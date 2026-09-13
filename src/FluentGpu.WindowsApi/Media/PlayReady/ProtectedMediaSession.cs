@@ -1,21 +1,30 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
 using FluentGpu.Media.Adaptive;
-using FluentGpu.Pal;
 using MediaTrackKind = FluentGpu.Media.TrackKind;
 
 namespace FluentGpu.WindowsApi.Media.PlayReady;
 
 /// <summary>
 /// A protected (PlayReady/CDM) <see cref="IMediaSession"/> — the DRM counterpart of the clear MF <c>MfMediaSession</c>.
-/// It drives an <see cref="IProtectedVideoPlayer"/> (the in-process native CDM in production; a fake in tests) and maps its
-/// worker-thread snapshot state onto the player's <see cref="MediaSignalSink"/> ON THE UI/pump thread (so the sole-writer
-/// contract holds). The produced PROTECTED DirectComposition handle binds through the SAME <c>VideoBinding.Bind</c> point
-/// as clear video — nothing downstream changes. A CDM/license shortfall surfaces as a typed
-/// <see cref="MediaErrorCategory.Drm"/> error (never a silent black frame).
+/// It drives an <see cref="IProtectedVideoPlayer"/> (a <see cref="ProtectedVideoSession"/> on the process runtime in
+/// production; a fake in tests) and maps its state onto the player's <see cref="MediaSignalSink"/> ON THE UI/PUMP
+/// THREAD, so the sole-writer contract holds. The PROTECTED DirectComposition handle binds through the SAME
+/// <c>VideoBinding.Bind</c> point as clear video. A CDM/license shortfall surfaces as a typed
+/// <see cref="MediaErrorCategory.Drm"/> error, never a silent black frame.
+/// <para><b>Event-driven.</b> The player raises <see cref="IProtectedVideoPlayer.PumpRequested"/> when native state
+/// changed; this session forwards it as its own <see cref="PumpRequested"/> (the same <see cref="IVideoPumpSource"/>
+/// contract the clear session uses) and does every signal write in <see cref="PumpVideo"/>. There is no poll timer, no
+/// transport ack wait and no seek suppression window: the first frame is on screen one host frame after the engine
+/// presents it, a seek publishes its target at once and its landed position on the Seeked event, and position is a
+/// timestamped native sample extrapolated by elapsed·rate exactly as the clear path does.</para>
+/// <para><b>One timer, one shot.</b> A source that never reaches CANPLAY within <see cref="StartBudget"/> is reported as
+/// a typed failure (Drm while the license is pending or the topology is being built, Network while the store is still
+/// empty). It is armed once at connect and disarmed by the first frame; it is a deadline, not a poll.</para>
 /// </summary>
 public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
 {
@@ -23,24 +32,34 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private readonly ProtectedVideoRequest _request;
     private readonly MediaOpenOptions _opts;
     private readonly MediaLocus _locus;
+    private readonly TimeSpan _startBudget;
 
     private MediaSignalSink? _sink;
     private bool _disposed;
     private bool _started;
-    private bool _playRequested;   // UI-thread play intent (the native MTA loop reconciles the actual transport level)
+    private bool _playRequested;
+    private double _rate = 1.0;
 
-    // Published/realized state (UI thread, via the pump).
-    // The protected DComp swapchain is created once at open and keeps that physical size across representation
-    // switches. The selected representation's resolution is DISPLAY metadata; feeding it to SetContentSize would lie
-    // about the backing surface and make the hole and video visual scale by different factors (the giant Mica gutter at
-    // 1080p). Keep the two concepts separate.
-    private SizeI _surfaceSize = SizeI.Zero;
+    private SizeI _naturalSize = SizeI.Zero;
     private TimeSpan _duration = TimeSpan.Zero;
     private PlaybackState _publishedState = PlaybackState.Opening;
     private bool _commandsPublished;
     private bool _errorPublished;
     private double _volume = 1.0;
     private bool _muted;
+    private long _lastFirstFrameEpoch;
+    private bool _settledPlayIntent;
+
+    // Seek (UI thread): the target is published immediately; the landed value replaces it on the Seeked event.
+    private bool _seekPublished;
+    private long _seekTargetMs;
+
+    // The CANPLAY deadline (a single one-shot timer; fires one pump).
+    private Timer? _startDeadline;
+    private long _startTicks;
+    private int _deadlinePassed;
+
+    // ABR.
     private readonly ProtectedTrackDescriptor? _videoTrack;
     private readonly QualityVariant[] _qualityVariants = Array.Empty<QualityVariant>();
     private readonly AdaptiveBitrateController? _abr;
@@ -55,46 +74,13 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private long _lastGrowthTicks;
     private long _lastAbrTicks;
 
-    // Throughput sample accumulation. The pump observes the native byte counter every 250ms, and one 250ms slice of a
-    // 2 Mbps stream is ~62 KB — just under the estimator's 64 KB noise floor, so sampling per pump would throw away
-    // almost every real measurement. Accumulate across pumps instead and emit ONE sample once it is big enough to mean
-    // something. Idle slices (no byte growth) are never charged to the pending sample: charging wall-clock time in
-    // which nothing transferred is what makes a wall-clock estimate read low.
+    // Throughput sample accumulation: one pump slice of a 2 Mbps stream can sit under the estimator's 64 KB noise floor,
+    // so slices are accumulated into one sample big enough to mean something. Idle slices are never charged.
     private long _pendingSampleBytes;
     private long _pendingSampleMs;
     private long _lastSampleBytes;
     private long _lastSampleMs;
     private double _lastSampleKbps;
-
-    // Seek intent (the optimistic publish + the republish-suppression window). The native transport acknowledges a
-    // seek asynchronously — seconds, on a protected source. Publishing the target only AFTER that ack made the seek
-    // bar snap back to the stale playhead for the whole round-trip, and the post-await write ran on a THREAD-POOL
-    // thread, i.e. a signal write off the pump, breaking the sole-writer contract documented at the top of this file.
-    // The target is now published SYNCHRONOUSLY on the calling (UI/pump) thread; the ack continuation only sets
-    // _seekSettlePending and asks for a pump, and the pump does every signal write.
-    private bool _seekPending;
-    private long _seekTargetMs;
-    private long _seekDeadlineTicks;
-    private int _seekSettlePending;
-    private long _seekAckTicks;
-    private const int SeekSuppressMs = 6_000;          // outer bound on the suppression window
-    private const long SeekReachedToleranceMs = 750;   // native position considered "arrived" within this of the target
-
-    // Session-level start watchdog (belt-and-suspenders around the player's own): guarantees a terminal Failed even if
-    // the underlying player never reports Error. A CONSTANT 90s, matching the player's own budget and sitting above
-    // every native ceiling it supervises (30s licence + 45s CANPLAY + 12s handle). No environment override.
-    private const int StartTimeoutMs = 90_000;
-    private long _startTicks;
-    private bool _watchdogFired;
-
-    // The desktop PlayReady backend exposes a native snapshot rather than a media-engine event callback. Poll it at a
-    // deliberately low cadence only while opening, buffering, playing, or settling a transport command. That preserves
-    // protected-session state/position progress without turning every panel frame into a UI-thread video repaint.
-    private const int PumpPollMs = 250;
-    private const int TransportSettlePollMs = 1_000;
-    private Timer? _pumpPoll;
-    private bool _pumpPollActive;
-    private long _pollUntilTicks;
 
     /// <inheritdoc/>
     public event Action? PumpRequested;
@@ -107,6 +93,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _opts = opts;
         _playRequested = !opts.StartPaused;
         _locus = new MediaLocus(null, request.Source, null, null, null);
+        _startBudget = StartBudget(opts.Buffering);
         _videoTrack = FindDefaultTrack(request.Catalog, MediaTrackKind.Video);
         if (_videoTrack is { Representations.Count: > 0 })
         {
@@ -121,6 +108,34 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 if (string.Equals(_qualityVariants[i].Id, _activeQuality?.Id, StringComparison.Ordinal))
                 { _abr.SeedCurrent(i); break; }
         }
+        _player.PumpRequested += OnPlayerPumpRequested;
+    }
+
+    /// <summary>The underlying protected player (the prepared/attached source).</summary>
+    public IProtectedVideoPlayer Player => _player;
+
+    /// <summary>How long a source may take to reach CANPLAY before it is reported as failed: the buffer policy's
+    /// initial-playback target × 10, never less than 10 s. Pure (the engine's session tests pin it).</summary>
+    public static TimeSpan StartBudget(BufferPolicy? policy)
+    {
+        TimeSpan initial = policy?.InitialPlayback ?? TimeSpan.FromSeconds(1);
+        TimeSpan budget = TimeSpan.FromTicks(initial.Ticks * 10);
+        return budget < TimeSpan.FromSeconds(10) ? TimeSpan.FromSeconds(10) : budget;
+    }
+
+    /// <summary>Which error a start that ran out of <see cref="StartBudget"/> is: a license still pending or a topology
+    /// that never produced metadata is a protected-path (Drm) failure; a store that never received media is Network.</summary>
+    public static MediaErrorCategory StartFailureCategory(ProtectedVideoPhase phase)
+        => phase == ProtectedVideoPhase.Buffering ? MediaErrorCategory.Network : MediaErrorCategory.Drm;
+
+    /// <summary>The position to publish: the native sample, extrapolated by the time since it was taken × rate while the
+    /// clock runs (the clear path's rule — a pump between two native samples reports a moving playhead, not a
+    /// stair-step). Pure.</summary>
+    public static long ExtrapolatePositionMs(long sampleMs, long sampleTimestamp, bool playing, double rate, long nowTimestamp)
+    {
+        if (!playing || sampleTimestamp == 0 || nowTimestamp <= sampleTimestamp) return Math.Max(0, sampleMs);
+        double elapsedMs = (nowTimestamp - sampleTimestamp) * 1000.0 / Stopwatch.Frequency;
+        return Math.Max(0, sampleMs + (long)(elapsedMs * rate));
     }
 
     /// <inheritdoc/>
@@ -130,15 +145,16 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         sink.PlayRequested(!_opts.StartPaused);
         sink.State(PlaybackState.Opening);
         _publishedState = PlaybackState.Opening;
+        // The carried start position is published at once: the seek bar never shows 0:00 for a source opening at 1:23.
+        if (_request.StartPosition > TimeSpan.Zero) sink.Position(_request.StartPosition);
         PublishCatalog(sink);
         StartOnce();
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
             RequestRepresentation(initialPin);
-        KeepPollingFor(TransportSettlePollMs);
         RequestPump();
     }
 
-    private static void PumpPollTick(object? state) => ((ProtectedMediaSession)state!).RequestPump();
+    private void OnPlayerPumpRequested() => RequestPump();
 
     private void RequestPump()
     {
@@ -146,62 +162,45 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         try { PumpRequested?.Invoke(); } catch { }
     }
 
-    private void KeepPollingFor(int durationMs)
-    {
-        if (_disposed) return;
-        _pollUntilTicks = Math.Max(_pollUntilTicks, Environment.TickCount64 + durationMs);
-        SetPumpPoll(true);
-    }
-
-    private void SetPumpPoll(bool active)
-    {
-        if (_disposed || _pumpPollActive == active) return;
-        _pumpPollActive = active;
-        if (active)
-        {
-            _pumpPoll ??= new Timer(PumpPollTick, this, Timeout.Infinite, Timeout.Infinite);
-            _pumpPoll.Change(0, PumpPollMs);
-        }
-        else
-        {
-            _pumpPoll?.Change(Timeout.Infinite, Timeout.Infinite);
-        }
-    }
-
-    private bool ShouldPoll(ProtectedVideoState state)
-        => !_disposed && !_errorPublished &&
-            (Environment.TickCount64 < _pollUntilTicks
-             || _seekPending   // a seek in flight must keep the pump alive until the native position crosses over
-             || state is ProtectedVideoState.Launching or ProtectedVideoState.Connecting or ProtectedVideoState.Loading
-                 or ProtectedVideoState.Licensed or ProtectedVideoState.Buffering
-             || (_playRequested && state is not (ProtectedVideoState.Error or ProtectedVideoState.Ended or ProtectedVideoState.Stopped)));
-
     private void StartOnce()
     {
         if (_started) return;
         _started = true;
         _startTicks = Environment.TickCount64;
         _lastGrowthTicks = _startTicks;
-        _player.Start(_request);   // non-blocking; the native CDM/decode loop runs on its own MTA thread
+        _startDeadline = new Timer(static s => ((ProtectedMediaSession)s!).OnStartDeadline(), this,
+            (long)_startBudget.TotalMilliseconds, Timeout.Infinite);
+        _player.Start(_request with { StartPaused = !_playRequested });
+    }
+
+    private void OnStartDeadline()
+    {
+        Volatile.Write(ref _deadlinePassed, 1);
+        RequestPump();
+    }
+
+    private void DisarmStartDeadline()
+    {
+        Timer? t = Interlocked.Exchange(ref _startDeadline, null);
+        t?.Dispose();
     }
 
     /// <inheritdoc/>
     public VideoDelivery Video =>
-        _player.HasSurface && !_surfaceSize.IsEmpty
-            ? new VideoDelivery.CompositedSurface(new VideoSurfaceId(1), _surfaceSize, IsHdr: false)
+        _player.HasSurface && !_naturalSize.IsEmpty
+            ? new VideoDelivery.CompositedSurface(new VideoSurfaceId(1), _naturalSize, IsHdr: false)
             : VideoDelivery.None;
 
-    // ── transport (idempotent; accepted synchronously; the pump realizes state) ──────────────────────────────────────
+    // ── transport (idempotent; accepted synchronously; the pump realizes state from events) ────────────────────────
 
     /// <inheritdoc/>
     public ValueTask PlayAsync()
     {
         if (_disposed) return ValueTask.CompletedTask;
-        StartOnce();
         _playRequested = true;
+        _settledPlayIntent = false;
         _sink?.PlayRequested(true);
-        KeepPollingFor(TransportSettlePollMs);
-        RequestPump();
+        if (!_started) StartOnce();
         return _player.PlayAsync();
     }
 
@@ -210,9 +209,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     {
         if (_disposed) return ValueTask.CompletedTask;
         _playRequested = false;
+        _settledPlayIntent = false;
         _sink?.PlayRequested(false);
-        KeepPollingFor(TransportSettlePollMs);
-        RequestPump();
         return _player.PauseAsync();
     }
 
@@ -220,58 +218,30 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     public void PublishSeekIntent(TimeSpan target)
     {
         if (_disposed || _sink is null) return;
-        var sink = _sink;
         long ms = ClampToDuration(target);
-
-        // Publish the TARGET now, on the calling (UI/pump) thread, BEFORE any await. The native ack is a multi-second
-        // round-trip on a protected source; publishing only afterwards is what made the scrubber snap back to the
-        // stale playhead for seconds after every drag.
         _seekTargetMs = ms;
-        _seekPending = true;
-        _seekDeadlineTicks = Environment.TickCount64 + SeekSuppressMs;
-        _seekAckTicks = 0;
-        Publish(sink, PlaybackState.Buffering);
-        sink.Position(TimeSpan.FromMilliseconds(ms));
-        sink.Buffering(new BufferingInfo(BufferingReason.Seeking, -1, TimeSpan.Zero, TimeSpan.Zero, false));
-        KeepPollingFor(TransportSettlePollMs);
-        RequestPump();
+        _seekPublished = true;
+        // The target moves the transport UI NOW, on the calling thread. The Seeked event (not a timer, not a tolerance
+        // window) replaces it with the landed position.
+        _sink.Position(TimeSpan.FromMilliseconds(ms));
+        Publish(_sink, PlaybackState.Buffering);
+        _sink.Buffering(new BufferingInfo(BufferingReason.Seeking, -1, TimeSpan.Zero,
+            (_opts.Buffering ?? BufferPolicy.Vod).ResumePlayback, false));
     }
 
     /// <inheritdoc/>
-    public ValueTask SeekAsync(TimeSpan to, SeekMode mode)
+    public ValueTask SeekAsync(TimeSpan to, SeekMode mode) => SeekAsync(to, mode, keyframeMs: -1);
+
+    /// <summary>Seek with the host planner's keyframe answer (<paramref name="keyframeMs"/>, -1 = native decides), so the
+    /// native side does not repeat the search. Completes at once; Seeking/Seeked arrive as events.</summary>
+    public ValueTask SeekAsync(TimeSpan to, SeekMode mode, long keyframeMs)
     {
         if (_disposed) return ValueTask.CompletedTask;
         long ms = ClampToDuration(to);
         PublishSeekIntent(to);
-        // A seek does NOT change the network, so the throughput history survives it; only the ladder's vote/probe
-        // state is stale (the buffer is about to be discarded and refilled).
+        // A seek does not change the network: the throughput history survives; only the ladder's vote/probe is stale.
         _abr?.ResetForSeek();
-        // The player logs the issued seek (position + mode) on the same timeline, so this path deliberately does NOT
-        // add a second line: a drag issues one throttled seek every 200ms and each log line is a file append on the
-        // UI thread.
-        try
-        {
-            return new ValueTask(AwaitSeekAckAsync(_player.SeekAsync(ms, mode)));
-        }
-        catch (Exception e)
-        {
-            // A synchronous backend refusal is not a user-visible failure: the pump reconciles from the snapshot.
-            _player.LogDiagnostic($"seek {ms}ms was refused synchronously: {e.Message}");
-            Volatile.Write(ref _seekSettlePending, 1);
-            RequestPump();
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    /// <summary>Await the backend's seek acknowledgement WITHOUT touching a signal. This continuation runs on a
-    /// thread-pool thread, so it may only set a flag and ask for a pump — the pump (UI thread) does every write, which
-    /// is what keeps the sole-writer contract this class documents at the top intact.</summary>
-    private async Task AwaitSeekAckAsync(ValueTask pending)
-    {
-        try { await pending.ConfigureAwait(false); }
-        catch { /* superseded or timed out — a stale ack nobody is waiting on, never a user-visible failure */ }
-        Volatile.Write(ref _seekSettlePending, 1);
-        RequestPump();
+        return _player.SeekAsync(ms, mode, keyframeMs);
     }
 
     private long ClampToDuration(TimeSpan to)
@@ -284,10 +254,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     public void SetRate(double rate)
     {
         if (_disposed) return;
-        _player.SetRate((float)rate);
-        KeepPollingFor(TransportSettlePollMs);
-        RequestPump();
+        _rate = rate > 0 ? rate : 1.0;
+        _player.SetRate((float)_rate);
     }
+
     /// <inheritdoc/>
     public void SetVolume(double volume)
     {
@@ -295,6 +265,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _volume = Math.Clamp(volume, 0, 1);
         _player.SetVolume(_muted ? 0f : (float)_volume);
     }
+
     /// <inheritdoc/>
     public void SetMuted(bool muted)
     {
@@ -318,6 +289,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!selection.IsAuto && selection.VariantId is { } id)
         {
             _pendingRepresentationId = id;
+            _pendingRepresentationTicks = Environment.TickCount64;
             try
             {
                 await _player.SelectVideoRepresentationAsync(id).ConfigureAwait(false);
@@ -331,36 +303,21 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 throw;
             }
         }
-        KeepPollingFor(TransportSettlePollMs);
         RequestPump();
     }
 
-    /// <inheritdoc/>
-    public ValueTask SelectTrackAsync(MediaTrack? track)
-    {
-        if (_disposed || track is null || _request.Catalog is null) return ValueTask.CompletedTask;
-        for (int i = 0; i < _request.Catalog.Tracks.Count; i++)
-            if (_request.Catalog.Tracks[i].Id == track.Id && _request.Catalog.Tracks[i].Kind == track.Kind)
-                return _player.SelectTrackAsync(track.Id);
-        throw new ArgumentOutOfRangeException(nameof(track), "The protected manifest does not contain that track.");
-    }
-
-    /// <summary>The floor the laid-out viewport height is clamped to before it becomes an ABR cap.
-    /// <para>THE BUG THIS EXISTS FOR ("Auto · 240p", and the frame freeze the resulting switch caused): the element
-    /// pushes its laid-out VIDEO HEIGHT IN DIP every pump, and real video surfaces are small — 191 DIP for the docked
-    /// rail, 202 DIP for the pop-out, 135 DIP at the pop-out minimum. Every one of those is BELOW every rung a
-    /// manifest offers (240p and up), so the raw viewport height filtered the entire ladder away and Auto collapsed to
-    /// the bottom rung on any bandwidth. A viewport is a hint about what is worth downloading, not a licence to starve
-    /// the ladder — so it can only ever cap the climb at 720p or above.</para></summary>
+    /// <summary>The floor the laid-out viewport height is clamped to before it becomes an ABR cap. Real video surfaces
+    /// are small (191 DIP docked, 202 DIP pop-out, 135 DIP at the pop-out minimum) and every one is below every rung a
+    /// manifest offers, so the raw height would filter the whole ladder away and Auto would collapse to the bottom rung
+    /// on any bandwidth. A viewport is a hint about what is worth downloading, not a licence to starve the ladder.</summary>
     private const int MinViewportCapHeight = 720;
 
     /// <inheritdoc/>
     public void SetAdaptiveViewportHeight(int height)
     {
         if (_abr is null) return;
-        // A zero/negative height is "not laid out yet", and a height arriving while a representation switch is still
-        // in flight describes a surface that is mid-replacement — neither is a real viewport, and acting on either
-        // re-caps the ladder from a transient measurement.
+        // Zero/negative is "not laid out yet"; a height during an in-flight representation switch describes a surface
+        // mid-replacement — neither is a real viewport.
         if (height <= 0 || _pendingRepresentationId is not null) return;
         _viewportMaxHeight = Math.Max(height, MinViewportCapHeight);
         _abr.MaxHeight = Math.Min(_policyMaxHeight, _viewportMaxHeight);
@@ -374,63 +331,64 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _abr.MaxHeight = Math.Min(_viewportMaxHeight, _policyMaxHeight);
     }
 
-    // ── the UI-thread pump (state mapping + the composited-surface handoff) ───────────────────────────────────────────
+    // ── the UI-thread pump ─────────────────────────────────────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
     public void PumpVideo(VideoBinding binding, RectF videoRect, float scale)
     {
         if (_disposed || _sink is null) return;
-        var sink = _sink;
+        MediaSignalSink sink = _sink;
 
-        // Advance the native snapshot + bind the PROTECTED DComp handle (value-gated inside the player).
         _player.Pump(binding);
-        var pv = _player.State.Value;
+        ProtectedVideoState pv = _player.State.Value;
         UpdateAdaptiveState(sink);
 
-        // 1. Terminal CDM/DRM error → typed MediaError (published once). Never a silent drop.
+        // 1. Terminal error → typed MediaError, published once. Never a silent drop.
         if (pv == ProtectedVideoState.Error)
         {
             if (!_errorPublished)
             {
                 _errorPublished = true;
+                DisarmStartDeadline();
                 sink.Error(new MediaError(MediaErrorCategory.Drm,
                     _player.Error.Value ?? "Protected playback failed (CDM/license).", null, _locus, MediaRecovery.NeedsLicense));
                 Publish(sink, PlaybackState.Failed);
             }
-            SetPumpPoll(false);
             return;
         }
 
-        // 1b. Session watchdog — guarantee a terminal failure even if the player never reports Error (e.g. an OLD native
-        // DLL that only LOGS a rejected license). If we asked to play and are still merely Opening/Buffering past the start
-        // budget with no natural size, surface the same typed DRM failure instead of an eternal "Starting playback…".
-        if (!_watchdogFired && !_errorPublished && _playRequested && _surfaceSize.IsEmpty
-            && _publishedState is PlaybackState.Opening or PlaybackState.Buffering
-            && Environment.TickCount64 - _startTicks > StartTimeoutMs)
+        // 2. First frame: the deadline is met.
+        long firstFrameEpoch = _player.FirstFrameEpoch;
+        if (firstFrameEpoch != _lastFirstFrameEpoch)
         {
-            _watchdogFired = true;
+            _lastFirstFrameEpoch = firstFrameEpoch;
+            DisarmStartDeadline();
+        }
+
+        // 2b. The CANPLAY deadline passed with no first frame: a typed failure, categorised by where the switch stuck.
+        if (Volatile.Read(ref _deadlinePassed) != 0 && _lastFirstFrameEpoch == 0 && !_errorPublished)
+        {
             _errorPublished = true;
-            _player.LogDiagnostic($"session watchdog TIMED OUT after {Environment.TickCount64 - _startTicks}ms " +
-                                  $"of a {StartTimeoutMs}ms budget (state={pv}, no natural size) — surfacing Failed");
-            sink.Error(new MediaError(MediaErrorCategory.Drm,
-                _player.Error.Value ?? $"Protected video TIMED OUT after {StartTimeoutMs / 1000}s: the backend never " +
-                    "reported a natural size. This is a timeout, not a licence rejection (a rejected licence is " +
-                    "reported by the licence relay). " +
-                    "See %LOCALAPPDATA%\\FluentGpu\\PlayReady\\desktop-playready.log.",
-                null, _locus, MediaRecovery.NeedsLicense));
+            ProtectedVideoPhase stuck = _player.Phase;
+            MediaErrorCategory category = StartFailureCategory(stuck);
+            string message = $"Protected video did not start within {_startBudget.TotalSeconds:0.#}s (stuck at {stuck}). " +
+                             (category == MediaErrorCategory.Network
+                                 ? "No media arrived from the CDN."
+                                 : "The license or the protected decoder never became ready.");
+            _player.LogDiagnostic($"start.timeout phase={stuck} budgetMs={(long)_startBudget.TotalMilliseconds} " +
+                                  $"sinceOpenMs={Environment.TickCount64 - _startTicks}");
+            sink.Error(new MediaError(category, message, null, _locus,
+                category == MediaErrorCategory.Network ? MediaRecovery.NeedsNetwork : MediaRecovery.NeedsLicense));
             Publish(sink, PlaybackState.Failed);
-            SetPumpPoll(false);
             return;
         }
 
-        // 2. Natural size / duration / commands once the CDM reports them.
-        var ns = _player.NaturalSize.Value;
-        if (ns.Width > 0 && (_surfaceSize.Width != (int)ns.Width || _surfaceSize.Height != (int)ns.Height))
+        // 3. Natural size / duration / commands.
+        Size2 ns = _player.NaturalSize.Value;
+        if (ns.Width > 0 && (_naturalSize.Width != (int)ns.Width || _naturalSize.Height != (int)ns.Height))
         {
-            _surfaceSize = new SizeI((int)ns.Width, (int)ns.Height);
-            SizeI displaySize = _activeQuality?.Resolution is { IsEmpty: false } selected
-                ? selected
-                : _surfaceSize;
+            _naturalSize = new SizeI((int)ns.Width, (int)ns.Height);
+            SizeI displaySize = _activeQuality?.Resolution is { IsEmpty: false } selected ? selected : _naturalSize;
             sink.NaturalSize(displaySize);
             if (!_commandsPublished)
             {
@@ -438,10 +396,6 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 var commands = MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate;
                 if (_player.SupportsAdaptiveSelection && _videoTrack is { Representations.Count: > 1 })
                     commands |= MediaCommandFlags.SelectVideoQuality;
-                if (_player.SupportsTrackSelection && CountTracks(MediaTrackKind.Audio) > 1)
-                    commands |= MediaCommandFlags.SelectAudioTrack;
-                if (_player.SupportsTrackSelection && CountTracks(MediaTrackKind.Video) > 1)
-                    commands |= MediaCommandFlags.SelectVideoTrack;
                 sink.Commands(commands);
             }
         }
@@ -452,56 +406,57 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             sink.Duration(_duration);
         }
 
-        // 3. Composited-surface handoff (Path A) — place the (already-bound) protected surface at the video rect.
+        // 4. The composited surface (already bound by the player's pump): size the STREAM to what the destination can
+        //    show — the same rule as the clear path, so a 4K rung in a 640-px card allocates 640-px buffers — and place it.
         if (binding.IsValid && _player.HasSurface)
         {
-            binding.SetContentSize(_surfaceSize);   // physical swapchain size; representation resolution is metadata
+            SizeI content = VideoStreamSizing.ContentSizeFor(_naturalSize, videoRect, scale);
+            _player.SetStreamSize(content);
+            binding.SetContentSize(content);
             binding.Place(videoRect);
             binding.SetVisible(true);
-            // Same ALWAYS-ON placement report the clear path publishes (MfMediaSession §3) — one shape for both, so a
-            // geometry defect reads identically in the host log whether or not the source is protected.
-            sink.SurfaceGeometry(new VideoSurfaceGeometry(_surfaceSize, _surfaceSize, videoRect, scale <= 0f ? 1f : scale) { Token = binding.Token });
+            sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
+                { Token = binding.Token });
         }
 
-        // 4. State + position. The play/pause LEVEL is reconciled natively (the MTA loop re-asserts Play until the clock
-        // advances — boot-drop + resume both covered — and never clobbers a Seek, since seek has its own slot). The old
-        // managed 60Hz Play re-assert lived here and is gone: it filled the single native command slot and overwrote
-        // Seek/Pause issued in the same 80ms window (the seek + resume-after-pause failures).
-        long posMs = _player.PositionMs.Value;
-
-        // 4a. Drain a completed seek acknowledgement HERE — the continuation that observed it runs on a thread-pool
-        // thread and is forbidden from writing signals, so it only raises this flag and asks for a pump.
-        long tick = Environment.TickCount64;
-        if (Volatile.Read(ref _seekSettlePending) != 0)
+        // 5. State + position. A seek holds the published target until the Seeked event, then the landed position
+        //    takes over — no tolerance window, no timeout.
+        bool seeking = _player.IsSeeking;
+        if (_seekPublished && !seeking)
         {
-            Volatile.Write(ref _seekSettlePending, 0);
-            if (_seekAckTicks == 0) _seekAckTicks = tick;
+            _seekPublished = false;
+            sink.SettleTransport();
+            long landed = _player.LastSeekLandedMs;
+            _player.LogDiagnostic($"seek.landed target={_seekTargetMs} landed={(landed >= 0 ? landed : _player.PositionMs.Value)}");
+        }
+
+        PlaybackState state = seeking ? PlaybackState.Buffering : MapState(pv, _playRequested);
+        Publish(sink, state);
+        if (state == PlaybackState.Buffering)
+        {
+            BufferingReason reason = seeking ? BufferingReason.Seeking
+                : _lastFirstFrameEpoch != 0 ? BufferingReason.Rebuffering : BufferingReason.Initial;
+            sink.Buffering(new BufferingInfo(reason, -1, TimeSpan.FromMilliseconds(_player.ForwardBufferedMs),
+                (_opts.Buffering ?? BufferPolicy.Vod).ResumePlayback, false));
+        }
+        else
+        {
+            sink.Buffering(BufferingInfo.None);
+        }
+
+        if (!_settledPlayIntent && ((_playRequested && pv == ProtectedVideoState.Playing)
+                                    || (!_playRequested && pv == ProtectedVideoState.Paused)))
+        {
+            _settledPlayIntent = true;
             sink.SettleTransport();
         }
 
-        // 4b. While a seek is in flight, the native playhead is still the PRE-seek value. Republishing it every 250ms
-        // would undo the optimistic target published by PublishSeekIntent and snap the scrubber back — the exact bug
-        // the optimistic publish exists to fix. Hold both the position and the state until the seek has demonstrably
-        // landed, which is any of:
-        //   • the native position reached the target (an EXACT seek), or
-        //   • the native transport acknowledged and has had one poll interval to publish its new (possibly
-        //     keyframe-snapped, so NOT equal to the target) playhead, or
-        //   • the outer window expired — so a dropped acknowledgement can never wedge the transport.
-        if (_seekPending
-            && (Math.Abs(posMs - _seekTargetMs) <= SeekReachedToleranceMs
-                || (_seekAckTicks != 0 && tick - _seekAckTicks >= PumpPollMs)
-                || tick >= _seekDeadlineTicks))
+        if (!seeking)
         {
-            _player.LogDiagnostic($"seek landed: target={_seekTargetMs}ms native={posMs}ms " +
-                                  $"{(_seekAckTicks == 0 ? "(no ack — window expired)" : "acked")} after " +
-                                  $"{SeekSuppressMs - Math.Max(0, _seekDeadlineTicks - tick)}ms");
-            _seekPending = false;
-            _seekAckTicks = 0;
+            long pos = ExtrapolatePositionMs(_player.PositionMs.Value, _player.PositionQpc,
+                pv == ProtectedVideoState.Playing, _rate, Stopwatch.GetTimestamp());
+            if (_lastFirstFrameEpoch != 0 || pos > 0) sink.Position(TimeSpan.FromMilliseconds(pos));
         }
-
-        Publish(sink, _seekPending ? PlaybackState.Buffering : MapState(pv));
-        if (!_seekPending) sink.Position(TimeSpan.FromMilliseconds(posMs));
-        SetPumpPoll(ShouldPoll(pv));
     }
 
     private void PublishCatalog(MediaSignalSink sink)
@@ -510,7 +465,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (_request.Catalog is null) return;
         for (int i = 0; i < _request.Catalog.Tracks.Count; i++)
         {
-            var track = _request.Catalog.Tracks[i];
+            ProtectedTrackDescriptor track = _request.Catalog.Tracks[i];
             if (track.Representations.Count == 0) continue;
             sink.Track(track.Id, track.Kind, track.Language, track.Label, track.Role,
                 track.Representations[0].Quality.Codec, track.IsDefault);
@@ -531,7 +486,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
 
         if (bytes < _lastBytesDownloaded || downloadMs < _lastDownloadElapsedMs)
         {
-            // The backend rebased its counters (a new open, or a representation switch) — never sample across that.
+            // The backend rebased its counters (a new session, or a representation switch) — never sample across that.
             _lastBytesDownloaded = bytes;
             _lastDownloadElapsedMs = downloadMs;
             _pendingSampleBytes = 0;
@@ -540,12 +495,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         }
         else if (bytes > _lastBytesDownloaded)
         {
-            // WALL-CLOCK FALLBACK. The V1 native ABI never reports DownloadElapsedMs (it stays 0 forever), and the
-            // old branch order meant `_lastDownloadElapsedMs == 0` won on EVERY pump: RecordDownload was never
-            // called, the estimate stayed structurally 0, and the `EstimatedKbps <= 0` guard below meant Choose never
-            // ran at all — Auto was inert for the whole session. Prefer the backend's transfer-only clock when it
-            // moves; otherwise charge the wall time since the last slice that ACTUALLY moved bytes (idle slices are
-            // never charged, so the wall-clock estimate is not dragged down by the gaps between segment fetches).
+            // Prefer the backend's transfer-only clock when it moves; otherwise charge the wall time since the last slice
+            // that ACTUALLY moved bytes (idle gaps between segment fetches are never charged).
             long deltaBytes = bytes - _lastBytesDownloaded;
             long deltaMs = downloadMs > _lastDownloadElapsedMs ? downloadMs - _lastDownloadElapsedMs
                                                                : Math.Max(1, now - _lastGrowthTicks);
@@ -559,14 +510,14 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             {
                 _lastSampleBytes = _pendingSampleBytes;
                 _lastSampleMs = _pendingSampleMs;
-                _lastSampleKbps = _pendingSampleBytes * 8.0 / _pendingSampleMs;   // bytes*8/ms == kbit/s
+                _lastSampleKbps = _pendingSampleBytes * 8.0 / _pendingSampleMs;
                 _pendingSampleBytes = 0;
                 _pendingSampleMs = 0;
             }
         }
         else
         {
-            _lastGrowthTicks = now;   // nothing transferred this slice — do not charge it to the pending sample
+            _lastGrowthTicks = now;
         }
 
         string? activeId = _player.ActiveVideoRepresentationId;
@@ -579,17 +530,12 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 { _abr.SeedCurrent(i); break; }
             if (string.Equals(_pendingRepresentationId, activeId, StringComparison.Ordinal)) _pendingRepresentationId = null;
             sink.QualitySelection(_qualitySelection, _activeQuality);
-            // GUARD (the same guard the natural-size publish in PumpVideo already has). A Spotify profile that carries
-            // no video_width/video_height yields SizeI.Zero; publishing that mid-playback flips MediaPlayerElement into
-            // audio-only and BOTH the hole and the protected surface disappear. A missing display size means "keep the
-            // one we have", never "there is no video".
+            // A profile with no declared resolution must not publish an empty natural size mid-playback: that flips the
+            // element into audio-only and both the hole and the surface disappear.
             if (!active.Quality.Resolution.IsEmpty) sink.NaturalSize(active.Quality.Resolution);
-            else _player.LogDiagnostic($"representation '{activeId}' has no declared resolution — " +
-                                       "keeping the previous natural size (an empty one would flip to audio-only)");
+            else _player.LogDiagnostic($"representation '{activeId}' has no declared resolution — keeping the previous natural size");
         }
 
-        // A representation switch that is never acknowledged must not wedge Auto forever: the ack path is a logged
-        // no-op now, so nothing else clears the pending id.
         if (_pendingRepresentationId is not null && now - _pendingRepresentationTicks > RepresentationPendingTimeoutMs)
         {
             _player.LogDiagnostic($"representation '{_pendingRepresentationId}' never became active within " +
@@ -597,26 +543,25 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             _pendingRepresentationId = null;
         }
 
-        // No throughput gate here any more. The estimator is seeded (never zero) and the decision itself is
-        // buffer-gated inside Choose, so the only cadence rule is one decision per second.
         if (!_qualitySelection.IsAuto || now - _lastAbrTicks < 1_000) return;
         _lastAbrTicks = now;
         long bufferedMs = Math.Max(0, _player.ForwardBufferedMs);
         int chosen = _abr.Choose(_qualityVariants, TimeSpan.FromMilliseconds(bufferedMs));
-        var pick = _qualityVariants[Math.Clamp(chosen, 0, _qualityVariants.Length - 1)];
-
-        // Always-on per-decision line: the sample that fed the estimate, both EWMAs, the buffer, the cap, the rung and
-        // WHY. This is the one line that explains an "Auto · 240p" from a field log with no repro.
-        _player.LogDiagnostic(
-            $"abr sample={_lastSampleBytes}B/{_lastSampleMs}ms={_lastSampleKbps:F0}kbps " +
-            $"fast={_abr.FastKbps:F0} slow={_abr.SlowKbps:F0} n={_abr.ThroughputSamples} " +
-            $"buffer={bufferedMs}ms cap={(_abr.MaxHeight == int.MaxValue ? "none" : _abr.MaxHeight.ToString())} " +
-            $"active={_activeQuality?.Id ?? "-"} -> idx={chosen} id={pick.Id} " +
-            $"{pick.Resolution.Width}x{pick.Resolution.Height}@{pick.Bitrate} why={_abr.LastDecisionReason}");
+        QualityVariant pick = _qualityVariants[Math.Clamp(chosen, 0, _qualityVariants.Length - 1)];
 
         if (!string.Equals(pick.Id, _activeQuality?.Id, StringComparison.Ordinal)
             && !string.Equals(pick.Id, _pendingRepresentationId, StringComparison.Ordinal))
+        {
+            // Always-on, and only on an actual rung change: the sample that fed the estimate, both EWMAs, the buffer,
+            // the cap and WHY — the one line that explains an "Auto · 240p" from a field log with no repro.
+            _player.LogDiagnostic(
+                $"abr sample={_lastSampleBytes}B/{_lastSampleMs}ms={_lastSampleKbps:F0}kbps " +
+                $"fast={_abr.FastKbps:F0} slow={_abr.SlowKbps:F0} n={_abr.ThroughputSamples} " +
+                $"buffer={bufferedMs}ms cap={(_abr.MaxHeight == int.MaxValue ? "none" : _abr.MaxHeight.ToString())} " +
+                $"active={_activeQuality?.Id ?? "-"} -> idx={chosen} id={pick.Id} " +
+                $"{pick.Resolution.Width}x{pick.Resolution.Height}@{pick.Bitrate} why={_abr.LastDecisionReason}");
             RequestRepresentation(pick.Id);
+        }
     }
 
     /// <summary>How long a requested-but-unacknowledged representation blocks further ABR decisions.</summary>
@@ -640,22 +585,13 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         catch { if (string.Equals(_pendingRepresentationId, id, StringComparison.Ordinal)) _pendingRepresentationId = null; }
     }
 
-    private int CountTracks(MediaTrackKind kind)
-    {
-        if (_request.Catalog is null) return 0;
-        int count = 0;
-        for (int i = 0; i < _request.Catalog.Tracks.Count; i++)
-            if (_request.Catalog.Tracks[i].Kind == kind) count++;
-        return count;
-    }
-
     private static ProtectedTrackDescriptor? FindDefaultTrack(ProtectedAdaptiveCatalog? catalog, MediaTrackKind kind)
     {
         if (catalog is null) return null;
         ProtectedTrackDescriptor? first = null;
         for (int i = 0; i < catalog.Tracks.Count; i++)
         {
-            var track = catalog.Tracks[i];
+            ProtectedTrackDescriptor track = catalog.Tracks[i];
             if (track.Kind != kind) continue;
             first ??= track;
             if (track.IsDefault) return track;
@@ -678,13 +614,16 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         return track.Representations.Count > 0 ? track.Representations[0].Quality : null;
     }
 
-    private static PlaybackState MapState(ProtectedVideoState s) => s switch
+    /// <summary>Map the protected lifecycle onto the player's transport state. <see cref="ProtectedVideoState.Paused"/>
+    /// before a play was ever requested is <see cref="PlaybackState.Ready"/> (paused-and-ready at the start position);
+    /// a play requested while the source is still loading reads Buffering. Pure.</summary>
+    public static PlaybackState MapState(ProtectedVideoState s, bool playRequested) => s switch
     {
-        ProtectedVideoState.Idle => PlaybackState.Idle,
-        ProtectedVideoState.Launching or ProtectedVideoState.Connecting or ProtectedVideoState.Loading => PlaybackState.Opening,
-        ProtectedVideoState.Licensed or ProtectedVideoState.Buffering => PlaybackState.Buffering,
+        ProtectedVideoState.Idle => PlaybackState.Opening,
+        ProtectedVideoState.Loading or ProtectedVideoState.Licensed => PlaybackState.Opening,
+        ProtectedVideoState.Buffering => PlaybackState.Stalled,
         ProtectedVideoState.Playing => PlaybackState.Playing,
-        ProtectedVideoState.Paused => PlaybackState.Paused,
+        ProtectedVideoState.Paused => playRequested ? PlaybackState.Buffering : PlaybackState.Paused,
         ProtectedVideoState.Ended => PlaybackState.Ended,
         ProtectedVideoState.Stopped => PlaybackState.Idle,
         ProtectedVideoState.Error => PlaybackState.Failed,
@@ -704,15 +643,12 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (_disposed) return ValueTask.CompletedTask;
         _disposed = true;
         _sink = null;
-        _pumpPollActive = false;
-        _pumpPoll?.Dispose();
-        _pumpPoll = null;
+        DisarmStartDeadline();
         PumpRequested = null;
-        var player = _player;
-        return new ValueTask(Task.Run(() =>
-        {
-            try { player.Stop(); } catch { }
-            player.Dispose();
-        }));
+        _player.PumpRequested -= OnPlayerPumpRequested;
+        // Detach + destroy are posted native work items (non-blocking); the runtime and its engine stay warm.
+        try { _player.Stop(); } catch { }
+        try { _player.Dispose(); } catch { }
+        return ValueTask.CompletedTask;
     }
 }

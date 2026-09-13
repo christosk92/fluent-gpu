@@ -271,7 +271,7 @@ sealed class MediaScenarioPage : Component
         string title = custom ? "Custom source · DASH + PlayReady" : scenario?.Title ?? ScenarioId;
 
         Element runner = custom
-            ? FluentGpu.WindowsApi.Media.PlayReady.DesktopProtectedVideoPlayer.IsAvailable
+            ? FluentGpu.WindowsApi.Media.PlayReady.ProtectedVideoRuntime.IsAvailable
                 ? Embed.Comp(() => new ProtectedVideoDemo()) with { Key = "custom-drm#" + runEpoch }
                 : Body("The in-process PlayReady native backend (FluentGpu.PlayReady.Native.dll) isn't present in this build.").Secondary()
             : scenario is null

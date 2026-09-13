@@ -52,10 +52,6 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     // same call site or a different one — stays silent until the presenter is recreated (device-lost rebuild).
     private readonly HashSet<uint> _loggedHrs = new();
 
-    // Diagnostic opt-in only: place the video child z-ABOVE the UI (the M3 spike shortcut that skipped the hole-punch).
-    // The PRODUCTION path is z-BELOW the UI, revealed through the premultiplied-0 hole (IVideoPresenter contract).
-    private static readonly bool s_zAbove = Environment.GetEnvironmentVariable("FG_VIDEO_ZABOVE") == "1";
-
     // The swapchain whose DirectComposition root hosts THIS presenter's video children. The primary window's presenter
     // targets the primary swapchain; a detached/secondary video window gets its OWN presenter targeting ITS swapchain
     // (see D3D12Device.GetVideoPresenter(ISwapchain)). Every presenter shares the device's one IDCompositionDevice, so
@@ -206,17 +202,11 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     private void AttachChild(ref Slot s)
     {
         if (s.InTree || Target is not { DcompRoot: not null, DcompVisual: not null } sc) return;
-        // PRODUCTION (default): z-BELOW the UI visual — AddVisual(child, insertAbove=FALSE, reference=uiVisual). The video
-        // child renders BENEATH the UI swapchain and is revealed at its rect through the premultiplied-0 hole-punch the
-        // UI back buffer draws there (the IVideoPresenter contract). This lets UI chrome (rounded corners, overlays,
-        // transport) composite OVER the video edge — which z-above forgoes.
-        //
-        // FG_VIDEO_ZABOVE=1 (diagnostic only) restores the M3 spike's z-ABOVE shortcut: the child renders ON TOP of the
-        // UI at its clipped rect, so it shows over an OPAQUE page background without a hole-punch — useful for isolating
-        // a hole-punch problem from a compositing problem, never the shipping path.
-        BOOL above = s_zAbove ? BOOL.TRUE : BOOL.FALSE;
-        if (!Ok(sc.DcompRoot->AddVisual(s.Child, above, sc.DcompVisual),
-            s_zAbove ? "Root.AddVisual(video child, above UI [diagnostic])" : "Root.AddVisual(video child, below UI)"))
+        // z-BELOW the UI visual — AddVisual(child, insertAbove=FALSE, reference=uiVisual). The video child renders BENEATH
+        // the UI swapchain and is revealed at its rect through the premultiplied-0 hole-punch the UI back buffer draws
+        // there (the IVideoPresenter contract), so UI chrome (rounded corners, overlays, transport) composites OVER the
+        // video edge. This is the only placement: the M3 spike's z-above shortcut and its environment switch are gone.
+        if (!Ok(sc.DcompRoot->AddVisual(s.Child, BOOL.FALSE, sc.DcompVisual), "Root.AddVisual(video child, below UI)"))
             return;   // s.InTree stays false; the next AttachChild call (a later Drain/CreateSurface, or the next
                       // OnSwapchainRebound) retries — nothing else in this class depends on InTree becoming true here
         s.InTree = true;

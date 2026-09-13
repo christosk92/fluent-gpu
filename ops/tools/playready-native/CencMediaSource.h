@@ -7,9 +7,11 @@
 // SetSource hard-wedges the PMP protected pipeline. Microsoft's sample instead demuxes fMP4/CENC IN-APP and hands the
 // engine already-encrypted samples with the CENC metadata the CDM needs to decrypt. This is that source.
 //
-// This header is #included from Helper.cpp (FG_UWP build) AFTER all the shared helpers it leans on are defined:
-//   LogLine, HttpGetBytes, CreateAndPrepareCdm, MediaEngineProtectionManager, EmeNeedKeyNotify, MediaEngineNotify,
-//   CdmSessionCallbacks, HandleCdmKeyMessage, QueryCdmKeyStatus, WriteCoord, StopRequested, and the g_* CDM globals.
+// This header is #included from PrInternal.h AFTER the platform headers (Media Foundation, C++/WinRT) and the log
+// entry points (`LogLine`, `fgpr::RaiseLog`) are declared. It pulls SegmentStore.h in right after `namespace cenc`
+// closes: the streams' time-window retention, their buffered ranges and CanSeekTo are the store's algorithms applied to
+// each stream's sample list. Nothing here depends on the runtime, which is what lets FgPrProbeFile run ParseInit +
+// ParseSegment on a box with no CDM, no D3D device and no network.
 //
 // Scope of the demuxer (H.264 video, single track): moov{trak/mdia(mdhd)/minf/stbl/stsd(encv|avc1 → avcC + sinf →
 // schm(cenc/cbcs)/schi/tenc)}, pssh (PlayReady init data), and per media segment moof{traf/tfhd/trun/senc}+mdat.
@@ -26,10 +28,6 @@
 #include <map>        // per-stream ITA cache (a single slot thrashes once there are two streams)
 #include <set>        // announced / ended stream ids
 #include <iterator>   // make_move_iterator — appending fetched samples without copying them
-
-// ── MF_MT_PROTECTED is not in the 26100 SDK headers; its documented GUID (media type "content is protected"). ──
-// {5FA1B54B-B61A-4d76-A99B-8FD7F0EA8F55}
-static const GUID FG_MF_MT_PROTECTED = { 0x5FA1B54B, 0xB61A, 0x4d76, { 0xA9, 0x9B, 0x8F, 0xD7, 0xF0, 0xEA, 0x8F, 0x55 } };
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Big-endian box reader helpers.
@@ -369,7 +367,11 @@ static bool ConvertAvccToAnnexBInPlace(Sample& sample, uint8_t nalLenSize)
 }
 
 // Parse one media segment (moof + mdat) and append its samples. runningDecodeTicks tracks decode time across segments.
-static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, std::vector<Sample>& out, uint64_t& runningDecodeTicks)
+// `outKeyframeMs`, when supplied, receives the presentation time (ms) of every VIDEO sync sample the segment produced —
+// the per-session keyframe table (SegmentStore.h) the seek planner reads through FgPrSessionGetKeyframes. The demuxer
+// always knew these (the same sync flag gates the SPS/PPS prepend below); the old feeder simply threw them away.
+static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, std::vector<Sample>& out, uint64_t& runningDecodeTicks,
+                        std::vector<int64_t>* outKeyframeMs = nullptr)
 {
     // Locate moof + mdat at the top level (record moof's absolute start for trun data_offset base).
     Box moof{}, mdat{}; bool haveMoof = false, haveMdat = false; size_t moofAbs = 0;
@@ -534,6 +536,8 @@ static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, s
             }
         }
 
+        if (outKeyframeMs && s.keyframe && info.timescale)
+            outKeyframeMs->push_back((int64_t)((s.timeTicks * 1000ULL) / info.timescale));
         out.push_back(std::move(s));
         cursor += sz;
         runningDecodeTicks += dur;
@@ -543,6 +547,10 @@ static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, s
 }
 
 } // namespace cenc
+
+// The session store's algorithms (time-window trim, buffered ranges, CanSeekTo, the keyframe table) are written against
+// cenc::Sample, which is complete from here on.
+#include "SegmentStore.h"
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Custom IMFMediaStream — serves the demuxed encrypted samples with CENC per-sample attributes.
@@ -568,7 +576,19 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     std::vector<winrt::com_ptr<::IUnknown>> m_starvedRequests;
     std::mutex m_mx;
 
+    // ── the session this stream serves (PrSession.cpp) ──────────────────────────────────────────────────────────────
+    uint64_t m_session = 0;                          // stamps every diagnostic line with its FgPrSession handle
+    std::shared_ptr<fgpr::SegmentStore> m_store;     // the time window, the byte budget, the keyframe table
+    uint64_t m_bytes = 0;                            // what m_samples costs the budget (m_mx); mirrored into the store
+    // The feeder's demand hook, invoked under m_mx when delivery drains the forward window below bufferAheadMs. It only
+    // sets a flag on a LEAF lock and notifies (Session::Kick) — which is what replaces the old 50 ms backpressure sleep:
+    // the feeder is woken by the playhead consuming the buffer, never by a timer.
+    std::function<void()> m_demand;
+
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
+
+    /// Every diagnostic line from this stream carries its session handle (shadows the runtime-level ::LogLine).
+    void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
 
     // IMFMediaEventGenerator (delegate to the queue).
     IFACEMETHODIMP BeginGetEvent(IMFAsyncCallback* c, ::IUnknown* s) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->BeginGetEvent(c, s); }
@@ -659,7 +679,11 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         }
         if (m_next == 0 || (m_next % 100) == 0) LogLine("[cenc-src] RequestSample #" + std::to_string(m_next) + " (encrypted sample delivered)");
         m_next++;
-        return m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
+        hr = m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
+        // Demand-driven feeding: the playhead consuming the forward window is what wakes the feeder — only while more
+        // can still arrive (a complete track has nothing left to fetch) and only once below the forward target.
+        if (m_demand && !m_complete && m_store && AheadDurationMsLocked() < m_store->bufferAheadMs) m_demand();
+        return hr;
     }
 
     // Complete one Start operation on the stream. An explicit position repositions to the nearest keyframe at or
@@ -728,49 +752,125 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
     }
 
-    /// How much already-delivered history stays resident behind the playhead. Without a bound the vector grows for the
-    /// whole track AND for every seek (the memory half of the feeder wedge). What is retained is also exactly what a
-    /// short backward scrub can be served from without a refetch.
-    static constexpr size_t kRetainBehind = 300;
+    /// How much already-delivered history stays resident behind the playhead used to be `kRetainBehind = 300` SAMPLES
+    /// (~10 s of 30 fps video, ~6 s of AAC — two different windows for two tracks of one presentation). It is now the
+    /// session's `retainBehindMs` in presentation TIME, capped by its byte budget (SegmentStore.h TrimBehindByTime).
+    /// Without a bound the vector grows for the whole track AND for every seek (the memory half of the feeder wedge).
+    /// What is retained is also exactly what a short backward scrub can be served from without a refetch.
 
     /// Insert a freshly demuxed run so the buffer stays MONOTONIC in presentation time.
     ///
-    /// The feeder rewinds its cursor on a seek and on a representation switch, so an incoming run can overlap what is
-    /// already buffered. Appending it at the tail (what this used to do) left the vector non-monotonic and duplicated:
-    /// Ahead()/AheadDurationMs() then over-reported and the feeder parked in its backpressure sleep. Instead, drop
-    /// everything at or after the incoming start time first — but NEVER anything already handed to Media Foundation,
-    /// which owns those samples. Returns the index the run landed at.
-    size_t SpliceLocked(std::vector<cenc::Sample>&& incoming)
+    /// The feeder rewinds on a seek and on a representation switch, so an incoming run can overlap what is already
+    /// buffered. Appending it at the tail (what this once did) left the vector non-monotonic and duplicated:
+    /// Ahead()/AheadDurationMs() then over-reported and the feeder parked in its backpressure sleep. The previous fix cut
+    /// everything from the first sample at or after the run's start (searching from m_next) to the END and appended — which
+    /// was monotonic only while the run lay AHEAD of the playhead. A seek BACKWARD into a range the time window had not
+    /// retained put the run after history that is later in time, and the time-window trim, the buffered ranges and
+    /// CanSeekTo all read an ascending vector. So the run now lands at its own presentation time: the overlapped samples
+    /// [lo, hi) are replaced in place and everything past the run survives (it is still valid media ahead).
+    ///
+    /// NEVER re-deliver what Media Foundation already has: a run that straddles the delivery point is spliced from
+    /// m_next forward (the original rule); a run wholly behind it only refreshes history and m_next keeps pointing at the
+    /// same logical sample. `truncateAfter` restores the cut-to-end for a representation switch, whose samples past the
+    /// splice are the OLD representation and must be refetched in the new one. Returns the index the run landed at.
+    size_t SpliceLocked(std::vector<cenc::Sample>&& incoming, bool truncateAfter = false)
     {
         const uint64_t startTicks = incoming.front().timeTicks;
-        size_t cut = m_samples.size();
-        for (size_t i = m_next; i < m_samples.size(); i++)
-            if (m_samples[i].timeTicks >= startTicks) { cut = i; break; }
-        if (cut < m_samples.size())
-            m_samples.erase(m_samples.begin() + (ptrdiff_t)cut, m_samples.end());
-        m_samples.insert(m_samples.end(), std::make_move_iterator(incoming.begin()),
+        uint64_t endTicks = startTicks;
+        uint64_t incomingBytes = 0;
+        for (auto const& s : incoming)
+        {
+            if (s.timeTicks + s.durTicks > endTicks) endTicks = s.timeTicks + s.durTicks;
+            incomingBytes += fgpr::SampleFootprint(s);
+        }
+
+        size_t lo = m_samples.size();
+        for (size_t i = 0; i < m_samples.size(); i++)
+            if (m_samples[i].timeTicks >= startTicks) { lo = i; break; }
+        size_t hi = lo;
+        while (hi < m_samples.size() && m_samples[hi].timeTicks < endTicks) hi++;
+
+        if (lo < m_next && hi > m_next)
+        {
+            lo = m_next;
+            while (lo < m_samples.size() && m_samples[lo].timeTicks < startTicks) lo++;
+            hi = lo;
+            while (hi < m_samples.size() && m_samples[hi].timeTicks < endTicks) hi++;
+        }
+        if (truncateAfter && lo >= m_next) hi = m_samples.size();
+
+        uint64_t freed = 0;
+        for (size_t i = lo; i < hi; i++) freed += fgpr::SampleFootprint(m_samples[i]);
+        const size_t removed = hi - lo;
+        const size_t added = incoming.size();
+        m_samples.erase(m_samples.begin() + (ptrdiff_t)lo, m_samples.begin() + (ptrdiff_t)hi);
+        m_samples.insert(m_samples.begin() + (ptrdiff_t)lo, std::make_move_iterator(incoming.begin()),
                          std::make_move_iterator(incoming.end()));
-        return cut;
+        if (lo < m_next) m_next = m_next - removed + added;   // wholly behind the playhead: same logical sample
+        m_bytes = (m_bytes > freed ? m_bytes - freed : 0) + incomingBytes;
+        PublishBytesLocked();
+        return lo;
     }
 
-    /// Drop history beyond the retention window, keeping m_next pointing at the same sample.
+    /// Drop history beyond the retention window (time, then bytes), keeping m_next pointing at the same sample.
     void TrimBehindLocked()
     {
-        if (m_next <= kRetainBehind) return;
-        const size_t drop = m_next - kRetainBehind;
-        m_samples.erase(m_samples.begin(), m_samples.begin() + (ptrdiff_t)drop);
-        m_next -= drop;
+        if (!m_store) return;
+        const uint64_t budget = m_streamId == 1 ? m_store->VideoBudget() : m_store->AudioBudget();
+        fgpr::TrimBehindByTime(m_samples, m_next, m_info.timescale, m_store->retainBehindMs, budget, m_bytes);
+        PublishBytesLocked();
+    }
+
+    void PublishBytesLocked()
+    {
+        if (!m_store) return;
+        (m_streamId == 1 ? m_store->videoBytes : m_store->audioBytes).store(m_bytes, std::memory_order_relaxed);
     }
 
     /// Append freshly demuxed samples (the background fetcher) and release any request that was parked on starvation.
-    /// Called from the fetch thread; the stream lock serialises it against RequestSample.
+    /// Called from the fetch thread; the stream lock serialises it against RequestSample. A stream Media Foundation has
+    /// already shut down (its source was replaced by a detach) still ACCEPTS samples: the session's buffer outlives the
+    /// MF object, and the re-attach moves it into a fresh source (TakeSamples).
     void AppendSamples(std::vector<cenc::Sample>&& more)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || more.empty()) return;
+        if (more.empty()) return;
         SpliceLocked(std::move(more));
         TrimBehindLocked();
-        ReleaseStarvedLocked();
+        if (!m_shutdown) ReleaseStarvedLocked();
+    }
+
+    /// Move the whole buffer out, with its byte cost, for the fresh source a re-attach builds.
+    std::vector<cenc::Sample> TakeSamples(uint64_t& bytes)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        std::vector<cenc::Sample> out = std::move(m_samples);
+        m_samples.clear();
+        m_next = 0;
+        bytes = m_bytes;
+        m_bytes = 0;
+        return out;
+    }
+
+    /// FgPrSessionGetBuffered for this stream: ascending (startMs, endMs) pairs, a hole starts a new pair.
+    int BufferedPairs(int64_t* out, int capPairs)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return fgpr::ComputeBufferedPairs(m_samples, m_info.timescale, out, capPairs);
+    }
+
+    /// A seek into a range the feeder has not fetched re-opens a track that had been marked complete — otherwise the
+    /// stream would report end-of-stream the moment it drained the target segment while the next one is still on the wire.
+    void MarkIncomplete()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_complete = false;
+    }
+
+    bool IsComplete()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_complete;
     }
 
     /// Splice the target representation's segment into the timeline at ITS OWN presentation time, then announce the new
@@ -784,7 +884,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return;
         const uint64_t spliceTicks = replacement.front().timeTicks;
-        const size_t at = SpliceLocked(std::move(replacement));
+        const size_t at = SpliceLocked(std::move(replacement), true);
         m_info = nextInfo;
         // Only the sample delivered NEXT may be flagged discontinuous. When the splice lands ahead of the playhead the
         // next sample is still old-representation continuous video; flagging it would make the decoder drop frames all
@@ -837,6 +937,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     int64_t AheadDurationMs()
     {
         std::lock_guard<std::mutex> g(m_mx);
+        return AheadDurationMsLocked();
+    }
+    int64_t AheadDurationMsLocked() const
+    {
         if (m_info.timescale == 0 || m_next >= m_samples.size()) return 0;
         uint64_t start = m_samples[m_next].timeTicks;
         auto const& last = m_samples.back();
@@ -855,27 +959,12 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// instant reposition instead of three serial TLS-handshaking GETs. Video needs a KEYFRAME at or before the target
     /// (that is what Start() repositions to); audio only needs coverage. Both need CONTIGUOUS coverage past the target
     /// — a buffer with a hole in it (left by an earlier forward seek) must not report the far side as seekable.
+    /// The algorithm moved verbatim to SegmentStore.h (fgpr::CanSeekToIn). The m_shutdown refusal is gone: the samples
+    /// are the SESSION's buffer and stay valid after Media Foundation shuts a detached source down.
     bool CanSeekTo(int64_t targetMs, bool requireKeyframe)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || m_info.timescale == 0 || m_samples.empty()) return false;
-        if (targetMs < 0) targetMs = 0;
-        const uint64_t target = ((uint64_t)targetMs * m_info.timescale) / 1000ULL;
-        size_t anchor = m_samples.size();
-        for (size_t i = 0; i < m_samples.size(); i++)
-        {
-            if (m_samples[i].timeTicks > target) break;
-            if (!requireKeyframe || m_samples[i].keyframe) anchor = i;
-        }
-        if (anchor == m_samples.size()) return false;
-        uint64_t reach = m_samples[anchor].timeTicks;
-        for (size_t i = anchor; i < m_samples.size(); i++)
-        {
-            if (m_samples[i].timeTicks > reach) break;   // gap in the buffer — coverage ends here
-            const uint64_t end = m_samples[i].timeTicks + m_samples[i].durTicks;
-            if (end > reach) reach = end;
-        }
-        return reach > target;
+        return fgpr::CanSeekToIn(m_samples, m_info.timescale, targetMs, requireKeyframe);
     }
 
     /// The buffered presentation range, for the always-on log.
@@ -983,7 +1072,21 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     bool m_started = false, m_paused = false, m_shutdown = false;
     std::mutex m_mx;
 
+    uint64_t m_session = 0;                           // the FgPrSession this source was built for
+    std::shared_ptr<fgpr::SegmentStore> m_store;      // shared with the session: MF may hold this source past its session
+    LONGLONG m_startPosition100ns = 0;                // m_mx — where the FIRST Start lands (consumed once; see Start)
+    std::atomic<bool> m_handedToEngine{ false };      // an attach SetSource'd this object; a re-attach needs a fresh one
+
     CencMediaSource() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
+
+    /// Every diagnostic line from this source carries its session handle (shadows the runtime-level ::LogLine).
+    void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
+
+    void SetStartPosition100ns(LONGLONG position100ns)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_startPosition100ns = position100ns > 0 ? position100ns : 0;
+    }
 
     // IMFMediaEventGenerator
     IFACEMETHODIMP BeginGetEvent(IMFAsyncCallback* c, ::IUnknown* s) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->BeginGetEvent(c, s); }
@@ -1021,6 +1124,21 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
             if (FAILED(PropVariantCopy(&startVar, startPos))) return E_OUTOFMEMORY;
 
             wasActive = m_started;
+            // THE CARRIED START POSITION (plan bug S1). The media engine opens a source from the beginning — VT_EMPTY or
+            // an explicit 0 — so a switch to a video at 1:23 used to present 0:00 first and then jump. The session hands
+            // the source its start position; the first Start that asks for "the beginning" is rewritten to it, the
+            // streams reposition to the keyframe at or before it, and MESourceStarted carries the ACTUAL start time so the
+            // presentation clock begins there too. Consumed once: a later Start(0) is a real seek to 0.
+            if (!wasActive && m_startPosition100ns > 0 &&
+                (startVar.vt == VT_EMPTY || (startVar.vt == VT_I8 && startVar.hVal.QuadPart == 0)))
+            {
+                PropVariantClear(&startVar);
+                startVar.vt = VT_I8;
+                startVar.hVal.QuadPart = m_startPosition100ns;
+                LogLine("[cenc-src] first Start rewritten to the carried start position " +
+                        std::to_string((long long)(m_startPosition100ns / 10000)) + "ms");
+            }
+            if (!wasActive) m_startPosition100ns = 0;
             explicitPosition = startVar.vt == VT_I8;
             seeking = wasActive && explicitPosition;
 
@@ -1249,9 +1367,14 @@ static winrt::com_ptr<IMFMediaType> BuildAacMediaType(const cenc::InitInfo& a)
 /// streaming build: deriving the presentation duration from the samples in hand would declare the track to be as long as
 /// the initial burst (~8s), and the media engine then treats every later position as past the end — the seek bar pins,
 /// the clock overshoots ("0:36 / 0:08"), and Play() after a Pause does nothing because the presentation already ended.</param>
+/// <param name="sessionHandle">The FgPrSession the source serves — every diagnostic line it writes carries it.</param>
+/// <param name="store">The session's SegmentStore: the streams trim against its time window and byte budget.</param>
+/// <param name="startPosition100ns">Where the source's FIRST Start lands (plan bug S1); 0 = the beginning.</param>
 static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& info, std::vector<cenc::Sample>&& samples,
-                                                       CencAudioFeed* audio = nullptr, bool streaming = false,
-                                                       uint64_t totalDuration100ns = 0)
+                                                       CencAudioFeed* audio, bool streaming,
+                                                       uint64_t totalDuration100ns, uint64_t sessionHandle,
+                                                       std::shared_ptr<fgpr::SegmentStore> store,
+                                                       LONGLONG startPosition100ns)
 {
     auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
 
@@ -1269,16 +1392,13 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     // what tells the media engine's modern EME pipeline "insert the CDM's decryptor before the decoder for this
     // stream"; without it the engine wires our encrypted samples STRAIGHT into the H.264 decoder, which rejects the
     // first ciphertext-bearing sample as MF_E_INVALIDREQUEST (decode error 3). NOTE this is NOT the earlier failed
-    // experiment: stamping the raw MF_MT_PROTECTED *attribute* on an UNWRAPPED clear type (FG_CENC_MARK_SD_PROTECTED=1
-    // diagnostics) selects the legacy ITA/OTA topology whose trust verification fails 0xC00D715B. The wrapped type is
-    // unwrapped by the pipeline (MFUnwrapMediaType) after the decryptor, so the decoder still sees the real H.264 type.
-    // Set FG_CENC_NO_PROTECTED_WRAP=1 to A/B the old clear-typed wiring.
-    bool markProtected = info.encrypted && GetEnvironmentVariableW(L"FG_CENC_MARK_SD_PROTECTED", nullptr, 0) != 0;
-    if (markProtected) mt->SetUINT32(FG_MF_MT_PROTECTED, TRUE);
-
+    // experiment: stamping the raw MF_MT_PROTECTED *attribute* on an UNWRAPPED clear type (the retired
+    // FG_CENC_MARK_SD_PROTECTED diagnostics) selects the legacy ITA/OTA topology whose trust verification fails
+    // 0xC00D715B. The wrapped type is unwrapped by the pipeline (MFUnwrapMediaType) after the decryptor, so the decoder
+    // still sees the real H.264 type. The wrap is now the ONLY wiring: the environment A/B arms (the raw attribute, and
+    // FG_CENC_NO_PROTECTED_WRAP's clear-typed stream) were deleted with every other env switch in this directory.
     winrt::com_ptr<IMFMediaType> streamType = mt;
-    bool wrapProtected = info.encrypted && !markProtected &&
-                         GetEnvironmentVariableW(L"FG_CENC_NO_PROTECTED_WRAP", nullptr, 0) == 0;
+    const bool wrapProtected = info.encrypted;
     if (wrapProtected)
     {
         winrt::com_ptr<IMFMediaType> wrapped;
@@ -1290,7 +1410,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     winrt::com_ptr<IMFStreamDescriptor> sd;
     IMFMediaType* mts[1] = { streamType.get() };
     winrt::check_hresult(MFCreateStreamDescriptor(1 /*streamId*/, 1, mts, sd.put()));
-    if (markProtected || wrapProtected) sd->SetUINT32(MF_SD_PROTECTED, 1);
+    if (wrapProtected) sd->SetUINT32(MF_SD_PROTECTED, 1);
     {
         winrt::com_ptr<IMFMediaTypeHandler> mth;
         winrt::check_hresult(sd->GetMediaTypeHandler(mth.put()));
@@ -1303,9 +1423,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     {
         auto audioMt = BuildAacMediaType(audio->info);
         winrt::com_ptr<IMFMediaType> audioStreamType = audioMt;
-        bool wrapAudio = audio->info.encrypted && !markProtected &&
-                         GetEnvironmentVariableW(L"FG_CENC_NO_PROTECTED_WRAP", nullptr, 0) == 0;
-        if (audio->info.encrypted && markProtected) audioMt->SetUINT32(FG_MF_MT_PROTECTED, TRUE);
+        const bool wrapAudio = audio->info.encrypted;
         if (wrapAudio)
         {
             winrt::com_ptr<IMFMediaType> wrapped;
@@ -1315,7 +1433,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
         }
         IMFMediaType* amts[1] = { audioStreamType.get() };
         winrt::check_hresult(MFCreateStreamDescriptor(2 /*streamId*/, 1, amts, audioSd.put()));
-        if (audio->info.encrypted && (markProtected || wrapAudio)) audioSd->SetUINT32(MF_SD_PROTECTED, 1);
+        if (wrapAudio) audioSd->SetUINT32(MF_SD_PROTECTED, 1);
         winrt::com_ptr<IMFMediaTypeHandler> amth;
         winrt::check_hresult(audioSd->GetMediaTypeHandler(amth.put()));
         winrt::check_hresult(amth->SetCurrentMediaType(audioStreamType.get()));
@@ -1341,7 +1459,12 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     if (dur100ns) pd->SetUINT64(MF_PD_DURATION, (UINT64)dur100ns);
 
     auto source = winrt::make_self<CencMediaSource>();
+    source->m_session = sessionHandle;
+    source->m_store = store;
+    source->m_startPosition100ns = startPosition100ns > 0 ? startPosition100ns : 0;
     auto stream = winrt::make_self<CencMediaStream>();
+    stream->m_session = sessionHandle;
+    stream->m_store = store;
     stream->m_sd = sd;
     stream->m_source = (IMFMediaSource*)source.get();   // weak — source holds the strong ref
     stream->m_info = info;
@@ -1349,12 +1472,16 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     stream->m_streamId = 1;
     stream->m_label = "video";
     stream->m_complete = !streaming;
+    stream->m_bytes = fgpr::SampleFootprint(stream->m_samples);
+    stream->PublishBytesLocked();   // not yet visible to any other thread
     source->m_pd = pd;
     source->m_streams.push_back(stream);
 
     if (audio)
     {
         auto astream = winrt::make_self<CencMediaStream>();
+        astream->m_session = sessionHandle;
+        astream->m_store = store;
         astream->m_sd = audioSd;
         astream->m_source = (IMFMediaSource*)source.get();
         astream->m_info = audio->info;
@@ -1362,6 +1489,8 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
         astream->m_streamId = 2;
         astream->m_label = "audio";
         astream->m_complete = !streaming;
+        astream->m_bytes = fgpr::SampleFootprint(astream->m_samples);
+        astream->PublishBytesLocked();
         source->m_streams.push_back(astream);
     }
 

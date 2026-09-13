@@ -44,7 +44,7 @@ public sealed record ProtectedAdaptiveCatalog
 }
 
 /// <summary>
-/// The parsed source descriptor an MPD yields for the native PlayReady open path (<c>FgPlayReadyOpenDesc</c>): an explicit
+/// The parsed source descriptor an MPD yields for the native PlayReady open path (<c>FgPrOpenDesc</c>): an explicit
 /// init-segment URL plus the <c>base + prefix + number + suffix</c> media-segment template the native demuxer walks, the
 /// segment range, and the PlayReady init data (<c>cenc:pssh</c> + <c>default_KID</c>). Produced by
 /// <see cref="DashManifestParser"/>; consumed by <see cref="ProtectedMediaBackend"/> (mapped onto a
@@ -71,6 +71,24 @@ public sealed record DashSourceDescriptor
     /// <summary>Segment-number step: 1 for numbered <c>$Number$</c> content; N for time-addressed segments (Spotify names
     /// segments by absolute time — segment i = <see cref="StartNumber"/> + i*stride, stride = segment length in seconds).</summary>
     public int SegmentStride { get; init; } = 1;
+
+    // ── the seek index hints ─────────────────────────────────────────────────────────────────────────────────────────
+    // A template-addressed DASH source needs no `sidx`: segment i starts at i·SegmentLengthMs and (with
+    // SegmentsStartWithKeyframe) every segment start is a keyframe, so a seek maps to ONE segment GET per stream with no
+    // index fetch at all — the arithmetic IS the index. The keyframes INSIDE a segment are learnt by the native demuxer
+    // as segments are parsed (the session's keyframe table); these fields are what the planner knows before any byte.
+    /// <summary>The presentation length of one media segment in ms (<c>SegmentTemplate@duration / @timescale</c>, or the
+    /// first <c>SegmentTimeline/S@d</c>); 0 when the MPD does not say (the native side measures it from the first
+    /// parsed segment). Spotify: <c>segment_length</c> × 1000.</summary>
+    public int SegmentLengthMs { get; init; }
+    /// <summary>The presentation duration in ms (<c>MPD@mediaPresentationDuration</c>), or 0 when unknown.</summary>
+    public long DurationMs { get; init; }
+    /// <summary>Whether every media segment begins with a stream access point of type 1 or 2 (an IDR), per
+    /// <c>@startWithSAP</c> on the Representation or its AdaptationSet. An MPD that does not declare it is assumed to
+    /// (the DASH-IF interoperability profiles require it for segment-template content); only an explicit 0 or ≥ 3 says
+    /// otherwise, and then the seek planner may not treat a segment start as a keyframe.</summary>
+    public bool SegmentsStartWithKeyframe { get; init; } = true;
+
     /// <summary>The PlayReady <c>cenc:pssh</c> init data (decoded from base64), or empty when the native parses it from the
     /// init segment.</summary>
     public ReadOnlyMemory<byte> Pssh { get; init; }
@@ -204,6 +222,10 @@ public static class DashManifestParser
         SplitNumberTemplate(mediaResolved, out string segBase, out string segPrefix, out string segSuffix);
 
         int segCount = ComputeSegmentCount(tmpl, mpd, ns, startNumber);
+        int segLengthMs = ComputeSegmentLengthMs(tmpl, ns);
+        double totalSeconds = ParseIsoDuration((string?)mpd.Attribute("mediaPresentationDuration"));
+        string? sap = (string?)chosenRep.Attribute("startWithSAP") ?? (string?)chosenAdaptation.Attribute("startWithSAP");
+        bool startsWithKeyframe = sap is null || ParseInt(sap, 1) is 1 or 2;
 
         // ── PlayReady ContentProtection (search AdaptationSet then Representation) ──
         (byte[] pssh, string? kid) = ExtractPlayReadyProtection(chosenAdaptation, chosenRep, ns, cenc);
@@ -216,6 +238,9 @@ public static class DashManifestParser
             SegmentSuffix = segSuffix,
             StartNumber = startNumber,
             SegmentCount = segCount,
+            SegmentLengthMs = segLengthMs,
+            DurationMs = totalSeconds > 0 ? (long)Math.Round(totalSeconds * 1000.0) : 0,
+            SegmentsStartWithKeyframe = startsWithKeyframe,
             Pssh = pssh,
             DefaultKid = kid,
             RepresentationId = repId.Length > 0 ? repId : null,
@@ -323,6 +348,20 @@ public static class DashManifestParser
         // 3. Unknown — the native tolerates over-fetch (it stops at the first missing segment); a small safe default.
         _ = startNumber;
         return 6;
+    }
+
+    /// <summary>The presentation length of one segment in ms: <c>@duration / @timescale</c> on the template, else the
+    /// first <c>S@d</c> of a <c>SegmentTimeline</c> over the same timescale; 0 when neither is stated.</summary>
+    private static int ComputeSegmentLengthMs(XElement tmpl, XNamespace ns)
+    {
+        double timescale = ParseDouble((string?)tmpl.Attribute("timescale"), 1);
+        if (timescale <= 0) return 0;
+        double duration = ParseDouble((string?)tmpl.Attribute("duration"), 0);
+        if (duration <= 0 && tmpl.Element(ns + "SegmentTimeline")?.Element(ns + "S") is { } first)
+            duration = ParseDouble((string?)first.Attribute("d"), 0);
+        if (duration <= 0) return 0;
+        double ms = duration * 1000.0 / timescale;
+        return ms is > 0 and < int.MaxValue ? (int)Math.Round(ms) : 0;
     }
 
     private static (byte[] pssh, string? kid) ExtractPlayReadyProtection(XElement aset, XElement rep, XNamespace ns, XNamespace cenc)
