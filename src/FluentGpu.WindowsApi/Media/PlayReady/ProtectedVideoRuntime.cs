@@ -51,12 +51,17 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     private static readonly object s_sharedGate = new();
 
     private readonly IPrRuntimeNative _native;
+    private readonly IPrSessionNative _sessionNative;
     private readonly string _storePath;
     private readonly int _idleMs;
     private readonly object _gate = new();
+    // Serialises native bring-up against native teardown. FgPrRuntimeDestroy blocks (it joins the runtime thread) and runs
+    // OUTSIDE _gate; a create that raced it would get ERROR_BUSY from the DLL and fail the video that asked. Lock order:
+    // _lifecycleGate, then _gate. Only the create and the destroy take it — every other call stays on _gate alone.
+    private readonly object _lifecycleGate = new();
     private readonly Dictionary<string, LicenseEntry> _licenses = new(StringComparer.Ordinal);
     private readonly Dictionary<ulong, ProtectedVideoSession> _sessions = new();
-    private readonly Dictionary<ulong, TaskCompletionSource<bool>> _bufferedWaits = new();
+    private readonly Dictionary<ulong, BufferedWait> _bufferedWaits = new();
 
     private GCHandle _self;
     private ulong _rt;
@@ -79,13 +84,20 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     }
 
     /// <summary>A runtime over <paramref name="native"/> — the real DLL in production (<see cref="Shared"/>), a fake in
-    /// the engine's own tests. <paramref name="idleMs"/> is the warm-idle window (tests shorten it).</summary>
-    internal ProtectedVideoRuntime(IPrRuntimeNative native, string storePath, int idleMs = WarmIdleDisposeMs)
+    /// the engine's own tests. <paramref name="idleMs"/> is the warm-idle window (tests shorten it).
+    /// <paramref name="sessionNative"/> is what every <see cref="ProtectedVideoSession"/> on this runtime calls for its
+    /// own verbs (the real DLL when null).</summary>
+    internal ProtectedVideoRuntime(IPrRuntimeNative native, string storePath, int idleMs = WarmIdleDisposeMs,
+                                   IPrSessionNative? sessionNative = null)
     {
         _native = native;
+        _sessionNative = sessionNative ?? PrSessionNative.Instance;
         _storePath = storePath;
         _idleMs = idleMs > 0 ? idleMs : WarmIdleDisposeMs;
     }
+
+    /// <summary>The session half of the native seam — what <see cref="ProtectedVideoSession"/> calls.</summary>
+    internal IPrSessionNative SessionNative => _sessionNative;
 
     /// <summary>The process runtime, created on first use. The native bring-up happens on the first session or license
     /// request, not here.</summary>
@@ -153,15 +165,24 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     /// the native component is missing or bring-up failed (<see cref="StartupError"/> says why).</summary>
     internal bool Acquire()
     {
+        // Fast path: the runtime is up — take a reference and cancel a pending idle teardown.
         lock (_gate)
         {
             if (_disposed) return false;
             _idle?.Change(Timeout.Infinite, Timeout.Infinite);
             if (_rt != 0) { _refs++; return true; }
+        }
+        // Slow path: bring it up, after any teardown that is still joining the old runtime thread has finished.
+        lock (_lifecycleGate)
+        lock (_gate)
+        {
+            if (_disposed) return false;
+            if (_rt != 0) { _refs++; return true; }   // another caller brought it up while this one waited
 
             if (!_native.IsAvailable)
             {
-                StartupError = "The protected-video component (" + PrNative.LibraryName + ") is not available.";
+                StartupError = "The protected-video component (" + PrNative.LibraryName +
+                               ") is missing, or is a stale build that does not export the runtime ABI.";
                 return false;
             }
             try { Directory.CreateDirectory(_storePath); } catch { /* the CDM reports a store failure itself */ }
@@ -211,15 +232,18 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
 
     private void IdleElapsed()
     {
-        ulong rt;
-        ulong[] licenses;
-        lock (_gate)
+        lock (_lifecycleGate)
         {
-            if (_refs != 0 || _rt == 0) return;
-            Log($"runtime.destroy idleMs={_idleMs}");
-            rt = DetachLocked(out licenses);
+            ulong rt;
+            ulong[] licenses;
+            lock (_gate)
+            {
+                if (_refs != 0 || _rt == 0) return;
+                Log($"runtime.destroy idleMs={_idleMs}");
+                rt = DetachLocked(out licenses);
+            }
+            DestroyNative(rt, licenses);   // blocking (bounded native join) — outside _gate, inside the lifecycle lock
         }
-        DestroyNative(rt, licenses);
     }
 
     /// <summary>Clear the managed tables and hand back what the native side must release — outside the gate.</summary>
@@ -231,7 +255,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         licenses = handles.ToArray();
         _licenses.Clear();
         _sessions.Clear();
-        foreach (KeyValuePair<ulong, TaskCompletionSource<bool>> kv in _bufferedWaits) kv.Value.TrySetResult(false);
+        foreach (KeyValuePair<ulong, BufferedWait> kv in _bufferedWaits) kv.Value.Finish(false);
         _bufferedWaits.Clear();
         ulong rt = _rt;
         Volatile.Write(ref _rt, 0);
@@ -249,20 +273,23 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     /// <inheritdoc/>
     public void Dispose()
     {
-        ulong rt;
-        ulong[] licenses;
-        lock (_gate)
+        lock (_lifecycleGate)
         {
-            if (_disposed) return;
-            _disposed = true;
-            _idle?.Dispose();
-            _idle = null;
-            _refs = 0;
-            rt = DetachLocked(out licenses);
+            ulong rt;
+            ulong[] licenses;
+            lock (_gate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                _idle?.Dispose();
+                _idle = null;
+                _refs = 0;
+                rt = DetachLocked(out licenses);
+            }
+            DestroyNative(rt, licenses);
+            lock (_gate)
+                if (_self.IsAllocated) _self.Free();
         }
-        DestroyNative(rt, licenses);
-        lock (_gate)
-            if (_self.IsAllocated) _self.Free();
     }
 
     // ── the license cache ──────────────────────────────────────────────────────────────────────────────────────────
@@ -439,32 +466,80 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     internal void UnregisterSession(ulong handle)
     {
         if (handle == 0) return;
-        TaskCompletionSource<bool>? waiter;
+        BufferedWait? waiter;
         lock (_gate)
         {
             _sessions.Remove(handle);
             _bufferedWaits.Remove(handle, out waiter);
         }
-        waiter?.TrySetResult(false);
+        waiter?.Finish(false);
     }
 
-    /// <summary>Complete when the session's store reports buffered media (the <c>Buffered</c> event), or when the
-    /// token cancels. One waiter per session — a second call supersedes the first, which completes false.</summary>
-    internal Task WaitBufferedAsync(ulong handle, CancellationToken ct)
+    private static readonly Task<bool> s_nothingToWaitFor = Task.FromResult(false);
+
+    /// <summary>
+    /// Complete TRUE when the session's store reports buffered media (the <c>Buffered</c> event with media ahead), and
+    /// FALSE when it cannot: the token cancels, the session reports an error or goes away, a newer wait for the same
+    /// session supersedes this one, or the runtime is torn down. Never faults, never throws. One waiter per session.
+    /// <para>Register the wait BEFORE issuing the native call it waits for: a store that already holds the window
+    /// answers from the feeder thread at once, and a waiter registered after that answer would never see it.</para>
+    /// <para>A cancelled waiter is removed from the table at the moment it cancels (not left behind until something
+    /// replaces it), and its token registration is released when it completes by any route.</para>
+    /// </summary>
+    internal Task<bool> WaitBufferedAsync(ulong handle, CancellationToken ct)
     {
-        if (handle == 0) return Task.CompletedTask;
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        TaskCompletionSource<bool>? old;
+        if (handle == 0) return s_nothingToWaitFor;
+        var wait = new BufferedWait(this, handle);
+        BufferedWait? superseded;
         lock (_gate)
         {
-            _bufferedWaits.Remove(handle, out old);
-            _bufferedWaits[handle] = tcs;
+            _bufferedWaits.Remove(handle, out superseded);
+            _bufferedWaits[handle] = wait;
         }
-        old?.TrySetResult(false);
-        if (!ct.CanBeCanceled) return tcs.Task;
-        CancellationTokenRegistration reg = ct.Register(static s => ((TaskCompletionSource<bool>)s!).TrySetResult(false), tcs);
-        return tcs.Task.ContinueWith(static (t, s) => ((CancellationTokenRegistration)s!).Dispose(),
-            reg, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        superseded?.Finish(false);
+        if (ct.CanBeCanceled)
+            wait.Registration = ct.UnsafeRegister(static s => ((BufferedWait)s!).Cancel(), wait);
+        return wait.Task;
+    }
+
+    /// <summary>Complete <paramref name="handle"/>'s pending buffered wait with <paramref name="buffered"/>, if any.</summary>
+    internal void CompleteBufferedWait(ulong handle, bool buffered)
+    {
+        BufferedWait? waiter;
+        lock (_gate) _bufferedWaits.Remove(handle, out waiter);
+        waiter?.Finish(buffered);
+    }
+
+    /// <summary>How many buffered waits are registered (the engine's tests check a cancelled one does not linger).</summary>
+    internal int PendingBufferedWaits { get { lock (_gate) return _bufferedWaits.Count; } }
+
+    /// <summary>One session's pending buffered wait.</summary>
+    private sealed class BufferedWait : TaskCompletionSource<bool>
+    {
+        private readonly ProtectedVideoRuntime _owner;
+        private readonly ulong _session;
+        internal CancellationTokenRegistration Registration;
+
+        internal BufferedWait(ProtectedVideoRuntime owner, ulong session)
+            : base(TaskCreationOptions.RunContinuationsAsynchronously)
+        {
+            _owner = owner;
+            _session = session;
+        }
+
+        internal void Finish(bool result)
+        {
+            if (!TrySetResult(result)) return;
+            Registration.Unregister();   // never blocks, even when called from inside the cancellation callback
+        }
+
+        internal void Cancel()
+        {
+            lock (_owner._gate)
+                if (_owner._bufferedWaits.TryGetValue(_session, out BufferedWait? current) && ReferenceEquals(current, this))
+                    _owner._bufferedWaits.Remove(_session);
+            TrySetResult(false);
+        }
     }
 
     // ── the native event sink ──────────────────────────────────────────────────────────────────────────────────────
@@ -508,13 +583,19 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 break;
 
             case PrNative.EvBuffered:
-            {
-                TaskCompletionSource<bool>? waiter = null;
-                if (a > 0)
-                    lock (_gate)
-                        _bufferedWaits.Remove(session, out waiter);
-                waiter?.TrySetResult(true);
+                if (a > 0) CompleteBufferedWait(session, buffered: true);
                 break;
+
+            case PrNative.EvError:
+            {
+                // A session that failed (an init segment that never parsed, a network end) will never report media: its
+                // prepare must end now, not at a token that may never cancel. The session records the error FIRST, so
+                // whatever continues from that wait already sees it.
+                ProtectedVideoSession? failed;
+                lock (_gate) _sessions.TryGetValue(session, out failed);
+                failed?.OnNativeEvent(ev, a, b);
+                CompleteBufferedWait(session, buffered: false);
+                return;
             }
 
             case PrNative.EvLog:
@@ -529,6 +610,9 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
 
     private void OnLicenseEvent(ulong licenseHandle, int ev, long a, long b, string? kidText)
     {
+        // The native side raises every license event with its license handle. A 0 would match — by handle — every row
+        // that is still waiting for its handle, and adopt itself as that handle: never a license event.
+        if (licenseHandle == 0) return;
         string? kid = null;
         long sinceMs = 0;
         lock (_gate)
@@ -551,6 +635,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             sinceMs = Environment.TickCount64 - e.AcquiredMs;
             if (ev == PrNative.EvLicenseExpired)
             {
+                if (!LicenseCachePolicy.AcceptExpiry(rowExists: true, e.State, e.Handle, licenseHandle)) return;
                 e.State = LicenseCacheState.Expired;
             }
             else if (LicenseCachePolicy.AcceptCompletion(rowExists: true, e.State, e.Handle, licenseHandle))
@@ -748,10 +833,10 @@ internal interface ILicenseDelivery
 
 /// <summary>The four native calls the runtime itself makes — the real DLL in production (<see cref="PrRuntimeNative"/>),
 /// a fake in the engine's tests, so the license cache, the relay and the warm-idle lifetime are testable with no CDM,
-/// no GPU, no license server and no window. Sessions call <see cref="PrNative"/> directly.</summary>
+/// no GPU, no license server and no window. Sessions call the other half, <see cref="IPrSessionNative"/>.</summary>
 internal interface IPrRuntimeNative
 {
-    /// <summary>Whether the native component can be loaded at all.</summary>
+    /// <summary>Whether the native component can be loaded AND exports the whole runtime ABI (a stale build does not).</summary>
     bool IsAvailable { get; }
     /// <summary><c>FgPrRuntimeCreate</c> with the runtime's event thunk and <paramref name="ctx"/>.</summary>
     int RuntimeCreate(string storePath, nint ctx, out ulong runtime);
@@ -771,6 +856,29 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
 
     private int _available = -1;   // -1 unknown, 0 no, 1 yes — probed once
 
+    /// <summary>Every export the managed side binds (<see cref="PrNative"/>). A DLL that loads but lacks one is a stale
+    /// build of an older ABI: calling into it would be an <see cref="EntryPointNotFoundException"/> out of the first
+    /// protected open, so it is reported as unavailable up front instead.</summary>
+    internal static readonly string[] RequiredExports =
+    [
+        "FgPrRuntimeCreate", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs",
+        "FgPrLicenseAcquire", "FgPrLicenseState", "FgPrLicenseRelease",
+        "FgPrSessionCreate", "FgPrSessionPrefetch", "FgPrSessionAttach", "FgPrSessionDetach", "FgPrSessionDestroy",
+        "FgPrSessionPlay", "FgPrSessionPause", "FgPrSessionSeek", "FgPrSessionSetVolume", "FgPrSessionSetRate",
+        "FgPrSessionSetStreamSize", "FgPrSessionSelectRepresentation", "FgPrSessionSnapshot",
+        "FgPrSessionGetKeyframes", "FgPrSessionGetBuffered", "FgPrSessionGetInitProtection",
+        "FgPrProbeFile",
+    ];
+
+    /// <summary>The first of <see cref="RequiredExports"/> that <paramref name="hasExport"/> says is missing, or null
+    /// when the library exports them all. Pure (the decision behind <see cref="IsAvailable"/>).</summary>
+    internal static string? FirstMissingExport(Func<string, bool> hasExport)
+    {
+        foreach (string name in RequiredExports)
+            if (!hasExport(name)) return name;
+        return null;
+    }
+
     public bool IsAvailable
     {
         get
@@ -782,7 +890,17 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
             {
                 ok = NativeLibrary.TryLoad(PrNative.LibraryName, typeof(PrRuntimeNative).Assembly,
                     DllImportSearchPath.ApplicationDirectory | DllImportSearchPath.AssemblyDirectory, out nint h);
-                if (ok) NativeLibrary.Free(h);
+                if (ok)
+                {
+                    string? missing = FirstMissingExport(name => NativeLibrary.TryGetExport(h, name, out _));
+                    NativeLibrary.Free(h);
+                    if (missing is not null)
+                    {
+                        ok = false;
+                        ProtectedVideoRuntime.WriteVideoLine(
+                            $"native.unavailable dll={PrNative.LibraryName} missingExport={missing} (a stale build of an older ABI)");
+                    }
+                }
             }
             catch { ok = false; }
             Volatile.Write(ref _available, ok ? 1 : 0);

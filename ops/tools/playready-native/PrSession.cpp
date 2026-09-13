@@ -266,7 +266,7 @@ static void PostToRuntime(Session& s, std::function<void(Runtime&)> fn)
 
 static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp);
 static void ApplyPendingSeek(Runtime& rt, const std::shared_ptr<Session>& sp, uint64_t seq);
-static void DetachInternal(Runtime& rt, Session& s);
+static void DetachInternal(Runtime& rt, Session& s, bool releaseSource = true);
 
 /// Fail the session from the feeder: the state, the error, and one Error event.
 static void FailSession(const std::shared_ptr<Session>& sp, HRESULT hr, int32_t mediaErr, const std::string& why)
@@ -324,8 +324,7 @@ static JobResult FetchInits(const std::shared_ptr<Session>& sp)
     fgpr::RaiseLog(s.handle, "[cenc] init " + fgpr::Narrow(videoUrl) + " HTTP " + std::to_string(vf->status) + " (" +
                              std::to_string(vf->body.size()) + "B) in " + std::to_string(vf->timing.headerMs + vf->timing.transferMs) + "ms");
     cenc::InitInfo info;
-    const bool videoOk = vf->status == 200 && !vf->body.empty() && cenc::ParseInit(vf->body, info) &&
-                         info.kind == cenc::TrackKind::Video;
+    const bool videoOk = vf->status == 200 && !vf->body.empty() && cenc::ParseInit(vf->body, info, cenc::TrackPick::Video);
     vf->ReleaseBody();
     if (!videoOk)
     {
@@ -352,8 +351,7 @@ static JobResult FetchInits(const std::shared_ptr<Session>& sp)
     bool haveAudio = false;
     if (af)
     {
-        if (af->status == 200 && !af->body.empty() && cenc::ParseInit(af->body, audioInfo) &&
-            audioInfo.kind == cenc::TrackKind::Audio)
+        if (af->status == 200 && !af->body.empty() && cenc::ParseInit(af->body, audioInfo, cenc::TrackPick::Audio))
         {
             haveAudio = true;
             char acc[5] = { (char)(audioInfo.codec4cc >> 24), (char)(audioInfo.codec4cc >> 16),
@@ -455,8 +453,8 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         ReferenceLocked(s, refMs, wantEndMs, seekPlan);
     }
     const bool compatible = initFetch->status == 200 && !initFetch->body.empty() &&
-                            cenc::ParseInit(initFetch->body, nextInfo) &&
-                            nextInfo.kind == cenc::TrackKind::Video && nextInfo.timescale == currentInfo.timescale &&
+                            cenc::ParseInit(initFetch->body, nextInfo, cenc::TrackPick::Video) &&
+                            nextInfo.timescale == currentInfo.timescale &&
                             memcmp(nextInfo.kid, currentInfo.kid, sizeof(currentInfo.kid)) == 0;
     initFetch->ReleaseBody();
     if (!compatible || !video)
@@ -871,7 +869,21 @@ static void ApplyPendingSeek(Runtime& rt, const std::shared_ptr<Session>& sp, ui
     ApplySeekToEngine(rt, s);
 }
 
-static void DetachInternal(Runtime& rt, Session& s)
+/// Unload whatever source the engine holds (an empty SetSource). Only ever called when no successor's SetSource is
+/// about to replace it: two loads back to back would let the empty load's asynchronous error land after the real one.
+static void ReleaseEngineSource(Runtime& rt, uint64_t logHandle)
+{
+    if (!rt.engine || rt.engineSource == 0) return;
+    BSTR empty = SysAllocString(L"");
+    HRESULT hs = rt.engineEx->SetSource(empty);
+    SysFreeString(empty);
+    rt.engineSource = 0;
+    fgpr::RaiseLog(logHandle, "[cenc] engine source released: SetSource(empty) hr=" + fgpr::Hex(hs));
+}
+
+/// `releaseSource` = false when an attach of ANOTHER session replaces this one: that session's own SetSource unloads
+/// this source (a paused one stays loaded until it does), so nothing loads twice in a row.
+static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
 {
     const bool wasSetSource = !s.attachPending;
     rt.attached.store(0, std::memory_order_release);   // first: the detach's own PAUSE / source events are dropped
@@ -880,10 +892,8 @@ static void DetachInternal(Runtime& rt, Session& s)
         if (s.firstFrameQpc.load(std::memory_order_acquire) != 0)
             s.startPositionMs.store(s.positionMs.load(std::memory_order_acquire), std::memory_order_release);   // a re-attach resumes here
         HRESULT hp = rt.engine->Pause();
-        BSTR empty = SysAllocString(L"");
-        HRESULT hs = rt.engineEx->SetSource(empty);
-        SysFreeString(empty);
-        fgpr::RaiseLog(s.handle, "[cenc] detach: Pause hr=" + fgpr::Hex(hp) + " SetSource(empty) hr=" + fgpr::Hex(hs));
+        fgpr::RaiseLog(s.handle, "[cenc] detach: Pause hr=" + fgpr::Hex(hp) + (releaseSource ? "" : " (the successor's source replaces this one)"));
+        if (releaseSource && rt.engineSource == s.handle) ReleaseEngineSource(rt, s.handle);
     }
     s.attachPending = false;
     s.metadataSeen = false;
@@ -997,6 +1007,7 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
         DetachInternal(rt, s);
         return;
     }
+    rt.engineSource = s.handle;
     Raise(s.handle, FgPrEvent_Attached, attachMs);
 
     const double volume = (double)s.volumeMicro.load(std::memory_order_acquire) / 1000000.0;
@@ -1020,6 +1031,9 @@ static void DestroyInternal(Runtime& rt, const std::shared_ptr<Session>& sp)
 {
     Session& s = *sp;
     if (rt.attached.load(std::memory_order_acquire) == s.handle) DetachInternal(rt, s);
+    // Replaced by an attach that is still waiting for its inits: the engine still holds THIS source (paused). Nothing live
+    // needs it and the successor's SetSource has not happened, so unload it now rather than keep its samples resident.
+    else if (rt.engineSource == s.handle && rt.attached.load(std::memory_order_acquire) == 0) ReleaseEngineSource(rt, s.handle);
 
     // Stop the feeder: flag, cancel whatever is on the wire (the token completes the wait at once), wake, join.
     s.feedStop.store(true, std::memory_order_release);
@@ -1311,7 +1325,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         if (prev)
         {
             std::shared_ptr<Session> old = fgpr::SessionByHandle(prev);
-            if (old) DetachInternal(rt, *old);
+            if (old) DetachInternal(rt, *old, /*releaseSource*/ false);   // this attach's SetSource replaces it
             else rt.attached.store(0, std::memory_order_release);
         }
         // lic == 0 is legal: clear content, or a key already usable through another session's license.
@@ -1659,11 +1673,17 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionGetInitProtection(FgPrRuntime
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  The demuxer gate.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// ParseInit + ParseSegment over a LOCAL self-contained fragmented MP4 — the init `moov` followed by `moof`/`mdat` runs
-// in the SAME file. No CDM, no D3D device, no network, no runtime: nothing below touches Media Foundation. Each
-// `moof` is sliced out together with the first `mdat` after it, so the demuxer sees exactly what a segment GET hands it
-// (a moof-relative data offset — `default-base-is-moof`, which every DASH segment uses). A track whose AVC NAL length
-// field is not 4 bytes is REFUSED with the value reported, before any sample is converted.
+// ParseInit + ParseMoof over a LOCAL self-contained fragmented MP4 — the init `moov` followed by `moof`/`mdat` runs in
+// the SAME file (or a DASH init segment with its media segments concatenated behind it). No CDM, no D3D device, no
+// network, no runtime: nothing below touches Media Foundation. The runtime's own demuxer code answers:
+//   * the track is ONE trak — the first usable video track, else the first usable audio track (a muxed file's tracks are
+//     never merged), and each moof contributes that track's traf only, matched by track_ID;
+//   * every moof is parsed against the WHOLE file, so a data offset means what the file says (moof-relative, or a
+//     tfhd base_data_offset from the file's first byte) rather than what a sliced copy happens to make it mean;
+//   * keyframe times are PRESENTATION times on the edit-list-corrected timeline (the manifest's), ascending;
+//   * `encrypted` is the track's tenc protection, and the subsample count comes from senc or saiz/saio.
+// A video track whose AVC NAL length field is not 4 bytes is REFUSED with the value reported, before any sample is
+// converted.
 
 __declspec(dllexport) int32_t __stdcall FgPrProbeFile(const wchar_t* path, int64_t* outKeyframes, int32_t cap,
                                                       FgPrProbeResult* out)
@@ -1695,46 +1715,32 @@ __declspec(dllexport) int32_t __stdcall FgPrProbeFile(const wchar_t* path, int64
     if (got != data.size()) return HRESULT_FROM_WIN32(ERROR_READ_FAULT);
 
     cenc::InitInfo info;
-    const bool initOk = cenc::ParseInit(data, info);
+    if (!cenc::ParseInit(data, info, cenc::TrackPick::Any)) return MF_E_INVALIDMEDIATYPE;
+    const bool video = info.kind == cenc::TrackKind::Video;
     out->width = (int32_t)info.width;
     out->height = (int32_t)info.height;
-    out->nalLengthSize = info.kind == cenc::TrackKind::Video ? (int32_t)info.nalLenSize : 0;
+    out->nalLengthSize = video ? (int32_t)info.nalLenSize : 0;
     out->encrypted = info.encrypted ? 1 : 0;
-    if (!initOk) return MF_E_INVALIDMEDIATYPE;
-    if (info.kind == cenc::TrackKind::Video && info.nalLenSize != 4) return MF_E_INVALIDMEDIATYPE;   // reported, refused
-
-    // Top-level boxes: each moof paired with the next mdat.
-    struct TopBox { uint32_t type; size_t offset; size_t length; };
-    std::vector<TopBox> top;
-    cenc::ForEachBox(data.data(), data.size(), [&](const cenc::Box& b) {
-        top.push_back(TopBox{ b.type, (size_t)(b.boxStart - data.data()), b.boxLen });
-    });
+    if (video && info.nalLenSize != 4) return MF_E_INVALIDMEDIATYPE;   // reported, refused
 
     std::vector<cenc::Sample> samples;
     std::vector<int64_t> keyframes;
     uint64_t ticks = 0, endTicks = 0;
     int64_t sampleCount = 0, subsampleCount = 0;
-    for (size_t i = 0; i < top.size(); i++)
-    {
-        if (top[i].type != cenc::fourcc("moof")) continue;
-        size_t j = i + 1;
-        while (j < top.size() && top[j].type != cenc::fourcc("mdat") && top[j].type != cenc::fourcc("moof")) j++;
-        if (j >= top.size() || top[j].type != cenc::fourcc("mdat")) continue;
-        const std::vector<uint8_t> segment(data.begin() + (ptrdiff_t)top[i].offset,
-                                           data.begin() + (ptrdiff_t)(top[j].offset + top[j].length));
+    cenc::ForEachBox(data.data(), data.size(), [&](const cenc::Box& b) {
+        if (b.type != cenc::fourcc("moof")) return;
         samples.clear();
-        const int produced = cenc::ParseSegment(segment, info, samples, ticks, &keyframes);
-        if (produced <= 0) continue;
+        const int produced = cenc::ParseMoof(data.data(), data.size(), b, info, samples, ticks, video ? &keyframes : nullptr);
+        if (produced <= 0) return;
         sampleCount += produced;
         for (auto const& smp : samples)
         {
             subsampleCount += (int64_t)smp.subsamples.size();
+            if (!smp.subsamples.empty()) out->encrypted = 1;
             const uint64_t e = smp.timeTicks + smp.durTicks;
             if (e > endTicks) endTicks = e;
         }
-        if (!info.encrypted && (int64_t)samples.size() > 0 && !samples.front().subsamples.empty()) out->encrypted = 1;
-        i = j;
-    }
+    });
 
     std::sort(keyframes.begin(), keyframes.end());
     keyframes.erase(std::unique(keyframes.begin(), keyframes.end()), keyframes.end());

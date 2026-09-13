@@ -176,16 +176,18 @@ typedef struct FgPrSnapshot
 } FgPrSnapshot;
 
 /// What FgPrProbeFile answers about a local fragmented MP4 — the demuxer gate's read-out (tests only; no CDM, no GPU).
+/// Every field describes ONE track: the first usable video track, else the first usable audio track. Times are
+/// presentation times on the edit-list-corrected timeline.
 typedef struct FgPrProbeResult
 {
     uint32_t structSize;
-    int32_t keyframeCount;      // sync samples found (the caller's buffer may have held fewer)
-    int32_t sampleCount;
+    int32_t keyframeCount;      // VIDEO sync samples found (0 for an audio track; the caller's buffer may have held fewer)
+    int32_t sampleCount;        // samples in the presentation (an edit list's leading audio priming is not one)
     int32_t width, height;
-    int32_t nalLengthSize;      // 4 is the only accepted value; anything else is reported and refused
-    int32_t encrypted;          // 1 when the track carries a `tenc` / `senc` subsample map
-    int32_t subsampleCount;     // subsample entries seen across the parsed segments (0 for clear content)
-    int64_t durationMs;
+    int32_t nalLengthSize;      // 4 is the only accepted value; anything else is reported and refused (0 for audio)
+    int32_t encrypted;          // 1 when the track's `tenc` says protected, or a sample carries a subsample map
+    int32_t subsampleCount;     // subsample entries seen across the parsed fragments (senc or saiz/saio; 0 for clear)
+    int64_t durationMs;         // the end of the last presented sample
 } FgPrProbeResult;
 
 // ── runtime ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -301,9 +303,10 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionGetInitProtection(FgPrRuntime
 
 // ── test seam ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/// Run ParseInit + ParseSegment over a LOCAL fragmented MP4 and report what the demuxer found — the engine's
-/// CencDemuxTests gate. No CDM, no D3D device, no network, no runtime: callable on any box with the DLL present.
-/// `outKeyframes` (may be null) receives up to `cap` ascending sync-sample times in ms.
+/// Run the runtime's own demuxer (ParseInit + ParseMoof) over a LOCAL fragmented MP4 — an init `moov` followed by its
+/// `moof`/`mdat` runs, e.g. a DASH init segment with its media segments concatenated — and report what it found: the
+/// engine's CencDemuxTests gate. No CDM, no D3D device, no network, no runtime: callable on any box with the DLL present.
+/// `outKeyframes` (may be null) receives up to `cap` ascending video sync-sample presentation times in ms.
 __declspec(dllexport) int32_t __stdcall FgPrProbeFile(const wchar_t* path, int64_t* outKeyframes, int32_t cap,
                                                       FgPrProbeResult* out);
 

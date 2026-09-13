@@ -22,7 +22,9 @@ if not exist %OUT%\linktmp mkdir %OUT%\linktmp
 set TEMP=%HERE%%OUT%\linktmp
 set TMP=%TEMP%
 
-cl /nologo /std:c++20 /EHsc /MD /O2 /DWIN32 /D_UNICODE /DUNICODE /DFG_UWP /DFG_WIN32_PMP /DFG_DESKTOP_DLL ^
+REM /utf-8: the sources are UTF-8 (box-drawing comments, a few non-ASCII log literals); without it MSVC reads them in the
+REM machine's ANSI code page and a narrow literal's bytes depend on which box built the DLL.
+cl /nologo /std:c++20 /utf-8 /EHsc /MD /O2 /DWIN32 /D_UNICODE /DUNICODE /DFG_UWP /DFG_WIN32_PMP /DFG_DESKTOP_DLL ^
    /I "%HERE%generated" ^
    /Fo"%OUT%\\" /Fe"%OUT%\FluentGpu.PlayReady.Native.dll" /LD ^
    PrRuntime.cpp PrLicense.cpp PrSession.cpp ^

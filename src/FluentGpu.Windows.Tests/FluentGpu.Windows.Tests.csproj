@@ -41,15 +41,10 @@
   </ItemGroup>
 
   <!-- CencDemuxTests call FgPrProbeFile in FluentGpu.PlayReady.Native.dll. Copied beside the test assembly ONLY when it has
-       been built (ops/tools/playready-native/build.cmd <arch>); a box without it still builds and those tests skip. The
-       arch rule mirrors FluentGpu.WindowsApp.csproj's _PlayReadyNative* properties. -->
-  <PropertyGroup>
-    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</_PlayReadyNativeArch>
-    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_PlayReadyNativeArch>
-    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'AMD64'">x64</_PlayReadyNativeArch>
-    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
-    <_PlayReadyNativeDll>$(MSBuildThisFileDirectory)..\..\ops\tools\playready-native\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
-  </PropertyGroup>
+       been built (ops/tools/playready-native/build.cmd <arch>, or any build of FluentGpu.WindowsApp); a box without it
+       still builds and those tests skip. The architecture is the test HOST's (PlayReadyNative.props), shared with the
+       gallery so the two can never disagree. -->
+  <Import Project="..\..\ops\tools\playready-native\PlayReadyNative.props" />
   <ItemGroup Condition="Exists('$(_PlayReadyNativeDll)')">
     <None Include="$(_PlayReadyNativeDll)" Link="FluentGpu.PlayReady.Native.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>

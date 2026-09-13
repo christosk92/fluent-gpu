@@ -44,7 +44,7 @@ public readonly record struct LicenseCacheEntry(string Kid, LicenseCacheState St
 /// The decision half of <see cref="ProtectedVideoRuntime"/>'s license cache, extracted so it is testable with no CDM
 /// and no native call (the engine's <c>LicenseCachePolicyTests</c>). The runtime owns the handles, the CDM key
 /// sessions and the clock; this owns the RULES: reuse / join / re-acquire, when an expiry is close enough to count as
-/// expired, which row an eleventh KID evicts, and whether a late <c>LicenseUsable</c> still applies to a row that has
+/// expired, which row a ninth KID evicts, and whether a late <c>LicenseUsable</c> still applies to a row that has
 /// since been evicted or replaced.
 /// <para>Why a cache at all: PlayReady's "proactive acquisition" — the license request is issued the moment a
 /// manifest is known, not when the user asks for the video, so a song→video switch finds the key already usable and
@@ -78,7 +78,7 @@ public static class LicenseCachePolicy
     public static bool HasRoom(int count) => count < Capacity;
 
     /// <summary>
-    /// Which row an eleventh KID evicts, or -1 when the cache has room (or nothing is evictable). The order is:
+    /// Which row a KID beyond <see cref="Capacity"/> evicts, or -1 when the cache has room (or nothing is evictable). The order is:
     /// a Failed or Expired row first (it is dead weight), then the least-recently-used row. A row that is
     /// <see cref="LicenseCacheEntry.InUse"/> — an attached session is decoding with that key — is NEVER evicted, and
     /// neither is <paramref name="keepKid"/> (the KID the caller is about to attach), because evicting either closes
@@ -110,6 +110,17 @@ public static class LicenseCachePolicy
     /// </summary>
     public static bool AcceptCompletion(bool rowExists, LicenseCacheState rowState, ulong rowHandle, ulong eventHandle)
         => rowExists && rowState == LicenseCacheState.Pending && rowHandle != 0 && rowHandle == eventHandle;
+
+    /// <summary>
+    /// Whether a <c>LicenseExpired</c> event applies to a row. An expiry is about a key session that EXISTS — one that
+    /// became usable, or is still pending — so it must name that row's own non-zero handle. An expiry for a handle the
+    /// row does not carry (an evicted predecessor's key session, a re-acquired KID's old one) must not mark the live
+    /// row Expired and force a needless re-acquisition; nor can an expiry resurrect a Failed row's state into a
+    /// different dead state.
+    /// </summary>
+    public static bool AcceptExpiry(bool rowExists, LicenseCacheState rowState, ulong rowHandle, ulong eventHandle)
+        => rowExists && (rowState is LicenseCacheState.Usable or LicenseCacheState.Pending)
+           && rowHandle != 0 && rowHandle == eventHandle;
 }
 
 /// <summary>
@@ -127,7 +138,11 @@ public static class LicenseKeyId
         [0x9a, 0x04, 0xf0, 0x79, 0x98, 0x40, 0x42, 0x86, 0xab, 0x92, 0xe6, 0x5b, 0xe0, 0x88, 0x5f, 0x95];
 
     /// <summary>The first KID <paramref name="pssh"/> names, as 32 lower-case hex characters, or null when it names
-    /// none (or is not PlayReady init data). Accepts a whole <c>pssh</c> box or a bare PlayReady Object.</summary>
+    /// none (or is not PlayReady init data). Accepts a whole <c>pssh</c> box or a bare PlayReady Object.
+    /// <para>The input is untrusted manifest data (it runs at manifest time, on bytes from the network), so it NEVER
+    /// throws: every count and size in the box is an unsigned field, and each is checked against the bytes actually left
+    /// in 64-bit arithmetic before anything is sliced — a claimed KID list or data size that does not fit is simply not
+    /// there.</para></summary>
     public static string? FromPssh(ReadOnlySpan<byte> pssh)
     {
         if (pssh.Length < 8) return null;
@@ -139,20 +154,22 @@ public static class LicenseKeyId
             if (pssh.Length < 32) return null;
             byte version = pssh[8];
             if (!pssh.Slice(12, 16).SequenceEqual(PlayReadySystemId)) return null;
-            int at = 28;
+            long at = 28;
             if (version > 0)
             {
-                if (pssh.Length < at + 4) return null;
-                int count = ReadInt32BE(pssh, at);
+                if (pssh.Length - at < 4) return null;
+                uint count = ReadUInt32BE(pssh, (int)at);
                 at += 4;
-                if (count > 0 && pssh.Length >= at + 16) return Hex(pssh.Slice(at, 16));
-                at += Math.Max(0, count) * 16;
+                if (count > 0 && pssh.Length - at >= 16) return Hex(pssh.Slice((int)at, 16));
+                long kidBytes = (long)count * 16;
+                if (pssh.Length - at < kidBytes) return null;   // a KID list the box does not hold
+                at += kidBytes;
             }
-            if (pssh.Length < at + 4) return null;
-            int dataSize = ReadInt32BE(pssh, at);
+            if (pssh.Length - at < 4) return null;
+            uint dataSize = ReadUInt32BE(pssh, (int)at);
             at += 4;
-            if (dataSize <= 0 || pssh.Length < at + dataSize) return null;
-            pro = pssh.Slice(at, dataSize);
+            if (dataSize == 0 || pssh.Length - at < dataSize) return null;
+            pro = pssh.Slice((int)at, (int)dataSize);
         }
         return FromPlayReadyObject(pro);
     }
@@ -224,7 +241,8 @@ public static class LicenseKeyId
         return Hex(k);
     }
 
-    private static int ReadInt32BE(ReadOnlySpan<byte> b, int at) => (b[at] << 24) | (b[at + 1] << 16) | (b[at + 2] << 8) | b[at + 3];
+    private static uint ReadUInt32BE(ReadOnlySpan<byte> b, int at)
+        => ((uint)b[at] << 24) | ((uint)b[at + 1] << 16) | ((uint)b[at + 2] << 8) | b[at + 3];
 
     private static string Hex(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(bytes);
 }

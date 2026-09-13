@@ -501,6 +501,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
     if (!sp) return;
     fgpr::Session& s = *sp;
     const uint64_t h = s.handle;
+    // Attached but its source not on the engine yet (the attach is waiting for its init segments): whatever the engine
+    // says now is about the PREVIOUS source — its pause, a late error — and never this session's.
+    if (s.attachPending) return;
 
     switch (ev)
     {
@@ -532,6 +535,13 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
         {
             int64_t expected = 0;
             s.firstFrameQpc.compare_exchange_strong(expected, qpc, std::memory_order_acq_rel);
+            // An open PAUSED (startPaused) never plays, so no PLAYING or PAUSE event ever moves it out of Loading: the
+            // first frame being up IS the moment it is paused-and-ready. A playing source reports PLAYING itself.
+            {
+                int32_t loading = FgPrState_Loading;
+                s.state.compare_exchange_strong(loading, rt.engine->IsPaused() ? FgPrState_Paused : FgPrState_Playing,
+                                                std::memory_order_acq_rel);
+            }
             fgpr::SessionSamplePosition(rt, s, false);
             Raise(h, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire));
             fgpr::SessionPublishHandle(rt, s, false);
@@ -577,11 +587,26 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
             Raise(h, FgPrEvent_Ended);
             break;
         case MF_MEDIA_ENGINE_EVENT_ERROR:
-            LogLine("[cenc] media ERROR code=" + std::to_string((int)p1) + " hr=" + fgpr::Hex((HRESULT)p2));
-            s.errorHr.store((int32_t)p2, std::memory_order_release);
+        {
+            // The engine's CURRENT error object is the authority. Loading a new source clears it, so an error notification
+            // that outlived the source it was raised for (a detach's own empty SetSource, a replaced source's late failure)
+            // finds no error here and is not this session's to report.
+            winrt::com_ptr<IMFMediaError> err;
+            if (FAILED(rt.engine->GetError(err.put())) || !err)
+            {
+                fgpr::RaiseLog(h, "[cenc] media ERROR notification code=" + std::to_string((int)p1) + " hr=" +
+                                  fgpr::Hex((HRESULT)p2) + " with no current error - a previous source's, ignored");
+                break;
+            }
+            const int64_t code = (int64_t)err->GetErrorCode();
+            HRESULT hr = err->GetExtendedErrorCode();
+            if (SUCCEEDED(hr)) hr = (HRESULT)p2;
+            fgpr::RaiseLog(h, "[cenc] media ERROR code=" + std::to_string((long long)code) + " hr=" + fgpr::Hex(hr));
+            s.errorHr.store((int32_t)hr, std::memory_order_release);
             s.state.store(FgPrState_Error, std::memory_order_release);
-            Raise(h, FgPrEvent_Error, (int64_t)p1, (int64_t)(int32_t)p2);
+            Raise(h, FgPrEvent_Error, code, (int64_t)(int32_t)hr);
             break;
+        }
         case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
             // Playback time moved: refresh the snapshot, raise Position (rate-limited inside), and — should the swap chain
             // not have been ready at metadata / canplay / first frame — ask for the handle again.
