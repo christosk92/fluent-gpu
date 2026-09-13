@@ -15,6 +15,8 @@
   <ItemGroup>
     <!-- The pure decisions behind the OS pillars (NotifyIconModel, the startup command line, the activation refine) are
          internal and unit-tested there — no window, no source text. -->
+    <!-- The protected-video native seam (PrNative, the runtime's event entry, the session state machine's event hook)
+         is internal; the engine's own test gate drives it with fakes and the demuxer probe. -->
     <InternalsVisibleTo Include="FluentGpu.Windows.Tests" />
   </ItemGroup>
   <ItemGroup>

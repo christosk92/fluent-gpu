@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Media;
@@ -7,60 +8,63 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 
 /// <summary>
 /// The protected-video <see cref="IMediaBackend"/> (spec §9.2) — the DRM path the Windows MF backend routes to when a
-/// <see cref="MediaSource"/> carries a <see cref="DrmConfig"/>. It opens a <see cref="ProtectedMediaSession"/> backed by the
-/// in-process native PlayReady CDM (<see cref="DesktopProtectedVideoPlayer"/>) and threads the app license relay
-/// (<see cref="MediaOpenOptions.LicenseRelay"/>, from <c>WithDrm</c>) down to the native callback. Also
-/// <see cref="IPreparableBackend"/>: a queued protected item can be spun up + first-frame-readied ahead of a mixed-queue
-/// join (the two engines never co-mix — a cross-backend transition is a declicked hard cut).
-/// <para><b>Per-source descriptor (cross-plan contract, video-smooth-switching plan):</b> the parsed manifest descriptor
-/// travels ON THE SOURCE via <see cref="DrmConfig.SourceDescriptor"/> (an <c>object?</c> holding a
-/// <see cref="DashSourceDescriptor"/>), not baked into this backend. Every open/prepare resolves
-/// <c>drm.SourceDescriptor as DashSourceDescriptor ?? </c> the ctor-baked fallback, so ONE long-lived backend built
-/// with <c>descriptor: null</c> can play ANY per-source descriptor across repeated switches — the ctor-baked
-/// descriptor remains only as a fallback for the gallery/test-vector path (a backend pinned to one fixed track).</para>
-/// <para>Testable: inject a fake <see cref="IProtectedVideoPlayer"/> factory to exercise routing / snapshot mapping /
-/// prepare without a real CDM or native call.</para>
+/// <see cref="MediaSource"/> carries a <see cref="DrmConfig"/>. Every open is a <see cref="ProtectedVideoSession"/> on the
+/// process <see cref="ProtectedVideoRuntime"/> (one warm engine, one CDM, a KID-keyed license cache), wrapped in a
+/// <see cref="ProtectedMediaSession"/>.
+/// <para><b>Warm switching.</b> As an <see cref="IPreparableBackend"/>, <see cref="PrepareAsync"/> does what the seam always
+/// promised: the license goes in flight from its first line, and the session fetches the init segments plus
+/// <see cref="ProtectedVideoSession.DefaultPrefetchSegments"/> segments at the start position for both streams — with
+/// no engine call. <see cref="OpenAsync"/> then finds that prepared session by its init URL and the switch is one
+/// attach. An unconsumed prepared session is disposed after <see cref="PreparedExpiryMs"/>.</para>
+/// <para><b>The start position.</b> <see cref="MediaOpenOptions.StartPosition"/> is carried into the native open
+/// descriptor: the first segment fetched is the one containing it and the first presented frame is at it. A song→video
+/// switch at 1:23 never shows 0:00 first.</para>
+/// <para><b>Per-source descriptor.</b> The parsed manifest travels ON THE SOURCE via
+/// <see cref="DrmConfig.SourceDescriptor"/> (a <see cref="DashSourceDescriptor"/>), so ONE long-lived backend plays any
+/// source; the ctor-baked descriptor is only a fallback for a backend pinned to one fixed track.</para>
+/// <para>Testable: inject a player factory (and optionally the license hook) to exercise routing, request mapping and
+/// prepare/open hand-off without a CDM or a native call.</para>
 /// </summary>
 public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
 {
-    private readonly Func<IProtectedVideoPlayer> _playerFactory;
-    private readonly Func<LicenseRequest, ValueTask<LicenseResponse>>? _defaultRelay;
-    private readonly TimeSpan _prepareTimeout;
-    private readonly DashSourceDescriptor? _descriptor;
+    /// <summary>How long a prepared-but-unopened session is kept before it is disposed (its store and license row stay
+    /// accounted for no longer than the runtime's own warm-idle window).</summary>
+    public const int PreparedExpiryMs = ProtectedVideoRuntime.WarmIdleDisposeMs;
 
-    /// <summary>Create the production backend (each open builds a real in-process native CDM player). An optional
-    /// <paramref name="defaultRelay"/> is used for the prepare hook (which has no per-open options). The
-    /// <paramref name="descriptor"/> (from <see cref="DashManifestParser"/>) is only a FALLBACK used when a given
-    /// source's own <see cref="DrmConfig.SourceDescriptor"/> is absent — pass <c>null</c> (the norm for a long-lived
-    /// player) to play any per-source descriptor arriving on <c>DrmConfig.SourceDescriptor</c>, or a fixed descriptor
-    /// to pin this backend to one ARBITRARY parsed DASH/PlayReady source regardless of what the source itself carries.
-    /// With neither present, a recognized Axinom URI falls back to the baked test vector.</summary>
+    private readonly Func<ProtectedVideoRequest, IProtectedVideoPlayer> _playerFactory;
+    private readonly Action<ProtectedVideoRequest>? _ensureLicense;
+    private readonly Func<LicenseRequest, ValueTask<LicenseResponse>>? _defaultRelay;
+    private readonly DashSourceDescriptor? _descriptor;
+    private readonly object _gate = new();
+    private readonly Dictionary<string, PreparedEntry> _prepared = new(StringComparer.Ordinal);
+
+    /// <summary>Create the production backend: sessions on <see cref="ProtectedVideoRuntime.Shared"/>, licenses started in
+    /// its cache. <paramref name="defaultRelay"/> serves the prepare hook (which has no per-open options);
+    /// <paramref name="descriptor"/> is only a FALLBACK for a source that carries none of its own.</summary>
     public ProtectedMediaBackend(Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null,
                                  DashSourceDescriptor? descriptor = null)
-        : this(static () => new DesktopProtectedVideoPlayer(), defaultRelay, null, descriptor) { }
+        : this(static req => ProtectedVideoSession.Create(ProtectedVideoRuntime.Shared, req), defaultRelay, descriptor,
+               static req => StartLicense(ProtectedVideoRuntime.Shared, req))
+    {
+    }
 
-    /// <summary>Test/DI seam: supply the protected-player factory + optional prepare timeout + optional fallback
-    /// source descriptor (see the ctor-baked-fallback note above; <c>drm.SourceDescriptor</c> on the source being
-    /// opened always takes priority when present).</summary>
-    public ProtectedMediaBackend(Func<IProtectedVideoPlayer> playerFactory,
+    /// <summary>Test/DI seam: supply the per-request player factory, the optional default relay and fallback descriptor,
+    /// and the optional license hook (called with every request BEFORE its player is created — production starts the
+    /// runtime's license acquisition there).</summary>
+    public ProtectedMediaBackend(Func<ProtectedVideoRequest, IProtectedVideoPlayer> playerFactory,
                                  Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null,
-                                 TimeSpan? prepareTimeout = null,
-                                 DashSourceDescriptor? descriptor = null)
+                                 DashSourceDescriptor? descriptor = null,
+                                 Action<ProtectedVideoRequest>? ensureLicense = null)
     {
         _playerFactory = playerFactory;
         _defaultRelay = defaultRelay;
-        _prepareTimeout = prepareTimeout ?? TimeSpan.FromSeconds(10);
         _descriptor = descriptor;
+        _ensureLicense = ensureLicense;
     }
 
-    /// <summary>
-    /// Eagerly preload the native PlayReady component (fixes E2) so the FIRST real protected open does not pay for an
-    /// implicit <c>LoadLibrary</c> of <c>FluentGpu.PlayReady.Native.dll</c> + its MF/PlayReady dependency chain. The
-    /// app should call this once, at startup idle (e.g. after the first frame is up), well before the user is likely
-    /// to open a DRM-protected source. Idempotent and non-blocking — see
-    /// <see cref="DesktopProtectedVideoPlayer.Warmup"/> for the mechanics.
-    /// </summary>
-    public static void WarmupNative() => DesktopProtectedVideoPlayer.Warmup();
+    /// <summary>Preload the native component at startup idle, so the first protected open does not pay the DLL's
+    /// load + MF/PlayReady import resolution on the caller's thread. Idempotent and non-blocking.</summary>
+    public static void WarmupNative() => ProtectedVideoRuntime.Warmup();
 
     /// <inheritdoc/>
     public MediaCapabilities Capabilities { get; } = new(SupportsVideo: true, SupportsAudioGraph: false, SupportsDrm: true)
@@ -71,14 +75,35 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
     /// <inheritdoc/>
     public MediaKind Kind => MediaKind.MfVideoOrFile;
 
+    /// <summary>
+    /// Start the license for <paramref name="request"/>'s KID on <paramref name="runtime"/>, if the request names one
+    /// (its declared KID or the one its PSSH carries) and carries the PSSH to generate the challenge from. Returns at
+    /// once. This is the manifest-time half of the switch — call it as soon as a manifest is known.
+    /// </summary>
+    public static LicenseCacheState StartLicense(ProtectedVideoRuntime runtime, ProtectedVideoRequest request)
+    {
+        string? kid = ProtectedVideoSession.KeyIdFor(request);
+        if (kid is null || request.Pssh.IsEmpty) return LicenseCacheState.None;
+        return runtime.EnsureLicense(request.Pssh.Span, kid, request.LicenseRelay, request.Drm?.System ?? DrmSystem.PlayReady);
+    }
+
     /// <inheritdoc/>
     public ValueTask<IMediaSession> OpenAsync(MediaSource source, MediaOpenOptions opts, CancellationToken ct)
     {
         if (source.Drm is null)
             throw new NotSupportedException("ProtectedMediaBackend requires a source carrying a DrmConfig (source.With(drm)).");
 
-        var request = BuildRequest(source, source.Drm, opts.LicenseRelay ?? _defaultRelay, opts.StartPaused, _descriptor);
-        var player = _playerFactory();
+        ProtectedVideoRequest request = BuildRequest(source, source.Drm, opts.LicenseRelay ?? _defaultRelay, opts.StartPaused, _descriptor)
+            with { StartPosition = opts.StartPosition > TimeSpan.Zero ? opts.StartPosition : TimeSpan.Zero };
+
+        IProtectedVideoPlayer? player = TakePrepared(request);
+        if (player is null)
+        {
+            // Cold: start the license (it may still be pending at attach — attaching anyway is faster than waiting) and
+            // create the session; its attach fetches the init + the segment at the start position, both streams at once.
+            _ensureLicense?.Invoke(request);
+            player = _playerFactory(request);
+        }
         IMediaSession session = new ProtectedMediaSession(player, request, opts);
         return ValueTask.FromResult(session);
     }
@@ -89,35 +114,73 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         if (next.Drm is null)
             throw new NotSupportedException("ProtectedMediaBackend.PrepareAsync requires a source carrying a DrmConfig.");
 
-        var request = BuildRequest(next, next.Drm, _defaultRelay, startPaused: true, _descriptor);
-        var player = _playerFactory();
-        var opts = new MediaOpenOptions { StartPaused = true, LicenseRelay = _defaultRelay };
-        var session = new ProtectedMediaSession(player, request, opts);
+        ProtectedVideoRequest request = BuildRequest(next, next.Drm, _defaultRelay, startPaused: true, _descriptor);
+        _ensureLicense?.Invoke(request);                                   // the license is in flight from THIS line
+        IProtectedVideoPlayer player = _playerFactory(request);
+        var entry = new PreparedEntry(this, player, request);
+        AddPrepared(entry);
 
-        // Spin up the CDM + first-frame-ready ahead of the join (bounded). The join consumes it as a hard cut.
-        player.Start(request);
-        var deadline = DateTime.UtcNow + _prepareTimeout;
-        while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+        try
         {
-            player.Pump(default);   // refresh the native snapshot (no real binding at prepare time)
-            if (player.HasSurface || player.State.Value is ProtectedVideoState.Playing or ProtectedVideoState.Paused)
-                break;
-            if (player.State.Value == ProtectedVideoState.Error) break;
-            try { await Task.Delay(20, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+            await player.PrefetchAsync(ProtectedVideoSession.DefaultPrefetchSegments, ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) { /* a canceled prepare still leaves whatever landed usable */ }
 
-        bool ready = player.HasSurface || player.State.Value is ProtectedVideoState.Playing or ProtectedVideoState.Paused;
-        var duration = player.DurationMs.Value > 0 ? TimeSpan.FromMilliseconds(player.DurationMs.Value) : TimeSpan.Zero;
-        return new ProtectedPreparedItem(session, ready, duration);
+        TimeSpan duration = request.DurationMs > 0 ? TimeSpan.FromMilliseconds(request.DurationMs) : TimeSpan.Zero;
+        bool ready = player.ForwardBufferedMs > 0 && player.State.Peek() != ProtectedVideoState.Error;
+        return new ProtectedPreparedItem(entry, ready, duration);
     }
 
-    /// <summary>Map a <see cref="MediaSource"/> + <see cref="DrmConfig"/> + relay into a native open request. The
-    /// per-source descriptor travels ON <paramref name="drm"/> (<see cref="DrmConfig.SourceDescriptor"/>) — a
-    /// long-lived backend built with a null ctor-baked descriptor plays ANY source this way; <paramref name="fallbackDescriptor"/>
-    /// (the ctor-baked <c>_descriptor</c>, if any) is used only when the source itself carries none. When a parsed
-    /// descriptor is resolved (from <see cref="DashManifestParser"/>) it carries the source verbatim — ANY DASH/PlayReady
-    /// MPD, not just the test vector. Otherwise a recognized Axinom URI is expanded to its known init+segment template,
-    /// and an unrecognized URI leaves the template empty (native falls back to its baked vector).</summary>
+    private void AddPrepared(PreparedEntry entry)
+    {
+        string? key = entry.Request.InitUrl;
+        if (key is null) return;
+        List<PreparedEntry>? expired = null;
+        lock (_gate)
+        {
+            long now = Environment.TickCount64;
+            foreach (KeyValuePair<string, PreparedEntry> kv in _prepared)
+                if (now - kv.Value.CreatedMs > PreparedExpiryMs) (expired ??= new()).Add(kv.Value);
+            if (expired is not null)
+                for (int i = 0; i < expired.Count; i++) _prepared.Remove(expired[i].Request.InitUrl!);
+            if (_prepared.Remove(key, out PreparedEntry? superseded)) (expired ??= new()).Add(superseded);
+            _prepared[key] = entry;
+        }
+        if (expired is not null)
+            for (int i = 0; i < expired.Count; i++) expired[i].Release();
+    }
+
+    /// <summary>Hand a prepared player for <paramref name="request"/>'s init URL to the open, exactly once.</summary>
+    private IProtectedVideoPlayer? TakePrepared(ProtectedVideoRequest request)
+    {
+        if (request.InitUrl is null) return null;
+        PreparedEntry? entry;
+        lock (_gate)
+        {
+            if (!_prepared.Remove(request.InitUrl, out entry)) return null;
+        }
+        if (Environment.TickCount64 - entry.CreatedMs > PreparedExpiryMs) { entry.Release(); return null; }
+        return entry.Claim() ? entry.Player : null;
+    }
+
+    private void ForgetPrepared(PreparedEntry entry)
+    {
+        string? key = entry.Request.InitUrl;
+        if (key is null) return;
+        lock (_gate)
+        {
+            if (_prepared.TryGetValue(key, out PreparedEntry? current) && ReferenceEquals(current, entry))
+                _prepared.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Map a <see cref="MediaSource"/> + <see cref="DrmConfig"/> + relay into a protected open request. The per-source
+    /// descriptor on <paramref name="drm"/> wins; <paramref name="fallbackDescriptor"/> is used only when the source carries
+    /// none. With neither, a recognized Axinom test-vector URI is expanded to its known init + segment template (the KID
+    /// and PSSH are then read from its init segment); any other URI yields a request with no template, which the session
+    /// reports as a typed failure.
+    /// </summary>
     internal static ProtectedVideoRequest BuildRequest(MediaSource source, DrmConfig drm,
         Func<LicenseRequest, ValueTask<LicenseResponse>>? relay, bool startPaused, DashSourceDescriptor? fallbackDescriptor = null)
     {
@@ -127,15 +190,9 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             Drm = drm,
             LicenseRelay = relay,
             StartPaused = startPaused,
-            Mode = "protected-custom",
         };
 
-        // Per-source descriptor first (cross-plan contract: DrmConfig.SourceDescriptor travels on the source so one
-        // long-lived backend/player can switch between protected sources in place); the ctor-baked descriptor is only
-        // a fallback for the gallery/test-vector path.
         DashSourceDescriptor? descriptor = drm.SourceDescriptor as DashSourceDescriptor ?? fallbackDescriptor;
-
-        // Preferred generic path: a parsed manifest descriptor drives the native open ABI directly.
         if (descriptor is not null)
         {
             return req with
@@ -148,8 +205,10 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
                 StartNumber = descriptor.StartNumber,
                 SegmentCount = descriptor.SegmentCount,
                 SegmentStride = descriptor.SegmentStride,
+                SegmentLengthMs = descriptor.SegmentLengthMs,
+                DurationMs = descriptor.DurationMs,
                 Pssh = descriptor.Pssh,
-                // The paired audio representation (the video's own soundtrack), when the manifest carried one.
+                DefaultKid = descriptor.DefaultKid,
                 AudioInitUrl = descriptor.AudioInitUrl,
                 AudioSegmentBaseUrl = descriptor.AudioSegmentBaseUrl,
                 AudioSegmentPrefix = descriptor.AudioSegmentPrefix,
@@ -159,7 +218,8 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         }
 
         string? uri = ExtractUri(source);
-        // Legacy fallback — Axinom public singlekey PlayReady vector: expand its MPD to the explicit init/segment template.
+        // The Axinom public single-key PlayReady test vector (the engine's on-box protected gate): expand its MPD to the
+        // explicit init/segment template.
         if (uri is not null && uri.Contains("protected_dash_1080p_h264_singlekey", StringComparison.OrdinalIgnoreCase))
         {
             const string baseUrl = "https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/";
@@ -184,18 +244,48 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         LoopSource l => ExtractUri(l.Inner),
         _ => null,
     };
+
+    /// <summary>One prepared player waiting for its open. Claimed exactly once — by the open (which then owns it) or by
+    /// the prepared item's disposal / expiry (which disposes it).</summary>
+    internal sealed class PreparedEntry
+    {
+        private readonly ProtectedMediaBackend _owner;
+        private int _claimed;
+
+        internal PreparedEntry(ProtectedMediaBackend owner, IProtectedVideoPlayer player, ProtectedVideoRequest request)
+        {
+            _owner = owner;
+            Player = player;
+            Request = request;
+            CreatedMs = Environment.TickCount64;
+        }
+
+        internal IProtectedVideoPlayer Player { get; }
+        internal ProtectedVideoRequest Request { get; }
+        internal long CreatedMs { get; }
+
+        internal bool Claim() => Interlocked.Exchange(ref _claimed, 1) == 0;
+
+        /// <summary>Dispose the player unless the open already took it.</summary>
+        internal void Release()
+        {
+            if (!Claim()) return;
+            _owner.ForgetPrepared(this);
+            try { Player.Dispose(); } catch { }
+        }
+    }
 }
 
-/// <summary>A pre-rolled protected item (spec §8.4): no audio voice — it carries the spun-up
-/// <see cref="ProtectedMediaSession"/> the coordinator hard-cuts to at the boundary.</summary>
+/// <summary>A pre-rolled protected item (spec §8.4): no audio voice — it carries the prepared
+/// <see cref="IProtectedVideoPlayer"/> the next open attaches. Disposing an item whose player was never opened disposes the
+/// player; disposing one whose player the open took is a no-op.</summary>
 public sealed class ProtectedPreparedItem : IPreparedItem
 {
-    private readonly ProtectedMediaSession _session;
+    private readonly ProtectedMediaBackend.PreparedEntry _entry;
 
-    /// <summary>Create a prepared protected item over <paramref name="session"/>.</summary>
-    public ProtectedPreparedItem(ProtectedMediaSession session, bool ready, TimeSpan duration)
+    internal ProtectedPreparedItem(ProtectedMediaBackend.PreparedEntry entry, bool ready, TimeSpan duration)
     {
-        _session = session;
+        _entry = entry;
         IsReady = ready;
         Duration = duration;
     }
@@ -214,11 +304,15 @@ public sealed class ProtectedPreparedItem : IPreparedItem
     public long TotalFrames => -1;
     /// <inheritdoc/>
     public TimeSpan Duration { get; }
-    /// <inheritdoc/>
-    public object? BackendHandle => _session;
+    /// <summary>The prepared <see cref="IProtectedVideoPlayer"/>.</summary>
+    public object? BackendHandle => _entry.Player;
     /// <inheritdoc/>
     public int MixRate => 0;
 
     /// <inheritdoc/>
-    public ValueTask DisposeAsync() => _session.DisposeAsync();
+    public ValueTask DisposeAsync()
+    {
+        _entry.Release();
+        return ValueTask.CompletedTask;
+    }
 }

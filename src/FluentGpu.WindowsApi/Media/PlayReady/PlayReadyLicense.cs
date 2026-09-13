@@ -41,7 +41,7 @@ public static class PlayReadyLicense
                 msg.Headers.TryAddWithoutValidation(headerName, headerValue);
 
             using var resp = await http.SendAsync(msg).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();   // non-2xx → throws → DrmLicenseBridge maps to a typed DRM error
+            resp.EnsureSuccessStatusCode();   // non-2xx → throws → the runtime's relay records it as the typed DRM error
             byte[] license = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             return new LicenseResponse(license);
         };

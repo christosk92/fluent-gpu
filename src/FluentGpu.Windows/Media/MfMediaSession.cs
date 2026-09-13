@@ -558,26 +558,10 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             ? MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate
             : MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate | MediaCommandFlags.StepFrame;
 
-    /// <summary>The size (device px) to render the decoded frame at inside MF's own swap chain, which is ALSO the
-    /// content size handed to the compositor — the two must agree or DirectComposition scales by the wrong factor.
-    /// <para>It is the natural frame size, capped so a frame far larger than the rect it is being shown in does not
-    /// allocate buffers nobody can see (a 4K stream in a 480-px card). The cap scales BOTH axes by one factor, so the
-    /// frame's aspect ratio — the input to the fit — survives exactly; the factor is chosen from the axis that is
-    /// magnified MOST, so a Fill/UniformToFill destination never samples a downscaled buffer up again.</para>
-    /// <para>A natural size that is not known yet falls back to the destination rect (the pre-fix behaviour), so the
-    /// surface still presents something during the pump or two before the engine answers.</para></summary>
+    /// <summary>The stream/content size for a destination — owned by <see cref="VideoStreamSizing.ContentSizeFor"/>
+    /// (shared with the protected session so the two backends can never size a surface differently).</summary>
     internal static SizeI ContentSizeFor(SizeI natural, RectF videoRect, float scale)
-    {
-        float s = scale <= 0f ? 1f : scale;
-        int dw = Math.Max(1, (int)MathF.Round(videoRect.W * s));
-        int dh = Math.Max(1, (int)MathF.Round(videoRect.H * s));
-        if (natural.IsEmpty) return new SizeI(dw, dh);
-        float factor = MathF.Max((float)dw / natural.Width, (float)dh / natural.Height);
-        if (!float.IsFinite(factor) || factor >= 1f) return natural;
-        return new SizeI(
-            Math.Max(1, (int)MathF.Round(natural.Width * factor)),
-            Math.Max(1, (int)MathF.Round(natural.Height * factor)));
-    }
+        => VideoStreamSizing.ContentSizeFor(natural, videoRect, scale);
 
     private void PublishManifestCatalog(MediaSignalSink sink)
     {

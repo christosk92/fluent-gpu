@@ -797,9 +797,9 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
 >   (the stale-state guard), so a late read from a superseded `SetSource` is inert rather than a source mix-up.
 >   A second concurrent player over the same backend gets a throwaway (non-warm) engine — a documented, not
 >   silent, decision.
-> - **Residual, stated plainly:** this warm-reuse path is the clear↔clear (and same-DRM-family) case; DRM stays
->   create-per-open on the native side regardless (§8.4) — bounded, off the UI thread, and pre-warmed, but not
->   instant. The deep `IMediaPlayer`/`MfMediaPlayer` API surface remains owned by
+> - **Scope:** this warm-reuse path is the CLEAR engine. The protected path has its own process-lifetime runtime
+>   with the same warm-idle policy (§8.4, "As built 2026-09-13") — a DRM→DRM switch is also one `SetSource` on a
+>   live engine. The deep `IMediaPlayer`/`MfMediaPlayer` API surface remains owned by
 >   `docs/plans/media-playback-api-spec.md` (SPEC-INDEX §2); this note exists here because the seam is what
 >   makes the phase-7.2 pump above actually non-blocking. Full rationale:
 >   `docs/plans/video-smooth-switching-implementation.md` §1.
@@ -849,11 +849,12 @@ content key.**
   custom CENC `IMFMediaSource` → the modern MF-CDM decryptor → decode → a non-zero protected windowless-swapchain
   handle → `BindSurfaceHandle`. It is the DRM code path of the unified spec's `MfMediaPlayer`
   (`FluentGpu.Windows/Media/`), built from `FluentGpu.PlayReady.Native.dll`
-  (`ops/tools/playready-native/{PlayReadyNative.cpp,CencMediaSource.h}`). Three proven native fixes make it work: the
-  right license server for the content, `MFWrapMediaType(MFMediaType_Protected)` + `MF_SD_PROTECTED` (the
-  modern EME wrap, NOT the raw `MF_MT_PROTECTED` attribute that triggers the legacy ITA/OTA topology →
-  `MF_E_TOPOLOGY_VERIFICATION_FAILED 0xC00D715B` of microsoft-ui-xaml#10918), and a persistent-license EME
-  session — all guarded by `FG_CENC_*` A/B env vars.
+  (`ops/tools/playready-native/`: `FgPlayReady.h` the C ABI, `PrRuntime.cpp` / `PrLicense.cpp` / `PrSession.cpp`,
+  `SegmentStore.h`, `CencMediaSource.h`). The proven native choices are the only code (the `FG_CENC_*` A/B
+  environment switches are deleted): the right license server for the content (the managed relay's concern),
+  `MFWrapMediaType(MFMediaType_Protected)` + `MF_SD_PROTECTED` (the modern EME wrap, NOT the raw `MF_MT_PROTECTED`
+  attribute that triggers the legacy ITA/OTA topology → `MF_E_TOPOLOGY_VERIFICATION_FAILED 0xC00D715B` of
+  microsoft-ui-xaml#10918), and TEMPORARY CDM key sessions (streaming licenses are not persistable).
 - **License acquisition is the managed `WithDrm` relay.** The native CDM raises the challenge; a managed
   `Func<LicenseRequest, ValueTask<LicenseResponse>>` (spec §9.2) performs the license POST (the app supplies
   the server + token per source) and returns the license bytes for the native `Update()`. Native keeps only
@@ -864,25 +865,47 @@ content key.**
 - **A DRM shortfall is `MediaError{Category.Drm, Recovery.NeedsLicense/PickLowerQuality}` — never a silent drop
   to black** (`gpu-renderer.md` treats the protected surface identically to any composited surface).
 
-**As built (2026-09, video-smooth-switching — DRM warmup + per-source descriptor).** Two amendments to the
-native path above, neither changing the spine:
-- **Worker-thread first P/Invoke (warmup).** The FIRST call into `FluentGpu.PlayReady.Native.dll` implicitly
-  `LoadLibrary`s it plus the MF chain it pulls in; that used to happen inline in
-  `DesktopProtectedVideoPlayer.Start()` **on the UI thread**. The seed calls (`FgPlayReadyResetAdaptive` + the
-  transport-seed first-P/Invokes) move to the top of `RunNative` — the `fgpu-playready-desktop` native worker
-  thread — preserving the original seed-before-`RunEx` ordering, just off the UI thread. An idempotent
-  `static Warmup()` (`NativeLibrary.TryLoad` on a pool thread) is exposed as `ProtectedMediaBackend.WarmupNative()`;
-  the app calls it once at startup idle so a user's first protected-content open no longer pays the
-  LoadLibrary + MF-chain bring-up cost inline on the UI thread.
+**As built (2026-09, video-smooth-switching — DRM warmup + per-source descriptor).** Two amendments that survive
+the rework below:
+- **Warmup.** The FIRST call into `FluentGpu.PlayReady.Native.dll` implicitly `LoadLibrary`s it plus the MF chain it
+  pulls in. An idempotent `ProtectedVideoRuntime.Warmup()` (`NativeLibrary.TryLoad` on a pool thread), exposed as
+  `ProtectedMediaBackend.WarmupNative()`, pays that at startup idle instead of inline in the first open.
 - **Per-source descriptor (`DrmConfig.SourceDescriptor`).** `DrmConfig` (SEEDED in `MediaSeams.cs`) carries an
   `object? SourceDescriptor`; `ProtectedMediaBackend.BuildRequest` resolves
   `drm.SourceDescriptor as DashSourceDescriptor ?? _descriptor` — the per-open descriptor wins when the caller
   supplies one, the backend's construction-time descriptor is the fallback. This lets **one**
   `MfMediaPlayer(new ProtectedMediaBackend(defaultRelay: null, descriptor: null))` play every DASH source
   family, instead of a descriptor fixed at construction.
-- **Residual, stated plainly:** the native CDM/CENC session itself stays create-per-open — only the DLL
-  LoadLibrary + first-P/Invoke cost is amortized by warmup, not the per-open session bring-up. A DRM→DRM switch
-  therefore still pays that bounded, off-UI-thread native cost; clear↔clear is the truly instant path (§8.3).
+
+**As built (2026-09-13, the protected runtime — `WaveeMusic/docs/plans/wavee/wavee-0.3-video-engine-implementation.md`).**
+The "create-per-open" residual of the previous note is RETIRED. The native helper was a process-global singleton
+built and torn down around every source (`MFStartup` → serial CDN GETs → D3D11 → CDM + PMP → license → engine →
+CANPLAY, then all of it released), with transport slots applied by an 80 ms tick and three managed polling layers
+above it. It is now a runtime with handles, spine unchanged:
+- **`FgPrRuntime` (managed `ProtectedVideoRuntime`, one per process).** MF, the D3D11 video device + DXGI manager, ONE
+  `IMFMediaEngine` in windowless swap-chain mode, ONE CDM + PMP host, and an MTA runtime thread with an event-driven
+  work queue. Reference-counted by live sessions; destroyed `WarmIdleDisposeMs` (30 s) after the last one — the same
+  policy and memory argument as the clear engine's warm lease (§8.3).
+- **`FgPrLicense` (the KID-keyed cache, `LicenseCachePolicy`).** Eight open TEMPORARY key sessions, LRU, never
+  evicting a key a live decoder uses. Acquisition starts at MANIFEST/prepare time (PlayReady proactive
+  acquisition); the relay is non-blocking on both sides (the CDM thread hands the challenge up and returns; the
+  managed POST `deliver`s later). An attach on a still-pending license is legal — the engine's key-needed path waits.
+- **`FgPrSession` (managed `ProtectedVideoSession`, one per source).** A `CencMediaSource` over a byte-capped
+  (32 MiB), time-windowed (30 s behind / 60 s ahead) `SegmentStore`, opened AT `MediaOpenOptions.StartPosition`.
+  The switch is `FgPrSessionAttach` = one `SetSource` on the warm engine. Prefetch (`IPreparableBackend`) fetches
+  init + 2 segments at the start position, video ∥ audio. Seek is flush-not-recreate, applied immediately on the
+  runtime thread (or from the parallel fetch's completion); the demuxer's keyframe table and the buffered ranges are
+  exported for a host seek planner.
+- **Event-driven presentation.** `FIRSTFRAMEREADY` / CANPLAY / SEEKED / errors are native events → one coalesced
+  `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpVideo` reads ONE snapshot and binds the handle —
+  no poll timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
+  `VideoStreamSizing.ContentSizeFor` rule as the clear path. `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
+  `BufferedAheadMs`, and the protected session publishes that same POD.
+- **Always-on log lines, one file.** `ProtectedVideoRuntime.LogSink` receives `[video]` (attach → metadata →
+  canplay → first.frame `sinceAttachMs`, seek.done `ms`, prefetch.ok) and `[video.native]` lifecycle lines; the old
+  `desktop-playready.log` is gone. `DesktopProtectedVideoPlayer`, its ack waits and `DrmLicenseBridge` are deleted.
+- **Rendering stays the DComp child + hole-punch.** A protected frame cannot be sampled by an unprotected shader;
+  the `FG_VIDEO_ZABOVE` diagnostic switch in `DCompVideoPresenter` is deleted with the other environment switches.
 
 Canon: `IVideoPresenter`/`VideoSurfaceId` seam shape is owned by `pal-rhi.md`; this doc owns the present-tree
 placement + the DRM attach behavior above; the unified `IMediaPlayer`/`MediaPlayer`/`MediaRouter` + `MfMediaPlayer`
