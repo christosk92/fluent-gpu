@@ -245,6 +245,7 @@ static class ScrollSuite
         OcclusionCullChecks();
         ShadowOpacityGateChecks();
         WheelFallbackRelatchChecks(strings);
+        BugBScrollFeelChecks(strings);
         ContainingScrollerChecks(strings);
         // NamedScrollTimelineChecks deleted — gate.scroll.named-timeline / gate.scroll.named-timeline-retire deleted:
         // named scroll-timelines are removed from the DSL entirely (scroll-v3 plan §7.3 authoring collapse); no successor gate.
@@ -1023,6 +1024,153 @@ static class ScrollSuite
         Check("gate.scroll.fallback-relatch a pan whose slop-crossing hit test finds NO scroller (§A) re-latches onto the viewport its later packets reach — latched on the FIRST retried packet, offset moves; a pan that fell back because an element OWNS the wheel (§A′) keeps that fallback for the whole gesture even once it travels over a real viewport (no re-latch, viewport untouched)",
             ok, $"recovered(latch={recovered.LatchedOnFirstRetry} off={recovered.Offset:0.0} wheel={recovered.WheelCalls}) " +
                 $"consumed(latch={consumed.LatchedOnFirstRetry} off={consumed.Offset:0.0} wheel={consumed.WheelCalls})");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // bug-B (Wavee handoff 2026-09-15 §8) — scroll INPUT feel. Three functional gates (A3 two-packet fling, A2
+    // re-grab-then-fling, B1 lowered latch slop) driven through the REAL pipeline (QueueInput → RunFrame →
+    // InputDispatcher.Dispatch → ScrollInputRouter → ScrollKernel), same idiom as WheelFallbackRelatchChecks above,
+    // plus one trace-rewire smoke gate. Reuses WheelFallbackRelatchProbe (Probes.cs) — its ScrollEl at y∈[120,420)
+    // is all these need.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    static void BugBScrollFeelChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
+        const float overViewport = 250f;   // inside WheelFallbackRelatchProbe's ScrollEl band [120, 420)
+
+        static NodeHandle FindScrollable(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if ((s.Flags(n) & NodeFlags.Scrollable) != 0 && s.HasScroll(n)) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = FindScrollable(s, c);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        // gate.scroll.two-packet-fling (A3) + gate.scroll.regrab-refling (A2), same session: the second flick
+        // re-grabs the FIRST one's still-coasting Ballistic body, which is exactly A2's "flick-flick-flick" case.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bugB-two-packet-fling", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+
+            void QueueScrollPhase(InputKind kind, float delta, uint ms)
+                => window.QueueInput(new InputEvent(kind, new Point2(150f, overViewport), 0, 0, ScrollDelta: delta,
+                    Pointer: PointerKind.Touchpad, TimestampMs: ms, PointerId: 9, DeviceClassRaw: Fb));
+
+            uint t = 5000;
+            // Two raw packets, ~8ms apart (a ~120Hz digitizer cadence), BOTH queued before the SAME RunFrame — the
+            // exact shape §8.2/A3 says releases at v=0 under the old once-per-produced-FRAME estimator feed: a
+            // flick under ~17ms at 120Hz never got a second sample before the frame flushed.
+            QueueScrollPhase(InputKind.ScrollBegin, 0f, t);
+            QueueScrollPhase(InputKind.ScrollDelta, 40f, t += 8);
+            QueueScrollPhase(InputKind.ScrollDelta, 40f, t += 8);
+            host.RunFrame();   // ONE frame drains all three queued packets together
+            QueueScrollPhase(InputKind.ScrollEnd, 0f, t += 8);
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc1);
+            bool firstFlung = sc1.Activity == ScrollActivity.Ballistic
+                && MathF.Abs(sc1.Velocity) >= ScrollFeel.Shipping.FlingSeedGate;
+            Check("gate.scroll.two-packet-fling (bug-B/A3) a 2-packet touchpad flick folded into ONE produced frame still seeds a real Ballistic release velocity (was: v=0, estimator saw only 1 coalesced sample/frame)",
+                firstFlung, $"activity={sc1.Activity} v={sc1.Velocity:F1} gate={ScrollFeel.Shipping.FlingSeedGate:F1}");
+
+            // A2 re-grab: while the body is STILL Ballistic, flick again — 2 packets in 1 frame, same shape as
+            // above. "Touch stops the fling" (ApplyFrameDelta's `starting` branch) must still hold — that is
+            // asserted separately by not requiring any particular mid-flight state here — but the SECOND flick
+            // must not need two more flushed frames to fling: it has per-packet samples from the very first packet.
+            QueueScrollPhase(InputKind.ScrollBegin, 0f, t += 40);   // re-grab: interrupts the still-coasting fling
+            QueueScrollPhase(InputKind.ScrollDelta, 35f, t += 8);
+            QueueScrollPhase(InputKind.ScrollDelta, 35f, t += 8);
+            host.RunFrame();
+            QueueScrollPhase(InputKind.ScrollEnd, 0f, t += 8);
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc2);
+            bool reflung = sc2.Activity == ScrollActivity.Ballistic
+                && MathF.Abs(sc2.Velocity) >= ScrollFeel.Shipping.FlingSeedGate;
+            Check("gate.scroll.regrab-refling (bug-B/A2) re-grabbing a coasting Ballistic body with a second 2-packet-in-1-frame flick flings again immediately (no 2-frame warm-up before the estimator has ≥2 samples)",
+                reflung, $"activity={sc2.Activity} v={sc2.Velocity:F1} gate={ScrollFeel.Shipping.FlingSeedGate:F1}");
+        }
+
+        // gate.scroll.latch-slop-lowered (B1): a gesture between the NEW slop (3 DIP) and the OLD one (8 DIP) must
+        // now move the viewport on the very packet that crosses 3 DIP — silent under the old 8.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bugB-latch-slop", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+
+            uint t = 5000;
+            window.QueueInput(new InputEvent(InputKind.ScrollBegin, new Point2(150f, overViewport), 0, 0,
+                Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));
+            // 4 DIP total: below the OLD 8-DIP slop (would post nothing), above the NEW 3-DIP one.
+            window.QueueInput(new InputEvent(InputKind.ScrollDelta, new Point2(150f, overViewport), 0, 0, ScrollDelta: 4f,
+                Pointer: PointerKind.Touchpad, TimestampMs: t += 8, PointerId: 9, DeviceClassRaw: Fb));
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc);
+            bool latchedAtNewSlop = sc.OffsetY > 0f && sc.OffsetY <= 4.5f;
+            Check("gate.scroll.latch-slop-lowered (bug-B/B1) a 4 DIP travel latches and moves the viewport — above the new 3 DIP slop, below the old 8 DIP one",
+                latchedAtNewSlop, $"offsetY={sc.OffsetY:F2}");
+        }
+
+        // gate.scroll.trace-rewire (step 1 measurement): the five re-wired ScrollTrace call sites (VelSample,
+        // Release, Latch, Phase, GestureEnd) are reachable and cost ZERO managed bytes to call regardless of
+        // FG_SCROLL_TRACE (Add() only ever touches the preallocated ring) — the only thing testable in-process
+        // without an env var / file (same "vacuous unless FG_SCROLL_TRACE armed" idiom as
+        // gate.scroll.single-writer-structural below: actual CSV row content needs a real capture,
+        // ops/diag/wavee-scroll-session.ps1). Also drives the SAME two-packet gesture as above one more time so
+        // the five call sites are proven reachable from a live gesture, not just directly invocable.
+        {
+            bool allocOk = true;
+            long delta = 0;
+            if (ScrollTrace.CompiledIn)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                ScrollTrace.VelSample(1, 12.5f, 0f, 1500f, 0f, 0L);
+                ScrollTrace.Release(1, 1500f, 0f, 1500f, 0f, 0L);
+                ScrollTrace.Latch(0, 1, 4f, 4f, 0f);
+                ScrollTrace.Phase((byte)InputKind.ScrollDelta, 0, 1, 40f, 0f, 0f, 0f, 0L);
+                ScrollTrace.GestureEnd(0, 0, 0f);
+                long after = GC.GetAllocatedBytesForCurrentThread();
+                delta = after - before;
+                allocOk = delta == 0;
+            }
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bugB-trace-reachable", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            uint t = 5000;
+            void QueueScrollPhase2(InputKind kind, float delta2, uint ms)
+                => window.QueueInput(new InputEvent(kind, new Point2(150f, overViewport), 0, 0, ScrollDelta: delta2,
+                    Pointer: PointerKind.Touchpad, TimestampMs: ms, PointerId: 9, DeviceClassRaw: Fb));
+            bool threw = false;
+            try
+            {
+                QueueScrollPhase2(InputKind.ScrollBegin, 0f, t);
+                QueueScrollPhase2(InputKind.ScrollDelta, 40f, t += 8);
+                QueueScrollPhase2(InputKind.ScrollDelta, 40f, t += 8);
+                host.RunFrame();
+                QueueScrollPhase2(InputKind.ScrollEnd, 0f, t += 8);
+                host.RunFrame();
+            }
+            catch { threw = true; }
+
+            Check("gate.scroll.trace-rewire the 5 re-wired dead ScrollTrace rows (VelSample/Release/Latch/Phase/GestureEnd) are reachable from a live gesture and cost 0 managed bytes to call — row CONTENT needs FG_SCROLL_TRACE (a real capture), same idiom as gate.scroll.single-writer-structural",
+                allocOk && !threw, $"allocDelta={delta}B threw={threw} compiledIn={ScrollTrace.CompiledIn}");
+        }
     }
 
     // Overlay plate / zero-overflow: ancestor-only targeting misses a list that still geometrically contains the point.

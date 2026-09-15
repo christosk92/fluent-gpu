@@ -93,7 +93,16 @@ public sealed class ScrollInputRouter
     // like the legacy _sg* singleton) — a fresh ScrollBegin always ends whatever was latched. Pre-latch accumulates the
     // WHOLE gesture's raw delta to pick + resolve an axis at the 8-DIP slop window; post-latch accumulates only THIS
     // FRAME's delta (flushed once per Dispatch batch by EndFrame — plan §3.4 "sum the frame's deltas → ONE FrameDelta").
-    private const float LatchSlopDip = 8f;
+    // bug-B/B1: was 8f. The "no dead zone" comment on AccumulatePhaseDelta is true of DISTANCE (the pre-latch travel
+    // is applied on the latch frame, not dropped) but false of TIME: until Σ|dx|+|dy| crosses this many DIP the
+    // router posts nothing at all, so the first ~73 raw touchpad units (8 DIP / HiResUnitDip=0.11f, Win32Platform.cs)
+    // of every gesture are silent, then arrive in one jump — the measured "heavy initial lift". This is a
+    // WHEEL/TOUCHPAD PHASE gesture, not a pointer drag — no click-vs-drag ambiguity to protect — so the slop exists
+    // only to (a) pick the axis (`|Σdx| > |Σdy|` below) and (b) resolve the target once. 3 DIP (≈27 raw units) is the
+    // smallest value that still separates a real flick from HID axis jitter; no gate or other call site pins 8 for a
+    // stated reason (grepped: only this file's own two references). Does NOT touch the detented-wheel path's
+    // `Carryover` 120-unit accumulator (Win32Platform.cs) — a real mouse wheel, unrelated and unchanged.
+    private const float LatchSlopDip = 3f;
     private NodeHandle _phaseNode;
     private bool _phaseHoriz;
     private bool _phaseLatched;
@@ -204,27 +213,46 @@ public sealed class ScrollInputRouter
     /// <summary>ScrollBegin/Delta/End — the entire phase-tagged producer contract. PTP/precision-touchpad inertia is
     /// engine-owned (the kernel seeds its own Ballistic fling from the trailing frame-delta history on
     /// <see cref="InputKind.ScrollEnd"/>); there is no OS-momentum kind to special-case.</summary>
-    public void Phase(in InputEvent e)
+    /// <param name="velSamples">bug-B/A3: this frame's pre-coalesce velocity-ring deposits (Pal.cs
+    /// "scroll-v3-plan §5.4"), passed through ONLY for the <see cref="InputKind.ScrollDelta"/> case — 2+ raw
+    /// ScrollDelta packets landing in one frame coalesce (same Kind + PointerId) inside <c>InputEventRing.Write</c>
+    /// BEFORE <see cref="Phase"/> ever sees them, so without this the estimator would see only the ALREADY-SUMMED
+    /// final delta — exactly one sample, and <c>ImpulseEstimator.Compute</c> needs ≥2 to return anything but 0. A
+    /// span can't be a field on this class (<c>ReadOnlySpan&lt;T&gt;</c> is a ref struct), so the caller
+    /// (<c>InputDispatcher.Dispatch</c>) threads it through the call instead. Default = empty (Begin/End never need
+    /// it — Begin never coalesces, End carries no delta).</param>
+    public void Phase(in InputEvent e, ReadOnlySpan<PointerVelSample> velSamples = default)
     {
+        // bug-B measurement (step 1): one row per scroll-phase event CONSUMED, before it does anything — the
+        // dead ScrollTrace.Phase row this rewrite re-wires. accX/accY are the gesture accumulator BEFORE this
+        // event folds in (captured here, ahead of any mutation below); momentum is always 0 — PTP inertia is
+        // engine-owned, there is no OS-momentum kind to report (see the method doc).
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+        {
+            int deviceFlags = e.DeviceClassRaw | (_phaseLatched ? 1 << 8 : 0);
+            ScrollTrace.Phase((byte)e.Kind, deviceFlags, e.ScrollPhaseSeq, e.ScrollDelta, e.ScrollDeltaX,
+                _phaseTotalX, _phaseTotalY, e.QpcTicks);
+        }
         switch (e.Kind)
         {
             case InputKind.ScrollBegin:
-                EndPhaseGesture(cancel: true);   // a producer restart ends any prior gesture cleanly (legacy OnScrollPhase)
+                EndPhaseGesture(cancel: true, reason: 2);   // a producer restart ends any prior gesture cleanly (legacy OnScrollPhase)
                 _phaseTotalX = 0f; _phaseTotalY = 0f;
                 _phaseOpen = true;
                 _phaseWheel = IsWheelProducer(e.DeviceClassRaw, e.Pointer);   // latched: one physics path per gesture
-                // A Begin may carry the first displacement (a hi-res fallback's slop packet) — count it.
-                if (e.ScrollDelta != 0f || e.ScrollDeltaX != 0f) AccumulatePhaseDelta(in e);
+                // A Begin may carry the first displacement (a hi-res fallback's slop packet) — count it. Begin
+                // events never coalesce (Pal.cs InputEventRing.Write), so there is never a pre-sample for one.
+                if (e.ScrollDelta != 0f || e.ScrollDeltaX != 0f) AccumulatePhaseDelta(in e, default);
                 break;
 
             case InputKind.ScrollDelta:
                 // Producer contract: deltas exist only INSIDE an open Begin…End gesture. A stray delta after a wheel
                 // takeover / lift (a terminal DM callback already in the queue) must never revive a gesture.
-                if (_phaseOpen) AccumulatePhaseDelta(in e);
+                if (_phaseOpen) AccumulatePhaseDelta(in e, velSamples);
                 break;
 
             case InputKind.ScrollEnd:
-                EndPhaseGesture(cancel: false);
+                EndPhaseGesture(cancel: false, reason: 0);
                 break;
         }
     }
@@ -235,7 +263,7 @@ public sealed class ScrollInputRouter
     /// frame per gesture (accumulate across the drained span, flush at end of Phase batch)".</summary>
     public void EndFrame() => FlushPhaseDelta();
 
-    private void AccumulatePhaseDelta(in InputEvent e)
+    private void AccumulatePhaseDelta(in InputEvent e, ReadOnlySpan<PointerVelSample> velSamples)
     {
         if (_phaseElementOwnsWheel)
         {
@@ -246,6 +274,7 @@ public sealed class ScrollInputRouter
         }
         _phaseTotalX += e.ScrollDeltaX;
         _phaseTotalY += e.ScrollDelta;
+        bool justLatched = false;
         if (!_phaseLatched)
         {
             if (MathF.Abs(_phaseTotalX) + MathF.Abs(_phaseTotalY) < LatchSlopDip) return;
@@ -261,18 +290,56 @@ public sealed class ScrollInputRouter
                 return;
             }
             _phaseNode = vp; _phaseHoriz = horiz; _phaseLatched = true;
+            justLatched = true;
             NodeHandle parent = NearestSameAxisAncestorViewport(vp, horiz);
             if (!parent.IsNull) _port.Post(ScrollInput.Chain((int)vp.Raw.Index, (int)parent.Raw.Index));
             OnGestureStarted?.Invoke();
             // No dead zone: the pre-latch travel (everything accumulated up to and excluding THIS packet — the packet
             // itself is added below) is applied on the latch frame, so the content starts exactly where the fingers
-            // did rather than 8 DIP behind (Chromium/DM apply the slop distance too).
+            // did rather than the slop distance behind (Chromium/DM apply the slop distance too).
             _phaseFrameX = _phaseTotalX - e.ScrollDeltaX; _phaseFrameY = _phaseTotalY - e.ScrollDelta;
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+            {
+                int deviceHoriz = (_phaseWheel ? 1 : 0) | (horiz ? 1 << 8 : 0);
+                float anchor = horiz ? _phaseFrameX : _phaseFrameY;   // the pre-latch travel applied THIS frame (no dead zone)
+                ScrollTrace.Latch((int)vp.Raw.Index, deviceHoriz, anchor, _phaseTotalX, _phaseTotalY);
+            }
         }
-        if (!_scene.IsLive(_phaseNode)) { _phaseLatched = false; return; }
+        if (!_scene.IsLive(_phaseNode))
+        {
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.GestureEnd(4, 0, 0f);   // 4 = target died
+            _phaseLatched = false;
+            return;
+        }
         _phaseFrameX += e.ScrollDeltaX; _phaseFrameY += e.ScrollDelta;
         _phaseLastT = SampleSec(e.TimestampMs, e.QpcTicks);
         _phaseDirty = true;
+
+        // bug-B/A3: feed the estimator with EVERY raw packet this call represents, in chronological order — not
+        // once per produced FRAME the way the removed ScrollKernel.ApplyFrameDelta Reset/Sample calls did. `e` may
+        // itself already be the SUM of 2+ raw ScrollDelta packets (InputEventRing.Write coalesces same-Kind/
+        // same-PointerId packets before Phase() ever sees them individually) — `velSamples` carries the sub-packets
+        // that folded away, each stamped with the CUMULATIVE delta-within-this-merge-group at its own deposit time
+        // (Pal.cs "scroll-v3-plan §5.4"). `baseBeforeThisEvent` is the gesture-wide running position BEFORE this
+        // call's own contribution (already added to _phaseTotalX/Y above), so base + a pre-sample's cumulative-so-
+        // far value is that packet's own absolute phase-delta-domain position — same domain `e`'s own post-delta
+        // total ends up in. The very first sample of the WHOLE gesture (whether that is a pre-sample here, at THIS
+        // latch, or `e` itself when nothing coalesced) Resets; everything after Samples — mirrors
+        // ApplyContactBegin's seeding contract on the touch/pen path.
+        int node = (int)_phaseNode.Raw.Index;
+        float baseBeforeThisEvent = (_phaseHoriz ? _phaseTotalX : _phaseTotalY) - (_phaseHoriz ? e.ScrollDeltaX : e.ScrollDelta);
+        bool firstSampleOfGesture = justLatched;
+        for (int i = 0; i < velSamples.Length; i++)
+        {
+            ref readonly PointerVelSample s = ref velSamples[i];
+            if (!s.IsScrollPhase) continue;   // touch/pen PointerMove deposits share this ring — not ours
+            double t = SampleSec(s.TimestampMs, s.QpcTicks);
+            float pos = baseBeforeThisEvent + (_phaseHoriz ? s.X : s.Y);
+            _port.Post(ScrollInput.ImpulseSample(node, t, pos, reset: firstSampleOfGesture, src: 0));
+            firstSampleOfGesture = false;
+        }
+        _port.Post(ScrollInput.ImpulseSample(node, _phaseLastT, _phaseHoriz ? _phaseTotalX : _phaseTotalY,
+            reset: firstSampleOfGesture, src: 1));
     }
 
     private void FlushPhaseDelta()
@@ -297,17 +364,27 @@ public sealed class ScrollInputRouter
     public static bool IsWheelProducer(byte deviceClassRaw, PointerKind pointer)
         => deviceClassRaw == (byte)ScrollDeviceClass.WheelHiResFallback && pointer == PointerKind.Mouse;
 
-    private void EndPhaseGesture(bool cancel)
+    /// <paramref name="reason"/> is the <c>ScrollTrace.GestureEnd</c> i0 code (0=ScrollEnd, 2=restart-on-Begin,
+    /// 3=wheel takeover — <see cref="Wheel"/> calls this too, cancel:true; reason 4=target died is the one case that
+    /// does NOT route through here — <see cref="AccumulatePhaseDelta"/>'s dead-target branch posts it inline, since
+    /// by that point the kernel already has no bound slot to Cancel/ContactEnd against).</summary>
+    private void EndPhaseGesture(bool cancel, int reason)
     {
         FlushPhaseDelta();
-        if (_phaseLatched && _scene.IsLive(_phaseNode))
+        bool wasLatched = _phaseLatched && _scene.IsLive(_phaseNode);
+        float band = 0f;
+        if (wasLatched)
         {
             int node = (int)_phaseNode.Raw.Index;
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled && _kernel.TryGetBody(node, out var body))
+                band = body.Horizontal ? body.BandX : body.BandY;
             // A=0: no position resample happens on the frame-delta path (§2.2 "Drag (FrameDelta)... no resample, no
             // LSQ"), so ContactEnd's axis-position argument is unused for this producer — the kernel seeds Ballistic
             // from the trailing frame deltas already recorded, not from this call's A.
             _port.Post(cancel ? ScrollInput.Cancel(node) : ScrollInput.ContactEnd(node, _phaseLastT, 0f));
         }
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled && wasLatched)
+            ScrollTrace.GestureEnd(reason, 0, band);   // wasMomentum always 0 — PTP inertia is engine-owned
         _phaseLatched = false; _phaseOpen = false; _phaseNode = NodeHandle.Null;
         _phaseTotalX = 0f; _phaseTotalY = 0f; _phaseFrameX = 0f; _phaseFrameY = 0f; _phaseDirty = false;
         _phaseElementOwnsWheel = false;
@@ -340,15 +417,8 @@ public sealed class ScrollInputRouter
     public bool Wheel(in InputEvent e)
     {
         // Device crossover (legacy CancelGesture / scratchpad :3084): a physical wheel takes over from any live
-        // phase-driven gesture — one owner of the offset at a time.
-        if (_phaseLatched || _phaseOpen)
-        {
-            FlushPhaseDelta();
-            if (_phaseLatched && _scene.IsLive(_phaseNode)) _port.Post(ScrollInput.Cancel((int)_phaseNode.Raw.Index));
-            _phaseLatched = false; _phaseOpen = false; _phaseNode = NodeHandle.Null;
-            _phaseTotalX = 0f; _phaseTotalY = 0f; _phaseFrameX = 0f; _phaseFrameY = 0f; _phaseDirty = false;
-            _phaseElementOwnsWheel = false;
-        }
+        // phase-driven gesture — one owner of the offset at a time. reason 3 = wheel takeover (ScrollTrace.GestureEnd).
+        if (_phaseLatched || _phaseOpen) EndPhaseGesture(cancel: true, reason: 3);
         bool any = false;
         if (e.WheelNotch != 0f || e.ScrollDelta != 0f) any |= WheelAxis(in e, horizontal: false);
         if (e.WheelNotchX != 0f || e.ScrollDeltaX != 0f) any |= WheelAxis(in e, horizontal: true);

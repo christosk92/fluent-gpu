@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using FluentGpu.Foundation;
 
 namespace FluentGpu.Scroll;
 
@@ -329,6 +330,7 @@ public sealed class ScrollKernel
             case ScrollInputKind.ThumbSet: ApplyThumbSet(in cmd); break;
             case ScrollInputKind.Restore: ApplyRestore(in cmd); break;
             case ScrollInputKind.AnchorShift: ApplyAnchorShift(in cmd); break;
+            case ScrollInputKind.ImpulseSample: ApplyImpulseSample(in cmd); break;
         }
     }
 
@@ -694,8 +696,19 @@ public sealed class ScrollKernel
         seed.LastReleaseVelocity = v;
         seed.NoOverscroll = _bodies[idx].NoOverscroll;   // the fling inherits the gesture's producer (ResolveEdge reads it)
         float band = seed.BandMain;
+        bool seeded = band == 0f && MathF.Abs(v) >= _feel.FlingSeedGate;
 
-        if (band == 0f && MathF.Abs(v) >= _feel.FlingSeedGate)
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+        {
+            // bug-B/A3 measurement: the computed release v + the FlingSeedGate verdict, in the SAME row — settles
+            // "did the estimator return 0" definitively (§8.5 of the bug-B handoff) instead of inferring it from an
+            // absent OffsetWrite(Activity=Ballistic) run. aux/qpc: see ApplyImpulseSample's note — 0 here too.
+            int flags = (seed.Horizontal ? 1 : 0) | (seeded ? 2 : 0) | (idx != seedSlot ? 4 : 0);
+            float vx = seed.Horizontal ? v : 0f, vy = seed.Horizontal ? 0f : v;
+            ScrollTrace.Release(flags, vx, vy, v, band, 0L);
+        }
+
+        if (seeded)
         {
             seed.Activity = ScrollActivity.Ballistic;
             seed.Velocity = Math.Clamp(v, -_feel.FlingMax, _feel.FlingMax);
@@ -781,13 +794,38 @@ public sealed class ScrollKernel
         }
         ApplyDragDelta(idx, idx, cmd.A);
         b = ref _bodies[idx];
-        // (T, Σdelta) — DragRaw IS the running delta-sum accumulator. Reset (not Sample) on the FIRST frame of a new
-        // drag: it must seed the estimator with the POST-delta position at cmd.T (matching what every later Sample
-        // records), not the pre-delta baseline — seeding pre-delta would double the very first computed segment
-        // velocity against the second sample.
-        if (starting) b.Impulse.Reset(b.DragRaw, cmd.T);
-        else b.Impulse.Sample(b.DragRaw, cmd.T);
+        // bug-B/A3: the estimator is fed per RAW PACKET now (ScrollInputRouter.AccumulatePhaseDelta posts one
+        // ImpulseSample — ApplyImpulseSample below — per Phase()-consumed packet, plus the drained pre-coalesce
+        // side-ring samples for a frame that folded 2+ packets before Phase() ever saw them), not once here per
+        // produced FRAME. A flick shorter than 2 flushed frames (~17 ms at 120 Hz) used to release at exactly 0
+        // because this was the ONLY feed and `ImpulseEstimator.Compute` bails under 2 samples (ScrollPhysics.cs).
+        // DragRaw/position application above is unchanged — only the estimator's input moved.
         MarkTouched(idx);
+    }
+
+    /// <summary>bug-B/A3: feed ONE raw (pre-frame-coalesce) sample into a body's release-velocity estimator, without
+    /// touching its offset/position (that stays <see cref="ApplyFrameDelta"/>'s job — no <c>MarkActive</c>/
+    /// <c>MarkTouched</c>/sink write here, this never moves anything visible). Posted by
+    /// <c>ScrollInputRouter.AccumulatePhaseDelta</c> once per Phase()-consumed packet (direct feed) and by
+    /// <c>ScrollInputRouter.FeedImpulsePreSamples</c> for the pre-coalesce velocity-ring deposits of a frame that
+    /// folded 2+ raw packets before Phase() ever saw them (Seams/Pal/Pal.cs "scroll-v3-plan §5.4"). A body with no
+    /// bound slot (node died mid-gesture) is a silent no-op, matching every other node-keyed command handler.</summary>
+    private void ApplyImpulseSample(in ScrollInput cmd)
+    {
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
+        ref ScrollBody b = ref _bodies[idx];
+        bool reset = (cmd.Flags & (byte)ScrollInputFlags.ImpulseReset) != 0;
+        if (reset) b.Impulse.Reset(cmd.A, cmd.T);
+        else b.Impulse.Sample(cmd.A, cmd.T);
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+        {
+            // aux/qpc: this layer only has cmd.T in SECONDS (the router already converted it) — no raw QPC tick
+            // count survives to here, so the trace row's aux column is 0 ("no stamp"), not a wrong-domain value.
+            int src = reset ? 2 : cmd.I;   // ScrollTrace.VelSample's own "2=reset" takes precedence over the caller's tag
+            float px = b.Horizontal ? cmd.A : 0f, py = b.Horizontal ? 0f : cmd.A;
+            float vx = b.Horizontal ? b.Impulse.Velocity : 0f, vy = b.Horizontal ? 0f : b.Impulse.Velocity;
+            ScrollTrace.VelSample(src, px, py, vx, vy, 0L);
+        }
     }
 
     /// <summary>Apply a main-axis drag delta at pool slot <paramref name="slot"/>, chaining any leftover excess to

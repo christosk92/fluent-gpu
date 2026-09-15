@@ -1132,9 +1132,18 @@ public sealed class InputDispatcher
 
                 // ── the phase-tagged scroll contract (design §1/§6): the ONE consumer for every producer ──
                 case InputKind.ScrollBegin:
-                case InputKind.ScrollDelta:
                 case InputKind.ScrollEnd:
                     Scroll?.Phase(in e);
+                    handled++;
+                    break;
+
+                case InputKind.ScrollDelta:
+                    // bug-B/A3: thread this frame's pre-coalesce scroll-phase packets through to the router so its
+                    // release-velocity estimator sees every raw packet, not just the coalesced sum — a frame where
+                    // 2+ raw ScrollDelta packets fold into ONE InputEvent before Phase() ever sees them individually
+                    // (Pal.cs InputEventRing.Write / "scroll-v3-plan §5.4"). Scoped to ScrollDelta only (Begin never
+                    // coalesces; End carries no delta) — see ScrollInputRouter.Phase's velSamples doc.
+                    Scroll?.Phase(in e, _velSamples.AsSpan(0, _velSampleCount));
                     handled++;
                     break;
 

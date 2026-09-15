@@ -207,8 +207,16 @@ public readonly record struct InputEvent(
 /// the monotonic phase sequence (scroll-feel-rework-v2 §3.4) lets a consumer that latches one gesture drain only that
 /// gesture's samples — an interleaved event that splits a frame into two <see cref="InputKind.ScrollDelta"/>s can never
 /// replay a later packet's deposit against an earlier base. The estimator's strictly-increasing-stamp rejection already
-/// covers the single-latched-gesture case; the seq tag hardens the cross-gesture case (and the DirectManipulation sink).</para></summary>
-public readonly record struct PointerVelSample(uint PointerId, float X, float Y, uint TimestampMs, long QpcTicks, byte Seq = 0);
+/// covers the single-latched-gesture case; the seq tag hardens the cross-gesture case (and the DirectManipulation sink).</para>
+/// <para><paramref name="IsScrollPhase"/> (bug-B/A3) distinguishes this deposit's PRODUCER: <c>true</c> for a
+/// scroll-phase (<see cref="InputKind.ScrollDelta"/>) coalesce deposit, whose <c>X</c>/<c>Y</c> are DELTAS (the
+/// cumulative merge-so-far, scroll-v3-plan §5.4); <c>false</c> (the default, unchanged at the touch/pen call site)
+/// for a touch/pen <see cref="InputKind.PointerMove"/> deposit, whose <c>X</c>/<c>Y</c> are an ABSOLUTE position. The
+/// two producers share this one ring, so a consumer that only wants one kind (<c>ScrollInputRouter.FeedImpulsePreSamples</c>,
+/// which would otherwise silently corrupt its estimator by feeding an absolute pointer position through a delta-sum
+/// axis) MUST filter on this field rather than inferring it from <see cref="Seq"/> (0 is a legitimate value for a
+/// real scroll-phase gesture's first packet, not just the touch/pen "no sequence" default).</para></summary>
+public readonly record struct PointerVelSample(uint PointerId, float X, float Y, uint TimestampMs, long QpcTicks, byte Seq = 0, bool IsScrollPhase = false);
 
 /// <summary>
 /// Drained by the host each frame (drain-to-empty, single contiguous span — <c>AppHost.RunFrame</c> Clears, the window
@@ -303,7 +311,7 @@ public sealed class InputEventRing
                 // once: the estimator then saw the pan axis as flat plateaus + per-frame spikes and inflated release
                 // velocity ~4-6× whenever ≥2 packets folded into one frame — the oversized-fling / violent-edge-bounce
                 // defect. gate.scroll.phase-release-velocity pins the corrected order.)
-                PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq));
+                PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq, IsScrollPhase: true));
                 if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
                     ScrollTrace.Coalesce((byte)e.Kind, e.ScrollDelta, e.ScrollDeltaX,
                         prev.ScrollDelta + e.ScrollDelta, prev.ScrollDeltaX + e.ScrollDeltaX, e.QpcTicks);

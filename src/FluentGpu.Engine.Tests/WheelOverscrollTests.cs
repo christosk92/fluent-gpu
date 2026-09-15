@@ -81,9 +81,16 @@ public sealed class WheelOverscrollTests
     {
         var k = BoundKernel(200f);
         double t = 0.0;
+        float impulsePos = 0f;
         for (int i = 0; i < 6; i++)
         {
+            // bug-B/A3: ScrollInputRouter.AccumulatePhaseDelta now posts a ScrollInput.ImpulseSample alongside every
+            // FrameDelta it flushes (ScrollKernel.ApplyFrameDelta no longer feeds the release-velocity estimator
+            // itself — see its doc). A test that posts raw FrameDelta commands directly, bypassing the router, must
+            // replicate that pairing or the fling below releases at v=0 (Impulse never gets a 2nd sample).
             k.Port.Post(ScrollInput.FrameDelta(Node, t, -25f, noOverscroll: wheel));
+            impulsePos += -25f;
+            k.Port.Post(ScrollInput.ImpulseSample(Node, t, impulsePos, reset: i == 0));
             k.Tick(in Clock);
             t += 0.008;
         }

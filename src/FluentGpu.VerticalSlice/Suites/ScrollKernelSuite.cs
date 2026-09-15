@@ -87,6 +87,20 @@ static class ScrollKernelSuite
 
     private static ScrollClock ClockAt(double t, float dtSec = 0.00833f) => new(t, dtSec, t, 0.00833f);
 
+    /// <summary>bug-B/A3: posts a <see cref="ScrollInputKind.FrameDelta"/> AND the <see cref="ScrollInputKind.ImpulseSample"/>
+    /// that now carries the release-velocity estimator's feed (<c>ScrollInputRouter.AccumulatePhaseDelta</c> posts
+    /// both together for every real phase-producer packet — see ScrollKernel.ApplyImpulseSample's doc). A test that
+    /// posts raw <c>ScrollInput.FrameDelta</c> commands directly, bypassing the router, must post this too or its
+    /// body's Impulse estimator sees zero samples and never flings — <paramref name="impulsePos"/> is the caller's
+    /// own running cumulative-delta tracker (mirrors the router's <c>_phaseTotalX/Y</c>), <paramref name="reset"/>
+    /// true only on the FIRST call of a fresh gesture/re-grab.</summary>
+    private static void PostFrameDeltaWithImpulse(ScrollKernel k, int node, double t, float delta, ref float impulsePos, bool reset)
+    {
+        k.Port.Post(ScrollInput.FrameDelta(node, t, delta));
+        impulsePos += delta;
+        k.Port.Post(ScrollInput.ImpulseSample(node, t, impulsePos, reset));
+    }
+
     // ── gate.kernel.dt-invariance ─────────────────────────────────────────────────────────────────────────────
     // Exercises the ported physics formulas directly (CoastStep/ChaseStep/StepSpring are the shared per-body time
     // step ScrollBody.Advance calls) — the frame-rate independence claim these gates verify.
@@ -200,11 +214,12 @@ static class ScrollKernelSuite
 
         const double dtS = 0.00833;
         double t = 0;
+        float impulsePos = 0f;
         const float deltaPerFrame = 10f; // ≈1200 DIP/s at 8.33ms — constant-velocity samples give an EXACT IMPULSE estimate.
         for (int i = 1; i <= 6; i++)
         {
             t = i * dtS;
-            k.Port.Post(ScrollInput.FrameDelta(1, t, deltaPerFrame));
+            PostFrameDeltaWithImpulse(k, 1, t, deltaPerFrame, ref impulsePos, reset: i == 1);
             var c = ClockAt(t, (float)dtS);
             k.Tick(in c);
         }
@@ -275,10 +290,11 @@ static class ScrollKernelSuite
         k.Reclamp();
 
         double t = 0.00833;
-        k.Port.Post(ScrollInput.FrameDelta(2, t, 5f)); // 90→95, fully absorbed by child
+        float impulsePos = 0f;
+        PostFrameDeltaWithImpulse(k, 2, t, 5f, ref impulsePos, reset: true); // 90→95, fully absorbed by child
         k.Tick(ClockAt(t));
         t += 0.00833;
-        k.Port.Post(ScrollInput.FrameDelta(2, t, 20f)); // 95→115 clamps to 100; 15 excess → parent absorbs LAST
+        PostFrameDeltaWithImpulse(k, 2, t, 20f, ref impulsePos, reset: false); // 95→115 clamps to 100; 15 excess → parent absorbs LAST
         k.Tick(ClockAt(t));
         t += 0.00833;
         k.Port.Post(ScrollInput.ContactEnd(2, t, 0f));
@@ -303,14 +319,15 @@ static class ScrollKernelSuite
             SetupViewport(k, 2, 500f, 400f);  // child maxOff=100
 
             double t = 0.00833;
+            float impulsePos = 0f;
             k.Port.Post(ScrollInput.ThumbSet(2, 90f));
             k.Reclamp();
             // Two FrameDeltas (not one) — the impulse estimator needs ≥2 samples to compute a release velocity;
-            // the FIRST FrameDelta only seeds Impulse.Reset (one sample), so a single-delta drag releases at v=0.
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 6f)); // 90→96
+            // the FIRST ImpulseSample only seeds Impulse.Reset (one sample), so a single-delta drag releases at v=0.
+            PostFrameDeltaWithImpulse(k, 2, t, 6f, ref impulsePos, reset: true); // 90→96
             k.Tick(ClockAt(t));
             t += 0.00833;
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 4f)); // 96→100 exactly, no excess yet
+            PostFrameDeltaWithImpulse(k, 2, t, 4f, ref impulsePos, reset: false); // 96→100 exactly, no excess yet
             k.Tick(ClockAt(t));
             t += 0.00833;
             k.Port.Post(ScrollInput.ContactEnd(2, t, 0f)); // seeds child Ballistic
@@ -339,15 +356,16 @@ static class ScrollKernelSuite
             SetupViewport(k, 2, 500f, 400f);  // child maxOff=100
 
             double t = 0.00833;
+            float impulsePos = 0f;
             k.Port.Post(ScrollInput.ThumbSet(1, 100f)); // parent already pinned at ITS max
             k.Port.Post(ScrollInput.ThumbSet(2, 90f));
             k.Port.Post(ScrollInput.Chain(2, 1));
             k.Reclamp();
 
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 6f)); // 90→96
+            PostFrameDeltaWithImpulse(k, 2, t, 6f, ref impulsePos, reset: true); // 90→96
             k.Tick(ClockAt(t));
             t += 0.00833;
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 4f)); // 96→100 exactly
+            PostFrameDeltaWithImpulse(k, 2, t, 4f, ref impulsePos, reset: false); // 96→100 exactly
             k.Tick(ClockAt(t));
             t += 0.00833;
             k.Port.Post(ScrollInput.ContactEnd(2, t, 0f));
@@ -552,12 +570,13 @@ static class ScrollKernelSuite
         SetupViewport(k, 1, 500f, 400f); // maxOff=100 — tight
 
         double t = 0.00833;
+        float impulsePos = 0f;
         k.Port.Post(ScrollInput.ThumbSet(1, 95f));
         k.Reclamp();
-        k.Port.Post(ScrollInput.FrameDelta(1, t, 3f)); // 95→98
+        PostFrameDeltaWithImpulse(k, 1, t, 3f, ref impulsePos, reset: true); // 95→98
         k.Tick(ClockAt(t));
         t += 0.00833;
-        k.Port.Post(ScrollInput.FrameDelta(1, t, 2f)); // 98→100 exactly — zero excess so the drag itself does not band
+        PostFrameDeltaWithImpulse(k, 1, t, 2f, ref impulsePos, reset: false); // 98→100 exactly — zero excess so the drag itself does not band
         k.Tick(ClockAt(t));
         t += 0.00833;
         k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
@@ -605,10 +624,11 @@ static class ScrollKernelSuite
 
         const double dtS = 0.00833;
         double t = 0;
+        float impulsePos = 0f;
         for (int i = 1; i <= 4; i++)
         {
             t = i * dtS;
-            k.Port.Post(ScrollInput.FrameDelta(1, t, 30f)); // constant-velocity samples, ~3600 DIP/s
+            PostFrameDeltaWithImpulse(k, 1, t, 30f, ref impulsePos, reset: i == 1); // constant-velocity samples, ~3600 DIP/s
             k.Tick(ClockAt(t, (float)dtS));
         }
         t += dtS;
