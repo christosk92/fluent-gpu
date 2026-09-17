@@ -1,6 +1,9 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
@@ -26,7 +29,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private readonly IImageCodec _codec;
     private readonly IImageFetcher _fetcher;
     private readonly DecodeOptions _opt;
-    private readonly PixelBufferPool _pixels;   // bounded CPU pixel pool for decode dst buffers (fetch buffers stay on ArrayPool.Shared)
+    private readonly PixelBufferPool _pixels;   // bounded CPU pixel pool for decode dst buffers (fetch buffers go back through IImageFetcher.ReturnBuffer); a buffer the sink TOOK in Pump is returned here by the render thread via ImageUploadQueue.ReturnUploadBuffer
     private readonly ConcurrentQueue<int>[] _lanes = { new(), new(), new() };   // [Visible, Overscan, Prefetch]
     private readonly ConcurrentDictionary<int, Req> _reqs = new();
     private readonly SemaphoreSlim _signal = new(0);
@@ -75,8 +78,65 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// gesture and popped them all in at the end. One ~1 MiB upload per frame is amortizable; a permanent LQIP smear
     /// is not. This throttle is ALSO the retained mitigation for the historical Adreno DXGI_ERROR_DEVICE_HUNG suspect
     /// (an unthrottled upload burst under deeper buffering): it bounds that burst class at ANY buffer depth, which is
-    /// why it stays on now that FRAME_COUNT is 3 — see D3D12Device.FRAME_COUNT.</summary>
+    /// why it stays on now that FRAME_COUNT is 3 — see D3D12Device.FRAME_COUNT.
+    ///
+    /// The throttle bounds how many uploads a frame STAGES; two further rules bound what one apply COSTS the UI thread,
+    /// because the 2026-09-16 real-mode scroll recordings showed covers landing late and allocating (20 MB hotAllocKB,
+    /// gen2 GCs per fling) even at one apply per frame: (1) the decode buffer's OWNERSHIP is handed to the host sink
+    /// instead of being copied — see <see cref="TryTakeDecodeBuffer"/>; (2) a budget-bounded pump is guaranteed its
+    /// own minimum slice — see <see cref="PumpMinSliceMs"/> — so the head apply is never starved by a realize deadline
+    /// the rest of the frame already consumed.</summary>
     public bool ScrollThrottled { get; set; }
+
+    /// <summary>The smallest UI-thread slice a budget-bounded <see cref="Pump(ImageCompleteHandler, ImageReadyHandler, long)"/>
+    /// is handed: the host passes <c>max(FrameBudget.DeadlineTicks, now + PumpMinSliceTicks)</c>. The realize budget is
+    /// measured from FRAME START, and on a fling frame where flush + realize + layout + animation had already spent it,
+    /// a pump sharing that deadline applied ZERO images (the deadline is checked before the first apply) — covers
+    /// landed only when the gesture stopped. 1.5 ms is ample for one head apply (under the async render thread the
+    /// apply is an ownership handoff + cache bookkeeping, no memcpy) and small against an 8.3 ms 120 Hz frame. One
+    /// const, no env knob — a host-loop pacing budget, the sibling of <c>FrameBudget.MotionUiSliceMs</c>.</summary>
+    public const float PumpMinSliceMs = 1.5f;
+    /// <summary><see cref="PumpMinSliceMs"/> in <see cref="Stopwatch"/> ticks, computed once.</summary>
+    public static readonly long PumpMinSliceTicks = (long)(PumpMinSliceMs * Stopwatch.Frequency / 1000.0);
+
+    // ── Decode-buffer ownership handoff (UI thread, call-scoped) ─────────────────────────────────────────────────
+    // Pump hands `onPixels` a span over the worker's pooled decode buffer and used to Return that buffer one line
+    // later, which forced the async host sink to Rent a SECOND buffer and memcpy the pixels on the UI thread —
+    // 256 KB–1 MiB per cover, an LOH-class copy per apply during a fling. The sink may instead TAKE the decode buffer:
+    // while `onPixels` runs, the buffer is on loan in these thread-static slots and TryTakeDecodeBuffer transfers
+    // ownership when the offered span is exactly the loaned pixels. A taken buffer is NOT returned by Pump; the taker
+    // returns it to the SAME PixelBufferPool the scheduler rents from (ImageUploadQueue.ReturnUploadBuffer → its
+    // BufferPool, which FluentApp/AppHost.PixelPool point at this scheduler's DecodeOptions.PixelPool) after the
+    // render thread staged it — one Rent→Return cycle per cover, zero UI-thread pixel allocation.
+    // Thread-static, not an instance member, because the sink reaches this scheduler only through the span-typed
+    // ImageReadyHandler → ImageCache → ImageUploadAttemptHandler chain, and a span cannot name its array. The slots
+    // are written immediately before and cleared immediately after the synchronous callback (finally-guarded), so a
+    // loan never outlives one apply, never crosses threads, and a stale loan can never be taken by a later frame.
+    [ThreadStatic] private static byte[]? t_loanBuffer;
+    [ThreadStatic] private static int t_loanByteLen;
+    [ThreadStatic] private static bool t_loanTaken;
+
+    /// <summary>Host pixel sink: take ownership of the decode buffer behind <paramref name="pixels"/> instead of
+    /// copying it. Succeeds only while a <see cref="Pump"/> apply is running the sink on this thread AND
+    /// <paramref name="pixels"/> is exactly that apply's loaned span (same start, same length) — any other span (the
+    /// blur-hash LQIP scratch, <c>FakeImageDecoder</c>'s scratch, a non-scheduler decoder) returns false and the caller
+    /// copies as before. On success the caller owns <paramref name="buffer"/> (<c>buffer.Length ≥ pixels.Length</c>;
+    /// only the first <c>pixels.Length</c> bytes are pixels) and MUST return it exactly once to the scheduler's
+    /// <see cref="PixelBufferPool"/> (<see cref="DecodeOptions.PixelPool"/>) — the pool drops foreign sizes, never
+    /// throws. Zero-alloc; a second call for the same apply returns false.</summary>
+    public static bool TryTakeDecodeBuffer(ReadOnlySpan<byte> pixels, [NotNullWhen(true)] out byte[]? buffer)
+    {
+        byte[]? loan = t_loanBuffer;
+        if (loan is not null && !t_loanTaken && pixels.Length == t_loanByteLen && pixels.Length > 0
+            && Unsafe.AreSame(ref MemoryMarshal.GetReference(pixels), ref MemoryMarshal.GetArrayDataReference(loan)))
+        {
+            t_loanTaken = true;
+            buffer = loan;
+            return true;
+        }
+        buffer = null;
+        return false;
+    }
     /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
     public int LastPumpAppliedCount { get; private set; }
     /// <summary>Decoded pixel bytes applied by the most recent UI-thread <see cref="Pump"/>.</summary>
@@ -184,7 +244,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// same visible effect as the existing per-frame apply cap running out early. The deadline is an ADDITIONAL, independent
     /// stop condition checked BETWEEN applies (never mid-apply) — the 1-apply-cap-while-<see cref="ScrollThrottled"/>
     /// rule is unchanged and still guarantees a frame's head always makes progress. <c>long.MaxValue</c> (the
-    /// two-arg overload above; every steady frame) never reads the clock — zero extra cost.</summary>
+    /// two-arg overload above; every steady frame) never reads the clock — zero extra cost. Because the deadline IS
+    /// checked before the first apply, the host must never pass one that has already elapsed: it hands this pump
+    /// <c>max(FrameBudget.DeadlineTicks, now + <see cref="PumpMinSliceTicks"/>)</c>, so a fling frame whose realize
+    /// budget is spent still lands its head apply inside its own small slice.</summary>
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels, long deadlineTicks)
     {
         LastPumpAppliedCount = 0;
@@ -241,9 +304,19 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 continue;
             }
             Finish(d.Id);
-            if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
+            // Loan the decode buffer to the sink for the duration of the callback (see TryTakeDecodeBuffer). A sink
+            // that took it now owns it and returns it to _pixels itself (render thread, after Stage); a sink that only
+            // read the span leaves it with us and we return it below. finally: an exception escaping the sink (the
+            // sync path's device-lost throw) must not leave a stale loan for a later frame to take.
+            bool taken = false;
+            if (d.Ok && d.Buffer != null)
+            {
+                t_loanBuffer = d.Buffer; t_loanByteLen = d.ByteLen; t_loanTaken = false;
+                try { onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H); }
+                finally { taken = t_loanTaken; t_loanBuffer = null; t_loanByteLen = 0; t_loanTaken = false; }
+            }
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);
-            if (d.Buffer != null) _pixels.Return(d.Buffer);
+            if (d.Buffer != null && !taken) _pixels.Return(d.Buffer);
             appliedBytes += d.ByteLen;
             applied++;
         }
@@ -356,7 +429,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         var (fetch, attempts) = await FetchWithRetry(req.Src, req.Id).ConfigureAwait(false);
         if (!fetch.Ok)
         {
-            if (fetch.Buffer != null) ArrayPool<byte>.Shared.Return(fetch.Buffer);
+            if (fetch.Buffer != null) _fetcher.ReturnBuffer(fetch.Buffer);
             Complete(req.Id, false, 0, 0, fetch.Failure, attempts, null, 0);
             return;
         }
@@ -367,7 +440,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
 
             int cap = req.W * req.H * 4;
-            byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload)
+            byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload, or by the sink that took it — TryTakeDecodeBuffer)
             bool ok; int dw = req.W, dh = req.H;
             try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
             catch { ok = false; }
@@ -378,7 +451,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(fetch.Buffer!);            // return the POOLED fetch buffer after decode reads it
+            _fetcher.ReturnBuffer(fetch.Buffer!);            // back to the fetcher's own pool after decode reads it
         }
     }
 

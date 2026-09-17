@@ -286,6 +286,75 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         }
     }
 
+    // W2-E3 (scroll-feel plan, wave 2): records the lane every request was queued at (Begin) and applies every raise-only
+    // Prioritize the cache forwards, so a test can read the lane an image CURRENTLY sits in. Never completes anything:
+    // every entry stays Pending, which keeps lane moves observable (a settled entry ignores Promote by design).
+    sealed class LaneRecordingDecoder : IImageDecoder
+    {
+        readonly Dictionary<int, string> _source = new();
+        readonly Dictionary<int, ImagePriority> _begin = new();
+        readonly Dictionary<int, ImagePriority> _lane = new();
+
+        public int BeginCount => _begin.Count;
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _source[id] = source; _begin[id] = priority; _lane[id] = priority;
+            return true;
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) { }
+
+        public void Prioritize(int id, ImagePriority priority)
+        {
+            if (_lane.TryGetValue(id, out var cur) && priority < cur) _lane[id] = priority;
+        }
+
+        int IdOf(string source)
+        {
+            foreach (var (id, s) in _source) if (string.Equals(s, source, StringComparison.Ordinal)) return id;
+            return 0;
+        }
+        /// <summary>The lane the LATEST request for <paramref name="source"/> was queued at; null if never requested.</summary>
+        public ImagePriority? BeginLaneOf(string source)
+        {
+            int id = IdOf(source);
+            if (id == 0) return null;
+            return _begin[id];
+        }
+        /// <summary>The lane <paramref name="source"/> currently sits in (Begin lowered by every Prioritize); null if never requested.</summary>
+        public ImagePriority? LaneOf(string source)
+        {
+            int id = IdOf(source);
+            if (id == 0) return null;
+            return _lane[id];
+        }
+    }
+
+    // A 200 px viewport of 40 px rows, one cover per row (keyed RenderItem rows, or persistent bound slots when Bound):
+    // 5 rows unambiguously visible, the engine's visible edge at row 5, the +1 guard at row 6, the Overscan=4 halo beyond.
+    sealed class OverscanLaneProbe : Component
+    {
+        public bool Bound;
+
+        public override Element Render()
+        {
+            var list = new VirtualListEl
+            {
+                ItemCount = 200, EstimatedExtent = 40f, Overscan = 4, Width = 200f, Height = 200f,
+                RenderItem = static i => Row("static/" + i),
+                RowBind = Bound ? (Func<IReadSignal<int>, Element>)(sig => Row(Prop.Of(() => "bound/" + sig.Value))) : null,
+            };
+            return new BoxEl { Width = 200f, Height = 200f, Children = [list] };
+        }
+
+        static Element Row(Prop<string> source) => new BoxEl
+        {
+            Width = 200f, Height = 40f,
+            Children = [new ImageEl { Source = source, Width = 24f, Height = 24f }],
+        };
+    }
+
 static class ImageSuite
 {
     public static void Run(StringTable strings)
@@ -305,6 +374,7 @@ static class ImageSuite
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         HoldLastGoodChecks(strings);
+        OverscanPriorityChecks(strings);
     }
 
     // ── gate.budgets.* — the three ctor-captured image budgets, driven at BOTH tiers ───────────────────────────────
@@ -1635,6 +1705,72 @@ static class ImageSuite
 
             Check("46n4. hold-last-good: every steady frame after a hold + commit sequence keeps hot-phase (6–13) alloc at 0",
                 worst == 0, $"worstSteady={worst}B idA={idA} idB={idB}");
+        }
+    }
+
+    // ── W2-E3 (Reconciler.cs ImageRequestPriority / PromoteNewlyVisibleRows, ImageCache.Pin(priority) / Promote) ─────
+    // Before this every reconciler image request was ImagePriority.Visible — a fling that realized 30 rows started 30
+    // Visible decodes at once and DecodeScheduler's Overscan/Prefetch lanes + its backpressure drop arm were dead. Now a
+    // row realized inside the viewport's visible band requests Visible, a row realized in the overscan halo (incl. the +1
+    // guard row) requests Overscan, the pin no longer force-promotes, and a halo row that scrolls into view has its
+    // still-Pending decode promoted to the Visible lane by the realize pass that follows. Both realize paths are covered:
+    // the keyed RenderItem recycler (WriteColumns `case ImageEl`) and the persistent bound slots (the Source effect).
+    static void OverscanPriorityChecks(StringTable strings)
+    {
+        // Pure cache: the scheduler's backpressure arm drops an off-screen request (Begin false ⇒ a None tombstone) and the
+        // reconciler's pin at the SAME lane is dropped again, so the entry never becomes Pending. Promote — what the realize
+        // pass calls when that row scrolls into view — must restart it at Visible rather than skip a non-Pending entry.
+        var dropCache = new ImageCache(new DropPrefetchDecoder());
+        var dropped = dropCache.Request("halo-cover", 32, 32, ImagePriority.Overscan);
+        dropCache.Pin(dropped, ImagePriority.Overscan);
+        bool stayedDropped = dropCache.StateOf(dropped) == ImageState.None && dropCache.PendingCount == 0 && dropCache.RefsOf(dropped) == 1;
+        dropCache.Promote(dropped, ImagePriority.Visible);
+        bool revived = dropCache.StateOf(dropped) == ImageState.Pending && dropCache.PendingCount == 1;
+        dropCache.Pump();
+        bool revivedReady = dropCache.StateOf(dropped) == ImageState.Ready;
+        Check("gate.img.overscan-lane.promote-restarts-dropped: an Overscan request the scheduler dropped under backpressure stays a tombstone through its Overscan pin and is restarted at Visible by Promote when its row scrolls into view",
+            stayedDropped && revived && revivedReady,
+            $"afterPin={dropCache.StateOf(dropped)} pending={dropCache.PendingCount} refs={dropCache.RefsOf(dropped)} afterPromote={(revived ? "Pending" : "not-pending")} ready={revivedReady}");
+
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool bound = pass == 1;
+            string p = bound ? "bound/" : "static/";
+            string path = bound ? "bound" : "keyed";
+            var dec = new LaneRecordingDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overscan-lane-" + path, new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new OverscanLaneProbe { Bound = bound }, cache);
+            for (int i = 0; i < 6; i++) host.RunFrame();   // mount realizes the visible band; the at-rest catch-up / budget drip fills the halo
+            var vp = ViewportWithItemCount(host.Scene, host.Scene.Root, 200);
+            host.Scene.TryGetScroll(vp, out var sc0);
+
+            // Rows 0..4 are unambiguously visible; row 5 (the engine's visible edge) and 6 (the +1 guard) are left
+            // unasserted; everything realized from row 7 on is the overscan halo and must have been queued at Overscan.
+            bool visibleLane = true, haloLane = true; int haloRows = 0;
+            for (int i = 0; i <= 4; i++) visibleLane &= dec.BeginLaneOf(p + i) == ImagePriority.Visible;
+            for (int i = 7; i < sc0.LastRealized; i++) { haloLane &= dec.BeginLaneOf(p + i) == ImagePriority.Overscan; haloRows++; }
+            Check($"gate.img.overscan-lane.{path}: rows realized inside the visible band request Visible; rows realized in the overscan halo request Overscan (and the pin does not re-promote them)",
+                !vp.IsNull && visibleLane && haloLane && haloRows > 0,
+                $"realized=[{sc0.FirstRealized},{sc0.LastRealized}) visible0-4={visibleLane} halo7+={haloLane} haloRows={haloRows} begins={dec.BeginCount} lane7={dec.LaneOf(p + 7)}");
+
+            // Scroll 6 rows (offset 240): rows 7..9 were realized in the halo (Overscan lane) and now sit inside the
+            // visible band [6,12) — the realize pass that follows must move their still-Pending decodes to the Visible
+            // lane; rows entering the NEW halo beyond the +1 guard (13..) must request Overscan.
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 40f * 6f, immediate: true));
+            for (int i = 0; i < 6; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc1);
+            bool promoted = true;
+            for (int i = 7; i <= 9; i++) promoted &= dec.LaneOf(p + i) == ImagePriority.Visible;
+            bool newHaloLane = true; int newHaloRows = 0;
+            for (int i = 13; i < sc1.LastRealized; i++) { newHaloLane &= dec.BeginLaneOf(p + i) == ImagePriority.Overscan; newHaloRows++; }
+            Check($"gate.img.overscan-lane.{path}.promote: a halo row scrolling into the visible band has its pending decode promoted to the Visible lane, and the new halo still requests Overscan",
+                promoted && newHaloLane && newHaloRows > 0 && sc1.FirstRealized <= 6 && sc1.LastRealized >= 12,
+                $"realized=[{sc1.FirstRealized},{sc1.LastRealized}) lanes7-9={dec.LaneOf(p + 7)}/{dec.LaneOf(p + 8)}/{dec.LaneOf(p + 9)} newHaloRows={newHaloRows} begin13={dec.BeginLaneOf(p + 13)}");
         }
     }
 }

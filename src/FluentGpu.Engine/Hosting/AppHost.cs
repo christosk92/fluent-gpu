@@ -18,6 +18,22 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Hosting;
 
+/// <summary>Optional platform-window seam for the input-pacing census the host mirrors onto <see cref="FrameStats"/>
+/// (always-on P0 counters, no env switch). Implemented by the Win32 window (its paced <c>WaitForWork</c> keeps the
+/// counter); a headless or foreign window simply does not implement it and the host reports 0. Discovered once at
+/// construction (<c>window as IInputPacingSource</c>) — no per-frame type test, no allocation.</summary>
+public interface IInputPacingSource
+{
+    /// <summary>Monotonic count of display-paced waits a NON-deferrable message broke early (a frame produced off-phase).
+    /// Wheel packets are deferrable, so a wheel glide must hold this flat; a consumer differences successive frames.</summary>
+    long PacedUrgentBreaks { get; }
+}
+
+/// <summary>Why a scroll-active frame's raw gap exceeded the work the frame measured (<see cref="FrameStats.SlackMs"/>):
+/// a GC landed in the gap, the wake model deliberately slept for it, or the thread was runnable and did not run
+/// (OS pre-emption, a blocking call outside the measured phases).</summary>
+public enum SlackCause : byte { None, Gc, WakeSlept, Preempted }
+
 public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered)
 {
     public int NodesVisited { get; init; }
@@ -135,6 +151,14 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double ImagePumpMs { get; init; }
     public int ImageApplyCount { get; init; }
     public int ImageApplyBytes { get; init; }
+    /// <summary>P0 always-on counter (cumulative): render-thread image-upload drain turns that hit the device's per-turn
+    /// byte budget and carried a job to the next turn (<see cref="IGpuDevice.DeferredImageUploads"/>; 0 on headless).
+    /// Difference successive frames: a nonzero step is an applied cover whose texture landed one present later than its
+    /// admission, and a sustained climb during a scroll means covers land faster than one turn stages them.</summary>
+    public int DeferredImageUploads { get; init; }
+    /// <summary>Cumulative pixel bytes of the jobs <see cref="DeferredImageUploads"/> counted
+    /// (<see cref="IGpuDevice.DeferredImageUploadBytes"/>).</summary>
+    public long DeferredImageUploadBytes { get; init; }
     public double RealizeCatchupMs { get; init; }
     // Submit sub-split (diagnostics for the #1 hotspot; async runs the backend submit on the render thread).
     // FenceWaitMs = submitting-thread wall-time BLOCKED on back-buffer retirement + present-latency waitable
@@ -173,6 +197,31 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// consumer can normalise cadence metrics by SCROLL-ACTIVE time rather than wall time (an idle stretch otherwise
     /// dilutes every per-second figure) and can gate its emission on the gesture instead of on a fixed frame counter.</summary>
     public bool ScrollActive { get; init; }
+    /// <summary>The kernel reported continuous motion this frame (a drag, a fling, or a wheel/programmatic glide —
+    /// <see cref="ScrollFrameSummary.AnyLiveMotion"/>). The bit a cadence verdict conditions on: a vblank with no present
+    /// while this was true on the previous frame is a hitch the user saw; one during the gap between two wheel notches
+    /// that had already landed is nothing.</summary>
+    public bool ScrollLiveMotion { get; init; }
+    /// <summary>The largest main-axis displacement any scroll body produced this frame, DIP
+    /// (<see cref="ScrollFrameSummary.MaxAbsDeltaDip"/>) — the per-frame "shift" a screen-capture probe measures, from
+    /// inside, so a per-frame motion trace needs no capture.</summary>
+    public float ScrollDeltaDip { get; init; }
+    /// <summary>Wheel notches the kernel applied this frame (<see cref="ScrollFrameSummary.WheelNotches"/>).</summary>
+    public int WheelNotches { get; init; }
+    /// <summary>Scroll bodies whose coast step was pinned at a clamp this frame, pending fresh geometry
+    /// (<see cref="ScrollFrameSummary.EdgePins"/>) — a frame whose shift was cut by last frame's extent, not by physics.</summary>
+    public int ScrollEdgePins { get; init; }
+    /// <summary>The largest scroll rebase this frame that is not motion — an anchor shift or a clamp correction, DIP
+    /// (<see cref="ScrollFrameSummary.MaxAbsStructuralDip"/>); kept out of <see cref="ScrollDeltaDip"/>.</summary>
+    public float ScrollStructuralDip { get; init; }
+    /// <summary>A scroll contact is down and still: its drag applied no delta this frame and its newest sample is older
+    /// than the resample latency plus a frame (<see cref="ScrollFrameSummary.AnyContactHeld"/>).</summary>
+    public bool ScrollContactHeld { get; init; }
+    /// <summary>Why a body that should have coasted this frame moved under 0.05 DIP
+    /// (<see cref="ScrollFrameSummary.ZeroReason"/>); <see cref="ScrollZeroReason.None"/> when none did.</summary>
+    public ScrollZeroReason ScrollZeroReason { get; init; }
+    /// <summary>This frame's kernel dt was rebuilt from the wall clock because the frame stamp repeated (AppHost's scroll dt repair).</summary>
+    public bool ScrollDtRepaired { get; init; }
     /// <summary>The publish seq this frame's DrawList was handed to the render seam under (0 when the frame elided its
     /// submit). This is the ONLY per-frame identity that survives the UI→render-thread boundary; see
     /// <see cref="AppHost.LastPresentPublishSeq"/> for the ack side and the join contract.</summary>
@@ -192,6 +241,13 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int Gc0Delta { get; init; }
     public int Gc1Delta { get; init; }
     public int Gc2Delta { get; init; }
+    /// <summary>Always-on gap discriminator for scroll-active frames whose raw inter-frame gap exceeded 12 ms: the part
+    /// of that gap no measured phase (flush/layout/anim/record/submit) accounts for, in ms — the time the loop was not
+    /// running. 0 on every other frame.</summary>
+    public float SlackMs { get; init; }
+    /// <summary>What <see cref="SlackMs"/> was (<c>SlackCause.None</c> when the slack is under 4 ms — the frame was
+    /// slow, not absent).</summary>
+    public SlackCause SlackCause { get; init; }
     /// <summary>The per-component census line for this frame when <see cref="AppHost.RenderCensus"/> is on AND the
     /// flush exceeded <see cref="RefreshIntervalMs"/> (or rendered ≥ the census min-comps): "[render-census] flush=…
     /// top=Type×n(r=ms c=ms a=K),… bytes=Type×n=K,…" — WHICH components made the frame slow and WHO allocated. Null
@@ -204,6 +260,15 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// them before it woke). Ordinary and cheap — record-dirty bits and the pending-removal ledger accumulate until a
     /// publication is CONSUMED, so a skipped one loses nothing. A sustained climb means the render thread is behind.</summary>
     public long PublicationGaps { get; init; }
+    /// <summary>P0 always-on counter (monotonic): display-paced input waits the platform broke early for a non-deferrable
+    /// message, i.e. frames produced OFF-phase by urgent input (<see cref="IInputPacingSource.PacedUrgentBreaks"/>; 0 when
+    /// the window does not implement the seam — headless). Wheel packets are deferrable since the scroll pacing fix, so
+    /// the per-frame difference must be ~0 during a wheel glide; the app's <c>scroll.frames</c> rollup prints it.</summary>
+    public long PacedUrgentBreaks { get; init; }
+    /// <summary>P0 always-on counter (monotonic): <c>RunFrame</c>s that dispatched input but declined to produce a frame
+    /// because one was already produced for the current compositor tick (<see cref="AppHost.ProductionDeclines"/>). Each
+    /// one is an input update that reached the screen a tick late; a wheel glide must hold the difference at ~0.</summary>
+    public long ProductionDeclines { get; init; }
     /// <summary>Cumulative presents and OS-refresh slots those presents missed (an interval of two vblanks counts one
     /// missed slot). Cumulative so a window can difference them: the displayed cadence is the smoothness number, and
     /// it is invisible to the UI-side phase times when the renderer runs on its own thread.</summary>
@@ -496,6 +561,9 @@ public sealed class AppHost : IDisposable
     private ulong _frameClockSeq;                         // RunFrame-call ordinal — FrameClock.Seq (never resets)
     private long _frameClockFloorQpc;                     // RefreshLattice.Snap's monotonicity floor (replaces the old QuantizedFrameSec's _lastQuantizedFrameQpc)
     private long _prevScrollFrameQpc;                     // previous PAINTED frame's FrameClock.FrameQpc — ScrollClock.DtSec's Δ base (real-window path only)
+    private long _prevScrollNowQpc;        // wall stamp of the previous produced frame (the dt repair above)
+    private bool _scrollDtRepairedThisFrame;
+    private int _scrollDtRepairs;          // frames whose repeated frame stamp was repaired from the wall clock (FrameStats.ScrollDtRepaired)
     private readonly InputEventRing _scrollPumpRing = new();  // dedicated ring for IPlatformWindow.PumpScroll (kept separate from _ring, which the top-of-RunFrame pump already drained this frame)
     private readonly FrameBudget _frameBudget = new();   // motion-UI slice bound for realize + image-apply while Drag/Ballistic (§3.3 item 6)
     private readonly RepeatTicker _repeat;
@@ -899,7 +967,7 @@ public sealed class AppHost : IDisposable
     private void ApplyPresentPacing(in Threading.RenderFrame rf)
     {
         if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
-        else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
+        else if (rf.InteractivePresent) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
     }
 
     /// <summary>The render thread's byte-identical-frame elision, as a pure decision (unit-tested; see
@@ -1430,11 +1498,6 @@ public sealed class AppHost : IDisposable
     /// <summary>The sustainable cadence the adaptive-GPU governor paces to once engaged (fps). Not app policy and not
     /// a row's cadence: the rate a GPU-bound frame can actually hold.</summary>
     private const int GpuGovernorFps = 30;
-    // A/B-only strict-120 path. It activates exclusively on a compositor-owned swapchain after timestamp queries prove
-    // the actual GPU render is inside the 8ms budget. Set FG_SCROLL_PRESENT_INTERVAL0=1 together with FG_GPU_TIMING=1;
-    // otherwise ordinary vsync remains untouched.
-    private static readonly bool s_scrollPresentIntervalZero = Diag.EnvFlag("FG_SCROLL_PRESENT_INTERVAL0");
-
     // ── FG_BISECT_NO_IMAGE_PUMP: the image-pump bisection arm (ops/diag) ─────────────────────────────────────────
     // A BEHAVIOUR FORK, and the only kind of evidence that can settle the imageDecodeDuringScroll question. That
     // bucket's predicate is a correlation — "the phase-7.5 decode-apply cost is high while scroll is active" — and a
@@ -1456,7 +1519,6 @@ public sealed class AppHost : IDisposable
     /// PROVES the arm was live for this capture — a bisection whose suppression never actually engaged would
     /// otherwise read as "disabling the pump changed nothing", which is the opposite of what happened.</summary>
     public long BisectImagePumpsSuppressed => Volatile.Read(ref _bisectPumpsSuppressed);
-    private const double ScrollPresentGpuBudgetMs = 8.0;
     private double _gpuBoundEma;            // smoothed fresh whole-frame GPU execution samples (never fence waits)
     private ulong _gpuBoundSampleSequence;  // last completed device sample consumed into the EMA
     private GpuRenderSample _gpuBoundLastSample; // last coherent sample from THIS host's swapchain; TTL-bounded on read contention
@@ -1888,6 +1950,7 @@ public sealed class AppHost : IDisposable
     private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable)
     private long _lastProducedTickSeq;     // the tick the last produced frame belongs to
     private long _productionDeclines;      // diagnostic census: RunFrames that dispatched input but produced no frame (already produced for this tick)
+    private readonly IInputPacingSource? _pacingSource;   // the window's paced-wait census (FrameStats.PacedUrgentBreaks); null ⇒ 0
 
     /// <summary>Frames declined for production because a frame was already produced for the current compositor tick
     /// (input was still dispatched). Each one is a frame DropOldest would have discarded. Diagnostic (FG_FPS_LOG).</summary>
@@ -2521,6 +2584,7 @@ public sealed class AppHost : IDisposable
         _isDetachedChild = isDetachedChild;
         _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
+        _pacingSource = window as IInputPacingSource;   // once: the Win32 window implements it, headless does not (→ 0)
         _pixelPool.BufferRetained += OnPixelBufferRetained;
         // Render-loop mode decision: a Headless window is ALWAYS SingleThread (the deterministic path the slice/gates need);
         // a real windowed host defaults to Async (the landed default). loopModeOverride is the internal-only escape hatch —
@@ -2806,15 +2870,27 @@ public sealed class AppHost : IDisposable
             _device.SetBakedBlurQueue(_bakedBlurQueue);
             if (_loopMode is (RenderLoopMode.ForceSync or RenderLoopMode.Async))
             {
-                // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
-                // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
-                // (returning the buffer) and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
+                // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink hands an OWNED pixel buffer to the
+                // render thread via the queue (optimistically admitting Ready); the render thread stages it, returns the buffer
+                // to the queue's BufferPool, and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
                 _imageQueue = new Threading.ImageUploadQueue { BufferPool = _pixelPool };
                 var q = _imageQueue;
                 _images.SetPixelAttemptSink((int id, System.ReadOnlySpan<byte> px, int w, int h) =>
                 {
-                    byte[] buf = _pixelPool.Rent(px.Length);   // bounded pixel pool copy (returned render-side via the queue's BufferPool)
-                    px.CopyTo(buf);
+                    // Ownership handoff (scroll-feel 2026-09-16 W2-E1): while DecodeScheduler.Pump is running this sink,
+                    // `px` IS the worker's pooled decode buffer, on loan — take it and enqueue it as-is. The old shape
+                    // (Rent a second buffer + px.CopyTo) memcpy'd every cover a second time on the UI thread: 256 KB–1 MiB,
+                    // LOH-class, per apply during a fling — the hotAllocKB / gen2 signature in the scroll recordings.
+                    // The buffer flows back to the SAME pool the scheduler rented it from: D3D12Device.DrainImageJobs →
+                    // q.ReturnUploadBuffer → q.BufferPool, which the PixelPool setter points at FluentApp's ONE shared
+                    // PixelBufferPool (also the scheduler's DecodeOptions.PixelPool). Any other caller — the blur-hash LQIP
+                    // upload (ImageCache scratch), FakeImageDecoder's `new byte[]` scratch, a non-scheduler decoder — offers a
+                    // span it still owns, so it is copied into a pool rental exactly as before.
+                    if (!FluentGpu.Media.DecodeScheduler.TryTakeDecodeBuffer(px, out byte[]? buf))
+                    {
+                        buf = _pixelPool.Rent(px.Length);
+                        px.CopyTo(buf);
+                    }
                     q.EnqueueUpload(id, buf, w, h, px.Length);
                     return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump
                 });
@@ -3509,6 +3585,23 @@ public sealed class AppHost : IDisposable
             {
                 long deltaQpc = _palFrameClock.FrameQpc - _prevScrollFrameQpc;
                 if (deltaQpc < 0) deltaQpc = 0;
+                // A produced frame handed the SAME frame stamp as the previous one (the lattice slot was reused or lagged)
+                // used to give the kernel dt = 0: an awake body moved nothing that frame and never caught up — the
+                // `9.5 0.0 9.2` coast hitch. Credit the wall clock instead, in whole refresh intervals: two frames that
+                // really ran inside one vblank round to 0 and stay a no-op; a frame a refresh later gets its step.
+                long nowQpc = Stopwatch.GetTimestamp();
+                _scrollDtRepairedThisFrame = false;
+                if (deltaQpc == 0 && _prevScrollFrameQpc != 0 && _palFrameClock.RefreshQpc > 0)
+                {
+                    long wall = nowQpc - _prevScrollNowQpc;
+                    if (wall < 0) wall = 0;
+                    long refresh = _palFrameClock.RefreshQpc;
+                    long slots = (wall + refresh / 2) / refresh;
+                    deltaQpc = slots * refresh;
+                    _scrollDtRepairs++;
+                    _scrollDtRepairedThisFrame = slots > 0;
+                }
+                _prevScrollNowQpc = nowQpc;
                 long maxDeltaQpc = (long)(0.034 * Stopwatch.Frequency);
                 if (deltaQpc > maxDeltaQpc) deltaQpc = maxDeltaQpc;
                 scrollDtSec = (float)(deltaQpc / (double)Stopwatch.Frequency);
@@ -3529,7 +3622,10 @@ public sealed class AppHost : IDisposable
             _scrollSink.BeginFrame();          // reset the sink's own per-frame "really moved" latch (see its remarks) — sampled below, NOT the kernel's touched-count-based Summary.AnyMoved
             _scrollKernel.Tick(in scrollClock);
             _scrollSummary = _scrollKernel.Summary;
-            if (_scrollSummary.AnyDragOrBallistic) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
+            // Arm the UI frame budget for ANY live scroll motion — Drag, Ballistic AND a Driven wheel/programmatic glide
+            // (scroll fix S2): the wheel glide used to run ReRealizeVirtuals unbounded on the boundary-crossing frame
+            // after a notch because it is Driven|Wheel, not Drag/Ballistic, and that frame slipped a refresh.
+            if (_scrollSummary.AnyLiveMotion) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
 
             // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
             // content (an offset REALLY advanced THIS frame's tick) OR advanced LAST frame, a reconcile that lands
@@ -3705,7 +3801,7 @@ public sealed class AppHost : IDisposable
                 FlushHosted(ref reactiveDeadline);                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
                 _scrollKernel.Reclamp();                       // 5.5: mount-time Restore/Bind/SetFrame land before ReRealizeVirtuals sees them (§3.3 item 2)
                 long tRx1 = Stopwatch.GetTimestamp();
-                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while Drag/Ballistic (§4)
+                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while any live scroll motion incl. wheel/programmatic glides (§4, ScrollFrameSummary.AnyLiveMotion)
                 long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) FlushRebindsToQuiescence();   // bound-row rebinds (slot signal writes) land THIS frame — unbudgeted
                 long tRx2 = Stopwatch.GetTimestamp();
@@ -3851,7 +3947,7 @@ public sealed class AppHost : IDisposable
             // 7 eased hover/press: HoverT/PressT now driven by the engine's HoverFade/PressFade tracks (ticked in _anim.Tick above); InteractionAnimator deleted
             // 7 implicit BrushTransition: the cross-fade T is now driven by the unified engine (AnimChannel.BrushFade,
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
-            // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
+            // (TickTouchpad is gone — scroll phase events are posted to the kernel at dispatch and paced by its Tick; design §6/§12.)
             if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                 FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _traceInputKindMask,
                     _scrollKernel.ActiveCount > 0 || _scrollRouter.GestureActive);
@@ -3919,7 +4015,18 @@ public sealed class AppHost : IDisposable
                 // to escape Paint entirely. Route it into the SAME foreground recovery gate; a genuine (non-device-loss)
                 // decoder/upload bug still propagates. The backend soft-fails staging first, so this is the net, not the
                 // normal path (media-pipeline.md §4.1).
-                try { _images.Pump(_frameBudget.DeadlineTicks); }
+                //
+                // The pump gets its OWN minimum slice, not the bare realize deadline (scroll-feel 2026-09-16 W2-E1): the
+                // FrameBudget deadline is frameStart + 3 ms, and on a fling frame where flush + realize + layout + anim
+                // already spent it, DecodeScheduler.Pump checks the deadline BEFORE its first apply and applied ZERO
+                // images — covers landed only when the gesture stopped. max(deadline, now + 1.5 ms) keeps the realize
+                // budget's slice when it is still open and otherwise grants the pump 1.5 ms of its own, so every frame
+                // lands at least its head apply; the scroll per-frame caps (1 apply / 512 KiB) are unchanged. A disarmed
+                // budget (long.MaxValue, every steady frame) stays unbounded — the max never lowers it.
+                long imagePumpDeadline = _frameBudget.DeadlineTicks == long.MaxValue
+                    ? long.MaxValue
+                    : Math.Max(_frameBudget.DeadlineTicks, Stopwatch.GetTimestamp() + FluentGpu.Media.DecodeScheduler.PumpMinSliceTicks);
+                try { _images.Pump(imagePumpDeadline); }
                 catch (Exception ex)
                 {
                     if (!TryRecoverForegroundDeviceLost(ex, clicks)) throw;
@@ -4131,12 +4238,11 @@ public sealed class AppHost : IDisposable
                 var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll,
                                                repaint, DrawListHash: dlHash);
                 if (resized && keepAlive) _device.HintSettlePresent();
-                double gpuRenderMs = LastGpuRenderMs;
-                bool hasTargetProfile = _swapchain.TryGetGpuProfileSample(out _);
-                bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive
-                    && _swapchain.SupportsCompositedIntervalZero
-                    && hasTargetProfile   // preserves the A/B's explicit FG_GPU_TIMING opt-in without another target's sample
-                    && gpuRenderMs > 0.0 && gpuRenderMs <= ScrollPresentGpuBudgetMs;
+                // Scrolling is latency-sensitive. A composited swapchain's interval-0 Present is still tear-free because
+                // DWM owns the final composition, while interval 1 makes Present wait for the next vblank and can hold a
+                // freshly recorded offset behind an older frame. Keep ordinary content on the normal vsync path; only
+                // active scrolling gets the compositor's low-latency handoff.
+                bool interactivePresent = !keepAlive && scrollActive && _swapchain.SupportsCompositedIntervalZero;
                 // Keep the returned seq: it is this frame's identity across the seam, and the ONLY thing that lets a
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
                 if (recordOnRender)
@@ -4201,7 +4307,7 @@ public sealed class AppHost : IDisposable
                         if (_renderSeam.TryAcquire(out var rf))
                         {
                             if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
-                            else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
+                            else if (rf.InteractivePresent) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
                             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain); // 10 submit (own swapchain — primary host: _swapchain IS _primarySwapchain)
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
@@ -4275,8 +4381,26 @@ public sealed class AppHost : IDisposable
             bool hasGpuProfile = _swapchain.TryGetGpuProfileSample(out GpuProfileSample gpuProfile);
             bool gpuProfileFresh = hasGpuProfile && gpuProfile.Sequence != _lastGpuProfileStatsSequence;
             if (gpuProfileFresh) _lastGpuProfileStatsSequence = gpuProfile.Sequence;
+            // Gap discriminator, always-on (one branch per frame): while scroll is active, a raw inter-frame gap over
+            // 12 ms is split into the work this frame measured and the SLACK no phase accounts for. GC deltas landing
+            // in the gap vs the wait the loop last asked for tell "GC pause" / "wake model slept" / "pre-empted" apart —
+            // a 124 ms hole mid-drag with 2.8 ms of work and no GC otherwise goes unattributed.
+            float slackMs = 0f;
+            SlackCause slackCause = SlackCause.None;
+            float rawDtMs = _frameTime is StopwatchFrameTimeSource rawSrc ? rawSrc.LastRawDeltaMs : dtMs;
+            if (scrollActive && rawDtMs > 12f)
+            {
+                float workMs = (float)(ToMs(tFlush - frameStart) + ToMs(tLayout - tFlush) + ToMs(tAnim - tLayout) + ToMs(tRecord - tAnim) + ToMs(tSubmit - tRecord));
+                slackMs = MathF.Max(0f, rawDtMs - workMs);
+                if (slackMs >= 4f)
+                    slackCause = (gc0 | gc1 | gc2) != 0 ? SlackCause.Gc
+                        : _lastWaitMs > 0 && _lastWaitMs >= slackMs * 0.5f ? SlackCause.WakeSlept
+                        : SlackCause.Preempted;
+            }
             LastStats = new FrameStats(recordOnRender ? _lastRecordedCommandCount : _drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
+                SlackMs = slackMs,
+                SlackCause = slackCause,
                 NodesVisited = recordStats.NodesVisited,
                 NodesCulled = recordStats.NodesCulled,
                 DrawNodeCount = recordStats.DrawnNodeCount,
@@ -4328,6 +4452,8 @@ public sealed class AppHost : IDisposable
                 ImagePumpMs = ToMs(tImagePump - tAnim),            // of which: phase-7.5 decode apply/evict
                 ImageApplyCount = _images.LastPumpAppliedCount,
                 ImageApplyBytes = _images.LastPumpAppliedBytes,
+                DeferredImageUploads = _device.DeferredImageUploads,           // P0: budget-truncated upload drain turns (cumulative)
+                DeferredImageUploadBytes = _device.DeferredImageUploadBytes,
                 RealizeCatchupMs = ToMs(tRealizeCatchup - tImagePump), // of which: phase-7.6 re-realize + scoped relayout
                 SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present (total; ~0 on a skipped frame)
                 FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: submitting-thread wait for back-buffer retirement + latency waitable
@@ -4344,7 +4470,17 @@ public sealed class AppHost : IDisposable
                 GpuCompositeMs = hasGpuProfile ? gpuProfile.CompositeMs : 0.0,
                 Presented = !skipSubmit,
                 ScrollActive = scrollActive,
+                ScrollLiveMotion = _scrollSummary.AnyLiveMotion,
+                ScrollDeltaDip = _scrollSummary.MaxAbsDeltaDip,
+                WheelNotches = _scrollSummary.WheelNotches,
+                ScrollEdgePins = _scrollSummary.EdgePins,
+                ScrollStructuralDip = _scrollSummary.MaxAbsStructuralDip,
+                ScrollContactHeld = _scrollSummary.AnyContactHeld,
+                ScrollZeroReason = _scrollSummary.ZeroReason,
+                ScrollDtRepaired = _scrollDtRepairedThisFrame,
                 PublicationGaps = Interlocked.Read(ref _publicationGaps),
+                PacedUrgentBreaks = _pacingSource is null ? 0 : _pacingSource.PacedUrgentBreaks,   // P0: off-phase frames from urgent input
+                ProductionDeclines = _productionDeclines,                                          // P0: input updates that missed their tick
                 PresentedFrames = Interlocked.Read(ref _presentedFramesTotal),
                 MissedVsyncs = Interlocked.Read(ref _missedVsyncsTotal),
                 PublishSeq = _framePublishSeq,
@@ -4376,9 +4512,8 @@ public sealed class AppHost : IDisposable
                     (float)LastStats.FlushMs, (float)LastStats.LayoutMs, (float)LastStats.AnimMs,
                     (float)LastStats.RecordMs, (float)LastStats.SubmitMs, (float)LastStats.FenceWaitMs,
                     (float)LastStats.PresentMs, LastStats.MeasureCount, LastStats.TextShapeMisses, rawDt);
-                // Gap discriminator (note 113): most traced scroll hitches have SLACK — raw dt far exceeding the frame's
-                // measured work — meaning the loop wasn't running. GC-collection deltas vs the wait the loop last asked
-                // for split that into "GC pause" / "wake-model slept" / "externally preempted".
+                // Gap discriminator (note 113): the traced form of the always-on FrameStats.SlackMs/SlackCause split
+                // computed above — raw dt far exceeding the frame's measured work means the loop wasn't running.
                 float slack = rawDt - (float)(LastStats.FlushMs + LastStats.LayoutMs + LastStats.AnimMs + LastStats.RecordMs + LastStats.SubmitMs);
                 if (slack > 12f)
                 {

@@ -1,4 +1,5 @@
 using FluentGpu.Animation;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -11,15 +12,23 @@ public readonly record struct ScrollByRequest(float Delta, bool Animate);
 
 /// <summary>
 /// Two-way scroll-controller seam: a viewport pushes its live range through <see cref="SetValues"/> and a composing
-/// control requests motion through the two events. The controller is an identity and is therefore frozen at mount when
-/// supplied through <see cref="ScrollOptions.VerticalScrollController"/>.
+/// control requests motion through the events. The controller is an identity and is therefore frozen at mount when
+/// supplied through <see cref="ScrollOptions.VerticalScrollController"/>. It is also an <see cref="IWheelTarget"/>
+/// (<c>Element.WheelTarget</c>): <see cref="IWheelTarget.WheelNotch"/> scrolls by whole/fractional wheel notches with
+/// the same glide a device notch gets — the serving viewport posts <c>ScrollInput.WheelNotch</c> with
+/// <c>ScrollFeel.Shipping.PerNotchDip(viewport, LineDip)</c> per notch through <see cref="WheelNotchRequested"/>;
+/// unlike <see cref="ScrollByRequested"/> this is never immediate.
 /// </summary>
-public interface IScrollController
+public interface IScrollController : IWheelTarget
 {
     void SetValues(float minOffset, float maxOffset, float offset, float viewportLength);
     void SetIsScrollable(bool isScrollable);
     event Action<ScrollToRequest>? ScrollToRequested;
     event Action<ScrollByRequest>? ScrollByRequested;
+    /// <summary>Controller-originated wheel notches (<see cref="IWheelTarget.WheelNotch"/>): the viewport serving this
+    /// controller posts the kernel's <c>WheelNotch</c> — <c>PerNotchDip(viewport, LineDip) × notches</c>, a Driven|Wheel
+    /// chase over several frames — exactly what a device notch over its rows posts.</summary>
+    event Action<float>? WheelNotchRequested;
 }
 
 /// <summary>
@@ -42,6 +51,7 @@ public sealed class AnnotatedScrollBarController : IScrollController
 
     public event Action<ScrollToRequest>? ScrollToRequested;
     public event Action<ScrollByRequest>? ScrollByRequested;
+    public event Action<float>? WheelNotchRequested;
 
     public void SetValues(float minOffset, float maxOffset, float offset, float viewportLength)
     {
@@ -65,6 +75,11 @@ public sealed class AnnotatedScrollBarController : IScrollController
     /// <summary>Request a delta from the viewport's live offset.</summary>
     public void ScrollBy(float delta, bool animate = false)
         => ScrollByRequested?.Invoke(new ScrollByRequest(delta, animate));
+
+    /// <summary>Request whole/fractional wheel notches as a glide (<see cref="IWheelTarget.WheelNotch"/> — the
+    /// <c>Element.WheelTarget</c> seam: a header laid out above the list names this controller). Not immediate.</summary>
+    public void WheelNotch(float notches)
+        => WheelNotchRequested?.Invoke(notches);
 }
 
 /// <summary>

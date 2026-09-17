@@ -63,10 +63,17 @@ internal readonly record struct GlyphKey(int Fam, int Size, int Scale, int Weigh
 /// keying runs by phase, would multiply the cache by the phase count and re-shape on every sub-pixel crossing.</summary>
 internal struct ShapedGlyph { public float DstX, DstY, DstW, DstH, U0, V0, U1, V1, VStride; }
 
+/// <summary>One COLR v0 layer of a colour glyph (emoji), as <c>TranslateColorGlyphRun</c> reports it: the layer's own
+/// glyph id in the SAME face (a plain outline, rasterized through the ordinary alpha atlas), its offset from the base
+/// glyph's pen position in EM (size-independent, so one cache entry serves every size), and its fill — the CPAL palette
+/// colour, or <see cref="Foreground"/> (palette index 0xFFFF) meaning "the run colour" (baked as A==0 = inherit).</summary>
+internal readonly record struct ColorLayer(ushort Gid, float DxEm, float DyEm, ColorF Color, bool Foreground);
+
 /// <summary>A fully shaped text run cached by content (see <see cref="RunKey"/>): the local-space quads + an LRU stamp.
 /// Allocated only on a cache miss (content change); replayed allocation-free on every steady-state frame.
-/// <see cref="Colors"/> (span runs only, parallel to <see cref="Glyphs"/>): the per-quad span color override —
-/// A==0 entries inherit the replayed command color; null = a plain uniform run (the overwhelming case).</summary>
+/// <see cref="Colors"/> (span runs and colour-emoji runs, parallel to <see cref="Glyphs"/>): the per-quad color
+/// override — A==0 entries inherit the replayed command color; null = a plain uniform run (the overwhelming case).
+/// A colour emoji contributes one quad PER PALETTE LAYER, each carrying its CPAL colour here.</summary>
 internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors; public int Count; public int LastUsedFrame; }
 
 /// <summary>Content key for the shaped-run cache. Keyed on the interned <see cref="StringId"/> handles (stable across frames,
@@ -209,6 +216,26 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // Itemize→shape→wrap layout (shared logic with the measure path, so render and measure layout identically).
     private TextLayoutEngine _engine = null!;
     private readonly Dictionary<nint, int> _faceIds = new();   // IDWriteFontFace* → small int for the glyph-cache key
+
+    // ── Colour glyphs (COLR/CPAL emoji) — run-cache MISS path only, never touched at replay ─────────────────────
+    // The layout engine already isolates emoji into a Segoe UI Emoji sub-run (TextLayoutEngine.ResolveRunFace); what
+    // was missing is the raster side: CreateGlyphRunAnalysis of the BASE glyph yields its monochrome fallback outline,
+    // so emoji drew as run-coloured silhouettes. TranslateColorGlyphRun decomposes the base glyph into its COLR v0
+    // layers — each a plain outline glyph in the same face plus a CPAL colour — and ShapeInto bakes one quad per layer
+    // through the SAME R8 atlas / GetGlyphByGid path, pushing the layer colour into the run's per-quad Colors (the
+    // span-run mechanism Replay already honours). Layout, measure, GlyphKey, the atlas and RunKey are all colour-blind
+    // and unchanged. COLR v1 paint trees (gradients, transforms) are OUT OF SCOPE: DWrite reports them only through
+    // the DWRITE_GLYPH_IMAGE_FORMATS_COLR_PAINT_TREE format, which has no layer decomposition — the flat v0 look is
+    // the target, and a glyph with only a v1 description falls back to today's monochrome outline.
+    private IDWriteFactory2* _dw2;   // TranslateColorGlyphRun (COLR v0 layers); null on a pre-8.1 DirectWrite
+    private IDWriteFactory4* _dw4;   // the image-format-aware variant — the fallback when Factory2 reports NOCOLOR
+    private readonly Dictionary<nint, bool> _faceIsColor = new();          // IDWriteFontFace* → IDWriteFontFace2.IsColorFont
+    private readonly Dictionary<long, ColorLayer[]> _colorLayers = new();   // (faceId << 16 | gid) → layers (empty = no colour)
+    private readonly List<ColorLayer> _layerScratch = new(16);              // reused enumerator output buffer (miss path)
+    private static readonly ColorLayer[] NoLayers = [];
+    /// <summary>DWrite's "this glyph run has no colour information" — the expected answer for every non-emoji glyph
+    /// of a colour face (letters in Segoe UI Emoji's Latin range) and for a font with no COLR table at all.</summary>
+    private const int DWRITE_E_NOCOLOR = unchecked((int)0x8898500C);
 
     // Shaped-run cache: unchanged text runs replay their baked local-space quads instead of re-shaping every frame
     // (kills the per-glyph GetGlyph/Dictionary.TryGetValue/DirectWrite storm). Keyed on interned StringId handles, so a
@@ -414,6 +441,11 @@ float4 PSMain(VSOutG i) : SV_Target
         IDWriteFactory* f;
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED, __uuidof<IDWriteFactory>(), (IUnknown**)&f), "DWriteCreateFactory");
         _dw = f;
+        // Colour-glyph translation (best effort: null ⇒ emoji keep rendering as monochrome outlines, nothing else changes).
+        IDWriteFactory2* f2;
+        if ((int)_dw->QueryInterface(__uuidof<IDWriteFactory2>(), (void**)&f2) >= 0 && f2 != null) _dw2 = f2;
+        IDWriteFactory4* f4;
+        if ((int)_dw->QueryInterface(__uuidof<IDWriteFactory4>(), (void**)&f4) >= 0 && f4 != null) _dw4 = f4;
         // warm the default face so the atlas has metrics from frame 1
         ResolveFace(DefaultFamily, 400, out _, out _, out _);
     }
@@ -745,22 +777,23 @@ float4 PSMain(VSOutG i) : SV_Target
         // The quad array is POOLED (returned on eviction) so scroll-storms of fresh text don't churn Gen0 per run.
         // Span runs (rtb-01): the SpanRunTable overlay restyles ranges of the SAME flow; per-quad span colors bake
         // into a parallel Colors array (allocated on the miss only — a span style change minted a fresh id anyway).
+        // The colour scratch is passed for EVERY run (not only span runs) because a colour emoji's palette layers
+        // recolour quads of a plain run too; ColorGlyphBake.RetainColors keeps the plain all-inherit case at
+        // Colors = null, so the uniform run still pays nothing at replay.
         var spanRun = spanRunId != 0 ? SpanRunTable.Shared.Resolve(spanRunId) : null;
         _scratch.Clear();
         _colorScratch.Clear();
         bool consistent = ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
-            spanRun is not null ? spanRun.Spans : default, spanRun is not null ? _colorScratch : null,
+            spanRun is not null ? spanRun.Spans : default, _colorScratch,
             spanRun?.OverflowSuffixStart ?? -1);
         int n = _scratch.Count;
         var arr = RentQuads(n);
         for (int i = 0; i < n; i++) arr[i] = _scratch[i];
         ColorF[]? colors = null;
-        if (spanRun is not null && _colorScratch.Count == n)
+        if (_colorScratch.Count == n && ColorGlyphBake.RetainColors(CollectionsMarshal.AsSpan(_colorScratch)))
         {
-            for (int i = 0; i < n && colors is null; i++)
-                if (_colorScratch[i].A > 0f) colors = new ColorF[n];   // only retain when some span actually recolors
-            if (colors is not null)
-                for (int i = 0; i < n; i++) colors[i] = _colorScratch[i];
+            colors = new ColorF[n];   // only retain when some span or palette layer actually recolors
+            _colorScratch.CopyTo(colors);
         }
         // A mixed-generation shape (some quads hold stale atlas UVs) must NEVER be cached — it would replay wrong
         // forever instead of just this one frame. Unreachable in the frame-boundary-only reset model; kept as the
@@ -823,6 +856,10 @@ float4 PSMain(VSOutG i) : SV_Target
         else
         {
             _scratch.Clear();
+            // colorsOut stays null here: the wipe paints every quad from its own before/after pair, so colour emoji
+            // inside a gradient/lyrics wipe render MONOCHROME (each COLR layer takes the wipe colour). Geometry is
+            // identical to LayoutRun's shape of the same key (ShapeInto emits layer quads regardless), so the cached
+            // run is shared; a LayoutRun hit on a run first shaped HERE replays emoji flat (Colors = null) — accepted.
             bool consistent = ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
             count = _scratch.Count;
             var arr = RentQuads(count);
@@ -976,6 +1013,8 @@ float4 PSMain(VSOutG i) : SV_Target
         _pooledQuadBytes += bytes;
     }
 
+    // Colour-blind by design (like GlyphKey and the atlas): a colour emoji's palette layers bake into the run's Colors
+    // array, not the key, so the same run replays under any run colour; forceColor (selection/disabled) still wins.
     private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, int spanRunId)
     {
@@ -1025,9 +1064,10 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity
     /// and the run's <see cref="SnapDy"/> correction. Allocation-free (appends into the reused glyph-instance list) —
     /// the steady-state path for unchanged text.
-    /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
+    /// <paramref name="colors"/> (span runs and colour-emoji runs): the per-quad tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
-    /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).
+    /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint) — so a selected
+    /// or disabled emoji goes FLAT in the forced colour, exactly like WinUI's selection repaint of a colour glyph.
     /// <paramref name="perGlyphDy"/> (optional, parallel to <paramref name="glyphs"/>): an extra per-glyph local-DIP Y
     /// offset added on top of <paramref name="snapDy"/> — how <see cref="LayoutRunGradient"/>'s settled-split fast path
     /// reproduces the wipe's uniform unsung `Lift` through this lean single-color path.</summary>
@@ -1084,8 +1124,16 @@ float4 PSMain(VSOutG i) : SV_Target
     /// kerning/ligatures/complex-script/BiDi), then rasterize each POST-shaping glyph (by glyph id) into the atlas and
     /// bake its local-space quad. The engine drives BOTH this render path and the measure path, so they layout identically.
     /// <paramref name="spans"/> (rtb-01 inline runs): the same one-flow layout with per-range face/weight/size; each
-    /// glyph rasterizes at ITS shaped size (LaidGlyph.Size) and <paramref name="colorsOut"/> (non-null for span runs)
-    /// receives the per-quad span color (A==0 = inherit), parallel to <paramref name="outList"/>.</summary>
+    /// glyph rasterizes at ITS shaped size (LaidGlyph.Size) and <paramref name="colorsOut"/> (when non-null) receives
+    /// the per-quad color (A==0 = inherit the run colour), parallel to <paramref name="outList"/>.
+    /// <para>Colour emoji: a glyph of a colour face (<see cref="IsColorFace"/>) with COLR v0 layers
+    /// (<see cref="ColorLayersFor"/>) bakes one quad PER LAYER — the layer's own outline glyph through the same alpha
+    /// atlas, offset by the layer's EM delta — and pushes <c>ColorGlyphBake.LayerColor</c> (the CPAL colour, or the
+    /// span colour for a foreground layer) into <paramref name="colorsOut"/>. The GEOMETRY is emitted whether or not a
+    /// colour list is requested, so the same <see cref="RunKey"/> shapes identically for <see cref="LayoutRun"/> and
+    /// <see cref="LayoutRunGradient"/> (which keeps <c>colorsOut</c> null: emoji inside a gradient/lyrics wipe stay
+    /// monochrome — every layer takes the wipe colour). A glyph without colour layers takes the single-quad path
+    /// exactly as before, so non-emoji quads are byte-identical to the pre-colour bake.</para></summary>
     /// <summary>Returns whether the shape stayed within ONE atlas generation throughout — false means the atlas
     /// overflowed mid-shape (now impossible in the frame-boundary-only reset model — see PackOrReset/BeginFrame —
     /// but kept as an unconditional correctness invariant against any future mid-frame flush path): a caller MUST
@@ -1109,27 +1157,177 @@ float4 PSMain(VSOutG i) : SV_Target
             foreach (var lg in _engine.Glyphs)
             {
                 if (lg.Face == 0) continue;
-                var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, lg.Size > 0f ? lg.Size : size, dpiScale);
+                float gsize = lg.Size > 0f ? lg.Size : size;
+                ColorF spanColor = lg.Span >= 0 && lg.Span < spans.Length ? spans[lg.Span].Color : default;
+                // Colour emoji: one quad per COLR v0 layer (see the ColorLayer doc). Cache-miss path only — the
+                // face/layer lookups are dictionary probes after the first shape of a given (face, gid).
+                if (IsColorFace(lg.Face))
+                {
+                    var layers = ColorLayersFor((IDWriteFontFace*)lg.Face, lg.Gid, gsize);
+                    if (layers.Length > 0)
+                    {
+                        for (int li = 0; li < layers.Length; li++)
+                        {
+                            ref readonly var layer = ref layers[li];
+                            var le = GetGlyphByGid((IDWriteFontFace*)lg.Face, layer.Gid, gsize, dpiScale);
+                            if (le.W <= 0 || le.H <= 0) continue;   // an ink-less layer emits no quad AND no colour (lists stay parallel)
+                            outList.Add(Quad(in le, originX + lg.X + layer.DxEm * gsize + le.BearingX * inv, topY + lg.Y + layer.DyEm * gsize + le.BearingY * inv, inv));
+                            colorsOut?.Add(ColorGlyphBake.LayerColor(layer.Foreground, layer.Color, spanColor));
+                        }
+                        continue;
+                    }
+                    // A colour face's glyph without colour layers (a letter in Segoe UI Emoji) is an ordinary outline.
+                }
+                var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, gsize, dpiScale);
                 if (ge.W > 0 && ge.H > 0)
                 {
-                    outList.Add(new ShapedGlyph
-                    {
-                        DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
-                        DstW = ge.W * inv, DstH = ge.H * inv,
-                        U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
-                        VStride = ge.H / (float)ATLAS,
-                    });
-                    colorsOut?.Add(lg.Span >= 0 && lg.Span < spans.Length ? spans[lg.Span].Color : default);
+                    outList.Add(Quad(in ge, originX + lg.X + ge.BearingX * inv, topY + lg.Y + ge.BearingY * inv, inv));
+                    colorsOut?.Add(spanColor);
                 }
             }
         } while (epoch != _atlas.Epoch && ++restarts < 3);
         return epoch == _atlas.Epoch;
     }
 
+    /// <summary>The local-space quad for one packed atlas entry at a resolved top-left (bearing already applied by the
+    /// caller, in the same expression order as before so the non-emoji bake stays bit-identical).</summary>
+    private ShapedGlyph Quad(in GlyphEntry ge, float dstX, float dstY, float inv) => new()
+    {
+        DstX = dstX, DstY = dstY,
+        DstW = ge.W * inv, DstH = ge.H * inv,
+        U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
+        VStride = ge.H / (float)ATLAS,
+    };
+
     private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
+
+    /// <summary>Whether <paramref name="face"/> carries colour tables (<c>IDWriteFontFace2.IsColorFont</c> — COLR/CPAL,
+    /// SVG or bitmap). Cached per face pointer; false when DirectWrite predates FontFace2. A true answer only gates
+    /// the <see cref="ColorLayersFor"/> probe — every glyph of a colour face is still asked individually.</summary>
+    private bool IsColorFace(nint face)
+    {
+        if (_faceIsColor.TryGetValue(face, out bool isColor)) return isColor;
+        isColor = false;
+        if (_dw2 != null)   // FontFace2 shipped with Factory2 (DirectWrite 8.1); no point probing on an older runtime
+        {
+            IDWriteFontFace2* f2;
+            if ((int)((IDWriteFontFace*)face)->QueryInterface(__uuidof<IDWriteFontFace2>(), (void**)&f2) >= 0 && f2 != null)
+            {
+                isColor = f2->IsColorFont();
+                f2->Release();
+            }
+        }
+        _faceIsColor[face] = isColor;
+        return isColor;
+    }
+
+    /// <summary>The COLR v0 layers of glyph <paramref name="gid"/> in <paramref name="face"/>, cached on
+    /// <c>(faceId &lt;&lt; 16 | gid)</c> — offsets are stored in EM so the entry is size-independent (translated at
+    /// <paramref name="size"/> and divided back out). Empty for a glyph with no colour description
+    /// (<c>DWRITE_E_NOCOLOR</c>), which is also the cached answer, so the DirectWrite call runs once per (face, gid).
+    /// <para>Primary path: <c>IDWriteFactory2.TranslateColorGlyphRun</c> (COLR v0 only). Fallback when that reports
+    /// NOCOLOR: <c>IDWriteFactory4.TranslateColorGlyphRun</c> asking for <c>COLR | TRUETYPE | CFF</c>, whose
+    /// <c>IDWriteColorGlyphRunEnumerator1</c> yields the same base-struct layout (<c>DWRITE_COLOR_GLYPH_RUN1</c>
+    /// derives from <c>DWRITE_COLOR_GLYPH_RUN</c>, so the base pointer cast is exact). Both decompose only v0 layer
+    /// lists; a glyph that exists solely as a COLR v1 paint tree yields NOCOLOR from both and stays monochrome.</para>
+    /// <para>Miss path only: called from <see cref="ShapeInto"/>, never at replay. The one allocation is the cached
+    /// array itself (like a span run's <c>Colors</c> array), on the first shape of a given glyph.</para></summary>
+    private ColorLayer[] ColorLayersFor(IDWriteFontFace* face, ushort gid, float size)
+    {
+        long key = ((long)FaceId((nint)face) << 16) | gid;
+        if (_colorLayers.TryGetValue(key, out var cached)) return cached;
+
+        _layerScratch.Clear();
+        float zeroAdvance = 0f;
+        ushort gi = gid;
+        DWRITE_GLYPH_RUN run = default;
+        run.fontFace = face; run.fontEmSize = size; run.glyphCount = 1;
+        run.glyphIndices = &gi; run.glyphAdvances = &zeroAdvance; run.glyphOffsets = null;
+        run.isSideways = BOOL.FALSE; run.bidiLevel = 0;
+
+        bool translated = false;
+        if (_dw2 != null)
+        {
+            IDWriteColorGlyphRunEnumerator* en = null;
+            int hr = (int)_dw2->TranslateColorGlyphRun(0f, 0f, &run, null, DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, null, 0, &en);
+            if (hr >= 0 && en != null)
+            {
+                translated = true;
+                BOOL more;
+                while ((int)en->MoveNext(&more) >= 0 && more)
+                {
+                    DWRITE_COLOR_GLYPH_RUN* cr;
+                    if ((int)en->GetCurrentRun(&cr) < 0 || cr == null) break;
+                    AppendLayers(cr, size);
+                }
+                en->Release();
+            }
+            else if (hr != DWRITE_E_NOCOLOR)
+            {
+                Diag.Event("text.color", $"TranslateColorGlyphRun(Factory2) failed for gid {gid}: 0x{(uint)hr:X8}");
+            }
+        }
+        if (!translated && _dw4 != null)
+        {
+            // Factory2 answered NOCOLOR (or is unavailable): ask the image-format-aware variant for the same v0 layer
+            // list. TRUETYPE|CFF are included so a mixed run's plain outline members come back as foreground layers
+            // (paletteIndex 0xFFFF) rather than making the whole call fail; COLR_PAINT_TREE is deliberately NOT
+            // requested (v1 out of scope — see the field block).
+            IDWriteColorGlyphRunEnumerator1* en1 = null;
+            var origin = new D2D_POINT_2F { x = 0f, y = 0f };
+            int hr = (int)_dw4->TranslateColorGlyphRun(origin, &run, null,
+                DWRITE_GLYPH_IMAGE_FORMATS.DWRITE_GLYPH_IMAGE_FORMATS_COLR | DWRITE_GLYPH_IMAGE_FORMATS.DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE | DWRITE_GLYPH_IMAGE_FORMATS.DWRITE_GLYPH_IMAGE_FORMATS_CFF,
+                DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, null, 0, &en1);
+            if (hr >= 0 && en1 != null)
+            {
+                BOOL more;
+                while ((int)en1->MoveNext(&more) >= 0 && more)
+                {
+                    DWRITE_COLOR_GLYPH_RUN1* cr1;
+                    if ((int)en1->GetCurrentRun(&cr1) < 0 || cr1 == null) break;
+                    AppendLayers((DWRITE_COLOR_GLYPH_RUN*)cr1, size);   // DWRITE_COLOR_GLYPH_RUN1 : DWRITE_COLOR_GLYPH_RUN — base at offset 0
+                }
+                en1->Release();
+            }
+            else if (hr != DWRITE_E_NOCOLOR)
+            {
+                Diag.Event("text.color", $"TranslateColorGlyphRun(Factory4) failed for gid {gid}: 0x{(uint)hr:X8}");
+            }
+        }
+
+        var layers = _layerScratch.Count == 0 ? NoLayers : _layerScratch.ToArray();
+        _layerScratch.Clear();
+        if (layers.Length > 0) Diag.Count("text.color", "glyphsTranslated");
+        _colorLayers[key] = layers;
+        return layers;
+    }
+
+    /// <summary>Append one colour run's glyphs as <see cref="ColorLayer"/>s (EM units). A layer run normally holds
+    /// exactly one glyph, but the loop honours the general shape: X = baseline origin + advances before k + the glyph's
+    /// advanceOffset; Y = baseline origin − ascenderOffset (DirectWrite's ascender offset is positive UP, our Y is
+    /// positive DOWN). Palette index 0xFFFF marks a FOREGROUND layer whose colour is the run's, decided at bake by
+    /// <c>ColorGlyphBake.LayerColor</c>.</summary>
+    private void AppendLayers(DWRITE_COLOR_GLYPH_RUN* cr, float size)
+    {
+        var gr = cr->glyphRun;
+        if (gr.glyphIndices == null) return;
+        bool foreground = cr->paletteIndex == 0xFFFF;
+        var rc = cr->runColor;
+        ColorF palette = foreground ? default : new ColorF(rc.r, rc.g, rc.b, rc.a);
+        float pen = cr->baselineOriginX;
+        for (uint k = 0; k < gr.glyphCount; k++)
+        {
+            float dx = pen, dy = cr->baselineOriginY;
+            if (gr.glyphOffsets != null) { dx += gr.glyphOffsets[k].advanceOffset; dy -= gr.glyphOffsets[k].ascenderOffset; }
+            _layerScratch.Add(new ColorLayer(gr.glyphIndices[k], dx / size, dy / size, palette, foreground));
+            if (gr.glyphAdvances != null) pen += gr.glyphAdvances[k];
+        }
+    }
 
     // Rasterize one POST-shaping glyph (by glyph id, not codepoint) at the physical size into the atlas. The face comes
     // from the layout engine; DWrite factories are process-shared, so _dw and the engine's factory are the same object.
+    // Coverage only (R8): a colour emoji never comes through here as its base glyph — ShapeInto rasterizes each COLR
+    // LAYER glyph instead (plain outlines in the same face), so the GlyphKey/atlas stay colour-blind and unchanged.
     private GlyphEntry GetGlyphByGid(IDWriteFontFace* face, ushort gid, float size, float dpiScale)
     {
         int faceId = FaceId((nint)face);
@@ -1808,6 +2006,8 @@ float4 PSMain(VSOutG i) : SV_Target
         if (_tex != null) { D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release(); _tex = null; }
         foreach (var f in _faces.Values) if (f != 0) ((IDWriteFontFace*)f)->Release();
         _faces.Clear();
+        if (_dw4 != null) { _dw4->Release(); _dw4 = null; }
+        if (_dw2 != null) { _dw2->Release(); _dw2 = null; }
         if (_dw != null) _dw->Release();
     }
 }

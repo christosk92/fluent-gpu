@@ -957,16 +957,18 @@ public sealed partial class RenderContext
 
     /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to that
     /// cache handle's status epoch, so an unrelated image completion cannot fan out across every image consumer.</summary>
-    public ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
-        => UseImage(src, decodePx, decodePx, priority, blurHash);
+    public ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null,
+                                 ImageTransition? transition = null)
+        => UseImage(src, decodePx, decodePx, priority, blurHash, transition);
 
     /// <summary>As <see cref="UseImage(string,int,ImagePriority,string)"/> but with a non-square decode target, so an
     /// observer can share the EXACT cache handle of a non-square displayed image (key is <c>(src, decodeW, decodeH)</c>)
     /// instead of forking a second decode.</summary>
-    public ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
+    public ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible,
+                                 string? blurHash = null, ImageTransition? transition = null)
     {
         if (Images is null || string.IsNullOrEmpty(src)) return default;
-        var h = Images.Request(src, decodeW, decodeH, priority, blurHash);
+        var h = Images.Request(src, decodeW, decodeH, priority, blurHash, transition);
         _ = Images.StatusSignalOf(h)?.Value;
         return new ImageBinding(h, Images.StateOf(h), Images.FailureOf(h), Images.AttemptsOf(h));
     }

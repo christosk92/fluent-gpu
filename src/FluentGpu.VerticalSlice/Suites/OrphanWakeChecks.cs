@@ -56,6 +56,7 @@ static class OrphanWakeChecks
             allocated == 0, $"allocated={allocated}");
 
         window.Minimize();
+        host.RunFrame(); // consume the park edge; the following wait measures steady minimized state
         int minimizedWait = host.RecommendedWaitMs();
         Check("gate.anim.orphan-render-owned-minimized an unfinished exit does not poll a minimized host",
             minimizedWait == -1, $"wait={minimizedWait}");

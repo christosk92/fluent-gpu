@@ -56,11 +56,13 @@ public struct ScrollBody
     /// <summary>The main-axis position at ContactBegin (x0 in the anchor formula above).</summary>
     public float DragOrigin;
     /// <summary>Raw (unclamped) accumulated main-axis position during a drag — the anchor-relative resampled
-    /// position for a touch/pen drag, or the 1:1 delta accumulator for a FrameDelta drag; also the running total a
+    /// position for a touch/pen drag, or the paced-resample accumulator for a FrameDelta drag; also the running total a
     /// chained hand-off adds/removes excess from.</summary>
     public float DragRaw;
-    /// <summary>0 = not dragging; 1 = touch/pen (<see cref="ScrollInputKind.ContactMove"/>, resampled every Tick);
-    /// 2 = FrameDelta (DM RUNNING / hi-res fallback, applied 1:1 as each command arrives, no resampling).</summary>
+    /// <summary>0 = not dragging; 1 = touch/pen (<see cref="ScrollInputKind.ContactMove"/>, resampled every Tick at
+    /// <c>frame − ResampleLatencyMs</c>); 2 = FrameDelta (DM RUNNING / hi-res fallback): each packet is a sample of
+    /// the stream's cumulative position, paced by <c>ScrollKernel.PaceStream</c> — resampled every Tick at
+    /// <c>frame − PacedLatencyS(mean packet interval)</c>, released by inference once the packets stop.</summary>
     public byte DragMode;
     /// <summary>The live gesture is a MOUSE wheel (<see cref="ScrollInputFlags.NoOverscroll"/> on its FrameDelta): the
     /// drag clamps at the extents with no band, and the fling it seeds stops dead at an edge instead of bouncing.
@@ -86,6 +88,37 @@ public struct ScrollBody
 
     // Driven params (0/0/0/0 = use the profile default: ζ=1 chase at feel.WheelHalflifeMs).
     public float DrivenHalflifeMs, DrivenZeta, DrivenOmega, DrivenSettleVel;
+    /// <summary>Non-zero while a fling is landing (Driven|Programmatic entered from <see cref="Advance"/>'s Ballistic
+    /// branch): the hand-off speed, <c>min(feel.WheelFloorDipPerS, |v|)</c>, that <see cref="ScrollPhysics.LandingStep"/>
+    /// never exceeds. Zero for every other Driven flavour; cleared at settle and at every Driven entry (a notch, a
+    /// ScrollTo) so a later glide never inherits a fling's ceiling.</summary>
+    public float LandFloorDipPerS;
+
+    /// <summary>The kernel's tick stamp of the last <see cref="Advance"/> this body received (set by <c>ScrollKernel.Tick</c>).
+    /// <c>UpdateSummary</c> compares it with the current stamp to tell a coast frame that was never advanced
+    /// (<see cref="ScrollZeroReason.NotAdvanced"/>) from one advanced with dt = 0 (<see cref="ScrollZeroReason.DtZero"/>).</summary>
+    public int LastAdvanceStamp;
+
+    /// <summary>Wheel cadence state (<see cref="ScrollPhysics.WheelPlanNotch"/>/<see cref="ScrollPhysics.WheelStep"/>):
+    /// <see cref="WheelSinceS"/> = seconds since the last notch, <see cref="WheelGapS"/> = the observed notch cadence the
+    /// live plan was built for (0 = no cadence plan armed — a cold notch, a slow independent click, a reversal, or a
+    /// stream whose tail stiffening already fired). Both are zeroed whenever the body leaves the wheel flavour
+    /// (<see cref="ClearWheelPlan"/>).</summary>
+    public float WheelSinceS, WheelGapS;
+
+    /// <summary>The main-axis displacement since the previous kernel summary (signed DIP) and the position that summary
+    /// saw. Computed in <c>UpdateSummary</c> as <c>PositionMain − SummaryMain</c> over the active and touched bodies —
+    /// NOT around the tick's advance alone, because a drag delta lands in <c>ApplyDragDelta</c> while the command port
+    /// drains, before the advance loop, and a per-advance reading printed every drag frame as 0.0 (the first live
+    /// trace, 2026-09-16). <c>SummaryMain</c> is seeded when a body enrols in the active list (before the enrolling
+    /// command moves it). Read by <see cref="ScrollFrameSummary.MaxAbsDeltaDip"/> — the per-frame motion figure the app's
+    /// <c>scroll.trace</c> log reproduces the screen-capture probe from.</summary>
+    public float TickDeltaMain, SummaryMain;
+
+    /// <summary>Drop the wheel cadence plan — called at every site where the body leaves the Driven|Wheel flavour
+    /// (settle, a drag/contact takeover, a fling seed, a programmatic glide, Cancel/ThumbSet/Zoom, a Restore) so a later
+    /// notch never reads a stale gap as a live cadence.</summary>
+    public static void ClearWheelPlan(ref ScrollBody b) { b.WheelSinceS = 0f; b.WheelGapS = 0f; }
 
     /// <summary>Set by <c>ScrollKernel.SnapRetargetOnEntry</c> exactly when a fling was retargeted onto a snap grid
     /// (fresh at every Ballistic seed — never carries a stale value from an earlier, non-snap fling). While set,
@@ -103,7 +136,19 @@ public struct ScrollBody
     /// <summary>Set when a Ballistic step this tick landed past the clamp against LAST frame's geometry — resolved
     /// in <see cref="ScrollKernel.Reclamp"/> once fresh geometry is known (plan §2.2 "hole 1").</summary>
     public bool EdgeHitPending;
+    /// <summary>Signed main-axis DIP the pinned Ballistic step wanted past the clamp (<c>requested − clamped</c>) while
+    /// <see cref="EdgeHitPending"/> is set. The velocity has already decayed for the whole step, so when fresh geometry
+    /// gives room <c>ScrollKernel.ResolveEdge</c> re-applies this travel; without it the coast resumes one step lower
+    /// with the pinned frame's travel lost (a dead frame mid-coast). Cleared wherever <see cref="EdgeHitPending"/> is.</summary>
+    public float EdgeOvershoot;
     public bool Parked;
+    /// <summary>Set by <c>ScrollKernel.Tick</c> when a precise-stream drag (<see cref="DragMode"/> 2) was promoted to
+    /// Ballistic because its packets stopped arriving before the producer's End (the release is inferred from the
+    /// stream, not from the End command). While set, the coast's displacement is folded into
+    /// <see cref="LastResampleX"/> so a late packet resumes the same stream against the displayed position instead of
+    /// re-grabbing and applying its travel twice. Cleared by the real ContactEnd/Cancel, by a resume, and by any
+    /// fresh drag start.</summary>
+    public bool InferredRelease;
 
     /// <summary>Render-thread fling-lease sequence tag — reserved for Phase 6 (<c>TryLease</c>/<c>Return</c>); unused
     /// by the kernel itself in Phase 1.</summary>
@@ -196,12 +241,26 @@ public struct ScrollBody
                     // standalone Advance caller (the future render lease, which never sees layout growth) resolves
                     // immediately instead — see ScrollKernel.ResolveEdge, which Advance callers may invoke inline.
                     b.EdgeHitPending = true;
+                    b.EdgeOvershoot = requested - clamped;
                 }
-                else if (MathF.Abs(v) < feel.FlingSettleVel)
+                else if (!b.SnapArmed && MathF.Abs(v) < feel.FlingLandVel)   // a snap-armed fling ends on its snap target above
                 {
-                    b.Activity = ScrollActivity.Idle;
-                    b.Velocity = 0f;
-                    b.Awake = false;
+                    // Landing hand-off: the exponential coast never finishes (remaining/step ≡ 1/(k·dt) ≈ 40 frames at
+                    // 120 Hz whatever the speed), so below FlingLandVel it crawled from 1.5 to 0.5 DIP a frame for
+                    // ~60 frames and then stopped v/k short. Hand a SHORT horizon (v·FlingLandHorizonS — the distance
+                    // a linear decel from v to 0 over twice that covers) to the Driven landing, which walks it in equal
+                    // steps at the hand-off speed (LandingStep) — never faster than this frame moved, no sub-pixel
+                    // frame, exact at rest. The fling therefore rests v·(1/k − horizon) short of the exponential's
+                    // asymptote (~31 DIP at the 120 DIP/s hand-off), a stop nobody perceives; landing on the full
+                    // asymptote would need a tug. The target is unrounded: the kernel does not know the device scale.
+                    float land = Math.Clamp(clamped + v * feel.FlingLandHorizonS, 0f, maxOff);
+                    b.Target = land;
+                    b.TargetRaw = land;
+                    b.Activity = ScrollActivity.Driven;
+                    b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll)) | ScrollActivityFlags.Programmatic;
+                    b.LandFloorDipPerS = MathF.Min(feel.WheelFloorDipPerS, MathF.Abs(v));
+                    b.DrivenHalflifeMs = 0f; b.DrivenZeta = 0f; b.DrivenOmega = 0f; b.DrivenSettleVel = 0f;
+                    ClearWheelPlan(ref b);
                 }
                 break;
             }
@@ -210,25 +269,37 @@ public struct ScrollBody
             {
                 float off = b.PositionMain;
                 float vel = b.Velocity;
-                bool autoscroll = (b.Flags & ScrollActivityFlags.Autoscroll) != 0;
                 bool settled;
-                if (autoscroll)
+                if ((b.Flags & ScrollActivityFlags.Autoscroll) != 0)
                 {
                     off += vel * dt;
                     settled = vel == 0f;
                 }
-                else
+                else if (b.DrivenZeta > 0f && b.DrivenZeta < 0.999f && b.DrivenOmega > 0f)
                 {
-                    if (b.DrivenZeta > 0f && b.DrivenZeta < 0.999f && b.DrivenOmega > 0f)
-                        ScrollPhysics.ChaseStepUnderdamped(ref off, ref vel, b.Target, b.DrivenZeta, b.DrivenOmega, dt);
-                    else
-                    {
-                        float halflife = b.DrivenHalflifeMs > 0f ? b.DrivenHalflifeMs : feel.WheelHalflifeMs;
-                        ScrollPhysics.ChaseStep(ref off, ref vel, b.Target, halflife, dt);
-                    }
+                    // The per-viewport underdamped programmatic override (LyricsView's bespoke ζ/ω follow-glide).
+                    ScrollPhysics.ChaseStepUnderdamped(ref off, ref vel, b.Target, b.DrivenZeta, b.DrivenOmega, dt);
                     float settleVel = b.DrivenSettleVel > 0f ? b.DrivenSettleVel : feel.FlingSettleVel;
                     settled = MathF.Abs(off - b.Target) < 0.5f && MathF.Abs(vel) < settleVel;
                     if (settled) { off = b.Target; vel = 0f; }
+                }
+                else if ((b.Flags & ScrollActivityFlags.Wheel) != 0)
+                {
+                    // The wheel glide: the plan ScrollKernel.ApplyWheelNotch armed (cadence half-life, tail stiffening,
+                    // displacement floor, distance-only snap) — lands exactly, never creeps.
+                    settled = ScrollPhysics.WheelStep(ref off, ref vel, ref b.DrivenHalflifeMs, ref b.WheelSinceS, ref b.WheelGapS, b.Target, dt, in feel);
+                }
+                else if (b.LandFloorDipPerS > 0f)
+                {
+                    // A fling's landing: equal steps at the hand-off speed, never faster (see the Ballistic branch).
+                    settled = ScrollPhysics.LandingStep(ref off, ref vel, b.Target, b.LandFloorDipPerS, dt);
+                }
+                else
+                {
+                    // The default ζ=1 chase (programmatic glides), with the wheel plan's landing rules (displacement
+                    // floor + distance snap) so a restore/ScrollTo lands exactly instead of creeping sub-pixel.
+                    float halflife = b.DrivenHalflifeMs > 0f ? b.DrivenHalflifeMs : feel.WheelHalflifeMs;
+                    settled = ScrollPhysics.ProgrammaticStep(ref off, ref vel, b.Target, halflife, dt, in feel);
                 }
 
                 bool hardStop = (b.Flags & (ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic)) != 0;
@@ -244,6 +315,8 @@ public struct ScrollBody
                 {
                     b.Activity = ScrollActivity.Idle;
                     b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll);
+                    ClearWheelPlan(ref b);
+                    b.LandFloorDipPerS = 0f;
                     b.Awake = false;
                 }
                 break;

@@ -78,7 +78,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// on the NEXT contact, not on the lift). `Stop()` at the INERTIA edge would return DM to READY at once. NOT
     /// flipped here: it needs the dm-probe cell-F run (a real touchpad) to confirm, per that document — do not flip
     /// on code-read confidence alone.</summary>
-    private const bool UseOsInertiaStopFallback = false;
+    private const bool UseOsInertiaStopFallback = true;
 
     // ── DIRECTMANIPULATION_CONFIGURATION flags (directmanipulation.h), verified against the dm-probe cell-B PASS ──
     //   Primary: INTERACTION|TRANSLATION_X|TRANSLATION_Y|SCALING — NO TRANSLATION_INERTIA/SCALING_INERTIA (§5.2: PTP

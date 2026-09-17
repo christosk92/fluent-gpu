@@ -18,20 +18,26 @@ sealed class TrackListDemo : Component
     static readonly string[] Artists =
         { "M83", "Childish Gambino", "Kavinsky", "Massive Attack", "Sigur Rós", "Jon Hopkins", "Aphex Twin", "Brian Eno" };
 
+    // The list's authoring handle (VirtualListEl.Controller). The header band names it as its WheelTarget, so a wheel
+    // notch over the header glides the LIST — the same PerNotchDip(viewport, LineDip = 56) chase a notch over the rows
+    // gets — instead of being lost on a row that scrolls nothing (Element.WheelTarget; not a pass-through overlay).
+    readonly FluentGpu.Scroll.ScrollController _list = new();
+
     public override Element Render() => new BoxEl
     {
         Direction = 1,
         Children =
         [
-            // sticky-ish header band (a normal row above the scroller)
+            // header band (a normal row above the scroller) — wheel over it routes to the list below
             new BoxEl
             {
                 Height = 64, Padding = new Edges4(24, 16, 24, 16), AlignItems = FlexAlign.Center,
                 Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
+                WheelTarget = _list,
                 Children = [Heading("Liked Songs"), Text($"   {N:N0} songs").Foreground(Grey)],
             },
-            // the virtualized list fills the rest of the window and scrolls
-            Virtual.List(N, 56f, Row, keyOf: i => "t" + i) with { Grow = 1f },
+            // the virtualized list fills the rest of the window and scrolls (Virtual.List stamps ScrollLineDip = 56)
+            Virtual.List(N, 56f, Row, keyOf: i => "t" + i) with { Grow = 1f, Controller = _list },
         ],
     };
 

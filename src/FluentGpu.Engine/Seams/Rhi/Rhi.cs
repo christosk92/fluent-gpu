@@ -197,6 +197,17 @@ public interface IGpuDevice : IDisposable
     /// <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that do not block there.</summary>
     double LastFenceWaitMs => 0;
 
+    /// <summary>Always-on P0 counter (cumulative, render-thread writes / UI-thread reads as a rough gauge): image-upload
+    /// drain turns (<see cref="DrainImageJobs"/>) that hit the backend's per-turn pixel-byte budget and carried a job to
+    /// the next turn. The host mirrors it onto <c>FrameStats.DeferredImageUploads</c>; a consumer differences frames. A
+    /// sustained climb during a cover-heavy scroll means landed covers arrive faster than one present turn stages them.
+    /// Default 0: the headless seam and any backend without a budgeted drain. Typed <c>int</c> to match the D3D12
+    /// backend's property — an interface member of another width would silently keep this default.</summary>
+    int DeferredImageUploads => 0;
+
+    /// <summary>Cumulative pixel bytes of the jobs <see cref="DeferredImageUploads"/> counted. Default 0.</summary>
+    long DeferredImageUploadBytes => 0;
+
     /// <summary>Diagnostic (FG_GPU_TIMING=1): whole-command-list elapsed timestamp span paired with the detailed scene
     /// and category values below. This remains distinct from the target-local always-on
     /// <see cref="ISwapchain.TryGetGpuRenderSample"/> sample. 0 when off/unsupported.</summary>

@@ -59,10 +59,14 @@ public readonly record struct ImageHandle(int Id)
 
 /// <summary>Forwards decoded PREMULTIPLIED BGRA8 pixels to the GPU backend. The span is valid only for the duration of
 /// the synchronous call (it is never stored — the backend copies it into its upload heap), so the cache need not own
-/// pixel memory: it flows decoder → cache.Pump → host sink → IGpuDevice.UploadImage in one stack.</summary>
+/// pixel memory: it flows decoder → cache.Pump → host sink → IGpuDevice.UploadImage in one stack. Under the async
+/// render thread the host sink may instead TAKE the buffer behind the span — <c>Media.DecodeScheduler.TryTakeDecodeBuffer</c>
+/// transfers ownership of the scheduler's pooled decode buffer for exactly the span it loaned — so no second copy is
+/// made on the UI thread; the cache stays uninvolved (the span contract here is unchanged, the loan is the scheduler's).</summary>
 public delegate void ImageReadyHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
 
-/// <summary>Admission-aware variant of <see cref="ImageReadyHandler"/>. The span has the same call-scoped lifetime.</summary>
+/// <summary>Admission-aware variant of <see cref="ImageReadyHandler"/>. The span has the same call-scoped lifetime and
+/// the same take-instead-of-copy option (<c>Media.DecodeScheduler.TryTakeDecodeBuffer</c>).</summary>
 public delegate ImageUploadResult ImageUploadAttemptHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
 
 /// <summary>The decode seam: the portable cache asks a leaf to decode a source to a target size, off the UI thread.
@@ -755,8 +759,12 @@ public sealed class ImageCache
         return new ImageHandle(best);
     }
 
-    /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.</summary>
-    public void Pin(ImageHandle h)
+    /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.
+    /// <paramref name="priority"/> is the lane the pinning node REQUESTED at (W2-E3): a still-Pending entry is
+    /// re-prioritized to it — Visible promotes an overscan/prefetch decode, Overscan leaves an Overscan-lane decode where
+    /// the reconciler queued it (the scheduler's Prioritize is raise-only, so a pin can never demote). Before this every
+    /// pin forced Visible, which silently undid the reconciler's lane choice one line after the request.</summary>
+    public void Pin(ImageHandle h, ImagePriority priority = ImagePriority.Visible)
     {
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
@@ -772,9 +780,25 @@ public sealed class ImageCache
             else if (e.State == ImageState.Pending) TryQueueDerived(h.Id, e);
             else if (e.State == ImageState.Ready) TryQueueDerivedUpgrade(h.Id, e);
         }
-        else if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
-        else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
+        else if (ShouldRestart(e, priority)) RestartDecode(h.Id, e, priority);
+        else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, priority);
     }
+
+    /// <summary>W2-E3: raise a still-Pending decode to <paramref name="priority"/>'s lane — the reconciler calls it for a
+    /// row that was realized in the overscan halo and has just scrolled into the visible band. No ref change, no restart;
+    /// a no-op for a settled or derived entry (and the scheduler's Prioritize is itself raise-only and claim-deduped).</summary>
+    public void Promote(ImageHandle h, ImagePriority priority)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e) || e.Derived) return;
+        if (e.State == ImageState.Pending) { _decoder.Prioritize(h.Id, priority); return; }
+        // An off-screen request the scheduler DROPPED under backpressure (Begin returned false ⇒ a None / Canceled
+        // tombstone; a pin at the same lane is dropped again) is restarted at the promoted lane while a node still holds
+        // it — otherwise the cover would stay blank until the row happened to re-render. Anything else (Ready, a real
+        // failure under its backoff) is left alone.
+        if (e.Refs > 0 && (e.State == ImageState.None || (e.State == ImageState.Failed && e.Failure == ImageFailureKind.Canceled)))
+            RestartDecode(h.Id, e, priority);
+    }
+
     public void Unpin(ImageHandle h)
     {
         if (!_byId.TryGetValue(h.Id, out var e) || e.Refs <= 0) return;

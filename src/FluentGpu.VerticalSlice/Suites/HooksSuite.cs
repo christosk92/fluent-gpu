@@ -1323,6 +1323,7 @@ static class HooksSuite
                 : wDue >= 1;       // any throttled/idle branch must floor at 1 ms
 
             window.State = WindowState.Minimized;
+            host.RunFrame();                                  // consume the park edge before measuring steady blocking
             int wMin = host.RecommendedWaitMs();
             bool minimizedBlocks = wMin == -1 && host.LastWaitKind == HostWaitKind.Idle;
 

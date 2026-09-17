@@ -1178,7 +1178,10 @@ public sealed partial class FlexLayout
         float viewportW, float viewportH, int anchorIndex, float offset)
     {
         int idx = (int)node.Raw.Index;
-        if (delta != 0f)
+        // Sub-pixel extent noise is invisible in the row geometry but visible as a tiny reverse/forward scroll
+        // correction. Keep meaningful anchor re-pins exact while dropping the measurement noise that makes a steady
+        // flick feel like it is stepping.
+        if (MathF.Abs(delta) > 0.5f)
         {
             if (!Verifying) _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.AnchorShift(idx, delta));
             if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, idx, anchorIndex, offset);

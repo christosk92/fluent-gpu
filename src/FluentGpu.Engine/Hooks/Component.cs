@@ -144,9 +144,11 @@ public abstract class Component
     protected void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps) => Context.UseSpring(channel, to, spring, deps);
     protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps) => Context.UseTransition(channel, from, to, durationMs, easing, deps);
     /// <summary>Bind an async image and observe its load state (spinner / error fallback). Pair with <c>Ui.Image</c> to paint it.</summary>
-    protected ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null) => Context.UseImage(src, decodePx, priority, blurHash);
+    protected ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null,
+                                    ImageTransition? transition = null) => Context.UseImage(src, decodePx, priority, blurHash, transition);
     /// <summary>As <see cref="UseImage(string,int,ImagePriority,string)"/> but with a non-square decode target — shares the exact cache handle of a non-square displayed image instead of forking a second decode.</summary>
-    protected ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null) => Context.UseImage(src, decodeW, decodeH, priority, blurHash);
+    protected ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible,
+                                    string? blurHash = null, ImageTransition? transition = null) => Context.UseImage(src, decodeW, decodeH, priority, blurHash, transition);
     /// <summary>Prefetch an image the UI is about to need so it's resident before it scrolls in.</summary>
     protected void PrefetchImage(string src, int decodePx) => Context.PrefetchImage(src, decodePx);
     /// <summary>Acquire a composited video surface for this component (released automatically on unmount). A media player

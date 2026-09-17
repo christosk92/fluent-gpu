@@ -18,6 +18,15 @@ namespace FluentGpu.Rhi.D3D12;
 /// The reference Windows RHI backend (design/subsystems/pal-rhi.md, gpu-renderer.md). Real D3D12: hardware device,
 /// DIRECT command queue + fence, a DXGI flip-model swapchain on the HWND, an RTV heap, and per-frame
 /// record→submit→present. Step 1 clears; the SDF rounded-rect pipeline and the DirectWrite glyph atlas layer on top.
+/// <para><b>Image staging budget.</b> <see cref="DrainImageJobs"/> runs on the render thread inside the present turn,
+/// and the interval between consecutive Present returns on that thread is what <c>AppHost.NotePresented</c> scores as a
+/// missed vblank. Staging is CPU work in that interval (Map + padded row memcpy + Unmap per image, plus the pooled
+/// texture acquire), so an unbounded drain turned a burst of landed covers straight into missed vblanks even though
+/// the UI frames themselves averaged 0.5 ms. The drain therefore stages at most <see cref="UploadBytesPerTurn"/> per
+/// turn and carries the first over-budget job to the next turn (the queue is drained every present turn, and
+/// <see cref="HasPendingUploads"/> reports the carried job so the host keeps turning until it lands).
+/// <see cref="DeferredImageUploads"/> / <see cref="DeferredImageUploadBytes"/> count those carries for the always-on
+/// stats. The heap-churn half of the same defect is the upload ring in <see cref="ImageTextureStore"/>.</para>
 /// </summary>
 public sealed unsafe partial class D3D12Device : IGpuDevice
 {
@@ -914,21 +923,68 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // queue. Force-sync leaves the store UI-staged (no overlap), so this is a SEPARATE arm from MarkRenderConfined.
     public void MarkImageUploadsRenderConfined() => _imageTextures?.MarkRenderConfined();
 
+    /// <summary>Pixel bytes <see cref="DrainImageJobs"/> stages per present turn before it stops and carries the rest to
+    /// the next turn. 2 MiB is two 512px covers or eight 256px ones: ~0.3–0.5 ms of padded memcpy through a mapped UPLOAD
+    /// heap on a discrete adapter, i.e. under a tenth of a 120 Hz turn even when the pooled-texture acquire has to grow
+    /// cold, so a burst of landed covers spreads over a few turns (each still landing within the +1-frame admission
+    /// contract) instead of blowing one turn past its vblank. A single job larger than the budget always stages alone
+    /// on its turn — the budget bounds a TURN, it never refuses an image. A const, not a knob: the number is a property
+    /// of the memcpy rate and the refresh interval, and the always-on <see cref="DeferredImageUploads"/> counter is what
+    /// says whether it is being hit.</summary>
+    public const int UploadBytesPerTurn = 2 * 1024 * 1024;
+
+    // The first job that did not fit this turn's UploadBytesPerTurn, carried to the head of the next drain. The queue
+    // has no peek/push-back (and belongs to another seam), so the device holds exactly one job; ownership of its pixel
+    // buffer stays with us until Stage copies it and ReturnUploadBuffer hands it back on that later turn. FIFO order is
+    // preserved because the drain STOPS at the held job — an eviction queued behind an upload of the same id can never
+    // overtake it.
+    private FluentGpu.Hosting.Threading.ImageUploadQueue.Job _heldImageJob;
+    private bool _hasHeldImageJob;
+
+    /// <summary>Cumulative count of drain turns that hit <see cref="UploadBytesPerTurn"/> and carried a job over. The
+    /// carried job always stages FIRST on the next turn (the budget never refuses the first job of a turn), so each
+    /// carry is counted exactly once and the count equals the number of budget-truncated turns. Plain counter for the
+    /// always-on frame stats; read from any thread as a rough gauge (render-thread writes, no fence).</summary>
+    public int DeferredImageUploads { get; private set; }
+    /// <summary>Cumulative pixel bytes of the jobs <see cref="DeferredImageUploads"/> counted.</summary>
+    public long DeferredImageUploadBytes { get; private set; }
+
     // Seam Step 1 (ASYNC only): drain the UI→render image-upload queue on the render thread, just before the frame's
     // SubmitDrawList opens its command list (so a staged texture is resident before the draw that references it). Every
     // Stage/Free/return-to-pool here runs render-confined → the texture store is single-toucher, no lock.
+    // Budgeted: stages up to UploadBytesPerTurn of pixels per call (evictions are free and never counted), then holds
+    // the first over-budget job for the next turn — see the class summary for why the unbounded drain read as missed
+    // vblanks.
     public void DrainImageJobs(FluentGpu.Hosting.Threading.ImageUploadQueue queue)
     {
         AssertSubmitThread();
         if (_imageTextures is null) return;
         if (_fence != null) _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
         int faultsBefore = _imageTextures.ResourceFaults;
-        while (queue.TryDequeueJob(out var j))
+        long stagedBytes = 0;
+        while (true)
         {
+            FluentGpu.Hosting.Threading.ImageUploadQueue.Job j;
+            if (_hasHeldImageJob) { j = _heldImageJob; _heldImageJob = default; _hasHeldImageJob = false; }
+            else if (!queue.TryDequeueJob(out j)) break;
+
             if (j.Evict) { _imageTextures.Free(j.Id); continue; }
+            // Over budget with something already staged this turn: carry this job (and everything behind it) to the
+            // next turn. A turn that has staged nothing yet always takes the job, whatever its size.
+            if (j.Buffer is not null && stagedBytes > 0 && stagedBytes + j.ByteLen > UploadBytesPerTurn)
+            {
+                _heldImageJob = j; _hasHeldImageJob = true;
+                DeferredImageUploads++;
+                DeferredImageUploadBytes += j.ByteLen;
+                break;
+            }
             var res = j.Buffer is null ? ImageUploadResult.Invalid : _imageTextures.Stage(j.Id, j.Buffer.AsSpan(0, j.ByteLen), j.W, j.H);
             if (res != ImageUploadResult.Accepted) queue.PostReject(j.Id, res);   // +1-frame async admission: the UI folds the rejection next Pump
-            if (j.Buffer is not null) queue.ReturnUploadBuffer(j.Buffer);   // ownership transferred to us; return to the host's bounded pixel pool after Stage copied it
+            if (j.Buffer is not null)
+            {
+                queue.ReturnUploadBuffer(j.Buffer);   // ownership transferred to us; return to the host's bounded pixel pool after Stage copied it
+                stagedBytes += j.ByteLen;             // counted whether or not Stage accepted — the CPU work was spent either way
+            }
         }
         // A staging create/map failed. On a healthy device that was a driver OOM and this is a cheap no-op
         // (GetDeviceRemovedReason == S_OK ⇒ false); on a removed device it RECORDS the loss so the UI recovery gate
@@ -5307,7 +5363,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     /// <inheritdoc/>
-    public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
+    /// <remarks>Also true while <see cref="DrainImageJobs"/> holds a job it carried over its per-turn budget: the host's
+    /// wake predicate (<c>WakeReasons.ImagesPending</c>) and its skip-submit gate both key off this, so the carried job
+    /// gets its next drain turn even when nothing else is dirty — without it a budget-deferred cover could sit until
+    /// the next unrelated frame.</remarks>
+    public bool HasPendingUploads => _hasHeldImageJob || (_imageTextures?.HasPendingUploads ?? false);
 
     /// <inheritdoc/>
     public bool TextRepaintPending => _textRepaintPending;

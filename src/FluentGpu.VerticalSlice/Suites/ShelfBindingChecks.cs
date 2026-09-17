@@ -28,6 +28,7 @@ static class ShelfBindingChecks
             CheckRetainedRows(strings);
             CheckMeasurement(strings);
             CheckLazyGridVisibility(strings);
+            CheckLazyGridRenderGate(strings);
             CheckPropsDataGate(strings);
             CheckResponsiveGate(strings);
         }
@@ -159,6 +160,98 @@ static class ShelfBindingChecks
                     Embed.Comp(() => new LazyGrid(() => 6,
                         (index, width) => new BoxEl { Height = width, Children = [Text("release-" + index)] },
                         (_, _) => { }, onVisibleRangeChanged: range => Visible = range)),
+                    new BoxEl { Height = 1800f },
+                ],
+            }) with
+            {
+                Grow = 1f,
+                OnScrollGeometryChanged = (g => (int)g.OffsetY, g => _offset.SetIfChanged(g.OffsetY)),
+            });
+    }
+
+    // ── The render gate: the realized window is the render's ONLY scroll subscription ───────────────────────────────
+    // LazyGrid used to read one (realizedKey, visibleRange) tuple in its render, so every row crossing — about every
+    // frame at wheel speed — re-rendered the grid and rebuilt the whole realized slice (~450 KB a frame on the artist
+    // page). The render now subscribes to the realized-window key alone; the exact visible range feeds the
+    // onVisibleRangeChanged effect through its own signal. GridSlice calls the cell builder once per realized index on
+    // every grid render, so the probe's cell-build counter is a direct render counter: zero builds ⇔ no grid render.
+    // Geometry (content width 600, minColWidth 180, gap 12 ⇒ 3 columns of 192; rowH = 192 + 56 = 248; viewport 400;
+    // overscan 2; 30 items ⇒ 10 rows):
+    //   offset   0: visible rows 0-1 (items 0..6), realized rows 0..3
+    //   offset  40: visible rows 0-1 (items 0..6), realized rows 0..3   → neither moved: no render, no callback
+    //   offset 200: visible rows 0-2 (items 0..9), realized rows 0..4   → the band grew a row: one render + a callback
+    //   offset 270: visible rows 1-2 (items 3..9), realized rows 0..4   → visible moved, band did not: callback, NO render
+    static void CheckLazyGridRenderGate(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("grid-render-gate", new Size2(640, 400), 1f));
+        window.Show();
+        var probe = new GridRenderGateProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+        Settle(host);
+        var viewport = FindScrollNode(host.Scene, host.Scene.Root);
+        var atTop = probe.Visible;
+        bool mounted = probe.CellBuilds > 0 && atTop.FirstIndex == 0 && atTop.LastIndexExclusive > 0;
+
+        int ScrollAndCount(float offset)
+        {
+            probe.CellBuilds = 0; probe.VisibleCallbacks = 0;
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)viewport.Raw.Index, offset, immediate: true));
+            int rendered = 0;
+            for (int i = 0; i < 12; i++) rendered += host.RunFrame().ComponentsRendered;
+            return rendered;
+        }
+
+        int subRowRendered = ScrollAndCount(40f);
+        host.Scene.TryGetScroll(viewport, out var subRow);
+        Check("gate.lazygrid.render a sub-row scroll (visible rows and realized band unchanged) renders nothing and publishes nothing",
+            mounted && subRow.OffsetY > 30f && probe.CellBuilds == 0 && probe.VisibleCallbacks == 0 && probe.Visible == atTop,
+            $"offset={subRow.OffsetY} cellBuilds={probe.CellBuilds} callbacks={probe.VisibleCallbacks} componentsRendered={subRowRendered} visible={probe.Visible} atTop={atTop}");
+
+        ScrollAndCount(200f);
+        var grown = probe.Visible;
+        Check("gate.lazygrid.render a row entering the realized band re-renders the grid and publishes the wider range",
+            probe.CellBuilds > 0 && probe.VisibleCallbacks >= 1
+            && grown.FirstIndex == atTop.FirstIndex && grown.LastIndexExclusive > atTop.LastIndexExclusive,
+            $"cellBuilds={probe.CellBuilds} callbacks={probe.VisibleCallbacks} visible={grown} atTop={atTop}");
+
+        int crossedRendered = ScrollAndCount(270f);
+        var crossed = probe.Visible;
+        Check("gate.lazygrid.render a row crossing inside the realized band publishes the visible range WITHOUT a render",
+            probe.CellBuilds == 0 && probe.VisibleCallbacks >= 1
+            && crossed.FirstIndex > grown.FirstIndex && crossed.LastIndexExclusive == grown.LastIndexExclusive,
+            $"cellBuilds={probe.CellBuilds} callbacks={probe.VisibleCallbacks} componentsRendered={crossedRendered} visible={crossed} before={grown}");
+
+        probe.CellBuilds = 0;
+        probe.Count.Value = 33;
+        Settle(host);
+        int countBuilds = probe.CellBuilds;
+
+        probe.CellBuilds = 0;
+        probe.Count.Value = 33;   // an equal write: the signal coalesces it, the grid must not notice
+        Settle(host);
+        var steady = host.RunFrame();
+        Check("gate.lazygrid.render a count-signal change re-renders the grid; an equal write and a still frame do not",
+            countBuilds > 0 && probe.CellBuilds == 0 && steady.HotPhaseAllocBytes == 0,
+            $"countBuilds={countBuilds} equalWriteBuilds={probe.CellBuilds} bytes={steady.HotPhaseAllocBytes}");
+    }
+
+    sealed class GridRenderGateProbe : Component
+    {
+        readonly Signal<float> _offset = new(0f);
+        public readonly Signal<int> Count = new(30);
+        public int CellBuilds, VisibleCallbacks;
+        public LazyGridVisibleRange Visible;
+        public override Element Render() => Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)_offset,
+            ScrollView(new BoxEl
+            {
+                Direction = 1, Width = 600f,
+                Children =
+                [
+                    // The churn-free overload: the grid's render subscribes to Count and its realized-window key only.
+                    Embed.Comp(() => new LazyGrid(Count,
+                        (index, _) => { CellBuilds++; return new BoxEl { Height = 200f, Children = [Text("card-" + index)] }; },
+                        (_, _) => { }, onVisibleRangeChanged: range => { VisibleCallbacks++; Visible = range; })),
                     new BoxEl { Height = 1800f },
                 ],
             }) with

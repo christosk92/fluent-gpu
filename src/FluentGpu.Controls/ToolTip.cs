@@ -129,6 +129,15 @@ public sealed class ToolTip : Component
     private static ToolTip? s_openOwner;
     private static Action? s_openCloser;
 
+    /// <summary>Close whichever bubble is open, if any — the host's hook for a moment the pointer cannot signal. A
+    /// kept-alive page (Flow.KeepAlive parks it, nothing unmounts) that navigates away under a STILL pointer leaves its
+    /// owner both mounted and geometrically under the cursor: no leave edge fires, the safe-zone poll finds the owner
+    /// rect still "inside", and the bubble outlives the page it described until the 5s dwell (recording 2026-09-16: a
+    /// drawer's "Go to album" tip parked over the album page it opened). The app calls this on every route commit.
+    /// Idempotent; UI thread only. Runs the SAME closer a competing owner would (<see cref="s_openCloser"/>), so the
+    /// re-show window and the single-bubble latch stay consistent.</summary>
+    public static void CloseOpen() => s_openCloser?.Invoke();
+
     /// <summary>LIVE target+text slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
     /// idiom). <see cref="Target"/> and <see cref="Text"/> are plain fields, so via a propless <c>Embed.Comp</c> they
     /// freeze at first mount — a re-rendering parent's new wrapped element or new tooltip text would be silently
@@ -524,6 +533,9 @@ public sealed class ToolTip : Component
             // note on bare anchors is the same hazard). Growing the wrapper too is what makes `grow:` mean the same
             // thing here as everywhere else in the kit: fill the PARENT, whichever axis the parent runs on.
             Grow = grow,
+            // A pointer LISTENER, not an interaction scope: the four handlers below give it PointerBit, which would
+            // otherwise make it a hover-cascade boundary and hide a wrapped card FAB's reveal from the card's hover.
+            HoverScopeTransparent = true,
             OnRealized = x => anchor.Value = x,
             // P3 bound-text form: hasTooltip is false exactly when a bound Prop<string?> resolved null/empty THIS
             // render — no new open/dismiss/focus trigger is wired (the clock above is likewise forced absent via `ph`

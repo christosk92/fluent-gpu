@@ -232,6 +232,7 @@ public sealed class ScrollKernel
             if (b.Activity == ScrollActivity.Drag)
             {
                 float rawBefore = b.DragRaw;
+                bool released = false;
                 if (b.DragMode == 1)
                 {
                     int count = CopyHistory(in b, _histT, _histX);
@@ -250,23 +251,38 @@ public sealed class ScrollKernel
                         if (delta != 0f) ApplyDragDelta(slot, slot, delta);
                     }
                 }
-                // Live drag speed (signed, main axis) from this tick's raw advance — the result column the realize-ahead
-                // skew and text-motion softness read; it is NOT the fling seed (the impulse estimator owns that).
+                else if (b.DragMode == 2)
+                {
+                    released = PaceStream(slot, in clock);
+                }
                 b = ref _bodies[slot];
-                float dtV = clock.DtSec > 0f ? Math.Min(clock.DtSec, 0.034f) : clock.RefreshSec;
-                b.Velocity = dtV > 0f ? (b.DragRaw - rawBefore) / dtV : 0f;
-                MarkTouched(slot);
-                continue;
+                if (!released)
+                {
+                    // Live drag speed (signed, main axis) from this tick's raw advance — the result column the realize-ahead
+                    // skew and text-motion softness read; it is NOT the fling seed (the impulse estimator owns that).
+                    float dtV = clock.DtSec > 0f ? Math.Min(clock.DtSec, 0.034f) : clock.RefreshSec;
+                    b.Velocity = dtV > 0f ? (b.DragRaw - rawBefore) / dtV : 0f;
+                    MarkTouched(slot);
+                    continue;
+                }
+                if (b.Activity != ScrollActivity.Ballistic) { MarkTouched(slot); continue; }
+                // The inferred fling coasts on this same tick: no zero frame between the last paced frame and the first
+                // coast frame.
             }
 
+            float posBefore = b.PositionMain;
             ScrollBody.Advance(ref b, in clock, in _feel);
+            b.LastAdvanceStamp = _stamp;
+            // An inferred release keeps the paced resampler's baseline on the displayed position, so a late packet
+            // resumes the stream without applying its travel twice.
+            if (b.InferredRelease) b.LastResampleX += b.PositionMain - posBefore;
             MarkTouched(slot);
         }
 
         EmitTouched(ScrollWriteSource.Tick);
         CompactActiveList();
         FlushPendingFree();
-        UpdateSummary();
+        UpdateSummary(in clock, timed: true);
         UpdateDiag();
     }
 
@@ -294,7 +310,7 @@ public sealed class ScrollKernel
         EmitTouched(ScrollWriteSource.Reclamp);
         CompactActiveList();
         FlushPendingFree();
-        UpdateSummary();
+        UpdateSummary(default, timed: false);
     }
 
     // ── Command dispatch (shared by Tick's full drain and Reclamp's structural-only drain) ──────────────────────
@@ -308,7 +324,12 @@ public sealed class ScrollKernel
             case ScrollInputKind.Park:
                 if (TryGetSlot(cmd.Node, out int pidx))
                 {
-                    _bodies[pidx].Parked = (cmd.Flags & (byte)ScrollInputFlags.Immediate) != 0;
+                    ref ScrollBody pb = ref _bodies[pidx];
+                    pb.Parked = (cmd.Flags & (byte)ScrollInputFlags.Immediate) != 0;
+                    // A parked body is never ticked, so whatever motion it carried would otherwise stay "live" for
+                    // as long as it is parked (a page parked mid-fling kept AnyLiveMotion true for 41 s). Settle it
+                    // on the way in; unparking finds an idle body.
+                    if (pb.Parked) SettleParked(ref pb);
                     MarkTouched(pidx);
                 }
                 break;
@@ -472,6 +493,7 @@ public sealed class ScrollKernel
                 {
                     b.Activity = ScrollActivity.Driven;
                     b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Programmatic;
+                    ScrollBody.ClearWheelPlan(ref b);
                     b.Awake = false;
                 }
                 MarkActive(idx);
@@ -496,6 +518,7 @@ public sealed class ScrollKernel
         b.Activity = ScrollActivity.Idle;
         b.Velocity = 0f;
         b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // zoom rewrites content space — the old raw request no longer means anything
         MarkTouched(idx);
     }
@@ -509,11 +532,36 @@ public sealed class ScrollKernel
         b.BandVelMain = 0f;
         b.BandX = 0f; b.BandY = 0f;
         b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // the request is dead — never let it resurrect when the content next grows
         b.EdgeHitPending = false;
+        b.EdgeOvershoot = 0f;
+        b.InferredRelease = false;
         b.Awake = false;
         CancelRestore(ref b);
         MarkTouched(idx);
+    }
+
+    /// <summary>Park-time settle: a parked slot is skipped by <see cref="Tick"/>, so any motion it carries would never
+    /// finish. Idle, no velocity, no band, no wheel/programmatic plan, no pending edge or drag state. A pending Restore
+    /// is kept (it resolves on geometry, not on time).</summary>
+    private static void SettleParked(ref ScrollBody b)
+    {
+        b.Activity = ScrollActivity.Idle;
+        b.Velocity = 0f;
+        b.BandVelMain = 0f;
+        b.BandX = 0f; b.BandY = 0f;
+        b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
+        b.TargetRaw = b.Target;
+        b.EdgeHitPending = false;
+        b.EdgeOvershoot = 0f;
+        b.SnapArmed = false;
+        b.InferredRelease = false;
+        b.DragMode = 0;
+        b.ContactCount = 0;
+        b.LastAbsorbed = -1;
+        b.Awake = false;
     }
 
     private void ApplyThumbSet(in ScrollInput cmd)
@@ -527,6 +575,7 @@ public sealed class ScrollKernel
         b.Velocity = 0f;
         b.Activity = ScrollActivity.Idle;
         b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // dragging the thumb wins over any pending programmatic request
         CancelRestore(ref b);
         MarkTouched(idx);
@@ -571,6 +620,7 @@ public sealed class ScrollKernel
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
         SetOffsetMain(ref b, Math.Clamp(value, 0f, maxOff));
+        ScrollBody.ClearWheelPlan(ref b);   // the offset was moved under any live wheel plan — its cadence is meaningless now
         // Goal, not event: land immediately at the best-effort clamp, but stay latched while the saved offset is
         // still past the current extent (content is still growing). Resolve when the extent can hold it, or when
         // the retry deadline fires so a permanently-short page cannot latch forever.
@@ -606,17 +656,32 @@ public sealed class ScrollKernel
         {
             if (b.Horizontal) b.RestoreX += delta; else b.RestoreY += delta;
         }
+        NoteStructural(ref b, delta);
         ClampToFrame(ref b);
         MarkTouched(idx);
     }
 
-    private static void ClampToFrame(ref ScrollBody b)
+    private void ClampToFrame(ref ScrollBody b)
     {
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
         float pos = b.PositionMain;
         float clamped = Math.Clamp(pos, 0f, maxOff);
-        if (clamped != pos) SetOffsetMain(ref b, clamped);
+        if (clamped != pos)
+        {
+            SetOffsetMain(ref b, clamped);
+            NoteStructural(ref b, clamped - pos);
+        }
+    }
+
+    /// <summary>A position rebase that is not motion (an AnchorShift, a clamp correction after SetFrame): move the
+    /// summary baseline with it so <see cref="UpdateSummary"/> does not report it as this tick's shift, and book it
+    /// for <see cref="ScrollFrameSummary.MaxAbsStructuralDip"/>.</summary>
+    private void NoteStructural(ref ScrollBody b, float delta)
+    {
+        b.SummaryMain += delta;
+        float abs = MathF.Abs(delta);
+        if (abs > _maxAbsStructuralDip) _maxAbsStructuralDip = abs;
     }
 
     // ── Drag (ContactBegin/Move/End, FrameDelta) ─────────────────────────────────────────────────────────────
@@ -634,13 +699,16 @@ public sealed class ScrollKernel
         b.DragRaw = b.PositionMain + ScrollPhysics.ExcessFromBand(b.BandMain, b.Frame.ViewportMain);
         b.LastResampleX = cmd.A;
         b.ContactCount = 0;
+        b.InferredRelease = false;
         PushHistory(ref b, cmd.T, cmd.A);
         b.Impulse.Reset(cmd.A, cmd.T);
         b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing | ScrollActivityFlags.Chained);
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // the finger took over — a pending programmatic request must not resurrect on growth
         b.BandVelMain = 0f;
         b.LastAbsorbed = -1;
         b.EdgeHitPending = false;
+        b.EdgeOvershoot = 0f;
         b.NoOverscroll = false;   // a direct contact (touch/pen) always rubber-bands
         CancelRestore(ref b);
         MarkActive(idx);
@@ -661,7 +729,14 @@ public sealed class ScrollKernel
     {
         if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
-        if (b.Activity != ScrollActivity.Drag) return; // a stray End with no live drag — nothing to seed
+        if (b.Activity != ScrollActivity.Drag)
+        {
+            // The producer's End for a precise stream the kernel already released by inference (PaceStream): the
+            // coast is live and seeded from the same samples this End would have used — nothing to do but drop the
+            // resume latch so the next gesture starts fresh.
+            if (b.InferredRelease) { b.InferredRelease = false; b.LastAbsorbed = -1; }
+            return; // a stray End with no live drag — nothing to seed
+        }
 
         // Only feed the raw finger sample into the contact-history/impulse tracker for a RESAMPLED (touch/pen)
         // drag — cmd.A is meaningless for a FrameDelta drag (the router passes 0/irrelevant there) and would
@@ -680,13 +755,42 @@ public sealed class ScrollKernel
                 float delta = resampled - b.LastResampleX;
                 b.LastResampleX = resampled;
                 if (delta != 0f) ApplyDragDelta(idx, idx, delta);
-                b = ref _bodies[idx];
             }
         }
 
-        b.Impulse.ComputeReleaseVelocity(cmd.T);
-        float v = b.Impulse.Velocity;
+        ReleaseDrag(idx, cmd.T, out _);
+    }
+
+    /// <summary>Release the drag at pool slot <paramref name="idx"/> at <paramref name="tRelease"/>: compute the
+    /// release velocity, seed the fling on the body that absorbed the last delta (self or a chained ancestor), spring
+    /// a live band home, or stop. Shared by the producer's <see cref="ScrollInputKind.ContactEnd"/> and by
+    /// <see cref="PaceStream"/>'s inferred release. Returns the seed slot; <paramref name="seeded"/> is true when
+    /// that body left as Ballistic.</summary>
+    private int ReleaseDrag(int idx, double tRelease, out bool seeded)
+    {
+        ref ScrollBody b = ref _bodies[idx];
+        // A precise stream long enough to measure releases on its raw packet totals; anything shorter (a flick of
+        // one or two packets) and every touch/pen drag keep the impulse estimator.
+        float v;
+        if (b.DragMode == 2 && TryRawStreamVelocity(in b, tRelease, out float vRaw)) v = vRaw;
+        else
+        {
+            b.Impulse.ComputeReleaseVelocity(tRelease);
+            v = b.Impulse.Velocity;
+        }
         b.LastReleaseVelocity = v;
+
+        // A paced precise stream (DragMode 2) shows its packets one latency late. Landing without a fling, it owes
+        // the residual it has not displayed yet: apply it so the resting offset is exactly the packets' total. A
+        // fling starts from the displayed position instead — the coast covers the residual, and applying it here
+        // would show one frame at 2–3× the stream's step at release.
+        if (b.DragMode == 2 && MathF.Abs(v) < _feel.FlingSeedGate && b.ContactCount > 0)
+        {
+            float newest = NewestX(in b);
+            float residual = newest - b.LastResampleX;
+            b.LastResampleX = newest;
+            if (residual != 0f) ApplyDragDelta(idx, idx, residual);
+        }
 
         // LastAbsorbed is a NODE index (the chain hand-off speaks nodes). Resolve it back to a slot; a chained
         // ancestor that unbound between the hand-off and the lift falls back to seeding this body.
@@ -696,7 +800,7 @@ public sealed class ScrollKernel
         seed.LastReleaseVelocity = v;
         seed.NoOverscroll = _bodies[idx].NoOverscroll;   // the fling inherits the gesture's producer (ResolveEdge reads it)
         float band = seed.BandMain;
-        bool seeded = band == 0f && MathF.Abs(v) >= _feel.FlingSeedGate;
+        seeded = band == 0f && MathF.Abs(v) >= _feel.FlingSeedGate;
 
         if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
         {
@@ -714,6 +818,7 @@ public sealed class ScrollKernel
             seed.Velocity = Math.Clamp(v, -_feel.FlingMax, _feel.FlingMax);
             seed.Awake = false;
             seed.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Chained);
+            ScrollBody.ClearWheelPlan(ref seed);
             SnapRetargetOnEntry(ref seed);
             MarkActive(seedSlot);
         }
@@ -746,7 +851,90 @@ public sealed class ScrollKernel
         }
         _bodies[idx].LastAbsorbed = -1;
         MarkTouched(seedSlot);
+        return seedSlot;
     }
+
+    /// <summary>One paced step of a precise-stream drag (<see cref="ScrollBody.DragMode"/> 2 — FrameDelta packets from
+    /// DirectManipulation / the hi-res wheel fallback). The packets' cumulative positions are resampled at
+    /// <c>frame − PacedLatencyS(mean packet interval)</c> (<see cref="ScrollPhysics.ResamplePaced"/>), so packets that
+    /// arrive off the frame phase (a 60 Hz stream drawn at 120 Hz) yield one even step per frame instead of a zero
+    /// frame followed by a double. When the resample instant runs more than <see cref="ScrollFeel.DragExtrapolateMaxMs"/>
+    /// past the newest sample, the stream has stopped: the release is inferred at the newest sample's time
+    /// (<see cref="ReleaseDrag"/>, the same estimate the producer's late End would give) so the coast starts on this
+    /// tick rather than after the 1–6 zero frames the End takes to arrive. Returns true when the drag was released.</summary>
+    private bool PaceStream(int slot, in ScrollClock clock)
+    {
+        ref ScrollBody b = ref _bodies[slot];
+        int count = CopyHistory(in b, _histT, _histX);
+        if (count == 0) return false;
+        double newestT = _histT[count - 1];
+        double frameRef = Math.Abs(clock.FrameSec - newestT) <= ForeignClockToleranceSec ? clock.FrameSec : newestT;
+        double interval = count >= 2 ? (newestT - _histT[0]) / (count - 1) : 0.0;
+        double tStar = frameRef - ScrollPhysics.PacedLatencyS(interval);
+        double extrapolateMax = _feel.DragExtrapolateMaxMs / 1000.0;
+        if (tStar > newestT + extrapolateMax)
+        {
+            int seedSlot = ReleaseDrag(slot, newestT, out bool seeded);
+            // Resume latch only when the fling rides this body: a chained ancestor's coast has no stream to resume.
+            if (seeded && seedSlot == slot) _bodies[slot].InferredRelease = true;
+            return true;
+        }
+        float resampled = ScrollPhysics.ResamplePaced(_histT.AsSpan(0, count), _histX.AsSpan(0, count), count, tStar, extrapolateMax);
+        float delta = resampled - b.LastResampleX;
+        // The resampler redistributes the packets' travel across frames; it must not invent any. Two bounds, both
+        // from the raw packets themselves: a frame moves at most twice the largest packet in the retained history
+        // (a burst delivered inside one frame is spread over the next few instead of landing as one jump), and at
+        // most the undisplayed backlog plus one mean packet (extrapolation past the newest sample reaches one packet
+        // beyond what was received, never further). LastResampleX advances by what was applied, so a capped frame's
+        // remainder stays in the backlog and the paced total still equals the raw total.
+        float newest = _histX[count - 1];
+        float maxPacket = 0f, meanPacket = 0f;
+        if (count >= 2)
+        {
+            for (int i = 1; i < count; i++)
+            {
+                float p = MathF.Abs(_histX[i] - _histX[i - 1]);
+                if (p > maxPacket) maxPacket = p;
+                meanPacket += p;
+            }
+            meanPacket /= count - 1;
+        }
+        else maxPacket = meanPacket = MathF.Abs(newest);   // a single-sample history starts at that packet's own travel
+        float cap = MathF.Min(2f * maxPacket, MathF.Abs(newest - b.LastResampleX) + meanPacket);
+        if (MathF.Abs(delta) > cap) delta = MathF.CopySign(cap, delta);
+        b.LastResampleX += delta;
+        if (delta != 0f) ApplyDragDelta(slot, slot, delta);
+        return false;
+    }
+
+    private const double RawReleaseWindowS = 0.024;    // the raw packet span a release velocity is read over
+    private const double RawReleaseStoppedS = 0.040;   // newest packet → release gap beyond which the stream had stopped
+
+    /// <summary>A precise stream's release velocity from its RAW packet totals: the slope of the cumulative positions
+    /// over the newest samples spanning at least <see cref="RawReleaseWindowS"/>. False when the retained history is
+    /// shorter than that (a two-packet flick keeps the impulse estimator). The resampled positions are never used —
+    /// they are a display schedule, not the finger — and a stream silent for more than
+    /// <see cref="RawReleaseStoppedS"/> before the release reads 0.</summary>
+    private bool TryRawStreamVelocity(in ScrollBody b, double tRelease, out float v)
+    {
+        v = 0f;
+        int count = CopyHistory(in b, _histT, _histX);
+        if (count < 2) return false;
+        double tNew = _histT[count - 1];
+        int from = -1;
+        for (int i = count - 2; i >= 0; i--)
+        {
+            if (tNew - _histT[i] >= RawReleaseWindowS) { from = i; break; }
+        }
+        if (from < 0) return false;
+        if (tRelease - tNew > RawReleaseStoppedS) return true;   // stopped before the lift: v = 0
+        v = (float)((_histX[count - 1] - _histX[from]) / (tNew - _histT[from]));
+        return true;
+    }
+
+    private static float NewestX(in ScrollBody b) => b.ContactCount switch { 0 => 0f, 1 => b.X0, 2 => b.X1, 3 => b.X2, 4 => b.X3, _ => b.X4 };
+    private const double HistoryMinStepS = 0.000001;
+    private static double NewestT(in ScrollBody b) => b.ContactCount switch { 0 => 0.0, 1 => b.T0, 2 => b.T1, 3 => b.T2, 4 => b.T3, _ => b.T4 };
 
     /// <summary>Fling-entry snap retarget (once): pick the snap value the natural decay would settle nearest, then
     /// re-solve velocity so the SAME exponential curve lands EXACTLY there (ScrollIntegrator.cs:393-410).</summary>
@@ -776,7 +964,10 @@ public sealed class ScrollKernel
     {
         if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
-        bool starting = b.Activity != ScrollActivity.Drag || b.DragMode != 2;
+        // A packet reaching a body whose stream PaceStream released by inference resumes that stream (the coast was
+        // the stream's own extrapolation); any other non-DragMode-2 state is a fresh grab, which stops a fling.
+        bool resume = b.InferredRelease && b.Activity == ScrollActivity.Ballistic;
+        bool starting = !resume && (b.Activity != ScrollActivity.Drag || b.DragMode != 2);
         if (starting)
         {
             b.Activity = ScrollActivity.Drag;
@@ -785,22 +976,41 @@ public sealed class ScrollKernel
             b.DragAnchor = b.PositionMain;
             b.DragRaw = b.PositionMain + ScrollPhysics.ExcessFromBand(b.BandMain, b.Frame.ViewportMain);   // re-grab keeps a live stretch continuous
             b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing | ScrollActivityFlags.Chained);
+            ScrollBody.ClearWheelPlan(ref b);
             b.BandVelMain = 0f;
             b.LastAbsorbed = -1;
             b.EdgeHitPending = false;
+            b.EdgeOvershoot = 0f;
+            b.SnapArmed = false;
+            b.InferredRelease = false;
+            b.ContactCount = 0;
+            b.LastResampleX = 0f;
             // Latched for the whole gesture: a mouse-wheel producer clamps at the extents (no band, no edge bounce).
             b.NoOverscroll = (cmd.Flags & (byte)ScrollInputFlags.NoOverscroll) != 0;
             MarkActive(idx);
         }
-        ApplyDragDelta(idx, idx, cmd.A);
-        b = ref _bodies[idx];
-        // bug-B/A3: the estimator is fed per RAW PACKET now (ScrollInputRouter.AccumulatePhaseDelta posts one
-        // ImpulseSample — ApplyImpulseSample below — per Phase()-consumed packet, plus the drained pre-coalesce
-        // side-ring samples for a frame that folded 2+ packets before Phase() ever saw them), not once here per
-        // produced FRAME. A flick shorter than 2 flushed frames (~17 ms at 120 Hz) used to release at exactly 0
-        // because this was the ONLY feed and `ImpulseEstimator.Compute` bails under 2 samples (ScrollPhysics.cs).
-        // DragRaw/position application above is unchanged — only the estimator's input moved.
-        MarkTouched(idx);
+        else if (resume)
+        {
+            // The coast is already on screen: re-base the accumulator to the displayed position and restart the
+            // sample history from this packet. Keeping the pre-release samples would make the paced resample span
+            // the silent gap (its latency clamps to 34 ms) against a LastResampleX that has the coast folded in, so
+            // the first resumed frame could apply about minus the coast travel. With the history restarted the
+            // latch frame applies this packet's own travel, exactly as a fresh stream does.
+            b.Activity = ScrollActivity.Drag;
+            b.InferredRelease = false;
+            b.Velocity = 0f;
+            b.DragAnchor = b.PositionMain;
+            b.DragRaw = b.PositionMain + ScrollPhysics.ExcessFromBand(b.BandMain, b.Frame.ViewportMain);
+            b.ContactCount = 0;
+            b.LastResampleX = 0f;
+            b.EdgeHitPending = false;
+            b.EdgeOvershoot = 0f;
+            b.SnapArmed = false;
+        }
+        // The packet is a sample of the stream's cumulative position, applied by Tick's PaceStream resample (not 1:1
+        // here) so per-frame steps follow the frame clock rather than packet arrival. The release-velocity estimator
+        // is fed per RAW packet by ImpulseSample (ScrollInputRouter.AccumulatePhaseDelta), not here.
+        PushHistory(ref b, cmd.T, NewestX(in b) + cmd.A);
     }
 
     /// <summary>bug-B/A3: feed ONE raw (pre-frame-coalesce) sample into a body's release-velocity estimator, without
@@ -899,22 +1109,34 @@ public sealed class ScrollKernel
 
     // ── Wheel / programmatic / velocity / driven ─────────────────────────────────────────────────────────────
 
+    /// <summary>A wheel notch arms (or re-plans) the Driven|Wheel glide through <see cref="ScrollPhysics.WheelPlanNotch"/>:
+    /// a live wheel glide accumulates the target and re-plans its half-life/velocity from the observed cadence
+    /// (velocity-continuous — nothing here ever resets <see cref="ScrollBody.Velocity"/>, that reset was the ease-in
+    /// discontinuity the S1 plan removes); a cold notch seeds the chase at κ·R·y, or carries a same-direction
+    /// Ballistic/Driven velocity (capped at the no-overshoot bound). A Drag body's velocity is stale by construction
+    /// (command-driven, not integrated) and is never carried. The notch supersedes any pending programmatic request
+    /// (<c>TargetRaw</c> relatched, restore cancelled) and clears the per-command ζ/ω/settle overrides.</summary>
+    private int _wheelNotchesSinceTick;   // cadence marker for ScrollFrameSummary.WheelNotches; zeroed by UpdateSummary
+    private float _maxAbsStructuralDip;   // ScrollFrameSummary.MaxAbsStructuralDip accumulator (AnchorShift / clamp correction); zeroed by UpdateSummary
+
     private void ApplyWheelNotch(in ScrollInput cmd)
     {
         if (!TryGetSlot(cmd.Node, out int idx)) return;
+        _wheelNotchesSinceTick++;
         ref ScrollBody b = ref _bodies[idx];
         bool sameFlavourLive = b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Wheel) != 0;
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
-        float baseTarget = sameFlavourLive ? b.Target : b.PositionMain;
-        b.Target = Math.Clamp(baseTarget + cmd.A, 0f, maxOff);
+        float carry = (b.Activity == ScrollActivity.Ballistic || b.Activity == ScrollActivity.Driven) ? b.Velocity : 0f;
+        ScrollPhysics.WheelPlanNotch(ref b.Target, ref b.Velocity, ref b.DrivenHalflifeMs, ref b.WheelSinceS, ref b.WheelGapS,
+            b.PositionMain, cmd.A, maxOff, sameFlavourLive, carry, in _feel);
         b.TargetRaw = b.Target;   // a wheel notch supersedes any pending programmatic request
         CancelRestore(ref b);
-        if (!sameFlavourLive) { b.Velocity = 0f; b.Awake = false; }
+        if (!sameFlavourLive) b.Awake = false;
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Wheel;
-        b.DrivenHalflifeMs = _feel.WheelHalflifeMs;
         b.DrivenZeta = 0f; b.DrivenOmega = 0f; b.DrivenSettleVel = 0f;
+        b.LandFloorDipPerS = 0f;   // a notch on a landing fling is a wheel glide, not a landing
         MarkActive(idx);
         MarkTouched(idx);
     }
@@ -952,6 +1174,7 @@ public sealed class ScrollKernel
             b.Velocity = 0f;
             b.Activity = ScrollActivity.Idle;
             b.Flags &= ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll);
+            ScrollBody.ClearWheelPlan(ref b);
             MarkTouched(idx);
             return;
         }
@@ -961,9 +1184,11 @@ public sealed class ScrollKernel
         if (!sameFlavourLive) { b.Velocity = 0f; b.Awake = false; }
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Programmatic;
+        ScrollBody.ClearWheelPlan(ref b);
         float halflife = cmd.B > 0f ? cmd.B
             : ScrollPhysics.ProgrammaticHalflifeS(MathF.Abs(target - b.PositionMain), _feel.ProgrammaticMinHalflifeMs, _feel.ProgrammaticMaxHalflifeMs, _feel.ProgrammaticShortDip, _feel.ProgrammaticLongDip);
         b.DrivenHalflifeMs = halflife;
+        b.LandFloorDipPerS = 0f;   // a ScrollTo/ScrollBy on a landing fling is a programmatic glide, not a landing
         b.DrivenZeta = cmd.C;
         b.DrivenOmega = cmd.D;
         b.DrivenSettleVel = cmd.E;
@@ -990,6 +1215,7 @@ public sealed class ScrollKernel
         b.Velocity = v;
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Autoscroll;
+        ScrollBody.ClearWheelPlan(ref b);
         MarkActive(idx);
         MarkTouched(idx);
     }
@@ -1004,12 +1230,29 @@ public sealed class ScrollKernel
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
         float pos = b.PositionMain;
         bool stillAtEdge = pos <= 0.0001f || pos >= maxOff - 0.0001f;
+        float overshoot = b.EdgeOvershoot;
         b.EdgeHitPending = false;
+        b.EdgeOvershoot = 0f;
 
         if (!stillAtEdge)
         {
-            MarkTouched(slot); // fresh geometry gave it room — Ballistic simply continues next Tick
-            return;
+            // Fresh geometry gave it room. The pinned step already decayed the velocity for its whole dt, so re-apply
+            // the travel the clamp withheld (bounded by the new room) — Reclamp runs after layout and before record,
+            // so it lands on screen this same frame instead of leaving a dead frame in the coast.
+            float room = overshoot >= 0f ? maxOff - pos : pos;
+            float apply = MathF.CopySign(MathF.Min(MathF.Abs(overshoot), room), overshoot);
+            if (apply != 0f)
+            {
+                pos += apply;
+                SetOffsetMain(ref b, pos);
+                stillAtEdge = pos <= 0.0001f || pos >= maxOff - 0.0001f;
+            }
+            if (!stillAtEdge)
+            {
+                MarkTouched(slot); // Ballistic simply continues next Tick
+                return;
+            }
+            // The room was smaller than the withheld travel: it is at the NEW edge now — resolve below as usual.
         }
 
         float v = b.Velocity;
@@ -1028,6 +1271,7 @@ public sealed class ScrollKernel
             parent.SnapArmed = false;
             parent.Awake = false;
             parent.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing);
+            ScrollBody.ClearWheelPlan(ref parent);
             MarkActive(parentSlot);
             MarkTouched(parentSlot);
         }
@@ -1055,6 +1299,14 @@ public sealed class ScrollKernel
 
     private static void PushHistory(ref ScrollBody b, double t, float x)
     {
+        // Stamps must be strictly increasing: a frame-pumped packet stamped with the frame instant can arrive after
+        // an idle-pumped one stamped `now`, and a history that runs backwards blew up the resamplers (a Math.Clamp
+        // with min > max threw out of Tick on 2026-09-17). Fold such a packet into the next microsecond.
+        if (b.ContactCount > 0)
+        {
+            double newest = NewestT(in b);
+            if (t <= newest) t = newest + HistoryMinStepS;
+        }
         if (b.ContactCount < 5)
         {
             SetSlot(ref b, b.ContactCount, t, x);
@@ -1106,6 +1358,9 @@ public sealed class ScrollKernel
         if (slot < 0 || _inActive[slot]) return;
         _inActive[slot] = true;
         _activeList[_activeCount++] = slot;
+        // Enrolment precedes the enrolling command's write (ApplyDragDelta, the wheel plan, a programmatic glide), so
+        // this is the position the first summary of the new gesture measures its displacement from.
+        _bodies[slot].SummaryMain = _bodies[slot].PositionMain;
     }
 
     /// <summary>Stamp a pool slot as written this pass. Same bound as <see cref="MarkActive"/>: the stamp admits each
@@ -1160,23 +1415,91 @@ public sealed class ScrollKernel
         _wakeActiveCount = wake;
     }
 
-    private void UpdateSummary()
+    /// <param name="clock">The tick's clock; only read when <paramref name="timed"/> (a <see cref="Reclamp"/> has no
+    /// time step, so it never judges a contact held).</param>
+    private void UpdateSummary(in ScrollClock clock, bool timed)
     {
         bool anyMoved = _touchedCount > 0;
-        bool anyUserActive = false, anyDragOrBallistic = false;
-        float maxSpeed = 0f;
+        bool anyUserActive = false, anyLiveMotion = false, anyContactHeld = false;
+        float maxSpeed = 0f, maxAbsDelta = 0f;
+        int edgePins = 0;
+        var zeroReason = ScrollZeroReason.None;
         for (int i = 0; i < _activeCount; i++)
         {
             ref ScrollBody b = ref _bodies[_activeList[i]];
+            // A parked body is resident but never ticked; it must not report motion the host would budget a frame for.
             if (!b.Bound) continue;
+            if (b.Parked)
+            {
+                if (timed && b.Activity == ScrollActivity.Ballistic && zeroReason == ScrollZeroReason.None) zeroReason = ScrollZeroReason.Parked;
+                continue;
+            }
+            b.TickDeltaMain = b.PositionMain - b.SummaryMain;
+            b.SummaryMain = b.PositionMain;
+            float absDelta = MathF.Abs(b.TickDeltaMain);
+            if (absDelta > maxAbsDelta) maxAbsDelta = absDelta;
+            if (b.EdgeHitPending) edgePins++;
+            // A body that should have coasted this tick and did not: name why, for the trace.
+            bool shouldCoast = (b.Activity == ScrollActivity.Ballistic && MathF.Abs(b.Velocity) >= _feel.FlingLandVel)
+                || (b.Activity == ScrollActivity.Driven && b.LandFloorDipPerS > 0f);
+            if (timed && shouldCoast && absDelta < 0.05f && zeroReason == ScrollZeroReason.None)
+            {
+                zeroReason = clock.DtSec <= 0f ? ScrollZeroReason.DtZero
+                    : b.LastAdvanceStamp != _stamp ? ScrollZeroReason.NotAdvanced
+                    : b.EdgeHitPending ? ScrollZeroReason.Pinned
+                    : ScrollZeroReason.Other;
+            }
+            if (timed && b.TickDeltaMain == 0f && b.Activity == ScrollActivity.Drag && IsContactHeld(in b, in clock)) anyContactHeld = true;
             bool userActive = b.Activity == ScrollActivity.Drag || b.Activity == ScrollActivity.Ballistic
                 || (b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Programmatic) == 0);
             if (userActive) anyUserActive = true;
-            if (b.Activity == ScrollActivity.Drag || b.Activity == ScrollActivity.Ballistic) anyDragOrBallistic = true;
+            // Continuous motion the host budgets a frame for: a drag, a fling, or a wheel/programmatic glide (an
+            // Autoscroll drive is excluded — it is a constant-velocity edge drive, not a bounded glide).
+            bool liveMotion = b.Activity == ScrollActivity.Drag || b.Activity == ScrollActivity.Ballistic
+                || (b.Activity == ScrollActivity.Driven && (b.Flags & (ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic)) != 0);
+            if (liveMotion) anyLiveMotion = true;
             float speed = MathF.Abs(b.VelocityMain);
             if (speed > maxSpeed) maxSpeed = speed;
         }
-        Summary = new ScrollFrameSummary(anyMoved, anyUserActive, anyDragOrBallistic, _activeCount, maxSpeed);
+        // A body that landed THIS tick has already left the active list (CompactActiveList runs first), and an
+        // immediate write (ScrollBy immediate, a restore) touches a body that was never active: both are read off the
+        // touched set, so the landing frame's shift and a one-frame jump are part of the trace, not zeros. A slot in
+        // both sets was already settled above (TickDeltaMain is now 0 against the refreshed SummaryMain — harmless).
+        for (int i = 0; i < _touchedCount; i++)
+        {
+            ref ScrollBody b = ref _bodies[_touchedSlots[i]];
+            if (_inActive[_touchedSlots[i]]) continue;
+            b.TickDeltaMain = b.PositionMain - b.SummaryMain;
+            b.SummaryMain = b.PositionMain;
+            float absDelta = MathF.Abs(b.TickDeltaMain);
+            if (absDelta > maxAbsDelta) maxAbsDelta = absDelta;
+        }
+        Summary = new ScrollFrameSummary(anyMoved, anyUserActive, anyLiveMotion, _activeCount, maxSpeed, maxAbsDelta, _wheelNotchesSinceTick,
+            edgePins, _maxAbsStructuralDip, anyContactHeld, zeroReason);
+        _wheelNotchesSinceTick = 0;
+        _maxAbsStructuralDip = 0f;
+    }
+
+    /// <summary>A Drag body's newest contact sample is older than its resample latency plus one frame: touch/pen
+    /// (DragMode 1) at <c>ResampleLatencyMs</c>, a precise stream (DragMode 2) at <c>PacedLatencyS(mean interval)</c>.
+    /// Same frame-reference rule as the resample itself (a foreign sample clock is judged against its own newest
+    /// sample). A DragMode 2 stream is released by inference once it is silent past <c>DragExtrapolateMaxMs</c>, so
+    /// for it this window is at most that wide.</summary>
+    private bool IsContactHeld(in ScrollBody b, in ScrollClock clock)
+    {
+        if (b.ContactCount == 0 || b.DragMode == 0) return false;
+        double newestT = NewestT(in b);
+        double frameRef = Math.Abs(clock.FrameSec - newestT) <= ForeignClockToleranceSec ? clock.FrameSec : newestT;
+        double frame = clock.RefreshSec > 0f ? clock.RefreshSec : clock.DtSec;
+        double latency;
+        if (b.DragMode == 1) latency = _feel.ResampleLatencyMs / 1000.0;
+        else
+        {
+            double oldestT = b.T0;
+            double interval = b.ContactCount >= 2 ? (newestT - oldestT) / (b.ContactCount - 1) : 0.0;
+            latency = ScrollPhysics.PacedLatencyS(interval);
+        }
+        return frameRef - newestT > latency + frame;
     }
 
     private void UpdateDiag()

@@ -71,11 +71,11 @@ internal sealed class TimeoutCell : HookCell, IDisposableCell, ITimerControl
     private void OnFire(long g) { if (g == Gen) Callback?.Invoke(); }
 
     public void Arm(float ms) { if (Queue is null) return; Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(ms, 0f), Gen, Fire); }
-    public void Cancel() => Gen++;
+    public void Cancel() { Queue?.Cancel(Fire); Gen++; }
     public void Restart() { Cancel(); Arm(Ms); }
     public void RestartIn(float ms) { Cancel(); Arm(ms); }
     public double NowMs => Queue?.NowMs ?? 0;
-    public void DisposeCell() => Gen++;   // unmount → a due-after-unmount fire is a no-op
+    public void DisposeCell() { Queue?.Cancel(Fire); Gen++; }   // unmount → a due-after-unmount fire is a no-op
 }
 
 internal sealed class DebounceCell<T> : HookCell, IDisposableCell, IDebounceControl
@@ -93,10 +93,10 @@ internal sealed class DebounceCell<T> : HookCell, IDisposableCell, IDebounceCont
     public DebounceCell() => Fire = OnFire;
     private void OnFire(long g) { if (g == Gen) Output.Value = Source.Peek(); }   // trailing-edge commit
 
-    public void Arm() { if (Queue is null) return; Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire); }
-    public void Flush() { Gen++; Output.Value = Source.Peek(); }   // commit now + cancel the pending fire
-    public void Cancel() => Gen++;
-    public void DisposeCell() { Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
+    public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire); }
+    public void Flush() { Queue?.Cancel(Fire); Gen++; Output.Value = Source.Peek(); }   // commit now + cancel the pending fire
+    public void Cancel() { Queue?.Cancel(Fire); Gen++; }
+    public void DisposeCell() { Queue?.Cancel(Fire); Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
 }
 
 internal sealed class ThrottleCell<T> : HookCell, IDisposableCell
@@ -129,8 +129,8 @@ internal sealed class ThrottleCell<T> : HookCell, IDisposableCell
         if (!EqualityComparer<T>.Default.Equals(Output.Peek(), Latest)) Output.Value = Latest;   // trailing sample
     }
 
-    public void Arm() { if (Queue is null) return; Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire); }
-    public void DisposeCell() { Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
+    public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire); }
+    public void DisposeCell() { Queue?.Cancel(Fire); Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
 }
 
 internal sealed class IntervalCell : HookCell, IDisposableCell
@@ -164,7 +164,7 @@ internal sealed class IntervalCell : HookCell, IDisposableCell
         else if (Armed)
         {
             // Eager Cancel so a paused interval does not leave an orphan heap entry shaping RecommendedWaitMs (§5.2 Fix D).
-            Queue?.Cancel(Gen);
+            Queue?.Cancel(Fire);
             Gen++;
             Armed = false;
         }
@@ -174,7 +174,7 @@ internal sealed class IntervalCell : HookCell, IDisposableCell
     public void SetActive(bool a) { if (Active == a) return; Active = a; Reconcile(); }
     public void DisposeCell()
     {
-        if (Armed) Queue?.Cancel(Gen);
+        if (Armed) Queue?.Cancel(Fire);
         Gen++;
         ActiveWatcher?.Dispose();
     }

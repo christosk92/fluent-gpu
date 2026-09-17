@@ -18,6 +18,20 @@ public enum ScrollAnimate : byte { Immediate, Glide }
 /// whatever the kernel would otherwise pick for the travel distance).</summary>
 public readonly record struct ScrollGlide(float HalflifeMs, float Zeta, float Omega, float SettleVel);
 
+/// <summary>A scroller that takes a wheel notch routed from ANOTHER element (<c>Element.WheelTarget</c>): a list header
+/// laid out above its list forwards the wheel it receives to the list, as the same glide a device notch over the rows
+/// gets. Implemented by <see cref="ScrollController"/> (the engine's authoring handle) and by every Controls
+/// <c>IScrollController</c> / <c>ItemsViewController</c>. Called on the UI thread from the input dispatcher;
+/// implementations POST a kernel command (<see cref="ScrollInput.WheelNotch"/>) and never write scene state.</summary>
+public interface IWheelTarget
+{
+    /// <summary>Scroll by whole/fractional wheel notches (signed; positive = toward the content end) with the same
+    /// glide a device notch gets — posts <see cref="ScrollInput.WheelNotch"/> with
+    /// <c>ScrollFeel.Shipping.PerNotchDip(viewportExtent, ScrollState.LineDip)</c> DIP per notch. Unlike
+    /// <c>ScrollBy</c> this is NOT immediate: the kernel's Driven|Wheel chase carries it over several frames.</summary>
+    void WheelNotch(float notches);
+}
+
 /// <summary>The ONE authoring handle over a live scroll viewport (scroll-v3-plan §7.2) — a thin, allocation-light
 /// façade over kernel commands (<c>ScrollPort.Post</c>) and the existing geometry-observer mechanism
 /// (<see cref="FluentGpu.Scene.SceneStore.SetScrollObserver"/>). Never writes scene state directly (single-writer:
@@ -29,7 +43,7 @@ public readonly record struct ScrollGlide(float HalflifeMs, float Zeta, float Om
 /// <c>VirtualListEl</c> realizes (see <see cref="FluentGpu.Hooks.Hooks.UseScroll"/>) and detaches it on unmount /
 /// re-bake. Calling a mutator while detached is a silent no-op — a controller a caller is still holding after its
 /// viewport unmounted must not throw or resurrect a dead node.</para></summary>
-public sealed class ScrollController
+public sealed class ScrollController : IWheelTarget
 {
     private SceneStore? _scene;
     private NodeHandle _node = NodeHandle.Null;
@@ -120,6 +134,34 @@ public sealed class ScrollController
         scene.ScrollPort?.Post(ScrollInput.ScrollBy((int)_node.Raw.Index, delta, immediate: animate == ScrollAnimate.Immediate));
         _wake?.Invoke();
     }
+
+    /// <summary>Route a wheel notch to the attached viewport as a glide (<see cref="IWheelTarget.WheelNotch"/> — the
+    /// <c>Element.WheelTarget</c> seam). Scaled exactly like <c>ScrollInputRouter.WheelAxis</c>: one notch =
+    /// <c>ScrollFeel.Shipping.PerNotchDip(viewportMain, ScrollState.LineDip)</c>, posted as the kernel's detented
+    /// Driven|Wheel chase (a second notch mid-chase accumulates on the pending target). The kernel clamps at the
+    /// extents; there is no at-edge chaining — the header's own list is the only intended target. A no-op while
+    /// detached, when the node is no longer live, or for a zero notch.</summary>
+    public void WheelNotch(float notches)
+    {
+        if (_scene is not { } scene || _node.IsNull || notches == 0f) return;
+        if (!scene.IsLive(_node) || !scene.HasScroll(_node)) return;
+        ref ScrollState sc = ref scene.ScrollRef(_node);
+        float viewport = sc.Orientation == 1 ? sc.ViewportW : sc.ViewportH;
+        float dip = ScrollFeel.Shipping.PerNotchDip(viewport, sc.LineDip) * notches;
+        scene.ScrollPort?.Post(ScrollInput.WheelNotch((int)_node.Raw.Index, WheelSampleSec(), dip));
+        _wake?.Invoke();
+    }
+
+    /// <summary>The sample-clock stamp for a controller-originated <see cref="ScrollInput.WheelNotch"/> (a post with
+    /// no originating <c>InputEvent</c>): the clock the platform's <c>InputEvent.QpcTicks</c> are on when
+    /// <see cref="FluentGpu.Pal.SystemParams.QpcFrequency"/> is published (<c>Stopwatch</c> shares the QPC counter
+    /// with <c>POINTER_INFO.PerformanceCount</c>), else the millisecond message-time fallback
+    /// (<c>Environment.TickCount64</c>/1000) — mirrors <c>ScrollInputRouter.SampleSec</c>. Shared by the Controls
+    /// viewports serving <c>IScrollController.WheelNotch</c>.</summary>
+    public static double WheelSampleSec()
+        => FluentGpu.Pal.SystemParams.QpcFrequency > 0
+            ? System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency
+            : Environment.TickCount64 / 1000.0;
 
     /// <summary>Bring <paramref name="node"/> (a descendant of the attached viewport) into view — the
     /// <c>ScrollIntoView.Bring/BringInto</c> replacement (rect→offset math factored into <see cref="ScrollTargets"/>).

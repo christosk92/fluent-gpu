@@ -157,7 +157,12 @@ public sealed class LazyGrid : Component
     readonly float _expandedTopInset;
     readonly float _expandedRevealPeek;
     readonly ExpandedReveal _reveal;
-    readonly Func<int> _count;                      // total item count (reads the collection's version/count → reactive)
+    // Exactly one of the two is set. The Func form subscribes the grid's render to WHATEVER the caller reads inside it
+    // (a table's Changed counter ⇒ every publication re-renders the grid); the signal form subscribes to that one
+    // value-gated signal only — the churn-free form (the caller runs its count derivation in a UseComputed/Memo and
+    // only a changed COUNT reaches the grid).
+    readonly Func<int>? _count;                      // legacy: total item count as a tracked read
+    readonly IReadSignal<int>? _countSignal;         // churn-free: total item count, gated by value at the caller
     readonly Func<int, float, Element> _cell;        // (index, cellWidth) → card or placeholder
     readonly Action<int, int> _ensureRange;          // (firstIndex, lastIndexExclusive) → page the data in
     readonly float _minColW, _gap, _rowExtra;        // rowH = cellWidth + _rowExtra (cover square + text/padding)
@@ -167,8 +172,27 @@ public sealed class LazyGrid : Component
     readonly Func<int, float>? _drawerHeight;        // (index) → the drawer's exact height (so the extent is exact)
 
     readonly Signal<float> _w = new(0f);             // own measured width → column count
-    // Realized overscan can stay unchanged while actual visibility changes (including offscreen/return).
-    readonly Signal<(long Realized, LazyGridVisibleRange Visible)> _win = new((long.MinValue, default));
+    // Two windows, two signals, two readers — deliberately NOT one tuple. The REALIZED window (visible rows + overscan,
+    // packed by PackKey) is what the render subscribes to: it moves only when a row enters or leaves the realized band,
+    // so wheel-speed scrolling inside the band never re-renders the grid. The exact VISIBLE range moves on every row
+    // crossing (≈ every frame at wheel speed) and is read by the onVisibleRangeChanged effect alone. Both writes are
+    // equality-gated (the Signal<T> setter is SetIfChanged), so an unchanged window is silent. The initial value IS the
+    // width-unknown sentinel UpdateWindowKey writes on the mount frame, so that eager first write is silent too (it
+    // used to differ from the seed and cost every grid a second, identical 1px render at mount).
+    readonly Signal<long> _realized = new(long.MinValue + 1);
+    readonly Signal<LazyGridVisibleRange> _visible = new(default);
+    // The scroll/geometry effects hand UpdateWindowKey its offset through this field so the untracked call is one
+    // cached delegate, not a closure per scroll event; the callback effect does the same for the range it publishes.
+    float _windowOffset;
+    LazyGridVisibleRange _publishedVisible;
+    readonly Action _applyWindow;
+    readonly Action _invokeVisibleRangeChanged;
+    // Render scratch. The reconciler retains the previous Element tree (Update/RecordChanged diff old against new), so
+    // every Children ARRAY handed to a BoxEl/GridEl must be fresh — the list is only the builder behind ToArray().
+    // GridEl.Columns is likewise retained by reference (SetGrid stores it in the GridSpec) but never mutated, so one
+    // TrackSize[] per column count is shared by every render until cols changes.
+    List<Element>? _children;
+    TrackSize[]? _tracks;
     NodeHandle _node;                                // captured at realize; for content-space position via the scene
     readonly int _initialIndex;                      // >0 ⇒ on first valid layout, scroll the page so this item is at the top
     bool _didInitialScroll;
@@ -195,14 +219,43 @@ public sealed class LazyGrid : Component
     // intact for callers that legitimately test it (the one-shot initial scroll waits for real geometry).
     static float RealizeWindowH(float viewportH, float rowH) => viewportH > 1e8f ? rowH : viewportH;
 
+    /// <summary>The tracked-count form: <paramref name="count"/> runs inside the grid's render, so the grid re-renders
+    /// whenever anything it reads changes — fine for a count derived from one collection version (the gallery's
+    /// <c>VirtualCollection</c> pages), a re-render-per-publication trap when it reads shared table counters. Prefer the
+    /// <see cref="IReadSignal{T}"/> overload for the latter.</summary>
     public LazyGrid(Func<int> count, Func<int, float, Element> cell, Action<int, int> ensureRange,
                     float minColWidth = 180f, float gap = 12f, float rowExtra = 56f, int overscanRows = 2,
                     Signal<int>? expanded = null, Func<int, GridDrawerInfo, Element>? drawer = null, Func<int, float>? drawerHeight = null,
                     int initialIndex = 0, Action<LazyGridVisibleRange>? onVisibleRangeChanged = null,
                     float expandedTopInset = 28f, float expandedRevealPeek = 144f,
                     ExpandedReveal reveal = ExpandedReveal.Minimal)
+        : this(count, null, cell, ensureRange, minColWidth, gap, rowExtra, overscanRows, expanded, drawer, drawerHeight,
+               initialIndex, onVisibleRangeChanged, expandedTopInset, expandedRevealPeek, reveal)
+    { }
+
+    /// <summary>The churn-free form: the render subscribes to <paramref name="count"/> and nothing else of the caller's.
+    /// The caller gates the count BY VALUE — typically <c>UseComputed(() => { …read the tables…; return total; })</c>
+    /// (a <see cref="Memo{T}"/> re-evaluates on every publication but notifies only when the total moved) or a
+    /// <see cref="Signal{T}"/> written with <c>SetIfChanged</c> — so a publication that leaves the total unchanged never
+    /// reaches the grid. Anything a cell must react to besides the count (a late row landing behind a placeholder) needs
+    /// its own signal path; the grid does not re-render for it.</summary>
+    public LazyGrid(IReadSignal<int> count, Func<int, float, Element> cell, Action<int, int> ensureRange,
+                    float minColWidth = 180f, float gap = 12f, float rowExtra = 56f, int overscanRows = 2,
+                    Signal<int>? expanded = null, Func<int, GridDrawerInfo, Element>? drawer = null, Func<int, float>? drawerHeight = null,
+                    int initialIndex = 0, Action<LazyGridVisibleRange>? onVisibleRangeChanged = null,
+                    float expandedTopInset = 28f, float expandedRevealPeek = 144f,
+                    ExpandedReveal reveal = ExpandedReveal.Minimal)
+        : this(null, count, cell, ensureRange, minColWidth, gap, rowExtra, overscanRows, expanded, drawer, drawerHeight,
+               initialIndex, onVisibleRangeChanged, expandedTopInset, expandedRevealPeek, reveal)
+    { }
+
+    LazyGrid(Func<int>? count, IReadSignal<int>? countSignal, Func<int, float, Element> cell, Action<int, int> ensureRange,
+             float minColWidth, float gap, float rowExtra, int overscanRows,
+             Signal<int>? expanded, Func<int, GridDrawerInfo, Element>? drawer, Func<int, float>? drawerHeight,
+             int initialIndex, Action<LazyGridVisibleRange>? onVisibleRangeChanged,
+             float expandedTopInset, float expandedRevealPeek, ExpandedReveal reveal)
     {
-        _count = count; _cell = cell; _ensureRange = ensureRange;
+        _count = count; _countSignal = countSignal; _cell = cell; _ensureRange = ensureRange;
         _minColW = minColWidth; _gap = gap; _rowExtra = rowExtra; _overscanRows = Math.Max(0, overscanRows);
         _expanded = expanded; _drawer = drawer; _drawerHeight = drawerHeight;
         _initialIndex = Math.Max(0, initialIndex);
@@ -210,21 +263,41 @@ public sealed class LazyGrid : Component
         _expandedTopInset = MathF.Max(0f, expandedTopInset);
         _expandedRevealPeek = MathF.Max(0f, expandedRevealPeek);
         _reveal = reveal;
+        _applyWindow = () => UpdateWindowKey(_windowOffset);
+        _invokeVisibleRangeChanged = () => _visibleRangeChanged?.Invoke(_publishedVisible);
     }
+
+    /// <summary>The total item count as the RENDER reads it (tracked: the signal form subscribes to the one signal, the
+    /// Func form to whatever the caller reads).</summary>
+    int ReadCount() => _countSignal is { } sig ? sig.Value : _count!();
+
+    /// <summary>The total item count outside a render (never subscribes).</summary>
+    int PeekCount() => _countSignal is { } sig ? sig.Peek() : _count!();
 
     public override Element Render()
     {
-        int count = _count();
+        int count = ReadCount();
         float w = _w.Value;
         var scrollSig = UseContext(LazyScroll.Slot);
         float publishedScrollOffset = scrollSig?.Peek() ?? 0f;
-        _ = _win.Value;
+        // Subscribe to the REALIZED window only. The exact visible range is the effect's business below; reading it here
+        // was what re-rendered the grid on every row crossing (and rebuilt the whole realized slice) at wheel speed.
+        _ = _realized.Value;
         int expandedIndex = _expanded?.Value ?? -1;
 
         UseSignalEffect(() =>
         {
-            float off = scrollSig?.Value ?? 0f;
-            Reactive.Untrack(() => UpdateWindowKey(off));
+            _windowOffset = scrollSig?.Value ?? 0f;
+            Reactive.Untrack(_applyWindow);
+        });
+
+        // The visible-range callback follows the _visible signal, not the render: a row crossing inside the realized
+        // band costs one callback and no re-render. The callback runs untracked (as the keyed effect it replaces did),
+        // so whatever the host reads while handling it never subscribes this effect.
+        UseEffect(() =>
+        {
+            _publishedVisible = _visible.Value;
+            Reactive.Untrack(_invokeVisibleRangeChanged);
         });
 
         System.Diagnostics.Debug.Assert(_overscanRows >= 1,
@@ -241,9 +314,6 @@ public sealed class LazyGrid : Component
         float drawerH = expandedIndex >= 0 && _drawerHeight is { } dh ? dh(expandedIndex) : 0f;
         bool hasViewport = viewportH < 1e8f;
         float scrollInSection = scrollOffset - sectionTop;
-        float contentH = widthKnown ? totalRows * rowH + MathF.Max(0f, drawerH) : 1f;
-        bool intersects = widthKnown && (!hasViewport ||
-                          (scrollInSection + viewportH > 0f && scrollInSection < contentH));
 
         // One structural shape at every scroll position. Compute clamps an offscreen grid to its first/last realization
         // window while the exact spacers keep its total extent invariant; there is no alternate "empty spacer" subtree
@@ -255,14 +325,17 @@ public sealed class LazyGrid : Component
             ? LazyGridMath.Compute(scrollInSection, RealizeWindowH(viewportH, rowH), rowH, totalRows,
                                    realizeOverscan, expandedRow, drawerH)
             : new LazyGridMath.View(0, -1, 0f, 0f, false);
-        var visible = hasViewport && intersects
-            ? LazyGridMath.VisibleRange(scrollInSection, viewportH, rowH, count, cols, expandedRow, drawerH)
-            : new LazyGridVisibleRange(0, 0, cols);
-        UseEffect(() =>
+
+        // The windows also move WITHOUT a scroll — a page of data landing (count), the width refitting (cols/rowH), a
+        // drawer opening or resolving its height. Re-derive both keys post-layout when any of those change; the scroll
+        // effect above covers every other move. Equality-gated writes: a window that did not move stays silent, and a
+        // realized key that did (the first real-width layout) re-renders once through the normal path.
+        UseLayoutEffect(() =>
         {
-            _visibleRangeChanged?.Invoke(visible);
-        }, DepKey.From(hasViewport && intersects ? 1 : 0,
-                       visible.FirstIndex, visible.LastIndexExclusive, visible.Columns));
+            _windowOffset = scrollSig?.Peek() ?? 0f;
+            Reactive.Untrack(_applyWindow);
+        }, DepKey.Combine(DepKey.From(count, cols, expandedIndex, BitConverter.SingleToInt32Bits(rowH)),
+                          DepKey.From(drawerH)));
 
         bool hasRows = view.LastRow >= view.FirstRow;
         int ensureFirst = count <= 0 || !hasRows ? 0 : view.FirstRow * cols;
@@ -306,11 +379,14 @@ public sealed class LazyGrid : Component
         return Root(new BoxEl { Direction = 1, Gap = 0f, Children = children.ToArray() });
     }
 
+    /// <summary>Derive both window keys from the live scene geometry at <paramref name="offset"/> and write each signal
+    /// only when its value moved. Always called untracked (the scroll effect and the geometry layout-effect wrap it), so
+    /// neither the count derivation nor the drawer-height callback subscribes anything here.</summary>
     void UpdateWindowKey(float offset)
     {
-        int count = _count();
+        int count = PeekCount();
         float w = _w.Peek();
-        if (w <= 1f) { _win.Value = (long.MinValue + 1, default); return; }
+        if (w <= 1f) { _realized.Value = long.MinValue + 1; _visible.Value = default; return; }
 
         int cols = Math.Max(1, (int)((w + _gap) / (_minColW + _gap)));
         float cellW = MathF.Max(_minColW * 0.5f, (w - (cols - 1) * _gap) / cols);
@@ -330,13 +406,17 @@ public sealed class LazyGrid : Component
         var visible = intersects
             ? LazyGridMath.VisibleRange(scrollInSection, viewportH, rowH, count, cols, expandedRow, drawerH)
             : new LazyGridVisibleRange(0, 0, cols);
-        _win.Value = (PackKey(view), visible);
+        // Two independent equality-gated writes: a row crossing inside the realized band moves _visible alone (one
+        // callback, no re-render); a row entering/leaving the band moves _realized (one re-render).
+        _realized.Value = PackKey(view);
+        _visible.Value = visible;
     }
 
     List<Element> FlatChildren(in LazyGridMath.View view, int cols, float cellW, float rowH, int count,
                                int expandedIndex, int expandedRow, bool animateRefit)
     {
-        var children = new List<Element>(5);
+        var children = _children ??= new List<Element>(5);
+        children.Clear();
         if (view.TopPad > 0.5f) children.Add(new BoxEl { Key = "lazy-top", Height = view.TopPad });
         bool hasRows = view.LastRow >= view.FirstRow;
         if (!view.DrawerVisible && hasRows)
@@ -377,8 +457,16 @@ public sealed class LazyGrid : Component
                 Children = [_cell(idx, cellW)],
             };
         }
-        var tracks = new TrackSize[cols];
-        Array.Fill(tracks, TrackSize.Star());
+        // One 1fr-per-column array per column count, shared by every render (and by the above/below slices of a drawer
+        // render) until cols changes: the scene keeps the reference (GridSpec.Columns) and nobody mutates it, so the
+        // grid-spec diff short-circuits on ReferenceEquals instead of re-comparing tracks.
+        var tracks = _tracks;
+        if (tracks is null || tracks.Length != cols)
+        {
+            tracks = new TrackSize[cols];
+            Array.Fill(tracks, TrackSize.Star());
+            _tracks = tracks;
+        }
         return new GridEl
         {
             Key = isBelow ? "lazy-grid:below" : "lazy-grid",

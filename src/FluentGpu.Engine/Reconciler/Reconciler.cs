@@ -60,6 +60,12 @@ public sealed partial class TreeReconciler
     private sealed class VirtualEntry
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
+        // W2-E3: the viewport's VISIBLE item band [VisibleFirst, VisibleLast) as of the latest RealizeWindow — the
+        // reference every image request from a realized slot classifies against (inside → Visible lane; realized in the
+        // overscan halo, incl. the +1 guard rows → Overscan lane). Written before the realize dispatch so the cold-mount
+        // requests of the same pass already see it; read again at the host's post-realize Flush by the bound ImageEl
+        // effect's later fires (a RebindBoundSlot recycle drains there, outside the pass).
+        public int VisibleFirst, VisibleLast;
         public List<BoundSlot>? Slots;
         // Retained slow-path scratch. Equal-size contiguous scrolls use the in-place rotation fast path; this is touched
         // only for cold grow/shrink or defensive invariant repair and grows only with the viewport high-water mark.
@@ -90,10 +96,121 @@ public sealed partial class TreeReconciler
         // FrameEpoch of the most recent mount-deferral paint. Same-epoch ReRealizeVirtuals must not at-rest-eager the
         // halo (MountVirtual + re-realize in one Paint would otherwise expand immediately and defeat the mount gate).
         public int MountDeferEpoch = -1;
+        // Slot pool at the high-water mark (virtualization.md §6.1a, "slot pool"): bound slots the window no longer
+        // needs are PARKED here instead of removed — detached from the content node (no layout/paint/hit-test),
+        // NodeFlags.Parked (render-effects/animations quiesced), images unpinned — and taken back before rowBind on
+        // the next grow. A parked slot KEEPS its index signal: writing a sentinel would run every channel of every
+        // parked row through the rebind flush (fires, writes, the template's own formatting allocations) for rows
+        // nobody can see, and the same rows are the first to come back on the next flutter/reversal, where an exact
+        // index match makes the take a zero-write re-attach. Slots.Count + Spare.Count never exceeds the widest window
+        // this list has realized.
+        public List<BoundSlot>? Spare;
+        // ItemCount fell below Slots + Spare while the kernel was moving: the trim waits for the next idle pass.
+        public bool PoolTrimOwed;
         // ── extended bound-realize state (research adjustments #5 keep-alive + #16 content-type) — allocated ONLY when
         //    ve.KeepAlive or ve.ContentType is set (the default RealizeBoundWindow leaves both null; byte-identical path).
         // Keep-alive bucket: item index → its parked slot (detached, hidden, quiesced). Bounded + LRU-evicted.
         public Dictionary<int, KeptSlot>? Kept;
+    }
+
+    /// <summary>Park a bound slot the window no longer needs: hover/press/focus hygiene, detach, quiesce, unpin its
+    /// images, push on the entry's spare list. The index signal is left as is (see <see cref="VirtualEntry.Spare"/>);
+    /// the subtree stays mounted so the next grow can take it back with at most one signal write instead of a
+    /// <c>rowBind</c> + <c>Mount</c>. Same mechanics as a keep-alive park with ReleaseInactiveResources.</summary>
+    private void ParkSpareSlot(VirtualEntry entry, in BoundSlot slot)
+    {
+        if (slot.Index is null || !_scene.IsLive(slot.Root)) return;
+        OnSubtreeDeactivated?.Invoke(slot.Root);   // before Detach: the dispatcher's clear walk needs the live parent chain
+        _scene.Unmark(slot.Root, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
+        SetSubtreeResourcesActive(slot.Root, active: false);   // a parked row must not keep a cover resident
+        SetSubtreeParked(slot.Root, parked: true);
+        _scene.Detach(slot.Root);
+        (entry.Spare ??= new List<BoundSlot>(4)).Add(slot);
+    }
+
+    /// <summary>Re-attach spare <paramref name="i"/> under <paramref name="content"/> for item <paramref name="index"/>:
+    /// un-park, re-pin, and write the index signal only when it differs (a slot parked from this very row comes back
+    /// with zero writes — the flutter/reversal case).</summary>
+    private BoundSlot TakeSpareSlotAt(VirtualEntry entry, NodeHandle content, int i, int index)
+    {
+        var spare = entry.Spare!;
+        var slot = spare[i];
+        spare.RemoveAt(i);
+        _scene.AppendChild(content, slot.Root);
+        SetSubtreeResourcesActive(slot.Root, active: true);
+        SetSubtreeParked(slot.Root, parked: false);
+        if (slot.Index.Peek() != index) slot.Index.Value = index;
+        _realizeProgress = true;   // the host's post-realize flush must run either way (re-attached subtree settles)
+        return slot;
+    }
+
+    /// <summary>Take the parked slot still bound to exactly <paramref name="index"/>, if there is one (no signal write).</summary>
+    private bool TryTakeSpareSlotExact(VirtualEntry entry, NodeHandle content, int index, out BoundSlot slot)
+    {
+        var spare = entry.Spare;
+        if (spare is { Count: > 0 })
+            for (int i = spare.Count - 1; i >= 0; i--)
+            {
+                if (spare[i].Index.Peek() != index) continue;
+                if (!_scene.IsLive(spare[i].Root)) { spare.RemoveAt(i); continue; }   // defensive: freed behind our back
+                slot = TakeSpareSlotAt(entry, content, i, index);
+                return true;
+            }
+        slot = default;
+        return false;
+    }
+
+    /// <summary>Take any parked slot for item <paramref name="index"/>. False when the pool is empty (the caller then
+    /// mounts a fresh slot).</summary>
+    private bool TryTakeSpareSlot(VirtualEntry entry, NodeHandle content, int index, out BoundSlot slot)
+    {
+        var spare = entry.Spare;
+        while (spare is { Count: > 0 })
+        {
+            int i = spare.Count - 1;
+            if (!_scene.IsLive(spare[i].Root)) { spare.RemoveAt(i); continue; }
+            slot = TakeSpareSlotAt(entry, content, i, index);
+            return true;
+        }
+        slot = default;
+        return false;
+    }
+
+    /// <summary>Free parked slots beyond <paramref name="keep"/>: the pool trim (ItemCount fell below the pool and the
+    /// kernel is idle) and the unmount release both land here.</summary>
+    private void FreeSpareSlots(VirtualEntry entry, int keep)
+    {
+        var spare = entry.Spare;
+        if (spare is null) return;
+        keep = Math.Max(0, keep);
+        while (spare.Count > keep)
+        {
+            int i = spare.Count - 1;
+            var s = spare[i];
+            spare.RemoveAt(i);
+            if (_scene.IsLive(s.Root) && _scene.Parent(s.Root).IsNull)
+            {
+                UnmountSubtree(s.Root);
+                _scene.FreeSubtree(s.Root);
+            }
+            _reconciled = true;
+        }
+    }
+
+    /// <summary>Probe seam (VerticalSlice gate.virt.slotPool*): parked spare slots of the bound list at <paramref name="viewport"/>.</summary>
+    internal int SpareSlotCount(NodeHandle viewport)
+        => _virtuals.TryGetValue(viewport, out var e) && e.Spare is { } sp ? sp.Count : 0;
+
+    /// <summary>Probe seam: the root node of the <paramref name="i"/>-th parked spare slot.</summary>
+    internal bool TryGetSpareSlotRoot(NodeHandle viewport, int i, out NodeHandle root)
+    {
+        if (_virtuals.TryGetValue(viewport, out var e) && e.Spare is { } sp && (uint)i < (uint)sp.Count)
+        {
+            root = sp[i].Root;
+            return true;
+        }
+        root = NodeHandle.Null;
+        return false;
     }
 
     // A keep-alive-parked bound slot (research adjustment #5): its subtree stays mounted but is detached from the content
@@ -293,6 +410,18 @@ public sealed partial class TreeReconciler
     /// deferral) — the host ORs this into its wake mask so frames keep coming until every window catches up.</summary>
     public bool HasBudgetDeferredVirtuals => _budgetDeferredCount > 0;
     private bool _realizeProgress;   // set by RealizeWindow when the realized window actually changed (drives the 2-pass loops)
+    // ── W2-E3: the realize-pass image-priority context ─────────────────────────────────────────────────────────────
+    // Valid only while RealizeWindow is mounting / updating / rebinding the slots of ONE viewport (saved and restored
+    // around the nested case — a rail realized inside a page row). An image request made under it decides its
+    // DecodeScheduler lane from the slot being realized (ImageRequestPriority): inside the viewport's visible band →
+    // Visible; realized in the overscan halo → Overscan. Outside any realize pass (a page-level cover, a Show/For swap
+    // inside an already-realized row) the context is empty and a request keeps Visible — never a demotion by accident.
+    // Before this every request was Visible, so a fling that realized 30 rows started 30 Visible decodes at once and the
+    // scheduler's Overscan/Prefetch lanes and its backpressure drop arm were dead.
+    private VirtualEntry? _realizeEntry;       // the viewport whose window is being realized
+    private int _realizeSlotIndex = -1;         // the logical item index of the slot being mounted/updated (-1 = unknown)
+    private Signal<int>? _realizeSlotSignal;    // bound path: that slot's index signal (captured by the ImageEl effect)
+    private bool _realizeOuterOverscan;         // an ENCLOSING pass classified our viewport's own row as overscan
     // Probe seams (VerticalSlice gate.virt.*): dirty-queue entries examined / realized, SUMMED across every ReRealizeVirtuals
     // call in a Paint (there are up to three) and reset on the FrameEpoch tick — proves the steady path iterates the
     // scene-owned queue (== the dirty count), never scans the _virtuals dictionary.
@@ -1482,6 +1611,24 @@ public sealed partial class TreeReconciler
             var shimmerRoot = _scene.FirstChild(node);
             if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
         }
+        else if (branch == 2 && lastBranch == 0 && se.Group is { } initialGroup)
+        {
+            // A grouped region may mount directly on its real branch when its data was already warm. It still
+            // registered above, so it MUST report Done or it leaves the group waiting forever for a transition that
+            // will never happen. Keep the initial-ready reveal grouped; ungrouped regions retain their no-animation
+            // mount behavior.
+            Action? reveal = null;
+            if (Anim is { } a0)
+            {
+                var realRoot = _scene.FirstChild(node);
+                reveal = () =>
+                {
+                    if (!realRoot.IsNull && _scene.IsLive(realRoot))
+                        SkeletonReveal.Play(a0, _scene, se.Reveal, realRoot, se.Style);
+                };
+            }
+            SkelGroupCoordinator.Done(initialGroup, idx, reveal);
+        }
         else if (branch == 2 && lastBranch == 1 && Anim is { } a2)
         {
             // Shimmer→real: blur-reveal the freshly-mounted real subtree (grouped regions reveal together).
@@ -1980,15 +2127,113 @@ public sealed partial class TreeReconciler
     // carries (one null test per fire; signal-direct means the CALLER allocated no closure). Wiring stays MOUNT-ONLY:
     // a new thunk/signal supplied on a re-render is ignored (the signals-first contract — change the signal's value,
     // not the bind; locked by bind.mount-only.stale).
-    private void PinImageNode(NodeHandle node, int imageId)
+    /// <summary>Pin <paramref name="imageId"/> for <paramref name="node"/>. <paramref name="priority"/> is the lane the
+    /// request was made at: <c>ImageCache.Pin</c> re-prioritizes a still-Pending entry to it, so an Overscan request
+    /// stays in the Overscan lane through its pin instead of being force-promoted to Visible by the pin itself.</summary>
+    private void PinImageNode(NodeHandle node, int imageId, ImagePriority priority = ImagePriority.Visible)
     {
         if (Images is null || imageId == 0 || !_scene.IsLive(node) || !IsReachableFromRoot(node)) return;
         long pinKey = ((long)(int)node.Raw.Index << 32) | (uint)imageId;
         if (_imagePinnedNodes.Add(pinKey))
         {
-            Images.Pin(new ImageHandle(imageId));
+            Images.Pin(new ImageHandle(imageId), priority);
             TrackImageNode(imageId, node);
         }
+    }
+
+    /// <summary>W2-E3: the DecodeScheduler lane for an image request from <paramref name="node"/>. Inside a realize pass
+    /// (the <c>_realizeEntry</c> block) it is the slot being realized: scalar compares only. Outside one, the row is
+    /// located by walking parents until the parent is a viewport's content node — the shape a realized row takes when it
+    /// RE-RENDERS after its data lands (the cover source going "" → url), which is the common form of the fling defect and
+    /// so cannot be left at Visible. A node under no viewport is Visible.</summary>
+    private ImagePriority ImageRequestPriority(NodeHandle node)
+    {
+        if (_realizeOuterOverscan) return ImagePriority.Overscan;
+        if (_realizeEntry is not null) return ImagePriorityFor(_realizeEntry, _realizeSlotIndex);
+        if (_virtuals.Count == 0) return ImagePriority.Visible;
+        NodeHandle cur = node, parent = _scene.Parent(node);
+        while (!parent.IsNull)
+        {
+            NodeHandle viewport = _scene.Parent(parent);
+            if (!viewport.IsNull && _virtuals.TryGetValue(viewport, out var entry)
+                && _scene.TryGetScroll(viewport, out var sc) && sc.ContentNode == parent)
+                return ImagePriorityFor(entry, SlotIndexOf(entry, parent, cur, sc.FirstRealized));
+            cur = parent; parent = viewport;
+        }
+        return ImagePriority.Visible;
+    }
+
+    private static ImagePriority ImagePriorityFor(VirtualEntry? entry, int index)
+    {
+        if (entry is null || index < 0) return ImagePriority.Visible;
+        return index >= entry.VisibleFirst && index < entry.VisibleLast ? ImagePriority.Visible : ImagePriority.Overscan;
+    }
+
+    /// <summary>The logical item index of slot root <paramref name="root"/> under <paramref name="content"/>: the bound
+    /// slot's index signal, or FirstRealized + child ordinal on the keyed path (logical order is the layout/hit-test
+    /// contract). -1 (⇒ Visible) for a persistent-prefix slot or an unknown root.</summary>
+    private int SlotIndexOf(VirtualEntry entry, NodeHandle content, NodeHandle root, int firstRealized)
+    {
+        if (entry.Slots is { } slots)
+        {
+            var span = CollectionsMarshal.AsSpan(slots);
+            for (int i = 0; i < span.Length; i++)
+                if (span[i].Root == root) return span[i].Index is null ? -1 : span[i].Index.Peek();
+            return -1;
+        }
+        int ordinal = 0;
+        for (var c = _scene.FirstChild(content); !c.IsNull; c = _scene.NextSibling(c), ordinal++)
+            if (c == root) return firstRealized + ordinal;
+        return -1;
+    }
+
+    /// <summary>W2-E3 promotion: rows that were realized in the overscan halo under the PREVIOUS visible band and sit inside
+    /// the NEW one queued their covers in the Overscan lane — move every still-Pending request in their subtrees to the
+    /// Visible lane. <c>DecodeScheduler.Prioritize</c> is raise-only and claim-deduped, and <c>ImageCache.Promote</c> skips
+    /// settled entries, so a repeat is a no-op. Rows mounted or rebound BY this pass already requested at their final lane
+    /// and are excluded by the "was realized before this pass" test. A scalar walk over the slot list (bound) or the content
+    /// child chain (keyed; in logical order once ReconcileWindow returns) — no allocation, phases 6–13 safe.</summary>
+    private void PromoteNewlyVisibleRows(VirtualEntry entry, NodeHandle content, int prevFirst, int prevLast, int oldVisFirst, int oldVisLast)
+    {
+        if (Images is null || prevLast <= prevFirst) return;
+        int newVisFirst = entry.VisibleFirst, newVisLast = entry.VisibleLast;
+        if (newVisLast <= newVisFirst) return;
+        if (entry.Slots is { } slots)
+        {
+            var span = CollectionsMarshal.AsSpan(slots);
+            for (int i = 0; i < span.Length; i++)
+            {
+                if (span[i].Index is null) continue;
+                int idx = span[i].Index.Peek();
+                if (NewlyVisible(idx, prevFirst, prevLast, oldVisFirst, oldVisLast, newVisFirst, newVisLast))
+                    PromoteSlotImages(span[i].Root);
+            }
+        }
+        else
+        {
+            int idx = entry.PrevFirst;
+            for (var c = _scene.FirstChild(content); !c.IsNull; c = _scene.NextSibling(c), idx++)
+                if (NewlyVisible(idx, prevFirst, prevLast, oldVisFirst, oldVisLast, newVisFirst, newVisLast))
+                    PromoteSlotImages(c);
+        }
+
+        static bool NewlyVisible(int idx, int prevFirst, int prevLast, int oldVisFirst, int oldVisLast, int newVisFirst, int newVisLast)
+            => idx >= newVisFirst && idx < newVisLast          // inside the new visible band
+            && idx >= prevFirst && idx < prevLast              // was realized BEFORE this pass (so it requested at Overscan)
+            && !(idx >= oldVisFirst && idx < oldVisLast);      // and was not already visible (already Visible-lane)
+    }
+
+    private void PromoteSlotImages(NodeHandle n)
+    {
+        if (n.IsNull || !_scene.IsLive(n)) return;
+        ref NodePaint paint = ref _scene.Paint(n);
+        if (paint.VisualKind == VisualKind.Image)
+        {
+            if (paint.ImageId != 0) Images!.Promote(new ImageHandle(paint.ImageId), ImagePriority.Visible);
+            if (_pendingImageId.TryGetValue((int)n.Raw.Index, out int held) && held != 0)   // a hold-last-good target still decoding
+                Images!.Promote(new ImageHandle(held), ImagePriority.Visible);
+        }
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) PromoteSlotImages(c);
     }
 
     private void UnpinImageNode(NodeHandle node, int imageId)
@@ -2014,7 +2259,9 @@ public sealed partial class TreeReconciler
     // (a mount), a resident rendition of the same source stands in the same way. A synchronous cache hit and an instant
     // failure commit at once. Never a placeholder frame over decoded content: Flutter's Image.gaplessPlayback, plus the
     // dissolve.
-    private void SwapImageId(NodeHandle node, ref NodePaint paint, int newId)
+    // `priority` is the lane `newId` was requested at (W2-E3); it rides along to the pins of `newId` only — a stand-in's
+    // pin is a Ready entry, where the lane is moot.
+    private void SwapImageId(NodeHandle node, ref NodePaint paint, int newId, ImagePriority priority = ImagePriority.Visible)
     {
         int idx = (int)node.Raw.Index;
         int oldId = paint.ImageId;
@@ -2038,7 +2285,7 @@ public sealed partial class TreeReconciler
         {
             if (pending != 0) UnpinImageNode(node, pending);   // superseded hold target
             _pendingImageId[idx] = newId;
-            PinImageNode(node, newId);   // pins + tracks — MarkImageDirty reaches this node when `newId` settles
+            PinImageNode(node, newId, priority);   // pins + tracks — MarkImageDirty reaches this node when `newId` settles
             _scene.Mark(node, NodeFlags.PaintDirty);
             if (Diag.CompiledIn && Diag.Enabled && Images is not null && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
                 Diag.Event("img", $"hold node={node.Raw.Index} old={oldId} new={newId} " +
@@ -2060,7 +2307,7 @@ public sealed partial class TreeReconciler
             paint.ImageId = standIn.Id;
             PinImageNode(node, standIn.Id);
             _pendingImageId[idx] = newId;
-            PinImageNode(node, newId);
+            PinImageNode(node, newId, priority);
             _scene.Mark(node, NodeFlags.PaintDirty);
             if (Diag.CompiledIn && Diag.Enabled && Images is not null && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
                 Diag.Event("img", $"standin node={node.Raw.Index} old={oldId} drawn={standIn.Id} new={newId} " +
@@ -2080,7 +2327,7 @@ public sealed partial class TreeReconciler
         FinishImageSwap(node);
         UnpinImageNode(node, oldId);
         paint.ImageId = newId;
-        if (newId != 0) PinImageNode(node, newId);
+        if (newId != 0) PinImageNode(node, newId, priority);
         _scene.Mark(node, NodeFlags.PaintDirty);
         if (Diag.CompiledIn && Diag.Enabled && Images is not null && newId != 0
             && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
@@ -2492,18 +2739,27 @@ public sealed partial class TreeReconciler
             {
                 var sbind = ime.Source.Thunk; var ssig = ime.Source.Signal;
                 (int dW, int dH) = ImageDecodeTarget(in ime);   // extent props don't bind, so the target is stable
+                // W2-E3: the slot this ImageEl belongs to, captured at bind time (both null outside a bound realize
+                // pass). The first fire (runNow, inside the cold mount) sees the live realize context; every later fire
+                // — a RebindBoundSlot recycle draining at the host's post-realize Flush — classifies the slot's CURRENT
+                // index against the viewport's latest visible band. Two extra captured locals on a closure that already
+                // exists once per bound node; nothing further allocates on a rebind.
+                var slotEntry = _realizeEntry; var slotSig = _realizeSlotSignal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     string src = sbind is not null ? sbind() : ssig!.Value;
+                    ImagePriority prio = slotSig is not null && !ReferenceEquals(_realizeEntry, slotEntry)
+                        ? ImagePriorityFor(slotEntry, slotSig.Peek())
+                        : ImageRequestPriority(node);
                     int newId = Images is not null && src.Length > 0
-                        ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.RevealTransition).Id : 0;
+                        ? Images.Request(src, dW, dH, prio, ime.BlurHash, ime.RevealTransition).Id : 0;
                     NodeBindingWriteCount++;
                     ref var paint = ref _scene.Paint(node);
                     int oldDerived = _scene.TryGetImageEffects(node, out var oldEffects) ? oldEffects.DerivedImageId : 0;
                     int newDerived = RequestBakedImage(in ime, newId, dW, dH);
-                    SwapImageId(node, ref paint, newId);
+                    SwapImageId(node, ref paint, newId, prio);
                     if (newDerived != oldDerived)
                     {
                         UnpinImageNode(node, oldDerived);
@@ -2889,8 +3145,17 @@ public sealed partial class TreeReconciler
 
         // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row
         // pool while scrolling/flinging. At rest (and prop-eager) ClipRealizeBudget is skipped — full desired window.
-        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, entry, ve.RowBind is not null, mandFirst, mandLast, avgExtent, ref first, ref last);
-        bool stayDirty = budgetDeficit || mountDefer;
+        // Slot pool (bound lists): the pool is every slot this list owns, attached or parked. Under motion the clip may
+        // keep already-realized receding rows to fill it (no slot is ever parked-then-remounted mid-fling); a pool
+        // wider than ItemCount is trimmed on the next idle pass (PoolTrimOwed keeps the list dirty until then).
+        bool boundList = ve.RowBind is not null;
+        int poolCapacity = boundList ? (entry.Slots?.Count ?? 0) + (entry.Spare?.Count ?? 0) : 0;
+        bool poolOversize = boundList && count < poolCapacity;
+        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, entry, boundList, mandFirst, mandLast, avgExtent, count,
+                                                                  boundList && !kernelIdle ? poolCapacity : 0,
+                                                                  ref first, ref last);
+        entry.PoolTrimOwed = poolOversize && !kernelIdle;
+        bool stayDirty = budgetDeficit || mountDefer || entry.PoolTrimOwed;
         // ── the cold-realize ramp, half one: the WINDOW must not start below the visible band while ramping ──────────
         // A partially-realized bound window is published as the contiguous PREFIX [first, first+mat) — that is what
         // makes layout, hit-testing and SlotRootForIndex agree about a short window. So while the ramp is growing that
@@ -2905,6 +3170,18 @@ public sealed partial class TreeReconciler
         int w = last - first;
         int visibleSlots = Math.Clamp(visibleLast - first, 0, w);
 
+        // ── W2-E3: publish this pass's visible band and push the image-priority context ──────────────────────────────
+        // The band is stored BEFORE the dispatch so the cold-mount requests of this very pass classify against it; the
+        // previous band is kept for the post-dispatch promotion of rows the visible edge moved over. The context is a
+        // stack: a rail realized inside a page row (Mount → MountVirtual → RealizeWindow) pushes its own viewport and
+        // inherits "everything inside is overscan" when the enclosing pass put the row itself in the halo.
+        int oldVisFirst = entry.VisibleFirst, oldVisLast = entry.VisibleLast;
+        entry.VisibleFirst = visibleFirst; entry.VisibleLast = visibleLast;
+        var outerEntry = _realizeEntry; int outerSlot = _realizeSlotIndex; var outerSig = _realizeSlotSignal; bool outerOverscan = _realizeOuterOverscan;
+        _realizeOuterOverscan = outerOverscan || (outerEntry is not null && ImagePriorityFor(outerEntry, outerSlot) == ImagePriority.Overscan);
+        _realizeEntry = entry; _realizeSlotIndex = -1; _realizeSlotSignal = null;
+        try
+        {
         if (ve.RowBind is not null)
         {
             // P3 (virtualization.md §5.5): every bound realize pass — a recycled slot's RebindBoundSlot rewrite AND a
@@ -2925,6 +3202,10 @@ public sealed partial class TreeReconciler
                 RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty, atRest);
             else
                 RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty, atRest);
+            // Pool trim: only at kernel rest, only when ItemCount can no longer use the whole pool. Park/take conserve
+            // the pool size, so the pre-dispatch census still holds here; the pool ends at exactly ItemCount slots.
+            if (poolOversize && kernelIdle)
+                FreeSpareSlots(entry, keep: count - (entry.Slots?.Count ?? 0));
         }
         else
         {
@@ -2942,7 +3223,7 @@ public sealed partial class TreeReconciler
             }
 
             ReconcileWindow(content, cur.AsSpan(0, w),
-                entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen), first - prevFirst);
+                entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen), first - prevFirst, first);
 
             if (entry.Prev is not null) { Array.Clear(entry.Prev, 0, entry.PrevLen); ArrayPool<Element>.Shared.Return(entry.Prev); }
             entry.Prev = cur; entry.PrevLen = w; entry.PrevFirst = first;
@@ -2953,6 +3234,15 @@ public sealed partial class TreeReconciler
             else _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
 
             FireWindowLifecycle(ve, oldFirst, oldLast, first, last);   // E11: Prepared/Clearing/VisibleRange (cold realize edge)
+        }
+
+        // W2-E3: rows that were realized in the halo under the OLD visible band and now sit inside the NEW one carry
+        // Overscan-lane decodes — move those to the Visible lane (a no-op for anything already settled or Visible).
+        PromoteNewlyVisibleRows(entry, content, prevFirstR, prevLastR, oldVisFirst, oldVisLast);
+        }
+        finally
+        {
+            _realizeEntry = outerEntry; _realizeSlotIndex = outerSlot; _realizeSlotSignal = outerSig; _realizeOuterOverscan = outerOverscan;
         }
 
         // Progress = the realized window of this viewport actually changed (drives the AppHost 2-pass loops; a purely
@@ -2975,14 +3265,22 @@ public sealed partial class TreeReconciler
     /// ceiling − floor)</c>, with <paramref name="avgExtent"/> the caller's <c>ContentExtent / ItemCount</c>. Without
     /// it the halo drains under a sustained fling (the mandatory band grows with velocity, a flat refill does not) and
     /// every row entering the band becomes a cold realize. This scales the refill RATE only: the desired window
-    /// <c>[first,last)</c> handed in is E5's velocity-INDEPENDENT fixed-sum window and is never widened here.</para></summary>
-    private bool ClipRealizeBudget(in ScrollState sc, VirtualEntry entry, bool bound, int mandFirst, int mandLast, float avgExtent, ref int first, ref int last)
+    /// <c>[first,last)</c> handed in is E5's velocity-INDEPENDENT fixed-sum window and is never widened here.</para>
+    /// <para>Receding-side retention (slot pool): with <paramref name="retainCapacity"/> &gt; 0 (a bound list under live
+    /// motion) the clipped window is padded back into the PREVIOUSLY realized range — receding side first — until it
+    /// holds <paramref name="retainCapacity"/> rows (the list's slot pool). Those rows are already realized, so keeping
+    /// them costs nothing, while dropping them would park their slots only to refill the same slots on the leading side
+    /// a few frames later. The pad never adds a row that was not realized before, never exceeds the pool, and never
+    /// changes the returned "owed" verdict. At rest (0) the clip shrinks to the desired window as before.</para></summary>
+    private bool ClipRealizeBudget(in ScrollState sc, VirtualEntry entry, bool bound, int mandFirst, int mandLast, float avgExtent,
+                                   int count, int retainCapacity, ref int first, ref int last)
     {
         int df = first, dl = last;   // desired directional-overscan window (already ⊇ mandatory)
         // "Have" = rows already realized this scroll episode, clamped into [desired, mandatory] — so the mandatory band
         // reads as already-covered and stale rows outside the desired window are dropped.
         int haveFirst = mandFirst, haveLast = mandLast;
-        if (sc.LastRealized > sc.FirstRealized)
+        bool hadRealized = sc.LastRealized > sc.FirstRealized;
+        if (hadRealized)
         {
             haveFirst = Math.Clamp(sc.FirstRealized, df, mandFirst);
             haveLast = Math.Clamp(sc.LastRealized, mandLast, dl);
@@ -3013,8 +3311,26 @@ public sealed partial class TreeReconciler
             int t2 = Math.Min(highWant, budget); newLast = haveLast + t2; budget -= t2;
         }
         _frameRealizeBudgetUsed += (haveFirst - newFirst) + (newLast - haveLast);
+        bool owed = newFirst > df || newLast < dl;   // desired not fully reached ⇒ overscan owed
+        if (retainCapacity > 0 && hadRealized && newLast - newFirst < retainCapacity)
+        {
+            // Old realized range, normalized to the current count (a shrink can leave it stale — see the caller).
+            int oldLo = Math.Clamp(sc.FirstRealized, 0, count), oldHi = Math.Clamp(sc.LastRealized, 0, count);
+            int pad = retainCapacity - (newLast - newFirst);
+            int lowKeep = Math.Max(0, newFirst - oldLo), highKeep = Math.Max(0, oldHi - newLast);
+            if (forward)
+            {
+                int t = Math.Min(pad, lowKeep); newFirst -= t; pad -= t;
+                int t2 = Math.Min(pad, highKeep); newLast += t2;
+            }
+            else
+            {
+                int t = Math.Min(pad, highKeep); newLast += t; pad -= t;
+                int t2 = Math.Min(pad, lowKeep); newFirst -= t2;
+            }
+        }
         first = newFirst; last = newLast;
-        return newFirst > df || newLast < dl;   // desired not fully reached ⇒ overscan owed
+        return owed;
     }
 
     /// <summary>E11 lifecycle: Clearing for indices that left [oldFirst,oldLast), Prepared for indices that entered
@@ -3224,6 +3540,12 @@ public sealed partial class TreeReconciler
                     used[j] = true;
                     break;
                 }
+                // A slot parked from this very row (the window flutter / reversal case) returns with zero writes.
+                if (scratch[ord].Index is null && TryTakeSpareSlotExact(entry, content, idx, out var back))
+                {
+                    scratch[ord] = back;
+                    structural = true;
+                }
             }
 
             for (int ord = 0; ord < desiredCount; ord++)
@@ -3241,6 +3563,12 @@ public sealed partial class TreeReconciler
                     RebindBoundSlot(ref recycled, idx, ve);
                     scratch[ord] = recycled;
                 }
+                else if (TryTakeSpareSlot(entry, content, idx, out var taken))
+                {
+                    // A parked slot from an earlier shrink: re-attached and rebound, no rowBind, no Mount.
+                    scratch[ord] = taken;
+                    structural = true;
+                }
                 else
                 {
                     // The first grow's row-by-row node charge (see chargePerRow above): stop EXTENDING the window once
@@ -3257,7 +3585,9 @@ public sealed partial class TreeReconciler
                     Element el = rowBind(sig);
                     var child = _scene.CreateNode(el.ElementTypeId);
                     _scene.AppendChild(content, child);
+                    _realizeSlotIndex = idx; _realizeSlotSignal = sig;   // W2-E3: the cold mount's image requests classify by this slot
                     Mount(child, el);
+                    _realizeSlotIndex = -1; _realizeSlotSignal = null;
                     scratch[ord] = new BoundSlot(sig, el, child);
                     structural = true;
                     growRows++;
@@ -3265,10 +3595,12 @@ public sealed partial class TreeReconciler
             }
             if (chargePerRow && desiredCount < w && !entry.Warming) { entry.Warming = true; _warmingCount++; }
 
+            // Surplus slots are parked, not removed: the pool stays at its high-water mark so the next grow (a direction
+            // reversal, the budget catching up, a viewport growing back) is a signal write instead of a cold mount.
             for (int j = 0; j < slots.Count; j++)
                 if (!used[j] && _scene.IsLive(slots[j].Root))
                 {
-                    Remove(slots[j].Root);
+                    ParkSpareSlot(entry, slots[j]);
                     structural = true;
                 }
 
@@ -3553,7 +3885,9 @@ public sealed partial class TreeReconciler
             Element nel = rowBind(nsig);
             var child = _scene.CreateNode(nel.ElementTypeId);
             _scene.AppendChild(content, child);
+            _realizeSlotIndex = item; _realizeSlotSignal = nsig;   // W2-E3: the cold mount's image requests classify by this slot
             Mount(child, nel);
+            _realizeSlotIndex = -1; _realizeSlotSignal = null;
             newSlots[ord] = new BoundSlot(nsig, nel, child, dtype);
             structural = true;
             growRows++;
@@ -3689,25 +4023,27 @@ public sealed partial class TreeReconciler
     /// Non-recyclable subtrees (components, Show/For, providers, scrollers, reactive binds — identity fixed at mount)
     /// fall back to mount+remove. <paramref name="shift"/> = newFirst − prevFirst (the overlap slot mapping).
     /// </summary>
-    private void ReconcileWindow(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids, int shift)
+    private void ReconcileWindow(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids, int shift, int firstIndex)
     {
         int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
         if (oldN <= StackScratchMax && newN <= StackScratchMax)
         {
-            ReconcileWindowCore(node, newKids, oldKids, shift,
+            ReconcileWindowCore(node, newKids, oldKids, shift, firstIndex,
                 stackalloc NodeHandle[oldN], stackalloc bool[oldN], stackalloc NodeHandle[newN]);
             return;
         }
 
         var scratch = ChildScratch.Rent(oldN, newN);
-        try { ReconcileWindowCore(node, newKids, oldKids, shift, scratch.Old, scratch.Used, scratch.New); }
+        try { ReconcileWindowCore(node, newKids, oldKids, shift, firstIndex, scratch.Old, scratch.Used, scratch.New); }
         finally { scratch.Return(); }
     }
 
+    // `firstIndex` = the logical item index of newKids[0] (W2-E3): every Update/Mount below runs with _realizeSlotIndex
+    // = firstIndex + i so an ImageEl written for slot i requests at the lane its position in the viewport warrants.
     private void ReconcileWindowCore(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids,
-                                     int shift, Span<NodeHandle> oldNodes, Span<bool> used, Span<NodeHandle> newNodes)
+                                     int shift, int firstIndex, Span<NodeHandle> oldNodes, Span<bool> used, Span<NodeHandle> newNodes)
     {
         int oldN = oldKids.Length, newN = newKids.Length;
         {
@@ -3740,7 +4076,9 @@ public sealed partial class TreeReconciler
                 // document order are unchanged).
                 newNodes[i] = oldNodes[os];
                 used[os] = true;
+                _realizeSlotIndex = firstIndex + i;
                 Update(oldNodes[os], nk, ok);
+                _realizeSlotIndex = -1;
             }
             else newNodes[i] = NodeHandle.Null;
         }
@@ -3765,7 +4103,9 @@ public sealed partial class TreeReconciler
                 used[match] = true;
                 newNodes[i] = oldNodes[match];
                 AssertRecycleShapeStable(oldKids[match], nk);   // [Conditional("DEBUG")] — catches a PartDelta/factory that varied SHAPE per item
+                _realizeSlotIndex = firstIndex + i;
                 Update(oldNodes[match], nk, oldKids[match]);
+                _realizeSlotIndex = -1;
                 // The node now shows a DIFFERENT item: transient interaction state must not travel with it (the old
                 // code freed the node, which dropped this state implicitly).
                 _scene.Unmark(oldNodes[match], NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
@@ -3778,7 +4118,9 @@ public sealed partial class TreeReconciler
                 // unparented anchor would silently miss every provider (and never subscribe). The ordering pass
                 // below detaches/re-appends all children anyway.
                 _scene.AppendChild(node, child);
+                _realizeSlotIndex = firstIndex + i;
                 Mount(child, nk);
+                _realizeSlotIndex = -1;
                 newNodes[i] = child;
                 structural = true;
             }
@@ -4200,6 +4542,7 @@ public sealed partial class TreeReconciler
         {
             if (v.Warming) _warmingCount--;   // a bound list unmounted mid-warm → keep the warming census exact
             if (v.RealizeDeferred) _budgetDeferredCount--;   // …and the budget-deferred census exact (E4)
+            FreeSpareSlots(v, keep: 0);   // parked spares are detached, so the list's FreeSubtree cannot reach them
             if (v.Prev is not null)
             {
                 Array.Clear(v.Prev, 0, v.PrevLen);
@@ -4654,6 +4997,10 @@ public sealed partial class TreeReconciler
         // compiled to POD ScrollBind rows for every element type, replacing the old per-feature StickyTop/ScrollStretchHeader passes.
         BakeScrollBinds(node, el);
 
+        // Wheel routing (Element.WheelTarget): a header names the scroller its wheel input glides — every element type,
+        // the node-keyed sparse row InputDispatcher.RouteWheelTarget reads off the hit chain (null clears it).
+        _scene.SetWheelTarget(node, el.WheelTarget);
+
         // Stagger (declarative): a parent records its per-child entrance delay; each child's SynthesizeDeclarative reads
         // it + the child's sibling index to delay that child's Enter (a staggered list/shelf reveal). Reconciler-local;
         // cleared when Stagger drops to 0. Set for every element type (any container can stagger its children).
@@ -4965,6 +5312,11 @@ public sealed partial class TreeReconciler
                 if (b.BlocksDragArm) ii.HandlerMask |= InteractionInfo.BlocksDragArmBit;
                 else ii.HandlerMask &= ~InteractionInfo.BlocksDragArmBit;
 
+                // BoxEl.HoverScopeTransparent: a pointer listener the hover cascade / mount seed look through (the
+                // ToolTip wrapper). Discriminator only — same toggle-both-ways rule.
+                if (b.HoverScopeTransparent) ii.HandlerMask |= InteractionInfo.HoverScopeTransparentBit;
+                else ii.HandlerMask &= ~InteractionInfo.HoverScopeTransparentBit;
+
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= ~(uint)InteractionInfo.KeyBit; _scene.SetKeyHandler(node, null); }
 
@@ -5112,7 +5464,8 @@ public sealed partial class TreeReconciler
                 // A lazy hover affordance can mount AFTER its card/row received the pointer-enter edge (media-card play
                 // FABs are the canonical case). Seed it from the NEAREST interactive ancestor's live scope; stopping at
                 // that ancestor is load-bearing, otherwise a hovered list/pane would light newly mounted reveals in every
-                // sibling row. Existing nodes keep their own eased progress untouched.
+                // sibling row. A HoverScopeTransparent ancestor (the ToolTip wrapper) is not a scope: the walk skips it
+                // and reads the card behind it. Existing nodes keep their own eased progress untouched.
                 //
                 // Runs HERE, not next to the InteractionAnim writes above, because the rule is the CASCADE's rule
                 // (AnimScheduler.Hover.cs): a REVEAL follows the container it mounted into, a nested interactive control
@@ -5156,6 +5509,7 @@ public sealed partial class TreeReconciler
                 ref ScrollState ss = ref _scene.ScrollRef(node);
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
+                ss.LineDip = s.ScrollLineDip > 0f ? s.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
                 // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).
                 ss.Zoomable = s.Zoomable;
@@ -5203,6 +5557,7 @@ public sealed partial class TreeReconciler
                 sc.ItemCount = Math.Max(0, v.ItemCount);
                 sc.Layout = v.ItemLayout;
                 sc.Overscan = v.Overscan;
+                sc.LineDip = v.ScrollLineDip > 0f ? v.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 sc.PersistentPrefixCount = v.RowBind is null ? 0 : Math.Clamp(v.PersistentPrefixCount, 0, sc.ItemCount);
                 sc.ItemClipTopInset = v.RowBind is null || !float.IsFinite(v.ItemClipTopInset)
                     ? float.NaN
@@ -5350,9 +5705,12 @@ public sealed partial class TreeReconciler
 
                 if (!im.Source.IsBound)   // bound rows request via the binding (the effect owns pin/unpin)
                 {
+                    // W2-E3: the lane comes from the row's position in its viewport — Visible inside the visible band,
+                    // Overscan in the halo; Visible for a node under no viewport (see ImageRequestPriority).
+                    ImagePriority prio = ImageRequestPriority(node);
                     int newId = (Images is not null && im.Source.Value.Length > 0)
-                        ? Images.Request(im.Source.Value, decodeW, decodeH, ImagePriority.Visible, im.BlurHash, im.RevealTransition).Id : 0;
-                    SwapImageId(node, ref paint, newId);
+                        ? Images.Request(im.Source.Value, decodeW, decodeH, prio, im.BlurHash, im.RevealTransition).Id : 0;
+                    SwapImageId(node, ref paint, newId, prio);
                 }
 
                 int oldDerived = _scene.TryGetImageEffects(node, out var oldEffects) ? oldEffects.DerivedImageId : 0;
@@ -5536,7 +5894,9 @@ public sealed partial class TreeReconciler
         const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
         for (var parent = _scene.Parent(node); !parent.IsNull && _scene.IsLive(parent); parent = _scene.Parent(parent))
         {
-            if ((_scene.Interaction(parent).HandlerMask & interactive) == 0) continue;
+            uint mask = _scene.Interaction(parent).HandlerMask;
+            // Non-interactive ancestors and transparent listeners (the ToolTip wrapper) are not scopes: keep walking.
+            if ((mask & interactive) == 0 || (mask & InteractionInfo.HoverScopeTransparentBit) != 0) continue;
             return (_scene.Flags(parent) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0;
         }
         return false;

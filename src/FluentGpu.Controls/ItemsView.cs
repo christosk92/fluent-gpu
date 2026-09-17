@@ -14,12 +14,13 @@ namespace FluentGpu.Controls;
 /// ItemsView.idl:46-58 — CurrentItemIndex, StartBringItemIntoView, and the selection API via <see cref="Selection"/>).
 /// Pass one to <c>ItemsView.Create</c>; the component wires it at mount.
 /// </summary>
-public sealed class ItemsViewController
+public sealed class ItemsViewController : IWheelTarget
 {
     internal Action<int, float, bool>? BringIntoViewImpl;
     internal Func<int>? GetCurrent;
     internal TryGetItemIndexDelegate? TryGetItemIndexImpl;
     internal Action<float>? ScrollByImpl;
+    internal Action<float>? WheelNotchImpl;
     internal Action<float>? SetAutoScrollVelocityImpl;
     internal CorrectMeasuredExtentDelegate? CorrectMeasuredExtentImpl;
     internal Func<int, bool>? IsItemRealizedImpl;
@@ -103,6 +104,12 @@ public sealed class ItemsViewController
     /// <see cref="SetAutoScrollVelocity"/> instead — a one-shot instant shift is the wrong primitive for a continuous
     /// drag hold (see ItemsViewPresets' E5-L3 wiring).</summary>
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
+
+    /// <summary>Wheel notches routed from ANOTHER element (<c>Element.WheelTarget</c> — a header laid out above this
+    /// list): the viewport posts the kernel's <c>WheelNotch</c> with <c>PerNotchDip(viewport, LineDip)</c> per notch,
+    /// so the list glides exactly as a device notch over its rows would (<see cref="IWheelTarget.WheelNotch"/>). Never
+    /// immediate (unlike <see cref="ScrollBy"/>); a no-op before mount and for a non-virtual host.</summary>
+    public void WheelNotch(float notches) => WheelNotchImpl?.Invoke(notches);
 
     /// <summary>Scroll ANCHORING (CSS <c>overflow-anchor</c>): after a structural change ABOVE the first visible row —
     /// rows inserted or removed ahead of it — shift the offset by <paramref name="delta"/> so that row keeps its screen
@@ -1217,6 +1224,23 @@ public sealed class ItemsView : Component
             Context.RequestRerender();
         }
 
+        // Element.WheelTarget seam, both controller flavours (ItemsViewController.WheelNotch and
+        // IScrollController.WheelNotchRequested): the same post ScrollInputRouter.WheelAxis makes for a device notch
+        // over the rows — WheelNotch(PerNotchDip(viewport, LineDip) × notches), the kernel's Driven|Wheel chase, never
+        // an immediate displacement. Orientation follows the viewport (a horizontal shelf's header works too).
+        void PostWheelNotch(float notches)
+        {
+            if (sceneRef is null || notches == 0f) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
+            ref ScrollState sc = ref sceneRef.ScrollRef(vp);
+            float viewport = sc.Orientation == 1 ? sc.ViewportW : sc.ViewportH;
+            float dip = ScrollFeel.Shipping.PerNotchDip(viewport, sc.LineDip) * notches;
+            sceneRef.ScrollPort!.Post(ScrollInput.WheelNotch((int)vp.Raw.Index,
+                FluentGpu.Scroll.ScrollController.WheelSampleSec(), dip));
+            (Context.RequestFrame ?? Context.RequestRerender)();
+        }
+
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
         {
             if ((uint)next >= (uint)count || !ItemEnabled(next)) return;   // disabled = not focusable (cpp:203/:321)
@@ -1456,6 +1480,7 @@ public sealed class ItemsView : Component
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
+            ctl.WheelNotchImpl = PostWheelNotch;
             ctl.SetAutoScrollVelocityImpl = SetAutoScrollVelocity;
             ctl.CorrectMeasuredExtentImpl = CorrectMeasuredExtent;
             ctl.IsItemRealizedImpl = index =>
@@ -1494,10 +1519,12 @@ public sealed class ItemsView : Component
             if (controller is null || horizontal) return null;
             controller.ScrollToRequested += ControllerScrollTo;
             controller.ScrollByRequested += ControllerScrollBy;
+            controller.WheelNotchRequested += PostWheelNotch;
             return () =>
             {
                 controller.ScrollToRequested -= ControllerScrollTo;
                 controller.ScrollByRequested -= ControllerScrollBy;
+                controller.WheelNotchRequested -= PostWheelNotch;
                 controller.SetIsScrollable(false);
             };
         }, DepKey.FromRef(VerticalScrollController));
@@ -1512,6 +1539,7 @@ public sealed class ItemsView : Component
                 ctl.TryGetItemIndexImpl = null;
                 ctl.GetCurrent = null;
                 ctl.ScrollByImpl = null;
+                ctl.WheelNotchImpl = null;
                 ctl.SetAutoScrollVelocityImpl = null;
                 ctl.CorrectMeasuredExtentImpl = null;
                 ctl.IsItemRealizedImpl = null;
@@ -1812,6 +1840,15 @@ public sealed class ItemsView : Component
             realizeTemplate = i => { var e = rt(i); return e is BoxEl b ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
         }
 
+        // Wheel line-height hint (ScrollState.LineDip, S6): a fixed main-axis pitch is one Windows "line" — a stack
+        // row's extent, a grid row's height plus its gap; measured/custom layouts carry no hint (viewport rule).
+        float lineDip = spec.Kind switch
+        {
+            RepeatKind.Stack when spec.Extent > 0f => spec.Extent,
+            RepeatKind.Grid when spec.Extent > 0f => spec.Extent + spec.Gap,
+            _ => 0f,
+        };
+
         Element itemsHost = rowBind is not null && layout is not null
             // Bound slots: the RowBind path (RealizeBoundWindow) — persistent rows, recycle by index-signal write.
             ? new VirtualListEl
@@ -1833,6 +1870,7 @@ public sealed class ItemsView : Component
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
                 Controller = ScrollHandle,
+                ScrollLineDip = lineDip,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = geometryObserver,
@@ -1857,6 +1895,7 @@ public sealed class ItemsView : Component
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
                 Controller = ScrollHandle,
+                ScrollLineDip = lineDip,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = geometryObserver,

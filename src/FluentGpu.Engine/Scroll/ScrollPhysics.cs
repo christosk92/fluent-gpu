@@ -143,6 +143,170 @@ public static class ScrollPhysics
         vel = e * (vel - j1 * y * dtSec);
     }
 
+    /// <summary>Plan the <see cref="ChaseStep"/> a wheel notch drives — the S1 wheel plan (validated by the D=83/D=120
+    /// simulation sweep behind <c>fix-everything-make-a-nested-willow.md §S1</c>). <see cref="ChaseStep"/> stays the
+    /// integrator; this only decides <paramref name="target"/>, the seed/kick <paramref name="vel"/>, and the plan's
+    /// <paramref name="halflifeMs"/>, and books the cadence state (<paramref name="sinceS"/> = seconds since the last
+    /// notch, <paramref name="gapS"/> = the observed cadence, 0 = no cadence plan armed).
+    /// <list type="bullet">
+    /// <item>Cold notch (<paramref name="live"/> false — no wheel glide in flight): <c>vel = κ·R·yBase</c> with
+    /// κ = <see cref="ScrollFeel.WheelSeedFraction"/>, so the first frame is already ~40 % of a no-hump chase instead of
+    /// the <c>t·e^{−yt}</c> ease-in a zero-velocity ζ=1 chase produces (the old <c>Velocity = 0</c> reset). A same-direction
+    /// <paramref name="carryVel"/> (a Ballistic fling, a Programmatic glide) is carried instead, capped at
+    /// <c>0.95·|R|·yBase</c> — the exact no-overshoot bound of the ζ=1 solution (<c>v ≤ |R|·y</c> keeps
+    /// <c>j1 = v − |R|·y ≤ 0</c>, so the position never crosses the target).</item>
+    /// <item>Live notch, gap ≤ <see cref="ScrollFeel.WheelGapMaxS"/> (a stream — Chromium's velocity-continuous
+    /// retarget): the target accumulates, <c>hl = clamp(ρ·gap, WheelHalflifeMs, WheelSlowHalflifeMs)</c> so a steady
+    /// cadence gives a steady velocity (Firefox's cadence regime), a kick <c>vel ≥ min(WheelCadenceKick·|Δ|/gap,
+    /// 0.95·|R|·y)</c> so the second click never dips to 2 px, then <c>y ≥ min(|vel|/|R|, yBase)</c> so the plan is never
+    /// softer than the no-hump match (velocity never rises-then-falls inside one gap).</item>
+    /// <item>Live notch, gap &gt; WheelGapMaxS: independent clicks — stay at <see cref="ScrollFeel.WheelHalflifeMs"/>,
+    /// kick up to the cold seed, no cadence plan.</item>
+    /// <item>Reversal (<c>Δ·vel &lt; 0</c> or <c>Δ·R &lt; 0</c>): rebase <c>target = off + Δ</c> (drop the unconsumed
+    /// lag), keep the velocity — the ζ=1 chase brakes through zero in one frame and moves back on the second.</item>
+    /// </list>
+    /// Zero allocation, no branches on anything but POD; NaN-safe (the <c>|R| &lt; 1e-3</c> guard is what keeps a notch
+    /// clamped onto the current offset from producing 0/0).</summary>
+    public static void WheelPlanNotch(ref float target, ref float vel, ref float halflifeMs, ref float sinceS, ref float gapS,
+        float off, float delta, float maxOff, bool live, float carryVel, in ScrollFeel f)
+    {
+        float yBase = 1.3862944f / (f.WheelHalflifeMs * 0.001f);
+        if (!live)
+        {
+            target = Math.Clamp(off + delta, 0f, maxOff);
+            float r = target - off;
+            float seed = MathF.Abs(f.WheelSeedFraction * r * yBase);
+            float carry = carryVel * r > 0f ? MathF.Min(MathF.Abs(carryVel), 0.95f * MathF.Abs(r) * yBase) : 0f;
+            vel = r == 0f ? 0f : MathF.CopySign(MathF.Max(seed, carry), r);
+            halflifeMs = f.WheelHalflifeMs; sinceS = 0f; gapS = 0f;
+            return;
+        }
+        float g = sinceS; sinceS = 0f;
+        float rOld = target - off;
+        if (delta * vel < 0f || delta * rOld < 0f)            // reversal: drop the unconsumed lag, brake through zero
+        { target = Math.Clamp(off + delta, 0f, maxOff); halflifeMs = f.WheelHalflifeMs; gapS = 0f; return; }
+        target = Math.Clamp(target + delta, 0f, maxOff);
+        float R = target - off, aR = MathF.Abs(R);
+        if (aR < 1e-3f) { halflifeMs = f.WheelHalflifeMs; gapS = 0f; return; }   // 0/0 → NaN guard, mandatory
+        if (g > f.WheelGapMaxS)                                // slow cadence: independent clicks, stay stiff
+        {
+            halflifeMs = f.WheelHalflifeMs; gapS = 0f;
+            float want = f.WheelSeedFraction * aR * yBase;
+            if (MathF.Abs(vel) < want) vel = MathF.CopySign(want, R);
+            return;
+        }
+        g = MathF.Max(g, f.WheelGapMinS); gapS = g;
+        float hl = Math.Clamp(f.WheelHalflifePerGap * g * 1000f, f.WheelHalflifeMs, f.WheelSlowHalflifeMs);
+        float y = 1.3862944f / (hl * 0.001f);
+        float kick = MathF.Min(f.WheelCadenceKick * MathF.Abs(delta) / g, 0.95f * aR * y);
+        if (MathF.Abs(vel) < kick) vel = MathF.CopySign(kick, R);
+        y = MathF.Max(y, MathF.Min(MathF.Abs(vel) / aR, yBase));   // never softer than the no-hump match
+        halflifeMs = 1386.2944f / y;
+    }
+
+    /// <summary>One wheel-glide time step — <see cref="ChaseStep"/> under the plan <see cref="WheelPlanNotch"/> armed,
+    /// plus the three landing rules that remove the sub-pixel creep tail without touching the content transform
+    /// (<c>§S4</c>): returns true when the body has landed exactly on <paramref name="target"/>.
+    /// <list type="bullet">
+    /// <item>Tail stiffening: once <paramref name="sinceS"/> exceeds <c>gap·(1+WheelGapSlackFrac) + WheelGapSlackS</c>
+    /// with no new notch, the stream is over and the half-life drops to <see cref="ScrollFeel.WheelTailHalflifeMs"/>.
+    /// The step is split at the exact switch instant (two <see cref="ChaseStep"/>s), so the trajectory stays
+    /// dt-exact — a 60 Hz and a 120 Hz lattice agree to well under a DIP.</item>
+    /// <item>Displacement floor: while heading for the target before AND after the step (never through it), the
+    /// step is at least <c>WheelFloorDipPerS·dt</c> — 160 DIP/s is exactly 2 device px per 120 Hz frame at scale 1.5, so
+    /// the tail reads 3 3 2 2 2 2 (+≤1.5 px landing) instead of 1 1 1 0 1 0 1: zero frames that change the offset
+    /// without moving a whole device pixel, which is what forced a crisp re-snap of every glyph run each frame.</item>
+    /// <item>Distance-only snap: <c>|R| &lt; WheelSnapEpsDip</c> lands exactly on the target and zeroes the
+    /// velocity — the settle predicate is distance, never a velocity floor the exponential creeps under.</item>
+    /// </list>
+    /// The step never travels past the target. Zero allocation; the caller (<c>ScrollBody.Advance</c>) still applies the
+    /// hard-stop clamp at the extents.</summary>
+    public static bool WheelStep(ref float off, ref float vel, ref float halflifeMs, ref float sinceS, ref float gapS,
+        float target, float dtSec, in ScrollFeel f)
+    {
+        float r0 = target - off;
+        if (MathF.Abs(r0) < f.WheelSnapEpsDip) { off = target; vel = 0f; gapS = 0f; return true; }
+        float since0 = sinceS; sinceS += dtSec;
+        float tSwitch = -1f;
+        if (gapS > 0f && halflifeMs > f.WheelTailHalflifeMs)
+        {
+            float tExpect = gapS * (1f + f.WheelGapSlackFrac) + f.WheelGapSlackS;
+            if (sinceS > tExpect) tSwitch = MathF.Max(0f, tExpect - since0);
+        }
+        float o = off, v = vel, v0 = vel, rest = dtSec;
+        if (tSwitch > 0f) { ChaseStep(ref o, ref v, target, halflifeMs, tSwitch); rest -= tSwitch; }
+        if (tSwitch >= 0f) { halflifeMs = f.WheelTailHalflifeMs; gapS = 0f; }
+        ChaseStep(ref o, ref v, target, halflifeMs, rest);
+        float d = o - off;
+        if (v0 * r0 >= 0f && v * r0 >= 0f)                     // heading for the target before AND after: floor applies
+        {
+            float floor = f.WheelFloorDipPerS * dtSec;
+            if (MathF.Abs(d) < floor) { d = MathF.CopySign(floor, r0); v = MathF.CopySign(f.WheelFloorDipPerS, r0); }
+        }
+        if (MathF.Abs(d) > MathF.Abs(r0)) d = r0;               // never past the target
+        off += d; vel = v;
+        if (MathF.Abs(target - off) < f.WheelSnapEpsDip) { off = target; vel = 0f; gapS = 0f; return true; }
+        return false;
+    }
+
+    /// <summary>Distance a programmatic landing snaps from when the step has already shrunk under
+    /// <see cref="ProgrammaticStepSnapDip"/>: the tail is within a few DIP and would otherwise creep in.</summary>
+    public const float ProgrammaticNearDip = 4f;
+    /// <summary>A programmatic step under this (DIP) with the target within <see cref="ProgrammaticNearDip"/> lands.</summary>
+    public const float ProgrammaticStepSnapDip = 0.75f;
+
+    /// <summary>One programmatic-glide (ζ=1 <see cref="ChaseStep"/>) time step with the wheel plan's landing rules:
+    /// a displacement floor of <see cref="ScrollFeel.WheelFloorDipPerS"/>·dt while heading for the target, a distance-only
+    /// snap at <see cref="ScrollFeel.WheelSnapEpsDip"/>, plus a step-size snap (a step under
+    /// <see cref="ProgrammaticStepSnapDip"/> with the target within <see cref="ProgrammaticNearDip"/> lands). Never
+    /// travels past the target. Returns true when the body landed exactly on <paramref name="target"/>. The velocity
+    /// floor the old settle predicate used (<c>|off−target| &lt; 0.5 &amp;&amp; |vel| &lt; settleVel</c>) let a
+    /// restore/ScrollTo glide creep 0.1–0.5 DIP a frame for 15–24 frames; the settle is distance now.</summary>
+    public static bool ProgrammaticStep(ref float off, ref float vel, float target, float halflifeMs, float dtSec, in ScrollFeel f)
+    {
+        float r0 = target - off;
+        if (MathF.Abs(r0) < f.WheelSnapEpsDip) { off = target; vel = 0f; return true; }
+        float o = off, v = vel, v0 = vel;
+        ChaseStep(ref o, ref v, target, halflifeMs, dtSec);
+        float d = o - off;
+        if (v0 * r0 >= 0f && v * r0 >= 0f)
+        {
+            float floor = f.WheelFloorDipPerS * dtSec;
+            if (MathF.Abs(d) < floor) { d = MathF.CopySign(floor, r0); v = MathF.CopySign(f.WheelFloorDipPerS, r0); }
+        }
+        if (MathF.Abs(d) > MathF.Abs(r0)) d = r0;
+        if (MathF.Abs(d) < ProgrammaticStepSnapDip && MathF.Abs(r0) <= ProgrammaticNearDip) d = r0;
+        off += d; vel = v;
+        if (MathF.Abs(target - off) < f.WheelSnapEpsDip) { off = target; vel = 0f; return true; }
+        return false;
+    }
+
+    /// <summary>Remaining distance at/under which <see cref="LandingStep"/> lands outright (float noise, not a snap).</summary>
+    public const float LandingEpsDip = 0.001f;
+    /// <summary>Slack (in steps) when counting the landing's remaining steps: a remainder of 1.009 steps is one step,
+    /// not a full step followed by a 0.009 crumb.</summary>
+    public const float LandingStepSlack = 0.01f;
+
+    /// <summary>One step of a fling's landing: the remaining distance to <paramref name="target"/> is split into
+    /// <c>ceil(|r|/(speed·dt) − slack)</c> EQUAL steps, so every step is at most <paramref name="speedDipPerS"/>·dt
+    /// (within 1 %), never smaller than about half of it, and the last one lands exactly. This is what lets a coast
+    /// handed off at <see cref="ScrollFeel.FlingLandVel"/> finish in a bounded number of frames WITHOUT speeding up:
+    /// <see cref="ProgrammaticStep"/>'s ζ=1 chase accelerates toward a target closer than <c>v/y</c>, and its 1 DIP
+    /// distance snap and 0.75-within-4 step snap would drop a 1–4 DIP step into a 0.5 DIP/frame tail. Velocity is
+    /// reported as the step speed (continuous with the hand-off), 0 at rest. Returns true when landed.</summary>
+    public static bool LandingStep(ref float off, ref float vel, float target, float speedDipPerS, float dtSec)
+    {
+        float r0 = target - off;
+        float stepMax = speedDipPerS * dtSec;
+        if (stepMax <= 0f || MathF.Abs(r0) <= LandingEpsDip) { off = target; vel = 0f; return true; }
+        int n = Math.Max(1, (int)MathF.Ceiling(MathF.Abs(r0) / stepMax - LandingStepSlack));
+        float d = r0 / n;
+        off += d;
+        vel = d / dtSec;
+        if (n == 1 || MathF.Abs(target - off) <= LandingEpsDip) { off = target; vel = 0f; return true; }
+        return false;
+    }
+
     /// <summary>Underdamped (ζ&lt;1) chase to <paramref name="target"/> — the per-viewport programmatic override
     /// (e.g. <c>LyricsView</c>'s bespoke ζ/ω follow-glide). Exact per-tick closed form, velocity-continuous across
     /// retargets.</summary>
@@ -311,7 +475,7 @@ public static class ScrollPhysics
                 if (denom > 1e-9)
                 {
                     double slope = num / denom;
-                    double tEval = Math.Clamp(tStar, oldestUsed, t1);
+                    double tEval = Math.Clamp(tStar, Math.Min(oldestUsed, t1), Math.Max(oldestUsed, t1));   // order-safe: never throw out of Tick
                     return (float)(xm + slope * (tEval - tm));
                 }
             }
@@ -342,6 +506,63 @@ public static class ScrollPhysics
         return x1; // no extrapolation past the newest sample
     }
 
+    /// <summary>Resample a PRECISE-STREAM history (a FrameDelta drag's cumulative packet positions, oldest first) to
+    /// <paramref name="tStar"/>. Differs from <see cref="ResampleContact"/> in two ways the packet stream needs: it never
+    /// back-projects before the oldest sample (that packet's travel is already on screen — a back-projection would move
+    /// the content backwards on the second frame of a gesture), and past the newest sample it extrapolates along the
+    /// last segment's velocity for at most <paramref name="extrapolateMaxS"/> (a late packet keeps moving the content
+    /// instead of showing a zero frame followed by a double). With one sample it returns that sample verbatim (the
+    /// latch frame applies its travel at once — no dead zone).</summary>
+    public static float ResamplePaced(ReadOnlySpan<double> t, ReadOnlySpan<float> x, int count, double tStar, double extrapolateMaxS)
+    {
+        if (count <= 0) return 0f;
+        if (count == 1) return x[0];
+        double t1 = t[count - 1];
+        if (tStar <= t[0]) return x[0];
+        if (tStar <= t1)
+        {
+            // Piecewise-linear between the two samples that bracket tStar: bounded by their values, so no stamping
+            // pattern (a burst of sub-ms packets, a frame stamp next to an idle-pump stamp) can make it invent
+            // travel. A least-squares line through ill-conditioned stamps can, and did: 8 DIP packets became
+            // 180–980 DIP frames in the 2026-09-17 traces.
+            for (int i = count - 1; i >= 1; i--)
+            {
+                double ta = t[i - 1], tb = t[i];
+                if (tStar < ta) continue;
+                double span = tb - ta;
+                if (span < ResampleMinDeltaS) return x[i];
+                return x[i - 1] + (x[i] - x[i - 1]) * (float)((tStar - ta) / span);
+            }
+            return x[count - 1];
+        }
+        double over = Math.Min(tStar - t1, extrapolateMaxS);
+        if (over <= 0.0) return x[count - 1];
+        return x[count - 1] + PacedVelocity(t, x, count) * (float)over;
+    }
+
+    /// <summary>The precise stream's velocity for extrapolating past its newest sample: the slope over the WHOLE
+    /// retained history (mean packet travel over mean packet interval), 0 when that history spans less than
+    /// <see cref="PacedVelocityMinSpanS"/>. The last segment alone is not usable — two packets stamped 0.2 ms apart
+    /// read as 40 000 DIP/s and the bounded extrapolation multiplied that by up to 34 ms.</summary>
+    public static float PacedVelocity(ReadOnlySpan<double> t, ReadOnlySpan<float> x, int count)
+    {
+        if (count < 2) return 0f;
+        double span = t[count - 1] - t[0];
+        if (span < PacedVelocityMinSpanS) return 0f;
+        return (float)((x[count - 1] - x[0]) / span);
+    }
+    public const double PacedVelocityMinSpanS = 0.004;
+
+    /// <summary>The paced resample's target instant lags the frame clock by this: 1.25× the observed mean packet
+    /// interval plus 1 ms of jitter margin, clamped to [<see cref="PacedLatencyMinS"/>, <see cref="PacedLatencyMaxS"/>].
+    /// With the latency tied to the packet cadence, a 60 Hz packet stream drawn at 120 Hz frames resamples strictly
+    /// inside its history (interpolation — exact for constant velocity), so packets landing just after a frame never
+    /// show as a zero frame followed by a double.</summary>
+    public static double PacedLatencyS(double meanIntervalS)
+        => Math.Clamp(1.25 * meanIntervalS + 0.001, PacedLatencyMinS, PacedLatencyMaxS);
+    public const double PacedLatencyMinS = 0.004;
+    public const double PacedLatencyMaxS = 0.034;
+
     // ── Android IMPULSE release-velocity estimator (InputDispatcher.cs:289-403) ─────────────────────────────────
 
     /// <summary>Android IMPULSE velocity estimator, ported scalar (one axis — the kernel keeps one estimator per
@@ -354,6 +575,7 @@ public static class ScrollPhysics
         private const float HorizonMs = 40f;         // the single IMPULSE window (= the trailing window)
         private const float AssumeStoppedMs = 40f;    // newest-sample→lift gap beyond this ⇒ release velocity 0
         private const float MaxVelocityPxPerS = 8000f; // Android max-fling clamp
+        private const double MinSegmentS = 0.002;      // shortest sample pair a velocity is read from (see Compute)
 
         private struct Pt { public float X; public double T; }
         [System.Runtime.CompilerServices.InlineArray(Cap)]
@@ -418,7 +640,10 @@ public static class ScrollPhysics
                 if ((tLift - s.T) * 1000.0 > HorizonMs + 0.001) { prev = s; hasPrev = true; continue; }
                 if (!hasPrev) { prev = s; hasPrev = true; continue; }
                 double dt = s.T - prev.T;
-                if (dt <= 0.0) { prev = s; continue; }
+                // A segment shorter than MinSegmentS is folded into the next one (prev stays): a producer that stamps
+                // two packets 0.2 ms apart is not reporting a 40 000 DIP/s finger, and √(2W) would carry that straight
+                // into the release velocity (the 65.8 DIP/frame FlingMax coasts of 2026-09-17).
+                if (dt < MinSegmentS) continue;
                 double v = (s.X - prev.X) / dt;
                 if (first) { w += 0.5 * v * Math.Abs(v); first = false; }
                 else { w += (v - vPrev) * Math.Abs(v); }

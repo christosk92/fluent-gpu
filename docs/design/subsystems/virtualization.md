@@ -585,6 +585,35 @@ would otherwise cause, **subordinate to one hard safety invariant**:
   hidden parked state of `KeepAlive`. Its live-node budget is exactly ordinary window + N; zero preserves the original
   recycler path byte-for-byte.
 
+- **Slot pool at the high-water mark + receding-side retention (as-built 2026-09-17).** The bound recycler
+  (`RealizeBoundWindow`) never removes a surplus slot. When the desired window is narrower than the slot list, the
+  unmatched slots are **parked** on the viewport's spare list: detached from the content node (out of layout, paint,
+  hit-test and focus traversal — the same mechanics as the keep-alive park above), `NodeFlags.Parked` (render-effects
+  and animations quiesced, `UseIsActive()` false), hover/press/focus flags cleared and the dispatcher's focus dropped
+  if it was inside, images unpinned (`SetSubtreeResourcesActive(false)`, as a keep-alive park with
+  `ReleaseInactiveResources`). The index signal is **kept**, not rewritten: a sentinel rebind would run every channel
+  of every parked row through the rebind flush for rows nobody can see (fires, writes, the template's own formatting
+  allocations), and the rows a shrink parks are the first ones the next flutter or reversal wants back. So a parked
+  slot behaves like a keep-alive slot — its channels re-evaluate only if ITS item changes upstream, writing columns on
+  a detached node (bounded by the pool size; no paint, no image pin). A grow takes from the spare list before it ever
+  calls `rowBind` + `Mount`: a spare still bound to the entering index is reserved first (re-attach, zero writes);
+  otherwise a leaving slot is recycled, then any spare (one index-signal write), then a fresh mount. **Bound:** `Slots + Spare` never exceeds the widest window the
+  viewport has realized — the E5 fixed sum `visible + 2 guard + 2·Overscan` (± the one-row alignment flutter of a
+  `ceil`-based layout window), so the worst case is that many parked subtrees per list, live for the list's lifetime.
+  **Release:** on the list's unmount (spares are detached, so they are freed explicitly), and when `ItemCount` falls
+  below `Slots + Spare` — trimmed to exactly `ItemCount` slots on the next realize pass at kernel rest (`Activity ==
+  Idle`, no user scroll, velocity under the fling guard); a shrink under motion keeps the viewport `VirtualRangeDirty`
+  until that idle pass. The retention half lives in the E4 clip: while the kernel is moving, `ClipRealizeBudget` pads
+  the budget-clipped window back into the previously realized range — receding side first — up to the pool size, so a
+  budget-starved frame, a deceleration or a direction reversal recycles slots across the halo instead of shrinking the
+  window and cold-mounting the same rows a few frames later; at rest the clip shrinks to the desired window as before.
+  The pad never adds an unrealized row, never exceeds the pool and never changes the "overscan owed" verdict, so the
+  visible-exemption invariant and the E4/E4b refill-rate contract are untouched. Scope: the default bound path and its
+  persistent-prefix wrapper; the extended keep-alive/content-type recycler keeps its own park/rebuild rules. Gates:
+  `gate.virt.slotPoolGrowShrinkGrow`, `gate.virt.slotPoolParkedInvisibleUnfocusable`,
+  `gate.virt.slotPoolTrimsOnIdleCountShrink`, `gate.virt.slotPoolReversalNoColdMounts`,
+  `gate.virt.slotPoolFlingAllocCeiling` (`ScrollSuite.SlotPoolChecks`).
+
 ### 6.2 Variable-height path — `MeasureItems=true`, anchoring
 
 Forced whenever `ItemExtent==0` **or** `GroupHeaderTypeId != 0` (headers are variable — image-bearing Liked

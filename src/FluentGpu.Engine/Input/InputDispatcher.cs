@@ -1127,6 +1127,10 @@ public sealed class InputDispatcher
                     // Scroll v3 (plan §3.4): ScrollInputRouter.Wheel does the device-crossover cancel (a live
                     // phase-driven gesture yields to a physical wheel), the same-axis resolution for both axes, and
                     // posts WheelNotch — no more CancelGesture()/ScrollAt() here.
+                    // Header → list routing (Element.WheelTarget): the nearest hit-chain element naming a wheel target
+                    // takes the notch as a glide on THAT scroller, so the router's ancestor walk (which would find the
+                    // header's own page scroller, or nothing) never runs for it.
+                    if (RouteWheelTarget(in e)) { handled++; break; }
                     if (Scroll is not null && Scroll.Wheel(in e)) handled++;
                     break;
 
@@ -2800,6 +2804,33 @@ public sealed class InputDispatcher
                 }
                 return true;
             }
+        }
+        return false;
+    }
+
+    /// <summary><c>Element.WheelTarget</c> routing: walk the hit chain leaf→root for the nearest node naming a wheel
+    /// target (SceneStore's sparse WheelTarget rows — the same node-keyed side-table pattern as HitTestPassThrough /
+    /// BlocksBackgroundScroll, written by the reconciler from the element), stopping at the first scrollable ancestor:
+    /// a notch over a list's OWN rows belongs to <see cref="ScrollInputRouter"/>'s same-axis / at-edge resolution, never
+    /// to a header target further up. The notch is the event's signed device notch (vertical first, then horizontal);
+    /// a Wheel event carrying only delta units (hi-res / synthetic) is taken as fractional notches. The target posts the
+    /// kernel's WheelNotch itself (<see cref="FluentGpu.Scroll.IWheelTarget.WheelNotch"/>). No allocation per event;
+    /// the common no-header scene exits on one int read.</summary>
+    private bool RouteWheelTarget(in InputEvent e)
+    {
+        if (_scene.WheelTargetCount == 0) return false;
+        // Notch-carrying events only: a DIP-only synthetic Wheel event ("scrolls that DIP directly", InputEvent doc)
+        // keeps its router contract and is never re-read as notches over a header.
+        float notches = e.WheelNotch != 0f ? e.WheelNotch : e.WheelNotchX;
+        if (notches == 0f) return false;
+        for (var n = HitTestAny(e.PositionPx); !n.IsNull; n = _scene.Parent(n))
+        {
+            var flags = _scene.Flags(n);
+            if ((flags & NodeFlags.Scrollable) != 0) return false;
+            if ((flags & NodeFlags.Disabled) != 0) continue;
+            if (!_scene.TryGetWheelTarget(n, out var target)) continue;
+            target.WheelNotch(notches);
+            return true;
         }
         return false;
     }

@@ -108,6 +108,24 @@ public sealed class HostTimerQueue
         for (int i = (_count >> 1) - 1; i >= 0; i--) SiftDown(i);
     }
 
+    /// <summary>Remove all queued entries owned by a timer callback. Generation invalidation prevents stale entries
+    /// from firing, but without eager removal they still wake the host at their old deadlines.</summary>
+    public void Cancel(Action<long> callback)
+    {
+        if (_count == 0 || callback is null) return;
+        int w = 0;
+        for (int r = 0; r < _count; r++)
+        {
+            if (ReferenceEquals(_heap[r].Callback, callback)) { _heap[r] = default; continue; }
+            if (w != r) _heap[w] = _heap[r];
+            w++;
+        }
+        if (w == _count) return;
+        for (int i = w; i < _count; i++) _heap[i] = default;
+        _count = w;
+        for (int i = (_count >> 1) - 1; i >= 0; i--) SiftDown(i);
+    }
+
     /// <summary>Fire every timer due at the current clock, earliest first. Zero-alloc: callbacks are mount-allocated and
     /// generation-guarded; a callback may re-<see cref="Schedule"/> itself (an interval tick / a debounce re-arm) — those
     /// fresh entries are deferred to the NEXT drain (they carry a sequence past this drain's snapshot), so a sub-frame
