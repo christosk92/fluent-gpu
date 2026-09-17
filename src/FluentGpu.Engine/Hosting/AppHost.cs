@@ -397,9 +397,6 @@ public sealed class AppHost : IDisposable
     private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
     private readonly SpanTable _spanTable = new();
-    // Last image-content epoch included in a submitted frame. It does not invalidate retained spans; it only defeats
-    // byte-hash submit elision for the one frame where a same-handle texture (for example a baked-blur upgrade) changed.
-    private int _recordedImageContentEpoch;
     private bool _imageCrossfadeWasActive;
     // Render-thread seam (Cut A, submit-only; docs/plans/render-thread-seam-landing-plan.md · design/subsystems/threading-render-seam.md).
     // STEP 1 — single-thread pass-through: the UI records into _drawList, copies it into a render-readable arena, then
@@ -490,6 +487,42 @@ public sealed class AppHost : IDisposable
         _images.AdvancePresentationClock(nowMs);
     }
 
+    /// <summary>E1 (design-engine-images.md): describe every currently-revealing image as its owning node(s)' repaint
+    /// rect instead of the caller forcing a full frame for <c>HasActiveCrossfades</c>. Returns false — leaving
+    /// <paramref name="repaint"/> untouched beyond whatever it already had — the moment the crossfade set cannot be
+    /// fully described: <see cref="ImageCache.RevealingOverflow"/> (more than 128 concurrent reveals), a node under a
+    /// scaled/rotated ancestor (<see cref="TreeReconciler.AddImageNodeRepaint"/> returns -1), or a live image inside the
+    /// detached-fly slab (<c>FG_DETACHED_FLY</c>) — those nodes are snapshot rows, not scene nodes, so they are never in
+    /// <c>_imageNodes</c> and would otherwise silently go undescribed. The caller then keeps its named
+    /// <see cref="RepaintFullReason.DetachedContent"/> surrender for this frame.</summary>
+    private bool AddCrossfadeRepaint(ref RepaintDamageRegion repaint)
+    {
+        if (_images.RevealingOverflow) return false;
+        if (DetachedSlabHasLiveImages()) return false;
+        foreach (int id in _images.RevealingIds)
+        {
+            if (_reconciler.AddImageNodeRepaint(id, ref repaint) < 0) return false;
+        }
+        return true;
+    }
+
+    /// <summary>True when the detached-fly slab (<see cref="ConnectedAnimation.Detached"/>, <c>FG_DETACHED_FLY</c>)
+    /// currently holds a live snapshot carrying an image. Those rows are not scene nodes — <c>Reconciler._imageNodes</c>
+    /// never sees them — so a crossfade landing on one of them cannot be described as a per-node rect; the caller keeps
+    /// its named full for the frame instead. The slab holds only the handful of nodes presently exiting/flying
+    /// (typically 0-3), so this scan is O(live count), not O(capacity).</summary>
+    private bool DetachedSlabHasLiveImages()
+    {
+        var detached = _connected.Detached;
+        if (!detached.HasActive) return false;
+        for (int i = 0; i < detached.NodeCount; i++)
+        {
+            ref readonly var node = ref detached.At(i);
+            if (node.InUse && node.ImageId != 0) return true;
+        }
+        return false;
+    }
+
     private bool HasRenderMotion()
     {
         if (HasOwnRenderMotion()) return true;
@@ -569,6 +602,8 @@ public sealed class AppHost : IDisposable
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
+    // M5 (adreno-hang-fixes.md): hysteresis/cooldown/grace for _images.EvictToVramPressure — see VramShedPolicy.cs.
+    private VramShedPolicy _vramShed;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
@@ -1087,6 +1122,11 @@ public sealed class AppHost : IDisposable
                 {
                     Interlocked.Increment(ref _framesSkippedSubmit);
                     DrainVideoForPresentTurn(in rf);   // owed regardless — see its remarks
+                    // E5: this turn elides the record AND the submit, so it will never reach the staging pass above
+                    // again for a while — fence-only maintenance (retire-backlog release) still owes forward progress,
+                    // or an image evicted under VRAM pressure sits un-released for as long as the clock keeps re-
+                    // entering here. No command list, no present — just releases resources whose retire fence completed.
+                    _device.ReclaimCompletedUploads();
                     return;
                 }
                 // Publications the consumer never adopted. A DIAGNOSTIC now, on both sides: the store keeps its
@@ -1120,11 +1160,13 @@ public sealed class AppHost : IDisposable
                 // A clock-driven re-record USED to force full here, on the grounds that no scene bit described it.
                 // Since §13.1's pose split that is no longer true: a pose stamps the posed node's own overlay-self
                 // epoch, so the recorder's damage block describes exactly the nodes whose pixels moved, and forcing
-                // full here threw that description away on every animation turn. What is still undescribed is an image
-                // CROSSFADE: its pixels advance with ImageClockMs under byte-identical commands and no dirty bit
-                // anywhere, so that one case keeps its full frame.
-                else if (!fresh && sceneFrame.Images.HasCrossfades(imageClockMs))
-                    repaint.ForceFull(RepaintFullReason.DetachedContent);
+                // full here threw that description away on every animation turn. The remaining undescribed case — an
+                // image CROSSFADE, whose pixels advance with ImageClockMs under byte-identical commands and no dirty
+                // bit anywhere — is no longer a render-thread ForceFull either (design-engine-images.md E1): the HOST
+                // already unioned its own per-node crossfade rects into `rf.Submit.RepaintDamage` before publish
+                // (`AddCrossfadeRepaint`), and that region rides in via the `repaint.Union` above on EVERY re-record of
+                // the same publication — so this arm would only ever repeat a full the host already downgraded to
+                // partial. Kept as a comment, not a case: deleting it silently would read as an oversight.
                 ulong dlHash = DrawListHash(_renderCommands.Bytes, _renderCommands.SortKeys);
                 // Skip-submit (idle/slow-change power): a byte-identical stream with an EMPTY repaint region and no
                 // clock-driven work is ALREADY on screen — the presented front buffer is still correct, so elide the
@@ -1150,6 +1192,10 @@ public sealed class AppHost : IDisposable
                     _renderSubmissionContinuity.Elided(rf.PublishSeq);
                     presented = false;
                     Interlocked.Increment(ref _framesSkippedSubmit);
+                    // E5: this turn skips the submit (no command list, no present) but the staging pass at the top of
+                    // this method may still have queued retires this frame — a settle frame that never submits again
+                    // must not leave them stuck behind a fence the device already signaled.
+                    _device.ReclaimCompletedUploads();
                 }
                 else
                 {
@@ -2452,6 +2498,9 @@ public sealed class AppHost : IDisposable
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (!_anim.RenderOwnsCompositor && _scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
         if (_images.HasReadyCompletions) r |= WakeReasons.ImageReady;
+        // E5 (design-engine-images.md): HasPendingUploads is an unsubmitted UPLOAD/activation, not a retire backlog —
+        // a queued retire is fence-only maintenance (ReclaimCompletedUploads), never a reason to keep the loop awake on
+        // its own, since it clears itself the next time ANY frame (even a skipped/elided one) reaches the device.
         if (_device.HasPendingUploads) r |= WakeReasons.ImagesPending;
         if (_device.TextRepaintPending) r |= WakeReasons.TextRepaintPending;
         if (_bakedBlurQueue.HasJobs) r |= WakeReasons.BakedBlurPending;
@@ -3339,6 +3388,12 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) db = Probe(SegImages, db, dt);
             if (completed == 0)
             {
+                // E5 (design-engine-images.md): this IS the dominant elided turn for a real (non-headless-test) idle
+                // app — no reconcile, no layout, no Paint at all, so SubmitPresentOnRenderThread's own reclaim points
+                // never run either. A retired image sitting behind an already-signaled fence must not wait for the
+                // NEXT active frame (which may be seconds away at rest) to be released. Async gate off only — under
+                // Async/ForceSync the render thread owns every device touch and reclaims on its own turns instead.
+                if (!_asyncActive) _device.ReclaimCompletedUploads();
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsParked); _wakeDiag.MaybeReport(); }
                 if (_memCensus is not null) _memCensus.MaybeReport();
@@ -4035,12 +4090,24 @@ public sealed class AppHost : IDisposable
                 }
             }
             if (_frameTime is not StopwatchFrameTimeSource) _images.Tick(dtMs); // fixed/manual headless time stays deterministic
+            // E1 (design-engine-images.md): every id whose CONTENT changed this pump (LQIP→full, baked-blur replace,
+            // a fresh decode landing) marks its owning node(s) paint-dirty, so the recorder's §13.1 block describes the
+            // landing as a per-node band instead of the host having to force a full frame for it. Idempotent for ids an
+            // ImageStatusChanged event already reached this frame (Mark is itself idempotent) — this sweep only catches
+            // the sites that advance ContentEpoch with no status event (RestartDecode/RestartDerived/blur upgrade).
+            // The OR'd return feeds `imageContentChanged` below: an id with no owning node (prefetch-only) cannot have
+            // changed any SUBMITTED draw-list bytes, so it must not defeat the skip-submit hash shortcut by itself.
+            bool anyImageNodeDirtied = false;
+            foreach (int id in _images.ContentChangedIds) anyImageNodeDirtied |= _reconciler.MarkImageDirty(id);
             // M5 (adreno-hang-fixes.md): VRAM-pressure eviction, Weak/UMA only. Once per frame, after the apply/tick
-            // maintenance, read the device LOCAL-segment usage and evict unpinned LRU when over 90% of budget so the
-            // tracked live set stays under the 128 MB UMA budget the UBWC hang is amplified by. Discrete GPUs never
-            // read VRAM here (short-circuits on IsWeak); TryGetVramUsage default-returns false so no per-frame alloc.
-            if (FluentGpu.Foundation.GpuProfile.IsWeak && _device.TryGetVramUsage(out long __vu, out long __vb) && __vb > 0 && __vu > __vb * 0.90)
-                _images.EvictToVramPressure(__vb, __vu);
+            // maintenance, read the device LOCAL-segment usage and evict unpinned LRU when the shed policy says so —
+            // armed above 90% of budget, disarmed below 80%, and re-fired only on a genuinely NEW sample after its
+            // cooldown (VramShedPolicy.cs): the device only refreshes its usage sample every 10 presents, so reacting
+            // on every frame re-shed the same stale overage for up to 10 frames straight, evicting entries a scroll
+            // immediately re-requested. Discrete GPUs never read VRAM here (short-circuits on IsWeak); TryGetVramUsage
+            // default-returns false so no per-frame alloc.
+            if (FluentGpu.Foundation.GpuProfile.IsWeak && _device.TryGetVramUsage(out long __vu, out long __vb) && _vramShed.Decide(__vu, __vb))
+                _vramShed.NoteShed(_images.EvictToVramPressure(__vb, __vu));
             long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -4122,8 +4189,17 @@ public sealed class AppHost : IDisposable
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             }
             else RecordPopupWindows(in focus, in textEdit, prepareOnly: true);
-            bool imageContentChanged = _recordedImageContentEpoch != _images.ContentEpoch;
-            _recordedImageContentEpoch = _images.ContentEpoch;
+            // E1 (design-engine-images.md): ImageContent is now the NAMED SURRENDER for the case the per-node path
+            // above cannot describe (more than 64 ids landed in one pump) — a normal landing is already described by
+            // MarkImageDirty's PaintDirty → the recorder's §13.1 band, so it does NOT force a full frame any more.
+            // imageContentChanged still has to defeat skip-submit below, but ONLY for a change that could touch the
+            // SUBMITTED draw-list bytes: a byte-identical LQIP→full-res swap on a LIVE node changes pixels under
+            // UNCHANGED command bytes, which the hash compare cannot see — anyImageNodeDirtied (above) is exactly that
+            // set. A changed id with no owning node (prefetch-only) has no draw op to go stale, so it must NOT block
+            // the elide — that is what keeps an off-screen landing's otherwise-idle frame skippable.
+            bool imageContentOverflow = _images.ContentChangedOverflow;
+            bool imageContentChanged = imageContentOverflow || anyImageNodeDirtied;
+            _images.ClearContentChanged();   // the ONE clear — read by both the MarkImageDirty sweep above and here first
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
             // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
             CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
@@ -4197,6 +4273,11 @@ public sealed class AppHost : IDisposable
                 // silent hole — a hole would make the pacing bucket look clean precisely when pacing is the fault.
                 _framePublishSeq = 0;
                 _framesSkippedSubmit++;
+                // E5: fence-only maintenance for the frame this branch just elided. Guarded on the async gate being
+                // OFF — under Async/ForceSync the render thread owns every device touch (threading-render-seam.md:
+                // "the render thread owns every ComPtr") and reclaims on its OWN skip/elided-record branches instead;
+                // calling this from the UI thread while that thread is live would be a cross-thread device touch.
+                if (!_asyncActive) _device.ReclaimCompletedUploads();
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmitDone = tSubmit = Stopwatch.GetTimestamp();
             }
@@ -4213,10 +4294,13 @@ public sealed class AppHost : IDisposable
                 // self-blur groups already use, decided here so the flag describes the frame being published.
                 // RepaintDamage (§13.1) rides the same seam. The recorder filled it from SCENE changes; the host folds in
                 // the invalidations only it can see — an untrustworthy target (first frame / resize / DPI / device
-                // recovery), a clear-color change under a byte-identical stream (theme switch), and the two classes whose
-                // PIXELS move with no dirty bit at all (an image whose content epoch advanced under identical commands,
-                // and live crossfades driven by ImageClockMs). The region is CONSUMED: it is the submitted
-                // FrameInfo.RepaintDamage, and an empty one is what lets a byte-identical frame elide its present.
+                // recovery) and a clear-color change under a byte-identical stream (theme switch) stay named-full
+                // surrenders. The two classes whose PIXELS move with no dirty bit at all — an image content landing and
+                // a live crossfade — are (design-engine-images.md E1) DESCRIBED as per-node rects instead of forcing
+                // full: MarkImageDirty already turned a landing into a recorder band (only an id COUNT overflow, more
+                // than 64 in one pump, still surrenders by name), and AddCrossfadeRepaint below turns every revealing id
+                // into its own node's band. The region is CONSUMED: it is the submitted FrameInfo.RepaintDamage, and an
+                // empty one is what lets a byte-identical frame elide its present.
                 // recordOnRender: the recorder runs on the render thread, so `recordStats` here is the PREVIOUS frame's
                 // imported feedback — its repaint region describes a frame that already presented and must NOT seed this
                 // one (it would pin every frame "dirty" and defeat the render-side elision). Seed only what the HOST can
@@ -4224,8 +4308,8 @@ public sealed class AppHost : IDisposable
                 RepaintDamageRegion repaint = recordOnRender ? default : recordStats.RepaintDamage;
                 if (!_repaintTargetValid || resized || Clear != _lastPublishedClear)
                     repaint.ForceFull(RepaintFullReason.TargetInvalidated);
-                if (imageContentChanged) repaint.ForceFull(RepaintFullReason.ImageContent);
-                if (_images.HasActiveCrossfades) repaint.ForceFull(RepaintFullReason.DetachedContent);
+                if (imageContentOverflow) repaint.ForceFull(RepaintFullReason.ImageContent);          // the named surrender survives, for >64 landings in one pump
+                if (_images.HasActiveCrossfades && !AddCrossfadeRepaint(ref repaint)) repaint.ForceFull(RepaintFullReason.DetachedContent);
                 _repaintTargetValid = true;
                 _lastPublishedClear = Clear;
                 // The STAT (not the submitted region). Under recordOnRender the frame's real repaint set is only known

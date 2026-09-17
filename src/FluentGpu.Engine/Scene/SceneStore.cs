@@ -2149,6 +2149,33 @@ public sealed partial class SceneStore : ISceneBackend
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }
 
+    /// <summary>Same walk as <see cref="AbsoluteRect"/>, but refuses (returns <c>false</c>) the moment any node on the
+    /// parent chain carries a <see cref="NodePaint.LocalTransform"/> whose scale/skew is not identity. This is the E1
+    /// image-repaint path's rect source (<c>Reconciler.AddImageNodeRepaint</c>, damage-scoped-repaint-design.md "Step
+    /// 3"): a landing/crossfade band can only describe a plain translated box, so a node under a scaled/rotated
+    /// ancestor (or its own scaled transform) must fall back to the caller's named <c>ForceFull(DetachedContent)</c>
+    /// instead of emitting a rect that under-covers the actual painted pixels. Zero-alloc, same walk shape as
+    /// <see cref="AbsoluteRect"/>.</summary>
+    public bool TryAbsoluteRectTranslationOnly(NodeHandle h, out RectF r)
+    {
+        float x = 0f, y = 0f;
+        for (var n = h; !n.IsNull; n = Parent(n))
+        {
+            var xform = _paint[n.Raw.Index].LocalTransform;
+            if (xform.M11 != 1f || xform.M12 != 0f || xform.M21 != 0f || xform.M22 != 1f) { r = default; return false; }
+            x += _bounds[n.Raw.Index].X + xform.Dx;
+            y += _bounds[n.Raw.Index].Y + xform.Dy;
+            var parent = Parent(n);
+            if (!parent.IsNull)
+            {
+                x += _paint[parent.Raw.Index].ChildShiftX;
+                y += _paint[parent.Raw.Index].ChildShiftY;
+            }
+        }
+        r = new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
+        return true;
+    }
+
     /// <summary>Same origin walk as <see cref="AbsoluteRect"/> (window-space = summed origin up the parent chain) but
     /// LAYOUT bounds only — no compositor <c>LocalTransform</c>/<c>ChildShiftX/Y</c> folded in. A content-space caller
     /// computing a SCROLL target (offsets live in content space == layout space) needs this: <see cref="AbsoluteRect"/>

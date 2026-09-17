@@ -50,6 +50,7 @@ public static class SuiteRegistry
         new("kernel", "kernel", ScrollKernelSuite.Run),
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
+        new("budgets", "budgets", BudgetsSuite.Run),
         new("controls", "controls", ControlsSuite.Run),
         new("titlebar", "titlebar", TitleBarSuite.Run),
         new("nav", "nav", NavSuite.Run),

@@ -296,8 +296,10 @@ internal sealed class SceneRecordingContext
     // ── Repaint-damage scratch (gpu-renderer.md §13.1) ──────────────────────────────────────────────────────────────
     // The AA floor every emitted repaint rect is padded by. Per-kind effect extent (shadow offset+spread+3σ, self-blur
     // 3σ) rides on TOP of it via DamageExtent below — this constant is only the anti-aliasing/ink slop, same class as
-    // OpacityGroupExtentPadDip above.
-    private const float RepaintAaPadDip = 8f;
+    // OpacityGroupExtentPadDip above. internal (not private): Reconciler.AddImageNodeRepaint (image-landing/crossfade
+    // node rects, damage-scoped-repaint-design.md "Step 3") pads by the SAME floor so an image band and an ordinary
+    // record-side band agree on how far AA slop reaches.
+    internal const float RepaintAaPadDip = 8f;
 
     // Video Dst rects recorded this frame. A DrawVideo punches a hole the compositor fills from a DComp visual, so a
     // partial repaint that touches ANY part of it must redraw the whole punch or the hole's edges tear. Same UI-thread

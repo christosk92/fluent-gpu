@@ -219,8 +219,15 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>True when decoded pixels are staged but not yet copied to their resident texture (drained by
     /// <see cref="FlushUploads"/> at the top of the next submit). The host must NOT skip that submit, or the texture
     /// stays empty and the image renders white — uploads are throttled, so a deferred one can land on an otherwise
-    /// idle frame whose DrawList is unchanged.</summary>
-    public bool HasPendingUploads => _pendingCopies.Count > 0 || _retired.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false);
+    /// idle frame whose DrawList is unchanged. The retire backlog (<see cref="HasRetireBacklog"/>) is deliberately
+    /// NOT folded in here: it is fence-only maintenance (<see cref="ReclaimCompleted"/>), reclaimable on an elided
+    /// frame via <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> without opening a command list.</summary>
+    public bool HasPendingUploads => _pendingCopies.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false);
+    /// <summary>True while resources evicted from residency are still waiting on their retire fence (queued by
+    /// <see cref="Free"/>/<see cref="RetirePlacement"/>, drained by <see cref="ReclaimCompleted"/>). Does NOT force a
+    /// submit on its own — an elided/idle frame reclaims it for free via
+    /// <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> instead of waking the render loop.</summary>
+    internal bool HasRetireBacklog => _retired.Count > 0;
     internal ulong PlacedHeapBytes => _smallImages?.HeapBytes ?? 0;
     internal ulong PlacedOccupiedBytes => _smallImages?.OccupiedBytes ?? 0;
     internal int PlacedResourceCreates => _smallImages?.ResourceCreateCount ?? 0;

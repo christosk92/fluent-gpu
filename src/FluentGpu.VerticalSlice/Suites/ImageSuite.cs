@@ -355,6 +355,23 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         };
     }
 
+    // E7 gate fixture: wraps FakeImageDecoder (+1-frame latency, always-succeeds) while counting Begin calls, so a test
+    // can prove a pinned-exhausted entry's retry sweep (ImageCache.RetryPinnedExhausted) actually issued a NEW decode
+    // request rather than just changing state — the thing 45b's admission-rejection sink alone can't distinguish.
+    sealed class CountingFakeDecoder : IImageDecoder
+    {
+        readonly FakeImageDecoder _inner = new();
+        public int BeginCount { get; private set; }
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            BeginCount++;
+            return _inner.Begin(id, source, targetW, targetH, priority);
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) => _inner.Pump(onComplete, onPixels);
+    }
+
 static class ImageSuite
 {
     public static void Run(StringTable strings)
@@ -371,6 +388,8 @@ static class ImageSuite
         BlurHashChecks(strings);
         ImageTransitionChecks();
         ImageEvictChecks();
+        VramShedGraceAndFloorChecks();
+        ExhaustedPinnedRetryChecks();
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         HoldLastGoodChecks(strings);
@@ -1124,6 +1143,61 @@ static class ImageSuite
                 $"published={published} first={firstId}/{firstCount}/{firstBytes}B pending={followerPending} " +
                 $"second={secondId}/{sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B left={sched.HasReadyCompletions}");
         }
+
+        // 46d6: WeakTier changes only the AT-REST apply COUNT (rises from the naive 1 to 3, same as discrete) — the
+        // byte budget stays the tight 512 KiB scroll figure in every state (E2, adreno-hang-fixes.md M0). WeakTier is
+        // a plain settable property here (never GpuProfile), so this is exercisable headlessly.
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            sched.WeakTier = true;
+            for (int i = 401; i <= 406; i++) sched.Begin(i, "weak-rest/" + i, 8, 8);
+            bool published = WaitPublished(sched);
+            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+            int weakRestApplied = sched.LastPumpAppliedCount;
+            int weakRestBytes = sched.LastPumpAppliedBytes;
+            while (sched.HasReadyCompletions)
+                sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+
+            sched.Begin(407, "weak-scroll/1", 8, 8);
+            sched.Begin(408, "weak-scroll/2", 8, 8);
+            WaitPublished(sched);
+            sched.ScrollThrottled = true;
+            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+            int weakScrollApplied = sched.LastPumpAppliedCount;
+            while (sched.HasReadyCompletions)
+                sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+            sched.ScrollThrottled = false;
+
+            Check("46d6. DecodeScheduler weak rest cadence: at-rest applies rise to 3 (same as discrete) while the byte budget stays the tight scroll cap; ScrollThrottled still forces 1",
+                published && weakRestApplied == 3 && weakRestBytes <= 512 * 1024 && weakScrollApplied == 1,
+                $"published={published} restApplied={weakRestApplied} restBytes={weakRestBytes} scrollApplied={weakScrollApplied}");
+        }
+
+        // 46d6b: the head exemption survives the weak-tier cadence change — an oversized cover still lands ALONE
+        // (the byte cap is unaffected by the count relaxing to 3), then the two small thumbs clear on the next pump
+        // under the same rest budget.
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            sched.WeakTier = true;
+            sched.Begin(501, "weak-oversized/cover", 512, 512, ImagePriority.Visible);
+            sched.Begin(502, "weak-oversized/thumb1", 8, 8, ImagePriority.Visible);
+            sched.Begin(503, "weak-oversized/thumb2", 8, 8, ImagePriority.Visible);
+            bool published2 = WaitPublished(sched);
+
+            int firstId = 0;
+            sched.Pump((id, ok, w, h, failure, attempts) => { if (ok) firstId = id; }, (id, px, w, h) => { });
+            int firstCount = sched.LastPumpAppliedCount;
+            int firstBytes = sched.LastPumpAppliedBytes;
+            bool moreLeft = sched.HasReadyCompletions;
+
+            int secondApplied = 0;
+            sched.Pump((id, ok, w, h, failure, attempts) => { if (ok) secondApplied++; }, (id, px, w, h) => { });
+
+            Check("46d6b. DecodeScheduler weak rest: an oversized cover still lands alone via the head exemption; the two thumbs clear on the next pump",
+                published2 && firstId == 501 && firstCount == 1 && firstBytes == 512 * 512 * 4
+                && moreLeft && secondApplied == 2 && !sched.HasReadyCompletions,
+                $"published={published2} first={firstId}/{firstCount}/{firstBytes}B moreLeft={moreLeft} second={secondApplied}");
+        }
     }
 
     static void PixelBufferPoolChecks()
@@ -1298,6 +1372,82 @@ static class ImageSuite
 
         Check("46g. Residency: evicts unpinned LRU + frees its GPU texture; never evicts pinned", freed && pinnedSafe,
             $"evicted={evicted.Count} pinnedEvicted={evicted2.Count}");
+    }
+
+    // E4: VRAM-pressure relief (ImageCache.EvictToVramPressure) respects a grace window on freshly-Ready entries and
+    // never sheds below half this cache's own budget, unlike the ordinary byte-budget path (EvictToBudget, exercised
+    // via Pump above in 46g / ImageCacheChecks) which has neither restriction.
+    static void VramShedGraceAndFloorChecks()
+    {
+        // gate.img.vram-shed-grace: a just-landed Ready entry is exempt from pressure relief until ReadyGraceMs has
+        // elapsed — otherwise the texture that just pushed VRAM over the arm ratio would be the very thing shed,
+        // re-requested on the next scroll tick, and re-land into the same pressure (the loop adreno-hang-fixes.md M5
+        // exists to break). A SMALL explicit budget matters here: the default 96 MB budget leaves this cache's five
+        // small entries far below even the floor's Math.Min(_budgetBytes/2, UsedBytes/2), so `target` never drops
+        // below `UsedBytes` and the shed loop would never start regardless of grace — proving nothing. Sized so the
+        // cache sits comfortably under budget (no EvictToBudget interference) while the floor still sits below
+        // UsedBytes, so `afterGrace` actually exercises a real shed.
+        long graceUnit = ImageCache.CommittedBytesFor(64, 64);
+        var graceCache = new ImageCache(new FakeImageDecoder(), budgetBytes: graceUnit * 10);
+        for (int i = 0; i < 5; i++) graceCache.Request("grace" + i, 64, 64);
+        graceCache.Pump();                                          // five Ready, unpinned entries; ReadyMs == clock (0)
+        long freedImmediate = graceCache.EvictToVramPressure(100, 100);
+        graceCache.Tick(ImageCache.ReadyGraceMs + 1f);
+        long freedAfterGrace = graceCache.EvictToVramPressure(100, 100);
+        Check("gate.img.vram-shed-grace a just-landed Ready entry is not shed by VRAM-pressure relief until ReadyGraceMs has elapsed, then it is",
+            freedImmediate == 0 && freedAfterGrace > 0,
+            $"immediate={freedImmediate} afterGrace={freedAfterGrace}");
+
+        // gate.img.vram-shed-floor: pressure relief never sheds below _budgetBytes/2 even under extreme overage;
+        // EvictToBudget (the ordinary cap, exercised via Pump) is unrestricted and still reaches the real cap.
+        // Entry size is CommittedBytesFor(64,64) exactly — chosen budgets are whole multiples of it so the coarse
+        // (whole-image) eviction loop lands EXACTLY on the cap/floor, not merely close to it.
+        long unit = ImageCache.CommittedBytesFor(64, 64);
+        long floorBudget = unit * 20;
+        var floorCache = new ImageCache(new FakeImageDecoder(), budgetBytes: floorBudget);
+        for (int i = 0; i < 30; i++) floorCache.Request("floor" + i, 64, 64);
+        floorCache.Pump();                                          // EvictToBudget trims to exactly 20 images (== budget)
+        long capUsed = floorCache.UsedBytes;
+        bool reachesCap = capUsed == floorBudget;
+        floorCache.Tick(ImageCache.ReadyGraceMs + 1f);              // clear the grace window for all 20 survivors
+        long freedByPressure = floorCache.EvictToVramPressure(floorBudget, floorBudget * 100);   // extreme overage
+        long floorUsed = floorCache.UsedBytes;
+        bool neverBelowFloor = floorUsed == floorBudget / 2 && freedByPressure == floorBudget / 2;
+        Check("gate.img.vram-shed-floor VRAM-pressure relief never sheds below budget/2 even under extreme overage; EvictToBudget is unrestricted and still reaches the real cap",
+            reachesCap && neverBelowFloor,
+            $"capUsed={capUsed} cap={floorBudget} floorUsed={floorUsed} floor={floorBudget / 2} freed={freedByPressure}");
+    }
+
+    // E7: a PINNED entry that goes GpuResourceExhausted cannot self-heal through Request/Pin (a realized on-screen
+    // node calls neither again once mounted — see ImageCache.ReRealizeAllResident's remark). Pump's
+    // RetryPinnedExhausted sweep is what retries it, paced by the same RestartBackoffMs every other restart uses.
+    static void ExhaustedPinnedRetryChecks()
+    {
+        bool admit = false;
+        var decoder = new CountingFakeDecoder();
+        var cache = new ImageCache(decoder);
+        cache.SetPixelAttemptSink((_, _, _, _) => admit ? ImageUploadResult.Accepted : ImageUploadResult.ResourceExhausted);
+        var h = cache.Request("exhausted-pinned", 32, 32);
+        cache.Pin(h);                                               // on screen the whole time — never unpinned/re-requested
+        cache.Pump();                                                // rejected: Failed/GpuResourceExhausted, still pinned
+        int beginAfterFirst = decoder.BeginCount;
+        bool rejected = cache.StateOf(h) == ImageState.Failed && cache.FailureOf(h) == ImageFailureKind.GpuResourceExhausted;
+
+        cache.Tick(1000f);
+        cache.Pump();                                                // under RestartBackoffMs (2000ms) — no new Begin yet
+        bool noRetryUnderBackoff = decoder.BeginCount == beginAfterFirst && cache.StateOf(h) == ImageState.Failed;
+
+        cache.Tick(1001f);                                          // total 2001ms since the failure — backoff has elapsed
+        admit = true;                                                // the backend can admit now
+        cache.Pump();                                                // RetryPinnedExhausted scans and restarts the pinned entry
+        bool retried = decoder.BeginCount > beginAfterFirst;
+        bool pendingAfterRetry = cache.StateOf(h) == ImageState.Pending;
+        cache.Pump();                                                // drains the queued re-decode → admitted this time → Ready
+        bool ready = cache.StateOf(h) == ImageState.Ready;
+
+        Check("gate.img.exhausted-pinned-retries-after-backoff a PINNED GpuResourceExhausted entry retries on its own once RestartBackoffMs elapses, not only on the next re-pin",
+            rejected && noRetryUnderBackoff && retried && pendingAfterRetry && ready,
+            $"begin1={beginAfterFirst} beginLater={decoder.BeginCount} state={cache.StateOf(h)} fail={cache.FailureOf(h)}");
     }
 
     static void ImageLifecycleChecks(StringTable strings)

@@ -714,6 +714,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // alone it would now measure a no-op and report ~0 ms, which is worse than not reporting it.
         FluentGpu.Foundation.Diag.Line(
             $"[d3d12.boot] initDevice={(System.Diagnostics.Stopwatch.GetTimestamp() - t0) * (1000.0 / System.Diagnostics.Stopwatch.Frequency):F1}ms (early, pre-budget)");
+        // Forced, bypassing the 10/60-present cadence: the host derives the weak-tier image-cache cap from
+        // TryGetVramUsage (GpuMemoryBudgets.For) immediately after this call, BEFORE any swapchain/present exists to
+        // drive the ordinary countdown — without this, _vramSampled stays false and the derivation falls back to the
+        // unknown-budget default instead of the real LOCAL budget.
+        PublishVideoMemorySnapshot(force: true);
     }
 
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
@@ -4781,10 +4786,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         return _vramSampled;
     }
 
-    void PublishVideoMemorySnapshot()
+    // `force` bypasses the countdown entirely (no decrement, no reschedule) for the one early sample
+    // EnsureDeviceCreated takes right after device bring-up — so budget derivation (GpuMemoryBudgets.For, the
+    // image-cache cap's LOCAL-budget input) sees a real _vramSampled=true before the image cache is even built,
+    // instead of waiting up to 10/60 presents for the ordinary cadence below to first fire.
+    void PublishVideoMemorySnapshot(bool force = false)
     {
-        if (--_videoMemorySampleCountdown > 0) return;
-        _videoMemorySampleCountdown = GpuProfile.IsWeak ? VideoMemorySampleEveryNPresentsWeak : VideoMemorySampleEveryNPresents;
+        if (!force)
+        {
+            if (--_videoMemorySampleCountdown > 0) return;
+            _videoMemorySampleCountdown = GpuProfile.IsWeak ? VideoMemorySampleEveryNPresentsWeak : VideoMemorySampleEveryNPresents;
+        }
         EnsureAdapter3();
         if (_adapter3 == null) return;
         DXGI_QUERY_VIDEO_MEMORY_INFO local = default, nonLocal = default;
@@ -5394,6 +5406,19 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// gets its next drain turn even when nothing else is dirty — without it a budget-deferred cover could sit until
     /// the next unrelated frame.</remarks>
     public bool HasPendingUploads => _hasHeldImageJob || (_imageTextures?.HasPendingUploads ?? false);
+
+    /// <summary>Fence-only maintenance for an elided/skip-submit frame: reclaims image resources whose retire fence
+    /// has completed without opening a command list or presenting. Same thread confinement as the rest of the image
+    /// texture store (<see cref="ImageTextureStore.ReclaimCompleted"/> asserts it internally): a no-op assert in
+    /// default/force-sync (any thread may call it — matches <see cref="DrainImageJobs"/> and UI-staged Stage/Free
+    /// before the async seam arms), but RENDER-THREAD ONLY once <see cref="MarkImageUploadsRenderConfined"/> has
+    /// armed the store (a stray call off the render thread then throws under FGGUARD, erased in Release). Mirrors
+    /// the fence read <see cref="DrainImageJobs"/> already uses.</summary>
+    public void ReclaimCompletedUploads()
+    {
+        if (_imageTextures is null || _fence == null) return;
+        _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
+    }
 
     /// <inheritdoc/>
     public bool TextRepaintPending => _textRepaintPending;

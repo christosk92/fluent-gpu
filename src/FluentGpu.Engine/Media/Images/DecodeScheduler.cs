@@ -68,6 +68,12 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // progress, whatever it weighs.
     private const int ScrollApplyBytesPerFrame = 512 * 1024;
     private const int ControlDrainPerFrame = 256;
+    // E2 (adreno-hang-fixes.md M0): the AT-REST apply-count cap on a weak tier — same as discrete (3), not the tight
+    // 1 a naive "weak == throttled" read would suggest. The byte budget is what actually protects a weak GPU (it
+    // stays pinned to ScrollApplyBytesPerFrame in every state, see byteCap below); three SMALL Home-feed thumbnails
+    // comfortably clear that budget, and gating the COUNT down to 1 too just made a passive feed load trickle in one
+    // thumbnail per frame for no VRAM/fence-stall benefit.
+    private const int WeakRestApplies = 3;
 
     /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 1 —
     /// each apply stages a GPU CopyTextureRegion into the SAME command list the present then fences on (the
@@ -137,6 +143,12 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         buffer = null;
         return false;
     }
+    /// <summary>E2: the weak/UMA tier decision, set ONCE by <see cref="FluentGpu.Scene.ImageCache"/>'s ctor from its
+    /// own <c>weak</c> argument — never read from <c>GpuProfile</c> here (adreno-hang-fixes.md M0's original bug: a
+    /// process-global tier read that lands after this scheduler is constructed, and is always false headlessly, so
+    /// the weak arm was unreachable both in production and under every gate). Only changes the AT-REST apply-count
+    /// cap (<see cref="WeakRestApplies"/>); the byte budget is unconditionally the tight scroll figure on this tier.</summary>
+    public bool WeakTier { get; set; }
     /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
     public int LastPumpAppliedCount { get; private set; }
     /// <summary>Decoded pixel bytes applied by the most recent UI-thread <see cref="Pump"/>.</summary>
@@ -263,14 +275,16 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
 
         int applied = 0;
-        // Weak/UMA GPUs (Adreno UBWC DEVICE_HUNG mitigation, adreno-hang-fixes.md M0): force the tight
-        // 1-apply / 512 KiB cap EVERY frame — throttled or not — so a passive Home-feed load can't stream
-        // uploads at the full at-rest rate. Discrete GPUs keep the exact scroll-gated behavior.
-        bool weak = FluentGpu.Foundation.GpuProfile.IsWeak;
-        int cap = (weak || ScrollThrottled) ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
-        int byteCap = weak
-            ? ScrollApplyBytesPerFrame
-            : ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
+        // Weak/UMA GPUs (Adreno UBWC DEVICE_HUNG mitigation, adreno-hang-fixes.md M0): the byte budget stays pinned
+        // to the tight 512 KiB scroll figure EVERY frame — throttled or not — so a passive Home-feed load can't
+        // stream uploads at the full at-rest byte rate. The apply-COUNT is looser at rest (WeakRestApplies, same as
+        // discrete) — see the const's remark. ScrollThrottled still forces the single-apply cap on every tier.
+        // WeakTier is set once by ImageCache from its ctor's `weak` argument — never GpuProfile here (E2), which
+        // keeps this cadence exercisable headlessly (gate 46d6).
+        int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame)
+            : WeakTier ? Math.Min(WeakRestApplies, s_maxAppliesPerFrame)
+            : s_maxAppliesPerFrame;
+        int byteCap = (WeakTier || ScrollThrottled) ? ScrollApplyBytesPerFrame : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
         while (applied < cap && (!bounded || Stopwatch.GetTimestamp() < deadlineTicks) && TryPeekPixels(out var next, out bool large))
         {

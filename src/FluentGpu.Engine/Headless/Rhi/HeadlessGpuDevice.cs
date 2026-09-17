@@ -176,6 +176,11 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
     public bool HasPendingUploads => false;
 
+    /// <summary>E5 (design-engine-images.md): census of fence-only-maintenance calls — how many times AppHost reclaimed
+    /// on an elided/skipped frame instead of forcing a submit. `gate.repaint.elided-frame-reclaims` reads this.</summary>
+    public int ReclaimCalls { get; private set; }
+    public void ReclaimCompletedUploads() => ReclaimCalls++;
+
     public int HintSettlePresentCount { get; private set; }
     public void HintSettlePresent() => HintSettlePresentCount++;
 

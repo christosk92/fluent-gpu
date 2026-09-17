@@ -9,6 +9,8 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Render;
+using FluentGpu.Rhi;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using FluentGpu.Text;
@@ -2486,10 +2488,17 @@ public sealed partial class TreeReconciler
         if (list.Count == 0) _imageNodes.Remove(imageId);
     }
 
-    /// <summary>Mark every on-screen Image node holding <paramref name="imageId"/> paint-dirty (image status landed).</summary>
-    public void MarkImageDirty(int imageId)
+    /// <summary>Mark every on-screen Image node holding <paramref name="imageId"/> paint-dirty (image status landed).
+    /// Returns true iff at least one LIVE node actually owned this id and was marked — an id with no owning node
+    /// (prefetch-only, or a node that already unmounted) returns false. E1 (design-engine-images.md): the host's UI-
+    /// thread sweep over <c>ImageCache.ContentChangedIds</c> ORs this return across every changed id to decide whether
+    /// a content change can matter to the SUBMITTED draw-list bytes at all — a change with no owning node cannot
+    /// (there is no draw op referencing it), so it must not defeat the skip-submit hash shortcut for a frame that is
+    /// otherwise byte-identical.</summary>
+    public bool MarkImageDirty(int imageId)
     {
-        if (imageId == 0 || !_imageNodes.TryGetValue(imageId, out var list)) return;
+        if (imageId == 0 || !_imageNodes.TryGetValue(imageId, out var list)) return false;
+        bool dirtied = false;
         for (int i = list.Count - 1; i >= 0; i--)
         {
             var node = list[i];
@@ -2537,8 +2546,33 @@ public sealed partial class TreeReconciler
             }
 
             _scene.Mark(node, NodeFlags.PaintDirty);
+            dirtied = true;
         }
         if (list.Count == 0) _imageNodes.Remove(imageId);
+        return dirtied;
+    }
+
+    /// <summary>Describe every on-screen node holding <paramref name="imageId"/> as a repaint rect (damage-scoped-
+    /// repaint-design.md "Step 3": an image landing or crossfade tick damages ITS nodes, not the whole window). Returns
+    /// the count of rects added, or <c>-1</c> the moment a node cannot be described as a plain translated box (a scaled/
+    /// rotated ancestor) — the caller falls back to a named <c>ForceFull(DetachedContent)</c> for THIS id rather than
+    /// emit an under-covering rect. <c>0</c> with no nodes tracked means the id is off screen (prefetch-only, or a node
+    /// that already unmounted) — nothing to repaint, not a failure. Zero-alloc: walks the existing per-id node list.</summary>
+    public int AddImageNodeRepaint(int imageId, ref RepaintDamageRegion region)
+    {
+        if (imageId == 0 || !_imageNodes.TryGetValue(imageId, out var list)) return 0;
+        int added = 0;
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            var node = list[i];
+            if (!_scene.IsLive(node)) { list.RemoveAt(i); continue; }
+            if (!_scene.TryAbsoluteRectTranslationOnly(node, out var r)) return -1;
+            region.Add(new RectF(r.X - SceneRecordingContext.RepaintAaPadDip, r.Y - SceneRecordingContext.RepaintAaPadDip,
+                                  r.W + 2 * SceneRecordingContext.RepaintAaPadDip, r.H + 2 * SceneRecordingContext.RepaintAaPadDip));
+            added++;
+        }
+        if (list.Count == 0) _imageNodes.Remove(imageId);
+        return added;
     }
 
     private bool IsReachableFromRoot(NodeHandle node)

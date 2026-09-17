@@ -340,7 +340,12 @@ public static class FluentApp
         // skips it, and device-loss recovery still re-runs InitDevice.
         (device as D3D12Device)?.EnsureDeviceCreated();
         BootStamp("d3d12device-init");
-        var budgets = GpuMemoryBudgets.For(GpuProfile.IsWeak);
+        // The LOCAL segment sample is only meaningful once EnsureDeviceCreated has forced the adapter (and its first
+        // PublishVideoMemorySnapshot) up, same reasoning as the Tier read above — read here, not before. 0 (device
+        // does not support the query, or the sample truly is not ready) falls back to the flat weak default inside
+        // GpuMemoryBudgets.For; it never blocks image-pipeline construction.
+        device.TryGetVramUsage(out _, out long localBudgetBytes);
+        var budgets = GpuMemoryBudgets.For(GpuProfile.IsWeak, localBudgetBytes);
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         if (o.ImageCacheDirectory is { Length: > 0 }) SweepLegacyImageCache();
@@ -352,7 +357,8 @@ public static class FluentApp
         var pixelPool = new PixelBufferPool(budgets.PixelPool);
         using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher,
             new DecodeOptions { PixelPool = pixelPool });
-        var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes(budgets.ImageCache), budgets.Derived);
+        var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes(budgets.ImageCache, GpuProfile.IsWeak),
+            budgets.Derived, weak: GpuProfile.IsWeak);
         BootStamp("image-pipeline");
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
@@ -830,10 +836,13 @@ public static class FluentApp
     /// <summary>The tier's image-cache cap (<see cref="GpuMemoryBudgets"/> owns the tier decision), with the
     /// discrete-only developer override applied on top. The override is deliberately NOT part of the pure budget
     /// function: it is an environment read, and it must never be able to raise a weak adapter back over the cap the
-    /// Adreno hang work put there.</summary>
-    private static long ImageCacheBudgetBytes(long tierBudget)
+    /// Adreno hang work put there. <paramref name="weak"/> is the same tier flag <see cref="GpuMemoryBudgets.For"/>
+    /// was called with — checked explicitly rather than by comparing <paramref name="tierBudget"/> against the flat
+    /// <see cref="GpuMemoryBudgets.ImageCacheWeak"/> constant, now that a weak tier's cap can also legitimately land
+    /// at 32 or 64 MB once it is derived from the LOCAL segment.</summary>
+    private static long ImageCacheBudgetBytes(long tierBudget, bool weak)
     {
-        if (tierBudget == GpuMemoryBudgets.ImageCacheWeak) return tierBudget;
+        if (weak) return tierBudget;
         string? raw = Environment.GetEnvironmentVariable("FG_IMAGE_CACHE_MB");
         if (int.TryParse(raw, out int mb) && mb is >= 16 and <= 1024) return (long)mb * 1024 * 1024;
         return tierBudget;
