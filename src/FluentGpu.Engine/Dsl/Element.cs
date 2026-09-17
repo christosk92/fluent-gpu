@@ -70,6 +70,22 @@ public abstract record Element
     /// Any layout move/resize of this node animates via transform only.</summary>
     public LayoutTransition? Layout { get; init; }
 
+    /// <summary>Route wheel input over this element to that scroller as a glide — a list header laid out ABOVE its
+    /// list (not a pass-through overlay): a notch over the header posts the list's kernel <c>WheelNotch</c> with the
+    /// same <c>PerNotchDip(viewport, LineDip)</c> a notch over the rows gets, so header and rows feel identical. The
+    /// input dispatcher walks the hit chain leaf→root for the nearest element naming a target (stopping at the first
+    /// scrollable ancestor) BEFORE <c>ScrollInputRouter</c>'s own ancestor resolution, and marks the event handled.
+    /// Any <see cref="FluentGpu.Scroll.IWheelTarget"/>: the engine's <see cref="FluentGpu.Scroll.ScrollController"/>
+    /// (<c>ScrollEl.Controller</c> / <c>VirtualListEl.Controller</c>) or a Controls <c>IScrollController</c> /
+    /// <c>ItemsViewController</c>. Re-asserted on every reconcile like any handler (null clears it). Null = none.</summary>
+    public FluentGpu.Scroll.IWheelTarget? WheelTarget { get; init; }
+
+    /// <summary>Scroll-viewport line height hint (DIP) — <c>ScrollState.LineDip</c>: one wheel notch travels
+    /// <c>WheelScrollLines × ScrollLineDip</c> (Windows semantics) instead of the viewport-fraction rule. Read only on a
+    /// viewport element (<c>ScrollEl</c> / <c>VirtualListEl</c>); <c>Virtual.List</c> and the other fixed-extent factories
+    /// stamp their item extent. 0 (default) = no hint.</summary>
+    public float ScrollLineDip { get; init; }
+
     /// <summary>FLIP coherence (Framer <c>layout</c> relativeTarget): compute this node's FLIP relative to the frame of
     /// the node carrying this <see cref="MorphId"/> (a shared-layout GROUP anchor) instead of its layout parent — so a
     /// reordered/moved item animates coherently WITH the anchor rather than double-counting the anchor's own motion.
@@ -406,6 +422,12 @@ public sealed record BoxEl : Element
     /// this element's own click/press handling are unaffected, and it says nothing about whether the element itself is
     /// draggable (set <c>Draggable</c>/<c>CanDrag</c> for that).</summary>
     public bool BlocksDragArm { get; init; }
+
+    /// <summary>A pointer LISTENER that is not an interaction scope (the ToolTip service wrapper): it carries pointer
+    /// handlers, so it is hit-testable and receives them normally, but the hover cascade, the lazy-mount hover seed and
+    /// the un-hover re-resolve look THROUGH it to the nearest real interactive ancestor. A card's hover then still
+    /// reveals a wrapped play FAB. Hit-testing and handler delivery are unchanged.</summary>
+    public bool HoverScopeTransparent { get; init; }
 
     /// <summary>Clip-ESCAPE root for a hover-elevated descendant (pairs with <see cref="HoverElevatePaint"/>): set on a
     /// clipping viewport (a shelf's paged strip) to let the hovered card's lift + halo paint OUTSIDE this clip. The

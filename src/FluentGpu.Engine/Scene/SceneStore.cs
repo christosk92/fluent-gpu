@@ -462,6 +462,7 @@ public sealed partial class SceneStore : ISceneBackend
         }
         _grids.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
+        if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
         if ((flags & NodeFlags.InteractionAnim) != 0) _interact.Remove(idx);
         if ((flags & NodeFlags.SparsePaint) != 0)
         {
@@ -1634,6 +1635,35 @@ public sealed partial class SceneStore : ISceneBackend
 
     public bool GetBlocksBackgroundScroll(NodeHandle node)
         => _wheelOccludes.TryGet((int)node.Raw.Index, out bool v) && v;
+
+    // ── wheel routing target (Element.WheelTarget) ─────────────────────────────────────────────────
+    // A list header laid out ABOVE its list names the list's scroller as the target for wheel input over the header
+    // (InputDispatcher.RouteWheelTarget), so the notch glides the LIST instead of the header's own ancestor scroller.
+    // Sparse — O(headers), same shape as _hitPassThrough; the slot wraps the reference because ColdSlab is struct-only.
+    private struct WheelTargetSlot { public FluentGpu.Scroll.IWheelTarget? Target; }
+    private readonly ColdSlab<WheelTargetSlot> _wheelTargets = new();
+
+    /// <summary>Live wheel-target rows — the dispatcher's O(1) early-out before it walks a hit chain.</summary>
+    public int WheelTargetCount => _wheelTargets.Count;
+
+    public void SetWheelTarget(NodeHandle node, FluentGpu.Scroll.IWheelTarget? target)
+    {
+        if (!IsLive(node)) return;
+        int idx = (int)node.Raw.Index;
+        if (target is null) { if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx); }
+        else _wheelTargets.GetOrAdd(idx).Target = target;
+    }
+
+    public bool TryGetWheelTarget(NodeHandle node, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Scroll.IWheelTarget? target)
+    {
+        if (_wheelTargets.Count != 0 && _wheelTargets.TryGet((int)node.Raw.Index, out var slot) && slot.Target is not null)
+        {
+            target = slot.Target;
+            return true;
+        }
+        target = null;
+        return false;
+    }
 
     // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
     // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).

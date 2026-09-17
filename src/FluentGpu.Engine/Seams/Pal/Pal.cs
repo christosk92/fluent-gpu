@@ -60,8 +60,11 @@ public enum InputKind : byte
     // frame deltas on lift) — there is no OS-momentum kind: a producer must never ride OS-owned inertia; DirectManip-
     // ulation is configured without TRANSLATION_INERTIA/SCALING_INERTIA (§5.2), and RUNNING→INERTIA is treated as a
     // lift (ScrollEnd), not a momentum handoff. The legacy Wheel kind stays for detented mouse notches + element-level
-    // OnPointerWheel. Fields: ScrollDelta/ScrollDeltaX carry the DIP deltas (same sign convention), DeviceClassRaw the
-    // producer tag (see ScrollDeviceClass), QpcTicks the per-packet high-res stamp.
+    // OnPointerWheel. Fields: ScrollDelta/ScrollDeltaX carry the deltas (same sign convention) — DIP for a
+    // DirectManipulation/touch/headless producer, NOTCH UNITS (raw/120) for the hi-res wheel fallback, which tags the
+    // packet by also writing the units into WheelNotch/WheelNotchX (ScrollInputRouter.IsNotchUnits converts them with
+    // the viewport's per-notch scale) — DeviceClassRaw the producer tag (see ScrollDeviceClass), QpcTicks the per-packet
+    // high-res stamp.
     /// <summary>A frame-aligned producer engaged (touch pan claimed / DManip RUNNING entered / a hi-res wheel
     /// gesture started). Delta may be 0. Never coalesces.</summary>
     ScrollBegin = 12,

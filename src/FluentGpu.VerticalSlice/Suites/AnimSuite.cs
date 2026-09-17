@@ -99,6 +99,7 @@ static class AnimSuite
         MarqueeChecks(strings);
         CrossfadeChecks(strings);
         NestedHoverBoundaryChecks(strings);
+        TransparentHoverScopeChecks(strings);
         WaveeSkeletonChecks(strings);
         BrushTransitionChecks(strings);
         AnimRestChecks(strings);
@@ -4019,6 +4020,151 @@ static class AnimSuite
             $"reveal={mountedRevealOn} buttonQuiet={mountedButtonQuiet}");
     }
 
+    // ── 58e-58h: BoxEl.HoverScopeTransparent — a pointer LISTENER that is not an interaction scope ────────────────
+    // The ToolTip wrapper carries OnHoverMove/OnPointerExit/OnPointerPressed/OnFocusChanged, so it owns PointerBit and
+    // read as a cascade boundary: a card's hover stopped at the wrapper and never reached the wrapped play FAB, and the
+    // lazy-mount seed resolved the wrapper (never hovered) instead of the card. The transparent bit makes the cascade,
+    // the seed and the un-hover re-resolve look through it; hit-test and handler delivery are unchanged.
+    static void TransparentHoverScopeChecks(StringTable strings)
+    {
+        static BoxEl Fab() => new BoxEl { Key = "fab", OnClick = static () => { }, Opacity = 0f, HoverOpacity = 1f, HoverScale = 1.04f };
+        static BoxEl Listener(BoxEl fab) => new BoxEl
+        {
+            Key = "listener",
+            HoverScopeTransparent = true,
+            OnHoverMove = static _ => { },
+            OnPointerExit = static () => { },
+            OnPointerPressed = static _ => { },
+            OnFocusChanged = static _ => { },
+            Children = [fab],
+        };
+        static bool Quiet(SceneStore s, NodeHandle n) => !s.TryGetInteract(n, out var ia) || ia.HoverTarget < 0.01f;
+        static bool On(SceneStore s, NodeHandle n) => s.TryGetInteract(n, out var ia) && ia.HoverTarget > 0.99f;
+
+        // 58e — eager: the FAB is already mounted under the transparent listener when the card takes the hover edge.
+        {
+            var scene = new SceneStore();
+            var anim = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = anim };
+            recon.ReconcileRoot(new BoxEl
+            {
+                OnClick = static () => { },
+                Children =
+                [
+                    new BoxEl { Key = "plate", HitTestVisible = false, Opacity = 0f, HoverOpacity = 1f },
+                    Listener(Fab()),
+                    new BoxEl
+                    {
+                        Key = "row", OnClick = static () => { },
+                        Children = [new BoxEl { Key = "row-reveal", Opacity = 0f, HoverOpacity = 1f }],
+                    },
+                ],
+            }, null);
+            var card = scene.Root;
+            var plate = scene.FirstChild(card);
+            var listener = scene.NextSibling(plate);
+            var fab = scene.FirstChild(listener);
+            var row = scene.NextSibling(listener);
+            var rowReveal = scene.FirstChild(row);
+
+            anim.SetHover(card, true);
+            bool plateOn = On(scene, plate);
+            bool fabOn = On(scene, fab);                       // through the listener
+            bool listenerQuiet = Quiet(scene, listener);        // no reveal/scale of its own: no interact row driven
+            bool rowRevealOff = Quiet(scene, rowReveal);        // a real nested scope still stops the cascade
+            anim.SetHover(card, false);
+            bool fabOff = Quiet(scene, fab) && Quiet(scene, plate);
+
+            Check("58e. a card's hover cascades through a HoverScopeTransparent listener to the wrapped FAB (and back off)",
+                plateOn && fabOn && listenerQuiet && rowRevealOff && fabOff,
+                $"plate={plateOn} fab={fabOn} listenerQuiet={listenerQuiet} rowRevealOff={rowRevealOff} off={fabOff}");
+        }
+
+        // 58f — lazy: the listener + FAB mount AFTER the card's enter edge; the seed walks past the listener to the card.
+        {
+            var scene = new SceneStore();
+            var anim = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = anim };
+            var before = new BoxEl { OnClick = static () => { }, Children = [] };
+            recon.ReconcileRoot(before, null);
+            var card = scene.Root;
+            scene.SetFlagBits(card, NodeFlags.Hovered);
+            anim.SetHover(card, true);
+            recon.ReconcileRoot(new BoxEl { OnClick = static () => { }, Children = [Listener(Fab())] }, before);
+            var listener = scene.FirstChild(card);
+            var fab = scene.FirstChild(listener);
+            bool fabSeeded = On(scene, fab);
+            bool listenerQuiet = Quiet(scene, listener);
+
+            Check("58f. a FAB mounting under a HoverScopeTransparent listener inside a hovered card seeds from the card",
+                fabSeeded && listenerQuiet, $"fabSeeded={fabSeeded} listenerQuiet={listenerQuiet}");
+        }
+
+        // 58g — un-hover re-resolve: the pointer leaves the FAB back onto the still-hovered card; the reveal stays on.
+        {
+            var scene = new SceneStore();
+            var anim = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = anim };
+            recon.ReconcileRoot(new BoxEl { OnClick = static () => { }, Children = [Listener(Fab())] }, null);
+            var card = scene.Root;
+            var fab = scene.FirstChild(scene.FirstChild(card));
+            scene.SetFlagBits(card, NodeFlags.HoverWithin);
+            anim.SetHover(card, true);
+            anim.SetHover(fab, true);
+            anim.SetHover(fab, false);
+            bool staysOn = On(scene, fab);
+            scene.ClearFlagBits(card, NodeFlags.HoverWithin);
+            anim.SetHover(card, false);
+            anim.SetHover(fab, false);
+            bool goesOff = Quiet(scene, fab);
+
+            Check("58g. a reveal losing its own hover stays on while its enclosing scope is hovered, and clears when it is not",
+                staysOn && goesOff, $"staysOn={staysOn} goesOff={goesOff}");
+        }
+
+        // 58h — the real thing: ToolTip.WrapStable inside a padded card under AppHost; pointer onto the card PADDING.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tt-scope", new Size2(320, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var fabNode = NodeHandle.Null;
+            Element MakeFab() => new BoxEl
+            {
+                Width = 32f, Height = 32f, Opacity = 0f, HoverOpacity = 1f,
+                OnClick = static () => { },
+                OnRealized = h => fabNode = h,
+            };
+            Func<Element> factory = MakeFab;
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 200f, Height = 120f, Padding = Edges4.All(24f), OnClick = static () => { },
+                    Children = [ToolTip.WrapStable(factory, "Play")],
+                },
+            });
+            host.RunFrame();
+            var card = host.Scene.Root;
+            var r = host.Scene.AbsoluteRect(card);
+            var padding = new Point2(r.X + 6f, r.Y + 6f);          // inside the card, outside the wrapped FAB
+            var outside = new Point2(r.Right + 40f, r.Bottom + 40f);
+
+            window.QueueInput(new InputEvent(InputKind.PointerMove, padding, 0, 0));
+            host.RunFrame();
+            bool cardHovered = (host.Scene.Flags(card) & NodeFlags.Hovered) != 0;
+            bool fabOn = !fabNode.IsNull && On(host.Scene, fabNode);
+
+            window.QueueInput(new InputEvent(InputKind.PointerMove, outside, 0, 0));
+            host.RunFrame();
+            bool fabOff = !fabNode.IsNull && Quiet(host.Scene, fabNode);
+
+            Check("58h. hovering a card's padding reveals its ToolTip-wrapped FAB; leaving the card hides it",
+                cardHovered && fabOn && fabOff, $"cardHovered={cardHovered} fabOn={fabOn} fabOff={fabOff}");
+        }
+    }
+
     static void BrushTransitionChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -4422,6 +4568,51 @@ static class AnimSuite
         }
         Check("M3b. marquee edge-fade left band appears after scroll (scrollX ticker wired)",
               maxTrack3 > 10f && maxLeftBand > 0.5f, $"maxAbsTrackX={maxTrack3:0.##} maxLeftBand={maxLeftBand:0.##}");
+
+        // M4a: the trigger-deactivated return is a ONE-SHOT from the LIVE translate back to 0 — the pure shape. The
+        // engine seeds Keyframes from keys[0] (not the live row), so the departure value must be the first key; the
+        // duration is paced at 4×Speed and clamped 120..450 ms; an already-home offset degenerates to a 1 ms no-op at 0.
+        var homeStyle = new Marquee.Style { Speed = 200f, Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Hover };
+        var (homeKeys, homeDur, homeLoop) = MarqueeScroller.HomeTrack(-120f, homeStyle);
+        var (noopKeys, noopDur, noopLoop) = MarqueeScroller.HomeTrack(-0.2f, homeStyle);
+        bool homeShape = homeKeys.Length >= 2 && Near(homeKeys[0].Value, -120f, 0.001f) && Near(homeKeys[^1].Value, 0f, 0.001f)
+                         && !homeLoop && homeDur >= 120f && homeDur <= 450f;
+        bool noopShape = noopKeys.Length >= 2 && noopKeys[0].Value == 0f && noopKeys[^1].Value == 0f && !noopLoop && noopDur <= 1f;
+        Check("M4a. marquee HomeTrack returns from the live translate to 0 as a one-shot",
+              homeShape && noopShape,
+              $"home: k0={homeKeys[0].Value:0.##} kN={homeKeys[^1].Value:0.##} dur={homeDur:0.#} loop={homeLoop}; noop: k0={noopKeys[0].Value:0.##} kN={noopKeys[^1].Value:0.##} dur={noopDur:0.#} loop={noopLoop}");
+
+        // M4b: behavioural — a HOVER-triggered ping-pong marquee (external gate, the player-bar shape) scrolls out while
+        // hovered; on hover-leave it must GLIDE home (|translate| strictly non-increasing, through intermediate frames —
+        // not a park at -tailDist and not a 0→0 snap) and land at 0, where the host's fade is the right-edge cue only
+        // (the left band the mid-scroll frames raised has cleared — the ticker keeps mirroring the live translate).
+        var probe4 = new MarqueeHoverHomeProbe();
+        var window4 = new HeadlessWindow(new WindowDesc("marquee-home", new Size2(220, 120), 1f)); window4.Show();
+        using var host4 = new AppHost(app, window4, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe4);
+        for (int i = 0; i < 8; i++) host4.RunFrame();                        // mount at rest, not hovered: translate stays 0
+        float restBefore = MaxAbsTrackX(host4, host4.Scene.Root);
+        probe4.Hovered.Value = true;                                          // hover enters: the ping-pong track seeds and runs
+        float peak = 0f;
+        int outFrames = 0;
+        while (outFrames++ < 120 && peak <= 20f) { host4.RunFrame(); peak = MaxAbsTrackX(host4, host4.Scene.Root); }
+        float leftBandWhileOut = MaxEdgeFadeLeftBand(host4.Scene, host4.Scene.Root);
+        probe4.Hovered.Value = false;                                         // hover leaves: glide HOME from the live translate
+        float prev = float.MaxValue, last = peak;
+        bool monotone = true, glided = false;
+        for (int i = 0; i < 40; i++)
+        {
+            host4.RunFrame();
+            float cur = MaxAbsTrackX(host4, host4.Scene.Root);
+            if (cur > prev + 0.01f) monotone = false;
+            if (cur > 0.5f && cur < peak - 0.5f) glided = true;               // an intermediate frame: a glide, not a snap
+            prev = cur; last = cur;
+        }
+        float leftBandEnd = MaxEdgeFadeLeftBand(host4.Scene, host4.Scene.Root);
+        float rightBandEnd = MaxEdgeFadeRightBand(host4.Scene, host4.Scene.Root);
+        Check("M4b. marquee hover-leave glides home and the left fade clears",
+              restBefore < 0.5f && peak > 20f && leftBandWhileOut > 0.5f && monotone && glided && last < 0.5f
+              && leftBandEnd <= 0.001f && rightBandEnd > 0.5f,
+              $"rest={restBefore:0.##} peak={peak:0.##} outFrames={outFrames - 1} leftOut={leftBandWhileOut:0.##} monotone={monotone} glided={glided} last={last:0.###} leftEnd={leftBandEnd:0.##} rightEnd={rightBandEnd:0.##}");
     }
 
     static float MaxEdgeFadeLeftBand(SceneStore s, NodeHandle n)
@@ -4430,6 +4621,15 @@ static class AnimSuite
         if (s.TryGetEdgeFade(n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Left));
         for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
             best = MathF.Max(best, MaxEdgeFadeLeftBand(s, c));
+        return best;
+    }
+
+    static float MaxEdgeFadeRightBand(SceneStore s, NodeHandle n)
+    {
+        float best = 0f;
+        if (s.TryGetEdgeFade(n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Right));
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            best = MathF.Max(best, MaxEdgeFadeRightBand(s, c));
         return best;
     }
 
@@ -5496,4 +5696,22 @@ sealed class FlipCellProbe : Component
             ],
         };
     }
+}
+
+/// <summary>The M4b root: the M3 ping-pong column, but HOVER-triggered through the external <c>scrollWhen</c> gate (the
+/// shared group-hover shape the player bar uses), so the gate flips hover on and off deterministically without
+/// synthesising pointer motion. Hover-leave must glide the content home, never park it mid-scroll.</summary>
+sealed class MarqueeHoverHomeProbe : Component
+{
+    public readonly Signal<bool> Hovered = new(false);
+    public override Element Render() => new BoxEl
+    {
+        Width = 150f, Height = 40f, Direction = 1, AlignItems = FlexAlign.Stretch,
+        Children =
+        [
+            Marquee.Of("This is a very long track title that should overflow and scroll",
+                new Marquee.Style { FontSize = 14f, StartDelayMs = 0f, Speed = 200f, Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Hover },
+                Hovered),
+        ],
+    };
 }

@@ -87,6 +87,7 @@ static partial class ControlsSuite
         ToolTipStableWrapChecks(strings);
         SemanticZoomChecks(strings);
         AutoSuggestProgrammaticFocusChecks(strings);
+        AutoSuggestGhostChecks(strings);
         ChartsChecks(strings);
         InfoBarClosePlateChecks(strings);
     }
@@ -10243,6 +10244,52 @@ static partial class ControlsSuite
         Check("gate.controls.autosuggest-programmatic-focus focusing AutoSuggestBox chrome swallows chars; FirstFocusableIn lands on the editor",
             chromeTrap && typed && editorRole,
             $"chromeTrap={chromeTrap} text='{text.Peek()}' focusedRole={focusedRole} editorNull={editor.IsNull}");
+    }
+
+    // The inline grey completion ghost is a focused-editor affordance: a completion published while the field is
+    // blurred used to stay painted under the text and read as typed characters. The ghost must be absent before
+    // focus, present while the editor has focus, and gone again on the same commit that blurs it.
+    static void AutoSuggestGhostChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("asb-ghost", new Size2(420, 160), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var text = new Signal<string>("");
+        var completion = new Signal<string>("abc");
+        using var host = new AppHost(app, window, device, fonts, strings,
+            new W0fStaticProbe { Build = () => AutoSuggestBox.Create([], "Search", 260f, text, completion: completion) });
+        host.RunFrame();
+        // Unfocused, empty query, a completion already published: the old predicate painted the ghost here.
+        int ghostBefore = CountTextEquals(host.Scene, strings, host.Scene.Root, "abc");
+
+        var chrome = FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox);
+        var editor = host.Input.FirstFocusableIn(chrome);
+        // Pointer focus, then TYPE: the ghost also requires the caret at the end of the document (a Tab focus selects
+        // all, a pointer focus on a non-empty document parks the caret where the press landed), and typing is the one
+        // path that leaves the caret at the end — the flow a user actually takes.
+        host.Input.SetFocus(editor, visual: false);
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'a'));
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'b'));
+        host.RunFrame(); host.RunFrame();
+        int ghostFocused = CountTextEquals(host.Scene, strings, host.Scene.Root, "abc");
+
+        host.Input.SetFocus(host.Scene.Root);
+        host.RunFrame(); host.RunFrame();
+        int ghostBlurred = CountTextEquals(host.Scene, strings, host.Scene.Root, "abc");
+
+        Check("gate.controls.autosuggest-ghost the inline completion ghost shows only while the editor is focused",
+            ghostBefore == 0 && ghostFocused == 1 && ghostBlurred == 0,
+            $"before={ghostBefore} focused={ghostFocused} blurred={ghostBlurred} text='{text.Peek()}'");
+    }
+
+    static int CountTextEquals(SceneStore s, StringTable strings, NodeHandle n, string text)
+    {
+        if (n.IsNull) return 0;
+        ref var p = ref s.Paint(n);
+        int c = p.VisualKind == VisualKind.Text && strings.Resolve(p.Text) == text ? 1 : 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c += CountTextEquals(s, strings, ch, text);
+        return c;
     }
 }
 

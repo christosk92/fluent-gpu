@@ -18,6 +18,17 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Hosting;
 
+/// <summary>Optional platform-window seam for the input-pacing census the host mirrors onto <see cref="FrameStats"/>
+/// (always-on P0 counters, no env switch). Implemented by the Win32 window (its paced <c>WaitForWork</c> keeps the
+/// counter); a headless or foreign window simply does not implement it and the host reports 0. Discovered once at
+/// construction (<c>window as IInputPacingSource</c>) — no per-frame type test, no allocation.</summary>
+public interface IInputPacingSource
+{
+    /// <summary>Monotonic count of display-paced waits a NON-deferrable message broke early (a frame produced off-phase).
+    /// Wheel packets are deferrable, so a wheel glide must hold this flat; a consumer differences successive frames.</summary>
+    long PacedUrgentBreaks { get; }
+}
+
 public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered)
 {
     public int NodesVisited { get; init; }
@@ -204,6 +215,15 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// them before it woke). Ordinary and cheap — record-dirty bits and the pending-removal ledger accumulate until a
     /// publication is CONSUMED, so a skipped one loses nothing. A sustained climb means the render thread is behind.</summary>
     public long PublicationGaps { get; init; }
+    /// <summary>P0 always-on counter (monotonic): display-paced input waits the platform broke early for a non-deferrable
+    /// message, i.e. frames produced OFF-phase by urgent input (<see cref="IInputPacingSource.PacedUrgentBreaks"/>; 0 when
+    /// the window does not implement the seam — headless). Wheel packets are deferrable since the scroll pacing fix, so
+    /// the per-frame difference must be ~0 during a wheel glide; the app's <c>scroll.frames</c> rollup prints it.</summary>
+    public long PacedUrgentBreaks { get; init; }
+    /// <summary>P0 always-on counter (monotonic): <c>RunFrame</c>s that dispatched input but declined to produce a frame
+    /// because one was already produced for the current compositor tick (<see cref="AppHost.ProductionDeclines"/>). Each
+    /// one is an input update that reached the screen a tick late; a wheel glide must hold the difference at ~0.</summary>
+    public long ProductionDeclines { get; init; }
     /// <summary>Cumulative presents and OS-refresh slots those presents missed (an interval of two vblanks counts one
     /// missed slot). Cumulative so a window can difference them: the displayed cadence is the smoothness number, and
     /// it is invisible to the UI-side phase times when the renderer runs on its own thread.</summary>
@@ -1886,6 +1906,7 @@ public sealed class AppHost : IDisposable
     private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable)
     private long _lastProducedTickSeq;     // the tick the last produced frame belongs to
     private long _productionDeclines;      // diagnostic census: RunFrames that dispatched input but produced no frame (already produced for this tick)
+    private readonly IInputPacingSource? _pacingSource;   // the window's paced-wait census (FrameStats.PacedUrgentBreaks); null ⇒ 0
 
     /// <summary>Frames declined for production because a frame was already produced for the current compositor tick
     /// (input was still dispatched). Each one is a frame DropOldest would have discarded. Diagnostic (FG_FPS_LOG).</summary>
@@ -2509,6 +2530,7 @@ public sealed class AppHost : IDisposable
         _isDetachedChild = isDetachedChild;
         _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
+        _pacingSource = window as IInputPacingSource;   // once: the Win32 window implements it, headless does not (→ 0)
         _pixelPool.BufferRetained += OnPixelBufferRetained;
         // Render-loop mode decision: a Headless window is ALWAYS SingleThread (the deterministic path the slice/gates need);
         // a real windowed host defaults to Async (the landed default). loopModeOverride is the internal-only escape hatch —
@@ -3482,7 +3504,10 @@ public sealed class AppHost : IDisposable
             _scrollSink.BeginFrame();          // reset the sink's own per-frame "really moved" latch (see its remarks) — sampled below, NOT the kernel's touched-count-based Summary.AnyMoved
             _scrollKernel.Tick(in scrollClock);
             _scrollSummary = _scrollKernel.Summary;
-            if (_scrollSummary.AnyDragOrBallistic) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
+            // Arm the UI frame budget for ANY live scroll motion — Drag, Ballistic AND a Driven wheel/programmatic glide
+            // (scroll fix S2): the wheel glide used to run ReRealizeVirtuals unbounded on the boundary-crossing frame
+            // after a notch because it is Driven|Wheel, not Drag/Ballistic, and that frame slipped a refresh.
+            if (_scrollSummary.AnyLiveMotion) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
 
             // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
             // content (an offset REALLY advanced THIS frame's tick) OR advanced LAST frame, a reconcile that lands
@@ -3658,7 +3683,7 @@ public sealed class AppHost : IDisposable
                 FlushHosted(ref reactiveDeadline);                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
                 _scrollKernel.Reclamp();                       // 5.5: mount-time Restore/Bind/SetFrame land before ReRealizeVirtuals sees them (§3.3 item 2)
                 long tRx1 = Stopwatch.GetTimestamp();
-                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while Drag/Ballistic (§4)
+                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while any live scroll motion incl. wheel/programmatic glides (§4, ScrollFrameSummary.AnyLiveMotion)
                 long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) FlushRebindsToQuiescence();   // bound-row rebinds (slot signal writes) land THIS frame — unbudgeted
                 long tRx2 = Stopwatch.GetTimestamp();
@@ -4298,6 +4323,8 @@ public sealed class AppHost : IDisposable
                 Presented = !skipSubmit,
                 ScrollActive = scrollActive,
                 PublicationGaps = Interlocked.Read(ref _publicationGaps),
+                PacedUrgentBreaks = _pacingSource is null ? 0 : _pacingSource.PacedUrgentBreaks,   // P0: off-phase frames from urgent input
+                ProductionDeclines = _productionDeclines,                                          // P0: input updates that missed their tick
                 PresentedFrames = Interlocked.Read(ref _presentedFramesTotal),
                 MissedVsyncs = Interlocked.Read(ref _missedVsyncsTotal),
                 PublishSeq = _framePublishSeq,

@@ -124,6 +124,8 @@ public readonly record struct InputEvent(
 
 **Move-coalescing (Win32 map fix, folded):** the >1 kHz `WM_POINTERUPDATE`/`WM_INPUT`/`WM_MOUSEMOVE` flood is collapsed to the **latest** `PointerMove` per `PointerId` at ring-write time (the slab keeps a fixed per-id "last-move index" table — reset each drain, so allocation-free at steady state — and overwrites that id's pending move in place), so dispatch sees at most one move per pointer per frame. Consecutive `Wheel` deltas at the same position **accumulate** (sum, not last). Down/Up/Key/Char/Cancel are never coalesced (ordering-significant).
 
+**The display-paced wait and which messages may wait for the tick (as-built, `Win32Window.WaitForPacedWork` + the pure `PacedInputWaitClassifier`).** When the host asks for a display-rate wait (`AppHost.WaitRequest` → `PlatformInputWakePolicy.CoalescePointerMotion`), the window waits on the compositor tick / present ack with an **absolute** deadline and pumps **deferrable** messages without ending the wait: pointer motion and its companions (`WM_POINTERUPDATE`, `WM_NCPOINTERUPDATE`, `WM_MOUSEMOVE`, `WM_NCMOUSEMOVE`, `WM_SETCURSOR`) and — since the scroll pacing fix — the two wheel packets **`WM_POINTERWHEEL` / `WM_POINTERHWHEEL`**. Why the wheel is deferrable: the ring **sums** consecutive wheel deltas (above), so a packet that waits ≤ one refresh for the tick loses nothing, and the frame that consumes it is produced *in phase* — before the fix a wheel packet broke the wait mid-vblank and the frame slipped one interval on every notch. Why it is safe for the first notch: the paced wait only runs for display-rate waits (a live host); an idle host waits with the `Immediate` policy and wakes on the first packet at once. Down/Up/Key/Char/Timer/`WM_NULL` stay **urgent** (they end the wait early; the platform counts those breaks as `PacedUrgentBreaks`, mirrored onto `FrameStats.PacedUrgentBreaks` through the `IInputPacingSource` seam together with `FrameStats.ProductionDeclines` — the two always-on counters that must read ~0 across a wheel glide). The classifier owns **no DIP constant**: the wheel's distance is the engine's (§7B).
+
 **Win32 map fixes (folded) — pump primitives ratified:**
 - **`EnableMouseInPointer(TRUE)` at window create** is the ratified pump mode: it routes mouse, touch, and pen uniformly through the `WM_POINTER*` family, so one decode path tags `PointerId` + `PointerKind` + `Pressure` and the legacy `WM_MOUSE*`/`SetCapture` path is retired atomically (running both double-counts). NC caption input then arrives as `WM_NCPOINTER*` (the custom-frame handlers extend to it; `WM_NCHITTEST` is unaffected).
 - **`GetPointerFrameInfoHistory`** is the ratified OS-coalesced drain: each `WM_POINTERUPDATE` carries a frame of back-buffered samples which the pump reads in one call (the OS-side analogue of the slab's per-id coalescing), then **DIP-converts once** with the window's current effective DPI → ring. `GetPointerInfo`/`GetPointerType` classify the contact; `WM_POINTERCAPTURECHANGED` → a per-`PointerId` `PointerCancel` (§4).
@@ -593,6 +595,24 @@ Recognized gestures emit their bubble events **only after the arena declares thi
 > DM posts during an update may wake the pump early, but cannot slide that deadline or trigger a catch-up burst. This
 > distinction is load-bearing: Windows can provide high-fidelity contact/lift/momentum **intent**, while the deterministic
 > engine remains the only offset/virtualization owner and the only portable fallback physics implementation.
+
+> **Settled (as-built, scroll pacing fix S1/S3/S6): one notch scale for every wheel device; the glide is cadence-planned.**
+> The hi-res `WM_POINTERWHEEL` fallback producer (sub-notch mouse or precision touchpad without DirectManipulation) no
+> longer converts to DIP in `FluentGpu.Windows` — the frozen `0.11 DIP/unit` one-machine calibration and its speed
+> multiplier are deleted. Its `ScrollBegin`/`ScrollDelta` phase events carry **notch units** (`raw/120`) in
+> `ScrollDelta`/`ScrollDeltaX` (the fields the ring sums per frame) and tag the gesture by writing the same units into
+> `WheelNotch`/`WheelNotchX` (`ScrollInputRouter.IsNotchUnits`, latched for the whole gesture); `ScrollInputRouter`
+> converts with the **same** `ScrollFeel.PerNotchDip(viewport, lineDip)` the detented `Wheel` path uses — `WheelScrollLines`
+> × the scroller's declared line height (`ScrollState.LineDip`; Virtual lists publish their item extent) when it has one,
+> else `max(48 DIP, 10 %·viewport)` — so 120 raw units always travel exactly one notch whether they arrive as one packet
+> or twenty, and `SystemParams.WheelScrollLines` applies to both. A DIP-scripted producer (DirectManipulation, touch, the
+> headless `HeadlessScrollProducer`) never sets the notch fields and stays DIP byte-for-byte. Element-level
+> `OnPointerWheel` handlers on the hi-res path receive the detented element convention (60 DIP per notch). The detented
+> notch itself is no longer a cold critically-damped chase from `Velocity = 0` per notch: `ScrollPhysics.WheelPlanNotch`
+> plans each notch as a **cadence-aware chase** — the arrival time is set from the observed inter-notch cadence, velocity
+> is carried continuously across notches (no per-notch ease-in, no creep), and the landing snaps to the DIP grid — see the
+> kernel (`ScrollKernel.ApplyWheelNotch`) and `docs/plans/scroll-v3-plan-2026-08-17.md` §5.3. Gates:
+> `gate.scroll.wheel-line-dip`, `gate.kernel.wheel-plan-*`.
 
 > **Settled (as-built): the app-zoom wheel hook — `InputHooks.ZoomWheel` (owned here).** In
 > `InputDispatcher.Dispatch`'s `InputKind.Wheel` case the ordering is: (1) element-level `OnPointerWheel` handlers

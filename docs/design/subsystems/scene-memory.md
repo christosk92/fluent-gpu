@@ -282,7 +282,11 @@ blocks as cheap insurance.
 > place rather than re-parking into a consumed slot). Resting content still clips exactly at the viewport; only the
 > hover-elevated subtree escapes. `HoverElevatePaintBit = 1<<17`, `HoverElevateClipRootBit = 1<<18`; the dispatcher's
 > `UpdateHoverWithin` ancestor mask includes `HoverElevatePaintBit` so a NON-interactive flagged wrapper (a shelf cell)
-> still receives `HoverWithin`. Owner of the bit assignment: this doc (the `InteractionInfo`/`HandlerMask` column).
+> still receives `HoverWithin`. `BlocksDragArmBit = 1<<19` (`BoxEl.BlocksDragArm`, the drag-arm barrier —
+> `input-a11y.md`) and `HoverScopeTransparentBit = 1<<20` (`BoxEl.HoverScopeTransparent`: a pointer LISTENER that is
+> not a hover-cascade scope — the ToolTip wrapper; semantics owned by `backdrop-effects-animation.md` §7) are the same
+> kind of discriminator: outside `AnyInteractiveMask`, never a hit/press/focus target. Owner of the bit assignment:
+> this doc (the `InteractionInfo`/`HandlerMask` column).
 
 ```csharp
 [StructLayout(LayoutKind.Sequential, Size = 24)]

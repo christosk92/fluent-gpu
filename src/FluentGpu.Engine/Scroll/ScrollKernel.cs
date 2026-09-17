@@ -470,6 +470,7 @@ public sealed class ScrollKernel
                 {
                     b.Activity = ScrollActivity.Driven;
                     b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Programmatic;
+                    ScrollBody.ClearWheelPlan(ref b);
                     b.Awake = false;
                 }
                 MarkActive(idx);
@@ -494,6 +495,7 @@ public sealed class ScrollKernel
         b.Activity = ScrollActivity.Idle;
         b.Velocity = 0f;
         b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // zoom rewrites content space — the old raw request no longer means anything
         MarkTouched(idx);
     }
@@ -507,6 +509,7 @@ public sealed class ScrollKernel
         b.BandVelMain = 0f;
         b.BandX = 0f; b.BandY = 0f;
         b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // the request is dead — never let it resurrect when the content next grows
         b.EdgeHitPending = false;
         b.Awake = false;
@@ -525,6 +528,7 @@ public sealed class ScrollKernel
         b.Velocity = 0f;
         b.Activity = ScrollActivity.Idle;
         b.Flags = ScrollActivityFlags.None;
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // dragging the thumb wins over any pending programmatic request
         CancelRestore(ref b);
         MarkTouched(idx);
@@ -569,6 +573,7 @@ public sealed class ScrollKernel
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
         SetOffsetMain(ref b, Math.Clamp(value, 0f, maxOff));
+        ScrollBody.ClearWheelPlan(ref b);   // the offset was moved under any live wheel plan — its cadence is meaningless now
         // Goal, not event: land immediately at the best-effort clamp, but stay latched while the saved offset is
         // still past the current extent (content is still growing). Resolve when the extent can hold it, or when
         // the retry deadline fires so a permanently-short page cannot latch forever.
@@ -635,6 +640,7 @@ public sealed class ScrollKernel
         PushHistory(ref b, cmd.T, cmd.A);
         b.Impulse.Reset(cmd.A, cmd.T);
         b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing | ScrollActivityFlags.Chained);
+        ScrollBody.ClearWheelPlan(ref b);
         b.TargetRaw = b.Target;   // the finger took over — a pending programmatic request must not resurrect on growth
         b.BandVelMain = 0f;
         b.LastAbsorbed = -1;
@@ -701,6 +707,7 @@ public sealed class ScrollKernel
             seed.Velocity = Math.Clamp(v, -_feel.FlingMax, _feel.FlingMax);
             seed.Awake = false;
             seed.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Chained);
+            ScrollBody.ClearWheelPlan(ref seed);
             SnapRetargetOnEntry(ref seed);
             MarkActive(seedSlot);
         }
@@ -772,6 +779,7 @@ public sealed class ScrollKernel
             b.DragAnchor = b.PositionMain;
             b.DragRaw = b.PositionMain + ScrollPhysics.ExcessFromBand(b.BandMain, b.Frame.ViewportMain);   // re-grab keeps a live stretch continuous
             b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing | ScrollActivityFlags.Chained);
+            ScrollBody.ClearWheelPlan(ref b);
             b.BandVelMain = 0f;
             b.LastAbsorbed = -1;
             b.EdgeHitPending = false;
@@ -861,6 +869,13 @@ public sealed class ScrollKernel
 
     // ── Wheel / programmatic / velocity / driven ─────────────────────────────────────────────────────────────
 
+    /// <summary>A wheel notch arms (or re-plans) the Driven|Wheel glide through <see cref="ScrollPhysics.WheelPlanNotch"/>:
+    /// a live wheel glide accumulates the target and re-plans its half-life/velocity from the observed cadence
+    /// (velocity-continuous — nothing here ever resets <see cref="ScrollBody.Velocity"/>, that reset was the ease-in
+    /// discontinuity the S1 plan removes); a cold notch seeds the chase at κ·R·y, or carries a same-direction
+    /// Ballistic/Driven velocity (capped at the no-overshoot bound). A Drag body's velocity is stale by construction
+    /// (command-driven, not integrated) and is never carried. The notch supersedes any pending programmatic request
+    /// (<c>TargetRaw</c> relatched, restore cancelled) and clears the per-command ζ/ω/settle overrides.</summary>
     private void ApplyWheelNotch(in ScrollInput cmd)
     {
         if (!TryGetSlot(cmd.Node, out int idx)) return;
@@ -868,14 +883,14 @@ public sealed class ScrollKernel
         bool sameFlavourLive = b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Wheel) != 0;
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
-        float baseTarget = sameFlavourLive ? b.Target : b.PositionMain;
-        b.Target = Math.Clamp(baseTarget + cmd.A, 0f, maxOff);
+        float carry = (b.Activity == ScrollActivity.Ballistic || b.Activity == ScrollActivity.Driven) ? b.Velocity : 0f;
+        ScrollPhysics.WheelPlanNotch(ref b.Target, ref b.Velocity, ref b.DrivenHalflifeMs, ref b.WheelSinceS, ref b.WheelGapS,
+            b.PositionMain, cmd.A, maxOff, sameFlavourLive, carry, in _feel);
         b.TargetRaw = b.Target;   // a wheel notch supersedes any pending programmatic request
         CancelRestore(ref b);
-        if (!sameFlavourLive) { b.Velocity = 0f; b.Awake = false; }
+        if (!sameFlavourLive) b.Awake = false;
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Wheel;
-        b.DrivenHalflifeMs = _feel.WheelHalflifeMs;
         b.DrivenZeta = 0f; b.DrivenOmega = 0f; b.DrivenSettleVel = 0f;
         MarkActive(idx);
         MarkTouched(idx);
@@ -914,6 +929,7 @@ public sealed class ScrollKernel
             b.Velocity = 0f;
             b.Activity = ScrollActivity.Idle;
             b.Flags &= ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll);
+            ScrollBody.ClearWheelPlan(ref b);
             MarkTouched(idx);
             return;
         }
@@ -923,6 +939,7 @@ public sealed class ScrollKernel
         if (!sameFlavourLive) { b.Velocity = 0f; b.Awake = false; }
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Programmatic;
+        ScrollBody.ClearWheelPlan(ref b);
         float halflife = cmd.B > 0f ? cmd.B
             : ScrollPhysics.ProgrammaticHalflifeS(MathF.Abs(target - b.PositionMain), _feel.ProgrammaticMinHalflifeMs, _feel.ProgrammaticMaxHalflifeMs, _feel.ProgrammaticShortDip, _feel.ProgrammaticLongDip);
         b.DrivenHalflifeMs = halflife;
@@ -952,6 +969,7 @@ public sealed class ScrollKernel
         b.Velocity = v;
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Autoscroll;
+        ScrollBody.ClearWheelPlan(ref b);
         MarkActive(idx);
         MarkTouched(idx);
     }
@@ -990,6 +1008,7 @@ public sealed class ScrollKernel
             parent.SnapArmed = false;
             parent.Awake = false;
             parent.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing);
+            ScrollBody.ClearWheelPlan(ref parent);
             MarkActive(parentSlot);
             MarkTouched(parentSlot);
         }
@@ -1125,7 +1144,7 @@ public sealed class ScrollKernel
     private void UpdateSummary()
     {
         bool anyMoved = _touchedCount > 0;
-        bool anyUserActive = false, anyDragOrBallistic = false;
+        bool anyUserActive = false, anyLiveMotion = false;
         float maxSpeed = 0f;
         for (int i = 0; i < _activeCount; i++)
         {
@@ -1134,11 +1153,15 @@ public sealed class ScrollKernel
             bool userActive = b.Activity == ScrollActivity.Drag || b.Activity == ScrollActivity.Ballistic
                 || (b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Programmatic) == 0);
             if (userActive) anyUserActive = true;
-            if (b.Activity == ScrollActivity.Drag || b.Activity == ScrollActivity.Ballistic) anyDragOrBallistic = true;
+            // Continuous motion the host budgets a frame for: a drag, a fling, or a wheel/programmatic glide (an
+            // Autoscroll drive is excluded — it is a constant-velocity edge drive, not a bounded glide).
+            bool liveMotion = b.Activity == ScrollActivity.Drag || b.Activity == ScrollActivity.Ballistic
+                || (b.Activity == ScrollActivity.Driven && (b.Flags & (ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic)) != 0);
+            if (liveMotion) anyLiveMotion = true;
             float speed = MathF.Abs(b.VelocityMain);
             if (speed > maxSpeed) maxSpeed = speed;
         }
-        Summary = new ScrollFrameSummary(anyMoved, anyUserActive, anyDragOrBallistic, _activeCount, maxSpeed);
+        Summary = new ScrollFrameSummary(anyMoved, anyUserActive, anyLiveMotion, _activeCount, maxSpeed);
     }
 
     private void UpdateDiag()

@@ -21,6 +21,15 @@ static class ScrollKernelSuite
         ChainLiftHandoffCheck();
         ChainBallisticEdgeCheck();
         WheelAccumulateHardStopCheck();
+        WheelColdSeedCheck();
+        WheelCadenceFlatCheck();
+        WheelSecondClickCheck();
+        WheelDtInvarianceCheck();
+        WheelReversalCheck();
+        WheelSlowCadenceStiffCheck();
+        WheelEdgeDegenerateCheck();
+        WheelFlingCarryCheck();
+        WheelNoSubpixelTailCheck();
         ProgrammaticGlideRetargetCheck();
         RestoreLatchUntilExtentCheck();
         RestoreGoalExtentGrowsCheck();
@@ -397,6 +406,335 @@ static class ScrollKernelSuite
         k.TryGetBody(1, out var final);
         bool ok = targetClamped && !everBanded && MathF.Abs(final.PositionMain - 600f) < 0.5f;
         Check("gate.kernel.wheel-accumulate-hardstop", ok, $"target={body0.Target} final={final.PositionMain:F2} everBanded={everBanded}");
+    }
+
+    // ── gate.kernel.wheel-* — the S1 wheel plan (ScrollPhysics.WheelPlanNotch / WheelStep) ───────────────────
+    // Every scenario drives a REAL ScrollKernel (notch → ApplyWheelNotch → ScrollBody.Advance → WheelStep) at
+    // 8.333 ms ticks with D = 120 DIP per notch (three 40-DIP rows — S6's Windows rule) over a 100 000-DIP extent so
+    // no clamp interferes unless the check wants one. Thresholds are the D = 120 values of the plan's own
+    // simulation, re-run at this notch size (the plan quotes D = 83): cold notch 12.9 DIP on the first tick, peak on
+    // the second, Idle after 21 ticks (175 ms); 110 ms cadence min/max 0.59 over notches 6..11, Idle 250 ms after
+    // the last notch; a reversal at a cadence slot carries on 1.4 DIP and moves back on the next tick.
+
+    private const float WheelD = 120f;
+    private const float WheelDt120 = 1f / 120f;
+
+    private static ScrollKernel WheelKernel(float extent = 100000f, float viewport = 400f)
+    {
+        var k = new ScrollKernel(new RecordingSink(), ScrollFeel.Shipping);
+        SetupViewport(k, 1, extent, viewport);
+        return k;
+    }
+
+    /// <summary>One kernel tick of <paramref name="dt"/> seconds on node 1 (RefreshSec = dt, so the wake-tick rule
+    /// substitutes the same lattice); returns the signed main-axis displacement of that tick.</summary>
+    private static float WheelTick(ScrollKernel k, ref double t, float dt)
+    {
+        k.TryGetBody(1, out var before);
+        t += dt;
+        var c = new ScrollClock(t, dt, t, dt);
+        k.Tick(in c);
+        k.TryGetBody(1, out var after);
+        return after.PositionMain - before.PositionMain;
+    }
+
+    /// <summary>Posts <paramref name="notches"/> notches of <see cref="WheelD"/> at a <paramref name="gapS"/> cadence
+    /// (the LAST one carries <paramref name="lastDelta"/> instead), each posted just before the first tick at or past
+    /// its slot time — the way a paced host consumes a packet on the vblank — ticking at <paramref name="dt"/> until
+    /// the body is Idle after the last notch. Fills the per-tick displacement and the tick index each notch was posted
+    /// on; returns the tick count (the last tick is the landing tick).</summary>
+    private static int WheelCadenceRun(ScrollKernel k, float gapS, int notches, float lastDelta, float dt, float[] d, int[] notchTick)
+    {
+        double t = 0, next = 0;
+        int posted = 0, n = 0;
+        while (n < d.Length)
+        {
+            if (posted < notches && t >= next - 1e-6)
+            {
+                k.Port.Post(ScrollInput.WheelNotch(1, t, posted == notches - 1 ? lastDelta : WheelD));
+                notchTick[posted++] = n;
+                next += gapS;
+            }
+            d[n++] = WheelTick(k, ref t, dt);
+            k.TryGetBody(1, out var b);
+            if (posted == notches && b.Activity == ScrollActivity.Idle) break;
+        }
+        return n;
+    }
+
+    private static bool WheelBodyNaN(in ScrollBody b)
+        => float.IsNaN(b.PositionMain) || float.IsNaN(b.Velocity) || float.IsNaN(b.Target) || float.IsNaN(b.DrivenHalflifeMs)
+           || float.IsNaN(b.WheelSinceS) || float.IsNaN(b.WheelGapS);
+
+    // ── gate.kernel.wheel-cold-seed ───────────────────────────────────────────────────────────────────────────
+    // A cold notch seeds κ·R·y: the first tick already moves 6–14 DIP (no t·e^{−yt} ease-in), the per-tick shift is
+    // monotone from the third tick on (the seed peaks on the second), it never crosses the target, no tick before the
+    // landing one is a sub-pixel (0 < |d| < 0.667 DIP = one device pixel at scale 1.5) creep, and it is Idle within
+    // 185 ms (the D = 120 simulation lands on tick 21 = 175 ms; the D = 83 figure in the plan is 158 ms).
+
+    private static void WheelColdSeedCheck()
+    {
+        var k = WheelKernel();
+        var d = new float[64];
+        double t = 0;
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        int n = 0; bool idle = false;
+        while (n < d.Length && !idle)
+        {
+            d[n++] = WheelTick(k, ref t, WheelDt120);
+            k.TryGetBody(1, out var b);
+            idle = b.Activity == ScrollActivity.Idle;
+        }
+        int land = n - 1;
+        bool firstOk = d[0] >= 6f && d[0] <= 14f;
+        bool monotone = true, noSubPixel = true, noOvershoot = true;
+        float pos = 0f, peak = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            pos += d[i];
+            peak = MathF.Max(peak, d[i]);
+            if (d[i] < 0f || pos > WheelD + 0.01f) noOvershoot = false;
+            if (i >= 2 && i < land && d[i] > d[i - 1] + 0.01f) monotone = false;
+            if (i < land && d[i] > 0f && d[i] < 0.667f) noSubPixel = false;
+        }
+        k.TryGetBody(1, out var fin);
+        float settleMs = n * WheelDt120 * 1000f;
+        bool landed = idle && MathF.Abs(fin.PositionMain - WheelD) < 0.01f;
+        bool ok = firstOk && monotone && noOvershoot && noSubPixel && landed && settleMs <= 185f;
+        Check("gate.kernel.wheel-cold-seed", ok,
+            $"first={d[0]:F2} peak={peak:F2} monotone={monotone} noOvershoot={noOvershoot} noSubPixel={noSubPixel} settle={settleMs:F0}ms final={fin.PositionMain:F2} idle={idle}");
+    }
+
+    // ── gate.kernel.wheel-cadence-flat ────────────────────────────────────────────────────────────────────────
+    // 12 notches at 110 ms (9 notches/s): the cadence-planned half-life keeps the per-tick shift steady — min/max
+    // over the ticks between notch 6 and notch 11 ≥ 0.55 (today's kernel: 0.20) — every notch lands (final = 12·D),
+    // and the tail stiffening settles the body within 260 ms of the last notch (D = 120 simulation: 250 ms; the plan's
+    // ≤ 240 ms acceptance is its D = 83 Pareto point; one tick of margin on top of the measured value).
+
+    private static void WheelCadenceFlatCheck()
+    {
+        var k = WheelKernel();
+        var d = new float[512]; var nt = new int[12];
+        int n = WheelCadenceRun(k, 0.110f, 12, WheelD, WheelDt120, d, nt);
+        float min = float.MaxValue, max = 0f;
+        for (int i = nt[5]; i < nt[11]; i++) { min = MathF.Min(min, d[i]); max = MathF.Max(max, d[i]); }
+        float ratio = max > 0f ? min / max : 0f;
+        k.TryGetBody(1, out var fin);
+        float settleMs = (n - nt[11]) * WheelDt120 * 1000f;
+        bool landed = fin.Activity == ScrollActivity.Idle && MathF.Abs(fin.PositionMain - 12f * WheelD) < 0.01f;
+        bool ok = ratio >= 0.55f && landed && settleMs <= 260f;
+        Check("gate.kernel.wheel-cadence-flat", ok,
+            $"min/max={ratio:F2} (min={min:F2} max={max:F2}) settleAfterLast={settleMs:F0}ms final={fin.PositionMain:F1} idle={fin.Activity == ScrollActivity.Idle}");
+    }
+
+    // ── gate.kernel.wheel-second-click ────────────────────────────────────────────────────────────────────────
+    // The second click of a stream arrives when the first glide has decayed to ~3.5 DIP/tick; the cadence kick
+    // (vel ≥ 0.65·D/gap) makes the tick that receives it move ≥ 4 DIP on its own (today: a 2 px dip and a re-ramp).
+
+    private static void WheelSecondClickCheck()
+    {
+        var k = WheelKernel();
+        double t = 0;
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        float lastBefore = 0f;
+        for (int i = 0; i < 13; i++) lastBefore = WheelTick(k, ref t, WheelDt120);   // 108 ms in — mid-tail of the first notch
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        float second = WheelTick(k, ref t, WheelDt120);
+        k.TryGetBody(1, out var b);
+        bool ok = second >= 4f && b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Wheel) != 0
+                  && MathF.Abs(b.Target - 2f * WheelD) < 0.01f;
+        Check("gate.kernel.wheel-second-click", ok, $"tickBefore={lastBefore:F2} secondClickTick={second:F2} target={b.Target:F1} activity={b.Activity}");
+    }
+
+    // ── gate.kernel.wheel-dt-invariance ───────────────────────────────────────────────────────────────────────
+    // The same three notches (0 / 100 / 200 ms) on a 60 Hz and a 120 Hz lattice: the closed-form chase, the
+    // split-at-the-switch tail stiffening and the velocity-valued floor keep the two trajectories within 0.33 DIP at
+    // every shared instant.
+
+    private static void WheelDtInvarianceCheck()
+    {
+        static void Lattice(float dt, int notchEvery, float[] pos)
+        {
+            var k = WheelKernel();
+            double t = 0;
+            for (int i = 0; i < pos.Length; i++)
+            {
+                if (i % notchEvery == 0 && i / notchEvery < 3) k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+                WheelTick(k, ref t, dt);
+                k.TryGetBody(1, out var b);
+                pos[i] = b.PositionMain;
+            }
+        }
+        var p120 = new float[120]; var p60 = new float[60];
+        Lattice(1f / 120f, 12, p120);
+        Lattice(1f / 60f, 6, p60);
+        float maxDiff = 0f;
+        for (int i = 0; i < p60.Length; i++) maxDiff = MathF.Max(maxDiff, MathF.Abs(p60[i] - p120[2 * i + 1]));
+        bool ok = maxDiff <= 0.33f && MathF.Abs(p120[^1] - 3f * WheelD) < 0.01f && MathF.Abs(p60[^1] - 3f * WheelD) < 0.01f;
+        Check("gate.kernel.wheel-dt-invariance", ok, $"maxDiff={maxDiff:F3} final120={p120[^1]:F2} final60={p60[^1]:F2}");
+    }
+
+    // ── gate.kernel.wheel-reversal ────────────────────────────────────────────────────────────────────────────
+    // Six forward notches at 110 ms, then a −D notch at the seventh slot (the cycle's velocity trough, ~740 DIP/s):
+    // the plan rebases Target = off − D (the unconsumed lag is dropped), keeps the velocity, and the ζ=1 chase brakes
+    // through zero inside the reversal tick — carry-on ≤ 2 DIP — and moves back on the very next tick.
+
+    private static void WheelReversalCheck()
+    {
+        var k = WheelKernel();
+        k.Port.Post(ScrollInput.ScrollTo(1, 5000f, immediate: true));   // start mid-content so the reversal has room
+        k.Reclamp();
+        var d = new float[512]; var nt = new int[7];
+        int n = WheelCadenceRun(k, 0.110f, 7, -WheelD, WheelDt120, d, nt);
+        int rev = nt[6];
+        float posBefore = 5000f;
+        for (int i = 0; i < rev; i++) posBefore += d[i];
+        float carryOn = d[rev];
+        float next = rev + 1 < n ? d[rev + 1] : 0f;
+        k.TryGetBody(1, out var fin);
+        bool rebased = MathF.Abs(fin.PositionMain - (posBefore - WheelD)) < 0.01f && fin.Activity == ScrollActivity.Idle;
+        bool ok = carryOn <= 2f && next < 0f && rebased;
+        Check("gate.kernel.wheel-reversal", ok,
+            $"carryOn={carryOn:F2} nextTick={next:F2} posBefore={posBefore:F1} final={fin.PositionMain:F1} expected={posBefore - WheelD:F1} ticksAfter={n - rev}");
+    }
+
+    // ── gate.kernel.wheel-slow-cadence-stiff ──────────────────────────────────────────────────────────────────
+    // Clicks 150 ms apart (> WheelGapMaxS) are independent: no cadence plan is armed, the half-life stays at
+    // WheelHalflifeMs, and each notch's own tick moves ≥ 6 DIP (kicked back up to the cold seed).
+
+    private static void WheelSlowCadenceStiffCheck()
+    {
+        var k = WheelKernel();
+        double t = 0, next = 0;
+        var firsts = new float[5]; var hls = new float[5];
+        int posted = 0;
+        for (int i = 0; i < 200 && posted < firsts.Length; i++)
+        {
+            int idx = -1;
+            if (t >= next - 1e-6) { k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); idx = posted++; next += 0.150; }
+            float d = WheelTick(k, ref t, WheelDt120);
+            if (idx >= 0) { k.TryGetBody(1, out var b); firsts[idx] = d; hls[idx] = b.DrivenHalflifeMs; }
+        }
+        bool ok = true;
+        for (int i = 0; i < firsts.Length; i++)
+            if (firsts[i] < 6f || MathF.Abs(hls[i] - ScrollFeel.Shipping.WheelHalflifeMs) > 0.01f) ok = false;
+        Check("gate.kernel.wheel-slow-cadence-stiff", ok,
+            $"firsts={firsts[0]:F2}/{firsts[1]:F2}/{firsts[2]:F2}/{firsts[3]:F2}/{firsts[4]:F2} hl={hls[0]:F1}/{hls[1]:F1}/{hls[2]:F1}/{hls[3]:F1}/{hls[4]:F1}");
+    }
+
+    // ── gate.kernel.wheel-edge-degenerate ─────────────────────────────────────────────────────────────────────
+    // The 0/0 cases: a notch with nowhere to go (maxOff = 0), a live glide whose target is already clamped onto the
+    // edge and gets another notch, a notch while parked exactly at the edge, and a zero-delta notch mid-glide — none
+    // may produce a NaN, and every one lands Idle on the clamp.
+
+    private static void WheelEdgeDegenerateCheck()
+    {
+        // (1) maxOff = 0: target clamps onto the current offset — seed is 0, the next tick snaps and settles.
+        var k1 = WheelKernel(400f, 400f);
+        double t = 0;
+        k1.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); WheelTick(k1, ref t, WheelDt120);
+        k1.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); WheelTick(k1, ref t, WheelDt120);
+        k1.TryGetBody(1, out var a);
+        bool aOk = !WheelBodyNaN(in a) && a.Activity == ScrollActivity.Idle && a.PositionMain == 0f;
+
+        // (2) maxOff = 120: the glide is 15 ticks in (≈ 8 DIP short), a second notch re-clamps the target onto the
+        //     edge (a live re-plan against a tiny |R|), then a notch while Idle at the edge (cold, r = 0).
+        var k2 = WheelKernel(520f, 400f);
+        t = 0;
+        k2.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        for (int i = 0; i < 15; i++) WheelTick(k2, ref t, WheelDt120);
+        k2.TryGetBody(1, out var mid);
+        bool midLive = mid.Activity == ScrollActivity.Driven;
+        k2.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        bool bNaN = false;
+        for (int i = 0; i < 64; i++)
+        {
+            WheelTick(k2, ref t, WheelDt120);
+            k2.TryGetBody(1, out var b);
+            if (WheelBodyNaN(in b)) bNaN = true;
+            if (b.Activity == ScrollActivity.Idle) break;
+        }
+        k2.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); WheelTick(k2, ref t, WheelDt120);
+        k2.TryGetBody(1, out var edge);
+        bool bOk = midLive && !bNaN && !WheelBodyNaN(in edge) && edge.Activity == ScrollActivity.Idle && MathF.Abs(edge.PositionMain - 120f) < 0.01f;
+
+        // (3) a zero-delta notch during a live glide: not a reversal, target unchanged, glide continues forward.
+        var k3 = WheelKernel();
+        t = 0;
+        k3.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        for (int i = 0; i < 3; i++) WheelTick(k3, ref t, WheelDt120);
+        k3.Port.Post(ScrollInput.WheelNotch(1, t, 0f));
+        float dz = WheelTick(k3, ref t, WheelDt120);
+        k3.TryGetBody(1, out var z);
+        bool cOk = !WheelBodyNaN(in z) && z.Activity == ScrollActivity.Driven && dz > 0f && MathF.Abs(z.Target - WheelD) < 0.01f;
+
+        Check("gate.kernel.wheel-edge-degenerate", aOk && bOk && cOk,
+            $"maxOff0: pos={a.PositionMain} vel={a.Velocity} act={a.Activity}; edge: pos={edge.PositionMain:F2} vel={edge.Velocity:F2} act={edge.Activity} nan={bNaN}; zeroDelta: d={dz:F2} act={z.Activity}");
+    }
+
+    // ── gate.kernel.wheel-fling-carry ─────────────────────────────────────────────────────────────────────────
+    // A Ballistic fling (a lifted finger at ~4000 DIP/s) followed by a same-direction notch: the wheel plan carries the
+    // fling velocity instead of resetting it (the first wheel tick moves far more than a cold notch's 12.9 DIP), caps
+    // it at the exact no-overshoot bound 0.95·|R|·y, never crosses the target and lands exactly on it.
+
+    private static void WheelFlingCarryCheck()
+    {
+        var k = WheelKernel();
+        k.Port.Post(ScrollInput.ContactBegin(1, 0.0, 0f));
+        k.Port.Post(ScrollInput.ContactEnd(1, 0.02, 80f));   // 80 DIP in 20 ms ⇒ 4000 DIP/s, Begin+End only
+        double t = 0.02;
+        var c0 = new ScrollClock(t, WheelDt120, t, WheelDt120);
+        k.Tick(in c0);
+        k.TryGetBody(1, out var fl);
+        bool ballistic = fl.Activity == ScrollActivity.Ballistic && fl.Velocity > 0f;
+        float vFling = fl.Velocity;
+        float posAtNotch = fl.PositionMain;
+
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        var d = new float[128];
+        int n = 0; bool idle = false, over = false;
+        float target = 0f;
+        while (n < d.Length && !idle)
+        {
+            d[n++] = WheelTick(k, ref t, WheelDt120);
+            k.TryGetBody(1, out var b);
+            if (n == 1) target = b.Target;
+            if (b.PositionMain > b.Target + 0.01f) over = true;
+            idle = b.Activity == ScrollActivity.Idle;
+        }
+        k.TryGetBody(1, out var fin);
+        float yBase = 1.3862944f / (ScrollFeel.Shipping.WheelHalflifeMs * 0.001f);
+        float capFirstTick = 0.95f * WheelD * yBase * WheelDt120;   // a velocity at the bound can travel at most this on the first tick
+        bool carried = d[0] >= 20f && d[0] <= capFirstTick + 0.01f;   // a cold notch moves 12.9; the carried fling ~26
+        bool targetOk = MathF.Abs(target - (posAtNotch + WheelD)) < 0.01f;
+        bool landed = idle && MathF.Abs(fin.PositionMain - target) < 0.01f;
+        bool ok = ballistic && carried && targetOk && !over && landed;
+        Check("gate.kernel.wheel-fling-carry", ok,
+            $"ballistic={ballistic} vFling={vFling:F0} first={d[0]:F2} cap={capFirstTick:F2} over={over} landed={landed} final={fin.PositionMain:F2} target={target:F2}");
+    }
+
+    // ── gate.kernel.wheel-no-subpixel-tail ────────────────────────────────────────────────────────────────────
+    // After the last notch of a 110 ms stream, no tick before the landing one changes the offset by less than one
+    // device pixel at scale 1.5 (0 < |d| < 0.667 DIP): the 160 DIP/s floor and the 1-DIP snap replace the 4–5
+    // change-without-motion frames that forced a glyph re-snap every frame (S4).
+
+    private static void WheelNoSubpixelTailCheck()
+    {
+        var k = WheelKernel();
+        var d = new float[512]; var nt = new int[12];
+        int n = WheelCadenceRun(k, 0.110f, 12, WheelD, WheelDt120, d, nt);
+        int last = nt[11], sub = 0, tailTicks = 0;
+        float minTail = float.MaxValue;
+        for (int i = last; i < n - 1; i++)
+        {
+            float a = MathF.Abs(d[i]);
+            tailTicks++;
+            if (a > 0f) minTail = MathF.Min(minTail, a);
+            if (a > 0f && a < 0.667f) sub++;
+        }
+        k.TryGetBody(1, out var fin);
+        bool ok = sub == 0 && tailTicks > 0 && fin.Activity == ScrollActivity.Idle;
+        Check("gate.kernel.wheel-no-subpixel-tail", ok, $"subPixelTicks={sub} tailTicks={tailTicks} minTail={minTail:F2} landing={d[n - 1]:F2}");
     }
 
     // ── gate.kernel.programmatic-glide-retarget ───────────────────────────────────────────────────────────────

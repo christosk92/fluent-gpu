@@ -16,11 +16,15 @@ public sealed partial class AnimEngine
 {
     /// <summary>Pointer entered/left a node (the dispatcher's HoverWithin edge). A container reads as hovered while the
     /// pointer is anywhere in its subtree, so its reveal/scale descendants stay driven as the pointer crosses onto a
-    /// child — the effective guard makes a stray leaf-hover-off of a still-within container a no-op.</summary>
+    /// child — the effective guard makes a stray leaf-hover-off of a still-within container a no-op.
+    /// <para>A REVEAL losing its own hover while its enclosing scope is still hovered stays on: the pointer moved off
+    /// a card's play FAB back onto the card, and the reveal is the card's affordance, not the FAB's own state. The
+    /// scope walk skips <see cref="InteractionInfo.HoverScopeTransparentBit"/> listeners (the ToolTip wrapper).</para></summary>
     public void SetHover(NodeHandle node, bool on)
     {
         if (node.IsNull || !_scene.IsLive(node)) return;
         bool effective = on || (_scene.Flags(node) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0;
+        if (!effective && IsReveal(node) && EnclosingScopeHovered(node)) effective = true;
         SetHoverCore(node, effective, force: true);
         SetHoverDescendants(node, effective);
     }
@@ -94,19 +98,41 @@ public sealed partial class AnimEngine
     }
 
     /// <summary>Does this node own its own interaction scope? Click / pointer / pressed handlers make it a control in its
-    /// own right rather than a part of its container.</summary>
+    /// own right rather than a part of its container — unless it declares itself a transparent listener
+    /// (<c>BoxEl.HoverScopeTransparent</c>, the ToolTip wrapper), which the cascade walks through.</summary>
     private bool IsNestedHoverBoundary(NodeHandle node)
     {
         const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
-        return (_scene.Interaction(node).HandlerMask & interactive) != 0;
+        uint mask = _scene.Interaction(node).HandlerMask;
+        return (mask & interactive) != 0 && (mask & InteractionInfo.HoverScopeTransparentBit) == 0;
+    }
+
+    /// <summary>A hover/press REVEAL: the node declares <c>HoverOpacity</c> or <c>PressedOpacity</c>.</summary>
+    private bool IsReveal(NodeHandle node)
+    {
+        ref NodePaint p = ref _scene.Paint(node);
+        return !float.IsNaN(p.HoverOpacity) || !float.IsNaN(p.PressedOpacity);
+    }
+
+    /// <summary>Is the nearest REAL interaction scope above this node hovered? Non-interactive ancestors and transparent
+    /// listeners are skipped; the first interactive, non-transparent ancestor answers. False at the root.</summary>
+    private bool EnclosingScopeHovered(NodeHandle node)
+    {
+        const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+        for (var parent = _scene.Parent(node); !parent.IsNull && _scene.IsLive(parent); parent = _scene.Parent(parent))
+        {
+            uint mask = _scene.Interaction(parent).HandlerMask;
+            if ((mask & interactive) == 0 || (mask & InteractionInfo.HoverScopeTransparentBit) != 0) continue;
+            return (_scene.Flags(parent) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0;
+        }
+        return false;
     }
 
     /// <summary>Whether a descendant's hover/press progress is driven by its CONTAINER. A reveal always is; a scale is
     /// only when the node is not its own interaction scope (see the cascade-rule comment above).</summary>
     private bool FollowsContainer(NodeHandle node, bool ownsScope)
     {
-        ref NodePaint p = ref _scene.Paint(node);
-        if (!float.IsNaN(p.HoverOpacity) || !float.IsNaN(p.PressedOpacity)) return true;   // reveal — crosses boundaries
+        if (IsReveal(node)) return true;                                                   // reveal — crosses boundaries
         if (ownsScope) return false;                                                       // its own control state
         return _scene.TryGetInteract(node, out var ia) && (ia.HoverScale != 1f || ia.PressScale != 1f);
     }
@@ -115,7 +141,8 @@ public sealed partial class AnimEngine
     /// hover-affordance path (a media-card play FAB mounts after its card already took the pointer-enter edge). Applies
     /// the SAME rule as the cascade, which the old path bypassed by going through <see cref="SetHover"/>'s
     /// <c>force: true</c> arm: a reveal is seeded, a nested interactive control is not, so a button that mounts (or
-    /// re-keys) inside a hovered card no longer lights up with no pointer edge at all.
+    /// re-keys) inside a hovered card no longer lights up with no pointer edge at all. A transparent listener
+    /// (<c>HoverScopeTransparent</c>) is not a boundary here either, so its subtree seeds from the scope behind it.
     /// <para>Returns false when nothing was seeded, so a caller without an <see cref="AnimEngine"/> equivalent can tell
     /// the node was deliberately left at rest.</para></summary>
     public bool TrySeedHoverFromContainer(NodeHandle node)

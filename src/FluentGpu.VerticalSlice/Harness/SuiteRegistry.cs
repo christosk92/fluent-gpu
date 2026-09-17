@@ -46,6 +46,7 @@ public static class SuiteRegistry
         new("hooks", "hooks", HooksSuite.Run),
         new("anim", "anim", AnimSuite.Run),
         new("scroll", "scroll", ScrollSuite.Run),
+        new("scroll-pacing", "scroll", ScrollPacingChecks.Run),   // wheel distance / pacing evidence; runs with --suite scroll
         new("kernel", "kernel", ScrollKernelSuite.Run),
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),

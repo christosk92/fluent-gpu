@@ -4654,6 +4654,10 @@ public sealed partial class TreeReconciler
         // compiled to POD ScrollBind rows for every element type, replacing the old per-feature StickyTop/ScrollStretchHeader passes.
         BakeScrollBinds(node, el);
 
+        // Wheel routing (Element.WheelTarget): a header names the scroller its wheel input glides — every element type,
+        // the node-keyed sparse row InputDispatcher.RouteWheelTarget reads off the hit chain (null clears it).
+        _scene.SetWheelTarget(node, el.WheelTarget);
+
         // Stagger (declarative): a parent records its per-child entrance delay; each child's SynthesizeDeclarative reads
         // it + the child's sibling index to delay that child's Enter (a staggered list/shelf reveal). Reconciler-local;
         // cleared when Stagger drops to 0. Set for every element type (any container can stagger its children).
@@ -4965,6 +4969,11 @@ public sealed partial class TreeReconciler
                 if (b.BlocksDragArm) ii.HandlerMask |= InteractionInfo.BlocksDragArmBit;
                 else ii.HandlerMask &= ~InteractionInfo.BlocksDragArmBit;
 
+                // BoxEl.HoverScopeTransparent: a pointer listener the hover cascade / mount seed look through (the
+                // ToolTip wrapper). Discriminator only — same toggle-both-ways rule.
+                if (b.HoverScopeTransparent) ii.HandlerMask |= InteractionInfo.HoverScopeTransparentBit;
+                else ii.HandlerMask &= ~InteractionInfo.HoverScopeTransparentBit;
+
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= ~(uint)InteractionInfo.KeyBit; _scene.SetKeyHandler(node, null); }
 
@@ -5112,7 +5121,8 @@ public sealed partial class TreeReconciler
                 // A lazy hover affordance can mount AFTER its card/row received the pointer-enter edge (media-card play
                 // FABs are the canonical case). Seed it from the NEAREST interactive ancestor's live scope; stopping at
                 // that ancestor is load-bearing, otherwise a hovered list/pane would light newly mounted reveals in every
-                // sibling row. Existing nodes keep their own eased progress untouched.
+                // sibling row. A HoverScopeTransparent ancestor (the ToolTip wrapper) is not a scope: the walk skips it
+                // and reads the card behind it. Existing nodes keep their own eased progress untouched.
                 //
                 // Runs HERE, not next to the InteractionAnim writes above, because the rule is the CASCADE's rule
                 // (AnimScheduler.Hover.cs): a REVEAL follows the container it mounted into, a nested interactive control
@@ -5156,6 +5166,7 @@ public sealed partial class TreeReconciler
                 ref ScrollState ss = ref _scene.ScrollRef(node);
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
+                ss.LineDip = s.ScrollLineDip > 0f ? s.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
                 // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).
                 ss.Zoomable = s.Zoomable;
@@ -5203,6 +5214,7 @@ public sealed partial class TreeReconciler
                 sc.ItemCount = Math.Max(0, v.ItemCount);
                 sc.Layout = v.ItemLayout;
                 sc.Overscan = v.Overscan;
+                sc.LineDip = v.ScrollLineDip > 0f ? v.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 sc.PersistentPrefixCount = v.RowBind is null ? 0 : Math.Clamp(v.PersistentPrefixCount, 0, sc.ItemCount);
                 sc.ItemClipTopInset = v.RowBind is null || !float.IsFinite(v.ItemClipTopInset)
                     ? float.NaN
@@ -5536,7 +5548,9 @@ public sealed partial class TreeReconciler
         const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
         for (var parent = _scene.Parent(node); !parent.IsNull && _scene.IsLive(parent); parent = _scene.Parent(parent))
         {
-            if ((_scene.Interaction(parent).HandlerMask & interactive) == 0) continue;
+            uint mask = _scene.Interaction(parent).HandlerMask;
+            // Non-interactive ancestors and transparent listeners (the ToolTip wrapper) are not scopes: keep walking.
+            if ((mask & interactive) == 0 || (mask & InteractionInfo.HoverScopeTransparentBit) != 0) continue;
             return (_scene.Flags(parent) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0;
         }
         return false;

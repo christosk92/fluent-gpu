@@ -87,6 +87,18 @@ public struct ScrollBody
     // Driven params (0/0/0/0 = use the profile default: ζ=1 chase at feel.WheelHalflifeMs).
     public float DrivenHalflifeMs, DrivenZeta, DrivenOmega, DrivenSettleVel;
 
+    /// <summary>Wheel cadence state (<see cref="ScrollPhysics.WheelPlanNotch"/>/<see cref="ScrollPhysics.WheelStep"/>):
+    /// <see cref="WheelSinceS"/> = seconds since the last notch, <see cref="WheelGapS"/> = the observed notch cadence the
+    /// live plan was built for (0 = no cadence plan armed — a cold notch, a slow independent click, a reversal, or a
+    /// stream whose tail stiffening already fired). Both are zeroed whenever the body leaves the wheel flavour
+    /// (<see cref="ClearWheelPlan"/>).</summary>
+    public float WheelSinceS, WheelGapS;
+
+    /// <summary>Drop the wheel cadence plan — called at every site where the body leaves the Driven|Wheel flavour
+    /// (settle, a drag/contact takeover, a fling seed, a programmatic glide, Cancel/ThumbSet/Zoom, a Restore) so a later
+    /// notch never reads a stale gap as a live cadence.</summary>
+    public static void ClearWheelPlan(ref ScrollBody b) { b.WheelSinceS = 0f; b.WheelGapS = 0f; }
+
     /// <summary>Set by <c>ScrollKernel.SnapRetargetOnEntry</c> exactly when a fling was retargeted onto a snap grid
     /// (fresh at every Ballistic seed — never carries a stale value from an earlier, non-snap fling). While set,
     /// <see cref="Advance"/>'s Ballistic branch terminates on distance-to-<see cref="Target"/> rather than on the
@@ -210,22 +222,31 @@ public struct ScrollBody
             {
                 float off = b.PositionMain;
                 float vel = b.Velocity;
-                bool autoscroll = (b.Flags & ScrollActivityFlags.Autoscroll) != 0;
                 bool settled;
-                if (autoscroll)
+                if ((b.Flags & ScrollActivityFlags.Autoscroll) != 0)
                 {
                     off += vel * dt;
                     settled = vel == 0f;
                 }
+                else if (b.DrivenZeta > 0f && b.DrivenZeta < 0.999f && b.DrivenOmega > 0f)
+                {
+                    // The per-viewport underdamped programmatic override (LyricsView's bespoke ζ/ω follow-glide).
+                    ScrollPhysics.ChaseStepUnderdamped(ref off, ref vel, b.Target, b.DrivenZeta, b.DrivenOmega, dt);
+                    float settleVel = b.DrivenSettleVel > 0f ? b.DrivenSettleVel : feel.FlingSettleVel;
+                    settled = MathF.Abs(off - b.Target) < 0.5f && MathF.Abs(vel) < settleVel;
+                    if (settled) { off = b.Target; vel = 0f; }
+                }
+                else if ((b.Flags & ScrollActivityFlags.Wheel) != 0)
+                {
+                    // The wheel glide: the plan ScrollKernel.ApplyWheelNotch armed (cadence half-life, tail stiffening,
+                    // displacement floor, distance-only snap) — lands exactly, never creeps.
+                    settled = ScrollPhysics.WheelStep(ref off, ref vel, ref b.DrivenHalflifeMs, ref b.WheelSinceS, ref b.WheelGapS, b.Target, dt, in feel);
+                }
                 else
                 {
-                    if (b.DrivenZeta > 0f && b.DrivenZeta < 0.999f && b.DrivenOmega > 0f)
-                        ScrollPhysics.ChaseStepUnderdamped(ref off, ref vel, b.Target, b.DrivenZeta, b.DrivenOmega, dt);
-                    else
-                    {
-                        float halflife = b.DrivenHalflifeMs > 0f ? b.DrivenHalflifeMs : feel.WheelHalflifeMs;
-                        ScrollPhysics.ChaseStep(ref off, ref vel, b.Target, halflife, dt);
-                    }
+                    // The default ζ=1 chase (programmatic glides).
+                    float halflife = b.DrivenHalflifeMs > 0f ? b.DrivenHalflifeMs : feel.WheelHalflifeMs;
+                    ScrollPhysics.ChaseStep(ref off, ref vel, b.Target, halflife, dt);
                     float settleVel = b.DrivenSettleVel > 0f ? b.DrivenSettleVel : feel.FlingSettleVel;
                     settled = MathF.Abs(off - b.Target) < 0.5f && MathF.Abs(vel) < settleVel;
                     if (settled) { off = b.Target; vel = 0f; }
@@ -244,6 +265,7 @@ public struct ScrollBody
                 {
                     b.Activity = ScrollActivity.Idle;
                     b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll);
+                    ClearWheelPlan(ref b);
                     b.Awake = false;
                 }
                 break;

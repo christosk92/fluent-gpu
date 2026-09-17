@@ -18,6 +18,7 @@ public static class Virtual
         {
             ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            ScrollLineDip = itemExtent,   // one wheel "line" = one row (ScrollState.LineDip, S6)
         };
 
     /// <summary>A vertically-virtualized uniform card GRID (album/artist shelves) — virtualizes by row.</summary>
@@ -27,6 +28,7 @@ public static class Virtual
         {
             ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            ScrollLineDip = itemHeight + gap,   // one wheel "line" = one grid row pitch
         };
 
     /// <summary>A virtualized collection with ANY custom <see cref="IVirtualLayout"/> you supply.</summary>
@@ -61,6 +63,7 @@ public static class Virtual
             ItemCount = itemCount,
             ItemLayout = new LinedFlowLayout(lineHeight, aspectRatio, lineSpacing, minItemSpacing),
             RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            ScrollLineDip = lineHeight + lineSpacing,   // one wheel "line" = one flow line pitch
         };
 
     /// <summary>A grouped flat list with measured rows + sticky-header hook (E11-L0 grouping): headers occupy flat
@@ -88,6 +91,7 @@ public static class Virtual
             ItemCount = itemCount,
             ItemLayout = new SpanningGridVirtualLayout(columns, rowHeight, gap, spanOf),
             RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            ScrollLineDip = rowHeight + gap,   // one wheel "line" = one row pitch
         };
 
     /// <summary>A HORIZONTALLY-scrolling uniform card grid (a shelf <paramref name="rows"/> cells tall) — the
@@ -99,6 +103,7 @@ public static class Virtual
             ItemCount = itemCount,
             ItemLayout = new HorizontalGridVirtualLayout(rows, itemWidth, gap),
             RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Horizontal = true, Grow = 1f,
+            ScrollLineDip = itemWidth + gap,   // one wheel "line" = one column pitch (main axis is X)
         };
 
     /// <summary>Signals-first BOUND list (the recycler fast path): <paramref name="row"/> runs ONCE per visible slot
@@ -107,9 +112,9 @@ public static class Virtual
     /// <c>SourceBind</c>/<c>PlaceholderBind</c>), never a captured value. The fastest path for huge uniform lists
     /// (the WaveeMusic 100k track list under a scrollbar thumb-drag).</summary>
     public static VirtualListEl ListBound(int itemCount, float itemExtent, Func<IReadSignal<int>, Element> row, int overscan = 4)
-        => new() { ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RowBind = row, Overscan = overscan, Grow = 1f };
+        => new() { ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RowBind = row, Overscan = overscan, Grow = 1f, ScrollLineDip = itemExtent };
 
     /// <summary>Signals-first BOUND uniform card grid — <see cref="ListBound"/> semantics over <see cref="GridVirtualLayout"/>.</summary>
     public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func<IReadSignal<int>, Element> row, int overscan = 2)
-        => new() { ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Overscan = overscan, Grow = 1f };
+        => new() { ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Overscan = overscan, Grow = 1f, ScrollLineDip = itemHeight + gap };
 }

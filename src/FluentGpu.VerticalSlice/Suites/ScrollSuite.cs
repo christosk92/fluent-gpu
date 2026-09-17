@@ -367,6 +367,7 @@ static class ScrollSuite
         public bool Scrollable;
         public event Action<ScrollToRequest>? ScrollToRequested;
         public event Action<ScrollByRequest>? ScrollByRequested;
+        public event Action<float>? WheelNotchRequested;
 
         public void SetValues(float minOffset, float maxOffset, float offset, float viewportLength)
         {
@@ -384,6 +385,7 @@ static class ScrollSuite
             => ScrollToRequested?.Invoke(new ScrollToRequest(offset, animate));
         public void ScrollBy(float delta, bool animate = false)
             => ScrollByRequested?.Invoke(new ScrollByRequest(delta, animate));
+        public void WheelNotch(float notches) => WheelNotchRequested?.Invoke(notches);
     }
 
     sealed class AsbLabelsHost : Component
@@ -7123,78 +7125,86 @@ static class ScrollSuite
                 Near(asbR.H, SlotH, 1f), $"h={asbR.H:0.#} slot={SlotH}");
         }
 
-        // ── Wheel-through sticky overlay: HitTestPassThrough band still scrolls via OnPointerWheel → ScrollBy ──
+        // ── Wheel-through header (S5): Element.WheelTarget glides the LIST from a header laid out ABOVE it. The header
+        //    names the list's IScrollController as its WheelTarget; one device notch over the header must (a) travel
+        //    exactly PerNotchDip(viewport, LineDip) — the same distance a notch over the rows gets, (b) arrive as a
+        //    GLIDE (the kernel's Driven|Wheel chase: the offset changes over ≥ 3 frames, never in one), (c) leave the
+        //    header itself where it was laid out, and (d) keep the header clickable (no pass-through, no OnPointerWheel).
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("cp4-wheel-overlay", new Size2(320, 280), 1f));
+            var window = new HeadlessWindow(new WindowDesc("cp4-wheel-header", new Size2(320, 280), 1f));
             window.Show();
-            var listCtl = new ItemsViewController();
-            int overlayClicks = 0, overlayWheels = 0;
-            float lastWheelDelta = 0f;
+            var rail = new AnnotatedScrollBarController();   // an IScrollController IS an IWheelTarget
+            int headerClicks = 0;
             const float Band = 48f;
+            var headerFill = ColorF.FromRgba(0x2A, 0x3B, 0x4C);
             using var host = new AppHost(app, window, new HeadlessGpuDevice(),
                 new HeadlessFontSystem(strings), strings, new W0fStaticProbe
                 {
                     Build = () => new BoxEl
                     {
-                        Width = 280f, Height = 240f, ZStack = true, ClipToBounds = true,
+                        Width = 280f, Height = 240f, Direction = 1, ClipToBounds = true,
                         Children =
                         [
+                            new BoxEl
+                            {
+                                Height = Band, Fill = headerFill, WheelTarget = rail,
+                                Children = [new BoxEl { Height = Band, Grow = 1f, OnClick = () => headerClicks++ }],
+                            },
                             ItemsView.Create(40,
                                 i => new BoxEl { Height = 40f, Children = [new TextEl($"row {i}") { Size = 13f }] },
                                 RepeatLayout.Stack(40f),
                                 new ListOptions
                                 {
-                                    Controller = listCtl,
                                     SelectionMode = ItemsSelectionMode.None,
                                     Selector = SelectorVisual.None,
                                     Grow = 1f,
+                                    Scroll = new ScrollOptions { VerticalScrollController = rail },
                                 }),
-                            new BoxEl
-                            {
-                                Height = Band, HitTestPassThrough = true,
-                                OnPointerWheel = e =>
-                                {
-                                    overlayWheels++;
-                                    lastWheelDelta = e.Delta;
-                                    listCtl.ScrollBy(e.Delta);
-                                    e.Handled = true;
-                                },
-                                Children =
-                                [
-                                    new BoxEl { Height = Band, Grow = 1f, OnClick = () => overlayClicks++ },
-                                ],
-                            },
                         ],
                     },
                 });
             host.RunFrame();
             host.RunFrame();
             var vp = FindScrollable(host.Scene, host.Scene.Root);
-            var below = new Point2(140f, 120f);
-            var onBand = new Point2(140f, 24f);
-            uint t = 16;
-            window.QueueInput(new InputEvent(InputKind.Wheel, below, 0, 0, ScrollDelta: 48f, TimestampMs: t));
-            host.RunFrame(); host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var scBelow);
-            float offBelow = scBelow.OffsetY;
-            int wheelsAfterBelow = overlayWheels;
-            window.QueueInput(new InputEvent(InputKind.Wheel, onBand, 0, 0, ScrollDelta: 48f, TimestampMs: t += 16));
-            host.RunFrame(); host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var scBand);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, onBand, 0, 0));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, onBand, 0, 0));
+            var header = FindFillNode(host.Scene, host.Scene.Root, headerFill);
+            var headerBefore = host.Scene.AbsoluteRect(header);
+            host.Scene.TryGetScroll(vp, out var sc0);
+            float start = sc0.OffsetY;
+            float expected = ScrollFeel.Shipping.PerNotchDip(sc0.ViewportH, sc0.LineDip);
+            var onHeader = new Point2(140f, 24f);
+            window.QueueInput(new InputEvent(InputKind.Wheel, onHeader, 0, 0, WheelNotch: 1f, TimestampMs: 16));
+            // Follow the glide frame by frame: count the frames that moved the offset and stop once it has rested for
+            // three consecutive frames after moving (bounded — a notch settles in ~10 frames in this scene).
+            int movingFrames = 0, restFrames = 0;
+            float prev = start, firstStep = 0f;
+            for (int i = 0; i < 90 && restFrames < 3; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sci);
+                float step = sci.OffsetY - prev;
+                if (MathF.Abs(step) > 0.01f)
+                {
+                    if (movingFrames == 0) firstStep = step;
+                    movingFrames++;
+                    restFrames = 0;
+                }
+                else if (movingFrames > 0) restFrames++;
+                prev = sci.OffsetY;
+            }
+            host.Scene.TryGetScroll(vp, out var scEnd);
+            float travelled = scEnd.OffsetY - start;
+            var headerAfter = host.Scene.AbsoluteRect(header);
+            bool headerStill = Near(headerAfter.Y, headerBefore.Y, 0.01f) && Near(headerAfter.H, headerBefore.H, 0.01f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, onHeader, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, onHeader, 0, 0));
             host.RunFrame();
-            float offBeforeHiRes = scBand.OffsetY;
-            window.QueueInput(new InputEvent(InputKind.Wheel, onBand, 0, 0, ScrollDelta: 2f, TimestampMs: t += 16));
-            host.RunFrame(); host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var scHiRes);
-            Check("gate.scroll.wheel-through-sticky-overlay pass-through header band forwards wheel via OnPointerWheel→ScrollBy, still clicks, and routes high-res 2 DIP deltas",
-                offBelow > 1f && wheelsAfterBelow == 0
-                && overlayWheels >= 2 && scBand.OffsetY > offBelow
-                && overlayClicks == 1
-                && Near(lastWheelDelta, 2f, 0.01f) && scHiRes.OffsetY > offBeforeHiRes,
-                $"offBelow={offBelow:0.#} wheelsBelow={wheelsAfterBelow} wheels={overlayWheels} offBand={scBand.OffsetY:0.#} clicks={overlayClicks} lastΔ={lastWheelDelta:0.#} hiRes={scHiRes.OffsetY:0.#}");
+            Check("gate.scroll.wheel-through-sticky-overlay a header laid out above its list names the list's IScrollController as WheelTarget: one notch over the header glides the list over ≥ 3 frames (not in one) to exactly PerNotchDip(viewport, LineDip), the header stays put, and it still clicks",
+                sc0.LineDip > 0f && expected > 0f
+                && movingFrames >= 3 && MathF.Abs(firstStep) < expected - 0.5f
+                && Near(travelled, expected, 1f)
+                && headerStill && headerClicks == 1,
+                $"lineDip={sc0.LineDip:0.#} expected={expected:0.#} travelled={travelled:0.##} movingFrames={movingFrames} firstStep={firstStep:0.##} headerY={headerBefore.Y:0.#}→{headerAfter.Y:0.#} clicks={headerClicks}");
         }
 
         // ── GroupedListVirtualLayout sticky vs IndexAt after a programmatic jump (Issue 2 candidate a) ──

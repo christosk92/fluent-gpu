@@ -17,8 +17,11 @@ public interface IScrollSink
 }
 
 /// <summary>Whole-kernel per-tick rollup, cheap to read every frame (e.g. to decide whether to suppress layout
-/// transitions, or whether the wake reason <c>ScrollAnim</c> should stay armed).</summary>
-public readonly record struct ScrollFrameSummary(bool AnyMoved, bool AnyUserActive, bool AnyDragOrBallistic, int ActiveCount, float MaxVisualSpeed);
+/// transitions, or whether the wake reason <c>ScrollAnim</c> should stay armed). <see cref="AnyLiveMotion"/> is true
+/// while any body is in continuous motion the host must budget a frame for — a Drag, a Ballistic fling, or a Driven
+/// glide with the <c>Wheel</c> or <c>Programmatic</c> flavour (<c>AppHost.Paint</c> arms its frame budget on it, so a
+/// wheel glide gets the same bounded realize deadline a fling does).</summary>
+public readonly record struct ScrollFrameSummary(bool AnyMoved, bool AnyUserActive, bool AnyLiveMotion, int ActiveCount, float MaxVisualSpeed);
 
 /// <summary>Pillar-A sensor fields (plan §2.3), filled only when <c>ScrollTrace.CompiledIn &amp;&amp; ScrollTrace.Enabled</c>
 /// — WP-A fills this struct every tick; WP-F wires it into the actual <c>ScrollTrace</c> rows (the kernel does NOT

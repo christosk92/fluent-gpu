@@ -524,6 +524,9 @@ public sealed class ToolTip : Component
             // note on bare anchors is the same hazard). Growing the wrapper too is what makes `grow:` mean the same
             // thing here as everywhere else in the kit: fill the PARENT, whichever axis the parent runs on.
             Grow = grow,
+            // A pointer LISTENER, not an interaction scope: the four handlers below give it PointerBit, which would
+            // otherwise make it a hover-cascade boundary and hide a wrapped card FAB's reveal from the card's hover.
+            HoverScopeTransparent = true,
             OnRealized = x => anchor.Value = x,
             // P3 bound-text form: hasTooltip is false exactly when a bound Prop<string?> resolved null/empty THIS
             // render — no new open/dismiss/focus trigger is wired (the clock above is likewise forced absent via `ph`

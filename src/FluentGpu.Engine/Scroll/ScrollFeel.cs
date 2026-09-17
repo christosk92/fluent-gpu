@@ -10,7 +10,18 @@ public readonly record struct ScrollFeel(
     float FlingSeedGate,              // |v| ≥ this seeds a Ballistic coast (Android min-fling)
     float FlingMax,                   // fling seed clamp (Android max-fling)
     float FlingSettleVel,             // below this fling speed the body settles (Ballistic → Idle/Bounce)
-    float WheelHalflifeMs,            // wheel/scrollbar chase half-life (ms) when no per-command override is given
+    float WheelHalflifeMs,            // wheel/scrollbar chase half-life (ms): the cold-notch / stiffest cadence plan (S1 sweep)
+    float WheelTailHalflifeMs,        // half-life the wheel glide stiffens to once a cadence stream has stopped (S1 tail: 3 3 2 2 2 2 px)
+    float WheelSlowHalflifeMs,        // cadence-plan ceiling: hl = clamp(WheelHalflifePerGap·gap, WheelHalflifeMs, this)
+    float WheelSeedFraction,          // κ — cold-notch velocity seed as a fraction of the no-hump velocity |R|·y (S1: 0.40 → 12.9 DIP first frame at D=120)
+    float WheelCadenceKick,           // live-notch velocity kick: vel ≥ this·|Δ|/gap (Firefox cadence regime — the second click never dips)
+    float WheelHalflifePerGap,        // ρ — cadence plan half-life as a fraction of the observed notch gap (0.70 = the S1 Pareto point)
+    float WheelGapMinS,               // observed notch gap floor (s) — a burst faster than this plans as if at this gap
+    float WheelGapMaxS,               // observed notch gap ceiling (s) — slower clicks are independent (stay at WheelHalflifeMs)
+    float WheelGapSlackFrac,          // the stream is over once since > gap·(1+this) + WheelGapSlackS with no notch → tail stiffening
+    float WheelGapSlackS,             // absolute slack (s) added to the stream-over test (one late frame of jitter)
+    float WheelFloorDipPerS,          // displacement floor toward the target while landing — 160 DIP/s = 2 device px per 120 Hz frame at scale 1.5
+    float WheelSnapEpsDip,            // distance-only snap: |R| below this lands exactly on the target (kills the sub-pixel creep tail)
     float ProgrammaticMinHalflifeMs,  // sqrt-ramp floor (a short programmatic glide)
     float ProgrammaticMaxHalflifeMs,  // sqrt-ramp ceiling (a long programmatic glide)
     float ProgrammaticShortDip,       // travel at/below which the ramp is flat at the min
@@ -33,7 +44,18 @@ public readonly record struct ScrollFeel(
         FlingSeedGate: 50f,
         FlingMax: 8000f,
         FlingSettleVel: 13f,
-        WheelHalflifeMs: 40f,
+        WheelHalflifeMs: 45f,
+        WheelTailHalflifeMs: 32f,
+        WheelSlowHalflifeMs: 90f,
+        WheelSeedFraction: 0.40f,
+        WheelCadenceKick: 0.65f,
+        WheelHalflifePerGap: 0.70f,
+        WheelGapMinS: 0.025f,
+        WheelGapMaxS: 0.130f,
+        WheelGapSlackFrac: 0.20f,
+        WheelGapSlackS: 0.008f,
+        WheelFloorDipPerS: 160f,
+        WheelSnapEpsDip: 1.0f,
         ProgrammaticMinHalflifeMs: 46f,
         ProgrammaticMaxHalflifeMs: 88f,
         ProgrammaticShortDip: 96f,
@@ -53,6 +75,14 @@ public readonly record struct ScrollFeel(
     /// <summary>The DIP a single wheel notch scrolls for a viewport of the given main-axis extent —
     /// <c>max(WheelNotchMinDip, WheelNotchViewportFrac·viewport)</c>.</summary>
     public float PerNotchDip(float viewportExtent) => MathF.Max(WheelNotchMinDip, WheelNotchViewportFrac * viewportExtent);
+
+    /// <summary>The Windows "three lines per notch" rule: a scroller that knows its own line height
+    /// (<paramref name="lineDip"/> &gt; 0 — a virtualized list's item extent, an <c>Element.ScrollLineDip</c> hint)
+    /// travels <c>3·lineDip</c> per notch, so a 40-DIP row list moves exactly three rows and stays on the row grid.
+    /// The platform has already scaled the notch by <c>SystemParams.WheelScrollLines / 3</c>, so the 3 here is the
+    /// Windows baseline, not a second application of the user's setting. Without a hint (<c>lineDip == 0</c>) this is
+    /// the viewport rule of <see cref="PerNotchDip(float)"/>.</summary>
+    public float PerNotchDip(float viewportExtent, float lineDip) => lineDip > 0f ? 3f * lineDip : PerNotchDip(viewportExtent);
 
     /// <summary>The flick-projection divisor at this profile's fling decay over its settle window (see
     /// <see cref="ScrollPhysics.FlickProjectDivisor"/> / <c>ScrollTuning.FlickProjectDivisor</c>).</summary>
