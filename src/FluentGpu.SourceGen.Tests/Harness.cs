@@ -54,11 +54,26 @@ internal static class Harness
     /// return only its diagnostics. <paramref name="assemblyName"/> lets an assembly-scoped rule (FGRP008 arms only in
     /// <c>FluentGpu.Controls</c>) be exercised both in and out of scope.</summary>
     public static ImmutableArray<Diagnostic> Analyze(DiagnosticAnalyzer analyzer, string source, string? assemblyName = null)
+        => Analyze(analyzer, source, assemblyName, globalOptions: null);
+
+    /// <summary>As <see cref="Analyze(DiagnosticAnalyzer, string, string?)"/> but feeds AdditionalFiles (loc JSON)
+    /// and MSBuild global properties (<c>build_property.*</c>).</summary>
+    public static ImmutableArray<Diagnostic> Analyze(
+        DiagnosticAnalyzer analyzer, string source, string? assemblyName,
+        (string Key, string Value)[]? globalOptions,
+        params (string Name, string Content)[] additionalTexts)
     {
         var compilation = Compile(source, EngineRefs, assemblyName);
+        ImmutableArray<AdditionalText> additional = additionalTexts.Length == 0
+            ? ImmutableArray<AdditionalText>.Empty
+            : additionalTexts.Select(t => (AdditionalText)new InMemoryText(t.Name, t.Content)).ToImmutableArray();
+        AnalyzerConfigOptionsProvider? optionsProvider = globalOptions is null ? null : new DictOptionsProvider(globalOptions);
+        var analyzerOptions = optionsProvider is null
+            ? new AnalyzerOptions(additional)
+            : new AnalyzerOptions(additional, optionsProvider);
         var withAnalyzers = compilation.WithAnalyzers(
             ImmutableArray.Create(analyzer),
-            new CompilationWithAnalyzersOptions(new AnalyzerOptions(ImmutableArray<AdditionalText>.Empty),
+            new CompilationWithAnalyzersOptions(analyzerOptions,
                 onAnalyzerException: null, concurrentAnalysis: false, logAnalyzerExecutionTime: false));
         return withAnalyzers.GetAnalyzerDiagnosticsAsync(CancellationToken.None).GetAwaiter().GetResult();
     }

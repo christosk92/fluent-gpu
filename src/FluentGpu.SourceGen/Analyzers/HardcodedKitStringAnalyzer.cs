@@ -35,12 +35,16 @@ public sealed class HardcodedKitStringAnalyzer : DiagnosticAnalyzer
 {
     public const string DiagnosticId = "FGRP008";
 
-    /// <summary>The one assembly this rule arms itself in. The shared analyzer is referenced everywhere; only the kit is
-    /// held to the no-hardcoded-string contract.</summary>
+    /// <summary>The one assembly this rule arms itself in by default. The shared analyzer is referenced everywhere;
+    /// only the kit is held to the no-hardcoded-string contract unless an app opts in via
+    /// <c>FluentGpuLocHardcodedAssemblies</c>.</summary>
     private const string KitAssemblyName = "FluentGpu.Controls";
+
+    private const string OptInProperty = "build_property.FluentGpuLocHardcodedAssemblies";
 
     /// <summary>The line marker that opts a deliberate literal out of the rule.</summary>
     private const string AllowMarker = "loc-allow";
+    private const string FileAllowMarker = "loc-allow-file";
 
     private static readonly DiagnosticDescriptor Rule = new(
         id: DiagnosticId,
@@ -64,12 +68,38 @@ public sealed class HardcodedKitStringAnalyzer : DiagnosticAnalyzer
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.RegisterCompilationStartAction(start =>
         {
-            // Arm only inside the control kit. The shared analyzer assembly is referenced by every project.
-            if (start.Compilation.AssemblyName != KitAssemblyName)
+            // Arm inside the control kit, or any assembly listed in FluentGpuLocHardcodedAssemblies (comma-separated).
+            if (!IsArmed(start.Compilation.AssemblyName, start.Options))
                 return;
             start.RegisterSyntaxNodeAction(AnalyzeAssignment, SyntaxKind.SimpleAssignmentExpression);
             start.RegisterSyntaxNodeAction(AnalyzeObjectCreation, SyntaxKind.ObjectCreationExpression);
+            start.RegisterSyntaxNodeAction(AnalyzeInvocation, SyntaxKind.InvocationExpression);
+            start.RegisterSyntaxNodeAction(AnalyzeTuple, SyntaxKind.TupleExpression);
         });
+    }
+
+    internal static bool IsArmed(string? assemblyName, AnalyzerOptions options)
+    {
+        if (assemblyName == KitAssemblyName) return true;
+        if (string.IsNullOrEmpty(assemblyName)) return false;
+        if (!options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(OptInProperty, out string? v) ||
+            string.IsNullOrWhiteSpace(v))
+            return false;
+        foreach (string part in v.Split(','))
+        {
+            if (part.Trim().Equals(assemblyName, System.StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool Skip(SyntaxNodeAnalysisContext context, LiteralExpressionSyntax lit)
+    {
+        if (HasFileAllow(lit.SyntaxTree)) return true;
+        string? ns = context.ContainingSymbol?.ContainingNamespace?.ToDisplayString();
+        if (ns is not null && ns.StartsWith("Wavee.Screens.Diagnostics", System.StringComparison.Ordinal))
+            return true;
+        return false;
     }
 
     // `x.Text = "…"`, `new T { Text = "…" }`, `AutomationName = "…"`.
@@ -85,7 +115,8 @@ public sealed class HardcodedKitStringAnalyzer : DiagnosticAnalyzer
             IdentifierNameSyntax id => id.Identifier.ValueText,                 // Text = "…"  (object initializer)
             _ => null,
         };
-        if (member is not ("Text" or "AutomationName"))
+        if (member is not ("Text" or "AutomationName" or "Placeholder" or "PrimaryText" or "SecondaryText"
+            or "CloseText" or "Title" or "Message"))
             return;
 
         Report(context, lit);
@@ -100,16 +131,54 @@ public sealed class HardcodedKitStringAnalyzer : DiagnosticAnalyzer
         if (args.Arguments[0].Expression is not LiteralExpressionSyntax lit || !lit.IsKind(SyntaxKind.StringLiteralExpression))
             return;
 
-        // Confirm the constructed type is TextEl (bind semantically; cheap syntactic types like `new BoxEl(...)` skip).
+        // Confirm the constructed type is TextEl or MenuFlyoutItem (first positional arg is the label).
         ITypeSymbol? type = context.SemanticModel.GetTypeInfo(creation, context.CancellationToken).Type;
-        if (!AnalyzerSemantics.IsTextEl(type))
+        if (!AnalyzerSemantics.IsTextEl(type) && type?.Name != "MenuFlyoutItem")
             return;
 
         Report(context, lit);
     }
 
+    // Button.Create/Standard/Subtle, HyperlinkButton.Create, MenuFlyoutItem.RadioItem/SubMenu, Notify.Say, Announcer.Say.
+    private static void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        if (invocation.ArgumentList.Arguments.Count == 0) return;
+        if (invocation.ArgumentList.Arguments[0].Expression is not LiteralExpressionSyntax lit ||
+            !lit.IsKind(SyntaxKind.StringLiteralExpression))
+            return;
+        var symbol = context.SemanticModel.GetSymbolInfo(invocation, context.CancellationToken).Symbol as IMethodSymbol;
+        if (symbol is null) return;
+        string typeName = symbol.ContainingType?.Name ?? "";
+        string method = symbol.Name;
+        bool hit =
+            (typeName is "Button" && method is "Create" or "Standard" or "Subtle") ||
+            (typeName is "HyperlinkButton" && method == "Create") ||
+            (typeName is "MenuFlyoutItem" && method is "RadioItem" or "SubMenu") ||
+            (typeName is "Notify" or "Announcer" && method == "Say");
+        if (!hit) return;
+        Report(context, lit);
+    }
+
+    // File-picker filter tuples: ("JPEG", "*.jpg").
+    private static void AnalyzeTuple(SyntaxNodeAnalysisContext context)
+    {
+        var tuple = (TupleExpressionSyntax)context.Node;
+        if (tuple.Arguments.Count < 2) return;
+        if (tuple.Arguments[0].Expression is not LiteralExpressionSyntax lit ||
+            !lit.IsKind(SyntaxKind.StringLiteralExpression))
+            return;
+        if (tuple.Arguments[1].Expression is not LiteralExpressionSyntax filter ||
+            !filter.IsKind(SyntaxKind.StringLiteralExpression))
+            return;
+        string f = filter.Token.ValueText;
+        if (f.IndexOf('*') < 0 && f.IndexOf('.') < 0) return;
+        Report(context, lit);
+    }
+
     private static void Report(SyntaxNodeAnalysisContext context, LiteralExpressionSyntax lit)
     {
+        if (Skip(context, lit)) return;
         string value = lit.Token.ValueText;
         if (IsAllowed(value) || HasAllowMarker(lit))
             return;
@@ -134,5 +203,12 @@ public sealed class HardcodedKitStringAnalyzer : DiagnosticAnalyzer
         int line = lit.GetLocation().GetLineSpan().StartLinePosition.Line;
         if (line < 0 || line >= text.Lines.Count) return false;
         return text.Lines[line].ToString().Contains(AllowMarker);
+    }
+
+    private static bool HasFileAllow(SyntaxTree tree)
+    {
+        var text = tree.GetText();
+        int n = text.Length < 4096 ? text.Length : 4096;
+        return text.ToString(new Microsoft.CodeAnalysis.Text.TextSpan(0, n)).IndexOf(FileAllowMarker, System.StringComparison.Ordinal) >= 0;
     }
 }

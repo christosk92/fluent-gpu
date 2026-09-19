@@ -53,6 +53,38 @@ namespace FluentGpu.SourceGen.Localization
             return result;
         }
 
+        /// <summary>Reads the optional root <c>$unusedAllow</c> string array (analyzer-only keepers). Missing or
+        /// malformed → empty list; never fails the string-table parse.</summary>
+        public static List<string> ParseUnusedAllow(string json)
+        {
+            var list = new List<string>();
+            if (string.IsNullOrEmpty(json)) return list;
+            const string marker = "\"$unusedAllow\"";
+            int at = json.IndexOf(marker, System.StringComparison.Ordinal);
+            if (at < 0) return list;
+            int i = at + marker.Length;
+            while (i < json.Length && (json[i] == ' ' || json[i] == '\t' || json[i] == '\r' || json[i] == '\n' || json[i] == ':'))
+                i++;
+            if (i >= json.Length || json[i] != '[') return list;
+            i++;
+            var reader = new TinyJsonReader(json);
+            reader._i = i;
+            reader.SkipWs();
+            if (reader.TryConsume(']')) return list;
+            while (true)
+            {
+                reader.SkipWs();
+                if (reader.TryReadString(out string s))
+                    list.Add(s);
+                else
+                    break;
+                reader.SkipWs();
+                if (reader.TryConsume(',')) continue;
+                break;
+            }
+            return list;
+        }
+
         // Parses the body of an object: zero or more "key": value pairs separated by commas, up to the closing '}'.
         // The opening '{' has already been consumed.
         private void ParseObjectBody(string prefix, List<KeyValuePair<string, string>> sink)
@@ -97,6 +129,11 @@ namespace FluentGpu.SourceGen.Localization
                         return;
                     }
                     if (!isMeta) sink.Add(new KeyValuePair<string, string>(dotted, value));
+                }
+                else if (isMeta)
+                {
+                    // Metadata may be an array ($unusedAllow) or other non-string; skip without failing the parse.
+                    SkipValue();
                 }
                 else
                 {

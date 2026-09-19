@@ -382,4 +382,123 @@ public sealed class AnalyzerTests
             """, assemblyName: Kit);
         Assert.Equal(0, Harness.Count(diags, "FGRP008"));
     }
+
+    [Fact]
+    public void FGRP008_Fires_When_Assembly_Opted_In()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() => new TextEl("Cut"); }
+            """,
+            assemblyName: "Wavee",
+            globalOptions: [("build_property.FluentGpuLocHardcodedAssemblies", "Wavee")]);
+        Assert.Equal(1, Harness.Count(diags, "FGRP008"));
+    }
+
+    [Fact]
+    public void FGRP008_Fires_On_Button_Standard_When_Opted_In()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            namespace FluentGpu.Controls {
+                public static class Button {
+                    public static object Standard(string label, Action onClick) => label;
+                }
+            }
+            sealed class C : Component {
+                public override Element Render() { FluentGpu.Controls.Button.Standard("Copy", () => {}); return new BoxEl(); }
+            }
+            """,
+            assemblyName: Kit);
+        Assert.Equal(1, Harness.Count(diags, "FGRP008"));
+    }
+
+    // ── FLLOC003 / FLLOC005 — loc key presence vs usage ──────────────────────────────────────────────────────────
+    private const string LocShim = """
+        namespace FluentGpu.Localization {
+            public static class Loc {
+                public static string Get(string key) => key;
+                public static string Format(string key, params object[] args) => key;
+                public static string Bind(string key) => key;
+            }
+        }
+        """;
+
+    [Fact]
+    public void FLLOC003_Fires_On_LocGet_Literal_Missing_From_Base()
+    {
+        var diags = Harness.Analyze(new MissingLocKeyAnalyzer(), LocShim + """
+            class C { string M() => FluentGpu.Localization.Loc.Get("detail.nope"); }
+            """,
+            assemblyName: null,
+            globalOptions: null,
+            ("assets/loc/en-US.json", "{\"detail\":{\"play\":\"Play\"}}"));
+        Assert.Equal(1, Harness.Count(diags, "FLLOC003"));
+    }
+
+    [Fact]
+    public void FLLOC003_Silent_On_Literal_Present_In_Base()
+    {
+        var diags = Harness.Analyze(new MissingLocKeyAnalyzer(), LocShim + """
+            class C { string M() => FluentGpu.Localization.Loc.Get("detail.play"); }
+            """,
+            assemblyName: null,
+            globalOptions: null,
+            ("assets/loc/en-US.json", "{\"detail\":{\"play\":\"Play\"}}"));
+        Assert.Equal(0, Harness.Count(diags, "FLLOC003"));
+    }
+
+    [Fact]
+    public void FLLOC005_Fires_On_Unreferenced_Base_Key()
+    {
+        var diags = Harness.Analyze(new MissingLocKeyAnalyzer(), LocShim + """
+            class C { string M() => FluentGpu.Localization.Loc.Get("detail.play"); }
+            """,
+            assemblyName: null,
+            globalOptions: null,
+            ("assets/loc/en-US.json", "{\"detail\":{\"play\":\"Play\",\"shuffle\":\"Shuffle\"}}"));
+        Assert.Equal(1, Harness.Count(diags, "FLLOC005"));
+        Assert.Contains(diags, d => d.Id == "FLLOC005" && d.GetMessage(null).Contains("detail.shuffle"));
+        Assert.Equal(Microsoft.CodeAnalysis.DiagnosticSeverity.Info, System.Linq.Enumerable.Single(diags, d => d.Id == "FLLOC005").Severity);
+    }
+
+    [Fact]
+    public void FLLOC005_Counts_Sub_Suffix_When_Stem_Is_Used()
+    {
+        var diags = Harness.Analyze(new MissingLocKeyAnalyzer(), LocShim + """
+            class C { string M() => FluentGpu.Localization.Loc.Get("sidebar.section.pinned"); }
+            """,
+            assemblyName: null,
+            globalOptions: null,
+            ("assets/loc/en-US.json", "{\"sidebar\":{\"section\":{\"pinned\":\"Pinned\",\"pinnedSub\":\"Your pins\"}}}"));
+        Assert.Equal(0, Harness.Count(diags, "FLLOC005"));
+    }
+
+    [Fact]
+    public void FLLOC005_Silent_On_UnusedAllow()
+    {
+        var diags = Harness.Analyze(new MissingLocKeyAnalyzer(), LocShim + """
+            class C { string M() => FluentGpu.Localization.Loc.Get("detail.play"); }
+            """,
+            assemblyName: null,
+            globalOptions: null,
+            ("assets/loc/en-US.json", "{\"$unusedAllow\":[\"detail.shuffle\"],\"detail\":{\"play\":\"Play\",\"shuffle\":\"Shuffle\"}}"));
+        Assert.Equal(0, Harness.Count(diags, "FLLOC005"));
+    }
+
+    [Fact]
+    public void FLLOC005_Counts_Strings_Member()
+    {
+        var diags = Harness.Analyze(new MissingLocKeyAnalyzer(), LocShim + """
+            namespace Wavee {
+                public static partial class Strings {
+                    public static class Detail { public const string Play = "detail.play"; public const string Shuffle = "detail.shuffle"; }
+                }
+            }
+            class C { string M() => Wavee.Strings.Detail.Play; }
+            """,
+            assemblyName: null,
+            globalOptions: null,
+            ("assets/loc/en-US.json", "{\"detail\":{\"play\":\"Play\",\"shuffle\":\"Shuffle\"}}"));
+        Assert.Equal(1, Harness.Count(diags, "FLLOC005"));
+        Assert.Contains(diags, d => d.Id == "FLLOC005" && d.GetMessage(null).Contains("detail.shuffle"));
+    }
 }
