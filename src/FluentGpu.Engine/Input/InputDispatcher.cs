@@ -139,6 +139,10 @@ public sealed class InputDispatcher
     // stationary hover re-resolve (RefreshHoverAfterScroll) after a phase-7 scroll write moves content under a still cursor.
     private Point2 _lastPointerPx;
     private bool _lastPointerValid;
+    // Armed by NotifySubtreeRemoved when the subtree carrying the hover is removed/orphaned: the pointer never moved, so
+    // nothing else will ever re-resolve, and the row that slid into that place under the still cursor would stay
+    // un-hovered until the user jiggles the mouse. Drained by the next frame's hover refresh (layout-move or scroll).
+    private bool _hoverResolvePending;
 
     // ── pinch-zoom session (Phase-4; a singleton across the TWO pinching contacts — the DragController precedent) ──────
     // Opened when a second touch contact lands over the same Zoomable viewport a still-down contact is over; both contacts'
@@ -645,6 +649,30 @@ public sealed class InputDispatcher
         if (IsSelfOrAncestorOf(root, _keyArmed)) CancelKeyArm(fire: false);
         if (IsSelfOrAncestorOf(root, _focused)) SetFocus(NodeHandle.Null);
         if (IsSelfOrAncestorOf(root, _selText)) { _selText = NodeHandle.Null; _selDragging = false; }
+    }
+
+    /// <summary>The REMOVAL twin of <see cref="DeactivateSubtree"/> (which covers the KeepAlive PARK edge): the
+    /// reconciler is about to take <paramref name="root"/> out of the live tree — hard (<c>FreeSubtree</c>) or into the
+    /// exit-orphan layer (<c>SceneStore.Orphan</c>, which keeps the node LIVE and drawing until its exit settles). Call
+    /// it BEFORE either, while the handle and its parent chain are still walkable.
+    ///
+    /// <para>Hover is the state that strands, because hover is the one singleton nothing re-drives on its own: a keyed
+    /// list remounting the row under a STATIONARY pointer produces no pointer event at all, so the departing row keeps
+    /// <see cref="NodeFlags.Hovered"/> (and its ancestors <see cref="NodeFlags.HoverWithin"/>) — visibly, as an orphan
+    /// that goes on painting its hover plate over the live list, or invisibly, as a dead <c>_hovered</c> handle that
+    /// makes the dispatcher's own refresh give up before it re-resolves. Route the exit through the SAME
+    /// <c>SetState</c> chokepoint a real pointer leave uses (clear the flag, diff the HoverWithin chain, fire
+    /// OnPointerExit + OnHoverChanged → the AnimEngine hover edge), then ARM a re-resolve at the last known pointer
+    /// position so the row now under the cursor lights up on the next frame instead of waiting for a mouse jiggle.</para>
+    ///
+    /// <para>Press/focus/drag/text-selection are deliberately NOT cleared here (unlike the park edge): a removal does
+    /// not end a captured gesture, and those singletons already self-guard on <c>IsLive</c>.</para>
+    /// Idempotent; UI thread only; zero managed allocation (one parent walk).</summary>
+    public void NotifySubtreeRemoved(NodeHandle root)
+    {
+        if (root.IsNull || !IsSelfOrAncestorOf(root, _hovered)) return;
+        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+        _hoverResolvePending = true;
     }
 
     /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes
@@ -3018,6 +3046,7 @@ public sealed class InputDispatcher
     internal void RefreshHoverAfterScroll()
     {
         if (!_lastPointerValid || _lastPointerKind == PointerKind.Touch || _panClaimed || Drag.IsActive) return;
+        _hoverResolvePending = false;   // this path re-resolves unconditionally — it IS the arming's service
         NodeHandle before = _hovered;
         NodeHandle next = HitTest(_lastPointerPx);
         // Recycled virtual-list slot: a boundary-crossing scroll rebinds the slot HANDLE still under the cursor to a new
@@ -3057,16 +3086,41 @@ public sealed class InputDispatcher
     /// re-drive the unconditional scroll-hover reveal + hover anim edges on EVERY reconcile (perturbing frame-exact controls
     /// — the ToolTip show/dismiss clock, the ToggleSwitch knob hover-grow), whereas a genuine stuck-hover ALWAYS changes the
     /// hit. Mouse/pen only — a touch pan (_panClaimed) and an item-drag capture (Drag.IsActive) deliberately suppress hover,
-    /// and an unknown/off-window position is skipped. Zero managed allocation: one hit-test through the existing chokepoints.</summary>
+    /// and an unknown/off-window position is skipped. Zero managed allocation: one hit-test through the existing chokepoints.
+    /// <para>ONE exception to the "only when the hit changed" gate: a STRANDED hover — the hovered subtree was removed or
+    /// orphaned out from under the pointer (see <see cref="NotifySubtreeRemoved"/>) — always re-resolves, because in that
+    /// case there is no surviving node whose containment could report the move and no pointer event is coming.</para></summary>
     internal void RefreshHoverAfterLayoutMove()
     {
-        if (!_lastPointerValid || _lastPointerKind == PointerKind.Touch || _panClaimed || Drag.IsActive) return;
+        if (!_lastPointerValid || _lastPointerKind == PointerKind.Touch || _panClaimed || Drag.IsActive)
+        {
+            _hoverResolvePending = false;   // these modes suppress hover on purpose — nothing to re-seed into
+            return;
+        }
+        // STRANDED HOVER — the one case that MAY seed from null (see the "un-stick only" rule below). The subtree that
+        // owned the hover was removed or orphaned: either NotifySubtreeRemoved told us (and already ran the exit), or
+        // nobody did and we find it ourselves — a DEAD _hovered (the slot was freed and the flags went with it), or a
+        // LIVE one that is now inside an exit orphan, which keeps drawing its hover plate over the live list until the
+        // exit settles. There is no pointer move coming to fix either, so re-resolve at the stationary cursor: this is
+        // not a fabricated hover, it is the continuation of one the pointer really is sitting in.
+        bool stranded = _hoverResolvePending
+                        || (!_hovered.IsNull && (!_scene.IsLive(_hovered) || IsInExitingSubtree(_hovered)));
+        _hoverResolvePending = false;
+        if (stranded)
+        {
+            // A dead handle must not be walked (Parent/Flags would index a recycled slot), so drop it WITHOUT SetState's
+            // prev-side clear — the flags died with the slot — and let the resolve run the full enter for the new hit. A
+            // LIVE orphan still goes through SetState, which clears its Hovered bit and its HoverWithin chain properly.
+            if (!_hovered.IsNull && !_scene.IsLive(_hovered)) _hovered = NodeHandle.Null;
+            ResolveHoverAt(_lastPointerPx);
+            return;
+        }
         // Un-stick ONLY: this path exists to CLEAR/relocate a hover the layout stranded, never to SYNTHESIZE one. When
         // nothing is hovered — including a scrub/press that deliberately nulled hover — a moved node sliding under the
         // still cursor must NOT fabricate a hover-enter here (that spuriously re-drove the ToggleSwitch knob hover-grow
         // every reconcile). A genuine enter still rides the next real PointerMove; the offset-write-correlated scroll path
         // is the one that may seed from null. Nothing hovered ⇒ nothing to un-stick.
-        if (_hovered.IsNull || !_scene.IsLive(_hovered)) return;
+        if (_hovered.IsNull) return;
         // Fire ONLY when the HOVERED node itself translated out from under the still cursor — i.e. the cursor is no longer
         // within its (post-transform) absolute bounds. This is the precise "content moved under a stationary pointer"
         // edge: a NEW node merely APPEARING over the cursor (a ToolTip bubble / flyout opening at the pointer) leaves the
@@ -3083,18 +3137,37 @@ public sealed class InputDispatcher
         }
         // The hovered node moved off the cursor: drive the SAME resolve + enter/leave + HoverWithin diff + cursor publish
         // the scroll refresh does, through the one SetState chokepoint (the cursor is genuinely over `next` now).
+        ResolveHoverAt(_lastPointerPx);
+    }
+
+    /// <summary>The stationary-pointer hover resolve shared by the layout-move refresh and the stranded-hover recovery
+    /// above: the one <see cref="SetState"/> chokepoint (enter/leave + HoverWithin diff + cursor publish), then the
+    /// per-span cursor refresh, the scrollbar-reveal follow, the bare-hover preview (only when the hovered node actually
+    /// CHANGED) and the container-aware move. Zero managed allocation — scalar walks over the existing chokepoints.</summary>
+    private void ResolveHoverAt(Point2 px)
+    {
         NodeHandle before = _hovered;
-        NodeHandle next = HitTest(_lastPointerPx);
+        NodeHandle next = HitTest(px);
         SetState(ref _hovered, next, NodeFlags.Hovered);
         if (!_hovered.IsNull && _scene.IsLive(_hovered)
             && (_scene.Interaction(_hovered).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
-            UpdateSpanCursor(_hovered, _lastPointerPx);
-        UpdateScrollHover(_lastPointerPx);   // scrollbar-reveal target follows the moved content (early-outs with no subscribers)
-        // Bare-hover preview (OnHoverMove) only when the hovered node actually CHANGED this refresh.
+            UpdateSpanCursor(_hovered, px);
+        UpdateScrollHover(px);   // scrollbar-reveal target follows the moved content (early-outs with no subscribers)
         if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
-            hm(LocalPos(_hovered, _lastPointerPx));
+            hm(LocalPos(_hovered, px));
         if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
-            DeliverPointerMoveWithin(_hovered, _lastPointerPx);
+            DeliverPointerMoveWithin(_hovered, px);
+    }
+
+    /// <summary>Is <paramref name="n"/> inside a subtree the reconciler has orphaned? <c>SceneStore.Orphan</c> detaches
+    /// the removed root and flags it <see cref="NodeFlags.Exiting"/> while keeping it LIVE and drawing until its exit
+    /// animation settles; descendants keep their own flags and their parent link, so the test walks up. A hover left
+    /// anywhere in there paints a hover plate over the live content that replaced it.</summary>
+    private bool IsInExitingSubtree(NodeHandle n)
+    {
+        for (var c = n; !c.IsNull && _scene.IsLive(c); c = _scene.Parent(c))
+            if ((_scene.Flags(c) & NodeFlags.Exiting) != 0) return true;
+        return false;
     }
 
     /// <summary>Deliver a container-aware move leaf→root without allocating a route. The leaf is the already-resolved

@@ -89,7 +89,9 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
             ? (int)Math.Clamp(len + ContentLengthSlack, MinBufferBytes, MaxBufferBytes)
             : ChunkedInitialCapacity;
 
-    private static HttpClient CreateClient()
+    /// <summary>The engine's image client, optionally with its transport wrapped (<c>AppOptions.ImageHttpHandler</c>):
+    /// the pooling, HTTP/2 and timeout policy stay the engine's; the wrapper only sees the requests go by.</summary>
+    public static HttpClient CreateClient(Func<HttpMessageHandler, HttpMessageHandler>? wrap = null)
     {
         var handler = new SocketsHttpHandler
         {
@@ -100,7 +102,7 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
             AutomaticDecompression = DecompressionMethods.All,
             ConnectTimeout = TimeSpan.FromSeconds(10),
         };
-        return new HttpClient(handler, disposeHandler: true)
+        return new HttpClient(wrap is null ? handler : wrap(handler), disposeHandler: true)
         {
             Timeout = Timeout.InfiniteTimeSpan,                     // the per-request CancellationToken owns the deadline
             DefaultRequestVersion = HttpVersion.Version20,          // prefer HTTP/2 (CDN multiplexing); falls back to 1.1

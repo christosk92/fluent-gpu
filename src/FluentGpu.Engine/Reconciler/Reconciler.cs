@@ -741,6 +741,10 @@ public sealed partial class TreeReconciler
     /// <summary>Set by the host; bumped on any image status change so <c>UseImage</c> consumers re-render granularly.</summary>
     /// <summary>Set by the host; clears input/focus state when a retained subtree is parked off the live scene chain.</summary>
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
+    /// <summary>Set by the host; called at the top of <see cref="Remove"/>, while the subtree's parent chain is still
+    /// walkable, so the dispatcher can run the hover exit for a hovered row that is about to orphan or free. NOT the
+    /// deactivation hook: a removal ends no captured gesture and must not clear focus/press/drag.</summary>
+    public Action<NodeHandle>? OnSubtreeRemoved { get; set; }
     /// <summary>Set by the host; called when a component context's passive/layout effect queue transitions 0→1.</summary>
     public Action<RenderContext, bool>? RegisterPendingEffectContext { get; set; }
     /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
@@ -1218,7 +1222,8 @@ public sealed partial class TreeReconciler
     /// Show body is therefore INERT: same type ⇒ update in place, whatever the key says. Honoring it here would turn a
     /// key change into a remount for every such site in the tree (an audited-unsafe blast radius: keyed roots whose key
     /// varies with a measured width or an expansion target exist today and rely on being updated), so the semantic stays
-    /// as-is and the DEBUG tripwire below makes the dropped request loud instead of silent.</para></summary>
+    /// as-is and the report below (UNCONDITIONAL — see <see cref="ReuseGuard.KeyIgnoredInSingleChildSlot"/>) makes the
+    /// dropped request loud instead of silent, in every build a user actually runs.</para></summary>
     private void ReconcileSingleChild(NodeHandle parent, Element? newChild, Element? oldChild)
     {
         var child = _scene.FirstChild(parent);
@@ -1236,11 +1241,14 @@ public sealed partial class TreeReconciler
         }
         else if (oldChild is not null && oldChild.ElementTypeId == newChild.ElementTypeId)
         {
-            // DEBUG tripwire (report-only; the const folds the block away in release): the author asked for a REMOUNT via
-            // a changed key and this slot cannot deliver one. Same-type + both keys present + different ⇒ the intent is
-            // unambiguous, so this must never be silent again — it is how a chart froze at its seed count.
-            if (ReuseGuard.CompiledIn && ReuseGuard.Enabled
-                && newChild.Key is { Length: > 0 } nk && oldChild.Key is { Length: > 0 } ok && nk != ok)
+            // ALWAYS ON (unlike every other ReuseGuard report — this one is not DEBUG/FLUENTGPU_DIAG-gated): the author
+            // asked for a REMOUNT via a changed key and this slot cannot deliver one. Same-type + both keys present +
+            // different ⇒ the intent is unambiguous, so this must never be silent again — it is how a chart froze at its
+            // seed count, and a Release build (where ReuseGuard.CompiledIn is false) had NO way to see it happen. Cost on
+            // the hot path: two reference reads (Element.Key), and only when both are non-empty, one ordinal compare;
+            // ReuseGuard.KeyIgnoredInSingleChildSlot owns the per-site dedupe that keeps a legitimately-varying-every-frame
+            // key (a measured width baked into a root key) a single log line instead of one per frame.
+            if (newChild.Key is { Length: > 0 } nk && oldChild.Key is { Length: > 0 } ok && nk != ok)
                 ReportKeyIgnoredInSingleChildSlot(newChild, oldChild, ok, nk);
             Update(child, newChild, oldChild);
         }
@@ -1442,8 +1450,19 @@ public sealed partial class TreeReconciler
         // (normally NaN/auto) so the anchor stays genuinely transparent and measures the eased child naturally.
         if (Anim is { } mpAnim)
         {
-            a.Width = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width;
-            a.Height = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height;
+            float mirroredW = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width;
+            float mirroredH = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height;
+            // The SAME hazard one level up, with the roles swapped: the ANCHOR itself may be the reflow node. A
+            // SkelRegionEl with SmoothResize puts the SizeMode.Reflow track on the BOUNDARY (MountSkeletonRegion marks
+            // the region BoundsAnimated), and ReconcileSkeletonRegion then mirrors its branch onto it on every flush —
+            // so writing a.Width/a.Height raw stomps the extent the anchor's own live row publishes each tick, and
+            // leaves the row's RestoreTo holding a value the author never declared. Hand the mirrored declared value to
+            // the track instead, exactly as WriteColumns does for an authored Width/Height: RecordDeclaredSize files it
+            // as the row's RestoreTo (so the settle restores the CURRENT declared value, not a stale one) and re-aims
+            // the row when a genuinely changed non-NaN value arrives mid-flight. Write LayoutInput only when no row
+            // owns the channel; the probe is O(1) for the overwhelmingly common unanimated anchor.
+            if (!mpAnim.RecordDeclaredSize(anchor, AnimChannel.LayoutW, mirroredW)) a.Width = mirroredW;
+            if (!mpAnim.RecordDeclaredSize(anchor, AnimChannel.LayoutH, mirroredH)) a.Height = mirroredH;
         }
         else { a.Width = c.Width; a.Height = c.Height; }
         a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
@@ -1512,10 +1531,15 @@ public sealed partial class TreeReconciler
         // Skipped under reduced motion (the swap snaps). The FLIP deadband makes a same-height swap a no-op.
         if (se.SmoothResize && !Motion.ReducedMotion && Anim is { } sa)
         {
+            // HEIGHT ONLY. `LayoutTransition.Axes` defaults to SizeAxes.Both, but the region's smooth resize exists to
+            // ease the BRANCH HEIGHT difference; its width is parent-owned (a page section fills its column) and easing
+            // it turns every re-measure into a horizontal rubber-band. Axes gates the seed itself (AnimateBounds →
+            // ReflowSize per axis), so the width channel is never created rather than created and ignored.
             sa.SetTransition(node, new LayoutTransition(
                 TransitionChannels.Size,
                 TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
-                Size: SizeMode.Reflow));
+                Size: SizeMode.Reflow,
+                Axes: SizeAxes.Height));
             _scene.Mark(node, NodeFlags.BoundsAnimated);
         }
 
@@ -3009,6 +3033,24 @@ public sealed partial class TreeReconciler
             if (_scene.HasScroll(n)) { viewport = n; break; }
         if (viewport.IsNull) { ReleaseSkeletonScrollbarSuppression(owner); return; }
 
+        // A VIRTUALIZED viewport is never suppressed. `ScrollState.ItemCount > 0` is the engine-wide marker for one
+        // (Columns.cs: "ItemCount == 0 ⇒ a plain ScrollView, non-virtual"; FlexLayout's measure/arrange virtual split and
+        // SkeletonRegion.FindVirtualRows read exactly the same field). Two reasons. (1) It buys nothing: a virtual
+        // viewport's scroll extent comes from its measured-extent table, which already absorbs a short→tall swap inside
+        // one row, so the rail does not pop. (2) It actively flashes: a Skel.Region used PER ITEM puts N regions under
+        // the SAME viewport — the list's own — and they all claim and release it, so the suppressor count toggles 0↔N
+        // every flush and the scroll chrome blinks with the rows. Release first rather than plain-return: a region whose
+        // ancestor chain changed (rare reparent), or whose enclosing list only became virtual after the claim, must drop
+        // the claim it already holds. A region that never claimed has no entry, so the Remove is a no-op and a
+        // never-claimed region can never decrement — claims stay balanced (the unmount sink calls the same release).
+        // Read through TryGetScroll, not ScrollRef: ScrollRef is get-or-create and notes a capture change on every call,
+        // which a pure predicate has no business doing.
+        if (_scene.TryGetScroll(viewport, out var vpScroll) && vpScroll.ItemCount > 0)
+        {
+            ReleaseSkeletonScrollbarSuppression(owner);
+            return;
+        }
+
         if (_skelScrollSuppression.TryGetValue(owner, out var prior))
         {
             if (prior == viewport && _scene.IsLive(prior)) return;   // this region already owns one claim
@@ -4430,6 +4472,7 @@ public sealed partial class TreeReconciler
     private void Remove(NodeHandle node)
     {
         _reconciled = true;
+        OnSubtreeRemoved?.Invoke(node);
         // Parked KeepAlive content is already invisible. A reactive boundary may settle after the park edge, but its
         // animated child must be hard-removed instead of escaping the detached page as a globally drawn exit orphan.
         bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0;

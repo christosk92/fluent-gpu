@@ -344,7 +344,9 @@ public static class FluentApp
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         if (o.ImageCacheDirectory is { Length: > 0 }) SweepLegacyImageCache();
-        using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache(o.ImageCacheDirectory));
+        using var imageFetcher = new DefaultImageFetcher(
+            http: o.ImageHttpHandler is { } wrap ? DefaultImageFetcher.CreateClient(wrap) : null,
+            diskCache: new DiskImageCache(o.ImageCacheDirectory));
         // ONE bounded CPU pixel pool for the whole pipeline: decode BGRA buffers (workers) + async-upload copies (UI)
         // share one budget (media-pipeline.md §3 staging blocks, as built).
         var pixelPool = new PixelBufferPool(budgets.PixelPool);
@@ -891,6 +893,10 @@ public sealed record AppOptions
     /// <c>%LOCALAPPDATA%\Wavee\cache\images</c>). When set, the engine deletes the legacy TEMP directory once,
     /// best-effort, so an upgrading install does not leave the old cache stranded.</summary>
     public string? ImageCacheDirectory { get; init; }
+    /// <summary>Wraps the image fetcher's transport — the seam an app uses to OBSERVE every image request (a logging
+    /// <see cref="System.Net.Http.DelegatingHandler"/>). It receives the engine's own configured handler and returns
+    /// the one the client is built on; null keeps the engine's handler as is. The engine logs nothing itself.</summary>
+    public Func<System.Net.Http.HttpMessageHandler, System.Net.Http.HttpMessageHandler>? ImageHttpHandler { get; init; }
     /// <summary>Initial app-zoom factor (browser-style Ctrl+= zoom; 1.0 = none). Seed it from persisted settings so the
     /// FIRST frame lays out at the user's level — no visible re-zoom after startup. Clamped to the
     /// <see cref="ZoomLadder"/> range before reaching the window; live changes go through

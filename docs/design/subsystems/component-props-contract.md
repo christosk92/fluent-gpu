@@ -108,6 +108,10 @@ call `ReuseGuard.Violation(...)`.
   `FG_REUSE_GUARD_THROW=1` to hard-fail. Enforced by `gate.reuse.*` in the VerticalSlice (`FrozenPropProbe`).
 - The **`FGRP001`** analyzer (frozen Element-as-field into `Embed.Comp`) + **`FGRP002`** (mount-snapshot `Prop.Of`
   capture) are the compile-time counterparts; they now recommend the re-pushed-props / `[Props]` fix.
+- One report on this type is the exception to the DEBUG-only posture above: the content root of `Skel.Region`, `Show`,
+  a provider, or a component is a **single-child slot** whose `Key` is structurally inert (`ReconcileSingleChild`
+  pairs old↔new by `ElementTypeId` only) — put a remount key on a **child** of that slot instead — and
+  `ReuseGuard.KeyIgnoredInSingleChildSlot` reports a dropped one **unconditionally**, in every build, deduped per site.
 
 ## Authoring checklist for a new control
 

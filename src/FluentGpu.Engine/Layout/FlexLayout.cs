@@ -610,8 +610,9 @@ public sealed partial class FlexLayout
                 }
                 // A SizeMode.Reflow exit orphan is detached (FirstVisibleChild skips it) but still owns the closing
                 // height: without this add, a measured virtual row snaps to the without-child extent on the remove
-                // frame while the orphan paints at its last full Bounds. Read the live LayoutInput / Bounds — no
-                // recursive Measure (content is frozen; the Size track writes the animating extent).
+                // frame while the orphan paints at its last full Bounds. ONLY such an orphan is folded in — see
+                // AddOrphanMain. Read the live LayoutInput — no recursive Measure (content is frozen; the Size track
+                // writes the animating extent).
                 AddOrphanMain(node, row, ref main, ref cross, ref n);
                 if (n > 1) main += li.Gap * (n - 1);
                 main += row ? li.Padding.Horizontal : li.Padding.Vertical;
@@ -650,9 +651,19 @@ public sealed partial class FlexLayout
         return StoreMemo(node, availW, result);
     }
 
-    /// <summary>Fold exit-orphan main/cross sizes into a parent's Measure. Allocation-free: walks the scene's existing
-    /// per-parent orphan list (empty in the steady state — OrphanCount short-circuits). Does not recurse into the
-    /// orphan; the Size track already wrote LayoutInput / Bounds.</summary>
+    /// <summary>Fold the main/cross size of a parent's REFLOWING exit orphans into its Measure. Allocation-free: walks
+    /// the scene's existing per-parent orphan list (empty in the steady state — OrphanCount short-circuits). Does not
+    /// recurse into the orphan; the Size track already wrote LayoutInput.
+    /// <para>ONLY an orphan whose MAIN axis is reflow-driven contributes. A SizeMode.Reflow exit is the one exit that
+    /// still occupies layout space (its track eases the main extent to 0 and the parent must ease closed with it);
+    /// every other exit — the opacity cross-dissolve a Skel region orphans under its real content, a fly-out — paints
+    /// OVER live content that is already measured, so adding its extent double-counts the same band. Inside a measured
+    /// virtual row that doubling is not merely a wrong height: it is committed into the ExtentTable through
+    /// SetMeasured and ballooned every row below for the exit duration.</para>
+    /// <para>The discriminator available to layout is the reflow track's own layout-visible product: it writes the
+    /// eased extent straight into the orphan's LayoutInput main axis every tick (AnimScheduler compose), so a definite
+    /// main size on a detached node means a live Size track owns it. A frozen last-arranged Bounds is NOT that signal
+    /// and is deliberately no longer read here — it is exactly what an opacity-only orphan still carries.</para></summary>
     private void AddOrphanMain(NodeHandle node, bool row, ref float main, ref float cross, ref int n)
     {
         if (_scene.OrphanCount == 0) return;
@@ -663,10 +674,12 @@ public sealed partial class FlexLayout
             var o = orphans[i];
             if (!_scene.IsLive(o)) continue;
             ref LayoutInput oli = ref _scene.Layout(o);
-            float oW = !float.IsNaN(oli.Width) ? oli.Width : _scene.Bounds(o).W;
-            float oH = !float.IsNaN(oli.Height) ? oli.Height : _scene.Bounds(o).H;
-            main += (row ? oW : oH) + MarginMain(oli, row);
-            float oCross = (row ? oH : oW) + MarginCross(oli, row);
+            float oMain = row ? oli.Width : oli.Height;
+            if (float.IsNaN(oMain)) continue;   // no Size track on this axis ⇒ the orphan holds no layout space
+            float oCross = row ? oli.Height : oli.Width;
+            if (float.IsNaN(oCross)) oCross = row ? _scene.Bounds(o).H : _scene.Bounds(o).W;
+            main += oMain + MarginMain(oli, row);
+            oCross += MarginCross(oli, row);
             if (oCross > cross) cross = oCross;
             n++;
         }
@@ -937,10 +950,17 @@ public sealed partial class FlexLayout
     }
 
     /// <summary>Updates an auto-main measured stack's intrinsic extent before its viewport is measured. Allocation-free;
-    /// arrange repeats the measure to preserve the normal measured-virtual anchor/deferred-correction contract.</summary>
+    /// arrange repeats the measure to preserve the normal measured-virtual anchor/deferred-correction contract.
+    /// <para>INVARIANT: this commits into the layout's SHARED ExtentTable, so it runs only against a REAL cross offer.
+    /// The caller's cross is 0 whenever the viewport's cross axis is still indefinite (an auto-width list measured at
+    /// +Inf leaves w = NaN ⇒ cross = 0), and every row measured at a 0/degenerate width answers with a hypothetical
+    /// extent — text wrapped to nothing, images at their intrinsic fallback. Writing THAT through SetMeasured is not a
+    /// transient bad frame: it is a durable corruption of the table every later pass, anchor re-pin and scrollbar reads
+    /// as measured truth. Arrange re-measures against the real cross, so skipping here costs nothing.</para></summary>
     private void RefreshNaturalMeasuredStack(in ScrollState sc, MeasuredStackVirtualLayout layout,
                                              NodeHandle content, float cross, bool horizontal)
     {
+        if (!(cross > 0f) || float.IsInfinity(cross)) return;   // NaN-safe: no real cross offer ⇒ nothing may enter the table
         _ = layout.ContentExtent(sc.ItemCount, cross);       // ensure/reset the backing extent table before SetMeasured
         int ord = 0;
         for (var row = _scene.FirstChild(content); !row.IsNull; row = _scene.NextSibling(row), ord++)
@@ -952,6 +972,7 @@ public sealed partial class FlexLayout
             float measureW = horizontal
                 ? MathF.Max(0f, rect.H - rli.Margin.Top - rli.Margin.Bottom)
                 : MathF.Max(0f, rect.W - rli.Margin.Left - rli.Margin.Right);
+            if (measureW <= 0f) continue;                    // same rule per row: a margin-eaten slot is not a measurement
             var measured = Measure(row, measureW);
             layout.SetMeasured(index, horizontal ? measured.Width : measured.Height, cross);
         }
@@ -1232,22 +1253,39 @@ public sealed partial class FlexLayout
             var cs = Measure(rc, measureW);
             float main = horizontal ? cs.Width : cs.Height;
             float oldMain = horizontal ? rect.W : rect.H;
-            // A row OUTSIDE the previous arrange window is FRESH: its first measure can be transiently short (deferred
+            // A row OUTSIDE the previous arrange window is FRESH: its first measure can be transiently SHORT (deferred
             // inner content lands next frame). Above the anchor that transient would re-pin the offset down then back up
             // — the felt jitter — so defer the correction one arrange (the slot keeps its table extent; next arrange
             // measures the settled value and usually matches, so no pin fires at all).
+            //
+            // ONLY the short case. INVARIANT: the extent table and the arranged child box never disagree for a realized
+            // row. A fresh row that measured TALLER than its slot is not a transient to ride out — pass 2 arranges it at
+            // that tall measure (it must: the alternative is a wrapped row scissored into its one-line estimate), so
+            // skipping the write would position every following row from a table that is provably too short and paint
+            // them over it until some later pass happens to re-measure the row inside the window. That is how an
+            // already-expanded drawer row loses its height the moment an overlay forces a full root layout: the row is
+            // "fresh" (outside the previous arrange window) and above the anchor, and its extra height lives ONLY here.
+            // A correction in place costs nothing extra: the write moves OffsetOf(anchorIndex) by the same amount, and
+            // the anchor re-pin below turns that into the AnchorShift the kernel rebases every live intent by — the
+            // same compensation every non-deferred above-anchor correction already gets, so the visible top does not
+            // move. (0.5px: only a REAL shortfall defers. A measure that came back at its slot ±noise has nothing to
+            // commit, so deferring it would buy a follow-up arrange for no correction at all.)
             bool fresh = ord >= sc.PersistentPrefixCount && (index < prevFirst || index > prevLast);
-            if (fresh && index < anchorIndex) { deferred = true; continue; }
+            bool transientlyShort = main < oldMain - 0.5f;
+            if (fresh && transientlyShort && index < anchorIndex) { deferred = true; continue; }
             if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && MathF.Abs(main - oldMain) > 0.5f)
                 FluentGpu.Foundation.ScrollTrace.Note(111, main - oldMain, (int)node.Raw.Index, index, main);   // extent correction: which row, by how much
             layout.SetMeasured(index, main, cross);
         }
 
-        // Pass 2 — arrange at the corrected slots (row-synced for grids). A fresh-above-anchor item deliberately did
-        // NOT update the extent table in pass 1, but its Measure result is already retained in Bounds. Use that measured
-        // main size for this frame's child box while keeping the old table POSITION; only the extent-table write remains
-        // deferred. Without this distinction a wrapped row is arranged into its one-line estimate for one frame, and a
-        // self-blur layer dutifully scissors the multi-line glyphs into that thin estimated strip.
+        // Pass 2 — arrange at the corrected slots (row-synced for grids). A fresh-above-anchor item that measured SHORT
+        // deliberately did NOT update the extent table in pass 1, but its Measure result is already retained in Bounds.
+        // Use that measured main size for this frame's child box while keeping the old table POSITION; only the
+        // extent-table write remains deferred. Without this distinction a row is arranged into a stale estimate for one
+        // frame, and a self-blur layer dutifully scissors its glyphs into that strip. A fresh row that GREW (or matched
+        // its slot) is no longer deferred at all — pass 1 wrote it — so the branch below re-reads the same number the
+        // table now holds: a value-identical no-op that keeps table and child box in agreement instead of straddling
+        // two truths.
         int gridCols = measuredGrid?.EffectiveColumns(cross) ?? 1;
         int deferredGridRow = -1;
         float deferredGridMain = 0f;

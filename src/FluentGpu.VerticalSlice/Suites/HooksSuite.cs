@@ -49,6 +49,7 @@ static class HooksSuite
         FrameClockPollerCensusChecks.Run(strings);
         FrameClockPollersSeenChecks.Run(strings);
         ReuseGuardChecks(strings);
+        KeyIgnoredInSingleChildSlotChecks(strings);
         PropsChannelChecks(strings);
         PropsGenChecks(strings);
         KeyboardChecks(strings);
@@ -760,6 +761,62 @@ static class HooksSuite
         {
             ReuseGuard.Enabled = prevEnabled;
             ReuseGuard.ThrowOnViolation = prevThrow;
+            ReuseGuard.Reset();
+        }
+    }
+
+    // E1 (library-stabilization-plan.md, Wave 3): the single-child-slot ignored-key report is now UNCONDITIONAL — no
+    // ReuseGuard.CompiledIn / ReuseGuard.Enabled gate, unlike every other report on the type (that gate is exactly why
+    // nobody saw the tripwire in the Release build that shipped the view-switcher regression this plan fixes). Proves
+    // both halves with the guard's own switch left OFF: (1) it still fires, and (2) a key that varies EVERY frame — the
+    // audited "measured width in a root key" shape the contract doc calls out — collapses to ONE line via the per-site
+    // (element type + key-prefix) dedupe, not one line per frame.
+    static void KeyIgnoredInSingleChildSlotChecks(StringTable strings)
+    {
+        bool prevEnabled = ReuseGuard.Enabled;
+        ReuseGuard.Enabled = false;   // the whole point of E1: this report needs neither this switch nor a DEBUG build
+        try
+        {
+            ReuseGuard.Reset();
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+
+            // A SkelRegionEl whose Pending()/Failed() are both false mounts straight onto its REAL branch (2) — the
+            // simplest single-child-slot owner the harness supports (Show/a component's ComponentEl root behave
+            // identically per ReconcileSingleChild's own contract comment; this one needs no host/component wiring).
+            static SkelRegionEl RealRegion(string contentKey) => new(
+                Pending: () => false, Failed: () => false,
+                Content: () => new BoxEl { Key = contentKey },
+                ShimmerSource: null, OnFailed: null,
+                Reveal: SkelReveal.None, Style: SkeletonStyle.Default, Group: null, SmoothResize: false);
+
+            var mount = RealRegion("region-content-slot-000000");
+            recon.ReconcileRoot(mount, null);
+            recon.Runtime.Flush();
+            var mountedChild = scene.FirstChild(scene.Root);
+            bool mountedCleanly = ReuseGuard.Violations == 0 && !mountedChild.IsNull;
+
+            // 40 re-runs, each asking for a DIFFERENT key that shares only its first 24 characters — a key built from a
+            // stable identity prefix + a value that moves every frame (a measured width, a generation counter). Every
+            // single re-run differs from the one before it (nk != ok every time), so without the dedupe this would be
+            // 40 log lines, not one.
+            Element last = mount;
+            for (int i = 1; i <= 40; i++)
+            {
+                var next = RealRegion("region-content-slot-" + i.ToString("D6"));
+                recon.ReconcileRoot(next, last);
+                recon.Runtime.Flush();
+                last = next;
+            }
+            var childAfter = scene.FirstChild(scene.Root);
+
+            Check("gate.reuse.key-ignored-always-on the single-child-slot ignored-key report fires with ReuseGuard.Enabled=false, and a per-frame-varying key de-dupes to ONE report while the child node stays reused (never remounted)",
+                mountedCleanly && ReuseGuard.Violations == 1 && childAfter == mountedChild,
+                $"mountedCleanly={mountedCleanly} violations={ReuseGuard.Violations} sameChild={childAfter == mountedChild} last={ReuseGuard.LastViolation}");
+        }
+        finally
+        {
+            ReuseGuard.Enabled = prevEnabled;
             ReuseGuard.Reset();
         }
     }

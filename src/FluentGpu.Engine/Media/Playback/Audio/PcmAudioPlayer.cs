@@ -1371,10 +1371,16 @@ public sealed class PcmAudioSession : IMediaSession
                 if (renderInline) RtRenderOnce(frames);   // single-thread path; RT path renders on the feed thread instead
                 PublishPosition(sink);
                 PublishVisualizer();
-                // RT path: read the RT-published drained flag (never the render-thread-owned voice list), and never declare
-                // Ended while a voice-add command is still queued (spec §12). Single-thread path: read the mixer directly.
-                bool drained = _feed is not null ? (_mixer.DrainedPublished && !MixerCmdsPending) : _mixer.IsDrained(_mixer.ConsumeSeq);
-                if (drained && _pendingFrames == 0 && (_out is not IBufferedAudioSink drainSink || drainSink.WritableFrames >= drainSink.CapacityFrames))
+                // RT path: read the RT-published drained flag (never the render-thread-owned voice list) — RenderBlock
+                // now publishes it even on a voiceless tick (see DrainVerdict), so a fully-drained RT session is never
+                // stuck waiting for a render that will never come. Single-thread path: read the mixer directly. Either
+                // way, never declare Ended while a voice-add command is still queued (spec §12) or the sink still
+                // holds unplayed filler.
+                bool mixerDrained = _feed is not null ? _mixer.DrainedPublished : _mixer.IsDrained(_mixer.ConsumeSeq);
+                var drainSink = _out as IBufferedAudioSink;
+                var endVerdict = DrainVerdict.Decide(mixerDrained, MixerCmdsPending, _pendingFrames,
+                    drainSink?.WritableFrames ?? 0, drainSink?.CapacityFrames ?? 0, drainSink is not null);
+                if (endVerdict.PublishEnded)
                 {
                     _playRequested = false;
                     sink.PlayRequested(false);
@@ -1413,6 +1419,31 @@ public sealed class PcmAudioSession : IMediaSession
         }
         DrainMixerCmds();
         if (_pendingFrames > 0) return SubmitPending();
+
+        // Nothing-to-render short-circuit (spec §12; Wavee: playback stuck at the tail on WASAPI — the mixer clock
+        // ran on past the end forever). A voiceless mixer with nothing queued to arrive has no content: rendering it
+        // anyway would keep submitting zero-filled blocks into a buffered sink, which is therefore never empty, so
+        // the sink-drained half of the Ended check (Advance, below) can never observe true silence on a real device.
+        // Gated to the RUNNING transport phase (0) only: a pause fade-out (phase 1) still needs its tail rendered —
+        // over silence if the mixer is already voiceless — so the transport ramp's own EndFrame comparison further
+        // down can still fire and carry the pause through phase 2 → 3 → Paused.
+        if (Volatile.Read(ref _transportPhase) == 0)
+        {
+            var drainProbe = _out as IBufferedAudioSink;
+            var verdict = DrainVerdict.Decide(
+                mixerDrained: _mixer.VoiceCount == 0,
+                cmdsPending: MixerCmdsPending,
+                pendingFrames: _pendingFrames,
+                writableFrames: drainProbe?.WritableFrames ?? 0,
+                capacityFrames: drainProbe?.CapacityFrames ?? 0,
+                bufferedSink: drainProbe is not null);
+            if (!verdict.RenderAllowed)
+            {
+                _mixer.PublishDrained(_mixer.ConsumeSeq);
+                return 0;
+            }
+        }
+
         frames = Math.Clamp(frames, 1, _maxBlock);
         if (_out is IBufferedAudioSink buffered)
         {

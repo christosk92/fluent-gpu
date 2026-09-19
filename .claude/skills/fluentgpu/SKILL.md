@@ -73,6 +73,10 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
     snippet below and `virtualization.md` §3.4. Never format a number/duration/date inline in a bind thunk — route it
     through `FormatCache.Int`/`.DurationMmSs` or a hoisted `FormatCache<TKey>` (one instance per call site, a static
     field, never per-row).
+14. **The content root of `Skel.Region`, `Show`, a provider, or a component is a single-child slot — its `Key` is
+    inert.** `ReconcileSingleChild` pairs that root old↔new by `ElementTypeId` only; put a remount `Key` on a CHILD of
+    that root instead (`new BoxEl { Children = [keyed] }`). A dropped one is reported unconditionally, in every build
+    (`ReuseGuard.KeyIgnoredInSingleChildSlot`) — see `docs/design/subsystems/component-props-contract.md`.
 
 ## Author UI (cheat sheet)
 

@@ -2632,7 +2632,8 @@ public sealed class AppHost : IDisposable
         _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the FG_DIAG relayout-escape message (DEBUG-only invocation)
         _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
-        _anim = new AnimEngine(_scene);
+        _reconciler.OnSubtreeRemoved = _dispatcher.NotifySubtreeRemoved;
+        _anim =new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         // scroll-v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.3 item 5): the kernel is the single, portable,
         // thread-agnostic scroll source (wheel/touchpad/touch fling + overscroll spring + programmatic glide + snap)

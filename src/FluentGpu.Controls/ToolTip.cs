@@ -278,6 +278,16 @@ public sealed class ToolTip : Component
         // backwards write — and the thunk reads the CURRENT value.
         var textRef = UseRef("");
         textRef.Value = text;
+        // The text the OPEN bubble was opened WITH — the owner's identity, as far as a bubble can observe it. Wrap
+        // re-pushes props, so a rail/list row whose identity changes IN PLACE reuses this component instead of
+        // remounting it, and both live thunks then quietly re-point: the content thunk reads textRef, the anchor thunk
+        // reads anchor.Value, so an open bubble survives onto a DIFFERENT owner and re-anchors there, describing the
+        // item that used to be under the pointer. A Ref (no subscription, no per-frame allocation) records what was
+        // opened so the stranded-bubble guard below can close it the moment the two disagree. Text is the only identity
+        // the wrapper actually has — the target Element is a new instance on every parent render and the wrapper's own
+        // node handle is reused across the swap — so a live-updating bound text on ONE owner also closes the bubble;
+        // that is the safe direction (a tooltip re-opens on the next hover; a wrong-row tooltip lies for 5s).
+        var openedText = UseRef("");
         // TRANSIENT posture — set by the same per-element override that makes the bubble open immediately (see Wrap).
         // Instant show and instant hide are one decision, not two: a bubble that appears the moment the pointer lands
         // is a DATA TIP (a sparkline bar's week, a blend slice's share) rather than a delayed reminder about a button.
@@ -310,6 +320,7 @@ public sealed class ToolTip : Component
             s_openOwner = this;
             s_openCloser = CloseNow;
             openedAtMs.Value = Environment.TickCount64;   // dwell epoch (m_tpCloseTimer is armed once per open)
+            openedText.Value = textRef.Value;             // identity epoch — see openedText (a re-pushed owner closes it)
             // A tooltip never traps focus and never light-dismisses on outside click — it is transient and dismissal
             // is driven by hover/focus-leave + press + the auto-dismiss timer (ToolTipService owns close, not the user).
             //
@@ -417,9 +428,14 @@ public sealed class ToolTip : Component
         {
             if (Environment.TickCount64 - openedAtMs.Value >= (long)ShowDurationMs) { AutoDismiss(); return; }
             var scene = Context.Scene;
+            var on = anchor.Value;
+            // The owner DIED under the bubble (its subtree was relaid out or removed while the pointer sat on it, or a
+            // drag holds capture), so the leave edge that would have closed this is never coming. The rect thunk now
+            // resolves to `default` and the placement pass walks the bubble to the viewport origin — a dead anchor is a
+            // close, not another poll interval.
+            if (scene is not null && !on.IsNull && !scene.IsLive(on)) { CloseNow(); return; }
             if (scene is not null && hooks.GetPointerPosition?.Invoke() is { } pt)
             {
-                var on = anchor.Value;
                 var bn = bubbleNode.Value;
                 bool inside = (!on.IsNull && scene.IsLive(on) && InRect(scene.AbsoluteRect(on), pt))
                            || (!bn.IsNull && scene.IsLive(bn) && InRect(scene.AbsoluteRect(bn), pt));
@@ -463,6 +479,24 @@ public sealed class ToolTip : Component
             autoOpened.Value = true;
             OpenNow();
         }, OpenOnMount);
+
+        // STRANDED-BUBBLE GUARD. Two ways an open bubble outlives the thing it describes, both ending with a tip
+        // anchored to the wrong item (or to the viewport origin) until the 5s dwell finally fires:
+        //   • the owner's IDENTITY changed in place — Wrap re-pushes props, so a recycled rail/list row REUSES this
+        //     component and the live thunks re-point the already-open bubble at the new item (see openedText);
+        //   • the anchor node DIED with no leave edge — the target was relaid out or destroyed under a still pointer, or
+        //     a drag holds capture, so OnLeave never runs and the phase never leaves 2 (the safe-zone poll, which has
+        //     the same test, only runs in phase 3).
+        // Deps-gated on the text, so a plain re-render costs one DepKey compare; an EFFECT rather than an inline render
+        // check because CloseNow writes signals (phase/bubbleNode), which a render body must not do.
+        UseEffect(() =>
+        {
+            if (phase.Peek() is not (2 or 3) && h.Value is not { IsOpen: true }) return;
+            if (!string.Equals(openedText.Value, textRef.Value, StringComparison.Ordinal)) { CloseNow(); return; }
+            var scene = Context.Scene;
+            var on = anchor.Value;
+            if (scene is not null && !on.IsNull && !scene.IsLive(on)) CloseNow();
+        }, text);
 
         // Owner unmount must not orphan the bubble. The component's OverlayHandle is the ONLY thing an unmounting
         // ToolTip still owns that the host does not: the entry lives in OverlayServiceImpl.Entries and leaves only via

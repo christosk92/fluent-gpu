@@ -58,8 +58,8 @@ internal readonly record struct GlyphKey(int Fam, int Size, int Scale, int Weigh
 /// here, so the same shaped run is reusable across scroll/theme/fade. The atlas UVs are stable (the shelf packer never
 /// repacks), so a cached quad stays valid for the life of the run.</summary>
 /// <summary>One cached local-space glyph quad. <see cref="V0"/>/<see cref="V1"/> address sub-pixel phase 0; a replay at
-/// phase <c>p</c> adds <c>p * VStride</c> to both, which is why the phase stack is packed CONTIGUOUSLY (one atlas slot,
-/// <c>SubPixelPhases</c> variants stacked vertically). That keeps the shaped-run cache phase-AGNOSTIC — the alternative,
+/// phase <c>p</c> adds <c>p * VStride</c> to both, which is why the phase stack is packed in ONE atlas slot
+/// (<c>SubPixelPhases</c> variants stacked vertically, one transparent gutter row between them — <c>PhaseStride</c>). That keeps the shaped-run cache phase-AGNOSTIC — the alternative,
 /// keying runs by phase, would multiply the cache by the phase count and re-shape on every sub-pixel crossing.</summary>
 internal struct ShapedGlyph { public float DstX, DstY, DstW, DstH, U0, V0, U1, V1, VStride; }
 
@@ -165,6 +165,16 @@ internal sealed unsafe class GlyphRenderer : IDisposable
 
     /// <summary>Baseline Y offset in DEVICE pixels for phase <paramref name="p"/> (positive = down).</summary>
     private static float PhaseOffset(int p) => p / (float)SubPixelPhases;
+
+    /// <summary>Rows from one phase's first row to the next phase's: the ink height plus ONE transparent gutter row. The
+    /// phases used to be stacked flush, so under LINEAR sampling any quad that is not texel-exact (scaled or animated
+    /// text — the lyrics) blended the bottom row of phase p with the TOP row of phase p+1: the top strokes of the next
+    /// variant showed up as short "underlines" beneath v, n, m… (and its bottom row above the glyph, from p−1).</summary>
+    private static int PhaseStride(int h) => h + 1;
+
+    /// <summary>The packed slot's height: <see cref="SubPixelPhases"/> phases, a gutter row between each pair. The atlas
+    /// packer's own 1-texel apron covers the outer edges.</summary>
+    private static int PhaseStackHeight(int h) => h * SubPixelPhases + (SubPixelPhases - 1);
 
     private IDWriteFactory* _dw;
     private const string DefaultFamily = "Segoe UI";
@@ -531,10 +541,19 @@ float4 PSMain(VSOutG i) : SV_Target
         return face;
     }
 
+    /// <summary>The glyph realization's size key: the DEVICE em in 10.6 fixed point (canon text.md §3.1 "SizePx: size
+    /// AFTER DPI scale, quantized"). The bitmap is rasterized from THIS value, so "same key ⇒ same pixels" holds by
+    /// construction. It used to be <c>Round(size)</c> — a whole DIP, on the wrong side of the DPI multiply — while the
+    /// bitmap was rasterized at the exact <c>size * dpiScale</c>: 13.5 and 14 DIP (20.25 vs 21 px at 150 %) shared one
+    /// key, so whichever run rasterized a glyph id FIRST decided the bitmap, bearings and cell height every other size
+    /// in the bucket got. A word then mixed two em sizes — the late-claimed letters (g, p, y…) 4–10 % larger, one device
+    /// row higher and one row taller than their neighbours ("aesPa", "leaGue").</summary>
+    private static int DeviceEmQ(float size, float dpiScale) => (int)MathF.Round(size * dpiScale * 64f);
+
     // Rasterize at the PHYSICAL size (size * dpiScale) so glyphs are crisp when drawn into a DIP-sized quad at high DPI.
     private GlyphEntry GetGlyph(IDWriteFontFace* face, ushort em, int famId, char ch, float size, int weight, float dpiScale)
     {
-        int sizeQ = (int)MathF.Round(size);
+        int sizeQ = DeviceEmQ(size, dpiScale);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
         var key = new GlyphKey(famId, sizeQ, scaleQ, weight, ch, ByGid: false);
         if (_cache.TryGetValue(key, out var e)) return e;
@@ -546,7 +565,7 @@ float4 PSMain(VSOutG i) : SV_Target
         DWRITE_GLYPH_METRICS gm;
         face->GetDesignGlyphMetrics(&gi, 1, &gm, BOOL.FALSE);
         float advance = gm.advanceWidth * (size / em);            // advance in DIP (scale-independent)
-        float physEm = size * dpiScale;                            // rasterize at physical pixels
+        float physEm = sizeQ * (1f / 64f);                         // rasterize FROM THE KEY (see DeviceEmQ)
 
         float zeroAdvance = 0f;
         DWRITE_GLYPH_RUN run = default;
@@ -569,7 +588,7 @@ float4 PSMain(VSOutG i) : SV_Target
 
         e = new GlyphEntry { Advance = advance, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
         Diag.Set("text.glyph", "last", $"ch='{ch}' gi={gi} {w}x{h}x{SubPixelPhases} adv={advance:0.0}");
-        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, h * SubPixelPhases);   // a successful pack marks its rows dirty
+        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, PhaseStackHeight(h));   // a successful pack marks its rows dirty
         Diag.Count("text.glyph", "rasterized");
         _cache[key] = e;
         return e;
@@ -616,7 +635,7 @@ float4 PSMain(VSOutG i) : SV_Target
         box = union;
         w = union.right - union.left;
         h = union.bottom - union.top;
-        stack = new byte[w * h * SubPixelPhases];
+        stack = new byte[w * PhaseStackHeight(h)];                 // zero-filled: the gutter rows stay transparent
 
         for (int p = 0; p < SubPixelPhases; p++)
         {
@@ -635,7 +654,7 @@ float4 PSMain(VSOutG i) : SV_Target
             a->Release();
             if (hrT >= 0)
             {
-                int dstBase = p * w * h + (b.top - union.top) * w + (b.left - union.left);
+                int dstBase = p * w * PhaseStride(h) + (b.top - union.top) * w + (b.left - union.left);
                 for (int row = 0; row < bh; row++)
                 {
                     int src = row * bw * 3, dst = dstBase + row * w;
@@ -1020,7 +1039,9 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : (int)MathF.Round(maxWidth);
         int lineHQ = float.IsNaN(lineHeight) || lineHeight <= 0f ? 0 : (int)MathF.Round(lineHeight * 10f);   // 0 = font-natural
-        return new RunKey(textId.Value, familyId.Value, (int)MathF.Round(size), weight, wrap, trim, maxLines,
+        // The size at the glyph cache's own resolution (DeviceEmQ): a whole-DIP bucket let a 13.5-DIP and a 14-DIP run
+        // of the same text share ONE baked quad set.
+        return new RunKey(textId.Value, familyId.Value, DeviceEmQ(size, dpiScale), weight, wrap, trim, maxLines,
             widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f),
             (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId);
     }
@@ -1196,7 +1217,7 @@ float4 PSMain(VSOutG i) : SV_Target
         DstX = dstX, DstY = dstY,
         DstW = ge.W * inv, DstH = ge.H * inv,
         U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
-        VStride = ge.H / (float)ATLAS,
+        VStride = PhaseStride(ge.H) / (float)ATLAS,
     };
 
     private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
@@ -1331,13 +1352,13 @@ float4 PSMain(VSOutG i) : SV_Target
     private GlyphEntry GetGlyphByGid(IDWriteFontFace* face, ushort gid, float size, float dpiScale)
     {
         int faceId = FaceId((nint)face);
-        int sizeQ = (int)MathF.Round(size);
+        int sizeQ = DeviceEmQ(size, dpiScale);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
         // Weight 0 here is correct: the face id already encodes the (family, numeric weight) the engine resolved.
         var key = new GlyphKey(faceId, sizeQ, scaleQ, 0, gid, ByGid: true);
         if (_cache.TryGetValue(key, out var e)) return e;
 
-        float physEm = size * dpiScale;
+        float physEm = sizeQ * (1f / 64f);                         // rasterize FROM THE KEY (see DeviceEmQ)
         float zeroAdvance = 0f;
         ushort gi = gid;
         DWRITE_GLYPH_RUN run = default;
@@ -1349,7 +1370,7 @@ float4 PSMain(VSOutG i) : SV_Target
         bool hasInk = TryRasterizePhaseStack(&run, out RECT bounds, out int w, out int h, out byte[] stack);
         if (!hasInk) { bounds = default; w = 0; h = 0; }
         e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
-        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, h * SubPixelPhases);   // a successful pack marks its rows dirty
+        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, PhaseStackHeight(h));   // a successful pack marks its rows dirty
         Diag.Count("text.glyph", "rasterized");
         _cache[key] = e;
         return e;
@@ -1363,7 +1384,7 @@ float4 PSMain(VSOutG i) : SV_Target
             {
                 DstX = pen + g.BearingX * inv, DstY = baseline + g.BearingY * inv, DstW = g.W * inv, DstH = g.H * inv,
                 U0 = g.X / (float)ATLAS, V0 = g.Y / (float)ATLAS, U1 = (g.X + g.W) / (float)ATLAS, V1 = (g.Y + g.H) / (float)ATLAS,
-                VStride = g.H / (float)ATLAS,
+                VStride = PhaseStride(g.H) / (float)ATLAS,
             });
         return pen + g.Advance;
     }
