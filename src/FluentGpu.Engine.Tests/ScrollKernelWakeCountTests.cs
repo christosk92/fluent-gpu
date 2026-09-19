@@ -4,7 +4,7 @@ using Xunit;
 namespace FluentGpu.Engine.Tests;
 
 /// <summary>Idle-power gate for <see cref="ScrollKernel.WakeActiveCount"/> (scroll-v3-plan §4): a KeepAlive-parked
-/// body stays resident in the kernel's active list by design (so it resumes cleanly on unpark) but the per-tick
+/// body stays resident in the kernel's active list, but parking settles its motion and the per-tick
 /// physics loop skips it outright, so it never does real work and must not, by itself, justify waking the render
 /// loop. <see cref="ScrollKernel.ActiveCount"/> (raw residency, including parked bodies) is left unchanged for its
 /// existing diagnostics/capacity-gate callers.</summary>
@@ -19,7 +19,7 @@ public sealed class ScrollKernelWakeCountTests
         => new(0, extent, 300f, viewport, 300f, 1f, false, 0f, 0f, 0f, null);
 
     [Fact]
-    public void ParkedBody_CountsTowardActiveCount_ButNotWakeActiveCount()
+    public void ParkingSettlesMotion_AndUnparkingDoesNotWakeAnIdleBody()
     {
         var kernel = new ScrollKernel(new NullSink(), ScrollFeel.Shipping);
         const int node = 1;
@@ -31,7 +31,7 @@ public sealed class ScrollKernelWakeCountTests
         // A non-immediate ScrollTo is a real Driven glide (Tick-only — not structural), so it lands MarkActive and
         // Activity=Driven (not settled) same as a genuine in-flight scroll.
         kernel.Port.Post(ScrollInput.ScrollTo(node, 300f, immediate: false));
-        // Park in the SAME batch — the physics loop must never advance a parked body, so it stays un-settled.
+        // Park in the SAME batch: parking settles the glide before the physics loop advances it.
         kernel.Port.Post(ScrollInput.Park(node, parked: true));
 
         var clock = new ScrollClock(0.0, 0.00833f, 0.0, 0.00833f);
@@ -39,11 +39,24 @@ public sealed class ScrollKernelWakeCountTests
 
         Assert.Equal(1, kernel.ActiveCount);
         Assert.Equal(0, kernel.WakeActiveCount);
+        Assert.True(kernel.TryGetBody(node, out var parked));
+        Assert.True(parked.IsSettled);
+        Assert.Equal(0f, parked.Velocity);
+        Assert.Equal(0f, parked.OffsetY);
 
-        // Unparking the same (still-Driven, still-unsettled) body must bring it back into WakeActiveCount.
+        // Unparking preserves the idle position; a stale glide must not resume or wake the render loop.
         kernel.Port.Post(ScrollInput.Park(node, parked: false));
         kernel.Tick(in clock);
 
+        Assert.Equal(0, kernel.ActiveCount);
+        Assert.Equal(0, kernel.WakeActiveCount);
+        Assert.True(kernel.TryGetBody(node, out var unparked));
+        Assert.True(unparked.IsSettled);
+        Assert.Equal(parked.OffsetY, unparked.OffsetY);
+
+        // A fresh explicit scroll after unpark still starts real motion.
+        kernel.Port.Post(ScrollInput.ScrollTo(node, 300f, immediate: false));
+        kernel.Tick(in clock);
         Assert.Equal(1, kernel.ActiveCount);
         Assert.Equal(1, kernel.WakeActiveCount);
     }

@@ -101,6 +101,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
     /// <inheritdoc cref="IAudioSink.Format"/>
     public MixFormat Format { get; private set; }
+    /// <summary>Identity of the endpoint actually opened by this sink; no COM access on read.</summary>
+    public WasapiEndpointInfo? EndpointInfo { get; private set; }
     /// <summary>True when the device opened and can render; false after the open failed at any step (logged through
     /// <see cref="FormatSink"/> as <c>open FAILED step=… hr=…</c>) or once a running client was invalidated
     /// (<see cref="MarkLost"/>). A false device is inert: <see cref="WritableFrames"/> -1, <see cref="Write"/> 0.</summary>
@@ -416,6 +418,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         hr = enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device);
         if (hr < 0) { Fail("GetDefaultAudioEndpoint", hr); return; }
         _device = device;
+        EndpointInfo = WasapiEndpoints.Describe(device, isDefault: true);
 
         Guid iidClient = IID.IID_IAudioClient;
         IAudioClient* client;

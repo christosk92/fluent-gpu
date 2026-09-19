@@ -240,7 +240,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (_disposed) return; _core.Rate.Value = (float)rate; _session?.SetRate(rate); RequestVideoPump(); }
+    public void SetRate(double rate) { if (_disposed) return; rate = WsolaAudioSource.ClampRate(rate); _core.Rate.Value = (float)rate; _session?.SetRate(rate); RequestVideoPump(); }
     /// <inheritdoc/>
     public void SetVolume(double volume) { if (_disposed) return; _core.Volume.Value = (float)Math.Clamp(volume, 0, 1); _session?.SetVolume(volume); }
     /// <inheritdoc/>
@@ -385,6 +385,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 _currentKind = kind;
                 AttachVideoPumpSource(session);
                 session.ConnectSignals(_sink);
+                session.SetRate(_core.Rate.Peek());
                 RequestVideoPump();
             }).ConfigureAwait(false);
             await LoadExternalSubtitlesAsync(source, opts.Network, ct).ConfigureAwait(false);

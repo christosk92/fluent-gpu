@@ -170,7 +170,7 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (!_disposed) _core.Rate.Value = (float)rate; }
+    public void SetRate(double rate) { if (!_disposed) _core.Rate.Value = (float)WsolaAudioSource.ClampRate(rate); }
     /// <inheritdoc/>
     public void SetVolume(double volume) { if (!_disposed) _core.Volume.Value = (float)Math.Clamp(volume, 0, 1); }
     /// <inheritdoc/>

@@ -56,19 +56,27 @@ public sealed class WheelOverscrollTests
     public void DragPastTheTopEdge_BandsOnlyForDirectManipulation(bool wheel)
     {
         var k = BoundKernel(0f);
+        // FrameDelta is paced, not applied 1:1 at packet arrival. Advance the render clock with
+        // the stream, sampling each packet after the cadence-derived interpolation delay.
+        const double packetInterval = 0.008;
+        double latency = ScrollPhysics.PacedLatencyS(packetInterval);
         for (int i = 0; i < 4; i++)
         {
-            k.Port.Post(ScrollInput.FrameDelta(Node, i * 0.008, -30f, noOverscroll: wheel));
-            k.Tick(in Clock);
+            double time = i * packetInterval;
+            k.Port.Post(ScrollInput.FrameDelta(Node, time, -30f, noOverscroll: wheel));
+            var frame = new ScrollClock(time + latency, (float)packetInterval, time + latency, (float)packetInterval);
+            k.Tick(in frame);
         }
         var pinned = Body(k);
         Assert.Equal(0f, pinned.OffsetY);
         if (wheel) Assert.Equal(0f, pinned.BandY);
         else Assert.NotEqual(0f, pinned.BandY);
 
-        // Reversal: the wheel scrolls back at once (its raw rests at the clamp); the touchpad first unwinds its stretch.
+        // Once the reversal reaches the display clock, the wheel moves back from its clamp;
+        // direct manipulation first unwinds the accumulated stretch.
         k.Port.Post(ScrollInput.FrameDelta(Node, 0.032, 30f, noOverscroll: wheel));
-        k.Tick(in Clock);
+        var reversedFrame = new ScrollClock(0.032 + latency, (float)packetInterval, 0.032 + latency, (float)packetInterval);
+        k.Tick(in reversedFrame);
         var back = Body(k);
         if (wheel) Assert.Equal(30f, back.OffsetY, 3);
         else Assert.Equal(0f, back.OffsetY);

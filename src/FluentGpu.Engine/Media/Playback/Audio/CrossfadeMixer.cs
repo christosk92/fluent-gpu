@@ -226,10 +226,12 @@ public sealed class CrossfadeMixer
             if (voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
             // A confirmed tail may finish inside this block while another voice continues across the join.
             // Only an unfinished producer can make the content timeline wait for unavailable PCM.
-            if (voice.Src is not RingAudioSource ring || ring.ProducerDone || voice.IsFinished(ConsumeSeq)) continue;
+            var stretched = voice.Src as WsolaAudioSource;
+            var ring = stretched?.Ring ?? voice.Src as RingAudioSource;
+            if (ring is null || ring.ProducerDone || voice.IsFinished(ConsumeSeq)) continue;
             long offset = Math.Max(0, voice.StartFrame - ConsumeSeq);
             if (offset >= readable) continue;
-            int available = ring.BufferedFrames;
+            int available = stretched?.ReadableFrames(requested) ?? ring.BufferedFrames;
             long safe = offset + available;
             if (safe < readable)
             {
@@ -246,8 +248,11 @@ public sealed class CrossfadeMixer
         foreach (var voice in CollectionsMarshal.AsSpan(_voices))
         {
             if (voice.StartFrame > ConsumeSeq || voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
-            if (voice.Src is RingAudioSource ring &&
-                (ring.HasPendingFlush || !ring.ProducerDone && ring.BufferedFrames < Math.Min(thresholdFrames, ring.TargetFrames))) return false;
+            var stretched = voice.Src as WsolaAudioSource;
+            var ring = stretched?.Ring ?? voice.Src as RingAudioSource;
+            int recovery = stretched?.RecoveryFrames(thresholdFrames) ?? thresholdFrames;
+            if (ring is not null && (ring.HasPendingFlush || !ring.ProducerDone &&
+                (stretched?.ReadableFrames(recovery) ?? ring.BufferedFrames) < Math.Min(recovery, ring.TargetFrames))) return false;
         }
         return true;
     }
