@@ -296,8 +296,10 @@ internal sealed class SceneRecordingContext
     // ── Repaint-damage scratch (gpu-renderer.md §13.1) ──────────────────────────────────────────────────────────────
     // The AA floor every emitted repaint rect is padded by. Per-kind effect extent (shadow offset+spread+3σ, self-blur
     // 3σ) rides on TOP of it via DamageExtent below — this constant is only the anti-aliasing/ink slop, same class as
-    // OpacityGroupExtentPadDip above.
-    private const float RepaintAaPadDip = 8f;
+    // OpacityGroupExtentPadDip above. internal (not private): Reconciler.AddImageNodeRepaint (image-landing/crossfade
+    // node rects, damage-scoped-repaint-design.md "Step 3") pads by the SAME floor so an image band and an ordinary
+    // record-side band agree on how far AA slop reaches.
+    internal const float RepaintAaPadDip = 8f;
 
     // Video Dst rects recorded this frame. A DrawVideo punches a hole the compositor fills from a DComp visual, so a
     // partial repaint that touches ANY part of it must redraw the whole punch or the hole's edges tear. Same UI-thread
@@ -1916,7 +1918,11 @@ internal sealed class SceneRecordingContext
 
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         AcrylicSpec ac = default;
-        bool isAcrylic = maybeSparsePaint && overlapsRecordClip && scene.TryGetAcrylic(node, out ac);
+        // Materials.AcrylicEnabled is WinUI's own fallback policy (transparency off / slow effects / energy saver) read
+        // at the ONE emission point instead of branched on per surface: with it false no PushLayer is written, no blur
+        // is paid, and every frosted surface resolves to the FallbackColor fill it already paints underneath.
+        bool isAcrylic = maybeSparsePaint && overlapsRecordClip
+            && FluentGpu.Dsl.Materials.AcrylicEnabled && scene.TryGetAcrylic(node, out ac);
         int acrylicRangeIdx = -1;   // E9: own-subtree damage-entry range slot for this layer (−1 = not a cached acrylic)
         if (isAcrylic)
         {
@@ -1977,6 +1983,23 @@ internal sealed class SceneRecordingContext
                                      || (maybeSparsePaint && FillFadeVisible(scene, node)):
             {
                 ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
+                // A frosted surface's authored fill IS its acrylic FallbackColor: the kit paints it (FlyoutSurface on
+                // both shapes it builds, ScrollBar's track, every Acrylic+Fallback pairing) so the surface stays solid
+                // wherever the acrylic LAYER cannot run. Where the layer DID run, that fill is not redundant, it is
+                // DESTRUCTIVE. An Acrylic PushLayer composites at PUSH time — blurred backdrop, SourceOver the same
+                // opaque Fallback, luminosity blend, tint, noise — and the node's own draw + its subtree land ON TOP of
+                // the result. Re-filling the node with that opaque Fallback therefore paints a flat slab straight over
+                // the frost that was just produced. Every popup presenter did exactly this (menus, ComboBox dropdowns,
+                // AutoSuggestBox suggestions, FlyoutPresenter all route through FlyoutSurface), which is why they read
+                // as a flat #2C2C2C panel over any page, however saturated — the acrylic ran, and was then covered up.
+                // Only an EXACT match is dropped: a hover wash, a tinted card, any fill that is not literally the
+                // layer's own base still paints. Where the layer does NOT run the spec is absent (Materials policy off,
+                // a video hole, an OS-backed popup — all clear it) or the backend supplies the Fallback itself
+                // (SubmitStreaming's PushLayer, the non-primary-swapchain route), so the solid plate survives.
+                // FeatherTop is the one exception: a feathered layer deliberately fades the frost in from the top, so
+                // the band above it is MEANT to show what is behind the surface — the plate fill there is content, not
+                // an occluder, and it stays.
+                if (isAcrylic && ac.FeatherTop <= 0f && fill.Equals(ac.Fallback)) fill = ColorF.Transparent;
                 bool hasGradFill = hasNodeGradient;
                 GradientSpec g = nodeGradient;
                 GradientSpec bb = default;

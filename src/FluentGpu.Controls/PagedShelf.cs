@@ -1052,15 +1052,25 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         ScrollIntoView.ScrollTo(Context, vp, target, animate: !Motion.ReducedMotion);
     }
 
-    // Tear a probe pass down to nothing: no emitted cells, no cached cell subtrees, no stale realize handles, no
-    // running max, no retry budget spent. Called on completion (the cells unmount) and on every restart (a new fit or a
-    // new content revision measures new cells at a new width).
+    // Tear a probe pass down to nothing: no emitted cells, no cached cell subtrees, no running max, no retry budget
+    // spent. Called on completion (the cells unmount) and on every restart (a new fit or a new content revision
+    // measures new cells at a new width).
+    //
+    // DELIBERATELY does NOT clear _probeNodes. A restart (passStale) re-emits the sample cells with the SAME keys
+    // (ShelfProbeKeys.Of(i)) — if the OLD cells from the prior pass are still mounted in the same reconcile (the
+    // measured-mode first-frame case: _w lands from 0 → real width in the same frame ResetProbePass ran for the
+    // min-width pass), the reconciler REUSES those nodes instead of remounting them, and OnRealized only fires at
+    // mount (BindNode) — never on a reuse. Clearing the handles here used to null them out from under a reused node
+    // that would never refire OnRealized to refill them, so the measure effect read _probeNodes[i]==Null forever,
+    // measured maxH=0, and the pass could never complete (ArmProbeRetry × MaxProbeRetries, then stuck). The measure
+    // effect already tolerates a stale/dead handle (`h.IsNull || !scene.IsLive(h)` — see the needProbe effect above),
+    // so a handle surviving a reset is safe either way: a truly unmounted cell's handle goes non-live and is skipped;
+    // a reused cell's handle stays valid and its bounds simply reflect the new width once layout catches up.
     void ResetProbePass()
     {
         _probeSample = 0;
         _probeMaxH = 0f;
         _probeRetries = 0;
-        Array.Clear(_probeNodes, 0, _probeNodes.Length);
         Array.Clear(_probeCells, 0, _probeCells.Length);
     }
 
@@ -1077,17 +1087,22 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         if (target <= 0) return;
         int next = ShelfProbeMath.NextSample(mounted, target);
         // Already at the target but the pass has not completed ⇒ the sample reported no bounds. Retry (bounded) rather
-        // than leaving the cells mounted and the height unresolved.
-        if (next == mounted && !TakeProbeRetry()) return;
+        // than leaving the cells mounted and the height unresolved. Retries EXHAUSTED ⇒ tear the pass down instead of
+        // leaving needProbe latched (_probeSample > 0) forever with no cells ever completing — a dead pass would
+        // otherwise block every later restart (passStale can still fire, but a shelf stuck with _probeSample > 0 and
+        // no continuation left to advance it never gets there). ResetProbePass lets the NEXT width/content change (or
+        // even this same stale state, next render) re-arm a fresh pass from chunk one.
+        if (next == mounted && !TakeProbeRetry()) { ResetProbePass(); return; }
         _probeSample = next;
         _probeTick.Value = _probeTick.Peek() + 1;
     }
 
     // Wake one more measure attempt for a mounted sample that has no bounds yet. Unreachable in practice — layout
     // effects run AFTER layout (frame phase 6.5), so a freshly realized cell already measured — and bounded either way.
+    // Same exhaustion hardening as AdvanceProbe: give up by tearing the pass down, not by latching needProbe forever.
     void ArmProbeRetry()
     {
-        if (!TakeProbeRetry()) return;
+        if (!TakeProbeRetry()) { ResetProbePass(); return; }
         _probeTick.Value = _probeTick.Peek() + 1;
     }
 

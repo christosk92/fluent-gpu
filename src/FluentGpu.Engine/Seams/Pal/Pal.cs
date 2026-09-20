@@ -60,8 +60,11 @@ public enum InputKind : byte
     // frame deltas on lift) — there is no OS-momentum kind: a producer must never ride OS-owned inertia; DirectManip-
     // ulation is configured without TRANSLATION_INERTIA/SCALING_INERTIA (§5.2), and RUNNING→INERTIA is treated as a
     // lift (ScrollEnd), not a momentum handoff. The legacy Wheel kind stays for detented mouse notches + element-level
-    // OnPointerWheel. Fields: ScrollDelta/ScrollDeltaX carry the DIP deltas (same sign convention), DeviceClassRaw the
-    // producer tag (see ScrollDeviceClass), QpcTicks the per-packet high-res stamp.
+    // OnPointerWheel. Fields: ScrollDelta/ScrollDeltaX carry the deltas (same sign convention) — DIP for a
+    // DirectManipulation/touch/headless producer, NOTCH UNITS (raw/120) for the hi-res wheel fallback, which tags the
+    // packet by also writing the units into WheelNotch/WheelNotchX (ScrollInputRouter.IsNotchUnits converts them with
+    // the viewport's per-notch scale) — DeviceClassRaw the producer tag (see ScrollDeviceClass), QpcTicks the per-packet
+    // high-res stamp.
     /// <summary>A frame-aligned producer engaged (touch pan claimed / DManip RUNNING entered / a hi-res wheel
     /// gesture started). Delta may be 0. Never coalesces.</summary>
     ScrollBegin = 12,
@@ -207,8 +210,16 @@ public readonly record struct InputEvent(
 /// the monotonic phase sequence (scroll-feel-rework-v2 §3.4) lets a consumer that latches one gesture drain only that
 /// gesture's samples — an interleaved event that splits a frame into two <see cref="InputKind.ScrollDelta"/>s can never
 /// replay a later packet's deposit against an earlier base. The estimator's strictly-increasing-stamp rejection already
-/// covers the single-latched-gesture case; the seq tag hardens the cross-gesture case (and the DirectManipulation sink).</para></summary>
-public readonly record struct PointerVelSample(uint PointerId, float X, float Y, uint TimestampMs, long QpcTicks, byte Seq = 0);
+/// covers the single-latched-gesture case; the seq tag hardens the cross-gesture case (and the DirectManipulation sink).</para>
+/// <para><paramref name="IsScrollPhase"/> (bug-B/A3) distinguishes this deposit's PRODUCER: <c>true</c> for a
+/// scroll-phase (<see cref="InputKind.ScrollDelta"/>) coalesce deposit, whose <c>X</c>/<c>Y</c> are DELTAS (the
+/// cumulative merge-so-far, scroll-v3-plan §5.4); <c>false</c> (the default, unchanged at the touch/pen call site)
+/// for a touch/pen <see cref="InputKind.PointerMove"/> deposit, whose <c>X</c>/<c>Y</c> are an ABSOLUTE position. The
+/// two producers share this one ring, so a consumer that only wants one kind (<c>ScrollInputRouter.FeedImpulsePreSamples</c>,
+/// which would otherwise silently corrupt its estimator by feeding an absolute pointer position through a delta-sum
+/// axis) MUST filter on this field rather than inferring it from <see cref="Seq"/> (0 is a legitimate value for a
+/// real scroll-phase gesture's first packet, not just the touch/pen "no sequence" default).</para></summary>
+public readonly record struct PointerVelSample(uint PointerId, float X, float Y, uint TimestampMs, long QpcTicks, byte Seq = 0, bool IsScrollPhase = false);
 
 /// <summary>
 /// Drained by the host each frame (drain-to-empty, single contiguous span — <c>AppHost.RunFrame</c> Clears, the window
@@ -303,7 +314,7 @@ public sealed class InputEventRing
                 // once: the estimator then saw the pan axis as flat plateaus + per-frame spikes and inflated release
                 // velocity ~4-6× whenever ≥2 packets folded into one frame — the oversized-fling / violent-edge-bounce
                 // defect. gate.scroll.phase-release-velocity pins the corrected order.)
-                PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq));
+                PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq, IsScrollPhase: true));
                 if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
                     ScrollTrace.Coalesce((byte)e.Kind, e.ScrollDelta, e.ScrollDeltaX,
                         prev.ScrollDelta + e.ScrollDelta, prev.ScrollDeltaX + e.ScrollDeltaX, e.QpcTicks);
@@ -727,6 +738,17 @@ public interface IPlatformWindow : IDisposable
     void SetTitle(StringId title);
     void Show();
 
+    /// <summary>Hide the window without destroying it (Win32 <c>SW_HIDE</c>: no taskbar button, no Alt+Tab entry, the
+    /// HWND and every engine resource stay alive). <see cref="Show"/> brings it back in the placement it had. While
+    /// hidden the host parks exactly as if minimized (<see cref="WindowStatus.Parked"/>). Default: a no-op (a backend
+    /// without window visibility).</summary>
+    void Hide() { }
+
+    /// <summary>True while the window is shown. The pull side of <see cref="Show"/>/<see cref="Hide"/>, read by the host
+    /// every frame to park a hidden window. Win32 reads the live <c>WS_VISIBLE</c> style, so a window shown or hidden
+    /// by any other code path is still seen correctly. Default true.</summary>
+    bool IsVisible => true;
+
     /// <summary>The per-window IME/text-services seam (composition events, candidate-window placement).</summary>
     IPlatformTextInput TextInput { get; }
 
@@ -753,6 +775,14 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }
+
+    /// <summary>Asked before the window closes (Win32 <c>WM_CLOSE</c>: the caption close button, Alt+F4, the system
+    /// menu, <see cref="CloseWindow"/>). Return true to keep the window — the handler has handled the request, typically
+    /// by hiding to a notification-area icon; false (or no handler) lets it close. A
+    /// <see cref="CloseReason.SessionEnding"/> request cannot be vetoed: the handler is told, then the window closes
+    /// (<see cref="WindowCloseGate"/>). Invoked on the UI thread from inside the platform's message dispatch. Default:
+    /// no handler and nothing stored (a backend whose windows close unconditionally).</summary>
+    Func<CloseReason, bool>? CloseRequested { get => null; set { } }
 
     /// <summary>Start the OS interactive MOVE loop for this window from the current pointer, exactly as if the user had
     /// pressed a caption the window does not draw — so Aero Snap, the Windows 11 snap bar, title-bar shake, monitor hops

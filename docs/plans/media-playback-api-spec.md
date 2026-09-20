@@ -741,8 +741,8 @@ Position = (playedFrames + (nowQpc − sampleQpc)·MixRate/qpcFreq) / MixRate �
   Published as `Signal<TimeSpan> Position` from a **non-RT clock-poll tick.** An `IsValid` warmup gate holds
   the signal until `GetPosition` returns non-zero (it reads 0 for the first several seconds on some drivers).
 - **Latency is measured, not assumed** (nominal ~22 ms vs measured ~38 ms in shared mode). Sum **every**
-  stage's `LatencySamples` (decoder trim, time-stretch, crossfade overlap, resampler, device buffer) and
-  subtract, so lyrics/visualizers/scrub slave to what's **audible now**. Re-measure on every device rebuild.
+  stage's output latency (`LatencySamples` for master DSP plus the measured device buffer) and subtract
+  before the source-time mapping in ?7.8, so lyrics/visualizers/scrub slave to what's **audible now**. Re-measure on every device rebuild.
 
 ### 7.7 Loudness normalization — metadata + one scalar + terminal limiter (never live AGC)
 
@@ -762,13 +762,35 @@ BEFORE the mix**, not globally after — you are mixing two tracks at *different
 - **EQ** — `EqStage` holds a per-channel cascade of RBJ biquads; `BiquadBand` POD `{type,freqHz,q,gainDb}`.
   A gain-only tweak ramps via the param plane; a freq/Q change recomputes coefficients **off-RT** and publishes
   via `SwapGraph`, cross-ramping old→new coefficients to avoid a step transient. Presets are `BiquadBand[]`.
-- **Speed/pitch** — a `TimeStretchStage` (WSOLA/phase-vocode) bound to `Rate`; pitch-preserving by default.
-  It reports a variable output count **and a non-zero `LatencySamples` that must be re-summed into §7.6** —
-  else the progress bar lies during a rate change.
+- **Speed/pitch (2026-09 source adapter)** - `WsolaAudioSource` wraps each prepared, decoded/trimmed voice
+  after its producer ring and before per-voice effects. It uses 40 ms windows, 20 ms overlap and a +/-10 ms
+  normalized waveform search, with shared stereo alignment and a coarse-to-fine search. The render thread
+  consumes preallocated input, overlap, output and clock-history buffers; it never decodes, allocates or waits.
+  `Rate` accepts 0.5-3 without quantization (including 1.9), defaults to 1 for non-finite values, and changes
+  at the next synthesis hop. Unity bypass copies the original samples without lookahead or cursor changes.
+  Ring preflight accounts for lookahead and rate so unavailable input stalls the content clock rather than
+  introducing silence. EOF drains the shortened/expanded tail; an acknowledged seek discards old overlap
+  and buffered samples before transport resumes.
+  **Clock ownership:** output-frame counters and mixer envelopes remain in device time. The source adapter
+  publishes bounded output-to-content segments; the presentation clock first subtracts measured endpoint
+  and master-DSP latency, then maps that audible output frame through the segment recorded when it was
+  generated. A desired-rate change therefore cannot reinterpret PCM already queued at the previous rate.
+  The analysis lookahead is buffered input, not inserted output silence: do not subtract its window a second
+  time from this mapped clock. `PcmAudioSession.ContentPositionFrames` exposes the audible active-source
+  position, `PlaybackRate` the retained desired rate, and `RemainingOutputFrames` the remaining wall-clock
+  frames at that rate (-1 for an unknown length). `Position` keeps the existing session timeline convention
+  while applying the source-time correction. The facade reapplies its desired rate to replacement sessions.
 - **Visualizer** — the `Tap` node's lock-free ring; a non-RT tick runs the FFT and publishes
   `IReadSignal<VisualizerFrame>`, bound like any other signal.
 
 ### 7.9 Output ownership, buffering and transport (2026-09 playback-quality revision)
+
+The Windows leaf exposes `WasapiAudioDevice.EndpointInfo` for the endpoint actually opened, and
+`WasapiPcm.EnumerateEndpoints()` for active render devices plus the current console default. Their
+`WasapiEndpointInfo` values carry the OS endpoint ID, friendly name, native form factor and default status
+at observation time. Enumeration/property-store COM calls happen off the audio thread; reading an opened
+sink's cached identity does not touch COM. App telemetry maps these facts rather than a remembered selection.
+
 
 The portable render graph is allocation-free after warmup. The output thread performs capacity checks, device
 submission and Start/Stop/Reset **outside** the `AudioTripwire` DSP scope. Waiting uses the device event plus an
@@ -1622,8 +1644,8 @@ the managed `WithDrm` relay — no longer blocked (§9.2).
   `MediaClockGroup { Attach(IMediaPlayer) }`; must stay independent of SMTC (the WinUI trap). Deferred.
 - **Casting** — honest URL/relay-only: `FromUri` casts directly; `FromPull`/`FromFeed`/`FromSamples` require a
   documented local HTTP shim (raw callback bytes can't be cast). Scope the shim.
-- **Time-stretch latency reporting.** `TimeStretchStage.LatencySamples` changes with `Rate`; verify the §7.6
-  position re-sum keeps the progress bar honest across rate ramps under the golden-PCM harness.
+- **Time-stretch clock mapping.** Verify queued old-rate PCM retains its source-time mapping across desired
+  rate changes, measured output latency is subtracted before mapping, and seeks discard the old overlap/history.
 - **ABR policy default.** Ship a non-oscillating auto with a manual pin + max-bitrate cap; the `IAbrPolicy` seam
   (Shaka `AbrManager` / dash.js rule-pipeline as reference) is the override.
 

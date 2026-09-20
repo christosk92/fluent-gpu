@@ -65,23 +65,41 @@ namespace FluentGpu.SourceGen.Localization
             defaultSeverity: DiagnosticSeverity.Info,
             isEnabledByDefault: true);
 
+        private static readonly DiagnosticDescriptor SatelliteMissing = new(
+            id: "FLLOC004",
+            title: "Satellite loc JSON is missing keys from the base culture",
+            messageFormat: "Satellite '{0}' is missing {1} key(s) present in the base culture (first: {2})",
+            category: "FluentGpu.Localization",
+            defaultSeverity: DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        private static readonly DiagnosticDescriptor SatelliteExtra = new(
+            id: "FLLOC006",
+            title: "Satellite loc JSON has keys not in the base culture",
+            messageFormat: "Satellite '{0}' has extra key(s) not in the base culture: {1}",
+            category: "FluentGpu.Localization",
+            defaultSeverity: DiagnosticSeverity.Info,
+            isEnabledByDefault: true);
+
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
-            // (text, isBase) pairs for every AdditionalText, deciding base-membership from metadata OR the path convention.
-            var baseTexts = context.AdditionalTextsProvider
+            // (path, content, isBase) for every AdditionalText under assets/loc/*.json.
+            var locFiles = context.AdditionalTextsProvider
                 .Combine(context.AnalyzerConfigOptionsProvider)
                 .Select(static (pair, ct) =>
                 {
                     AdditionalText text = pair.Left;
+                    string normalized = NormalizeSlashes(text.Path);
+                    bool inLocFolder = IsLocJsonPath(normalized);
+                    if (!inLocFolder) return default(LocFile?);
+
                     var opts = pair.Right.GetOptions(text);
                     bool markedBase = opts.TryGetValue(MetadataKey, out string? v) &&
                                       v is not null &&
                                       (v.Equals("true", System.StringComparison.OrdinalIgnoreCase));
-                    bool conventionBase = NormalizeSlashes(text.Path).EndsWith(PathConvention, System.StringComparison.OrdinalIgnoreCase);
-                    bool isBase = markedBase || conventionBase;
-                    if (!isBase) return default(BaseFile?);
+                    bool conventionBase = normalized.EndsWith(PathConvention, System.StringComparison.OrdinalIgnoreCase);
                     SourceText? src = text.GetText(ct);
-                    return new BaseFile(text.Path, src?.ToString() ?? string.Empty);
+                    return new LocFile(text.Path, src?.ToString() ?? string.Empty, markedBase || conventionBase);
                 })
                 .Where(static x => x is not null)
                 .Select(static (x, _) => x!.Value);
@@ -97,11 +115,11 @@ namespace FluentGpu.SourceGen.Localization
                 p.GlobalOptions.TryGetValue(NeutralRegisterProperty, out string? v) && v is not null &&
                 v.Trim().Equals("true", System.StringComparison.OrdinalIgnoreCase));
 
-            var collected = baseTexts.Collect().Combine(nsProvider).Combine(neutralProvider);
+            var collected = locFiles.Collect().Combine(nsProvider).Combine(neutralProvider);
 
             context.RegisterSourceOutput(collected, static (spc, tuple) =>
             {
-                ImmutableArray<BaseFile> files = tuple.Left.Left;
+                ImmutableArray<LocFile> files = tuple.Left.Left;
                 string ns = tuple.Left.Right;
                 bool registerNeutral = tuple.Right;
 
@@ -112,8 +130,16 @@ namespace FluentGpu.SourceGen.Localization
                     return;
                 }
 
+                ImmutableArray<LocFile> bases = files.Where(f => f.IsBase).ToImmutableArray();
+                if (bases.IsDefaultOrEmpty)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(NoBaseResource, Location.None));
+                    spc.AddSource("Strings.g.cs", EmitEmpty(ns));
+                    return;
+                }
+
                 // Deterministic: pick the first base file by path order.
-                BaseFile chosen = files.OrderBy(f => f.Path, System.StringComparer.Ordinal).First();
+                LocFile chosen = bases.OrderBy(f => f.Path, System.StringComparer.Ordinal).First();
 
                 var pairs = TinyJsonReader.Parse(chosen.Content, out bool hadError, out string? error);
                 if (hadError)
@@ -129,7 +155,35 @@ namespace FluentGpu.SourceGen.Localization
                 // user-facing text resolves to its neutral string with zero app configuration.
                 if (registerNeutral)
                     spc.AddSource("StringsNeutral.g.cs", SourceText.From(EmitNeutral(ns, pairs), Encoding.UTF8));
+
+                var baseKeys = new HashSet<string>(pairs.Select(p => p.Key), System.StringComparer.Ordinal);
+                foreach (LocFile sat in files.Where(f => !f.IsBase).OrderBy(f => f.Path, System.StringComparer.Ordinal))
+                    ReportSatellite(spc, sat, baseKeys);
             });
+        }
+
+        private static void ReportSatellite(SourceProductionContext spc, LocFile sat, HashSet<string> baseKeys)
+        {
+            var satPairs = TinyJsonReader.Parse(sat.Content, out _, out _);
+            var satKeys = new HashSet<string>(satPairs.Select(p => p.Key), System.StringComparer.Ordinal);
+            var missing = baseKeys.Where(k => !satKeys.Contains(k)).OrderBy(k => k, System.StringComparer.Ordinal).ToList();
+            if (missing.Count > 0)
+            {
+                string sample = string.Join(", ", missing.Take(8));
+                spc.ReportDiagnostic(Diagnostic.Create(SatelliteMissing, Location.None, sat.Path, missing.Count, sample));
+            }
+            var extra = satKeys.Where(k => !baseKeys.Contains(k)).OrderBy(k => k, System.StringComparer.Ordinal).ToList();
+            if (extra.Count == 0) return;
+            if (extra.Count > 20)
+            {
+                string sample = string.Join(", ", extra.Take(8)) + ", …";
+                spc.ReportDiagnostic(Diagnostic.Create(SatelliteExtra, Location.None, sat.Path, sample));
+            }
+            else
+            {
+                foreach (string key in extra)
+                    spc.ReportDiagnostic(Diagnostic.Create(SatelliteExtra, Location.None, sat.Path, key));
+            }
         }
 
         // A tree node: either an intermediate namespace (Children) or a leaf key (DottedKey set + placeholder list).
@@ -309,15 +363,23 @@ namespace FluentGpu.SourceGen.Localization
 
         private static string NormalizeSlashes(string path) => path.Replace('\\', '/');
 
-        // A base-resource file captured as a value (path + content) — equatable so the incremental pipeline caches it.
-        private readonly struct BaseFile : System.IEquatable<BaseFile>
+        internal static bool IsLocJsonPath(string normalized)
+        {
+            if (!normalized.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase)) return false;
+            int idx = normalized.IndexOf("assets/loc/", System.StringComparison.OrdinalIgnoreCase);
+            return idx >= 0 && (idx == 0 || normalized[idx - 1] == '/');
+        }
+
+        // A loc-resource file captured as a value (path + content + base-ness) — equatable so the incremental pipeline caches it.
+        private readonly struct LocFile : System.IEquatable<LocFile>
         {
             public readonly string Path;
             public readonly string Content;
-            public BaseFile(string path, string content) { Path = path; Content = content; }
-            public bool Equals(BaseFile other) => Path == other.Path && Content == other.Content;
-            public override bool Equals(object? obj) => obj is BaseFile o && Equals(o);
-            public override int GetHashCode() => unchecked((Path?.GetHashCode() ?? 0) * 397 ^ (Content?.GetHashCode() ?? 0));
+            public readonly bool IsBase;
+            public LocFile(string path, string content, bool isBase) { Path = path; Content = content; IsBase = isBase; }
+            public bool Equals(LocFile other) => Path == other.Path && Content == other.Content && IsBase == other.IsBase;
+            public override bool Equals(object? obj) => obj is LocFile o && Equals(o);
+            public override int GetHashCode() => unchecked(((Path?.GetHashCode() ?? 0) * 397 ^ (Content?.GetHashCode() ?? 0)) * 397 ^ IsBase.GetHashCode());
         }
     }
 }

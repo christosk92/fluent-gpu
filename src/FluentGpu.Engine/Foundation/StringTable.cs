@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Diagnostics;
+using System.Text;
 using System.Threading;
 
 namespace FluentGpu.Foundation;
@@ -99,6 +101,39 @@ public sealed class StringTable
     {
         if (s.IsEmpty) return StringId.Empty;
         return _mapAlt.TryGetValue(s, out int id) ? new StringId(id) : Intern(new string(s));
+    }
+
+    /// <summary>Intern a UTF-8 span (e.g. bytes read straight off a JSON/protobuf payload, no UTF-16 materialized yet):
+    /// decodes into a transient char buffer — a <c>stackalloc</c> when <c>utf8.Length &lt;= 256</c>, else an
+    /// <see cref="ArrayPool{T}"/> rental returned in <c>finally</c> — then probes the SAME map as
+    /// <see cref="Intern(ReadOnlySpan{char})"/>. A HIT is therefore allocation-free: the decode buffer is stack/pooled,
+    /// never heap, and no probe string is built. Only a genuinely new string pays the decode + <c>new string</c> cost
+    /// the char overload would pay anyway. Invalid UTF-8 decodes with U+FFFD replacement characters, same as
+    /// <see cref="Encoding.UTF8"/>. UI-thread only, same discipline as the other overloads.</summary>
+    public StringId Intern(ReadOnlySpan<byte> utf8)
+    {
+        if (utf8.IsEmpty) return StringId.Empty;
+
+        // A well-formed or replacement-fallback UTF-8→UTF-16 decode never emits more chars than input bytes
+        // (every UTF-16 code unit costs >= 1 UTF-8 byte, and one invalid byte costs exactly one U+FFFD) — utf8.Length
+        // is therefore a safe upper bound for both the stack and pooled buffer, no GetMaxCharCount call needed.
+        if (utf8.Length <= 256)
+        {
+            Span<char> buffer = stackalloc char[utf8.Length];
+            int written = Encoding.UTF8.GetChars(utf8, buffer);
+            return Intern(buffer[..written]);
+        }
+
+        char[] rented = ArrayPool<char>.Shared.Rent(utf8.Length);
+        try
+        {
+            int written = Encoding.UTF8.GetChars(utf8, rented);
+            return Intern(rented.AsSpan(0, written));
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Take an ownership reference on an id (UI thread). Owners are the scene's text columns; pair with <see cref="Release"/>.</summary>

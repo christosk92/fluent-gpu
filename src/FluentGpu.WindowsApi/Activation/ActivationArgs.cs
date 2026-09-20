@@ -3,15 +3,16 @@ using System;
 namespace FluentGpu.WindowsApi.Activation;
 
 /// <summary>
-/// How this process was activated, mirroring the values WASDK casts from the platform
-/// <c>Windows.ApplicationModel.Activation.ActivationKind</c> (a 1:1 copy: <c>File=3</c>, <c>Protocol=4</c>,
-/// <c>StartupTask=39</c> — <c>dev/AppLifecycle/AppInstance.cpp:485-491</c> casts <c>ActivationKind → ExtendedActivationKind</c>,
-/// and the kind values 0..1026 "mirror <c>ActivationKind</c> verbatim"; only <c>Push=5000</c>/<c>AppNotification=5001</c>
-/// are WASDK additions, docs/plans/windowsapi-implementation-research.md §2.2). FluentGpu keeps the byte-sized subset it
-/// actually classifies from the command line for an unpackaged process; the spelled-out numeric values document the
-/// shared lineage even though we own both writer and parser.
+/// How this process was activated. <see cref="Launch"/>, <see cref="File"/>, <see cref="Protocol"/> and
+/// <see cref="StartupTask"/> carry the platform <c>Windows.ApplicationModel.Activation.ActivationKind</c> values
+/// (<c>Launch=0</c>, <c>File=3</c>, <c>Protocol=4</c>, <c>StartupTask=1020</c> — Windows SDK
+/// <c>windows.applicationmodel.activation.idl</c>; WASDK's <c>ExtendedActivationKind</c> copies the same 0..1026 range,
+/// <c>dev/AppLifecycle/AppInstance.cpp:485-491</c>). <see cref="ToastActivated"/> is FluentGpu's own command-line
+/// sentinel classification, not a platform value. The command line is classified for every process; the packaged
+/// sign-in launch, which carries no command line of its own, is recognised from the platform activation
+/// (<see cref="ActivationArgs.FromCurrentProcess"/>).
 /// </summary>
-public enum ActivationKind : byte
+public enum ActivationKind : ushort
 {
     /// <summary>Plain launch (double-click / shortcut) — no protocol, file, or toast on the command line.</summary>
     Launch = 0,
@@ -22,18 +23,23 @@ public enum ActivationKind : byte
     /// <summary>A <c>scheme://…</c> deep link (the WAVEE OAuth callback / inter-app launch).</summary>
     Protocol = 4,
 
-    /// <summary>Auto-start at logon (the <c>HKCU\…\CurrentVersion\Run</c> key, <c>ActivationRegistrationManager.h:15</c>).</summary>
-    Startup = 39,
-
     /// <summary>The Shell relaunched us because the user clicked a toast. The argument is the toast's
     /// <c>launch=</c>/button <c>arguments=</c> string (see <see cref="ActivationArgs.ToastActivatedSentinel"/>).</summary>
     ToastActivated = 50,
+
+    /// <summary>A PACKAGED app's manifest <c>desktop:StartupTask</c> started it at sign-in. The argument is the task's
+    /// <c>TaskId</c> (empty when unreadable). Only a packaged process reports it: the platform's
+    /// <c>AppInstance.GetActivatedEventArgs()</c> is the only place the fact exists, because a startup task cannot pass a
+    /// command line. An UNPACKAGED sign-in start (the <c>HKCU\…\Run</c> value) is an ordinary <see cref="Launch"/> —
+    /// register it with an argument (<see cref="ProtocolRegistrar.RegisterStartup"/>) to tell it apart.</summary>
+    StartupTask = 1020,
 }
 
 /// <summary>
 /// The classified activation of the current process: the <see cref="Kind"/> plus its single string
 /// <see cref="Argument"/> (a URI for <see cref="ActivationKind.Protocol"/>, a path for <see cref="ActivationKind.File"/>,
-/// the toast args string for <see cref="ActivationKind.ToastActivated"/>, empty for <see cref="ActivationKind.Launch"/>).
+/// the toast args string for <see cref="ActivationKind.ToastActivated"/>, the task id for
+/// <see cref="ActivationKind.StartupTask"/>, empty for <see cref="ActivationKind.Launch"/>).
 /// Cold path — produced once at startup and once per single-instance redirect (see <c>SingleInstanceGate</c>); allocation
 /// is fine. FluentGpu uses its own command-line convention (<c>app.exe "scheme://…"</c>) rather than WASDK's
 /// <c>----ms-protocol:&lt;uri&gt;</c> envelope (<c>ActivationRegistrationManager.h:10-12</c>) because we own both the
@@ -59,21 +65,42 @@ public readonly record struct ActivationArgs(ActivationKind Kind, string Argumen
     }
 
     /// <summary>The current process's classified activation: <see cref="Environment.GetCommandLineArgs"/> (skipping argv[0],
-    /// the exe path) classified against <paramref name="scheme"/>. Convenience over <see cref="Classify"/>.
+    /// the exe path) classified against <paramref name="scheme"/>, then — for a PACKAGED process whose command line says
+    /// plain <see cref="ActivationKind.Launch"/> — refined by the platform activation (<see cref="Refine"/>), which is how
+    /// the manifest <c>StartupTask</c> sign-in launch is recognised. Cold: call once at startup (the platform read is a
+    /// WinRT statics call; fail-soft — any failure keeps the command-line answer).
     /// <para>
-    /// OPEN-QUESTION(#4): this is the UNPACKAGED path (command-line only) — the doc-recommended first build. A PACKAGED
-    /// (<c>Windows.FullTrustApplication</c>) protocol launch is NOT guaranteed to deliver the URI on the command line
-    /// (WASDK prefers the platform <c>GetActivatedEventArgs</c> when packaged, <c>AppInstance.cpp:485-491</c>); a future
-    /// MSIX build must call the platform WinRT <c>GetActivatedEventArgs</c> via the cold ABI for
-    /// <see cref="ActivationKind.Protocol"/>/<see cref="ActivationKind.File"/>, gated on
-    /// <see cref="FluentGpu.WindowsApi.Packaging.PackageIdentity.IsPackaged"/>. Live-validate on the target OS build
-    /// before shipping packaged (docs/plans/windowsapi-implementation-research.md §5 #4).
+    /// OPEN-QUESTION(#4): a PACKAGED (<c>Windows.FullTrustApplication</c>) protocol launch is NOT guaranteed to deliver the
+    /// URI on the command line (WASDK prefers the platform <c>GetActivatedEventArgs</c> when packaged,
+    /// <c>AppInstance.cpp:485-491</c>). Only <see cref="ActivationKind.StartupTask"/> is taken from the platform today;
+    /// <see cref="ActivationKind.Protocol"/>/<see cref="ActivationKind.File"/> still come from the command line.
+    /// Live-validate on the target OS build before shipping packaged (docs/plans/windowsapi-implementation-research.md §5 #4).
     /// </para></summary>
     public static ActivationArgs FromCurrentProcess(string scheme)
     {
         string[] argv = Environment.GetCommandLineArgs();
-        return Classify(argv.AsSpan(argv.Length > 0 ? 1 : 0), scheme);
+        ActivationArgs commandLine = Classify(argv.AsSpan(argv.Length > 0 ? 1 : 0), scheme);
+        if (commandLine.Kind != ActivationKind.Launch || !FluentGpu.WindowsApi.Packaging.PackageIdentity.IsPackaged)
+            return commandLine;
+        return PlatformActivation.TryRead(out int platformKind, out string taskId)
+            ? Refine(commandLine, platformKind, taskId)
+            : commandLine;
     }
+
+    /// <summary>The platform <c>ActivationKind.StartupTask</c> value (<c>windows.applicationmodel.activation.idl</c>).</summary>
+    internal const int PlatformStartupTask = 1020;
+
+    /// <summary>
+    /// Combine the command-line classification with the platform's activation kind (a packaged process's
+    /// <c>AppInstance.GetActivatedEventArgs().Kind</c>). The command line wins whenever it says anything beyond a plain
+    /// launch — a deep link, a file, a toast relaunch are what the process must act on. A plain launch whose platform
+    /// kind is <c>StartupTask</c> becomes <see cref="ActivationKind.StartupTask"/> carrying <paramref name="startupTaskId"/>;
+    /// every other platform kind leaves the command-line answer untouched. Pure.
+    /// </summary>
+    public static ActivationArgs Refine(ActivationArgs commandLine, int platformKind, string? startupTaskId)
+        => commandLine.Kind == ActivationKind.Launch && platformKind == PlatformStartupTask
+            ? new ActivationArgs(ActivationKind.StartupTask, startupTaskId ?? string.Empty)
+            : commandLine;
 
     /// <summary>
     /// Classify a process command line (argv WITHOUT argv[0]) into a <see cref="ActivationArgs"/>. Precedence:

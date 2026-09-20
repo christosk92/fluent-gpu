@@ -356,6 +356,11 @@ public struct ScrollState
                                           // transient into the extent table — the dip+restore re-pin pair was the felt scroll
                                           // jitter. Default 0/-1 = empty window (a mount treats every row as fresh).
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
+    /// <summary>The scroller's line height in DIP for Windows-style wheel notches (<c>WheelScrollLines × LineDip</c> per
+    /// notch — <c>ScrollFeel.PerNotchDip(viewportExtent, lineDip)</c>); 0 = no hint, the router falls back to the
+    /// viewport rule (<c>max(WheelNotchMinDip, WheelNotchViewportFrac·viewport)</c>). Written by the reconciler from
+    /// <c>Element.ScrollLineDip</c> (a <c>Virtual.List</c> stamps its item extent); a config column, never kernel-owned.</summary>
+    public float LineDip;
     // Pinch-zoom (WinUI ScrollPresenter ZoomFactor; opt-in like ScrollingZoomMode — default Disabled). When Zoomable, a
     // SECOND touch contact over this viewport scales the content about the gesture midpoint (Input owns ZoomFactor; it is
     // applied as a TRANSFORM-only term composed with the -offset translation on the ContentNode, never a relayout). The
@@ -672,6 +677,13 @@ public struct InteractionInfo
                                                     // drag, so this bit STOPS that walk at itself. Discriminator only:
                                                     // never a hit/press/focus target, deliberately outside
                                                     // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
+    public const uint HoverScopeTransparentBit = 1u << 20; // BoxEl.HoverScopeTransparent: a pointer LISTENER that is not
+                                                    // an interaction scope (the ToolTip wrapper). The hover cascade,
+                                                    // the lazy-mount hover seed and the un-hover re-resolve skip it and
+                                                    // resolve the next interactive ancestor. Discriminator only: never
+                                                    // a hit/press/focus target, deliberately outside AnyInteractiveMask;
+                                                    // hit-test and handler delivery are unchanged. Clear as
+                                                    // `~HoverScopeTransparentBit`.
     public const uint ClickRequestsContextBit = 1u << 16;  // BoxEl.ClickRequestsContext (input-a11y §6.5.1): a
                                                     // commit-time DISCRIMINATOR only — a left-click / touch-tap /
                                                     // Space-Enter activation of this node re-enters the context-request

@@ -215,7 +215,26 @@ public static class Asserts
         window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
         host.RunFrame();
     }
+    /// <summary>Click at an absolute POINT rather than at a node's centre - for gestures aimed at sub-node geometry
+    /// (a hyperlink span's laid rect, a scrollbar lane), where "which node" is precisely what is under test.</summary>
+    public static void ClickAt(AppHost host, HeadlessWindow window, Point2 p)
+    {
+        window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
+        host.RunFrame();
+    }
     public static uint s_touchClockMs = 1000;
+    /// <summary>The touch dual of <see cref="ClickAt"/>: a stationary tap (down, frame, up, frame) at one point, on the
+    /// shared touch clock so successive taps never chain into a double-tap.</summary>
+    public static void TapAt(AppHost host, HeadlessWindow window, Point2 p, uint pointerId)
+    {
+        uint t = s_touchClockMs;
+        window.QueueInput(Touch(InputKind.PointerDown, p, t, pointerId));
+        host.RunFrame();
+        window.QueueInput(Touch(InputKind.PointerUp, p, t + 48, pointerId));
+        host.RunFrame();
+        s_touchClockMs = t + 1000;
+    }
     public static InputEvent Touch(InputKind kind, Point2 p, uint timestampMs, uint pointerId)
         => new(kind, p, 0, 0, 0f, KeyModifiers.None, PointerKind.Touch, false, timestampMs, pointerId, 1f);
     public static Point2 Lerp(Point2 a, Point2 b, float t) => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);

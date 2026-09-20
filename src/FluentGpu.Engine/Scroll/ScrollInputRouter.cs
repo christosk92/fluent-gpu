@@ -91,18 +91,40 @@ public sealed class ScrollInputRouter
 
     // ── phase-tagged producer (DM RUNNING / hi-res wheel fallback): ONE latched gesture (single-gesture producer,
     // like the legacy _sg* singleton) — a fresh ScrollBegin always ends whatever was latched. Pre-latch accumulates the
-    // WHOLE gesture's raw delta to pick + resolve an axis at the 8-DIP slop window; post-latch accumulates only THIS
+    // WHOLE gesture's raw delta to pick + resolve an axis at the 0.5-DIP jitter window; post-latch accumulates only THIS
     // FRAME's delta (flushed once per Dispatch batch by EndFrame — plan §3.4 "sum the frame's deltas → ONE FrameDelta").
-    private const float LatchSlopDip = 8f;
+    // bug-B/B1: was 8f, then 3f. The "no dead zone" comment on AccumulatePhaseDelta is true of DISTANCE (the
+    // pre-latch travel is applied on the latch frame, not dropped) but false of TIME: until Σ|dx|+|dy| crosses this
+    // many DIP the router posts nothing at all. At 0.5 DIP the gate is below a single normal touchpad packet on
+    // this platform, so it still filters zero/jitter packets without making the first lift wait for a packet burst.
+    // The old 8 DIP gate made the first ~73 raw touchpad units (8 DIP / HiResUnitDip=0.11f, Win32Platform.cs)
+    // of every gesture silent, then arrive in one jump — the measured "heavy initial lift". This is a
+    // WHEEL/TOUCHPAD PHASE gesture, not a pointer drag — no click-vs-drag ambiguity to protect — so the slop exists
+    // only to (a) pick the axis (`|Σdx| > |Σdy|` below) and (b) resolve the target once. The phase path has no
+    // click-vs-drag ambiguity, so the remaining 0.5 DIP threshold is only a zero/jitter guard. No other call site
+    // pins this value. Does NOT touch the detented-wheel path's
+    // `Carryover` 120-unit accumulator (Win32Platform.cs) — a real mouse wheel, unrelated and unchanged.
+    private const float LatchSlopDip = 0.5f;
     private NodeHandle _phaseNode;
     private bool _phaseHoriz;
     private bool _phaseLatched;
     private bool _phaseOpen;                     // a ScrollBegin opened a gesture that no End/Cancel/takeover has closed yet
     private bool _phaseDirty;                    // this frame produced a delta EndFrame must flush
-    private float _phaseTotalX, _phaseTotalY;     // whole-gesture accumulation, pre-latch axis pick
-    private float _phaseFrameX, _phaseFrameY;     // this-frame accumulation, post-latch (flushed by EndFrame)
+    private float _phaseTotalX, _phaseTotalY;     // whole-gesture accumulation, pre-latch axis pick (producer units: DIP, or notch units when _phaseUnits)
+    private float _phaseFrameX, _phaseFrameY;     // this-frame accumulation, post-latch (always DIP; flushed by EndFrame)
     private double _phaseLastT;
     private bool _phaseWheel;                    // this gesture's producer is a MOUSE wheel (IsWheelProducer) — no overscroll
+    // Hi-res wheel packets (scroll fix S3) carry NOTCH UNITS, not DIP: the Win32 producer stopped owning a DIP scale, and
+    // the router converts with the same ScrollFeel.PerNotchDip(viewport, lineDip) the detented Wheel path uses, so one
+    // notch travels the same distance whether it arrives as one ±120 packet or twenty sub-notch ones. The tag is
+    // IsNotchUnits (below) and is latched for the WHOLE gesture on the first packet that carries it — a DIP-scripted
+    // producer (headless HeadlessScrollProducer, DirectManipulation) never sets it, so its deltas stay DIP byte-for-byte.
+    private bool _phaseUnits;
+    /// <summary>Element-handler DIP per notch for a hi-res wheel gesture that an ELEMENT owns (§A′ / DispatchElementWheel):
+    /// mirrors the detented Wheel event's element-level <c>ScrollDelta</c> (the Win32 producer's <c>WheelDipPerNotch</c>,
+    /// 60 DIP/notch), so a NumberBox / EditableText steps the same per notch from either wheel path. Not a viewport
+    /// distance — those come from <see cref="ScrollFeel.PerNotchDip"/>.</summary>
+    private const float ElementWheelDipPerNotch = 60f;
 
     // §A′ (class remarks / plan §12 "Wave-6 Fix C"): the slop-crossing packet found NO scroller but an ELEMENT under
     // it consumed the wheel — that ownership decision is locked for the WHOLE gesture (never re-latch a viewport even
@@ -204,27 +226,53 @@ public sealed class ScrollInputRouter
     /// <summary>ScrollBegin/Delta/End — the entire phase-tagged producer contract. PTP/precision-touchpad inertia is
     /// engine-owned (the kernel seeds its own Ballistic fling from the trailing frame-delta history on
     /// <see cref="InputKind.ScrollEnd"/>); there is no OS-momentum kind to special-case.</summary>
-    public void Phase(in InputEvent e)
+    /// <param name="velSamples">bug-B/A3: this frame's pre-coalesce velocity-ring deposits (Pal.cs
+    /// "scroll-v3-plan §5.4"), passed through ONLY for the <see cref="InputKind.ScrollDelta"/> case — 2+ raw
+    /// ScrollDelta packets landing in one frame coalesce (same Kind + PointerId) inside <c>InputEventRing.Write</c>
+    /// BEFORE <see cref="Phase"/> ever sees them, so without this the estimator would see only the ALREADY-SUMMED
+    /// final delta — exactly one sample, and <c>ImpulseEstimator.Compute</c> needs ≥2 to return anything but 0. A
+    /// span can't be a field on this class (<c>ReadOnlySpan&lt;T&gt;</c> is a ref struct), so the caller
+    /// (<c>InputDispatcher.Dispatch</c>) threads it through the call instead. Default = empty (Begin/End never need
+    /// it — Begin never coalesces, End carries no delta).</param>
+    public void Phase(in InputEvent e, ReadOnlySpan<PointerVelSample> velSamples = default)
     {
+        // bug-B measurement (step 1): one row per scroll-phase event CONSUMED, before it does anything — the
+        // dead ScrollTrace.Phase row this rewrite re-wires. accX/accY are the gesture accumulator BEFORE this
+        // event folds in (captured here, ahead of any mutation below); momentum is always 0 — PTP inertia is
+        // engine-owned, there is no OS-momentum kind to report (see the method doc).
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+        {
+            int deviceFlags = e.DeviceClassRaw | (_phaseLatched ? 1 << 8 : 0);
+            ScrollTrace.Phase((byte)e.Kind, deviceFlags, e.ScrollPhaseSeq, e.ScrollDelta, e.ScrollDeltaX,
+                _phaseTotalX, _phaseTotalY, e.QpcTicks);
+        }
         switch (e.Kind)
         {
             case InputKind.ScrollBegin:
-                EndPhaseGesture(cancel: true);   // a producer restart ends any prior gesture cleanly (legacy OnScrollPhase)
+                EndPhaseGesture(cancel: true, reason: 2);   // a producer restart ends any prior gesture cleanly (legacy OnScrollPhase)
                 _phaseTotalX = 0f; _phaseTotalY = 0f;
                 _phaseOpen = true;
                 _phaseWheel = IsWheelProducer(e.DeviceClassRaw, e.Pointer);   // latched: one physics path per gesture
-                // A Begin may carry the first displacement (a hi-res fallback's slop packet) — count it.
-                if (e.ScrollDelta != 0f || e.ScrollDeltaX != 0f) AccumulatePhaseDelta(in e);
+                _phaseUnits = IsNotchUnits(in e);                              // latched: one unit system per gesture
+                // A Begin may carry the first displacement (a hi-res fallback's slop packet) — count it. Begin
+                // events never coalesce (Pal.cs InputEventRing.Write), so there is never a pre-sample for one.
+                if (e.ScrollDelta != 0f || e.ScrollDeltaX != 0f) AccumulatePhaseDelta(in e, default);
                 break;
 
             case InputKind.ScrollDelta:
                 // Producer contract: deltas exist only INSIDE an open Begin…End gesture. A stray delta after a wheel
                 // takeover / lift (a terminal DM callback already in the queue) must never revive a gesture.
-                if (_phaseOpen) AccumulatePhaseDelta(in e);
+                if (_phaseOpen)
+                {
+                    // A zero-unit Begin (a touchpad's first packet can carry no travel) cannot tag the gesture; the first
+                    // tagged packet does. Sticky for the gesture: a DIP producer never sets the tag, so it never flips back.
+                    if (!_phaseUnits && IsNotchUnits(in e)) _phaseUnits = true;
+                    AccumulatePhaseDelta(in e, velSamples);
+                }
                 break;
 
             case InputKind.ScrollEnd:
-                EndPhaseGesture(cancel: false);
+                EndPhaseGesture(cancel: false, reason: 0);
                 break;
         }
     }
@@ -235,20 +283,29 @@ public sealed class ScrollInputRouter
     /// frame per gesture (accumulate across the drained span, flush at end of Phase batch)".</summary>
     public void EndFrame() => FlushPhaseDelta();
 
-    private void AccumulatePhaseDelta(in InputEvent e)
+    private void AccumulatePhaseDelta(in InputEvent e, ReadOnlySpan<PointerVelSample> velSamples)
     {
+        // Element-level handlers always receive DIP: a notch-unit packet is scaled by the element-handler notch DIP
+        // (the detented Wheel event's own element convention), a DIP packet passes through.
+        float elemK = _phaseUnits ? ElementWheelDipPerNotch : 1f;
         if (_phaseElementOwnsWheel)
         {
             // §A′ locked: every remaining packet of this gesture is redirected to the owning element, never latched
             // (the ownership decision survives even a later packet landing squarely over a real viewport).
-            DispatchElementWheel?.Invoke(e.PositionPx, e.ScrollDelta, e.ScrollDeltaX);
+            DispatchElementWheel?.Invoke(e.PositionPx, e.ScrollDelta * elemK, e.ScrollDeltaX * elemK);
             return;
         }
+        // Whole-gesture totals stay in the PRODUCER's unit (DIP, or notch units) — there is no viewport to scale
+        // against before the latch. The slop test compares like with like: for notch units the 8-DIP slop is expressed
+        // through the notch floor (WheelNotchMinDip is the smallest DIP a notch can ever travel), so a units gesture
+        // latches no later than a DIP gesture would.
         _phaseTotalX += e.ScrollDeltaX;
         _phaseTotalY += e.ScrollDelta;
+        bool justLatched = false;
         if (!_phaseLatched)
         {
-            if (MathF.Abs(_phaseTotalX) + MathF.Abs(_phaseTotalY) < LatchSlopDip) return;
+            float slop = _phaseUnits ? LatchSlopDip / ScrollFeel.Shipping.WheelNotchMinDip : LatchSlopDip;
+            if (MathF.Abs(_phaseTotalX) + MathF.Abs(_phaseTotalY) < slop) return;
             bool horiz = MathF.Abs(_phaseTotalX) > MathF.Abs(_phaseTotalY);
             NodeHandle vp = ResolveAxisTarget?.Invoke(e.PositionPx, horiz) ?? NodeHandle.Null;
             if (vp.IsNull)
@@ -256,24 +313,93 @@ public sealed class ScrollInputRouter
                 // §A vs §A′ (plan §12 "Wave-6 Fix C"): a slop-crossing packet with no scroller under it is either a
                 // genuine miss (§A — nothing there; keep probing every later packet via _phaseTotalX/Y, unchanged) or
                 // an element that OWNS the wheel (§A′ — dispatch THIS packet to it and lock the fallback for good).
-                if (DispatchElementWheel?.Invoke(e.PositionPx, e.ScrollDelta, e.ScrollDeltaX) == true)
+                // A touchpad phase gesture must keep looking for its page viewport.  Element wheel handlers are
+                // meaningful for a detented/free-spin mouse wheel, but letting one consume the first touchpad packet
+                // permanently steals the whole flick when the hit-test is still over a card/overlay during the latch.
+                if (_phaseWheel && DispatchElementWheel?.Invoke(e.PositionPx, e.ScrollDelta * elemK, e.ScrollDeltaX * elemK) == true)
                     _phaseElementOwnsWheel = true;
                 return;
             }
             _phaseNode = vp; _phaseHoriz = horiz; _phaseLatched = true;
+            justLatched = true;
             NodeHandle parent = NearestSameAxisAncestorViewport(vp, horiz);
             if (!parent.IsNull) _port.Post(ScrollInput.Chain((int)vp.Raw.Index, (int)parent.Raw.Index));
             OnGestureStarted?.Invoke();
             // No dead zone: the pre-latch travel (everything accumulated up to and excluding THIS packet — the packet
             // itself is added below) is applied on the latch frame, so the content starts exactly where the fingers
-            // did rather than 8 DIP behind (Chromium/DM apply the slop distance too).
-            _phaseFrameX = _phaseTotalX - e.ScrollDeltaX; _phaseFrameY = _phaseTotalY - e.ScrollDelta;
+            // did rather than the slop distance behind (Chromium/DM apply the slop distance too). Converted to DIP with
+            // the SAME per-notch scale as the packet below (the node is known now).
+            float k0 = PhaseDipPerUnit();
+            _phaseFrameX = (_phaseTotalX - e.ScrollDeltaX) * k0; _phaseFrameY = (_phaseTotalY - e.ScrollDelta) * k0;
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+            {
+                int deviceHoriz = (_phaseWheel ? 1 : 0) | (horiz ? 1 << 8 : 0);
+                float anchor = horiz ? _phaseFrameX : _phaseFrameY;   // the pre-latch travel applied THIS frame (no dead zone)
+                ScrollTrace.Latch((int)vp.Raw.Index, deviceHoriz, anchor, _phaseTotalX, _phaseTotalY);
+            }
         }
-        if (!_scene.IsLive(_phaseNode)) { _phaseLatched = false; return; }
-        _phaseFrameX += e.ScrollDeltaX; _phaseFrameY += e.ScrollDelta;
+        if (!_scene.IsLive(_phaseNode))
+        {
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.GestureEnd(4, 0, 0f);   // 4 = target died
+            _phaseLatched = false;
+            return;
+        }
+        // Post-latch: this frame's accumulation is DIP. A notch-unit packet is scaled by the latched viewport's per-notch
+        // distance (ScrollFeel.PerNotchDip(viewport, lineDip) on the VIEWPORT's own axis — the row height when the
+        // scroller declares one, else the viewport rule); a DIP packet is added as-is.
+        float k = PhaseDipPerUnit();
+        _phaseFrameX += e.ScrollDeltaX * k; _phaseFrameY += e.ScrollDelta * k;
         _phaseLastT = SampleSec(e.TimestampMs, e.QpcTicks);
         _phaseDirty = true;
+
+        // bug-B/A3: feed the estimator with EVERY raw packet this call represents, in chronological order — not
+        // once per produced FRAME the way the removed ScrollKernel.ApplyFrameDelta Reset/Sample calls did. `e` may
+        // itself already be the SUM of 2+ raw ScrollDelta packets (InputEventRing.Write coalesces same-Kind/
+        // same-PointerId packets before Phase() ever sees them individually) — `velSamples` carries the sub-packets
+        // that folded away, each stamped with the CUMULATIVE delta-within-this-merge-group at its own deposit time
+        // (Pal.cs "scroll-v3-plan §5.4"). `baseBeforeThisEvent` is the gesture-wide running position BEFORE this
+        // call's own contribution (already added to _phaseTotalX/Y above), so base + a pre-sample's cumulative-so-
+        // far value is that packet's own absolute phase-delta-domain position — same domain `e`'s own post-delta
+        // total ends up in. The very first sample of the WHOLE gesture (whether that is a pre-sample here, at THIS
+        // latch, or `e` itself when nothing coalesced) Resets; everything after Samples — mirrors
+        // ApplyContactBegin's seeding contract on the touch/pen path.
+        int node = (int)_phaseNode.Raw.Index;
+        float baseBeforeThisEvent = (_phaseHoriz ? _phaseTotalX : _phaseTotalY) - (_phaseHoriz ? e.ScrollDeltaX : e.ScrollDelta);
+        bool firstSampleOfGesture = justLatched;
+        for (int i = 0; i < velSamples.Length; i++)
+        {
+            ref readonly PointerVelSample s = ref velSamples[i];
+            if (!s.IsScrollPhase) continue;   // touch/pen PointerMove deposits share this ring — not ours
+            double t = SampleSec(s.TimestampMs, s.QpcTicks);
+            float pos = baseBeforeThisEvent + (_phaseHoriz ? s.X : s.Y);
+            _port.Post(ScrollInput.ImpulseSample(node, t, pos, reset: firstSampleOfGesture, src: 0));
+            firstSampleOfGesture = false;
+        }
+        _port.Post(ScrollInput.ImpulseSample(node, _phaseLastT, _phaseHoriz ? _phaseTotalX : _phaseTotalY,
+            reset: firstSampleOfGesture, src: 1));
     }
+
+    /// <summary>DIP per producer unit for the latched phase node: 1 for a DIP producer, else the viewport's per-notch
+    /// distance — <see cref="ScrollFeel.PerNotchDip(float, float)"/> over the viewport's main-axis extent and its declared
+    /// line height (<see cref="ScrollState.LineDip"/>, 0 = no hint). Zero alloc (a ref read of the scroll side-table).</summary>
+    private float PhaseDipPerUnit()
+    {
+        if (!_phaseUnits) return 1f;
+        if (!_scene.HasScroll(_phaseNode)) return ScrollFeel.Shipping.PerNotchDip(0f, 0f);
+        ref ScrollState sc = ref _scene.ScrollRef(_phaseNode);
+        float viewportExtent = sc.Orientation == 1 ? sc.ViewportW : sc.ViewportH;
+        return ScrollFeel.Shipping.PerNotchDip(viewportExtent, sc.LineDip);
+    }
+
+    /// <summary>Does this scroll-phase packet carry NOTCH UNITS rather than DIP? Only the hi-res wheel FALLBACK producer
+    /// does (scroll fix S3), and it marks the packet by ALSO writing the units into <see cref="InputEvent.WheelNotch"/>/
+    /// <see cref="InputEvent.WheelNotchX"/> — the fields whose documented meaning is exactly "signed device notch count,
+    /// viewport-independent". The router reads the frame's SUM from <see cref="InputEvent.ScrollDelta"/>/<c>ScrollDeltaX</c>
+    /// (the ring coalesces those; after coalescing <c>WheelNotch</c> holds only the first packet's value, which is why it is
+    /// a tag and not the payload). A DIP producer (DirectManipulation, touch, the headless script producer) leaves both
+    /// notch fields 0, so its deltas stay DIP. Pure.</summary>
+    public static bool IsNotchUnits(in InputEvent e)
+        => e.DeviceClassRaw == (byte)ScrollDeviceClass.WheelHiResFallback && (e.WheelNotch != 0f || e.WheelNotchX != 0f);
 
     private void FlushPhaseDelta()
     {
@@ -297,21 +423,33 @@ public sealed class ScrollInputRouter
     public static bool IsWheelProducer(byte deviceClassRaw, PointerKind pointer)
         => deviceClassRaw == (byte)ScrollDeviceClass.WheelHiResFallback && pointer == PointerKind.Mouse;
 
-    private void EndPhaseGesture(bool cancel)
+    /// <paramref name="reason"/> is the <c>ScrollTrace.GestureEnd</c> i0 code (0=ScrollEnd, 2=restart-on-Begin,
+    /// 3=wheel takeover — <see cref="Wheel"/> calls this too, cancel:true; reason 4=target died is the one case that
+    /// does NOT route through here — <see cref="AccumulatePhaseDelta"/>'s dead-target branch posts it inline, since
+    /// by that point the kernel already has no bound slot to Cancel/ContactEnd against).</summary>
+    private void EndPhaseGesture(bool cancel, int reason)
     {
         FlushPhaseDelta();
-        if (_phaseLatched && _scene.IsLive(_phaseNode))
+        bool wasLatched = _phaseLatched && _scene.IsLive(_phaseNode);
+        float band = 0f;
+        if (wasLatched)
         {
             int node = (int)_phaseNode.Raw.Index;
-            // A=0: no position resample happens on the frame-delta path (§2.2 "Drag (FrameDelta)... no resample, no
-            // LSQ"), so ContactEnd's axis-position argument is unused for this producer — the kernel seeds Ballistic
-            // from the trailing frame deltas already recorded, not from this call's A.
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled && _kernel.TryGetBody(node, out var body))
+                band = body.Horizontal ? body.BandX : body.BandY;
+            // A=0: the frame-delta path's samples are the packets' own cumulative positions (ScrollKernel.PaceStream),
+            // so ContactEnd's axis-position argument is unused for this producer — the kernel seeds Ballistic from the
+            // per-packet impulse samples already recorded, not from this call's A. If the stream went silent past the
+            // paced extrapolation window the kernel has already released it and this End is a no-op.
             _port.Post(cancel ? ScrollInput.Cancel(node) : ScrollInput.ContactEnd(node, _phaseLastT, 0f));
         }
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled && wasLatched)
+            ScrollTrace.GestureEnd(reason, 0, band);   // wasMomentum always 0 — PTP inertia is engine-owned
         _phaseLatched = false; _phaseOpen = false; _phaseNode = NodeHandle.Null;
         _phaseTotalX = 0f; _phaseTotalY = 0f; _phaseFrameX = 0f; _phaseFrameY = 0f; _phaseDirty = false;
         _phaseElementOwnsWheel = false;
         _phaseWheel = false;
+        _phaseUnits = false;
     }
 
     /// <summary>True when this frame's dispatch accumulated producer delta that <see cref="EndFrame"/> has not yet
@@ -340,15 +478,8 @@ public sealed class ScrollInputRouter
     public bool Wheel(in InputEvent e)
     {
         // Device crossover (legacy CancelGesture / scratchpad :3084): a physical wheel takes over from any live
-        // phase-driven gesture — one owner of the offset at a time.
-        if (_phaseLatched || _phaseOpen)
-        {
-            FlushPhaseDelta();
-            if (_phaseLatched && _scene.IsLive(_phaseNode)) _port.Post(ScrollInput.Cancel((int)_phaseNode.Raw.Index));
-            _phaseLatched = false; _phaseOpen = false; _phaseNode = NodeHandle.Null;
-            _phaseTotalX = 0f; _phaseTotalY = 0f; _phaseFrameX = 0f; _phaseFrameY = 0f; _phaseDirty = false;
-            _phaseElementOwnsWheel = false;
-        }
+        // phase-driven gesture — one owner of the offset at a time. reason 3 = wheel takeover (ScrollTrace.GestureEnd).
+        if (_phaseLatched || _phaseOpen) EndPhaseGesture(cancel: true, reason: 3);
         bool any = false;
         if (e.WheelNotch != 0f || e.ScrollDelta != 0f) any |= WheelAxis(in e, horizontal: false);
         if (e.WheelNotchX != 0f || e.ScrollDeltaX != 0f) any |= WheelAxis(in e, horizontal: true);
@@ -367,7 +498,10 @@ public sealed class ScrollInputRouter
         // back a viewport whose scroll axis differs from the wheel axis — from here on, geometry follows the VIEWPORT.
         horizontal = sc.Orientation == 1;
         float viewportExtent = horizontal ? sc.ViewportW : sc.ViewportH;
-        float dip = useNotch ? ScrollFeel.Shipping.PerNotchDip(viewportExtent) * notch : rawDip;
+        // Per-notch distance (scroll fix S6, Windows semantics): WheelScrollLines × the scroller's declared line height
+        // when it has one (ScrollState.LineDip — Virtual lists publish their item extent; the platform already folded
+        // WheelScrollLines/3 into the notch), else the WinUI viewport rule max(48 DIP, 10 %·viewport).
+        float dip = useNotch ? ScrollFeel.Shipping.PerNotchDip(viewportExtent, sc.LineDip) * notch : rawDip;
         if (dip == 0f) return false;
         // Direction-specific at-edge refusal (see class remarks on the accepted simplification vs the legacy
         // multi-candidate climb).

@@ -23,6 +23,12 @@ public static class Diag
     public const bool CompiledIn = false;
 #endif
 
+    /// <summary>The flavor THIS engine assembly was compiled as — "diag" when the DEBUG / FLUENTGPU_DIAG probes are in
+    /// (the per-frame incremental-capture parity audit, ScrollTrace's ring, RenderBudget), "release" otherwise. A
+    /// property, not a const, so an app logs the engine it actually loaded: a Release app output once carried a Debug
+    /// engine and spent two thirds of every frame in the parity audit (2026-09-17).</summary>
+    public static string BuildFlavor => CompiledIn ? "diag" : "release";
+
     /// <summary>Runtime gate (only consulted when compiled in). Defaults off unless FG_DIAG is set; AppContext switch overrides.</summary>
     public static bool Enabled = CompiledIn && EnvFlag("FG_DIAG");
 

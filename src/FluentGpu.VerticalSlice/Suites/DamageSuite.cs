@@ -3,11 +3,14 @@ using System.Runtime.InteropServices;
 using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Hosting;
+using FluentGpu.Pal;
+using FluentGpu.Pal.Headless;
 using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
 using FluentGpu.Scene;
 using FluentGpu.Text;
+using FluentGpu.Text.Headless;
 using FluentGpu.VerticalSlice.Harness;
 using static FluentGpu.VerticalSlice.Harness.Gate;
 
@@ -41,6 +44,8 @@ static class DamageSuite
         SceneSnapshotChecks.Run();
         PublicationGapChecks.Run();
         CompositorAnimationChecks.Run();
+        ImageRepaintChecks(strings);   // E1 (design-engine-images.md): image landing/crossfade damage their nodes, not the window
+        VramShedPolicyChecks();        // E4: VramShedPolicy hysteresis/cooldown/grace, tested as a pure struct
     }
 
     // ── §5.1-B: the pure decision layer (RepaintPolicy / RepaintStreamSafety / RepaintCull) ──────────────────────────
@@ -1194,7 +1199,15 @@ static class DamageSuite
         bool firstFull = first.RepaintDamage.IsFull && first.RepaintDamage.FullReason == RepaintFullReason.TargetInvalidated;
         bool firstStamped = first.PublishSequence == 1;
 
+        // E5 (design-engine-images.md): an elided frame is fence-only maintenance, not nothing — each settle turn
+        // above took the UI-side skipSubmit branch (headless is always the async gate OFF, never a real render
+        // thread), which must reclaim retired GPU resources instead of leaving them stuck behind a fence that will
+        // never see another submit while the loop stays idle. One ReclaimCompletedUploads call per elided turn.
+        int reclaimBeforeSettle = fx.Device.ReclaimCalls;
         for (int i = 0; i < 4; i++) fx.Host.RunFrame();   // settle (these elide the submit — nothing changed)
+        bool reclaimedEverySettleFrame = fx.Device.ReclaimCalls == reclaimBeforeSettle + 4;
+        Check("gate.repaint.elided-frame-reclaims every elided settle turn (skip-submit, nothing changed) calls IGpuDevice.ReclaimCompletedUploads exactly once — fence-only maintenance for retired GPU resources, never a reason to force a submit",
+            reclaimedEverySettleFrame, $"reclaimCalls={fx.Device.ReclaimCalls} before={reclaimBeforeSettle}");
         int framesBefore = fx.Device.FrameCount;
         ulong seqBefore = fx.Device.LastFrameInfo.PublishSequence;
 
@@ -2222,6 +2235,200 @@ static class DamageSuite
         return n;
     }
 
+    // ── E1 (design-engine-images.md, "Step 3 — image landings and crossfades damage their nodes") ─────────────────────
+    // A1/A3 killed the ancestor-trail and re-pose-latching full-window forces; A2/E1 kill the last two: an image
+    // LANDING (ContentEpoch advanced under byte-identical commands) and a live REVEAL/crossfade (pixels advance with
+    // ImageClockMs, no dirty bit anywhere) no longer force RepaintFullReason.ImageContent/DetachedContent outright —
+    // MarkImageDirty + AddCrossfadeRepaint describe them as the owning node's own band instead. The two named fulls
+    // survive only as an EXPLICIT surrender: more than 64 ids landing in one pump (ContentChangedOverflow), or a node
+    // this per-node path cannot describe at all (a scaled/rotated ancestor, or the detached-fly slab).
+    static void ImageRepaintChecks(StringTable strings)
+    {
+        const float W = 800f, H = 600f;
+
+        // gate.damage.image-landing-partial / gate.damage.image-crossfade-partial: a real decode landing through
+        // AppHost, end to end — GatedDecoder holds the decode Pending until Arm()+Pump() land it on a chosen turn (the
+        // 46k fixture, ImageSuite.cs), and ManualFrameTimeSource drives the reveal clock deterministically.
+        {
+            var decoder = new GatedDecoder();
+            var cache = new ImageCache(decoder);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("img-landing", new Size2(W, H), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, new ImageProbe(), cache, frameTime: clock);
+
+            host.RunFrame();                 // frame 1: first frame ever — untrustworthy target, forced full; image Pending
+            decoder.Arm();
+            host.RunFrame();                 // frame 2 (the Arm frame): the decode LANDS in this pump
+            var landedInfo = device.LastFrameInfo;
+            bool oneImage = device.LastImages.Count == 1;
+            // DrawImageCmd.Rect is LOCAL geometry, not window-space — the actual device/absolute rect (what
+            // AddImageNodeRepaint's TryAbsoluteRectTranslationOnly and the recorder's own SubtreeBounds band describe)
+            // is Transform.TransformBounds(Rect), exactly like the recorder's own Walk resolves it at record time.
+            var imageRect = oneImage ? device.LastImages[0].Transform.TransformBounds(device.LastImages[0].Rect) : default;
+            bool landingPartial = oneImage && !landedInfo.RepaintDamage.IsFull
+                && CoveredBy(landedInfo.RepaintDamage, imageRect)
+                && landedInfo.RepaintDamage.Coverage(W, H) < 0.1f;
+            Check("gate.damage.image-landing-partial an image decode landing (Pending→Ready) damages ONLY its own node's band — MarkImageDirty's PaintDirty feeds the recorder's §13.1 block instead of the host forcing RepaintFullReason.ImageContent — so the region is partial, covers the drawn rect, and its coverage of an 800x600 window is a small fraction",
+                landingPartial,
+                $"oneImage={oneImage} full={landedInfo.RepaintDamage.IsFull}/{landedInfo.RepaintDamage.FullReason} covers={(oneImage && CoveredBy(landedInfo.RepaintDamage, imageRect))} coverage={landedInfo.RepaintDamage.Coverage(W, H):0.0000}");
+
+            // The reveal this landing started is now live (ImageTransition.Default, 220ms). Every tick while it runs
+            // must stay partial AND keep covering the image's rect (AddCrossfadeRepaint's per-node band, not a
+            // DetachedContent surrender); once it settles, an otherwise-idle frame must elide outright.
+            bool everFull = false, everMissesImage = false;
+            int ticks = 0;
+            while (cache.HasActiveCrossfades && ticks < 60)
+            {
+                clock.Advance(16f);
+                host.RunFrame();
+                var r = device.LastFrameInfo.RepaintDamage;
+                if (r.IsFull) everFull = true;
+                else if (!CoveredBy(r, imageRect)) everMissesImage = true;
+                ticks++;
+            }
+            bool settledWithinBudget = ticks > 0 && ticks < 60;
+            int framesBeforeElide = device.FrameCount;
+            clock.Advance(300f);   // well past ImageTransition.Default's 220ms — nothing left to describe
+            host.RunFrame();
+            bool elidesAfterSettle = device.FrameCount == framesBeforeElide;
+
+            Check("gate.damage.image-crossfade-partial every tick while the reveal is live stays PARTIAL and keeps covering the image's rect (AddCrossfadeRepaint's per-node band over RevealingIds, never a DetachedContent surrender) and once HasActiveCrossfades settles, an otherwise-unchanged frame elides the submit outright (FrameCount unchanged)",
+                !everFull && !everMissesImage && settledWithinBudget && elidesAfterSettle,
+                $"ticks={ticks} everFull={everFull} everMissesImage={everMissesImage} elides={elidesAfterSettle} framesBefore={framesBeforeElide} framesAfter={device.FrameCount}");
+        }
+
+        // gate.damage.image-offscreen-landing-elides: a Prefetch handle nothing on screen owns. ImageTransition.None
+        // isolates the case from the reveal machinery above — MarkImageDirty finds ZERO owning nodes for this id
+        // (Reconciler._imageNodes has no entry), so the landing cannot describe a band, cannot force ImageContent
+        // (that id never touched a live draw op), and cannot keep the frame awake either.
+        {
+            var decoder = new GatedDecoder();
+            var cache = new ImageCache(decoder);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("img-offscreen", new Size2(W, H), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new BlankBoxProbe(), cache);
+
+            host.RunFrame();                                   // frame 1: first frame ever — forced full
+            for (int i = 0; i < 4; i++) host.RunFrame();        // settle (mirrors gate.damage.headless-payload)
+
+            decoder.Arm();
+            cache.Request("offscreen/prefetch.jpg", 8, 8, ImagePriority.Prefetch, transition: ImageTransition.None);
+            int framesBefore = device.FrameCount;
+            var landed = host.RunFrame();                      // begins AND lands the prefetch decode in this one pump
+            bool elided = device.FrameCount == framesBefore;
+            bool emptyRegion = landed.RepaintRectCount == 0 && landed.RepaintFullReason == RepaintFullReason.None;
+
+            Check("gate.damage.image-offscreen-landing-elides a Prefetch-only handle nothing on screen owns describes an EMPTY repaint region on landing (never RepaintFullReason.ImageContent/DetachedContent) and the otherwise-idle frame still elides the submit",
+                elided && emptyRegion,
+                $"elided={elided} rects={landed.RepaintRectCount} reason={landed.RepaintFullReason} frames={device.FrameCount}/{framesBefore}");
+        }
+
+        // gate.damage.image-content-overflow-named-full: 70 distinct decodes complete in ONE Pump — past the fixed
+        // 64-slot ContentChangedIds capacity, ImageCache sets ContentChangedOverflow instead of growing, and the host's
+        // ONLY response to that flag is the named surrender (a per-id describe over 70 nodes is exactly the "over
+        // budget" case the itemized path exists to bound).
+        {
+            var decoder = new GatedDecoder();
+            var cache = new ImageCache(decoder);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("img-overflow", new Size2(W, H), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ManyImagesProbe(), cache);
+
+            host.RunFrame();      // frame 1: ManyImagesProbe.Count decodes begin, all Pending
+            decoder.Arm();
+            host.RunFrame();      // frame 2: all of them land in this ONE Pump ⇒ ContentChangedOverflow
+            var region = device.LastFrameInfo.RepaintDamage;
+
+            Check("gate.damage.image-content-overflow-named-full more ids land in one Pump than ContentChangedIds' fixed capacity (64) — ContentChangedOverflow forces the named RepaintFullReason.ImageContent surrender instead of an itemized per-node describe",
+                region.IsFull && region.FullReason == RepaintFullReason.ImageContent,
+                $"full={region.IsFull} reason={region.FullReason} draws={device.LastImages.Count} count={ManyImagesProbe.Count}");
+        }
+
+        // gate.damage.image-crossfade-scaled-ancestor-full: the image's node sits under a ScaleX/ScaleY≠1 ancestor, so
+        // SceneStore.TryAbsoluteRectTranslationOnly refuses the whole chain — AddImageNodeRepaint returns -1,
+        // AddCrossfadeRepaint returns false, and the caller keeps its named DetachedContent surrender for the frame
+        // (over-inclusion, never an under-covering rect for a box this path cannot describe).
+        {
+            var decoder = new GatedDecoder();
+            var cache = new ImageCache(decoder);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("img-scaled", new Size2(W, H), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ScaledImageProbe(), cache);
+
+            host.RunFrame();      // frame 1: first frame ever — forced full; image Pending
+            decoder.Arm();
+            host.RunFrame();      // frame 2: the decode lands AND starts a reveal, both under the scaled ancestor
+            var region = device.LastFrameInfo.RepaintDamage;
+
+            Check("gate.damage.image-crossfade-scaled-ancestor-full an image node under a ScaleX/ScaleY≠1 ancestor cannot be described as a plain translated rect (TryAbsoluteRectTranslationOnly refuses) — AddCrossfadeRepaint reports failure and the host keeps its named DetachedContent surrender rather than emit an under-covering rect",
+                region.IsFull && region.FullReason == RepaintFullReason.DetachedContent,
+                $"full={region.IsFull} reason={region.FullReason} draws={device.LastImages.Count}");
+        }
+    }
+
+    // ── E4 (design-engine-images.md) — VramShedPolicy: hysteresis / cooldown / same-sample suppression, as a pure
+    // struct with no ImageCache/AppHost dependency (it decides WHEN to shed; ImageCache.EvictToVramPressure does the
+    // shedding). Directly mirrors the M5 defect: a 128 MB LOCAL part reads used > 0.90·budget on essentially every
+    // frame, and the device only refreshes its VRAM sample every ~10 presents, so reacting on every frame re-sheds the
+    // identical stale overage for up to 10 frames straight before the next real sample arrives.
+    static void VramShedPolicyChecks()
+    {
+        {
+            var p = default(VramShedPolicy);
+            bool notArmedYet = !p.Armed;
+            bool fired = p.Decide(91, 100);   // 91% crosses ArmRatio(90%) on a brand-new sample ⇒ arms AND fires
+            Check("gate.img.vram-shed-policy arms and fires the moment usage crosses 90% of budget on a brand-new sample",
+                notArmedYet && fired && p.Armed, $"fired={fired} armed={p.Armed}");
+        }
+        {
+            var p = default(VramShedPolicy);
+            p.Decide(91, 100);
+            bool refired = p.Decide(91, 100);   // the IDENTICAL (used, budget) pair — the exact stale-sample defect
+            Check("gate.img.vram-shed-policy re-acting on an unchanged (used, budget) sample never re-fires",
+                !refired, $"refired={refired}");
+        }
+        {
+            var p = default(VramShedPolicy);
+            p.Decide(91, 100);
+            p.NoteShed(1024);   // this frame's eviction actually freed something ⇒ arms the cooldown
+            int fireCount = 0;
+            bool firedBeforeCooldownDrained = false;
+            for (int i = 0; i < VramShedPolicy.CooldownFrames; i++)
+            {
+                bool fired = p.Decide(92 + i, 100);   // a genuinely NEW, still-armed sample every call
+                if (fired)
+                {
+                    fireCount++;
+                    if (i < VramShedPolicy.CooldownFrames - 1) firedBeforeCooldownDrained = true;
+                }
+            }
+            Check("gate.img.vram-shed-policy a shed arms a cooldown (longer than the device's ~10-present sample cadence): no fire on a new sample until it drains, then fires on the very next one",
+                fireCount == 1 && !firedBeforeCooldownDrained, $"fireCount={fireCount} early={firedBeforeCooldownDrained}");
+        }
+        {
+            var p = default(VramShedPolicy);
+            p.Decide(91, 100);          // arm
+            p.Decide(85, 100);          // 85% sits BETWEEN DisarmRatio(80%) and ArmRatio(90%) — hysteresis band
+            bool staysArmedAt85 = p.Armed;
+            p.Decide(79, 100);          // < 80% ⇒ disarms
+            bool disarmsBelow80 = !p.Armed;
+            Check("gate.img.vram-shed-policy hysteresis: stays armed at 85% (between the two ratios, so it does not chatter at every sample dithering around 90%) and disarms only once usage falls below 80%",
+                staysArmedAt85 && disarmsBelow80, $"staysArmed85={staysArmedAt85} disarmsBelow80={disarmsBelow80}");
+        }
+    }
 }
 
 sealed class DamageProbe : FluentGpu.Hooks.Component
@@ -2234,5 +2441,38 @@ sealed class DamageProbe : FluentGpu.Hooks.Component
         {
             Grow = 1f,
             Fill = FluentGpu.Signals.Prop.Of(() => ColorF.FromRgba((byte)(24 + Tint.Value * 90), 24, 28)),
+        };
+}
+
+// A plain box with no image at all — the "nothing on screen owns this id" half of
+// gate.damage.image-offscreen-landing-elides (a raw ImageCache.Request never reaches this tree).
+sealed class BlankBoxProbe : FluentGpu.Hooks.Component
+{
+    public override FluentGpu.Dsl.Element Render() => new FluentGpu.Dsl.BoxEl { Grow = 1f };
+}
+
+// gate.damage.image-content-overflow-named-full: enough distinct decodes to overrun ContentChangedIds' fixed 64-slot
+// capacity when they all land in the SAME GatedDecoder Pump.
+sealed class ManyImagesProbe : FluentGpu.Hooks.Component
+{
+    public const int Count = 70;
+
+    public override FluentGpu.Dsl.Element Render()
+    {
+        var children = new FluentGpu.Dsl.Element[Count];
+        for (int i = 0; i < Count; i++) children[i] = FluentGpu.Dsl.Ui.Image($"many/{i}.jpg", 8, 8);
+        return new FluentGpu.Dsl.BoxEl { Children = children };
+    }
+}
+
+// gate.damage.image-crossfade-scaled-ancestor-full: the image sits under a ScaleX/ScaleY≠1 ancestor, so its node's
+// absolute rect cannot be described as a plain translated box (SceneStore.TryAbsoluteRectTranslationOnly refuses).
+sealed class ScaledImageProbe : FluentGpu.Hooks.Component
+{
+    public override FluentGpu.Dsl.Element Render()
+        => new FluentGpu.Dsl.BoxEl
+        {
+            Width = 200, Height = 200, ScaleX = 2f, ScaleY = 2f,
+            Children = [FluentGpu.Dsl.Ui.Image("scaled/1.jpg", 80, 80, 6f)],
         };
 }

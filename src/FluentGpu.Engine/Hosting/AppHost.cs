@@ -18,6 +18,22 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Hosting;
 
+/// <summary>Optional platform-window seam for the input-pacing census the host mirrors onto <see cref="FrameStats"/>
+/// (always-on P0 counters, no env switch). Implemented by the Win32 window (its paced <c>WaitForWork</c> keeps the
+/// counter); a headless or foreign window simply does not implement it and the host reports 0. Discovered once at
+/// construction (<c>window as IInputPacingSource</c>) — no per-frame type test, no allocation.</summary>
+public interface IInputPacingSource
+{
+    /// <summary>Monotonic count of display-paced waits a NON-deferrable message broke early (a frame produced off-phase).
+    /// Wheel packets are deferrable, so a wheel glide must hold this flat; a consumer differences successive frames.</summary>
+    long PacedUrgentBreaks { get; }
+}
+
+/// <summary>Why a scroll-active frame's raw gap exceeded the work the frame measured (<see cref="FrameStats.SlackMs"/>):
+/// a GC landed in the gap, the wake model deliberately slept for it, or the thread was runnable and did not run
+/// (OS pre-emption, a blocking call outside the measured phases).</summary>
+public enum SlackCause : byte { None, Gc, WakeSlept, Preempted }
+
 public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered)
 {
     public int NodesVisited { get; init; }
@@ -135,6 +151,14 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double ImagePumpMs { get; init; }
     public int ImageApplyCount { get; init; }
     public int ImageApplyBytes { get; init; }
+    /// <summary>P0 always-on counter (cumulative): render-thread image-upload drain turns that hit the device's per-turn
+    /// byte budget and carried a job to the next turn (<see cref="IGpuDevice.DeferredImageUploads"/>; 0 on headless).
+    /// Difference successive frames: a nonzero step is an applied cover whose texture landed one present later than its
+    /// admission, and a sustained climb during a scroll means covers land faster than one turn stages them.</summary>
+    public int DeferredImageUploads { get; init; }
+    /// <summary>Cumulative pixel bytes of the jobs <see cref="DeferredImageUploads"/> counted
+    /// (<see cref="IGpuDevice.DeferredImageUploadBytes"/>).</summary>
+    public long DeferredImageUploadBytes { get; init; }
     public double RealizeCatchupMs { get; init; }
     // Submit sub-split (diagnostics for the #1 hotspot; async runs the backend submit on the render thread).
     // FenceWaitMs = submitting-thread wall-time BLOCKED on back-buffer retirement + present-latency waitable
@@ -173,6 +197,31 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// consumer can normalise cadence metrics by SCROLL-ACTIVE time rather than wall time (an idle stretch otherwise
     /// dilutes every per-second figure) and can gate its emission on the gesture instead of on a fixed frame counter.</summary>
     public bool ScrollActive { get; init; }
+    /// <summary>The kernel reported continuous motion this frame (a drag, a fling, or a wheel/programmatic glide —
+    /// <see cref="ScrollFrameSummary.AnyLiveMotion"/>). The bit a cadence verdict conditions on: a vblank with no present
+    /// while this was true on the previous frame is a hitch the user saw; one during the gap between two wheel notches
+    /// that had already landed is nothing.</summary>
+    public bool ScrollLiveMotion { get; init; }
+    /// <summary>The largest main-axis displacement any scroll body produced this frame, DIP
+    /// (<see cref="ScrollFrameSummary.MaxAbsDeltaDip"/>) — the per-frame "shift" a screen-capture probe measures, from
+    /// inside, so a per-frame motion trace needs no capture.</summary>
+    public float ScrollDeltaDip { get; init; }
+    /// <summary>Wheel notches the kernel applied this frame (<see cref="ScrollFrameSummary.WheelNotches"/>).</summary>
+    public int WheelNotches { get; init; }
+    /// <summary>Scroll bodies whose coast step was pinned at a clamp this frame, pending fresh geometry
+    /// (<see cref="ScrollFrameSummary.EdgePins"/>) — a frame whose shift was cut by last frame's extent, not by physics.</summary>
+    public int ScrollEdgePins { get; init; }
+    /// <summary>The largest scroll rebase this frame that is not motion — an anchor shift or a clamp correction, DIP
+    /// (<see cref="ScrollFrameSummary.MaxAbsStructuralDip"/>); kept out of <see cref="ScrollDeltaDip"/>.</summary>
+    public float ScrollStructuralDip { get; init; }
+    /// <summary>A scroll contact is down and still: its drag applied no delta this frame and its newest sample is older
+    /// than the resample latency plus a frame (<see cref="ScrollFrameSummary.AnyContactHeld"/>).</summary>
+    public bool ScrollContactHeld { get; init; }
+    /// <summary>Why a body that should have coasted this frame moved under 0.05 DIP
+    /// (<see cref="ScrollFrameSummary.ZeroReason"/>); <see cref="ScrollZeroReason.None"/> when none did.</summary>
+    public ScrollZeroReason ScrollZeroReason { get; init; }
+    /// <summary>This frame's kernel dt was rebuilt from the wall clock because the frame stamp repeated (AppHost's scroll dt repair).</summary>
+    public bool ScrollDtRepaired { get; init; }
     /// <summary>The publish seq this frame's DrawList was handed to the render seam under (0 when the frame elided its
     /// submit). This is the ONLY per-frame identity that survives the UI→render-thread boundary; see
     /// <see cref="AppHost.LastPresentPublishSeq"/> for the ack side and the join contract.</summary>
@@ -192,6 +241,13 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int Gc0Delta { get; init; }
     public int Gc1Delta { get; init; }
     public int Gc2Delta { get; init; }
+    /// <summary>Always-on gap discriminator for scroll-active frames whose raw inter-frame gap exceeded 12 ms: the part
+    /// of that gap no measured phase (flush/layout/anim/record/submit) accounts for, in ms — the time the loop was not
+    /// running. 0 on every other frame.</summary>
+    public float SlackMs { get; init; }
+    /// <summary>What <see cref="SlackMs"/> was (<c>SlackCause.None</c> when the slack is under 4 ms — the frame was
+    /// slow, not absent).</summary>
+    public SlackCause SlackCause { get; init; }
     /// <summary>The per-component census line for this frame when <see cref="AppHost.RenderCensus"/> is on AND the
     /// flush exceeded <see cref="RefreshIntervalMs"/> (or rendered ≥ the census min-comps): "[render-census] flush=…
     /// top=Type×n(r=ms c=ms a=K),… bytes=Type×n=K,…" — WHICH components made the frame slow and WHO allocated. Null
@@ -204,6 +260,15 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// them before it woke). Ordinary and cheap — record-dirty bits and the pending-removal ledger accumulate until a
     /// publication is CONSUMED, so a skipped one loses nothing. A sustained climb means the render thread is behind.</summary>
     public long PublicationGaps { get; init; }
+    /// <summary>P0 always-on counter (monotonic): display-paced input waits the platform broke early for a non-deferrable
+    /// message, i.e. frames produced OFF-phase by urgent input (<see cref="IInputPacingSource.PacedUrgentBreaks"/>; 0 when
+    /// the window does not implement the seam — headless). Wheel packets are deferrable since the scroll pacing fix, so
+    /// the per-frame difference must be ~0 during a wheel glide; the app's <c>scroll.frames</c> rollup prints it.</summary>
+    public long PacedUrgentBreaks { get; init; }
+    /// <summary>P0 always-on counter (monotonic): <c>RunFrame</c>s that dispatched input but declined to produce a frame
+    /// because one was already produced for the current compositor tick (<see cref="AppHost.ProductionDeclines"/>). Each
+    /// one is an input update that reached the screen a tick late; a wheel glide must hold the difference at ~0.</summary>
+    public long ProductionDeclines { get; init; }
     /// <summary>Cumulative presents and OS-refresh slots those presents missed (an interval of two vblanks counts one
     /// missed slot). Cumulative so a window can difference them: the displayed cadence is the smoothness number, and
     /// it is invisible to the UI-side phase times when the renderer runs on its own thread.</summary>
@@ -332,9 +397,6 @@ public sealed class AppHost : IDisposable
     private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
     private readonly SpanTable _spanTable = new();
-    // Last image-content epoch included in a submitted frame. It does not invalidate retained spans; it only defeats
-    // byte-hash submit elision for the one frame where a same-handle texture (for example a baked-blur upgrade) changed.
-    private int _recordedImageContentEpoch;
     private bool _imageCrossfadeWasActive;
     // Render-thread seam (Cut A, submit-only; docs/plans/render-thread-seam-landing-plan.md · design/subsystems/threading-render-seam.md).
     // STEP 1 — single-thread pass-through: the UI records into _drawList, copies it into a render-readable arena, then
@@ -425,6 +487,42 @@ public sealed class AppHost : IDisposable
         _images.AdvancePresentationClock(nowMs);
     }
 
+    /// <summary>E1 (design-engine-images.md): describe every currently-revealing image as its owning node(s)' repaint
+    /// rect instead of the caller forcing a full frame for <c>HasActiveCrossfades</c>. Returns false — leaving
+    /// <paramref name="repaint"/> untouched beyond whatever it already had — the moment the crossfade set cannot be
+    /// fully described: <see cref="ImageCache.RevealingOverflow"/> (more than 128 concurrent reveals), a node under a
+    /// scaled/rotated ancestor (<see cref="TreeReconciler.AddImageNodeRepaint"/> returns -1), or a live image inside the
+    /// detached-fly slab (<c>FG_DETACHED_FLY</c>) — those nodes are snapshot rows, not scene nodes, so they are never in
+    /// <c>_imageNodes</c> and would otherwise silently go undescribed. The caller then keeps its named
+    /// <see cref="RepaintFullReason.DetachedContent"/> surrender for this frame.</summary>
+    private bool AddCrossfadeRepaint(ref RepaintDamageRegion repaint)
+    {
+        if (_images.RevealingOverflow) return false;
+        if (DetachedSlabHasLiveImages()) return false;
+        foreach (int id in _images.RevealingIds)
+        {
+            if (_reconciler.AddImageNodeRepaint(id, ref repaint) < 0) return false;
+        }
+        return true;
+    }
+
+    /// <summary>True when the detached-fly slab (<see cref="ConnectedAnimation.Detached"/>, <c>FG_DETACHED_FLY</c>)
+    /// currently holds a live snapshot carrying an image. Those rows are not scene nodes — <c>Reconciler._imageNodes</c>
+    /// never sees them — so a crossfade landing on one of them cannot be described as a per-node rect; the caller keeps
+    /// its named full for the frame instead. The slab holds only the handful of nodes presently exiting/flying
+    /// (typically 0-3), so this scan is O(live count), not O(capacity).</summary>
+    private bool DetachedSlabHasLiveImages()
+    {
+        var detached = _connected.Detached;
+        if (!detached.HasActive) return false;
+        for (int i = 0; i < detached.NodeCount; i++)
+        {
+            ref readonly var node = ref detached.At(i);
+            if (node.InUse && node.ImageId != 0) return true;
+        }
+        return false;
+    }
+
     private bool HasRenderMotion()
     {
         if (HasOwnRenderMotion()) return true;
@@ -496,11 +594,16 @@ public sealed class AppHost : IDisposable
     private ulong _frameClockSeq;                         // RunFrame-call ordinal — FrameClock.Seq (never resets)
     private long _frameClockFloorQpc;                     // RefreshLattice.Snap's monotonicity floor (replaces the old QuantizedFrameSec's _lastQuantizedFrameQpc)
     private long _prevScrollFrameQpc;                     // previous PAINTED frame's FrameClock.FrameQpc — ScrollClock.DtSec's Δ base (real-window path only)
+    private long _prevScrollNowQpc;        // wall stamp of the previous produced frame (the dt repair above)
+    private bool _scrollDtRepairedThisFrame;
+    private int _scrollDtRepairs;          // frames whose repeated frame stamp was repaired from the wall clock (FrameStats.ScrollDtRepaired)
     private readonly InputEventRing _scrollPumpRing = new();  // dedicated ring for IPlatformWindow.PumpScroll (kept separate from _ring, which the top-of-RunFrame pump already drained this frame)
     private readonly FrameBudget _frameBudget = new();   // motion-UI slice bound for realize + image-apply while Drag/Ballistic (§3.3 item 6)
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
+    // M5 (adreno-hang-fixes.md): hysteresis/cooldown/grace for _images.EvictToVramPressure — see VramShedPolicy.cs.
+    private VramShedPolicy _vramShed;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
@@ -567,9 +670,10 @@ public sealed class AppHost : IDisposable
     /// slot). The layer animates within it; the host tears the preview down when it expires.</summary>
     public const float DragSettleMs = 250f;
     private Size2 _lastViewportDip;
-    // Window-visibility ambient (Activation.IsActive): false while minimized OR while the app has signalled a power
-    // suspend (SetWindowActive(false)). UseIsActive AND-folds it with each component's KeepAlive-parked state. Written
-    // on the minimize/restore EDGE in RunFrame (and by SetWindowActive); value-eq-gated, so a steady frame is a no-op.
+    // Window-visibility ambient (Activation.IsActive): false while the window is parked (minimized OR hidden) OR while the
+    // app has signalled a power suspend (SetWindowActive(false)). UseIsActive AND-folds it with each component's
+    // KeepAlive-parked state. Written on the park/un-park EDGE in RunFrame (and by SetWindowActive); value-eq-gated, so a
+    // steady frame is a no-op.
     private readonly Signal<bool> _windowVisible = new(true);
     private bool _windowActiveApp = true;                // app-side power suspend/resume gate (AND-ed into _windowVisible)
 
@@ -898,7 +1002,7 @@ public sealed class AppHost : IDisposable
     private void ApplyPresentPacing(in Threading.RenderFrame rf)
     {
         if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
-        else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
+        else if (rf.InteractivePresent) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
     }
 
     /// <summary>The render thread's byte-identical-frame elision, as a pure decision (unit-tested; see
@@ -1018,6 +1122,11 @@ public sealed class AppHost : IDisposable
                 {
                     Interlocked.Increment(ref _framesSkippedSubmit);
                     DrainVideoForPresentTurn(in rf);   // owed regardless — see its remarks
+                    // E5: this turn elides the record AND the submit, so it will never reach the staging pass above
+                    // again for a while — fence-only maintenance (retire-backlog release) still owes forward progress,
+                    // or an image evicted under VRAM pressure sits un-released for as long as the clock keeps re-
+                    // entering here. No command list, no present — just releases resources whose retire fence completed.
+                    _device.ReclaimCompletedUploads();
                     return;
                 }
                 // Publications the consumer never adopted. A DIAGNOSTIC now, on both sides: the store keeps its
@@ -1051,11 +1160,13 @@ public sealed class AppHost : IDisposable
                 // A clock-driven re-record USED to force full here, on the grounds that no scene bit described it.
                 // Since §13.1's pose split that is no longer true: a pose stamps the posed node's own overlay-self
                 // epoch, so the recorder's damage block describes exactly the nodes whose pixels moved, and forcing
-                // full here threw that description away on every animation turn. What is still undescribed is an image
-                // CROSSFADE: its pixels advance with ImageClockMs under byte-identical commands and no dirty bit
-                // anywhere, so that one case keeps its full frame.
-                else if (!fresh && sceneFrame.Images.HasCrossfades(imageClockMs))
-                    repaint.ForceFull(RepaintFullReason.DetachedContent);
+                // full here threw that description away on every animation turn. The remaining undescribed case — an
+                // image CROSSFADE, whose pixels advance with ImageClockMs under byte-identical commands and no dirty
+                // bit anywhere — is no longer a render-thread ForceFull either (design-engine-images.md E1): the HOST
+                // already unioned its own per-node crossfade rects into `rf.Submit.RepaintDamage` before publish
+                // (`AddCrossfadeRepaint`), and that region rides in via the `repaint.Union` above on EVERY re-record of
+                // the same publication — so this arm would only ever repeat a full the host already downgraded to
+                // partial. Kept as a comment, not a case: deleting it silently would read as an oversight.
                 ulong dlHash = DrawListHash(_renderCommands.Bytes, _renderCommands.SortKeys);
                 // Skip-submit (idle/slow-change power): a byte-identical stream with an EMPTY repaint region and no
                 // clock-driven work is ALREADY on screen — the presented front buffer is still correct, so elide the
@@ -1081,6 +1192,10 @@ public sealed class AppHost : IDisposable
                     _renderSubmissionContinuity.Elided(rf.PublishSeq);
                     presented = false;
                     Interlocked.Increment(ref _framesSkippedSubmit);
+                    // E5: this turn skips the submit (no command list, no present) but the staging pass at the top of
+                    // this method may still have queued retires this frame — a settle frame that never submits again
+                    // must not leave them stuck behind a fence the device already signaled.
+                    _device.ReclaimCompletedUploads();
                 }
                 else
                 {
@@ -1274,7 +1389,8 @@ public sealed class AppHost : IDisposable
     // fresh device warms up instead of re-hanging. Longer than nav because re-realize touches the whole resident set.
     private const int PostRecoveryThrottleFrames = 45;
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
-    private bool _wasMinimized;              // previous frame's minimize state — the restore EDGE forces a repaint
+    private bool _wasParked;                 // previous frame's parked state (minimized OR hidden) — the un-park EDGE forces a repaint
+    private WindowStateRelay _windowStateRelay;   // placement + visibility samples → AppHost.WindowStateChanged edges
     private bool _inPaint;
     private Size2 _lastSize;
     private float _lastScale;
@@ -1428,11 +1544,6 @@ public sealed class AppHost : IDisposable
     /// <summary>The sustainable cadence the adaptive-GPU governor paces to once engaged (fps). Not app policy and not
     /// a row's cadence: the rate a GPU-bound frame can actually hold.</summary>
     private const int GpuGovernorFps = 30;
-    // A/B-only strict-120 path. It activates exclusively on a compositor-owned swapchain after timestamp queries prove
-    // the actual GPU render is inside the 8ms budget. Set FG_SCROLL_PRESENT_INTERVAL0=1 together with FG_GPU_TIMING=1;
-    // otherwise ordinary vsync remains untouched.
-    private static readonly bool s_scrollPresentIntervalZero = Diag.EnvFlag("FG_SCROLL_PRESENT_INTERVAL0");
-
     // ── FG_BISECT_NO_IMAGE_PUMP: the image-pump bisection arm (ops/diag) ─────────────────────────────────────────
     // A BEHAVIOUR FORK, and the only kind of evidence that can settle the imageDecodeDuringScroll question. That
     // bucket's predicate is a correlation — "the phase-7.5 decode-apply cost is high while scroll is active" — and a
@@ -1454,7 +1565,6 @@ public sealed class AppHost : IDisposable
     /// PROVES the arm was live for this capture — a bisection whose suppression never actually engaged would
     /// otherwise read as "disabling the pump changed nothing", which is the opposite of what happened.</summary>
     public long BisectImagePumpsSuppressed => Volatile.Read(ref _bisectPumpsSuppressed);
-    private const double ScrollPresentGpuBudgetMs = 8.0;
     private double _gpuBoundEma;            // smoothed fresh whole-frame GPU execution samples (never fence waits)
     private ulong _gpuBoundSampleSequence;  // last completed device sample consumed into the EMA
     private GpuRenderSample _gpuBoundLastSample; // last coherent sample from THIS host's swapchain; TTL-bounded on read contention
@@ -1886,6 +1996,7 @@ public sealed class AppHost : IDisposable
     private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable)
     private long _lastProducedTickSeq;     // the tick the last produced frame belongs to
     private long _productionDeclines;      // diagnostic census: RunFrames that dispatched input but produced no frame (already produced for this tick)
+    private readonly IInputPacingSource? _pacingSource;   // the window's paced-wait census (FrameStats.PacedUrgentBreaks); null ⇒ 0
 
     /// <summary>Frames declined for production because a frame was already produced for the current compositor tick
     /// (input was still dispatched). Each one is a frame DropOldest would have discarded. Diagnostic (FG_FPS_LOG).</summary>
@@ -1978,7 +2089,8 @@ public sealed class AppHost : IDisposable
     /// running another frame. Computes the wake mask ONCE and paces by it:
     /// <list type="bullet">
     /// <item>None ⇒ -1: fully idle, block until an input/paint message arrives (0% CPU).</item>
-    /// <item>minimized ⇒ -1 (regardless of the mask): a minimized window paints nothing; only the restore message matters.</item>
+    /// <item>parked (minimized or hidden) ⇒ -1 (regardless of the mask): a parked window paints nothing; only the
+    ///   restore/show message matters — except an unconsumed park/un-park edge, which runs its edge frame at once (0).</item>
     /// <item>DynamicText is the ONLY set bit ⇒ 100: the on-screen fps/draw-count HUD is a READOUT, not an animation —
     ///   a 10 Hz refresh is imperceptible and idles the CPU at ~0% instead of running record+present at the display rate.</item>
     /// <item>otherwise ⇒ 0: real animation/scroll/decode/drag work in flight — pace at the display rate (present-throttled).</item>
@@ -1993,7 +2105,7 @@ public sealed class AppHost : IDisposable
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
         // reclaim backstop reachable even when no UI timer or input will ever arrive.
-        if (!IsMinimized && _anim.RenderOwnsCompositor && _scene.OrphanCount > 0)
+        if (!IsParked && _anim.RenderOwnsCompositor && _scene.OrphanCount > 0)
         {
             long now = Stopwatch.GetTimestamp();
             for (int i = 0; i < _scene.OrphanCount; i++)
@@ -2035,10 +2147,10 @@ public sealed class AppHost : IDisposable
     private int ClampWaitToTimers(int w, HostWaitKind kind)
     {
         if (IsDisplayRateWait(kind, w)) return w;
-        // Paint — the only drain site — is gated off while minimized, so no wait length can make a timer fire;
-        // shortening the idle block converts a 0%-CPU sleep into a spin. A message (restore, WM_ACTIVATE, a power
-        // broadcast) is what wakes a minimized loop, and the restore edge forces the frame that drains.
-        if (IsMinimized) return w;
+        // Paint — the only drain site — is gated off while parked (minimized or hidden), so no wait length can make a
+        // timer fire; shortening the idle block converts a 0%-CPU sleep into a spin. A message (restore, show,
+        // WM_ACTIVATE, a power broadcast) is what wakes a parked loop, and the un-park edge forces the frame that drains.
+        if (IsParked) return w;
         if (!_timers.TryPeekEarliest(out double due)) return w;
         int dueIn = (int)Math.Ceiling(Math.Max(0.0, due - _timers.NowMs));
         // The drain is on the NEXT frame, which may be skipped — never return 0 (that is a spin, not a wait).
@@ -2071,7 +2183,16 @@ public sealed class AppHost : IDisposable
                 GpuGovernorMaxSubmitAge, GpuGovernorSampleTtlTicks, ref _gpuBoundLastSample,
                 ref _gpuBoundSampleSequence, ref _gpuBoundEma, ref _gpuGovernorEngaged);
         }
-        if (IsMinimized) { _lastWaitKind = HostWaitKind.Idle; return -1; } // Cold maintenance bounds the outer wait, never paints.
+        // Parked (minimized or hidden): block until a message — cold maintenance bounds the outer wait, never paints. But
+        // an UNCONSUMED park/un-park edge runs one frame now: a window hidden or shown by app code (Hide/Show from a
+        // handler, not from a message the pump dispatched) posts nothing that would otherwise wake the loop, and the
+        // edge frame is what flips Activation.IsActive, pauses/resumes the render thread and forces the first paint.
+        // Not during a device-lost rendezvous: RunFrame returns before the edge block until RecoverDone, so a 0 there would
+        // spin instead of letting the render thread's wake nudge the loop (the existing recovery contract).
+        bool parked = IsParked;
+        bool recovering = _deviceLost is { RecoverRequest: not 0, RecoverDone: 0 } && _asyncActive;
+        if (parked != _wasParked && !recovering) { _lastWaitKind = HostWaitKind.Idle; return 0; }
+        if (parked) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
@@ -2377,6 +2498,9 @@ public sealed class AppHost : IDisposable
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (!_anim.RenderOwnsCompositor && _scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
         if (_images.HasReadyCompletions) r |= WakeReasons.ImageReady;
+        // E5 (design-engine-images.md): HasPendingUploads is an unsubmitted UPLOAD/activation, not a retire backlog —
+        // a queued retire is fence-only maintenance (ReclaimCompletedUploads), never a reason to keep the loop awake on
+        // its own, since it clears itself the next time ANY frame (even a skipped/elided one) reaches the device.
         if (_device.HasPendingUploads) r |= WakeReasons.ImagesPending;
         if (_device.TextRepaintPending) r |= WakeReasons.TextRepaintPending;
         if (_bakedBlurQueue.HasJobs) r |= WakeReasons.BakedBlurPending;
@@ -2509,6 +2633,7 @@ public sealed class AppHost : IDisposable
         _isDetachedChild = isDetachedChild;
         _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
+        _pacingSource = window as IInputPacingSource;   // once: the Win32 window implements it, headless does not (→ 0)
         _pixelPool.BufferRetained += OnPixelBufferRetained;
         // Render-loop mode decision: a Headless window is ALWAYS SingleThread (the deterministic path the slice/gates need);
         // a real windowed host defaults to Async (the landed default). loopModeOverride is the internal-only escape hatch —
@@ -2556,7 +2681,8 @@ public sealed class AppHost : IDisposable
         _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the FG_DIAG relayout-escape message (DEBUG-only invocation)
         _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
-        _anim = new AnimEngine(_scene);
+        _reconciler.OnSubtreeRemoved = _dispatcher.NotifySubtreeRemoved;
+        _anim =new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         // scroll-v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.3 item 5): the kernel is the single, portable,
         // thread-agnostic scroll source (wheel/touchpad/touch fling + overscroll spring + programmatic glide + snap)
@@ -2794,15 +2920,27 @@ public sealed class AppHost : IDisposable
             _device.SetBakedBlurQueue(_bakedBlurQueue);
             if (_loopMode is (RenderLoopMode.ForceSync or RenderLoopMode.Async))
             {
-                // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
-                // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
-                // (returning the buffer) and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
+                // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink hands an OWNED pixel buffer to the
+                // render thread via the queue (optimistically admitting Ready); the render thread stages it, returns the buffer
+                // to the queue's BufferPool, and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
                 _imageQueue = new Threading.ImageUploadQueue { BufferPool = _pixelPool };
                 var q = _imageQueue;
                 _images.SetPixelAttemptSink((int id, System.ReadOnlySpan<byte> px, int w, int h) =>
                 {
-                    byte[] buf = _pixelPool.Rent(px.Length);   // bounded pixel pool copy (returned render-side via the queue's BufferPool)
-                    px.CopyTo(buf);
+                    // Ownership handoff (scroll-feel 2026-09-16 W2-E1): while DecodeScheduler.Pump is running this sink,
+                    // `px` IS the worker's pooled decode buffer, on loan — take it and enqueue it as-is. The old shape
+                    // (Rent a second buffer + px.CopyTo) memcpy'd every cover a second time on the UI thread: 256 KB–1 MiB,
+                    // LOH-class, per apply during a fling — the hotAllocKB / gen2 signature in the scroll recordings.
+                    // The buffer flows back to the SAME pool the scheduler rented it from: D3D12Device.DrainImageJobs →
+                    // q.ReturnUploadBuffer → q.BufferPool, which the PixelPool setter points at FluentApp's ONE shared
+                    // PixelBufferPool (also the scheduler's DecodeOptions.PixelPool). Any other caller — the blur-hash LQIP
+                    // upload (ImageCache scratch), FakeImageDecoder's `new byte[]` scratch, a non-scheduler decoder — offers a
+                    // span it still owns, so it is copied into a pool rental exactly as before.
+                    if (!FluentGpu.Media.DecodeScheduler.TryTakeDecodeBuffer(px, out byte[]? buf))
+                    {
+                        buf = _pixelPool.Rent(px.Length);
+                        px.CopyTo(buf);
+                    }
                     q.EnqueueUpload(id, buf, w, h, px.Length);
                     return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump
                 });
@@ -3151,8 +3289,17 @@ public sealed class AppHost : IDisposable
         // HasActiveWork (FrameNeeded || HasPending) is true THIS frame and we fall through to Paint, whose
         // _runtime.Flush() applies the coalesced re-render. No lost-wakeup: Post enqueues before Wake, so a post that
         // arrives after this drain but before the gate still posted its own WM_NULL that re-wakes the loop next iteration.
-        bool minimized = IsMinimized;
-        bool restoreEdge = _wasMinimized && !minimized;
+        // Window lifecycle relay (AppHost.WindowStateChanged): one placement + visibility sample per frame, parked frames
+        // included, raised BEFORE the park gate so a minimize-to-tray handler hears the minimize in the frame it happened.
+        // A handler may hide/show/restore the window, so the park decision below reads a FRESH sample after it ran.
+        WindowStatus windowStatus = new(_window.State, _window.IsVisible);
+        if (_windowStateRelay.TryAdvance(windowStatus, out WindowStateChange windowChange))
+        {
+            WindowStateChanged?.Invoke(windowChange);
+            windowStatus = new(_window.State, _window.IsVisible);
+        }
+        bool minimized = windowStatus.Parked;   // "minimized" below means PARKED: minimized OR hidden (E2 — identical cost)
+        bool restoreEdge = _wasParked && !minimized;
         int restorePosts = 0, restoreTimers = 0;
         long restoreDrainT0 = 0;
         if (restoreEdge) { restorePosts = _uiPosts.Count; restoreTimers = _timers.Count; restoreDrainT0 = Stopwatch.GetTimestamp(); }
@@ -3187,7 +3334,7 @@ public sealed class AppHost : IDisposable
                 _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
         }
         long minimizedReactiveDeadline = 0;
-        if (_wasMinimized != minimized)
+        if (_wasParked != minimized)
         {
             // Window-visibility EDGE → update the Activation.IsActive signal so every component's UseIsActive flips and
             // UseActivation fires. On the minimize-ENTERING edge the gate below returns BEFORE Paint's reactive flush,
@@ -3198,9 +3345,15 @@ public sealed class AppHost : IDisposable
             OwningRenderThread?.WakeAsync();
             if (minimized) FlushHosted(ref minimizedReactiveDeadline);
         }
-        _wasMinimized = minimized;
+        _wasParked = minimized;
         if (minimized)
         {
+            // OS events stashed for app code (a second-launch redirect, a thumbnail-toolbar click, a Back/Forward command,
+            // explorer's taskbar-button re-creation) are normally re-raised at the top of Paint — which never runs while
+            // parked. Deliver them here, before the flush below, or a hidden tray app could never be woken by a second
+            // launch and a minimized one would sit on a thumbnail click until restored. The OS colour change stays with
+            // Paint: its handler feeds this frame's theme detection, which only Paint runs (it lands on the un-park frame).
+            DeliverPendingPlatformEvents(includeSystemColors: false);
             // The hoisted drain above ran, but Paint — the only _runtime.Flush() call site on the normal path — does not.
             // Flush here after a NON-EMPTY drain so the reactive pending queue does not simply become the new
             // accumulator: the posted signal writes are applied (memos recompute, effects run, components re-render into
@@ -3235,8 +3388,14 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) db = Probe(SegImages, db, dt);
             if (completed == 0)
             {
+                // E5 (design-engine-images.md): this IS the dominant elided turn for a real (non-headless-test) idle
+                // app — no reconcile, no layout, no Paint at all, so SubmitPresentOnRenderThread's own reclaim points
+                // never run either. A retired image sitting behind an already-signaled fence must not wait for the
+                // NEXT active frame (which may be seconds away at rest) to be released. Async gate off only — under
+                // Async/ForceSync the render thread owns every device touch and reclaims on its own turns instead.
+                if (!_asyncActive) _device.ReclaimCompletedUploads();
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
-                if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsMinimized); _wakeDiag.MaybeReport(); }
+                if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsParked); _wakeDiag.MaybeReport(); }
                 if (_memCensus is not null) _memCensus.MaybeReport();
                 if (s_allocTypes) AllocTypeProfiler.MaybeReport();
                 if (s_allocDiag)
@@ -3269,7 +3428,7 @@ public sealed class AppHost : IDisposable
         {
             // Awake frame: classify reconciled/layout-only/record-only from FrameStats (Rendered = reconciled||layoutNeeded).
             _wakeDiag.Record(wake, awake: true, rendered: painted.Rendered, reconciled: painted.ComponentsRendered > 0,
-                             laidOut: painted.Rendered, minimized: IsMinimized);
+                             laidOut: painted.Rendered, minimized: IsParked);
             _wakeDiag.MaybeReport();
         }
         if (_memCensus is not null) _memCensus.MaybeReport();
@@ -3280,13 +3439,24 @@ public sealed class AppHost : IDisposable
         return painted;
     }
 
-    /// <summary>True when the host window is minimized (PAL <see cref="Pal.WindowState.Minimized"/>) — frames run
-    /// while minimized are wasted work the wake diagnostics surface.</summary>
-    private bool IsMinimized => _window.State == FluentGpu.Pal.WindowState.Minimized;
+    /// <summary>True when nothing of the host window is on screen: minimized (PAL <see cref="Pal.WindowState.Minimized"/>)
+    /// OR hidden (<see cref="IPlatformWindow.IsVisible"/> false — a close-to-tray app). A parked host produces no frames:
+    /// no reconcile, layout, record or present, <c>UseIsActive</c> reads false, and the loop blocks on messages — the
+    /// minimized behaviour, now shared by the hidden window (<see cref="WindowStatus.Parked"/>). Live read of the window.</summary>
+    public bool IsParked => new WindowStatus(_window.State, _window.IsVisible).Parked;
+
+    /// <summary>Raised on the UI thread when the window's placement or visibility changed since the previous frame —
+    /// minimized, restored, maximized, hidden, shown (<see cref="WindowStateChange"/> carries both samples and the edge
+    /// flags). Sampled once per <see cref="RunFrame"/> after the pump, parked frames included, and raised before the
+    /// park gate, so a minimize-to-tray handler can <see cref="IPlatformWindow.Hide"/> the window in the frame it was
+    /// minimized. The first frame only seeds the relay. A handler may show, hide or restore the window; the host
+    /// re-samples before deciding whether this frame is parked.</summary>
+    public event Action<WindowStateChange>? WindowStateChanged;
 
     /// <summary>Recompute and publish the ambient window-visibility (<c>Activation.IsActive</c>): visible IFF not
-    /// minimized AND not app-suspended. Value-eq-gated by the signal, so a no-op write notifies nobody. UI-thread.</summary>
-    private void UpdateWindowVisible() => _windowVisible.Value = !IsMinimized && _windowActiveApp;
+    /// parked (minimized or hidden) AND not app-suspended. Value-eq-gated by the signal, so a no-op write notifies
+    /// nobody. UI-thread.</summary>
+    private void UpdateWindowVisible() => _windowVisible.Value = !IsParked && _windowActiveApp;
 
     /// <summary>App-side power suspend/resume hook (opt-in): the app wires <c>PowerSession.Suspending/Resumed</c> into
     /// this via <see cref="Post"/> (power callbacks arrive off-thread) to AND a suspend gate into window visibility, so
@@ -3299,6 +3469,44 @@ public sealed class AppHost : IDisposable
         _windowActiveApp = active;
         UpdateWindowVisible();
         WakeFrame();   // ensure the loop runs a frame so the UseActivation effects flush
+    }
+
+    /// <summary>Re-raise the OS events the PAL stashed for app code. Called at the top of <see cref="Paint"/> (before the
+    /// reactive flush, so a handler's signal writes render this same frame) and from <see cref="RunFrame"/>'s parked
+    /// branch (before its flush), because Paint never runs while the window is minimized or hidden. UI-thread only.</summary>
+    private void DeliverPendingPlatformEvents(bool includeSystemColors)
+    {
+        // Single-instance activation redirect: deliver a pending second-launch payload (set by the UI-thread
+        // ActivationRedirected subscription) to app code BEFORE the reactive flush, so any signal writes the handler
+        // makes are picked up by _runtime.Flush() and rendered this same frame. UI-thread only — no lock needed.
+        if (_pendingActivation is { } activation)
+        {
+            _pendingActivation = null;
+            ActivationRedirected?.Invoke(activation);
+        }
+        // OS color-settings change: deliver to app code BEFORE the flush (same rationale as activation above) so the
+        // handler's Tok.Use/SetAccent + RequestThemeTransition are picked up by THIS frame's theme detection + flush.
+        // Paint-only (includeSystemColors): theme detection is Paint's, so a parked window takes it on the un-park frame.
+        if (includeSystemColors && _pendingSystemColors)
+        {
+            _pendingSystemColors = false;
+            SystemColorsChanged?.Invoke();
+        }
+        if (_pendingThumbClick)
+        {
+            _pendingThumbClick = false;
+            ThumbButtonClicked?.Invoke(_pendingThumbButtonId);
+        }
+        if (_pendingAppNavigation)
+        {
+            _pendingAppNavigation = false;
+            AppNavigationCommand?.Invoke(_pendingAppNavigationWhich);
+        }
+        if (_pendingTaskbarButtonCreated)
+        {
+            _pendingTaskbarButtonCreated = false;
+            TaskbarButtonCreated?.Invoke();
+        }
     }
 
     /// <summary>Phases 3–12: flush reactive work, (scoped) re-layout, record, submit, present, effects. No pump — safe from WndProc.
@@ -3323,36 +3531,7 @@ public sealed class AppHost : IDisposable
         long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try
         {
-            // Single-instance activation redirect: deliver a pending second-launch payload (set by the UI-thread
-            // ActivationRedirected subscription) to app code BEFORE the reactive flush, so any signal writes the handler
-            // makes are picked up by _runtime.Flush() and rendered this same frame. UI-thread only — no lock needed.
-            if (_pendingActivation is { } activation)
-            {
-                _pendingActivation = null;
-                ActivationRedirected?.Invoke(activation);
-            }
-            // OS color-settings change: deliver to app code BEFORE the flush (same rationale as activation above) so the
-            // handler's Tok.Use/SetAccent + RequestThemeTransition are picked up by THIS frame's theme detection + flush.
-            if (_pendingSystemColors)
-            {
-                _pendingSystemColors = false;
-                SystemColorsChanged?.Invoke();
-            }
-            if (_pendingThumbClick)
-            {
-                _pendingThumbClick = false;
-                ThumbButtonClicked?.Invoke(_pendingThumbButtonId);
-            }
-            if (_pendingAppNavigation)
-            {
-                _pendingAppNavigation = false;
-                AppNavigationCommand?.Invoke(_pendingAppNavigationWhich);
-            }
-            if (_pendingTaskbarButtonCreated)
-            {
-                _pendingTaskbarButtonCreated = false;
-                TaskbarButtonCreated?.Invoke();
-            }
+            DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
@@ -3462,6 +3641,23 @@ public sealed class AppHost : IDisposable
             {
                 long deltaQpc = _palFrameClock.FrameQpc - _prevScrollFrameQpc;
                 if (deltaQpc < 0) deltaQpc = 0;
+                // A produced frame handed the SAME frame stamp as the previous one (the lattice slot was reused or lagged)
+                // used to give the kernel dt = 0: an awake body moved nothing that frame and never caught up — the
+                // `9.5 0.0 9.2` coast hitch. Credit the wall clock instead, in whole refresh intervals: two frames that
+                // really ran inside one vblank round to 0 and stay a no-op; a frame a refresh later gets its step.
+                long nowQpc = Stopwatch.GetTimestamp();
+                _scrollDtRepairedThisFrame = false;
+                if (deltaQpc == 0 && _prevScrollFrameQpc != 0 && _palFrameClock.RefreshQpc > 0)
+                {
+                    long wall = nowQpc - _prevScrollNowQpc;
+                    if (wall < 0) wall = 0;
+                    long refresh = _palFrameClock.RefreshQpc;
+                    long slots = (wall + refresh / 2) / refresh;
+                    deltaQpc = slots * refresh;
+                    _scrollDtRepairs++;
+                    _scrollDtRepairedThisFrame = slots > 0;
+                }
+                _prevScrollNowQpc = nowQpc;
                 long maxDeltaQpc = (long)(0.034 * Stopwatch.Frequency);
                 if (deltaQpc > maxDeltaQpc) deltaQpc = maxDeltaQpc;
                 scrollDtSec = (float)(deltaQpc / (double)Stopwatch.Frequency);
@@ -3482,7 +3678,10 @@ public sealed class AppHost : IDisposable
             _scrollSink.BeginFrame();          // reset the sink's own per-frame "really moved" latch (see its remarks) — sampled below, NOT the kernel's touched-count-based Summary.AnyMoved
             _scrollKernel.Tick(in scrollClock);
             _scrollSummary = _scrollKernel.Summary;
-            if (_scrollSummary.AnyDragOrBallistic) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
+            // Arm the UI frame budget for ANY live scroll motion — Drag, Ballistic AND a Driven wheel/programmatic glide
+            // (scroll fix S2): the wheel glide used to run ReRealizeVirtuals unbounded on the boundary-crossing frame
+            // after a notch because it is Driven|Wheel, not Drag/Ballistic, and that frame slipped a refresh.
+            if (_scrollSummary.AnyLiveMotion) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
 
             // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
             // content (an offset REALLY advanced THIS frame's tick) OR advanced LAST frame, a reconcile that lands
@@ -3658,7 +3857,7 @@ public sealed class AppHost : IDisposable
                 FlushHosted(ref reactiveDeadline);                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
                 _scrollKernel.Reclamp();                       // 5.5: mount-time Restore/Bind/SetFrame land before ReRealizeVirtuals sees them (§3.3 item 2)
                 long tRx1 = Stopwatch.GetTimestamp();
-                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while Drag/Ballistic (§4)
+                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while any live scroll motion incl. wheel/programmatic glides (§4, ScrollFrameSummary.AnyLiveMotion)
                 long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) FlushRebindsToQuiescence();   // bound-row rebinds (slot signal writes) land THIS frame — unbudgeted
                 long tRx2 = Stopwatch.GetTimestamp();
@@ -3804,7 +4003,7 @@ public sealed class AppHost : IDisposable
             // 7 eased hover/press: HoverT/PressT now driven by the engine's HoverFade/PressFade tracks (ticked in _anim.Tick above); InteractionAnimator deleted
             // 7 implicit BrushTransition: the cross-fade T is now driven by the unified engine (AnimChannel.BrushFade,
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
-            // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
+            // (TickTouchpad is gone — scroll phase events are posted to the kernel at dispatch and paced by its Tick; design §6/§12.)
             if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                 FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _traceInputKindMask,
                     _scrollKernel.ActiveCount > 0 || _scrollRouter.GestureActive);
@@ -3872,7 +4071,18 @@ public sealed class AppHost : IDisposable
                 // to escape Paint entirely. Route it into the SAME foreground recovery gate; a genuine (non-device-loss)
                 // decoder/upload bug still propagates. The backend soft-fails staging first, so this is the net, not the
                 // normal path (media-pipeline.md §4.1).
-                try { _images.Pump(_frameBudget.DeadlineTicks); }
+                //
+                // The pump gets its OWN minimum slice, not the bare realize deadline (scroll-feel 2026-09-16 W2-E1): the
+                // FrameBudget deadline is frameStart + 3 ms, and on a fling frame where flush + realize + layout + anim
+                // already spent it, DecodeScheduler.Pump checks the deadline BEFORE its first apply and applied ZERO
+                // images — covers landed only when the gesture stopped. max(deadline, now + 1.5 ms) keeps the realize
+                // budget's slice when it is still open and otherwise grants the pump 1.5 ms of its own, so every frame
+                // lands at least its head apply; the scroll per-frame caps (1 apply / 512 KiB) are unchanged. A disarmed
+                // budget (long.MaxValue, every steady frame) stays unbounded — the max never lowers it.
+                long imagePumpDeadline = _frameBudget.DeadlineTicks == long.MaxValue
+                    ? long.MaxValue
+                    : Math.Max(_frameBudget.DeadlineTicks, Stopwatch.GetTimestamp() + FluentGpu.Media.DecodeScheduler.PumpMinSliceTicks);
+                try { _images.Pump(imagePumpDeadline); }
                 catch (Exception ex)
                 {
                     if (!TryRecoverForegroundDeviceLost(ex, clicks)) throw;
@@ -3880,12 +4090,24 @@ public sealed class AppHost : IDisposable
                 }
             }
             if (_frameTime is not StopwatchFrameTimeSource) _images.Tick(dtMs); // fixed/manual headless time stays deterministic
+            // E1 (design-engine-images.md): every id whose CONTENT changed this pump (LQIP→full, baked-blur replace,
+            // a fresh decode landing) marks its owning node(s) paint-dirty, so the recorder's §13.1 block describes the
+            // landing as a per-node band instead of the host having to force a full frame for it. Idempotent for ids an
+            // ImageStatusChanged event already reached this frame (Mark is itself idempotent) — this sweep only catches
+            // the sites that advance ContentEpoch with no status event (RestartDecode/RestartDerived/blur upgrade).
+            // The OR'd return feeds `imageContentChanged` below: an id with no owning node (prefetch-only) cannot have
+            // changed any SUBMITTED draw-list bytes, so it must not defeat the skip-submit hash shortcut by itself.
+            bool anyImageNodeDirtied = false;
+            foreach (int id in _images.ContentChangedIds) anyImageNodeDirtied |= _reconciler.MarkImageDirty(id);
             // M5 (adreno-hang-fixes.md): VRAM-pressure eviction, Weak/UMA only. Once per frame, after the apply/tick
-            // maintenance, read the device LOCAL-segment usage and evict unpinned LRU when over 90% of budget so the
-            // tracked live set stays under the 128 MB UMA budget the UBWC hang is amplified by. Discrete GPUs never
-            // read VRAM here (short-circuits on IsWeak); TryGetVramUsage default-returns false so no per-frame alloc.
-            if (FluentGpu.Foundation.GpuProfile.IsWeak && _device.TryGetVramUsage(out long __vu, out long __vb) && __vb > 0 && __vu > __vb * 0.90)
-                _images.EvictToVramPressure(__vb, __vu);
+            // maintenance, read the device LOCAL-segment usage and evict unpinned LRU when the shed policy says so —
+            // armed above 90% of budget, disarmed below 80%, and re-fired only on a genuinely NEW sample after its
+            // cooldown (VramShedPolicy.cs): the device only refreshes its usage sample every 10 presents, so reacting
+            // on every frame re-shed the same stale overage for up to 10 frames straight, evicting entries a scroll
+            // immediately re-requested. Discrete GPUs never read VRAM here (short-circuits on IsWeak); TryGetVramUsage
+            // default-returns false so no per-frame alloc.
+            if (FluentGpu.Foundation.GpuProfile.IsWeak && _device.TryGetVramUsage(out long __vu, out long __vb) && _vramShed.Decide(__vu, __vb))
+                _vramShed.NoteShed(_images.EvictToVramPressure(__vb, __vu));
             long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -3967,8 +4189,17 @@ public sealed class AppHost : IDisposable
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             }
             else RecordPopupWindows(in focus, in textEdit, prepareOnly: true);
-            bool imageContentChanged = _recordedImageContentEpoch != _images.ContentEpoch;
-            _recordedImageContentEpoch = _images.ContentEpoch;
+            // E1 (design-engine-images.md): ImageContent is now the NAMED SURRENDER for the case the per-node path
+            // above cannot describe (more than 64 ids landed in one pump) — a normal landing is already described by
+            // MarkImageDirty's PaintDirty → the recorder's §13.1 band, so it does NOT force a full frame any more.
+            // imageContentChanged still has to defeat skip-submit below, but ONLY for a change that could touch the
+            // SUBMITTED draw-list bytes: a byte-identical LQIP→full-res swap on a LIVE node changes pixels under
+            // UNCHANGED command bytes, which the hash compare cannot see — anyImageNodeDirtied (above) is exactly that
+            // set. A changed id with no owning node (prefetch-only) has no draw op to go stale, so it must NOT block
+            // the elide — that is what keeps an off-screen landing's otherwise-idle frame skippable.
+            bool imageContentOverflow = _images.ContentChangedOverflow;
+            bool imageContentChanged = imageContentOverflow || anyImageNodeDirtied;
+            _images.ClearContentChanged();   // the ONE clear — read by both the MarkImageDirty sweep above and here first
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
             // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
             CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
@@ -4042,6 +4273,11 @@ public sealed class AppHost : IDisposable
                 // silent hole — a hole would make the pacing bucket look clean precisely when pacing is the fault.
                 _framePublishSeq = 0;
                 _framesSkippedSubmit++;
+                // E5: fence-only maintenance for the frame this branch just elided. Guarded on the async gate being
+                // OFF — under Async/ForceSync the render thread owns every device touch (threading-render-seam.md:
+                // "the render thread owns every ComPtr") and reclaims on its OWN skip/elided-record branches instead;
+                // calling this from the UI thread while that thread is live would be a cross-thread device touch.
+                if (!_asyncActive) _device.ReclaimCompletedUploads();
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmitDone = tSubmit = Stopwatch.GetTimestamp();
             }
@@ -4058,10 +4294,13 @@ public sealed class AppHost : IDisposable
                 // self-blur groups already use, decided here so the flag describes the frame being published.
                 // RepaintDamage (§13.1) rides the same seam. The recorder filled it from SCENE changes; the host folds in
                 // the invalidations only it can see — an untrustworthy target (first frame / resize / DPI / device
-                // recovery), a clear-color change under a byte-identical stream (theme switch), and the two classes whose
-                // PIXELS move with no dirty bit at all (an image whose content epoch advanced under identical commands,
-                // and live crossfades driven by ImageClockMs). The region is CONSUMED: it is the submitted
-                // FrameInfo.RepaintDamage, and an empty one is what lets a byte-identical frame elide its present.
+                // recovery) and a clear-color change under a byte-identical stream (theme switch) stay named-full
+                // surrenders. The two classes whose PIXELS move with no dirty bit at all — an image content landing and
+                // a live crossfade — are (design-engine-images.md E1) DESCRIBED as per-node rects instead of forcing
+                // full: MarkImageDirty already turned a landing into a recorder band (only an id COUNT overflow, more
+                // than 64 in one pump, still surrenders by name), and AddCrossfadeRepaint below turns every revealing id
+                // into its own node's band. The region is CONSUMED: it is the submitted FrameInfo.RepaintDamage, and an
+                // empty one is what lets a byte-identical frame elide its present.
                 // recordOnRender: the recorder runs on the render thread, so `recordStats` here is the PREVIOUS frame's
                 // imported feedback — its repaint region describes a frame that already presented and must NOT seed this
                 // one (it would pin every frame "dirty" and defeat the render-side elision). Seed only what the HOST can
@@ -4069,8 +4308,8 @@ public sealed class AppHost : IDisposable
                 RepaintDamageRegion repaint = recordOnRender ? default : recordStats.RepaintDamage;
                 if (!_repaintTargetValid || resized || Clear != _lastPublishedClear)
                     repaint.ForceFull(RepaintFullReason.TargetInvalidated);
-                if (imageContentChanged) repaint.ForceFull(RepaintFullReason.ImageContent);
-                if (_images.HasActiveCrossfades) repaint.ForceFull(RepaintFullReason.DetachedContent);
+                if (imageContentOverflow) repaint.ForceFull(RepaintFullReason.ImageContent);          // the named surrender survives, for >64 landings in one pump
+                if (_images.HasActiveCrossfades && !AddCrossfadeRepaint(ref repaint)) repaint.ForceFull(RepaintFullReason.DetachedContent);
                 _repaintTargetValid = true;
                 _lastPublishedClear = Clear;
                 // The STAT (not the submitted region). Under recordOnRender the frame's real repaint set is only known
@@ -4084,12 +4323,11 @@ public sealed class AppHost : IDisposable
                 var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll,
                                                repaint, DrawListHash: dlHash);
                 if (resized && keepAlive) _device.HintSettlePresent();
-                double gpuRenderMs = LastGpuRenderMs;
-                bool hasTargetProfile = _swapchain.TryGetGpuProfileSample(out _);
-                bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive
-                    && _swapchain.SupportsCompositedIntervalZero
-                    && hasTargetProfile   // preserves the A/B's explicit FG_GPU_TIMING opt-in without another target's sample
-                    && gpuRenderMs > 0.0 && gpuRenderMs <= ScrollPresentGpuBudgetMs;
+                // Scrolling is latency-sensitive. A composited swapchain's interval-0 Present is still tear-free because
+                // DWM owns the final composition, while interval 1 makes Present wait for the next vblank and can hold a
+                // freshly recorded offset behind an older frame. Keep ordinary content on the normal vsync path; only
+                // active scrolling gets the compositor's low-latency handoff.
+                bool interactivePresent = !keepAlive && scrollActive && _swapchain.SupportsCompositedIntervalZero;
                 // Keep the returned seq: it is this frame's identity across the seam, and the ONLY thing that lets a
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
                 if (recordOnRender)
@@ -4154,7 +4392,7 @@ public sealed class AppHost : IDisposable
                         if (_renderSeam.TryAcquire(out var rf))
                         {
                             if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
-                            else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
+                            else if (rf.InteractivePresent) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
                             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain); // 10 submit (own swapchain — primary host: _swapchain IS _primarySwapchain)
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
@@ -4228,8 +4466,26 @@ public sealed class AppHost : IDisposable
             bool hasGpuProfile = _swapchain.TryGetGpuProfileSample(out GpuProfileSample gpuProfile);
             bool gpuProfileFresh = hasGpuProfile && gpuProfile.Sequence != _lastGpuProfileStatsSequence;
             if (gpuProfileFresh) _lastGpuProfileStatsSequence = gpuProfile.Sequence;
+            // Gap discriminator, always-on (one branch per frame): while scroll is active, a raw inter-frame gap over
+            // 12 ms is split into the work this frame measured and the SLACK no phase accounts for. GC deltas landing
+            // in the gap vs the wait the loop last asked for tell "GC pause" / "wake model slept" / "pre-empted" apart —
+            // a 124 ms hole mid-drag with 2.8 ms of work and no GC otherwise goes unattributed.
+            float slackMs = 0f;
+            SlackCause slackCause = SlackCause.None;
+            float rawDtMs = _frameTime is StopwatchFrameTimeSource rawSrc ? rawSrc.LastRawDeltaMs : dtMs;
+            if (scrollActive && rawDtMs > 12f)
+            {
+                float workMs = (float)(ToMs(tFlush - frameStart) + ToMs(tLayout - tFlush) + ToMs(tAnim - tLayout) + ToMs(tRecord - tAnim) + ToMs(tSubmit - tRecord));
+                slackMs = MathF.Max(0f, rawDtMs - workMs);
+                if (slackMs >= 4f)
+                    slackCause = (gc0 | gc1 | gc2) != 0 ? SlackCause.Gc
+                        : _lastWaitMs > 0 && _lastWaitMs >= slackMs * 0.5f ? SlackCause.WakeSlept
+                        : SlackCause.Preempted;
+            }
             LastStats = new FrameStats(recordOnRender ? _lastRecordedCommandCount : _drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
+                SlackMs = slackMs,
+                SlackCause = slackCause,
                 NodesVisited = recordStats.NodesVisited,
                 NodesCulled = recordStats.NodesCulled,
                 DrawNodeCount = recordStats.DrawnNodeCount,
@@ -4281,6 +4537,8 @@ public sealed class AppHost : IDisposable
                 ImagePumpMs = ToMs(tImagePump - tAnim),            // of which: phase-7.5 decode apply/evict
                 ImageApplyCount = _images.LastPumpAppliedCount,
                 ImageApplyBytes = _images.LastPumpAppliedBytes,
+                DeferredImageUploads = _device.DeferredImageUploads,           // P0: budget-truncated upload drain turns (cumulative)
+                DeferredImageUploadBytes = _device.DeferredImageUploadBytes,
                 RealizeCatchupMs = ToMs(tRealizeCatchup - tImagePump), // of which: phase-7.6 re-realize + scoped relayout
                 SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present (total; ~0 on a skipped frame)
                 FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: submitting-thread wait for back-buffer retirement + latency waitable
@@ -4297,7 +4555,17 @@ public sealed class AppHost : IDisposable
                 GpuCompositeMs = hasGpuProfile ? gpuProfile.CompositeMs : 0.0,
                 Presented = !skipSubmit,
                 ScrollActive = scrollActive,
+                ScrollLiveMotion = _scrollSummary.AnyLiveMotion,
+                ScrollDeltaDip = _scrollSummary.MaxAbsDeltaDip,
+                WheelNotches = _scrollSummary.WheelNotches,
+                ScrollEdgePins = _scrollSummary.EdgePins,
+                ScrollStructuralDip = _scrollSummary.MaxAbsStructuralDip,
+                ScrollContactHeld = _scrollSummary.AnyContactHeld,
+                ScrollZeroReason = _scrollSummary.ZeroReason,
+                ScrollDtRepaired = _scrollDtRepairedThisFrame,
                 PublicationGaps = Interlocked.Read(ref _publicationGaps),
+                PacedUrgentBreaks = _pacingSource is null ? 0 : _pacingSource.PacedUrgentBreaks,   // P0: off-phase frames from urgent input
+                ProductionDeclines = _productionDeclines,                                          // P0: input updates that missed their tick
                 PresentedFrames = Interlocked.Read(ref _presentedFramesTotal),
                 MissedVsyncs = Interlocked.Read(ref _missedVsyncsTotal),
                 PublishSeq = _framePublishSeq,
@@ -4329,9 +4597,8 @@ public sealed class AppHost : IDisposable
                     (float)LastStats.FlushMs, (float)LastStats.LayoutMs, (float)LastStats.AnimMs,
                     (float)LastStats.RecordMs, (float)LastStats.SubmitMs, (float)LastStats.FenceWaitMs,
                     (float)LastStats.PresentMs, LastStats.MeasureCount, LastStats.TextShapeMisses, rawDt);
-                // Gap discriminator (note 113): most traced scroll hitches have SLACK — raw dt far exceeding the frame's
-                // measured work — meaning the loop wasn't running. GC-collection deltas vs the wait the loop last asked
-                // for split that into "GC pause" / "wake-model slept" / "externally preempted".
+                // Gap discriminator (note 113): the traced form of the always-on FrameStats.SlackMs/SlackCause split
+                // computed above — raw dt far exceeding the frame's measured work means the loop wasn't running.
                 float slack = rawDt - (float)(LastStats.FlushMs + LastStats.LayoutMs + LastStats.AnimMs + LastStats.RecordMs + LastStats.SubmitMs);
                 if (slack > 12f)
                 {

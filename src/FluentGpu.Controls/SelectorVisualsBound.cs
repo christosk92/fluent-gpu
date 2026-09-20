@@ -142,12 +142,14 @@ public static class SelectorVisualsBound
             AlignItems = FlexAlign.Center,
             Margin = new Edges4(ListRowMarginX, ListRowMarginY, ListRowMarginX, ListRowMarginY),
             Corners = Radii.ControlAll,
-            // Rest backplate BOUND to selection (the WinUI selected fill). Hover/Pressed stay static — they are
-            // resolved by the recorder's state-brush path, not the bind path, so they cannot carry a signal; the
-            // (subtle) selected-vs-unselected hover-ramp difference is dropped, the pill is the dominant cue.
+            // Rest/hover/pressed backplate all BOUND to selection — HoverFill/PressedFill are Prop channels the
+            // reconciler writes straight into the paint row (Element.cs:114-118), so the ramp can follow a recycled
+            // slot's selection without a remount. Same ramp as the recyclable twin (SelectorVisuals.BuildListRow):
+            // the unselected lane sits one step lighter than the selected rest plate, because WinUI's own
+            // unselected-hover value IS the selected-rest value and a hovered row would read as a second lit row.
             Fill = Prop.Of(() => isSel() ? Tok.FillSubtleSecondary : ColorF.Transparent),
-            HoverFill = Tok.FillSubtleSecondary,
-            PressedFill = Tok.FillSubtleTertiary,
+            HoverFill = Prop.Of(() => isSel() ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary),
+            PressedFill = Prop.Of(() => isSel() ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary),
             Opacity = Prop.Of(() => isEn() ? 1f : ItemContainer.DisabledOpacity),
             Focusable = false,                              // the ItemsView roving effect owns the single tab stop
             FocusVisualMargin = Edges4.All(1f),

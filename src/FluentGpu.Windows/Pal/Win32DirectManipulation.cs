@@ -70,8 +70,15 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// live INERTIA manipulation from the outside instead of riding its curve (see the class remarks and
     /// <see cref="HandleStatusChanged"/>). Flip this ONE constant — never a runtime knob — if hardware verification
     /// (dm-probe cell E, §5.6) finds the bare RUNNING→READY lift misbehaving (a stray post-lift
-    /// <c>WM_POINTERWHEEL</c>, a late/duplicated status callback, …).</summary>
-    private const bool UseOsInertiaStopFallback = false;
+    /// <c>WM_POINTERWHEEL</c>, a late/duplicated status callback, …).
+    ///
+    /// bug-B/A0 (Wavee handoff `docs/plans/wavee/wavee-0.3-bug-handoff-2026-09-15.md` §8.0/§8.2): this same arm is
+    /// ALSO the candidate mitigation for the "flick gets ignored" report — a contact landing while DM is still
+    /// parked in a stale INERTIA gets stranded as plain pointer messages (DM only reaches READY, and re-hit-tests,
+    /// on the NEXT contact, not on the lift). `Stop()` at the INERTIA edge would return DM to READY at once. NOT
+    /// flipped here: it needs the dm-probe cell-F run (a real touchpad) to confirm, per that document — do not flip
+    /// on code-read confidence alone.</summary>
+    private const bool UseOsInertiaStopFallback = true;
 
     // ── DIRECTMANIPULATION_CONFIGURATION flags (directmanipulation.h), verified against the dm-probe cell-B PASS ──
     //   Primary: INTERACTION|TRANSLATION_X|TRANSLATION_Y|SCALING — NO TRANSLATION_INERTIA/SCALING_INERTIA (§5.2: PTP

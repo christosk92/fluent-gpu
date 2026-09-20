@@ -12,6 +12,10 @@ namespace FluentGpu.Windows.Wasapi;
 /// </summary>
 public static class WasapiPcm
 {
+    /// <summary>Read active render endpoints and the current console default from Windows, off the audio thread.
+    /// An unavailable audio service returns an empty list; this never substitutes a remembered preference.</summary>
+    public static WasapiEndpointInfo[] EnumerateEndpoints() => WasapiEndpoints.Enumerate();
+
     /// <summary>Probe the default render endpoint's shared-mode mix format (rate/stereo), or a 48k/stereo fallback if no
     /// device is available.</summary>
     public static MixFormat ProbeFormat()

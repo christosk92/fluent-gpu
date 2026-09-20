@@ -277,4 +277,22 @@ public sealed class GeneratorTests
         Assert.DoesNotContain("ModuleInitializer", gen);                          // but NO neutral registration
         Assert.DoesNotContain("RegisterNeutral", gen);
     }
+
+    [Fact]
+    public void LocalizationKeysGenerator_FLLOC004_On_Satellite_Missing_Key()
+    {
+        var (_, diags) = Harness.Generate(new LocalizationKeysGenerator(), "",
+            ("assets/loc/en-US.json", "{\"dialog\":{\"ok\":\"OK\",\"cancel\":\"Cancel\"}}"),
+            ("assets/loc/nl.json", "{\"dialog\":{\"ok\":\"OK\"}}"));
+        Assert.Contains(diags, d => d.Id == "FLLOC004");
+    }
+
+    [Fact]
+    public void LocalizationKeysGenerator_FLLOC006_On_Satellite_Extra_Key()
+    {
+        var (_, diags) = Harness.Generate(new LocalizationKeysGenerator(), "",
+            ("assets/loc/en-US.json", "{\"dialog\":{\"ok\":\"OK\"}}"),
+            ("assets/loc/nl.json", "{\"dialog\":{\"ok\":\"OK\",\"nope\":\"x\"}}"));
+        Assert.Contains(diags, d => d.Id == "FLLOC006");
+    }
 }

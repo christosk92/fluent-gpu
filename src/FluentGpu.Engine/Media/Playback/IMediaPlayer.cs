@@ -136,6 +136,12 @@ public interface IMediaPlayer : IAsyncDisposable
 
     /// <summary>Open a source (the general form; multiple concurrent voices, not a single SetSource).</summary>
     ValueTask OpenAsync(MediaSource source, CancellationToken ct = default);
+    /// <summary>Open a source with the caller's open options — chiefly WHERE it opens
+    /// (<see cref="MediaOpenOptions.StartPosition"/>) and whether it starts paused. A backend that honours the start
+    /// position fetches and presents from it directly (the protected path never shows 0:00 first); options the caller
+    /// leaves unset (buffering, network, ABR, license relay) fall back to the player's own. An implementation that cannot
+    /// honour a start position opens at zero.</summary>
+    ValueTask OpenAsync(MediaSource source, MediaOpenOptions options, CancellationToken ct = default) => OpenAsync(source, ct);
     /// <summary>Enqueue a source to play after the current one.</summary>
     void Enqueue(MediaSource next);
     /// <summary>Explicitly preroll the next source (spec §8.4).</summary>

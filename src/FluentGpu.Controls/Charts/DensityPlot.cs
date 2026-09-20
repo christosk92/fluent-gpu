@@ -84,9 +84,10 @@ public static class DensityPlot
     /// is keyed on the values ARRAY, so key your inputs on content, not on list identity.</summary>
     public static int GeometryBuilds { get; internal set; }
 
-    /// <summary>The stage width is snapped DOWN to this grid before geometry is authored: the measured width is what
-    /// the parent offered, so rounding UP would author layers wider than the stage (and sub-pixel wobble must not
-    /// re-mint geometry).</summary>
+    /// <summary>The measured-width quantum handed to <c>UseMeasuredWidth</c>: the hook rounds the stage width to this
+    /// grid BEFORE its exact-compare signal write, so sub-quantum layout wobble never reaches the component at all (no
+    /// re-render, let alone a re-minted geometry). The render then steps half a quantum DOWN from that rounded value,
+    /// because the measured width is what the parent offered and a layer must never be wider than the stage.</summary>
     public const float WidthQuantum = 4f;
 
     internal sealed record Props(DensityPlotModel Model, Style Style);
@@ -102,9 +103,12 @@ internal sealed class DensityPlotComponent : Component
         var p = UseProps<DensityPlot.Props>();
         var m = p.Model;
         var st = p.Style;
-        // Snapped DOWN to the 4 DIP grid (the hook itself ROUNDS, which could author a layer up to 2 DIP wider than the
-        // stage); sub-quantum layout wobble re-renders cheaply but never changes the geometry key below.
-        float w = MathF.Floor(UseMeasuredWidth(0f).Value / DensityPlot.WidthQuantum) * DensityPlot.WidthQuantum;
+        // The hook rounds the measured width to the 4 DIP grid before it writes, so a sub-quantum wobble is coalesced at
+        // the signal and this render never runs for it (with quantum 0 every wobble re-rendered the whole chart: the
+        // bands, six layers and the axis — cheap per frame, but per frame). Round-to-nearest can land up to Quantum/2
+        // ABOVE the stage's true width, and a layer must never be wider than the stage, so step half a quantum down:
+        // w ∈ (stage − Quantum, stage], the same band the old floor snap produced, and just as stable a geometry key.
+        float w = MathF.Max(0f, UseMeasuredWidth(DensityPlot.WidthQuantum).Value - DensityPlot.WidthQuantum * 0.5f);
         bool dots = m.RugDotMax > 0 && m.Values.Length <= m.RugDotMax;
         int rugMode = m.RugDotMax <= 0 ? 0 : dots ? 1 : 2;
 

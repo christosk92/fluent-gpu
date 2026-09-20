@@ -59,10 +59,14 @@ public readonly record struct ImageHandle(int Id)
 
 /// <summary>Forwards decoded PREMULTIPLIED BGRA8 pixels to the GPU backend. The span is valid only for the duration of
 /// the synchronous call (it is never stored — the backend copies it into its upload heap), so the cache need not own
-/// pixel memory: it flows decoder → cache.Pump → host sink → IGpuDevice.UploadImage in one stack.</summary>
+/// pixel memory: it flows decoder → cache.Pump → host sink → IGpuDevice.UploadImage in one stack. Under the async
+/// render thread the host sink may instead TAKE the buffer behind the span — <c>Media.DecodeScheduler.TryTakeDecodeBuffer</c>
+/// transfers ownership of the scheduler's pooled decode buffer for exactly the span it loaned — so no second copy is
+/// made on the UI thread; the cache stays uninvolved (the span contract here is unchanged, the loan is the scheduler's).</summary>
 public delegate void ImageReadyHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
 
-/// <summary>Admission-aware variant of <see cref="ImageReadyHandler"/>. The span has the same call-scoped lifetime.</summary>
+/// <summary>Admission-aware variant of <see cref="ImageReadyHandler"/>. The span has the same call-scoped lifetime and
+/// the same take-instead-of-copy option (<c>Media.DecodeScheduler.TryTakeDecodeBuffer</c>).</summary>
 public delegate ImageUploadResult ImageUploadAttemptHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
 
 /// <summary>The decode seam: the portable cache asks a leaf to decode a source to a target size, off the UI thread.
@@ -81,6 +85,11 @@ public interface IImageDecoder
     /// <summary>While true, per-frame GPU upload applies are throttled (scroll-scoped fence-stall guard). Default no-op
     /// for decoders without an upload stage (headless fakes).</summary>
     bool ScrollThrottled { get => false; set { } }
+    /// <summary>True on a weak/UMA GPU tier — set once by <see cref="ImageCache"/>'s ctor <c>weak:</c> argument and
+    /// forwarded here, never read from <c>GpuProfile</c> directly by a decoder (adreno-hang-fixes.md M0), so the
+    /// cadence it drives (<see cref="Media.DecodeScheduler.WeakTier"/>) stays exercisable headlessly. Default no-op
+    /// for decoders without a weak-tier cadence (headless fakes).</summary>
+    bool WeakTier { get => false; set { } }
     /// <summary>Number of decoded images applied by the most recent <see cref="Pump"/>.</summary>
     int LastPumpAppliedCount => 0;
     /// <summary>Decoded pixel bytes applied by the most recent <see cref="Pump"/>.</summary>
@@ -143,6 +152,13 @@ public sealed class ImageCache
         // decode still sees WasReady==false there and keeps its authored fade, even under a synchronous test decoder
         // that lands well inside InstantRevealWindowMs).
         public bool WasReady;
+        // Clock (ms) at which this entry MOST RECENTLY became Ready — refreshed on every Ready landing (a fresh
+        // decode, a bake, a bake-quality upgrade), never on a byte-accounting-only touch. EvictOneLru's minReadyAgeMs
+        // reads this to give a just-landed texture a grace window before VRAM-pressure relief can shed it again
+        // (E4, ImageCache.ReadyGraceMs) — otherwise a landing that pushed VRAM over the arm ratio evicts on the very
+        // next frame, re-requests on the next scroll tick, and re-lands into the same pressure (the eviction loop
+        // adreno-hang-fixes.md documents). 0 for an entry that has never been Ready.
+        public float ReadyMs;
         public bool Derived;
         public int SourceId;
         public int BakeTargetW, BakeTargetH;
@@ -192,6 +208,12 @@ public sealed class ImageCache
     /// out while the new one fades in lets whatever sits behind the image (a placeholder tile, the page) show through
     /// mid-dissolve — a dip for exactly the opaque artwork this exists for. Not an <see cref="Easing"/> value.</summary>
     public const int SwapOutgoingEasing = -1;
+    /// <summary>Grace window (ms) a freshly-Ready entry is exempt from VRAM-pressure relief (E4,
+    /// <see cref="EvictToVramPressure"/>) — long enough that the texture that just pushed VRAM over the arm ratio
+    /// is not itself the first thing shed, which was the whole loop: evict → re-request on the next scroll tick →
+    /// re-land → evict again (adreno-hang-fixes.md M5). <see cref="EvictToBudget"/> (the ordinary byte-budget path)
+    /// is unaffected — it keeps 0 ms, because it must always be able to reach its cap.</summary>
+    internal const float ReadyGraceMs = 2000f;
 
     private readonly Dictionary<SourceKey, int> _byKey = new();
     // Source → the newest entry of that source (any decode size); older sizes chain through Entry.PrevSameSource.
@@ -235,8 +257,33 @@ public sealed class ImageCache
     // since (∃e: clockMs<deadlineₑ) ⟺ (clockMs < maxₑ deadlineₑ). The max only goes stale if a still-fading entry is
     // evicted; the evict path recomputes it then (rare — evicting an unpinned mid-fade image), keeping the getter O(1).
     private int _pendingCount;
+    // O(1) maintained mirror of the former ReadyCount scan (E8): incremented at every transition INTO Ready (a fresh
+    // decode landing, a bake completing), decremented at every transition OUT of Ready (LRU eviction, a device-lost
+    // RestartDecode/RestartDerived, an async upload rejection). Tombstones are never reclaimed from _byId, so this
+    // counts the LIVE Ready set only — never the historical id count.
+    private int _readyCount;
     private float _maxCrossfadeDeadlineMs = float.NegativeInfinity;
     private float _clockMs;   // monotonic ms clock for cross-fade timing (advanced by Tick once per painted frame)
+    // E1: ids whose CONTENT changed this pump cycle (a restart, a bake landing, an upload rejection — every site that
+    // used to just bump ContentEpoch) without a corresponding ImageStatusChanged event describing them to the host's
+    // dirty-marking pass. AppHost folds these into MarkImageDirty each pump, then clears via ClearContentChanged —
+    // the ONE clear site, on both the skip and submit branches. Fixed capacity: a landing burst past it sets the
+    // overflow flag instead of growing, and AppHost's over-inclusion fallback (ForceFull(ImageContent)) covers it.
+    private readonly int[] _contentChanged = new int[64];
+    private int _contentChangedCount;
+    private bool _contentChangedOverflow;
+    // E1: ids with a live crossfade — appended by NoteCrossfadeDeadline (BeginReveal's reveal, BeginSwap's outgoing
+    // hold). RevealingIds prunes settled ids IN PLACE on every read (the host reads it once per pump to describe
+    // crossfade repaint rects), so the array only ever holds ids someone still needs to know about.
+    private readonly int[] _revealing = new int[128];
+    private int _revealingCount;
+    private bool _revealingOverflow;
+    // E7: a PINNED (Refs>0) entry can go GpuResourceExhausted and then never self-heal — Pin/Request only run again
+    // on a remount, which a realized on-screen node does not do. Set true wherever such a failure lands
+    // (DrainAsyncRejections, OnDecodeComplete); Pump's RetryPinnedExhausted scans and restarts every matching entry
+    // once RestartBackoffMs has passed since the last failure/scan, then clears the flag.
+    private bool _exhaustedPinnedSeen;
+    private float _lastExhaustedScanMs;
     private const int BlurW = 32, BlurH = 32;
     private readonly byte[] _blurScratch = new byte[BlurW * BlurH * 4];   // reused (UI thread only) for LQIP decode
 
@@ -278,7 +325,11 @@ public sealed class ImageCache
 
     /// <param name="derivedSoftBudgetBytes">Soft cap on derived/blur bytes; 0 ⇒ the discrete default. Supplied by the
     /// host from <see cref="GpuMemoryBudgets"/> rather than read from <c>GpuProfile</c> here — see the field.</param>
-    public ImageCache(IImageDecoder decoder, long budgetBytes = 96L * 1024 * 1024, long derivedSoftBudgetBytes = 0)
+    /// <param name="weak">The tier decision, made ONCE by the host from <see cref="GpuMemoryBudgets"/> and handed
+    /// down (never read from <c>GpuProfile</c> here — see <see cref="DerivedSoftBudgetBytes"/>'s remark for why that
+    /// matters). Forwarded to the decoder's <see cref="IImageDecoder.WeakTier"/> so its upload cadence (E2) tracks
+    /// the same decision without a second read.</param>
+    public ImageCache(IImageDecoder decoder, long budgetBytes = 96L * 1024 * 1024, long derivedSoftBudgetBytes = 0, bool weak = false)
     {
         _decoder = decoder;
         _budgetBytes = budgetBytes;
@@ -287,7 +338,14 @@ public sealed class ImageCache
         _onPixels = OnPixels;
         _pixelSink = _noPixels;
         _evictSink = _noEvict;
+        IsWeakTier = weak;
+        _decoder.WeakTier = weak;
     }
+
+    /// <summary>The tier this cache was constructed for — forwarded to <see cref="IImageDecoder.WeakTier"/> (E2's
+    /// upload cadence) instead of read from the process-global <c>GpuProfile.IsWeak</c>, which is always false
+    /// headlessly and lands too late in production (see the ctor's <c>weak</c> parameter).</summary>
+    public bool IsWeakTier { get; }
 
     /// <summary>The host wires this to <c>IGpuDevice.UploadImage</c>; the cache forwards each decode's pixels through it
     /// during <see cref="Pump"/> (transiently — the sink must copy, not store). Set once at composition.</summary>
@@ -327,8 +385,55 @@ public sealed class ImageCache
     /// that is always false outside a real device.</summary>
     public long DerivedBudgetBytes => DerivedSoftBudgetBytes;
     public int Count => _byId.Count;
-    public int ReadyCount { get { int n = 0; foreach (var e in _byId.Values) if (e.State == ImageState.Ready) n++; return n; } }
+    public int ReadyCount => _readyCount;
     public int ContentEpoch { get; private set; }
+    /// <summary>Ids whose content changed this pump cycle without their own <see cref="ImageStatusChanged"/> event
+    /// (E1) — a restart, a bake landing, an upload rejection. The host folds these into its per-node dirty marking
+    /// each pump, then MUST call <see cref="ClearContentChanged"/> (the only clear site). Overflows past 64 in one
+    /// pump set <see cref="ContentChangedOverflow"/> instead of growing.</summary>
+    internal ReadOnlySpan<int> ContentChangedIds => _contentChanged.AsSpan(0, _contentChangedCount);
+    /// <summary>True when more than 64 ids changed content in one pump cycle — the host's named-full surrender
+    /// (<c>RepaintFullReason.ImageContent</c>) instead of an itemized per-node describe.</summary>
+    internal bool ContentChangedOverflow => _contentChangedOverflow;
+    /// <summary>The only clear site for <see cref="ContentChangedIds"/>/<see cref="ContentChangedOverflow"/> — called
+    /// by the host once it has folded this cycle's ids into its dirty marking, on both the skip and submit branches.</summary>
+    internal void ClearContentChanged()
+    {
+        _contentChangedCount = 0;
+        _contentChangedOverflow = false;
+    }
+
+    /// <summary>Ids with a still-live crossfade (a reveal in progress, or an outgoing swap-hold) — E1's per-node
+    /// alternative to a full-frame <c>DetachedContent</c> force. Settled ids are pruned (and the backing array
+    /// compacted) on every read, so the host can call this once per pump and get exactly the still-fading set.</summary>
+    internal ReadOnlySpan<int> RevealingIds
+    {
+        get
+        {
+            int w = 0;
+            for (int r = 0; r < _revealingCount; r++)
+            {
+                int id = _revealing[r];
+                if (!_byId.TryGetValue(id, out var e)) continue;   // can't happen (tombstones survive) — defensive drop
+                bool hasSwapHold = e.SwapHoldUntilMs > float.NegativeInfinity;
+                if (float.IsNaN(e.TextureMs) && !hasSwapHold) continue;   // no active reveal, no outgoing hold — settled
+                float textureDeadline = float.IsNaN(e.TextureMs) ? float.NegativeInfinity : e.TextureMs + e.RevealMs;
+                float deadline = MathF.Max(textureDeadline, e.SwapHoldUntilMs);
+                if (deadline < _clockMs) continue;                        // settled
+                _revealing[w++] = id;
+            }
+            _revealingCount = w;
+            // Compaction freed room, so a stale overflow (set the last time the array was genuinely full) no longer
+            // describes the current state — a fresh overflow can only be re-armed by a later AddRevealing.
+            if (w < _revealing.Length) _revealingOverflow = false;
+            return _revealing.AsSpan(0, w);
+        }
+    }
+    /// <summary>True when more than 128 crossfades were concurrently live at some point since the last
+    /// <see cref="RevealingIds"/> read that had room to compact — the host's named-full surrender
+    /// (<c>RepaintFullReason.DetachedContent</c>) instead of an itemized per-node describe.</summary>
+    internal bool RevealingOverflow => _revealingOverflow;
+
     /// <summary>Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).</summary>
     public int PendingCount => _pendingCount;
     /// <summary>True when decoded results are ready to apply on the UI thread. In-flight network/decode work does not
@@ -608,6 +713,24 @@ public sealed class ImageCache
         return Easings.Ease((Easing)fadeEasing, t);
     }
 
+    /// <summary>E1: bump <see cref="ContentEpoch"/> AND note <paramref name="id"/> in <see cref="ContentChangedIds"/> —
+    /// replaces every bare <c>ContentEpoch++</c> site so the host can describe the landing with a per-node repaint
+    /// rect instead of forcing a full frame. Fixed capacity; past it, <see cref="ContentChangedOverflow"/> covers it.</summary>
+    private void NoteContentChanged(int id)
+    {
+        ContentEpoch++;
+        if (_contentChangedCount < _contentChanged.Length) _contentChanged[_contentChangedCount++] = id;
+        else _contentChangedOverflow = true;
+    }
+
+    /// <summary>E1: note <paramref name="id"/> in <see cref="RevealingIds"/>. Fixed capacity; past it,
+    /// <see cref="RevealingOverflow"/> covers it.</summary>
+    private void AddRevealing(int id)
+    {
+        if (_revealingCount < _revealing.Length) _revealing[_revealingCount++] = id;
+        else _revealingOverflow = true;
+    }
+
     // `id` + `cause` are carried for the trace only (a reveal is exactly the "flashed back in" the user sees, so which
     // texture started it — the blurhash LQIP, the full decode, a baked derivative — is the whole question).
     void BeginReveal(Entry e, int id, string cause)
@@ -645,7 +768,7 @@ public sealed class ImageCache
             // more visible than the fade it was avoiding. Give it a half-length fade instead.
             e.RevealMs *= ScrollRevealScale;
         }
-        NoteCrossfadeDeadline(e);
+        NoteCrossfadeDeadline(id, e);
     }
 
     /// <summary>Placeholder→image reveal progress 0..1, eased by the image's <see cref="ImageTransition"/> from when its
@@ -663,12 +786,18 @@ public sealed class ImageCache
     public bool HasActiveCrossfades => _clockMs < _maxCrossfadeDeadlineMs;
 
     /// <summary>Fold an entry's reveal deadline (TextureMs+Dur) into the high-water max — called wherever TextureMs is
-    /// set. Disabled reveals (Dur==0) and NaN TextureMs don't contribute (mirrors the scan's guards exactly).</summary>
-    private void NoteCrossfadeDeadline(Entry e)
+    /// set. Disabled reveals (Dur==0) and NaN TextureMs don't contribute to the max (mirrors the scan's guards
+    /// exactly), but <paramref name="id"/> is unconditionally noted into <see cref="RevealingIds"/> (E1) — a swap's
+    /// outgoing hold (<see cref="BeginSwap"/>) has no enabled Transition of its own yet still needs tracking, and
+    /// <see cref="RevealingIds"/>'s own read-time prune is what actually decides when an id drops out.</summary>
+    private void NoteCrossfadeDeadline(int id, Entry e)
     {
-        if (!e.Transition.Enabled || float.IsNaN(e.TextureMs)) return;
-        float deadline = e.TextureMs + e.RevealMs;
-        if (deadline > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = deadline;
+        if (e.Transition.Enabled && !float.IsNaN(e.TextureMs))
+        {
+            float deadline = e.TextureMs + e.RevealMs;
+            if (deadline > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = deadline;
+        }
+        AddRevealing(id);
     }
 
     /// <summary>Force an entry's placeholder→image reveal to its settled (<see cref="CrossFadeOf"/>==1) state — used by
@@ -715,8 +844,12 @@ public sealed class ImageCache
     {
         float start = _clockMs;
         float until = start + MathF.Max(0f, durationMs);
-        if (_byId.TryGetValue(outgoing.Id, out var e) && until > e.SwapHoldUntilMs) e.SwapHoldUntilMs = until;
-        if (until > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = until;
+        if (_byId.TryGetValue(outgoing.Id, out var e))
+        {
+            if (until > e.SwapHoldUntilMs) e.SwapHoldUntilMs = until;
+            if (until > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = until;
+            NoteCrossfadeDeadline(outgoing.Id, e);   // E1: track the outgoing hold in RevealingIds too
+        }
         return start;
     }
 
@@ -755,8 +888,12 @@ public sealed class ImageCache
         return new ImageHandle(best);
     }
 
-    /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.</summary>
-    public void Pin(ImageHandle h)
+    /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.
+    /// <paramref name="priority"/> is the lane the pinning node REQUESTED at (W2-E3): a still-Pending entry is
+    /// re-prioritized to it — Visible promotes an overscan/prefetch decode, Overscan leaves an Overscan-lane decode where
+    /// the reconciler queued it (the scheduler's Prioritize is raise-only, so a pin can never demote). Before this every
+    /// pin forced Visible, which silently undid the reconciler's lane choice one line after the request.</summary>
+    public void Pin(ImageHandle h, ImagePriority priority = ImagePriority.Visible)
     {
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
@@ -772,9 +909,25 @@ public sealed class ImageCache
             else if (e.State == ImageState.Pending) TryQueueDerived(h.Id, e);
             else if (e.State == ImageState.Ready) TryQueueDerivedUpgrade(h.Id, e);
         }
-        else if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
-        else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
+        else if (ShouldRestart(e, priority)) RestartDecode(h.Id, e, priority);
+        else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, priority);
     }
+
+    /// <summary>W2-E3: raise a still-Pending decode to <paramref name="priority"/>'s lane — the reconciler calls it for a
+    /// row that was realized in the overscan halo and has just scrolled into the visible band. No ref change, no restart;
+    /// a no-op for a settled or derived entry (and the scheduler's Prioritize is itself raise-only and claim-deduped).</summary>
+    public void Promote(ImageHandle h, ImagePriority priority)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e) || e.Derived) return;
+        if (e.State == ImageState.Pending) { _decoder.Prioritize(h.Id, priority); return; }
+        // An off-screen request the scheduler DROPPED under backpressure (Begin returned false ⇒ a None / Canceled
+        // tombstone; a pin at the same lane is dropped again) is restarted at the promoted lane while a node still holds
+        // it — otherwise the cover would stay blank until the row happened to re-render. Anything else (Ready, a real
+        // failure under its backoff) is left alone.
+        if (e.Refs > 0 && (e.State == ImageState.None || (e.State == ImageState.Failed && e.Failure == ImageFailureKind.Canceled)))
+            RestartDecode(h.Id, e, priority);
+    }
+
     public void Unpin(ImageHandle h)
     {
         if (!_byId.TryGetValue(h.Id, out var e) || e.Refs <= 0) return;
@@ -790,6 +943,12 @@ public sealed class ImageCache
         if (e.State == ImageState.Failed)
         {
             if (e.Failure == ImageFailureKind.Canceled) return true;
+            // Refs==0 stays required here: a realized on-screen node never calls Request/Pin again on its own once
+            // mounted, so this branch only ever fires from an actual unmount+remount. E7's pinned-retry story is
+            // delivered by Pump's RetryPinnedExhausted sweep instead (it calls RestartDecode directly, bypassing
+            // ShouldRestart) — NOT by loosening this check, which a realized node re-rendering (a plain Request()
+            // hit while still pinned, no remount) would otherwise hit on every frame; 45b's "still pinned: no retry
+            // loop" gate pins exactly that this stays a no-op.
             if (e.Failure == ImageFailureKind.GpuResourceExhausted && e.Refs == 0) return true;
             if (e.Failure == ImageFailureKind.Decode && (e.Refs > 0 || priority == ImagePriority.Visible))
                 return true;   // stale disk poison / transient codec miss — backoff applied in RestartDecode
@@ -811,9 +970,11 @@ public sealed class ImageCache
     /// <para>Also restarts <see cref="ImageFailureKind.GpuResourceExhausted"/> entries. The dying device's last drain
     /// REJECTS every upload it was handed (the store soft-fails its creates rather than throwing past the render seam),
     /// so a device-loss window leaves a batch of entries Failed-exhausted, not Ready — without this they would stay blank
-    /// until something remounted them, and a PINNED one never retries at all (ShouldRestart requires Refs == 0). The
-    /// rebuilt device has a fresh, empty texture store, so "GPU could not admit it" is by construction no longer true.
-    /// Their Bytes are already 0, so the byte-accounting undo is a no-op for them.</para></summary>
+    /// until something remounted them. (E7: a PINNED exhausted entry is no longer stuck forever even without this call
+    /// — Pump's RetryPinnedExhausted sweep gets to it within one RestartBackoffMs window — but a device-lost recovery
+    /// still wants every resident id re-decoded in one pass rather than waiting out that backoff one entry at a time.)
+    /// The rebuilt device has a fresh, empty texture store, so "GPU could not admit it" is by construction no longer
+    /// true. Their Bytes are already 0, so the byte-accounting undo is a no-op for them.</para></summary>
     public void ReRealizeAllResident()
     {
         foreach (var (id, e) in _byId)
@@ -845,6 +1006,9 @@ public sealed class ImageCache
         // ends up permanently full. Upgrades already cap at 3 attempts (TryQueueDerivedUpgrade); initial bakes had no
         // limiter at all. Re-baking a READY derivative (the retheme/evict path) is unaffected — only Failed is gated.
         if (e.State == ImageState.Failed && _clockMs - e.LastRestartMs < RestartBackoffMs) return;
+        // E8: this can restart an entry that is currently Ready (ReRealizeAllResident's device-lost pass) — leaving
+        // Ready is a ReadyCount decrement wherever it happens, this restart included.
+        if (e.State == ImageState.Ready) _readyCount--;
         e.LastRestartMs = _clockMs;
         e.RequestedMs = _clockMs;
         e.State = ImageState.Pending;
@@ -857,7 +1021,7 @@ public sealed class ImageCache
         e.BakeQuality = BakedBlurQueue.Quality.Minimal;
         e.BakeGeneration++;
         _pendingCount++;
-        ContentEpoch++;
+        NoteContentChanged(id);
         TryQueueDerived(id, e);
     }
 
@@ -920,7 +1084,12 @@ public sealed class ImageCache
                 Diag.Event("img", $"restart id={id} src={DiagSourceTail(e.Key.Source)} verdict=prioritize prio={priority}");
             _decoder.Prioritize(id, priority); return;
         }
-        if (e.State == ImageState.Failed && (IsTransientFailure(e.Failure) || e.Failure == ImageFailureKind.Decode)
+        // E7: GpuResourceExhausted now backs off the same as a transient/decode failure — a safety net for every
+        // caller of RestartDecode on an exhausted entry (an unpin+re-pin remount via ShouldRestart, a device-lost
+        // ReRealizeAllResident pass, Pump's RetryPinnedExhausted sweep), so none of them can re-Begin faster than
+        // RestartBackoffMs even if called back-to-back.
+        if (e.State == ImageState.Failed
+            && (IsTransientFailure(e.Failure) || e.Failure is ImageFailureKind.Decode or ImageFailureKind.GpuResourceExhausted)
             && _clockMs - e.LastRestartMs < RestartBackoffMs)
         {
             if (trace)
@@ -930,6 +1099,9 @@ public sealed class ImageCache
         if (trace)
             Diag.Event("img", $"restart id={id} src={DiagSourceTail(e.Key.Source)} verdict=begin " +
                 $"decode={e.Key.W}x{e.Key.H} prio={priority} from={e.State} fail={e.Failure} refs={e.Refs}");
+        // E8: this can restart an entry that is currently Ready (ReRealizeAllResident's device-lost pass) — leaving
+        // Ready is a ReadyCount decrement wherever it happens, this restart included.
+        if (e.State == ImageState.Ready) _readyCount--;
         e.LastRestartMs = _clockMs;
         e.RequestedMs = _clockMs;
         e.State = ImageState.Pending;
@@ -940,7 +1112,7 @@ public sealed class ImageCache
         e.TextureMs = float.NaN;
         _pendingCount++;
         _totalRequested++;
-        ContentEpoch++;
+        NoteContentChanged(id);
         Diag.Set("media", "requested", _totalRequested);
         if (!_decoder.Begin(id, e.Key.Source, e.Key.W, e.Key.H, priority))
         {
@@ -968,7 +1140,24 @@ public sealed class ImageCache
         if (_decoder is DecodeScheduler ds) ds.Pump(_onComplete, _onPixels, deadlineTicks);
         else _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
+        RetryPinnedExhausted();
         return _pumpCompleted;
+    }
+
+    /// <summary>E7: a PINNED (Refs&gt;0) entry that went <see cref="ImageFailureKind.GpuResourceExhausted"/> cannot
+    /// self-heal through <see cref="Request"/>/<see cref="Pin"/> — a realized on-screen node calls neither again once
+    /// mounted (see <see cref="ReRealizeAllResident"/>'s remark). This sweeps once every <see cref="RestartBackoffMs"/>
+    /// while <see cref="_exhaustedPinnedSeen"/> is armed, restarting every matching entry at
+    /// <see cref="ImagePriority.Visible"/> — <see cref="RestartDecode"/>'s own backoff predicate still gates each
+    /// entry individually, this only supplies the tick that lets a pinned one retry with nobody re-rendering it.</summary>
+    private void RetryPinnedExhausted()
+    {
+        if (!_exhaustedPinnedSeen || _clockMs - _lastExhaustedScanMs < RestartBackoffMs) return;
+        _lastExhaustedScanMs = _clockMs;
+        foreach (var (id, e) in _byId)
+            if (e.Refs > 0 && e.State == ImageState.Failed && e.Failure == ImageFailureKind.GpuResourceExhausted)
+                RestartDecode(id, e, ImagePriority.Visible);
+        _exhaustedPinnedSeen = false;   // re-armed by OnDecodeComplete/DrainAsyncRejections if a retry fails exhausted again
     }
 
     private void DrainBakedBlurResults()
@@ -1009,9 +1198,10 @@ public sealed class ImageCache
                 e.BakeUpgradeAttempts = 0;
                 UsedBytes += e.Bytes - priorBytes;
                 DerivedUsedBytes += e.Bytes - priorBytes;
+                e.ReadyMs = _clockMs;   // E4: a quality upgrade re-lands content — grace protects it too
                 _totalBakeReady++;
                 _pumpCompleted++;
-                ContentEpoch++;
+                NoteContentChanged(result.Id);
                 Diag.Set("media", "bakedBlurReady", _totalBakeReady);
                 continue;
             }
@@ -1035,11 +1225,13 @@ public sealed class ImageCache
                 UsedBytes += e.Bytes;
                 DerivedUsedBytes += e.Bytes;
                 BeginReveal(e, result.Id, "derived");
+                e.ReadyMs = _clockMs;   // E4
+                _readyCount++;          // E8: Pending → Ready
                 _totalBakeReady++;
             }
             else { e.Bytes = 0; _totalBakeFailed++; }
             _pumpCompleted++;
-            ContentEpoch++;
+            NoteContentChanged(result.Id);
             Diag.Set("media", "bakedBlurReady", _totalBakeReady);
             Diag.Set("media", "bakedBlurFailed", _totalBakeFailed);
             Diag.Set("media", "pending", PendingCount);
@@ -1067,9 +1259,17 @@ public sealed class ImageCache
             e.TextureMs = float.NaN;
             e.State = ImageState.Failed;
             e.Failure = r.Result == ImageUploadResult.ResourceExhausted ? ImageFailureKind.GpuResourceExhausted : ImageFailureKind.GpuUpload;
+            _readyCount--;   // E8: leaving Ready
+            if (e.Refs > 0 && e.Failure == ImageFailureKind.GpuResourceExhausted)
+            {
+                // E7: a PINNED entry just went exhausted with nobody re-rendering it to trigger a retry — arm the
+                // backoff-paced sweep (Pump's RetryPinnedExhausted) and restart its clock from THIS failure.
+                _exhaustedPinnedSeen = true;
+                _lastExhaustedScanMs = _clockMs;
+            }
             if (wasActiveDeadline) RecomputeCrossfadeDeadline();
             _totalFailed++;
-            ContentEpoch++;
+            NoteContentChanged(r.Id);
             Diag.Set("media", "failed", _totalFailed);
             NotifyStatus(e);
             ImageStatusChanged?.Invoke(r.Id, e.State, e.Failure, e.Attempts);
@@ -1123,14 +1323,26 @@ public sealed class ImageCache
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
         if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e, id, "decode");
-        if (ok) e.WasReady = true;   // AFTER BeginReveal: a first-ever decode must still see WasReady==false there
+        if (ok)
+        {
+            e.WasReady = true;   // AFTER BeginReveal: a first-ever decode must still see WasReady==false there
+            e.ReadyMs = _clockMs;   // E4: grace-window anchor for EvictToVramPressure
+            _readyCount++;           // E8: Pending → Ready
+        }
+        else if (e.Refs > 0 && e.Failure == ImageFailureKind.GpuResourceExhausted)
+        {
+            // E7: a PINNED entry just went exhausted with nobody re-rendering it to trigger a retry — arm the
+            // backoff-paced sweep (Pump's RetryPinnedExhausted) and restart its clock from THIS failure.
+            _exhaustedPinnedSeen = true;
+            _lastExhaustedScanMs = _clockMs;
+        }
         e.W = w; e.H = h;
         // COMMITTED bytes, not decoded pixels — see CommittedBytesFor. Budgeting against the decoded figure let the
         // cache believe it was holding its cap while the GPU held roughly 3.5x that.
         e.Bytes = ok ? CommittedBytesFor(w, h) : 0;
         UsedBytes += e.Bytes;
         _pumpCompleted++;
-        ContentEpoch++;
+        NoteContentChanged(id);
 
         if (ok) _totalReady++; else _totalFailed++;
         if (attempts > 1) _totalRetried++;
@@ -1170,19 +1382,23 @@ public sealed class ImageCache
 
     /// <summary>
     /// Evicts the single oldest UNPINNED (<c>Refs == 0</c>) Ready entry — optionally restricted to derived/blur entries
-    /// (<paramref name="preferDerived"/>) which are the cheapest to lose — and returns the bytes it freed, or 0 when
-    /// nothing is evictable (everything left is pinned/visible). Allocation-free (a struct dictionary-enumerator scan,
-    /// no closures). Shared by <see cref="EvictToBudget"/> and <see cref="EvictToVramPressure"/>.
+    /// (<paramref name="preferDerived"/>) which are the cheapest to lose, and optionally excluding anything READY for
+    /// less than <paramref name="minReadyAgeMs"/> (E4's grace window — see <see cref="ReadyGraceMs"/>) — and returns
+    /// the bytes it freed, or 0 when nothing is evictable (everything left is pinned/visible/too-freshly-landed).
+    /// Allocation-free (a struct dictionary-enumerator scan, no closures). Shared by <see cref="EvictToBudget"/>
+    /// (0 ms — it must always be able to reach its cap) and <see cref="EvictToVramPressure"/> (<see cref="ReadyGraceMs"/>).
     /// </summary>
-    private long EvictOneLru(bool preferDerived)
+    private long EvictOneLru(bool preferDerived, float minReadyAgeMs = 0f)
     {
         int victim = 0; long oldest = long.MaxValue;
             foreach (var (id, e) in _byId)
-                if (e.Refs == 0 && e.State == ImageState.Ready && (!preferDerived || e.Derived) && e.LastUsed < oldest)
+                if (e.Refs == 0 && e.State == ImageState.Ready && (!preferDerived || e.Derived)
+                    && _clockMs - e.ReadyMs >= minReadyAgeMs && e.LastUsed < oldest)
                 { oldest = e.LastUsed; victim = id; }
-            if (victim == 0) return 0;   // everything left is pinned (on screen) — never evict it
+            if (victim == 0) return 0;   // everything left is pinned (on screen) / too fresh to shed — never evict it
             var e2 = _byId[victim];
             long freed = e2.Bytes;
+            _readyCount--;   // E8: leaving Ready
             UsedBytes -= e2.Bytes;
             if (e2.Derived) DerivedUsedBytes -= e2.Bytes;
             bool activeDeadline = e2.Transition.Enabled && !float.IsNaN(e2.TextureMs)
@@ -1220,8 +1436,10 @@ public sealed class ImageCache
 
     /// <summary>
     /// Weak-GPU VRAM-pressure relief (adreno-hang-fixes.md M5). The host samples the device's LOCAL-segment budget
-    /// (<see cref="FluentGpu.Rhi.IGpuDevice.TryGetVramUsage"/>) and, when total VRAM crosses ~0.90 of budget, calls this
-    /// every frame; it sheds unpinned image-cache LRU down toward the 0.85 soft line.
+    /// (<see cref="FluentGpu.Rhi.IGpuDevice.TryGetVramUsage"/>) and, gated by <c>VramShedPolicy</c>'s arm/disarm
+    /// hysteresis + same-sample suppression + cooldown (E4 — the caller owns ALL of that; this method just executes
+    /// when called), sheds unpinned image-cache LRU down toward the 0.85 soft line. Returns the bytes actually freed
+    /// so the caller can feed <c>VramShedPolicy.NoteShed</c>.
     ///
     /// <para><b>Approximation.</b> The device figure (<paramref name="usedBytes"/> / <paramref name="budgetBytes"/>) is
     /// TOTAL VRAM — swapchain + every OpacityLayer RT + all textures — but this cache only tracks its OWN image bytes
@@ -1230,25 +1448,38 @@ public sealed class ImageCache
     /// holds. Freeing our portion relieves proportional device pressure without ever evicting pinned/visible entries;
     /// the remaining overage (swapchain / RTs) is bounded by the other M5 levers (RT pool cap, depth-3 swapchain).</para>
     ///
-    /// <para>Hysteresis lives on the caller: the host arms this hard path only above 0.90 and stops once back under, so
-    /// this method just executes when called. It is allocation-free (the shared <see cref="EvictOneLru"/> scan) and safe
-    /// to call every frame.</para>
+    /// <para><b>Grace + floor.</b> A texture Ready for less than <see cref="ReadyGraceMs"/> is never a candidate — it
+    /// may be the very landing that pushed VRAM over the arm ratio, and shedding it immediately reopens the loop this
+    /// exists to break (evict → re-request next scroll tick → re-land → evict again). The shed target is also
+    /// clamped to never go below half of what is actually RESIDENT right now — <c>Math.Min(_budgetBytes / 2,
+    /// UsedBytes / 2)</c>, not a bare <c>_budgetBytes / 2</c>: this cache is very often far under its own budget (a
+    /// small screen's worth of pinned covers against a 96 MB cap), and a floor stated purely in terms of the budget
+    /// would then sit ABOVE everything the cache holds, so the shed loop's `while (UsedBytes > target)` never even
+    /// starts — the floor would silently veto every legitimate shed instead of merely bounding a deep one. Taking the
+    /// smaller of the two keeps the intent (don't walk a sustained device-wide overage — swapchain/RT growth, not
+    /// image bytes — all the way to zero one frame at a time) without that trap. <see cref="EvictToBudget"/> (the
+    /// ordinary byte-budget path, answering the CACHE's own cap) has neither restriction — 0 ms grace, no floor —
+    /// because it must always be able to reach its cap.</para>
     /// </summary>
-    public void EvictToVramPressure(long budgetBytes, long usedBytes)
+    public long EvictToVramPressure(long budgetBytes, long usedBytes)
     {
-        if (budgetBytes <= 0) return;
+        if (budgetBytes <= 0) return 0;
         long softLine = (long)(budgetBytes * 0.85);
         long overage = usedBytes - softLine;
-        if (overage <= 0) return;                       // already under the soft line — nothing to shed
+        if (overage <= 0) return 0;                     // already under the soft line — nothing to shed
         long target = UsedBytes - overage;              // shed at most our share of the overage…
-        if (target < 0) target = 0;                     // …bounded by what the cache holds (never negative)
+        long floor = Math.Min(_budgetBytes / 2, UsedBytes / 2);
+        if (target < floor) target = floor;             // …never below half the RESIDENT set (never above it either)
+        long freedTotal = 0;
         while (UsedBytes > target)
         {
             bool preferDerived = DerivedUsedBytes > 0;  // blur/derived first — cheapest to lose, re-baked on demand
-            long freed = EvictOneLru(preferDerived);
-            if (freed == 0 && preferDerived) freed = EvictOneLru(false);   // derived all pinned → try full images
-            if (freed == 0) break;                      // everything left is pinned/visible — never evict it
+            long freed = EvictOneLru(preferDerived, ReadyGraceMs);
+            if (freed == 0 && preferDerived) freed = EvictOneLru(false, ReadyGraceMs);   // derived all pinned → try full images
+            if (freed == 0) break;                      // everything left is pinned/visible/too-freshly-landed
+            freedTotal += freed;
         }
+        return freedTotal;
     }
 }
 

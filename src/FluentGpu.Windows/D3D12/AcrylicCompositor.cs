@@ -118,9 +118,10 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     public int CacheHitsThisFrame { get; private set; }
 
     /// <summary>Of <see cref="CacheHitsThisFrame"/>, how many were SCROLL-CADENCE HOLDS (§2.3/E10) — a retained
-    /// snapshot whose damage test MISSED but which was stretched one more frame because this frame carried
-    /// <c>FrameInfo.ScrollHold</c> and the layer had not yet reached <see cref="AcrylicScrollHold.ScrollRefreshCadence"/>.
-    /// A sustained user scroll over a chrome acrylic should read ≈¾ of layers held (diagnostics).</summary>
+    /// snapshot whose damage test MISSED (for ANY reason — a literal user scroll, an inertial coast, a programmatic
+    /// scroll, or row-realize damage under the layer) but which was stretched one more frame because the stamp was
+    /// unchanged and the layer had not yet reached <see cref="AcrylicScrollHold.ScrollRefreshCadence"/>.
+    /// A sustained scroll (of any kind) over a chrome acrylic should read ≈¾ of layers held (diagnostics).</summary>
     public int ScrollHoldsThisFrame { get; private set; }
 
     /// <summary>Live pooled RTs (diagnostics; a re-blur holds iterations+1 pyramid levels, ≤5, plus retained cache RTs).</summary>
@@ -794,13 +795,14 @@ float4 PSMain(V i) : SV_Target
     /// snapshot; else snapshot the canvas region, run the dual-Kawase down/up chain, and composite — RETAINING the
     /// result for a keyed (<see cref="PushLayerCmd.LayerId"/> != 0) layer. Leaves the canvas bound for continued drawing.
     /// The damage rect (physical px) is this frame's union of moved-node bounds (SceneRecorder) — empty ⇒ reuse.
-    /// <paramref name="scrollHold"/> is <c>FrameInfo.ScrollHold</c>: while set, a layer that ALREADY HAS a retained
-    /// snapshot of the SAME geometry may keep compositing it despite damage, refreshing only every
-    /// <see cref="AcrylicScrollHold.ScrollRefreshCadence"/>-th frame (§2.3/E10) — a scrolling backdrop damages every
-    /// frame, so without this the cache misses at frame rate and the whole chain re-runs per frame.</summary>
+    /// A layer that ALREADY HAS a retained snapshot of the SAME geometry (stamp unchanged) may keep compositing it
+    /// despite a damage-test miss, refreshing only every <see cref="AcrylicScrollHold.ScrollRefreshCadence"/>-th frame
+    /// (§2.3/E10) — a scrolling backdrop, an inertial coast, a programmatic scroll, or row-realize damage under the
+    /// layer all damage every frame, so without this the cache misses at frame rate and the whole chain re-runs per
+    /// frame while nothing behind the layer's own geometry has actually moved.</summary>
     public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence,
         float dmgX, float dmgY, float dmgW, float dmgH, RECT compositeScissor, ulong backdropSourceId,
-        ID3D12Resource* backdropTarget = null, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv = default, bool scrollHold = false)
+        ID3D12Resource* backdropTarget = null, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv = default)
     {
         if (scale <= 0f) scale = 1f;
         // directBB: when D3D12Device renders straight to the back buffer, snapshot ONLY the small region under this acrylic
@@ -843,7 +845,7 @@ float4 PSMain(V i) : SV_Target
                 bool stampSame = _pool[pin].Stamp.Equals(nowStamp);
                 bool stale = _pool[pin].HeldFrames > 0;
                 bool clean = !stale && AcrylicBackdropMath.BackdropReusable(_pool[pin].Stamp, nowStamp, tightPhys, damagePhys);
-                bool hold = !clean && !AcrylicScrollHold.ShouldRefresh(scrollHold, hasRetained: true, stampSame,
+                bool hold = !clean && !AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampSame,
                     _pool[pin].HeldFrames, AcrylicScrollHold.ScrollRefreshCadence);
                 if (clean || hold)
                 {

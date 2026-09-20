@@ -14,12 +14,18 @@ namespace FluentGpu.Controls;
 /// ItemsView.idl:46-58 — CurrentItemIndex, StartBringItemIntoView, and the selection API via <see cref="Selection"/>).
 /// Pass one to <c>ItemsView.Create</c>; the component wires it at mount.
 /// </summary>
-public sealed class ItemsViewController
+public sealed class ItemsViewController : IWheelTarget
 {
+    /// <summary>The ItemsView that wired this controller last. A controller outlives a keyed list swap: the INCOMING
+    /// list wires it at its first render while the OUTGOING one is still fading out, and the outgoing list's unmount
+    /// cleanup must not then null the incoming list's wiring (a bound list is autonomous and never re-renders to
+    /// re-wire itself — the controller would stay dead for the life of the mount).</summary>
+    internal object? Owner;
     internal Action<int, float, bool>? BringIntoViewImpl;
     internal Func<int>? GetCurrent;
     internal TryGetItemIndexDelegate? TryGetItemIndexImpl;
     internal Action<float>? ScrollByImpl;
+    internal Action<float>? WheelNotchImpl;
     internal Action<float>? SetAutoScrollVelocityImpl;
     internal CorrectMeasuredExtentDelegate? CorrectMeasuredExtentImpl;
     internal Func<int, bool>? IsItemRealizedImpl;
@@ -103,6 +109,12 @@ public sealed class ItemsViewController
     /// <see cref="SetAutoScrollVelocity"/> instead — a one-shot instant shift is the wrong primitive for a continuous
     /// drag hold (see ItemsViewPresets' E5-L3 wiring).</summary>
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
+
+    /// <summary>Wheel notches routed from ANOTHER element (<c>Element.WheelTarget</c> — a header laid out above this
+    /// list): the viewport posts the kernel's <c>WheelNotch</c> with <c>PerNotchDip(viewport, LineDip)</c> per notch,
+    /// so the list glides exactly as a device notch over its rows would (<see cref="IWheelTarget.WheelNotch"/>). Never
+    /// immediate (unlike <see cref="ScrollBy"/>); a no-op before mount and for a non-virtual host.</summary>
+    public void WheelNotch(float notches) => WheelNotchImpl?.Invoke(notches);
 
     /// <summary>Scroll ANCHORING (CSS <c>overflow-anchor</c>): after a structural change ABOVE the first visible row —
     /// rows inserted or removed ahead of it — shift the offset by <paramref name="delta"/> so that row keeps its screen
@@ -993,18 +1005,23 @@ public sealed class ItemsView : Component
             float itemExtent = horizontal ? rect.W : rect.H;
             float offset = horizontal ? sc.OffsetX : sc.OffsetY;
 
+            // A pinned persistent prefix (hero + sticky chrome) covers the top `ItemClipTopInset` of the viewport for every
+            // recyclable item: that band is not visible space for them. Without this, "align to start" lands the item's
+            // head UNDER the pinned chrome and "minimal scroll" calls an item hidden behind it already in view.
+            float topInset = !horizontal && index >= sc.PersistentPrefixCount && sc.ItemClipTopInset > 0f ? sc.ItemClipTopInset : 0f;
+
             float target;
             if (float.IsNaN(alignmentRatio))
             {
                 // Minimal scroll (default BringIntoViewOptions): only move when the item is outside the viewport.
-                if (itemStart < offset) target = itemStart;
+                if (itemStart < offset + topInset) target = itemStart - topInset;
                 else if (itemStart + itemExtent > offset + viewport) target = itemStart + itemExtent - viewport;
                 else return;
             }
             else
             {
                 // Home/End edge alignment (ItemsViewInteractions.cpp:1013-1016).
-                target = itemStart - alignmentRatio * MathF.Max(0f, viewport - itemExtent);
+                target = itemStart - topInset - alignmentRatio * MathF.Max(0f, viewport - topInset - itemExtent);
                 // A halo-bleed FillRowVirtualLayout positions item i at LeadInset+i·stride inside a viewport widened by
                 // the same gutter; an aligned (paged) bring-into-view must land the item at its REST screen position
                 // (the gutter), not flush to the widened edge — subtract the lead gutter so a page offset cancels to
@@ -1217,6 +1234,23 @@ public sealed class ItemsView : Component
             Context.RequestRerender();
         }
 
+        // Element.WheelTarget seam, both controller flavours (ItemsViewController.WheelNotch and
+        // IScrollController.WheelNotchRequested): the same post ScrollInputRouter.WheelAxis makes for a device notch
+        // over the rows — WheelNotch(PerNotchDip(viewport, LineDip) × notches), the kernel's Driven|Wheel chase, never
+        // an immediate displacement. Orientation follows the viewport (a horizontal shelf's header works too).
+        void PostWheelNotch(float notches)
+        {
+            if (sceneRef is null || notches == 0f) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
+            ref ScrollState sc = ref sceneRef.ScrollRef(vp);
+            float viewport = sc.Orientation == 1 ? sc.ViewportW : sc.ViewportH;
+            float dip = ScrollFeel.Shipping.PerNotchDip(viewport, sc.LineDip) * notches;
+            sceneRef.ScrollPort!.Post(ScrollInput.WheelNotch((int)vp.Raw.Index,
+                FluentGpu.Scroll.ScrollController.WheelSampleSec(), dip));
+            (Context.RequestFrame ?? Context.RequestRerender)();
+        }
+
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
         {
             if ((uint)next >= (uint)count || !ItemEnabled(next)) return;   // disabled = not focusable (cpp:203/:321)
@@ -1426,9 +1460,11 @@ public sealed class ItemsView : Component
             bool pointer = trigger is ItemContainerTrigger.Tap or ItemContainerTrigger.DoubleTap;
             // Pointer interactions bring a partially-visible item fully into view: ProcessInteraction passes
             // startBringIntoView = (focusState == FocusState::Pointer) into SetCurrentElementIndex →
-            // element.StartBringIntoView() with default (minimal-scroll) options (ItemsViewInteractions.cpp:894-895,
-            // :1340-1345). Keyboard triggers don't (the nav keys handle their own scrolling).
-            if (pointer) BringIntoView(i, float.NaN, animate: false);
+            // element.StartBringIntoView() with default options (ItemsViewInteractions.cpp:894-895, :1340-1345) — and
+            // WinUI's BringIntoViewOptions.AnimationDesired default is true, so this glides, it doesn't snap. Keyboard
+            // triggers stay unanimated (animate: false, unchanged): the nav keys handle their own scrolling and an
+            // arrow-key repeat must track the key, not chase an in-flight animation.
+            if (pointer) BringIntoView(i, float.NaN, animate: true);
             if (current.Peek() != i) current.Value = i;
             // Roving tab stop: a press on a non-current container can't take pointer focus at the dispatch edge
             // (only the current container is in the tab order), so land focus here — FocusState::Pointer shows no
@@ -1450,12 +1486,14 @@ public sealed class ItemsView : Component
 
         if (Controller is { } ctl)
         {
+            ctl.Owner = this;
             // WinUI StartBringItemIntoView scrolls/realizes but does NOT move focus (ItemsView.cpp:119-127).
             ctl.BringIntoViewImpl = BringIntoView;
             ctl.TryGetItemIndexImpl = TryGetItemAtViewport;
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
+            ctl.WheelNotchImpl = PostWheelNotch;
             ctl.SetAutoScrollVelocityImpl = SetAutoScrollVelocity;
             ctl.CorrectMeasuredExtentImpl = CorrectMeasuredExtent;
             ctl.IsItemRealizedImpl = index =>
@@ -1494,10 +1532,12 @@ public sealed class ItemsView : Component
             if (controller is null || horizontal) return null;
             controller.ScrollToRequested += ControllerScrollTo;
             controller.ScrollByRequested += ControllerScrollBy;
+            controller.WheelNotchRequested += PostWheelNotch;
             return () =>
             {
                 controller.ScrollToRequested -= ControllerScrollTo;
                 controller.ScrollByRequested -= ControllerScrollBy;
+                controller.WheelNotchRequested -= PostWheelNotch;
                 controller.SetIsScrollable(false);
             };
         }, DepKey.FromRef(VerticalScrollController));
@@ -1508,10 +1548,15 @@ public sealed class ItemsView : Component
             if (ctl is null) return null;
             return () =>
             {
+                // Only the list that owns the wiring may clear it (see ItemsViewController.Owner): a keyed swap mounts
+                // the successor BEFORE this cleanup runs.
+                if (!ReferenceEquals(ctl.Owner, this)) return;
+                ctl.Owner = null;
                 ctl.BringIntoViewImpl = null;
                 ctl.TryGetItemIndexImpl = null;
                 ctl.GetCurrent = null;
                 ctl.ScrollByImpl = null;
+                ctl.WheelNotchImpl = null;
                 ctl.SetAutoScrollVelocityImpl = null;
                 ctl.CorrectMeasuredExtentImpl = null;
                 ctl.IsItemRealizedImpl = null;
@@ -1812,6 +1857,15 @@ public sealed class ItemsView : Component
             realizeTemplate = i => { var e = rt(i); return e is BoxEl b ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
         }
 
+        // Wheel line-height hint (ScrollState.LineDip, S6): a fixed main-axis pitch is one Windows "line" — a stack
+        // row's extent, a grid row's height plus its gap; measured/custom layouts carry no hint (viewport rule).
+        float lineDip = spec.Kind switch
+        {
+            RepeatKind.Stack when spec.Extent > 0f => spec.Extent,
+            RepeatKind.Grid when spec.Extent > 0f => spec.Extent + spec.Gap,
+            _ => 0f,
+        };
+
         Element itemsHost = rowBind is not null && layout is not null
             // Bound slots: the RowBind path (RealizeBoundWindow) — persistent rows, recycle by index-signal write.
             ? new VirtualListEl
@@ -1833,6 +1887,7 @@ public sealed class ItemsView : Component
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
                 Controller = ScrollHandle,
+                ScrollLineDip = lineDip,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = geometryObserver,
@@ -1857,6 +1912,7 @@ public sealed class ItemsView : Component
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
                 Controller = ScrollHandle,
+                ScrollLineDip = lineDip,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = geometryObserver,

@@ -42,7 +42,11 @@ public static class Marquee
         public float Gap { get; init; } = 48f;           // space between the two copies in Loop mode
         public float FadeBand { get; init; } = 24f;      // edge fade width in px
         public float FadeStrength { get; init; } = 1f;   // edge-fade intensity 0..1 (1 = fades fully to transparent)
-        public float StartDelayMs { get; init; } = 350f;  // pause showing the START of the text before it scrolls
+        /// <summary>Hold (ms) showing the START of the text before it scrolls. It is part of the cycle, not a one-time
+        /// lead-in: the first traversal begins after this delay, and in <see cref="ScrollMode.Loop"/> /
+        /// <see cref="ScrollMode.PingPong"/> every subsequent cycle opens with the same hold at translate 0. A
+        /// <see cref="TriggerMode.Always"/> title with e.g. 2 s rests readable at its head before each pass.</summary>
+        public float StartDelayMs { get; init; } = 350f;
         public float EndPauseMs { get; init; } = 900f;    // pause at the tail before bouncing back (PingPong) / loop reset (Loop)
         public ScrollMode Mode { get; init; } = ScrollMode.Loop;
         public TriggerMode Trigger { get; init; } = TriggerMode.Always;
@@ -61,8 +65,9 @@ public static class Marquee
     /// <param name="scrollWhen">An OPTIONAL external hover gate (used with <see cref="TriggerMode.Hover"/> or
     /// <see cref="TriggerMode.PauseOnHover"/>): when supplied the marquee does NOT wire its own self-hover — a GROUP of
     /// marquees can share ONE parent hover zone. For <see cref="TriggerMode.Hover"/> the gate scrolls while true; for
-    /// <see cref="TriggerMode.PauseOnHover"/> it pauses while true. Null = self-hover. The edge fade is unaffected
-    /// (right-edge cue at rest, both edges while scrolling).</param>
+    /// <see cref="TriggerMode.PauseOnHover"/> it pauses while true. Either way, deactivating glides the content back to
+    /// its head (translate 0) from wherever it is — it is never frozen mid-scroll. Null = self-hover. The edge fade is
+    /// unaffected (right-edge cue at rest, both edges while scrolling).</param>
     public static Element Of(Prop<string> text, Style? style = null, IReadSignal<bool>? scrollWhen = null)
         => new BoxEl
         {
@@ -181,26 +186,33 @@ internal sealed class MarqueeScroller : Component
         float loopDist = tw + Sty.Gap;
         float tailDist = MathF.Max(0f, tw - cw);
 
-        // Park/unpark the translate track on hover-pause — never re-seed a "0,0" idle track (that snapped back to start).
-        UseLayoutEffect(() =>
-        {
-            if (Context.Anim is { } a && !Context.HostNode.IsNull)
-                a.SetNodeParked(Context.HostNode, paused);
-        }, (paused, canScroll));
+        // The trigger deactivating (`paused`) glides the content HOME from wherever the live translate is. Never park
+        // the track in place — a park at -tailDist left the title's head off-screen, a partial glyph at x=0 and the
+        // edge fade frozen — and never re-seed a "0,0" idle track (that snapped back to start). ScrollX is the ticker's
+        // mirror of the TranslateX composed at the end of the previous frame, i.e. exactly what is on screen when this
+        // render runs; Keyframes seeds from keys[0] (not the live row), so the departure point must be explicit.
+        float homeFrom = paused ? ScrollX.Peek() : 0f;
 
         // One animation hook per Mode (Mode is fixed for an instance, so the hook order is stable across renders).
+        // `paused` is part of every DepKey so the track re-seeds exactly on the trigger edge (a same-key re-render
+        // mid-glide leaves the in-flight row alone).
         if (Sty.Mode == Marquee.ScrollMode.SinglePass)
         {
-            UseSpring(AnimChannel.TranslateX, canScroll ? -tailDist : 0f,
-                      SpringParams.FromResponse(0.45f, 0.9f), DepKey.From(tailDist, canScroll ? 1 : 0));
+            UseSpring(AnimChannel.TranslateX, canScroll && !paused ? -tailDist : 0f,
+                      SpringParams.FromResponse(0.45f, 0.9f),
+                      DepKey.From(tailDist, (canScroll ? 1f : 0f) + (paused ? 2f : 0f)));
         }
         else
         {
-            (Keyframe[] keys, float durMs, bool looping) = BuildTrack(loop, canScroll, loopDist, tailDist);
+            (Keyframe[] keys, float durMs, bool looping) = paused
+                ? HomeTrack(homeFrom, Sty)
+                : BuildTrack(loop, canScroll, loopDist, tailDist);
             // A scrolling title is perpetual (it would default to DefaultLoopHz) but text motion at 30 Hz reads as
-            // stepping; 60 Hz halves the frames on a 120 Hz panel and is one refresh at 60/50 Hz.
-            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, DepKey.From(HashCode.Combine(canScroll, loop, loopDist, tailDist)),
-                         cadence: Cadence.At(60f));
+            // stepping; 60 Hz halves the frames on a 120 Hz panel and is one refresh at 60/50 Hz. The home glide is a
+            // short one-shot and takes the display cadence (null) like every other one-shot.
+            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping,
+                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)),
+                         cadence: paused ? null : Cadence.At(60f));
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };
@@ -285,6 +297,22 @@ internal sealed class MarqueeScroller : Component
             new Keyframe(f3, -tailDist, Easing.Linear),
             new Keyframe(1f, 0f, Easing.Linear),
         ], total, true);
+    }
+
+    /// <summary>The trigger-deactivated return: a ONE-SHOT from the LIVE translate <paramref name="fromX"/> back to 0
+    /// (the rest pose, where <see cref="ResolveEdgeFade"/> yields the right-edge overflow cue only). Pace is four times
+    /// <see cref="Marquee.Style.Speed"/> — a return, not a re-read — clamped to 120..450 ms so a one-glyph offset still
+    /// reads as motion and a full-tail return never drags. Already home (|x| &lt; 0.5) ⇒ a 1 ms no-op at 0 (the row
+    /// settles next tick and frees; nothing is parked). Pure and engine-free so the gate can pin its shape.</summary>
+    internal static (Keyframe[] keys, float durMs, bool loop) HomeTrack(float fromX, Marquee.Style sty)
+    {
+        float dist = MathF.Abs(fromX);
+        if (dist < 0.5f)
+            return ([new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 0f, Easing.Linear)], 1f, false);
+
+        float speed = MathF.Max(1f, sty.Speed * 4f);
+        float durMs = Math.Clamp(dist / speed * 1000f, 120f, 450f);
+        return ([new Keyframe(0f, fromX, Easing.Linear), new Keyframe(1f, 0f, Easing.SmoothOut)], durMs, false);
     }
 
     // Feather only edges with hidden overflow (scroll-cue parity): at translateX=0 fade right only; at the tail fade left only.

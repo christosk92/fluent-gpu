@@ -39,9 +39,22 @@ public static class GpuMemoryBudgets
     public const long DerivedWeak = 8L * 1024 * 1024;
 
     /// <summary>The three caps for a tier. Pure: no globals, no environment, no clock — so a gate can drive both
-    /// tiers headlessly, which is the whole point (see the class remarks).</summary>
-    public static (long PixelPool, long ImageCache, long Derived) For(bool weak)
+    /// tiers headlessly, which is the whole point (see the class remarks).
+    /// <para><paramref name="localBudgetBytes"/> is the adapter's DXGI LOCAL segment budget (0 = unknown, e.g. the
+    /// sample has not been taken yet, or the device is headless) — on the weak tier it derives
+    /// <see cref="ImageCache"/> instead of using the flat <see cref="ImageCacheWeak"/> constant, because a 128 MB
+    /// Adreno-class part and a 512 MB-class UMA iGPU are both "weak" but do not have the same LOCAL segment to share
+    /// between the swapchain, the pixel pool and the image cache. The discrete tier is unaffected — it never reads
+    /// the parameter.</para></summary>
+    public static (long PixelPool, long ImageCache, long Derived) For(bool weak, long localBudgetBytes = 0)
         => weak
-            ? (PixelPoolWeak, ImageCacheWeak, DerivedWeak)
+            ? (PixelPoolWeak, WeakImageCacheFor(localBudgetBytes), DerivedWeak)
             : (PixelPoolDefault, ImageCacheDefault, DerivedDefault);
+
+    /// <summary>5/16 of the LOCAL segment, clamped to [32, 64] MB. 0 (unknown LOCAL) keeps the shipped 40 MB flat
+    /// default. A 128 MB Adreno part lands at exactly 40 MB — the number this shipped with — so this is a
+    /// derivation, not a re-tune; a 256 MB-class part is allowed up to the discrete cache's own 64 MB ceiling, and
+    /// nothing below the 32 MB floor the eviction/prefetch ring needs to stay useful.</summary>
+    private static long WeakImageCacheFor(long localBudgetBytes)
+        => localBudgetBytes <= 0 ? ImageCacheWeak : Math.Clamp(localBudgetBytes * 5 / 16, 32L << 20, 64L << 20);
 }

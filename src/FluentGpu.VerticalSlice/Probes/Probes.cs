@@ -1145,6 +1145,48 @@ sealed class BoundVirtualProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// Slot pool (virtualization.md §6.1a): a bound list whose Overscan is a signal, so a gate can shrink the desired
+// window at rest (park the surplus slots) and grow it back (take them) without any scroll motion. Rows are focusable
+// so the park path's focus hygiene is observable. TemplateCalls counts rowBind runs — one per COLD slot mount, never
+// one per take from the pool.
+sealed class SlotPoolOverscanProbe : Component
+{
+    public const int N = 2_000;
+    public const float RowH = 40f;
+    public readonly Signal<int> Overscan = new(12);
+    public int TemplateCalls;
+    public override Element Render()
+        => Virtual.ListBound(N, RowH, idx =>
+           {
+               TemplateCalls++;
+               return new BoxEl
+               {
+                   Height = RowH, Focusable = true, Fill = ColorF.FromRgba(30, 30, 30),
+                   Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + idx.Value) }],
+               };
+           }, overscan: Overscan.Value)
+           with { Width = 300, Height = 400 };
+}
+
+// Slot pool alloc gate: BoundVirtualFillOnlyProbe's shape (no bound text ⇒ no per-recycle string) plus a rowBind
+// counter, so the fling gate can prove "zero cold mounts" and "zero hot-phase bytes" on the same run.
+sealed class SlotPoolFillOnlyProbe : Component
+{
+    public const int N = 10_000;
+    public int TemplateCalls;
+    public override Element Render()
+        => Virtual.ListBound(N, 40f, idx =>
+           {
+               TemplateCalls++;
+               return new BoxEl
+               {
+                   Height = 40,
+                   Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50))),
+               };
+           })
+           with { Width = 300, Height = 400 };
+}
+
 // Captures the stable signal identity behind each bound slot. The overlap recycler gate pairs those signals with the
 // initial scene roots, then proves small window shifts preserve every overlapping logical item's root.
 sealed class BoundOverlapProbe : Component
@@ -2464,6 +2506,14 @@ sealed class BoundHoldLastGoodProbe : Component
         Width = 120, Height = 120,
         Children = [new ImageEl { Source = Prop.Of(() => Src.Value), Width = 64, Height = 64 }],
     };
+}
+
+// A virtual item changing identity must not borrow the previous item's decoded cover.
+sealed class VirtualImageIdentityProbe : Component
+{
+    public readonly Signal<string> Src = new("virtual/a");
+    public override Element Render() => Virtual.ListBound(1, 80f,
+        _ => new ImageEl { Source = Prop.Of(() => Src.Value), Width = 64, Height = 64 });
 }
 
 // A responsive (aspect-ratio) image tile inside a fixed-width card: no fixed extent — it fills the card's content width

@@ -307,8 +307,8 @@ public sealed class PcmAudioSession : IMediaSession
     // thread that renders. A producer-side lock serializes the two control producers (the Enqueue chain + the crossfade
     // Timer tick are not mutually serialized); the consumer is lock-free. On a session with NO feed attached the command is
     // drained INLINE right after enqueue, so the single-thread pull path keeps byte-identical golden-PCM/test semantics.
-    private struct MixerCmd { public byte Kind; public long Id; public MixVoice Voice; public GainEnvelope? Env; public long Sequence; public int Frames; }
-    private const byte CmdReplacePrimary = 1, CmdAddVoice = 2, CmdSetEnvelope = 3, CmdRemoveVoice = 4, CmdFadeOut = 5, CmdFadeIn = 6, CmdReset = 7, CmdSeekAnchor = 8;
+    private struct MixerCmd { public long Position; public byte Kind; public long Id; public MixVoice Voice; public GainEnvelope? Env; public long Sequence; public int Frames; }
+    private const byte CmdReplacePrimary = 1, CmdAddVoice = 2, CmdSetEnvelope = 3, CmdRemoveVoice = 4, CmdFadeOut = 5, CmdFadeIn = 6, CmdReset = 7, CmdSeekAnchor = 8, CmdResetRate = 9;
     private readonly MixerCmd[] _mixerCmdQ = new MixerCmd[64];
     private int _mixerCmdHead, _mixerCmdTail;                 // Volatile head/tail; consumer = whichever thread runs RenderBlock
     private readonly object _mixerCmdProducerLock = new();
@@ -414,6 +414,30 @@ public sealed class PcmAudioSession : IMediaSession
     private float _volume = 1f;
     private bool _muted;
     private double _rate = 1.0;
+    private WsolaAudioSource? _activeRateSource;
+    private readonly System.Collections.Generic.Dictionary<long, WsolaAudioSource> _rateSources = new();
+    private long _clockAnchorPosition;
+
+    /// <summary>Desired pitch-preserving rate (0.5 through 3); retained while paused.</summary>
+    public double PlaybackRate => Volatile.Read(ref _rate);
+
+    /// <summary>The audible position within the active source, in content frames, after endpoint/DSP latency.
+    /// Queue timing and progress at non-unity rates must use this instead of output-frame counters.</summary>
+    public long ContentPositionFrames => (long)Math.Round(ContentFrameAt(_position.Project(NowTicks100ns()).TotalSeconds * _format.SampleRate));
+
+    /// <summary>Wall-clock output frames remaining at the desired rate; -1 when the source length is unknown.</summary>
+    public long RemainingOutputFrames => VoiceTotalFrames > 0
+        ? (long)Math.Ceiling(Math.Max(0, VoiceTotalFrames - ContentPositionFrames) / PlaybackRate) : -1;
+
+    private double ContentFrameAt(double clockFrame)
+    {
+        var source = Volatile.Read(ref _activeRateSource);
+        return source is null ? Math.Max(0, clockFrame - _activeMixerStart)
+            : source.SourceFrameAt(Math.Max(0, clockFrame - _clockAnchorPosition - _activeMixerStart));
+    }
+
+    private static RingAudioSource? SourceRing(IAudioSource? source)
+        => source is WsolaAudioSource stretched ? stretched.Ring : source as RingAudioSource;
 
     // Single control-thread feeder (real device only — NOT the M4 MMCSS RT thread).
     private Thread? _pumpThread;
@@ -602,7 +626,11 @@ public sealed class PcmAudioSession : IMediaSession
             // Single-thread pull path: the mixer reads the decoder directly (unchanged — golden-PCM identical). _voice stays the
             // inner decoder so Seek/loudness address the real source. Wrap publishes the ring table FIRST (immediate); the
             // mixer voice swap goes through the command SPSC (applied at RenderBlock's top on the render thread).
-            var mixSrc = _feed is not null ? _feed.Wrap(voice) : voice;
+            var mixSrc = new WsolaAudioSource(_feed is not null ? _feed.Wrap(voice) : voice,
+                _format.SampleRate, _format.Channels) { Rate = PlaybackRate };
+            _rateSources.Clear();
+            _rateSources[PrimaryVoiceId] = mixSrc;
+            Volatile.Write(ref _activeRateSource, mixSrc);
             EnqueueMixerCmd(new MixerCmd
             {
                 Kind = CmdReplacePrimary,
@@ -647,8 +675,11 @@ public sealed class PcmAudioSession : IMediaSession
     public void SetActiveVoice(long voiceId, IAudioSource voice, TimeSpan duration, long totalFrames)
     {
         if (_disposed) return;
+        long previousVoice = ActiveVoiceIdValue;
         ActiveVoiceIdValue = voiceId;
+        if (previousVoice != voiceId) _rateSources.Remove(previousVoice);
         _activeMixerStart = _voiceStarts.TryGetValue(voiceId, out long start) ? start : 0;
+        if (_rateSources.TryGetValue(voiceId, out var rateSource)) Volatile.Write(ref _activeRateSource, rateSource);
         _voice = voice;
         _duration = duration;
         _voiceTotalFrames = totalFrames;
@@ -677,7 +708,9 @@ public sealed class PcmAudioSession : IMediaSession
                 return false;
             if (_feed is not null && _feed.RingCount >= 3) return false;
 
-            var src = _feed is not null ? _feed.WrapAdditional(voice, id) : voice;
+            var src = new WsolaAudioSource(_feed is not null ? _feed.WrapAdditional(voice, id) : voice,
+                _format.SampleRate, _format.Channels) { Rate = PlaybackRate };
+            _rateSources[id] = src;
             _voiceStarts[id] = startFrame;
             EnqueueMixerCmd(new MixerCmd
             {
@@ -787,6 +820,7 @@ public sealed class PcmAudioSession : IMediaSession
             long installedPosition = useSourcePosition ? Math.Max(0, voice.PositionFrames) : Math.Max(0, positionFrames);
             _position.Reset();
             _position.Rebase(0, installedPosition);
+            _clockAnchorPosition = installedPosition;
             _sink?.Duration(prepared.Duration);
             _sink?.Position(TimeSpan.FromSeconds((double)installedPosition / Format.SampleRate));
             _sink?.SettleTransport();
@@ -857,10 +891,12 @@ public sealed class PcmAudioSession : IMediaSession
                 case CmdReplacePrimary:
                     if (_feed is not null)
                         foreach (var old in _mixer.VoicesSpan)
-                            if (old.Src is RingAudioSource retired && !ReferenceEquals(retired, c.Voice.Src)) _feed.EnqueueRetire(retired);
+                            if (SourceRing(old.Src) is { } retired && !ReferenceEquals(retired, SourceRing(c.Voice.Src))) _feed.EnqueueRetire(retired);
                     if (_feed is null)
                         foreach (var old in _mixer.VoicesSpan)
-                            if (!ReferenceEquals(old.Src, c.Voice.Src)) (old.Src as IDisposable)?.Dispose();
+                            if (!ReferenceEquals(old.Src is WsolaAudioSource oldRate ? oldRate.Inner : old.Src,
+                                c.Voice.Src is WsolaAudioSource newRate ? newRate.Inner : c.Voice.Src))
+                                (old.Src as IDisposable)?.Dispose();
                     _mixer.Clear();
                     _mixer.AddVoice(in c.Voice);
                     break;
@@ -870,7 +906,7 @@ public sealed class PcmAudioSession : IMediaSession
                     foreach (var removed in _mixer.VoicesSpan)
                         if (removed.Id == c.Id)
                         {
-                            if (_feed is not null && removed.Src is RingAudioSource ring) _feed.EnqueueRetire(ring);
+                            if (_feed is not null && SourceRing(removed.Src) is { } ring) _feed.EnqueueRetire(ring);
                             else if (_feed is null) (removed.Src as IDisposable)?.Dispose();
                             break;
                         }
@@ -897,7 +933,7 @@ public sealed class PcmAudioSession : IMediaSession
                         if (voice.Id != c.Id)
                         {
                             _mixer.RemoveVoice(voice.Id);
-                            if (voice.Src is RingAudioSource ring) _feed?.EnqueueRetire(ring);
+                            if (SourceRing(voice.Src) is { } ring) _feed?.EnqueueRetire(ring);
                             if (_feed is null) (voice.Src as IDisposable)?.Dispose();
                         }
                         else
@@ -906,6 +942,10 @@ public sealed class PcmAudioSession : IMediaSession
                             _mixer.VoicesSpan[i].Env = GainEnvelope.Constant;
                         }
                     }
+                    break;
+                case CmdResetRate:
+                    foreach (var live in _mixer.VoicesSpan)
+                        if (live.Id == c.Id && live.Src is WsolaAudioSource stretched) stretched.Reset(c.Position);
                     break;
                 case CmdReset:
                     // Device-lost only: a Stop/Reset on an invalidated endpoint is a sink failure (→ rebuild), never a
@@ -1175,8 +1215,13 @@ public sealed class PcmAudioSession : IMediaSession
                 }).ConfigureAwait(false);
             }
             if (_disposed || revision != Interlocked.Read(ref _seekRevision)) return;
+            long rateReset = await PostMixerCommandAsync(new MixerCmd
+                { Kind = CmdResetRate, Id = ActiveVoiceIdValue, Position = achieved }, CancellationToken.None).ConfigureAwait(false);
+            await WaitAppliedAsync(rateReset, CancellationToken.None).ConfigureAwait(false);
+            _activeMixerStart = 0;
             _position.Reset();
             _position.Rebase(0, achieved);
+            _clockAnchorPosition = achieved;
             _sink?.Position(TimeSpan.FromSeconds((double)achieved / _format.SampleRate));
             _sink?.SettleTransport();
             _seekRebufferActive = false;
@@ -1191,7 +1236,12 @@ public sealed class PcmAudioSession : IMediaSession
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (!_disposed) _rate = rate <= 0 ? 1.0 : rate; }
+    public void SetRate(double rate)
+    {
+        if (_disposed) return;
+        Volatile.Write(ref _rate, WsolaAudioSource.ClampRate(rate));
+        _feed?.WakeOutput();
+    }
     /// <inheritdoc/>
     public void SetVolume(double volume) { if (!_disposed) _volume = (float)Math.Clamp(volume, 0, 1); }
     /// <inheritdoc/>
@@ -1371,10 +1421,16 @@ public sealed class PcmAudioSession : IMediaSession
                 if (renderInline) RtRenderOnce(frames);   // single-thread path; RT path renders on the feed thread instead
                 PublishPosition(sink);
                 PublishVisualizer();
-                // RT path: read the RT-published drained flag (never the render-thread-owned voice list), and never declare
-                // Ended while a voice-add command is still queued (spec §12). Single-thread path: read the mixer directly.
-                bool drained = _feed is not null ? (_mixer.DrainedPublished && !MixerCmdsPending) : _mixer.IsDrained(_mixer.ConsumeSeq);
-                if (drained && _pendingFrames == 0 && (_out is not IBufferedAudioSink drainSink || drainSink.WritableFrames >= drainSink.CapacityFrames))
+                // RT path: read the RT-published drained flag (never the render-thread-owned voice list) — RenderBlock
+                // now publishes it even on a voiceless tick (see DrainVerdict), so a fully-drained RT session is never
+                // stuck waiting for a render that will never come. Single-thread path: read the mixer directly. Either
+                // way, never declare Ended while a voice-add command is still queued (spec §12) or the sink still
+                // holds unplayed filler.
+                bool mixerDrained = _feed is not null ? _mixer.DrainedPublished : _mixer.IsDrained(_mixer.ConsumeSeq);
+                var drainSink = _out as IBufferedAudioSink;
+                var endVerdict = DrainVerdict.Decide(mixerDrained, MixerCmdsPending, _pendingFrames,
+                    drainSink?.WritableFrames ?? 0, drainSink?.CapacityFrames ?? 0, drainSink is not null);
+                if (endVerdict.PublishEnded)
                 {
                     _playRequested = false;
                     sink.PlayRequested(false);
@@ -1413,6 +1469,31 @@ public sealed class PcmAudioSession : IMediaSession
         }
         DrainMixerCmds();
         if (_pendingFrames > 0) return SubmitPending();
+
+        // Nothing-to-render short-circuit (spec §12; Wavee: playback stuck at the tail on WASAPI — the mixer clock
+        // ran on past the end forever). A voiceless mixer with nothing queued to arrive has no content: rendering it
+        // anyway would keep submitting zero-filled blocks into a buffered sink, which is therefore never empty, so
+        // the sink-drained half of the Ended check (Advance, below) can never observe true silence on a real device.
+        // Gated to the RUNNING transport phase (0) only: a pause fade-out (phase 1) still needs its tail rendered —
+        // over silence if the mixer is already voiceless — so the transport ramp's own EndFrame comparison further
+        // down can still fire and carry the pause through phase 2 → 3 → Paused.
+        if (Volatile.Read(ref _transportPhase) == 0)
+        {
+            var drainProbe = _out as IBufferedAudioSink;
+            var verdict = DrainVerdict.Decide(
+                mixerDrained: _mixer.VoiceCount == 0,
+                cmdsPending: MixerCmdsPending,
+                pendingFrames: _pendingFrames,
+                writableFrames: drainProbe?.WritableFrames ?? 0,
+                capacityFrames: drainProbe?.CapacityFrames ?? 0,
+                bufferedSink: drainProbe is not null);
+            if (!verdict.RenderAllowed)
+            {
+                _mixer.PublishDrained(_mixer.ConsumeSeq);
+                return 0;
+            }
+        }
+
         frames = Math.Clamp(frames, 1, _maxBlock);
         if (_out is IBufferedAudioSink buffered)
         {
@@ -1421,6 +1502,8 @@ public sealed class PcmAudioSession : IMediaSession
             frames = Math.Min(frames, writable);
             if (frames == 0) return 0;
         }
+        foreach (var voice in _mixer.VoicesSpan)
+            if (voice.Src is WsolaAudioSource stretched) stretched.Rate = PlaybackRate;
         int readable = _mixer.ReadableFrames(frames, out var waitingFor);
         if (readable <= 0 && waitingFor is not null)
         {
@@ -1440,7 +1523,7 @@ public sealed class PcmAudioSession : IMediaSession
         if (_feed is not null)
         {
             foreach (var retired in _mixer.RetiredSourcesThisBlock)
-                if (retired is RingAudioSource ring) _feed.EnqueueRetire(ring);
+                if (SourceRing(retired) is { } ring) _feed.EnqueueRetire(ring);
         }
         _mixer.PublishDrained(_mixer.ConsumeSeq);
         _masterGain.Process(buf, buf, frames, ctx);
@@ -1535,7 +1618,11 @@ public sealed class PcmAudioSession : IMediaSession
         _position.Sample(_presentationClock);
         if (_presentationClock.TryGetPlayed(out long played, out _))
             Interlocked.Exchange(ref _playedFrames, Math.Clamp(played, 0, SubmittedFrames));
-        sink.Position(_position.Project(NowTicks100ns()));
+        double clockFrame = _position.Project(NowTicks100ns()).TotalSeconds * _format.SampleRate;
+        var rateSource = Volatile.Read(ref _activeRateSource);
+        double contentFrame = rateSource is null ? clockFrame
+            : _clockAnchorPosition + _activeMixerStart + ContentFrameAt(clockFrame) - rateSource.InitialSourceFrame;
+        sink.Position(TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate));
     }
 
     private long NowTicks100ns()
@@ -1604,7 +1691,7 @@ public sealed class PcmAudioSession : IMediaSession
 
         // Capture the current timeline position (frames) so it continues seamlessly across the swap.
         long posFrames = Math.Max(0, _position.PlayedFramesCompensated);
-        long sourcePosition = Math.Max(0, posFrames - _activeMixerStart);
+        long sourcePosition = Math.Max(0, (long)Math.Round(ContentFrameAt(posFrames)));
         int previousRate = _format.SampleRate;
 
         var oldSink = _out;
@@ -1619,6 +1706,7 @@ public sealed class PcmAudioSession : IMediaSession
         // Re-anchor: the new device clock starts at 0 played frames == the current timeline position (spec §7.6).
         _position.Reset();
         _position.Rebase(0, posFrames);
+        // Keep the output-domain anchor: the WSOLA map still describes the surviving mixer timeline.
 
         // Short fade-in on resume (spec §7.9): drop to silence and ramp back to the live master volume — no resume click.
         _masterGain.SetLinear(0f);

@@ -15,7 +15,7 @@ namespace FluentGpu.Media;
 /// signals through a shared <see cref="MediaPlayerCore"/>, and swaps the inner backend only when the source
 /// <see cref="MediaKind"/> changes (spec §12 reuse-vs-recreate). <c>Play(source)</c> is the whole 90% case.
 /// <para>M0: the concrete video/audio backends land in M1/M2 — until one is registered on the <see cref="MediaRouter"/>,
-/// <see cref="OpenAsync"/> surfaces an honest <see cref="MediaError.NoBackend"/> rather than pretending. The routing +
+/// <c>OpenAsync</c> surfaces an honest <see cref="MediaError.NoBackend"/> rather than pretending. The routing +
 /// signal-forwarding + backend-swap wiring is fully real and exercised headlessly via a registered test backend.</para>
 /// </summary>
 public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSource
@@ -240,7 +240,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (_disposed) return; _core.Rate.Value = (float)rate; _session?.SetRate(rate); RequestVideoPump(); }
+    public void SetRate(double rate) { if (_disposed) return; rate = WsolaAudioSource.ClampRate(rate); _core.Rate.Value = (float)rate; _session?.SetRate(rate); RequestVideoPump(); }
     /// <inheritdoc/>
     public void SetVolume(double volume) { if (_disposed) return; _core.Volume.Value = (float)Math.Clamp(volume, 0, 1); _session?.SetVolume(volume); }
     /// <inheritdoc/>
@@ -316,7 +316,13 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     // ── source + queue + preroll ─────────────────────────────────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
-    public async ValueTask OpenAsync(MediaSource source, CancellationToken ct = default)
+    public ValueTask OpenAsync(MediaSource source, CancellationToken ct = default) => OpenCoreAsync(source, null, ct);
+
+    /// <inheritdoc/>
+    public ValueTask OpenAsync(MediaSource source, MediaOpenOptions options, CancellationToken ct = default)
+        => OpenCoreAsync(source, options, ct);
+
+    private async ValueTask OpenCoreAsync(MediaSource source, MediaOpenOptions? caller, CancellationToken ct)
     {
         if (_disposed) return;
         var kind = MediaKindSniffer.Sniff(source);
@@ -347,16 +353,24 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         }).ConfigureAwait(false);
         var opts = new MediaOpenOptions
         {
-            StartPaused = true,
-            Buffering = _buffering,
-            Network = source.Network ?? _network,
-            Abr = _abr,
+            // The caller decides WHERE and HOW the source opens (a song→video switch opens the video paused AT the song's
+            // position, so the first frame is never 0:00); the facade's own policies fill everything the caller left unset.
+            StartPaused = caller?.StartPaused ?? true,
+            StartPosition = caller is { StartPosition: var start } && start > TimeSpan.Zero ? start : TimeSpan.Zero,
+            Buffering = caller?.Buffering ?? _buffering,
+            Network = caller?.Network ?? source.Network ?? _network,
+            Abr = caller?.Abr ?? _abr,
             LiveLatency = source is AdaptiveSource adaptive ? adaptive.Options.LatencyMode : LiveLatencyMode.Standard,
             // The caller's live-ness declaration (MediaSource.WithLiveness) outranks any backend inference — see
             // SourceLiveness. Auto (the default) leaves every backend exactly as it was.
             Liveness = source.Liveness,
-            LicenseRelay = _licenseRelay
+            LicenseRelay = caller?.LicenseRelay ?? _licenseRelay
         };
+        if (opts.StartPosition > TimeSpan.Zero)
+        {
+            TimeSpan startAt = opts.StartPosition;
+            await OnUiAsync(() => _core.SetPosition(startAt)).ConfigureAwait(false);
+        }
         try
         {
             var session = await backend.OpenAsync(source, opts, ct).ConfigureAwait(false);
@@ -371,6 +385,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 _currentKind = kind;
                 AttachVideoPumpSource(session);
                 session.ConnectSignals(_sink);
+                session.SetRate(_core.Rate.Peek());
                 RequestVideoPump();
             }).ConfigureAwait(false);
             await LoadExternalSubtitlesAsync(source, opts.Network, ct).ConfigureAwait(false);
@@ -394,7 +409,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     }
 
     /// <summary>Marshal a <see cref="MediaPlayerCore"/> mutation onto the UI thread — its sole writer (spec §12
-    /// thread-ownership table; see <see cref="MediaPlayerCore"/>'s own threading doc). <see cref="OpenAsync"/>'s
+    /// thread-ownership table; see <see cref="MediaPlayerCore"/>'s own threading doc). <c>OpenAsync</c>'s
     /// post-open continuation and <see cref="LoadExternalSubtitlesAsync"/>'s post-fetch track registration both
     /// resume off the UI thread once a backend/network await drops the calling sync context, so both route their
     /// core writes through here instead of writing in place. Posts through the process-static

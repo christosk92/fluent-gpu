@@ -206,8 +206,19 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public void Commit() => Commits++;
 }
 
-/// <summary>An in-memory <see cref="IProtectedVideoPlayer"/> — no native CDM. Tests drive its signals to script the exact
-/// snapshot the protected session must map, and set <see cref="ReadyOnStart"/> to model a first-frame-ready preroll.</summary>
+/// <summary>
+/// An in-memory <see cref="IProtectedVideoPlayer"/> — no native runtime, no CDM, no GPU. Tests script the exact state the
+/// protected session must map through the <c>Set*</c> helpers and the settable event-derived properties
+/// (<see cref="Phase"/>, <see cref="FirstFrameEpoch"/>, <see cref="IsSeeking"/>, …), then call <see cref="RaisePump"/>
+/// to model the native runtime's "state changed, one pump is due" event.
+/// <para>Mirrors the production contract where it matters to the session: the transport verbs return COMPLETED tasks
+/// (their acknowledgement is the next event), <see cref="SeekAsync(long, SeekMode, long)"/> marks
+/// <see cref="IsSeeking"/> synchronously and clears <see cref="LastSeekLandedMs"/> (the test lands the seek by clearing
+/// <see cref="IsSeeking"/>), and <see cref="Pump"/> binds <see cref="SurfaceHandle"/> through the binding it is given on
+/// EVERY pump (recording the token) so a placement move is observable at the registry.</para>
+/// <para><see cref="ReadyOnPrefetch"/> makes <see cref="PrefetchAsync"/> land 4 s of forward media when it completes; <see cref="PrefetchResult"/> (null ⇒
+/// completes at once) lets a test hold the prefetch open.</para>
+/// </summary>
 internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
 {
     private readonly Signal<ProtectedVideoState> _state = new(ProtectedVideoState.Idle);
@@ -215,18 +226,45 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     private readonly Signal<long> _durationMs = new(0);
     private readonly Signal<Size2> _naturalSize = new(default);
     private readonly Signal<string?> _error = new(null);
+    private readonly List<string> _diagnostics = new();
 
     public ProtectedVideoRequest? StartedWith;
-    public int StartCalls, PlayCalls, PauseCalls, StopCalls, DisposeCalls;
+    public int StartCalls, PlayCalls, PauseCalls, SeekCalls, StopCalls, DisposeCalls;
+    public int PumpCalls, PrefetchCalls, SetStreamSizeCalls, SelectRepresentationCalls;
     public long LastSeekMs = -1;
     public SeekMode LastSeekMode = SeekMode.Accurate;
+    /// <summary>The keyframe hint of the last seek (-1 = "native decides", also what the two-argument overload sends).</summary>
+    public long LastKeyframeHint = -1;
+    public SizeI LastStreamSize;
     public float LastVolume = 1f;
-    public bool ReadyOnStart;
-    public bool SupportsAdaptiveSelection { get; set; }
-    public string? ActiveVideoRepresentationId { get; private set; }
+    public float LastRate = 1f;
+    public int LastPrefetchSegments;
+    public bool ReadyOnPrefetch;
+    /// <summary>Holds <see cref="PrefetchAsync"/> open until the test completes it; null ⇒ the prefetch completes at once.</summary>
+    public TaskCompletionSource? PrefetchResult;
+    /// <summary>The scripted keyframe table (ascending ms) <see cref="GetKeyframes"/> copies out.</summary>
+    public long[] Keyframes = Array.Empty<long>();
+    /// <summary>The scripted buffered ranges as flattened (start, end) ms pairs <see cref="GetBuffered"/> copies out.</summary>
+    public long[] Buffered = Array.Empty<long>();
+    /// <summary>The swap-chain handle <see cref="Pump"/> binds through the binding while <see cref="HasSurface"/> (0 = none).</summary>
+    public nuint SurfaceHandle;
+    /// <summary>Every binding token the player was pumped with, in order (0 for an inert/default binding).</summary>
+    public readonly List<int> PumpedTokens = new();
     public string? LastSelectedRepresentationId;
+
+    public bool SupportsAdaptiveSelection { get; set; }
+    public string? ActiveVideoRepresentationId { get; set; }
     public bool HasSurface { get; set; }
-    public TaskCompletionSource<bool>? PlayAck, PauseAck, SeekAck;
+    public ProtectedVideoPhase Phase { get; set; }
+    public long FirstFrameEpoch { get; set; }
+    public long PositionQpc { get; set; }
+    public bool IsSeeking { get; set; }
+    public long LastSeekLandedMs { get; set; } = -1;
+    public long ForwardBufferedMs { get; set; }
+    public long RetainedBehindMs { get; set; }
+    public int IndexEpoch { get; set; }
+    public long BytesDownloaded { get; set; }
+    public long DownloadElapsedMs { get; set; }
 
     public IReadSignal<ProtectedVideoState> State => _state;
     public IReadSignal<long> PositionMs => _positionMs;
@@ -234,12 +272,41 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public IReadSignal<Size2> NaturalSize => _naturalSize;
     public IReadSignal<string?> Error => _error;
 
+    public event Action? PumpRequested;
+
+    /// <summary>How many handlers are subscribed to <see cref="PumpRequested"/> (the session subscribes once, unsubscribes on dispose).</summary>
+    public int PumpRequestedSubscribers => PumpRequested?.GetInvocationList().Length ?? 0;
+
+    /// <summary>Model the native runtime's event: native state changed and one coalesced UI pump is due.</summary>
+    public void RaisePump() => PumpRequested?.Invoke();
+
+    /// <summary>The lifecycle lines the session appended through <see cref="LogDiagnostic"/>.</summary>
+    public string[] Diagnostics { get { lock (_diagnostics) return _diagnostics.ToArray(); } }
+
     // Test scripting helpers.
     public void SetState(ProtectedVideoState s) => _state.Value = s;
     public void SetError(string? e) => _error.Value = e;
     public void SetNaturalSize(int w, int h) => _naturalSize.Value = new Size2(w, h);
     public void SetDurationMs(long ms) => _durationMs.Value = ms;
     public void SetPositionMs(long ms) => _positionMs.Value = ms;
+
+    public Task PrefetchAsync(int segments, CancellationToken ct)
+    {
+        PrefetchCalls++;
+        LastPrefetchSegments = segments;
+        if (PrefetchResult is not { } pending)
+        {
+            if (ReadyOnPrefetch) ForwardBufferedMs = 4000;
+            return Task.CompletedTask;
+        }
+        return AwaitPrefetch(pending.Task, ct);
+    }
+
+    private async Task AwaitPrefetch(Task pending, CancellationToken ct)
+    {
+        await pending.WaitAsync(ct).ConfigureAwait(false);
+        if (ReadyOnPrefetch) ForwardBufferedMs = 4000;
+    }
 
     public void Start(ProtectedVideoRequest request)
     {
@@ -252,28 +319,279 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
                         catalog.Tracks[t].Representations[r].InitUrl == request.InitUrl)
                         ActiveVideoRepresentationId = catalog.Tracks[t].Representations[r].Id;
         if (!request.StartPaused) PlayCalls++;
-        if (ReadyOnStart) { HasSurface = true; _naturalSize.Value = new Size2(1280, 720); _state.Value = ProtectedVideoState.Playing; }
     }
 
-    public ValueTask PlayAsync() { PlayCalls++; return PlayAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
-    public ValueTask PauseAsync() { PauseCalls++; return PauseAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
-    public ValueTask SeekAsync(long positionMs, SeekMode mode)
+    public ValueTask PlayAsync() { PlayCalls++; return ValueTask.CompletedTask; }
+    public ValueTask PauseAsync() { PauseCalls++; return ValueTask.CompletedTask; }
+    public ValueTask SeekAsync(long positionMs, SeekMode mode) => SeekAsync(positionMs, mode, -1);
+    public ValueTask SeekAsync(long positionMs, SeekMode mode, long keyframeMs)
     {
+        SeekCalls++;
         LastSeekMs = positionMs;
         LastSeekMode = mode;
-        return SeekAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask;
+        LastKeyframeHint = keyframeMs;
+        LastSeekLandedMs = -1;
+        IsSeeking = true;   // production marks the seek pending synchronously; Seeked clears it
+        return ValueTask.CompletedTask;
     }
+
+    public int GetKeyframes(Span<long> into)
+    {
+        long[] table = Keyframes;
+        int n = Math.Min(into.Length, table.Length);
+        table.AsSpan(0, n).CopyTo(into);
+        return table.Length;
+    }
+
+    public int GetBuffered(Span<long> pairs)
+    {
+        long[] ranges = Buffered;
+        int total = ranges.Length / 2;
+        int n = Math.Min(pairs.Length / 2, total);
+        ranges.AsSpan(0, n * 2).CopyTo(pairs);
+        return total;
+    }
+
     public ValueTask SelectVideoRepresentationAsync(string representationId)
     {
+        SelectRepresentationCalls++;
         LastSelectedRepresentationId = representationId;
         ActiveVideoRepresentationId = representationId;
         return ValueTask.CompletedTask;
     }
+
     public void SetVolume(float volume) => LastVolume = volume;
-    public void SetRate(float rate) { }
+    public void SetRate(float rate) => LastRate = rate;
+    public void SetStreamSize(SizeI size) { SetStreamSizeCalls++; LastStreamSize = size; }
     public void Stop() => StopCalls++;
-    public void Pump(in VideoBinding binding) { /* snapshot is driven by the test via the Set* helpers */ }
+    public void LogDiagnostic(string message) { lock (_diagnostics) _diagnostics.Add(message); }
+
+    public void Pump(in VideoBinding binding)
+    {
+        PumpCalls++;
+        PumpedTokens.Add(binding.Token);
+        if (HasSurface && SurfaceHandle != 0) binding.Bind(SurfaceHandle);   // bound EVERY pump, as production does
+    }
+
     public void Dispose() => DisposeCalls++;
+}
+
+/// <summary>
+/// A recording <see cref="IPrRuntimeNative"/> — the four native calls <see cref="ProtectedVideoRuntime"/> makes, with no
+/// DLL, no CDM and no GPU. Handles are monotonically increasing and never 0. Every call is recorded (in order) under a
+/// lock, because the runtime's warm-idle teardown runs on a timer thread while the test awaits <see cref="Destroyed"/>.
+/// </summary>
+internal sealed class FakeRuntimeNative : IPrRuntimeNative
+{
+    private readonly object _gate = new();
+    private readonly List<string> _calls = new();
+    private readonly List<ulong> _released = new();
+    private readonly List<(string Kid, ulong License)> _acquired = new();
+    private ulong _nextHandle = 0x100;
+    private int _creates, _destroys, _acquires, _releases;
+
+    /// <summary>Whether the "DLL" loads (<see cref="IPrRuntimeNative.IsAvailable"/>).</summary>
+    public bool Available { get; set; } = true;
+    /// <summary>A negative HRESULT forces <see cref="RuntimeCreate"/> to fail (0 = succeed).</summary>
+    public int CreateHr { get; set; }
+    /// <summary>A negative HRESULT forces <see cref="LicenseAcquire"/> to fail with no handle (0 = succeed).</summary>
+    public int AcquireHr { get; set; }
+    /// <summary>Runs INSIDE <see cref="LicenseAcquire"/> with the handle about to be returned and the KID, before the call
+    /// returns — models a license event racing the runtime's handle assignment. May throw to model a native fault.</summary>
+    public Action<ulong, string>? DuringAcquire { get; set; }
+
+    /// <summary>Completes on the first <see cref="RuntimeDestroy"/> — a test awaits it with a bounded timeout instead of
+    /// polling the runtime's warm-idle teardown (which runs on a timer thread).</summary>
+    public TaskCompletionSource Destroyed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public int CreateCount { get { lock (_gate) return _creates; } }
+    public int DestroyCount { get { lock (_gate) return _destroys; } }
+    public int AcquireCount { get { lock (_gate) return _acquires; } }
+    public int ReleaseCount { get { lock (_gate) return _releases; } }
+    public ulong LastRuntime { get; private set; }
+    public string? LastStorePath { get; private set; }
+
+    /// <summary>Every call in order: <c>create:{rt}</c>, <c>destroy:{rt}</c>, <c>acquire:{kid}:{lic}</c>, <c>release:{lic}</c>.</summary>
+    public string[] Calls { get { lock (_gate) return _calls.ToArray(); } }
+    public ulong[] Released { get { lock (_gate) return _released.ToArray(); } }
+    public (string Kid, ulong License)[] Acquired { get { lock (_gate) return _acquired.ToArray(); } }
+
+    public bool IsAvailable => Available;
+
+    public int RuntimeCreate(string storePath, nint ctx, out ulong runtime)
+    {
+        lock (_gate)
+        {
+            _creates++;
+            LastStorePath = storePath;
+            if (CreateHr < 0)
+            {
+                runtime = 0;
+                _calls.Add("create-failed");
+                return CreateHr;
+            }
+            runtime = _nextHandle++;
+            LastRuntime = runtime;
+            _calls.Add("create:" + runtime);
+            return 0;
+        }
+    }
+
+    public void RuntimeDestroy(ulong runtime)
+    {
+        lock (_gate)
+        {
+            _destroys++;
+            _calls.Add("destroy:" + runtime);
+        }
+        Destroyed.TrySetResult();
+    }
+
+    public int LicenseAcquire(ulong runtime, ReadOnlySpan<byte> pssh, string kid, nint ctx, out ulong license)
+    {
+        ulong lic;
+        lock (_gate)
+        {
+            _acquires++;
+            if (AcquireHr < 0)
+            {
+                _calls.Add("acquire-failed:" + kid);
+                license = 0;
+                return AcquireHr;
+            }
+            lic = _nextHandle++;
+            _acquired.Add((kid, lic));
+            _calls.Add("acquire:" + kid + ":" + lic);
+        }
+        DuringAcquire?.Invoke(lic, kid);   // outside the lock: the callback re-enters the runtime
+        license = lic;
+        return 0;
+    }
+
+    public void LicenseRelease(ulong runtime, ulong license)
+    {
+        lock (_gate)
+        {
+            _releases++;
+            _released.Add(license);
+            _calls.Add("release:" + license);
+        }
+    }
+}
+
+/// <summary>
+/// A recording <see cref="IPrSessionNative"/> — every <c>FgPrSession*</c> call <see cref="ProtectedVideoSession"/> makes,
+/// with no DLL. Calls are recorded in order as short strings (<c>create:{s}</c>, <c>attach:{s}:{lic}</c>,
+/// <c>seek:{s}:{ms}:{mode}:{kf}</c>, <c>play:{s}</c>, …). The snapshot a pump reads is <see cref="Snapshot"/> (a test
+/// edits it in place); <see cref="DuringPrefetch"/> runs inside the prefetch call to model the feeder answering at once.
+/// </summary>
+internal sealed class FakeSessionNative : IPrSessionNative
+{
+    private readonly object _gate = new();
+    private readonly List<string> _calls = new();
+    private ulong _next = 0x5000;
+
+    /// <summary>A negative HRESULT fails <see cref="SessionCreate"/> with no handle.</summary>
+    public int CreateHr { get; set; }
+    /// <summary>A negative HRESULT fails <see cref="SessionAttach"/>.</summary>
+    public int AttachHr { get; set; }
+    /// <summary>A negative HRESULT fails <see cref="SessionPrefetch"/>.</summary>
+    public int PrefetchHr { get; set; }
+    /// <summary>What the last create was given.</summary>
+    public PrOpenDescription? LastOpen { get; private set; }
+    /// <summary>The snapshot every <see cref="SessionSnapshot"/> returns.</summary>
+    public PrNative.Snapshot Snapshot;
+    /// <summary>The init protection <see cref="SessionGetInitProtection"/> reports (empty PSSH ⇒ "not parsed yet").</summary>
+    public byte[] InitPssh = Array.Empty<byte>();
+    public string? InitKid;
+    /// <summary>Runs inside <see cref="SessionPrefetch"/> with the session handle, before the call returns.</summary>
+    public Action<ulong>? DuringPrefetch { get; set; }
+
+    public string[] Calls { get { lock (_gate) return _calls.ToArray(); } }
+    public int CountOf(string verb) { lock (_gate) return _calls.FindAll(c => c.StartsWith(verb + ":", StringComparison.Ordinal)).Count; }
+
+    private int Record(string call, int hr = 0) { lock (_gate) _calls.Add(call); return hr; }
+
+    public int SessionCreate(ulong runtime, PrOpenDescription desc, out ulong session)
+    {
+        lock (_gate)
+        {
+            LastOpen = desc;
+            if (CreateHr < 0) { session = 0; _calls.Add("create-failed"); return CreateHr; }
+            session = _next++;
+            _calls.Add("create:" + session);
+            return 0;
+        }
+    }
+
+    public int SessionPrefetch(ulong runtime, ulong session, long aroundMs, int segments)
+    {
+        Record($"prefetch:{session}:{aroundMs}:{segments}");
+        if (PrefetchHr < 0) return PrefetchHr;
+        DuringPrefetch?.Invoke(session);
+        return 0;
+    }
+
+    public int SessionAttach(ulong runtime, ulong session, ulong license) => Record($"attach:{session}:{license}", AttachHr);
+    public int SessionDetach(ulong runtime, ulong session) => Record($"detach:{session}");
+    public void SessionDestroy(ulong runtime, ulong session) => Record($"destroy:{session}");
+    public int SessionPlay(ulong runtime, ulong session) => Record($"play:{session}");
+    public int SessionPause(ulong runtime, ulong session) => Record($"pause:{session}");
+    public int SessionSeek(ulong runtime, ulong session, long targetMs, int mode, long keyframeMs)
+        => Record($"seek:{session}:{targetMs}:{mode}:{keyframeMs}");
+    public int SessionSetVolume(ulong runtime, ulong session, double volume) => Record($"volume:{session}:{volume}");
+    public int SessionSetRate(ulong runtime, ulong session, double rate) => Record($"rate:{session}:{rate}");
+    public int SessionSetStreamSize(ulong runtime, ulong session, int width, int height) => Record($"size:{session}:{width}x{height}");
+    public int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
+                                           string? prefix, string? suffix) => Record($"rep:{session}:{index}");
+
+    // The pump's hot calls record nothing: the allocation gate measures them.
+    public int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot)
+    {
+        snapshot = Snapshot;
+        return 0;
+    }
+
+    public int SessionGetKeyframes(ulong runtime, ulong session, Span<long> into) => 0;
+    public int SessionGetBuffered(ulong runtime, ulong session, Span<long> pairs) => 0;
+
+    public int SessionGetInitProtection(ulong runtime, ulong session, Span<byte> pssh, Span<char> kid)
+    {
+        Record($"initprotection:{session}");
+        if (InitPssh.Length == 0) return 0;
+        InitPssh.AsSpan(0, Math.Min(InitPssh.Length, pssh.Length)).CopyTo(pssh);
+        if (InitKid is { } k && kid.Length > k.Length) { k.AsSpan().CopyTo(kid); kid[k.Length] = '\0'; }
+        return InitPssh.Length;
+    }
+}
+
+/// <summary>A recording <see cref="ILicenseDelivery"/>: captures the FIRST delivery's bytes and HRESULT, counts every
+/// delivery (the relay contract is exactly once), and completes <see cref="Delivered"/> on the first one.</summary>
+internal sealed class RecordingDelivery : ILicenseDelivery
+{
+    private readonly object _gate = new();
+    private int _calls;
+    private byte[]? _bytes;
+    private int _hr;
+
+    public TaskCompletionSource Delivered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public int Calls { get { lock (_gate) return _calls; } }
+    public byte[]? Bytes { get { lock (_gate) return _bytes; } }
+    public int Hr { get { lock (_gate) return _hr; } }
+
+    public void Deliver(ReadOnlySpan<byte> license, int hr)
+    {
+        lock (_gate)
+        {
+            _calls++;
+            if (_calls == 1)
+            {
+                _bytes = license.ToArray();
+                _hr = hr;
+            }
+        }
+        Delivered.TrySetResult();
+    }
 }
 
 /// <summary>A recording <see cref="IMediaBackend"/> that returns a scripted session — used to verify MfMediaPlayer routes

@@ -39,6 +39,29 @@ public sealed partial class SceneStore
 
     private byte[] _aux = System.Array.Empty<byte>();
 
+    // P4 fix (2026-09-19, "the drawer-under-context-flyout overflow"): a per-node MONOTONIC subtree-content version,
+    // parallel SoA column to `_aux`. AuxFlags.SubtreeLayoutDirty is FRAME-scoped (set on a LayoutDirty 0→1 edge,
+    // cleared once ClearLayoutDirty finishes the frame's worklist) — perfectly sized for the Arrange/Measure
+    // WITHIN-FRAME early-outs, but FlexLayout's cross-pass measure ring (Ring0/Ring1 in MeasureMemo) persists
+    // ACROSS frames, and nothing versioned the SUBTREE a stored ring slot actually answers for. A row that grows
+    // (chevron opens a drawer) gets a fresh, correct ring entry that frame; a LATER frame's full-root layout (an
+    // unrelated overlay opening) revisits the row at the SAME availW with IsLayoutClean(row) now true again (this
+    // frame touched nothing under it) — the stale CLOSED-size ring entry hits and Measure returns without
+    // descending, so Arrange commits the closed height and the open drawer paints over the rows below it.
+    // `_subtreeVersion[n]` increments every time node n OR anything below it is marked LayoutDirty (see
+    // BumpSubtreeVersionChain below — EVERY mark, not just the
+    // 0→1 edge the flag walk keys on) and NEVER resets — so a ring slot recorded at version V is provably stale
+    // the instant the live reading moves past V, this frame or fifty frames later. Cheaper than invalidating the
+    // ring by walking it (StoreRing/TryRingHit already touch this node's own slot) and allocation-free (one more
+    // uint read/write alongside the existing flag walk).
+    private uint[] _subtreeVersion = System.Array.Empty<uint>();
+
+    /// <summary>This node's current subtree-content version (see <see cref="_subtreeVersion"/>). FlexLayout's cross-pass
+    /// measure ring stamps this at <c>StoreRing</c> time and requires it unchanged at <c>TryRingHit</c> time — the
+    /// authoritative, cross-frame replacement for trusting <see cref="IsLayoutClean"/> alone (which only proves
+    /// "clean this frame", not "clean since the ring entry was written").</summary>
+    public uint SubtreeVersion(NodeHandle h) => _subtreeVersion[h.Raw.Index];
+
     /// <summary>True when the node is collapsed by the presence channel (<see cref="Dsl.Element.Visible"/> resolved
     /// false) — out of layout flow, unpainted, not hit-testable. Default false (every node starts visible).</summary>
     public bool IsCollapsed(NodeHandle h) => ((AuxFlags)_aux[h.Raw.Index] & AuxFlags.Collapsed) != 0;
@@ -124,6 +147,26 @@ public sealed partial class SceneStore
             if ((bits & AuxFlags.SubtreeLayoutDirty) != 0) return;
             _aux[n] = (byte)(bits | AuxFlags.SubtreeLayoutDirty);
         }
+    }
+
+    /// <summary>Bump <see cref="_subtreeVersion"/> for <paramref name="idx"/> and EVERY ancestor to the root. Run from
+    /// <see cref="Mark"/> on every <see cref="NodeFlags.LayoutDirty"/> mark — deliberately NOT only on the 0→1 edge
+    /// and deliberately NOT sharing <see cref="MarkSubtreeLayoutDirtyChain"/>'s early stop:
+    /// <list type="bullet">
+    /// <item>A node marked a SECOND time while still dirty (two edits before this frame's <c>ClearLayoutDirty</c>; a
+    /// realize/rebind between the host's two RunDirty passes) has new content, but the flag walk sees no edge. A ring
+    /// slot stored by the layout pass in between (the first pass) answers for the OLD content, and once
+    /// <c>ClearLayoutDirty</c> runs the frame-scoped <see cref="IsLayoutClean"/> gate can no longer tell — only a
+    /// version moved by THIS mark can (found via gate.layout.parity-from-scratch, which edits without clearing).</item>
+    /// <item>An ancestor that already has <see cref="AuxFlags.SubtreeLayoutDirty"/> set THIS FRAME can still hold a
+    /// ring entry persisted from a PRIOR frame that this new mark must also invalidate; stopping where the flag walk
+    /// stops would leave it looking fresh.</item>
+    /// </list>
+    /// idx's own version bumps too: idx is itself the subtree root whose ring slot(s) this change invalidates.</summary>
+    private void BumpSubtreeVersionChain(int idx)
+    {
+        _subtreeVersion[idx]++;
+        for (int n = _parent[idx]; n != 0; n = _parent[n]) _subtreeVersion[n]++;
     }
 
     /// <summary>The mirror clear, run once per <c>ClearLayoutDirty</c> worklist entry: walk from

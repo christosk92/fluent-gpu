@@ -18,18 +18,48 @@ namespace FluentGpu.Media;
 /// <item>HTTP/2 with multiple connections — CDN request multiplexing; bounded <c>MaxConnectionsPerServer</c>.</item>
 /// <item>Automatic decompression; per-request deadline via the token (NOT the global <c>HttpClient.Timeout</c>).</item>
 /// <item>Disk-first: a persistent <see cref="DiskImageCache"/> serves instant, offline, restart-surviving hits.</item>
-/// <item>Streams the body into an <c>ArrayPool</c> buffer — no per-fetch <c>byte[]</c>.</item>
+/// <item>Streams the body into ONE buffer from the fetcher's own pool, sized from <c>Content-Length</c> — no per-fetch
+///   <c>byte[]</c>, no rent-copy-return chain, and no dependence on how small the host capped
+///   <c>ArrayPool&lt;byte&gt;.Shared</c> (see <see cref="ReadAllPooled"/>).</item>
 /// </list>
 /// Reuse ONE instance app-wide. Maps transport/HTTP-status to <see cref="ImageFailureKind"/> for transient-vs-permanent.
 /// </summary>
 public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
 {
+    // Buffer policy (scroll-feel 2026-09-16 W3-E1). Encoded covers are 50–400 KB, well past the 85 KB LOH threshold, and
+    // the app caps ArrayPool<byte>.Shared at 4 partitions × 4 arrays for its own reasons — so a Shared rental that missed
+    // the pool was a fresh LOH array, and the old "start at 64 KB, double" loop rented (and dropped) a CHAIN of them per
+    // cover: 64 → 128 → 256 KB for a 150 KB JPEG. That worker-thread churn was the gen-2 signature behind cover-heavy
+    // scrolls. A dedicated pool sized for encoded images (8 MiB ceiling, 16 arrays per size class — a scroll's worth of
+    // in-flight fetches at every bucket) plus one Content-Length-sized rental makes the steady state allocation-free.
+
+    /// <summary>Largest array the dedicated pool retains; a rental above it is served fresh and dropped on return (a
+    /// multi-megabyte poster is a one-off, not a scroll workload).</summary>
+    internal const int PoolMaxArrayLength = 8 * 1024 * 1024;
+    /// <summary>Arrays retained per power-of-two size class — bounds the pool at a few MB per hot bucket while covering
+    /// the scheduler's whole worker fan-out (≤ 6 workers × in-flight + just-decoded).</summary>
+    internal const int PoolMaxArraysPerBucket = 16;
+    /// <summary>Slack added to a <c>Content-Length</c> hint so the buffer has room for the terminating zero-length read:
+    /// without it a body whose length is exactly a pool bucket size (65 536, 131 072, …) would be "full" before EOF was
+    /// observed and take one needless doubling step.</summary>
+    internal const int ContentLengthSlack = 1024;
+    /// <summary>First rental when the response carries no length (chunked transfer); grows by doubling.</summary>
+    internal const int ChunkedInitialCapacity = 64 * 1024;
+    /// <summary>Ceiling on a single body buffer (a length hint beyond it is clamped and the doubling path takes over).</summary>
+    internal const int MaxBufferBytes = 64 * 1024 * 1024;
+    private const int MinBufferBytes = 4096;
+
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
     private readonly DiskImageCache? _disk;
     private readonly string _accept;
+    private readonly ArrayPool<byte> _pool;
 
     public DefaultImageFetcher(HttpClient? http = null, DiskImageCache? diskCache = null, string? acceptHeader = null)
+        : this(http, diskCache, acceptHeader, pool: null) { }
+
+    /// <summary>Test seam: inject the body-buffer pool (a counting wrapper) to observe the rent/return policy.</summary>
+    internal DefaultImageFetcher(HttpClient? http, DiskImageCache? diskCache, string? acceptHeader, ArrayPool<byte>? pool)
     {
         _ownsHttp = http is null;
         _http = http ?? CreateClient();
@@ -37,9 +67,31 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
         // Safe default: never advertise a format WIC may lack a codec for (avoids an undecodable response).
         // Pass "image/avif,image/webp,image/*" to opt into modern formats when the platform has the codecs.
         _accept = acceptHeader ?? "image/jpeg,image/png,image/*;q=0.5";
+        _pool = pool ?? ArrayPool<byte>.Create(PoolMaxArrayLength, PoolMaxArraysPerBucket);
     }
 
-    private static HttpClient CreateClient()
+    /// <summary>Hand a <see cref="FetchResult.Buffer"/> back to the dedicated pool (the scheduler's post-decode call).
+    /// Tolerates a foreign array the way <c>PixelBufferPool</c> does — a non-power-of-two length is dropped to the GC,
+    /// never thrown on the worker. A <see cref="DiskImageCache"/> hit is such a foreign array (it rents from
+    /// <c>ArrayPool&lt;byte&gt;.Shared</c>, whose buckets are the same 16·2ⁿ sizes), so a disk-served cover simply
+    /// migrates into this pool on return — harmless, and one fewer array pressed through the capped shared pool.</summary>
+    public void ReturnBuffer(byte[] buffer)
+    {
+        if (buffer.Length < 16 || !System.Numerics.BitOperations.IsPow2(buffer.Length)) return;
+        _pool.Return(buffer);
+    }
+
+    /// <summary>The first rental's requested size: <c>Content-Length</c> + <see cref="ContentLengthSlack"/> when the
+    /// response declares a length (one rental, one read loop, no growth), <see cref="ChunkedInitialCapacity"/> when it does
+    /// not. Pure, so the sizing rule is unit-tested without a stream.</summary>
+    internal static int InitialCapacity(long? contentLength)
+        => contentLength is long len
+            ? (int)Math.Clamp(len + ContentLengthSlack, MinBufferBytes, MaxBufferBytes)
+            : ChunkedInitialCapacity;
+
+    /// <summary>The engine's image client, optionally with its transport wrapped (<c>AppOptions.ImageHttpHandler</c>):
+    /// the pooling, HTTP/2 and timeout policy stay the engine's; the wrapper only sees the requests go by.</summary>
+    public static HttpClient CreateClient(Func<HttpMessageHandler, HttpMessageHandler>? wrap = null)
     {
         var handler = new SocketsHttpHandler
         {
@@ -50,7 +102,7 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
             AutomaticDecompression = DecompressionMethods.All,
             ConnectTimeout = TimeSpan.FromSeconds(10),
         };
-        return new HttpClient(handler, disposeHandler: true)
+        return new HttpClient(wrap is null ? handler : wrap(handler), disposeHandler: true)
         {
             Timeout = Timeout.InfiniteTimeSpan,                     // the per-request CancellationToken owns the deadline
             DefaultRequestVersion = HttpVersion.Version20,          // prefer HTTP/2 (CDN multiplexing); falls back to 1.1
@@ -102,12 +154,13 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
         return await ReadAllPooled(fs, fs.Length, ct).ConfigureAwait(false);
     }
 
-    // Read a response/file body fully into a single ArrayPool buffer (grown by doubling if the length hint was short).
-    // No per-fetch byte[] allocation in the steady state — the pool reuses the buffer across fetches.
-    private static async Task<FetchResult> ReadAllPooled(Stream s, long? hint, CancellationToken ct)
+    /// <summary>Read a response/file body fully into ONE buffer from the fetcher's pool. With a length hint the single
+    /// rental (<see cref="InitialCapacity"/>) holds the whole body plus the EOF read; a chunked body (no hint) or a hint
+    /// the server undershot falls back to doubling, returning each outgrown buffer to the same pool. The result's buffer
+    /// belongs to the caller until it comes back through <see cref="ReturnBuffer"/>. Internal for the buffer-policy tests.</summary>
+    internal async Task<FetchResult> ReadAllPooled(Stream s, long? hint, CancellationToken ct)
     {
-        int cap = (int)Math.Clamp(hint ?? 64 * 1024, 4096, 64 * 1024 * 1024);
-        byte[] buf = ArrayPool<byte>.Shared.Rent(cap);
+        byte[] buf = _pool.Rent(InitialCapacity(hint));
         int len = 0;
         try
         {
@@ -115,9 +168,9 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
             {
                 if (len == buf.Length)
                 {
-                    byte[] bigger = ArrayPool<byte>.Shared.Rent(buf.Length * 2);
+                    byte[] bigger = _pool.Rent(buf.Length * 2);
                     Buffer.BlockCopy(buf, 0, bigger, 0, len);
-                    ArrayPool<byte>.Shared.Return(buf);
+                    _pool.Return(buf);
                     buf = bigger;
                 }
                 int n = await s.ReadAsync(buf.AsMemory(len), ct).ConfigureAwait(false);
@@ -128,7 +181,7 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(buf);   // never leak the rented buffer on a mid-stream error/cancel
+            _pool.Return(buf);   // never leak the rented buffer on a mid-stream error/cancel
             throw;
         }
     }

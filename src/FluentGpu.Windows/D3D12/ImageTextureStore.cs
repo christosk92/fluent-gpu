@@ -29,6 +29,20 @@ namespace FluentGpu.Rhi.D3D12;
 /// row-by-row memcpy, sampled straight out of <c>COMMON</c> by implicit promotion: no staging buffer, no
 /// <c>CopyTextureRegion</c>, and never a <c>COPY_DEST</c> transition — the barrier the Adreno UMD mishandles
 /// (adreno-hang-fixes.md M1). <see cref="ImageAtlasPacker.RequiresCopyDestTransition"/> is that posture as a value.</para>
+/// <para><b>Upload heap ring (discrete path).</b> The staging buffer a discrete <see cref="Stage"/> writes into is NOT
+/// allocated per image. It used to be: every landed cover paid <c>CreateCommittedResource(UPLOAD)</c> + <c>Map</c> +
+/// the row memcpy + <c>Unmap</c> on the render thread inside the present turn, and <see cref="FlushCopies"/> retired
+/// the heap one flush later, so a scroll that landed 20 covers did 20 heap creates and 20 heap releases on the thread
+/// whose Present-to-Present interval IS the vblank measurement (<c>AppHost.NotePresented</c>). A committed-resource
+/// create is a kernel round trip (VidMm allocation + page-table update) of 100–500 µs each on a discrete adapter, so
+/// image-heavy routes missed 12–18 % of vblanks while the UI frames themselves averaged 0.5 ms. Now the heaps live in
+/// a small ring keyed by power-of-two byte bucket (<see cref="MinUploadBucket"/> … <see cref="MaxUploadBucket"/>):
+/// <see cref="Stage"/> pops a heap from the request's bucket (creating one only when the bucket is empty) and the
+/// fence-deferred retire (<c>Kind 5</c>) hands it back once the GPU has fenced past the copy, so steady-state staging
+/// is Map + memcpy + Unmap and nothing else. The FREE ring is capped at <see cref="MaxPooledUploadBytes"/>; a return
+/// beyond the cap releases the heap instead (the ring bridges the copy latency, it is not a cache), and a request above
+/// the largest bucket still gets a one-off heap released on retire (<c>Kind 3</c>), exactly as before. UMA never
+/// allocates a staging heap (pixels go straight into the CPU-visible texture), so the ring is inert there.</para>
 /// </summary>
 internal sealed unsafe class ImageTextureStore : IDisposable
 {
@@ -41,6 +55,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public bool Atlas;                       // packed into an atlas page (else owns a pool/standalone texture)
         public ID3D12Resource* Resource;         // own texture (pool/standalone); null when Atlas
         public ID3D12Resource* Upload;           // staging buffer (padded rows), awaiting the copy
+        public long UploadCapacity;              // bytes Upload holds: a ring bucket (≤ MaxUploadBucket) or the exact one-off size
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;  // bind handle: own SRV (pool/standalone) or the page's SRV (atlas)
         public int Slot;                         // own SRV slot (pool/standalone); -1 when Atlas
         public int W, H, RowPitch;               // image pixels
@@ -87,8 +102,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         public SmallImageHeapPool.Lease Placed; // kind 4: heap-owned placed texture, descriptor returned after fence
         public ulong Fence;
-        public int Kind;                        // 0 standalone-release | 1 pool-return | 2 atlas-cell-return | 3 upload-release
-        public ID3D12Resource* Upload, Resource; // Upload always released; Resource released for kind 0
+        public int Kind;                        // 0 standalone-release | 1 pool-return | 2 atlas-cell-return | 3 upload-release (one-off heap) | 5 upload-return (ring heap back to its bucket)
+        public ID3D12Resource* Upload, Resource; // Upload always recycled via RecycleUpload (ring or release, by capacity); Resource released for kind 0
+        public long UploadCapacity;             // bytes Upload holds — decides ring-return vs release in RecycleUpload
         public int Bucket, Slot;
         public ImageAtlasCell Cell;             // kind 2: the packed cell to hand back to the packer
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
@@ -160,6 +176,21 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private const int MaxFreePooledTexturesPerBucket = 4;
     private int _atlasCount, _poolCount;
 
+    // ── Upload heap ring (discrete staging only; see the class summary) ──
+    // Buckets are the 256-aligned staging footprints of the cache's image buckets: a 128px BGRA8 thumb pads to 64 KB,
+    // 256px to 256 KB, 512px to 1 MB; 2 MB/4 MB cover the exact-size standalone heroes up to 1024². Anything larger is a
+    // one-off heap (created and released as before). The FREE-heap cap is 16 MB: sixteen 1 MB covers or four 4 MB heroes
+    // in flight between a stage and its fenced copy — more than one turn's UploadBytesPerTurn budget (D3D12Device) times
+    // the 2-frame fence window — so the ring absorbs the steady state without ratcheting UPLOAD memory to the session
+    // peak. A return that would exceed the cap is released outright (Kind 3 semantics), never queued.
+    private const int MinUploadBucket = 64 * 1024;
+    private const int MaxUploadBucket = 4 * 1024 * 1024;
+    private const int UploadBucketCount = 7;                          // 64K, 128K, 256K, 512K, 1M, 2M, 4M
+    private const long MaxPooledUploadBytes = 16L * 1024 * 1024;
+    private readonly Stack<nint>?[] _uploadRing = new Stack<nint>?[UploadBucketCount];  // bucket index → FREE heaps (ID3D12Resource*); a bucket is null until first return
+    private long _uploadRingBytes;                                    // Σ bytes of the FREE heaps held in the ring
+    private int _uploadHeapCreates, _uploadHeapReuses;                // cumulative: cold creates vs ring hits (census)
+
     // Seam Step 1 (ASYNC only): Stage/Free/FlushUploads become render-thread-confined once the host wires the upload
     // queue (AppHost drains it inside the render submit). Armed via MarkRenderConfined; a stray UI-thread Stage/Free then
     // throws under FGGUARD. Inert in default/force-sync (force-sync stages UI-side with no overlap). [Conditional]-erased
@@ -188,8 +219,15 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>True when decoded pixels are staged but not yet copied to their resident texture (drained by
     /// <see cref="FlushUploads"/> at the top of the next submit). The host must NOT skip that submit, or the texture
     /// stays empty and the image renders white — uploads are throttled, so a deferred one can land on an otherwise
-    /// idle frame whose DrawList is unchanged.</summary>
-    public bool HasPendingUploads => _pendingCopies.Count > 0 || _retired.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false);
+    /// idle frame whose DrawList is unchanged. The retire backlog (<see cref="HasRetireBacklog"/>) is deliberately
+    /// NOT folded in here: it is fence-only maintenance (<see cref="ReclaimCompleted"/>), reclaimable on an elided
+    /// frame via <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> without opening a command list.</summary>
+    public bool HasPendingUploads => _pendingCopies.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false);
+    /// <summary>True while resources evicted from residency are still waiting on their retire fence (queued by
+    /// <see cref="Free"/>/<see cref="RetirePlacement"/>, drained by <see cref="ReclaimCompleted"/>). Does NOT force a
+    /// submit on its own — an elided/idle frame reclaims it for free via
+    /// <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> instead of waking the render loop.</summary>
+    internal bool HasRetireBacklog => _retired.Count > 0;
     internal ulong PlacedHeapBytes => _smallImages?.HeapBytes ?? 0;
     internal ulong PlacedOccupiedBytes => _smallImages?.OccupiedBytes ?? 0;
     internal int PlacedResourceCreates => _smallImages?.ResourceCreateCount ?? 0;
@@ -221,6 +259,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     internal int PooledTextureCount => System.Threading.Volatile.Read(ref _pooledFreeMirror);
     /// <summary>Resources awaiting the deferred fence-gated reclaim (the retire list) — O(1) census.</summary>
     internal int RetiredCount => _retired.Count;
+    /// <summary>Bytes of FREE staging heaps held in the upload ring (≤ <see cref="MaxPooledUploadBytes"/>) — O(1) census.</summary>
+    internal long UploadRingBytes => _uploadRingBytes;
+    /// <summary>Cumulative cold <c>CreateCommittedResource(UPLOAD)</c> calls for ring-sized requests. In steady state this
+    /// stops moving while <see cref="UploadHeapReuses"/> keeps climbing — the ring doing its job.</summary>
+    internal int UploadHeapCreates => _uploadHeapCreates;
+    /// <summary>Cumulative <see cref="Stage"/> calls served by a heap popped from the ring (no create).</summary>
+    internal int UploadHeapReuses => _uploadHeapReuses;
 
     public void Init(ID3D12Device* device, bool unifiedMemory = false)
     {
@@ -503,11 +548,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             return ImageUploadResult.Accepted;   // NOT queued into _pendingCopies — FlushUploads has no copy/barrier to do
         }
 
-        // (Re)allocate the staging upload buffer if it must grow.
-        if (t.Upload == null || (long)t.RowPitch * t.H < uploadBytes)
+        // Take a staging heap from the ring (or keep this id's own when it still fits). A NON-null Upload here was never
+        // recorded into a command list — FlushCopies nulls it the moment it records the copy — so the outgrown heap goes
+        // straight back to its bucket with no fence gate (nothing on the GPU can be reading it).
+        if (t.Upload == null || t.UploadCapacity < uploadBytes)
         {
-            if (t.Upload != null) { D3D12MemoryDiagnostics.Release(t.Upload, "Image.Upload"); t.Upload->Release(); }
-            t.Upload = CreateUpload((uint)uploadBytes, "Image.Upload");
+            if (t.Upload != null) { RecycleUpload(t.Upload, t.UploadCapacity); t.Upload = null; t.UploadCapacity = 0; }
+            t.Upload = AcquireUpload(uploadBytes, out t.UploadCapacity);
         }
         t.W = w; t.H = h; t.RowPitch = rowPitch;
 
@@ -611,13 +658,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // Queue this Tex's GPU resources for deferred reclaim (cell return / pool return / standalone release + upload).
     private void RetirePlacement(ref Tex t)
     {
-        var r = new Retire { Fence = _retireFence, Upload = t.Upload, State = t.State };
+        var r = new Retire { Fence = _retireFence, Upload = t.Upload, UploadCapacity = t.UploadCapacity, State = t.State };
         if (t.Placed.IsValid) { r.Kind = 4; r.Placed = t.Placed; r.Slot = t.Slot; }
         else if (t.Atlas) { r.Kind = 2; r.Cell = new ImageAtlasCell(t.Page, t.Cell, t.Ox, t.Oy, t.Bucket, t.PageGen); }
         else if (t.Bucket > 0) { r.Kind = 1; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
         else { r.Kind = 0; r.Resource = t.Resource; r.Slot = t.Slot; }
         _retired.Add(r);
-        t.Resource = null; t.Upload = null;
+        t.Resource = null; t.Upload = null; t.UploadCapacity = 0;
     }
 
     /// <summary>Frame top: reclaim only resources whose last possible GPU-use fence completed, then record the
@@ -641,13 +688,16 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         {
             if (_retired[i].Fence > completedFence) continue;
             var r = _retired[i];
-            if (r.Upload != null) { D3D12MemoryDiagnostics.Release(r.Upload, "Image.Upload"); r.Upload->Release(); }
+            // The staging heap rides on ANY kind (a Free before the copy flushed carries it too): ring-sized heaps go
+            // back to their bucket, one-offs and over-cap returns are released. Kinds 3 and 5 exist only for this.
+            if (r.Upload != null) RecycleUpload(r.Upload, r.UploadCapacity);
             switch (r.Kind)
             {
                 case 0: if (r.Resource != null) { D3D12MemoryDiagnostics.Release(r.Resource, "Image.Texture"); r.Resource->Release(); } _freeSlots.Push(r.Slot); break;
                 case 1: ReleasePooled(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, State = r.State }); break;
                 case 2: ReleaseAtlasCell(r.Cell); break;
-                case 3: break;
+                case 3: break;   // one-off upload heap: released above
+                case 5: break;   // ring upload heap: returned to its bucket above
                 case 4:
                     if (!_smallImages!.Release(r.Placed, r.Fence, completedFence))
                         throw new InvalidOperationException("Invalid or stale placed-image return.");
@@ -700,8 +750,16 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             else t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             if (t.Upload != null)
             {
-                _retired.Add(new Retire { Fence = _retireFence, Kind = 3, Upload = t.Upload });
-                t.Upload = null;
+                // The copy is on the list now: the heap is busy until this submit's fence passes, then it returns to
+                // the ring (Kind 5) or, for a one-off above the largest bucket, is released (Kind 3).
+                _retired.Add(new Retire
+                {
+                    Fence = _retireFence,
+                    Kind = t.UploadCapacity <= MaxUploadBucket ? 5 : 3,
+                    Upload = t.Upload,
+                    UploadCapacity = t.UploadCapacity,
+                });
+                t.Upload = null; t.UploadCapacity = 0;
             }
             _byId[id] = t;
         }
@@ -1026,6 +1084,66 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         gpu = _srvGpu0; gpu.ptr += (ulong)slot * _srvInc;
     }
 
+    // ── upload heap ring ──────────────────────────────────────────────────────
+    /// <summary>The ring bucket (a power of two in [<see cref="MinUploadBucket"/>, <see cref="MaxUploadBucket"/>]) that
+    /// holds <paramref name="bytes"/>, or 0 when the request is above the largest bucket (one-off heap).</summary>
+    private static int UploadBucketFor(long bytes)
+    {
+        if (bytes > MaxUploadBucket) return 0;
+        int b = MinUploadBucket;
+        while (b < bytes) b <<= 1;
+        return b;
+    }
+
+    private static int UploadBucketIndex(int bucket)
+        => System.Numerics.BitOperations.Log2((uint)bucket) - System.Numerics.BitOperations.Log2((uint)MinUploadBucket);
+
+    /// <summary>A staging heap able to hold <paramref name="bytes"/>: popped from the ring bucket when one is free,
+    /// created cold otherwise (a one-off of the exact size above the largest bucket). <paramref name="capacity"/> is
+    /// what the heap actually holds — the bucket size, or the exact one-off size — and travels with the heap through
+    /// <see cref="Tex.UploadCapacity"/> / <see cref="Retire.UploadCapacity"/> so <see cref="RecycleUpload"/> can route it.
+    /// Null on a device fault, exactly like <see cref="CreateUpload"/>.</summary>
+    private ID3D12Resource* AcquireUpload(long bytes, out long capacity)
+    {
+        int bucket = UploadBucketFor(bytes);
+        if (bucket == 0)
+        {
+            capacity = bytes;
+            return CreateUpload((uint)bytes, "Image.Upload");
+        }
+        capacity = bucket;
+        var stk = _uploadRing[UploadBucketIndex(bucket)];
+        if (stk is { Count: > 0 })
+        {
+            var reused = (ID3D12Resource*)stk.Pop();
+            _uploadRingBytes -= bucket;
+            _uploadHeapReuses++;
+            return reused;
+        }
+        // Cold growth. The bucket joins the class KEY (NameKey cuts at the first space) so the census shows the ring
+        // per bucket instead of one undifferentiated `Image.Upload` row.
+        var created = CreateUpload((uint)bucket, $"Image.UploadRing.{bucket >> 10}K");
+        if (created != null) _uploadHeapCreates++;
+        return created;
+    }
+
+    /// <summary>Hand a staging heap back once nothing can read it (fence passed, or never recorded). A ring-sized heap
+    /// returns to its bucket while the FREE ring stays under <see cref="MaxPooledUploadBytes"/>; otherwise — one-off
+    /// size, or the cap would be exceeded — the heap is released. Capacity is exact by construction (every ring heap
+    /// was created at its bucket size), so the range test alone tells a ring heap from a one-off.</summary>
+    private void RecycleUpload(ID3D12Resource* upload, long capacity)
+    {
+        if (capacity >= MinUploadBucket && capacity <= MaxUploadBucket && _uploadRingBytes + capacity <= MaxPooledUploadBytes)
+        {
+            int idx = UploadBucketIndex((int)capacity);
+            (_uploadRing[idx] ??= new Stack<nint>(4)).Push((nint)upload);
+            _uploadRingBytes += capacity;
+            return;
+        }
+        D3D12MemoryDiagnostics.Release(upload, "Image.Upload");
+        upload->Release();
+    }
+
     private ID3D12Resource* CreateUpload(uint bytes, string name)
     {
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
@@ -1114,6 +1232,19 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         foreach (var stk in _pool.Values)
             foreach (var p in stk)
                 if (p.Resource != null) { D3D12MemoryDiagnostics.Release(p.Resource, "Image.Texture"); p.Resource->Release(); }
+        for (int i = 0; i < _uploadRing.Length; i++)
+        {
+            var ring = _uploadRing[i];
+            if (ring is null) continue;
+            while (ring.Count > 0)
+            {
+                var heap = (ID3D12Resource*)ring.Pop();
+                D3D12MemoryDiagnostics.Release(heap, "Image.Upload");
+                heap->Release();
+            }
+            _uploadRing[i] = null;
+        }
+        _uploadRingBytes = 0;
         foreach (var pg in _pages)
             if (pg.Tex != null)
             {

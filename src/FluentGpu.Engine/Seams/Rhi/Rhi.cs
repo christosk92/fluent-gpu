@@ -197,6 +197,17 @@ public interface IGpuDevice : IDisposable
     /// <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that do not block there.</summary>
     double LastFenceWaitMs => 0;
 
+    /// <summary>Always-on P0 counter (cumulative, render-thread writes / UI-thread reads as a rough gauge): image-upload
+    /// drain turns (<see cref="DrainImageJobs"/>) that hit the backend's per-turn pixel-byte budget and carried a job to
+    /// the next turn. The host mirrors it onto <c>FrameStats.DeferredImageUploads</c>; a consumer differences frames. A
+    /// sustained climb during a cover-heavy scroll means landed covers arrive faster than one present turn stages them.
+    /// Default 0: the headless seam and any backend without a budgeted drain. Typed <c>int</c> to match the D3D12
+    /// backend's property — an interface member of another width would silently keep this default.</summary>
+    int DeferredImageUploads => 0;
+
+    /// <summary>Cumulative pixel bytes of the jobs <see cref="DeferredImageUploads"/> counted. Default 0.</summary>
+    long DeferredImageUploadBytes => 0;
+
     /// <summary>Diagnostic (FG_GPU_TIMING=1): whole-command-list elapsed timestamp span paired with the detailed scene
     /// and category values below. This remains distinct from the target-local always-on
     /// <see cref="ISwapchain.TryGetGpuRenderSample"/> sample. 0 when off/unsupported.</summary>
@@ -242,11 +253,18 @@ public interface IGpuDevice : IDisposable
     /// <c>GetDeviceCaps(VREFRESH)</c> value. See <see cref="PresentStats"/>.</summary>
     PresentStats LastPresentStats => default;
 
-    /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture, or when
-    /// transient upload resources are awaiting fence-gated release. The host must NOT elide that submit, or the texture
-    /// stays empty and deferred upload memory can remain resident until unrelated UI work happens. Default false (a
-    /// headless/synchronous backend has nothing pending).</summary>
+    /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture. The host
+    /// must NOT elide that submit, or the texture stays empty and the image renders white. Default false (a
+    /// headless/synchronous backend has nothing pending). Deliberately excludes the retire backlog (evicted resources
+    /// waiting on their fence) — that is fence-only maintenance, reclaimed for free on an elided frame via
+    /// <see cref="ReclaimCompletedUploads"/> instead of forcing a submit.</summary>
     bool HasPendingUploads => false;
+
+    /// <summary>Fence-only maintenance for an elided frame: releases image resources whose retire fence completed,
+    /// without opening a command list or owing a present. Call this instead of a full submit when the frame would
+    /// otherwise be skipped/elided, so a backlog of evicted textures doesn't sit resident forever on a quiet UI.
+    /// Default no-op (headless / backends with no deferred-retire resource pool).</summary>
+    void ReclaimCompletedUploads() { }
 
     /// <summary>True when the last submitted frame rendered text unfaithfully — a glyph-atlas overflow deferred its
     /// cache flush to the next frame, so some glyphs drew BLANK this frame. The host must NOT skip-submit and must

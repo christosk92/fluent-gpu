@@ -214,12 +214,15 @@ public static class SelectorVisuals
             AlignItems = FlexAlign.Center,
             Margin = new Edges4(ListRowMarginX, ListRowMarginY, ListRowMarginX, ListRowMarginY),   // s_backplateMargin 4,2
             Corners = delta.Corners ?? Radii.ControlAll,                          // ListViewItemCornerRadius 4 (:58)
-            // Backplate ramp (:17-22, :74): selected rest=Secondary / hover=Tertiary / pressed=Secondary;
-            // unselected rest=Transparent / hover=Secondary / pressed=Tertiary. FullRow reads the selected fill as the
-            // whole-row highlight (no pill drawn above it).
+            // Backplate ramp (:17-22, :74) with ONE deliberate deviation: WinUI paints the unselected HOVER plate with
+            // SubtleFillColorSecondary — the very value it uses for the selected REST plate — so a merely hovered row
+            // and the selected row draw an identical backplate and the list reads as two lit rows. The unselected lane
+            // therefore drops one step (hover=Tertiary, pressed=Secondary: a press deepens) so hover stays strictly
+            // lighter than selection; the selected lane holds Secondary through hover (no subtle token is stronger) and
+            // presses to Tertiary. FullRow reads the selected fill as the whole-row highlight (no pill above it).
             Fill = delta.Fill ?? (selected ? Tok.FillSubtleSecondary : ColorF.Transparent),
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            HoverFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            PressedFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
             // The row plate has no border by default; a PartDelta.Border opts one in (width 1).
             BorderColor = delta.Border ?? ColorF.Transparent,
             BorderWidth = delta.Border is null ? 0f : 1f,

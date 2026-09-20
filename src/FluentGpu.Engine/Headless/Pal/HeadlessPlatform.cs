@@ -172,7 +172,18 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public void SetCursor(CursorId id) => LastCursor = id;
     public void SetTitle(StringId title) { }
-    public void Show() => Shown = true;
+    public void Show() { Shown = true; IsVisible = true; }
+
+    /// <summary>Settable visibility (test seam), mirroring Win32's live <c>WS_VISIBLE</c> read: <see cref="Hide"/> clears
+    /// it, <see cref="Show"/> sets it. Defaults to TRUE so a headless host that never calls <see cref="Show"/> is not
+    /// parked — headless has no real screen, and every existing gate drives an unshown window.</summary>
+    public bool IsVisible { get; set; } = true;
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Hide"/>
+    public void Hide() => IsVisible = false;
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.CloseRequested"/>
+    public Func<CloseReason, bool>? CloseRequested { get; set; }
     public IPlatformTextInput TextInput { get; } = new HeadlessTextInput();
 
     // ── custom-titlebar mirror: recorded call-lists + settable state (golden checks assert against these) ────────────

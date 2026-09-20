@@ -296,6 +296,7 @@ public sealed partial class SceneStore : ISceneBackend
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
         _aux = new byte[capacity];
+        _subtreeVersion = new uint[capacity];
         _recordDirty = new byte[capacity];
         _recordDirtySelf = new byte[capacity];
         _recordDirtyDescendant = new byte[capacity];
@@ -462,6 +463,7 @@ public sealed partial class SceneStore : ISceneBackend
         }
         _grids.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
+        if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
         if ((flags & NodeFlags.InteractionAnim) != 0) _interact.Remove(idx);
         if ((flags & NodeFlags.SparsePaint) != 0)
         {
@@ -1391,12 +1393,20 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         NodeFlags old = _flags[idx];
-        if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0)
+        if ((flags & NodeFlags.LayoutDirty) != 0)
         {
-            _layoutDirty.Add(h);
-            // P4 (Operation ultra-fast GPU engine): propagate a subtree-dirty bit up to the layout boundary so
-            // Measure/Arrange can skip a whole clean subtree without walking it — see SceneStore.Aux.cs.
-            MarkSubtreeLayoutDirtyChain(idx);
+            // P4 fix (2026-09-19): the subtree-content version bumps on EVERY LayoutDirty mark, edge or not. A second
+            // mark on an already-dirty node (a second edit before this frame's ClearLayoutDirty; a realize/rebind
+            // between the D1 loop's two RunDirty passes) changes content a ring slot stored in between may already
+            // answer for, and the 0→1 edge below never fires for it — see SceneStore.Aux.cs and FlexLayout.TryRingHit.
+            BumpSubtreeVersionChain(idx);
+            if ((old & NodeFlags.LayoutDirty) == 0)
+            {
+                _layoutDirty.Add(h);
+                // P4 (Operation ultra-fast GPU engine): propagate a subtree-dirty bit up to the layout boundary so
+                // Measure/Arrange can skip a whole clean subtree without walking it — see SceneStore.Aux.cs.
+                MarkSubtreeLayoutDirtyChain(idx);
+            }
         }
         if ((flags & NodeFlags.TransformDirty) != 0 && (old & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
         if ((flags & NodeFlags.BoundsAnimated) != 0 && (old & NodeFlags.BoundsAnimated) == 0) _boundsAnimated.Add(h);
@@ -1634,6 +1644,35 @@ public sealed partial class SceneStore : ISceneBackend
 
     public bool GetBlocksBackgroundScroll(NodeHandle node)
         => _wheelOccludes.TryGet((int)node.Raw.Index, out bool v) && v;
+
+    // ── wheel routing target (Element.WheelTarget) ─────────────────────────────────────────────────
+    // A list header laid out ABOVE its list names the list's scroller as the target for wheel input over the header
+    // (InputDispatcher.RouteWheelTarget), so the notch glides the LIST instead of the header's own ancestor scroller.
+    // Sparse — O(headers), same shape as _hitPassThrough; the slot wraps the reference because ColdSlab is struct-only.
+    private struct WheelTargetSlot { public FluentGpu.Scroll.IWheelTarget? Target; }
+    private readonly ColdSlab<WheelTargetSlot> _wheelTargets = new();
+
+    /// <summary>Live wheel-target rows — the dispatcher's O(1) early-out before it walks a hit chain.</summary>
+    public int WheelTargetCount => _wheelTargets.Count;
+
+    public void SetWheelTarget(NodeHandle node, FluentGpu.Scroll.IWheelTarget? target)
+    {
+        if (!IsLive(node)) return;
+        int idx = (int)node.Raw.Index;
+        if (target is null) { if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx); }
+        else _wheelTargets.GetOrAdd(idx).Target = target;
+    }
+
+    public bool TryGetWheelTarget(NodeHandle node, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Scroll.IWheelTarget? target)
+    {
+        if (_wheelTargets.Count != 0 && _wheelTargets.TryGet((int)node.Raw.Index, out var slot) && slot.Target is not null)
+        {
+            target = slot.Target;
+            return true;
+        }
+        target = null;
+        return false;
+    }
 
     // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
     // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).
@@ -2110,6 +2149,33 @@ public sealed partial class SceneStore : ISceneBackend
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }
 
+    /// <summary>Same walk as <see cref="AbsoluteRect"/>, but refuses (returns <c>false</c>) the moment any node on the
+    /// parent chain carries a <see cref="NodePaint.LocalTransform"/> whose scale/skew is not identity. This is the E1
+    /// image-repaint path's rect source (<c>Reconciler.AddImageNodeRepaint</c>, damage-scoped-repaint-design.md "Step
+    /// 3"): a landing/crossfade band can only describe a plain translated box, so a node under a scaled/rotated
+    /// ancestor (or its own scaled transform) must fall back to the caller's named <c>ForceFull(DetachedContent)</c>
+    /// instead of emitting a rect that under-covers the actual painted pixels. Zero-alloc, same walk shape as
+    /// <see cref="AbsoluteRect"/>.</summary>
+    public bool TryAbsoluteRectTranslationOnly(NodeHandle h, out RectF r)
+    {
+        float x = 0f, y = 0f;
+        for (var n = h; !n.IsNull; n = Parent(n))
+        {
+            var xform = _paint[n.Raw.Index].LocalTransform;
+            if (xform.M11 != 1f || xform.M12 != 0f || xform.M21 != 0f || xform.M22 != 1f) { r = default; return false; }
+            x += _bounds[n.Raw.Index].X + xform.Dx;
+            y += _bounds[n.Raw.Index].Y + xform.Dy;
+            var parent = Parent(n);
+            if (!parent.IsNull)
+            {
+                x += _paint[parent.Raw.Index].ChildShiftX;
+                y += _paint[parent.Raw.Index].ChildShiftY;
+            }
+        }
+        r = new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
+        return true;
+    }
+
     /// <summary>Same origin walk as <see cref="AbsoluteRect"/> (window-space = summed origin up the parent chain) but
     /// LAYOUT bounds only — no compositor <c>LocalTransform</c>/<c>ChildShiftX/Y</c> folded in. A content-space caller
     /// computing a SCROLL target (offsets live in content space == layout space) needs this: <see cref="AbsoluteRect"/>
@@ -2152,6 +2218,7 @@ public sealed partial class SceneStore : ISceneBackend
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _aux, n);
+        Array.Resize(ref _subtreeVersion, n);   // P4 fix: per-node subtree-content version, parallel to _aux (SceneStore.Aux.cs)
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
         Array.Resize(ref _recordDirtyWrote, n); Array.Resize(ref _recordDirtyStamp, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -46,9 +46,11 @@ public static class SuiteRegistry
         new("hooks", "hooks", HooksSuite.Run),
         new("anim", "anim", AnimSuite.Run),
         new("scroll", "scroll", ScrollSuite.Run),
+        new("scroll-pacing", "scroll", ScrollPacingChecks.Run),   // wheel distance / pacing evidence; runs with --suite scroll
         new("kernel", "kernel", ScrollKernelSuite.Run),
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
+        new("budgets", "budgets", BudgetsSuite.Run),
         new("controls", "controls", ControlsSuite.Run),
         new("titlebar", "titlebar", TitleBarSuite.Run),
         new("nav", "nav", NavSuite.Run),
@@ -58,6 +60,7 @@ public static class SuiteRegistry
         new("path", "path", PathSuite.Run),
         new("lottie", "lottie", LottieSuite.Run),
         new("text", "text", TextSuite.Run),
+        new("span-links", "text", SpanLinkDispatchChecks.Run),   // inline-hyperlink dispatch ownership; runs with --suite text
         new("bound", "bound", BoundTemplateSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),

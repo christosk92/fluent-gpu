@@ -227,6 +227,7 @@ static class ScrollSuite
         ScrollOverlayChecks(strings);
         VirtualChecks(strings);
         VirtualBudgetChecks(strings);
+        SlotPoolChecks(strings);
         BoundItemsViewChecks(strings);
         ShelfBindingChecks.Run(strings);
         ExtentTableChecks();
@@ -237,6 +238,7 @@ static class ScrollSuite
         ScrollV2ValidationChecks(strings);
         TouchpadFeelChecks(strings);
         E11VirtChecks(strings);
+        CompRootPinChecks(strings);
         PagerSnapChecks(strings);
         ListConsolidationChecks(strings);
         D1CollectionHostSizingChecks(strings);
@@ -245,6 +247,7 @@ static class ScrollSuite
         OcclusionCullChecks();
         ShadowOpacityGateChecks();
         WheelFallbackRelatchChecks(strings);
+        BugBScrollFeelChecks(strings);
         ContainingScrollerChecks(strings);
         // NamedScrollTimelineChecks deleted — gate.scroll.named-timeline / gate.scroll.named-timeline-retire deleted:
         // named scroll-timelines are removed from the DSL entirely (scroll-v3 plan §7.3 authoring collapse); no successor gate.
@@ -367,6 +370,7 @@ static class ScrollSuite
         public bool Scrollable;
         public event Action<ScrollToRequest>? ScrollToRequested;
         public event Action<ScrollByRequest>? ScrollByRequested;
+        public event Action<float>? WheelNotchRequested;
 
         public void SetValues(float minOffset, float maxOffset, float offset, float viewportLength)
         {
@@ -384,6 +388,7 @@ static class ScrollSuite
             => ScrollToRequested?.Invoke(new ScrollToRequest(offset, animate));
         public void ScrollBy(float delta, bool animate = false)
             => ScrollByRequested?.Invoke(new ScrollByRequest(delta, animate));
+        public void WheelNotch(float notches) => WheelNotchRequested?.Invoke(notches);
     }
 
     sealed class AsbLabelsHost : Component
@@ -987,7 +992,7 @@ static class ScrollSuite
         // Pan down: two packets over `start` (which crosses the 8 DIP slop and refuses the latch), then four over the
         // viewport. Returns whether the FIRST viewport packet latched, the offset the gesture produced, and how many
         // wheel notches the consuming strip ate.
-        (bool LatchedOnFirstRetry, float Offset, int WheelCalls) Pan(float startY)
+        (bool LatchedOnFirstRetry, float Offset, int WheelCalls) Pan(float startY, PointerKind pointer)
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("fallback-relatch", new Size2(360, 500), 1f)); window.Show();
@@ -1000,7 +1005,7 @@ static class ScrollSuite
             {
                 t += 16;
                 window.QueueInput(new InputEvent(k, new Point2(150f, y), 0, 0, ScrollDelta: dy,
-                    Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));
+                    Pointer: pointer, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));
                 host.RunFrame();
             }
             const float overViewport = 250f;   // inside the ScrollEl band [120, 420)
@@ -1015,14 +1020,163 @@ static class ScrollSuite
             return (latchedOnFirstRetry, sc.OffsetY, probe.WheelCalls);
         }
 
-        var recovered = Pan(90f);    // slop crossed over the INERT gap — §A, a genuine miss
-        var consumed = Pan(30f);     // slop crossed over the wheel-CONSUMING strip — §A′, an ownership decision
+        var recovered = Pan(90f, PointerKind.Touchpad);    // slop crossed over the INERT gap — §A, a genuine miss
+        var consumed = Pan(30f, PointerKind.Mouse);       // mouse fallback over the wheel-CONSUMING strip — §A′
+        var touchpad = Pan(30f, PointerKind.Touchpad);    // touchpad phase over the same strip must keep probing
 
         bool ok = recovered.LatchedOnFirstRetry && recovered.Offset > 0f && recovered.WheelCalls == 0
-               && !consumed.LatchedOnFirstRetry && consumed.Offset == 0f && consumed.WheelCalls > 0;
+               && !consumed.LatchedOnFirstRetry && consumed.Offset == 0f && consumed.WheelCalls > 0
+               && touchpad.LatchedOnFirstRetry && touchpad.Offset > 0f && touchpad.WheelCalls == 0;
         Check("gate.scroll.fallback-relatch a pan whose slop-crossing hit test finds NO scroller (§A) re-latches onto the viewport its later packets reach — latched on the FIRST retried packet, offset moves; a pan that fell back because an element OWNS the wheel (§A′) keeps that fallback for the whole gesture even once it travels over a real viewport (no re-latch, viewport untouched)",
             ok, $"recovered(latch={recovered.LatchedOnFirstRetry} off={recovered.Offset:0.0} wheel={recovered.WheelCalls}) " +
                 $"consumed(latch={consumed.LatchedOnFirstRetry} off={consumed.Offset:0.0} wheel={consumed.WheelCalls})");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // bug-B (Wavee handoff 2026-09-15 §8) — scroll INPUT feel. Three functional gates (A3 two-packet fling, A2
+    // re-grab-then-fling, B1 lowered latch slop) driven through the REAL pipeline (QueueInput → RunFrame →
+    // InputDispatcher.Dispatch → ScrollInputRouter → ScrollKernel), same idiom as WheelFallbackRelatchChecks above,
+    // plus one trace-rewire smoke gate. Reuses WheelFallbackRelatchProbe (Probes.cs) — its ScrollEl at y∈[120,420)
+    // is all these need.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    static void BugBScrollFeelChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
+        const float overViewport = 250f;   // inside WheelFallbackRelatchProbe's ScrollEl band [120, 420)
+
+        static NodeHandle FindScrollable(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if ((s.Flags(n) & NodeFlags.Scrollable) != 0 && s.HasScroll(n)) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = FindScrollable(s, c);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        // gate.scroll.two-packet-fling (A3) + gate.scroll.regrab-refling (A2), same session: the second flick
+        // re-grabs the FIRST one's still-coasting Ballistic body, which is exactly A2's "flick-flick-flick" case.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bugB-two-packet-fling", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+
+            void QueueScrollPhase(InputKind kind, float delta, uint ms)
+                => window.QueueInput(new InputEvent(kind, new Point2(150f, overViewport), 0, 0, ScrollDelta: delta,
+                    Pointer: PointerKind.Touchpad, TimestampMs: ms, PointerId: 9, DeviceClassRaw: Fb));
+
+            uint t = 5000;
+            // Two raw packets, ~8ms apart (a ~120Hz digitizer cadence), BOTH queued before the SAME RunFrame — the
+            // exact shape §8.2/A3 says releases at v=0 under the old once-per-produced-FRAME estimator feed: a
+            // flick under ~17ms at 120Hz never got a second sample before the frame flushed.
+            QueueScrollPhase(InputKind.ScrollBegin, 0f, t);
+            QueueScrollPhase(InputKind.ScrollDelta, 40f, t += 8);
+            QueueScrollPhase(InputKind.ScrollDelta, 40f, t += 8);
+            host.RunFrame();   // ONE frame drains all three queued packets together
+            QueueScrollPhase(InputKind.ScrollEnd, 0f, t += 8);
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc1);
+            bool firstFlung = sc1.Activity == ScrollActivity.Ballistic
+                && MathF.Abs(sc1.Velocity) >= ScrollFeel.Shipping.FlingSeedGate;
+            Check("gate.scroll.two-packet-fling (bug-B/A3) a 2-packet touchpad flick folded into ONE produced frame still seeds a real Ballistic release velocity (was: v=0, estimator saw only 1 coalesced sample/frame)",
+                firstFlung, $"activity={sc1.Activity} v={sc1.Velocity:F1} gate={ScrollFeel.Shipping.FlingSeedGate:F1}");
+
+            // A2 re-grab: while the body is STILL Ballistic, flick again — 2 packets in 1 frame, same shape as
+            // above. "Touch stops the fling" (ApplyFrameDelta's `starting` branch) must still hold — that is
+            // asserted separately by not requiring any particular mid-flight state here — but the SECOND flick
+            // must not need two more flushed frames to fling: it has per-packet samples from the very first packet.
+            QueueScrollPhase(InputKind.ScrollBegin, 0f, t += 40);   // re-grab: interrupts the still-coasting fling
+            QueueScrollPhase(InputKind.ScrollDelta, 35f, t += 8);
+            QueueScrollPhase(InputKind.ScrollDelta, 35f, t += 8);
+            host.RunFrame();
+            QueueScrollPhase(InputKind.ScrollEnd, 0f, t += 8);
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc2);
+            bool reflung = sc2.Activity == ScrollActivity.Ballistic
+                && MathF.Abs(sc2.Velocity) >= ScrollFeel.Shipping.FlingSeedGate;
+            Check("gate.scroll.regrab-refling (bug-B/A2) re-grabbing a coasting Ballistic body with a second 2-packet-in-1-frame flick flings again immediately (no 2-frame warm-up before the estimator has ≥2 samples)",
+                reflung, $"activity={sc2.Activity} v={sc2.Velocity:F1} gate={ScrollFeel.Shipping.FlingSeedGate:F1}");
+        }
+
+        // gate.scroll.latch-slop-lowered (B1): a gesture between the NEW slop (3 DIP) and the OLD one (8 DIP) must
+        // now move the viewport on the very packet that crosses 3 DIP — silent under the old 8.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bugB-latch-slop", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+
+            uint t = 5000;
+            window.QueueInput(new InputEvent(InputKind.ScrollBegin, new Point2(150f, overViewport), 0, 0,
+                Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));
+            // 4 DIP total: below the OLD 8-DIP slop (would post nothing), above the NEW 3-DIP one.
+            window.QueueInput(new InputEvent(InputKind.ScrollDelta, new Point2(150f, overViewport), 0, 0, ScrollDelta: 4f,
+                Pointer: PointerKind.Touchpad, TimestampMs: t += 8, PointerId: 9, DeviceClassRaw: Fb));
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc);
+            bool latchedAtNewSlop = sc.OffsetY > 0f && sc.OffsetY <= 4.5f;
+            Check("gate.scroll.latch-slop-lowered (bug-B/B1) a 4 DIP travel latches and moves the viewport — above the new 3 DIP slop, below the old 8 DIP one",
+                latchedAtNewSlop, $"offsetY={sc.OffsetY:F2}");
+        }
+
+        // gate.scroll.trace-rewire (step 1 measurement): the five re-wired ScrollTrace call sites (VelSample,
+        // Release, Latch, Phase, GestureEnd) are reachable and cost ZERO managed bytes to call regardless of
+        // FG_SCROLL_TRACE (Add() only ever touches the preallocated ring) — the only thing testable in-process
+        // without an env var / file (same "vacuous unless FG_SCROLL_TRACE armed" idiom as
+        // gate.scroll.single-writer-structural below: actual CSV row content needs a real capture,
+        // ops/diag/wavee-scroll-session.ps1). Also drives the SAME two-packet gesture as above one more time so
+        // the five call sites are proven reachable from a live gesture, not just directly invocable.
+        {
+            bool allocOk = true;
+            long delta = 0;
+            if (ScrollTrace.CompiledIn)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                ScrollTrace.VelSample(1, 12.5f, 0f, 1500f, 0f, 0L);
+                ScrollTrace.Release(1, 1500f, 0f, 1500f, 0f, 0L);
+                ScrollTrace.Latch(0, 1, 4f, 4f, 0f);
+                ScrollTrace.Phase((byte)InputKind.ScrollDelta, 0, 1, 40f, 0f, 0f, 0f, 0L);
+                ScrollTrace.GestureEnd(0, 0, 0f);
+                long after = GC.GetAllocatedBytesForCurrentThread();
+                delta = after - before;
+                allocOk = delta == 0;
+            }
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bugB-trace-reachable", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            uint t = 5000;
+            void QueueScrollPhase2(InputKind kind, float delta2, uint ms)
+                => window.QueueInput(new InputEvent(kind, new Point2(150f, overViewport), 0, 0, ScrollDelta: delta2,
+                    Pointer: PointerKind.Touchpad, TimestampMs: ms, PointerId: 9, DeviceClassRaw: Fb));
+            bool threw = false;
+            try
+            {
+                QueueScrollPhase2(InputKind.ScrollBegin, 0f, t);
+                QueueScrollPhase2(InputKind.ScrollDelta, 40f, t += 8);
+                QueueScrollPhase2(InputKind.ScrollDelta, 40f, t += 8);
+                host.RunFrame();
+                QueueScrollPhase2(InputKind.ScrollEnd, 0f, t += 8);
+                host.RunFrame();
+            }
+            catch { threw = true; }
+
+            Check("gate.scroll.trace-rewire the 5 re-wired dead ScrollTrace rows (VelSample/Release/Latch/Phase/GestureEnd) are reachable from a live gesture and cost 0 managed bytes to call — row CONTENT needs FG_SCROLL_TRACE (a real capture), same idiom as gate.scroll.single-writer-structural",
+                allocOk && !threw, $"allocDelta={delta}B threw={threw} compiledIn={ScrollTrace.CompiledIn}");
+        }
     }
 
     // Overlay plate / zero-overflow: ancestor-only targeting misses a list that still geometrically contains the point.
@@ -2838,6 +2992,223 @@ static class ScrollSuite
             bool onlyTwo = scan == 2 && realized == 2;
             Check("gate.virt.dirtyQueueMatchesScan marking 2 of 5 virtual lists VirtualRangeDirty realizes exactly those two; ReRealizeVirtuals iterates the scene-owned dirty queue (== 2), never the 5-entry _virtuals dictionary",
                 five && onlyTwo && firstRealizedUnchanged, $"lists={vps.Count} scan={scan} realized={realized} windowsStable={firstRealizedUnchanged} drainedAt={drained}");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // gate.virt.slotPool* — the bound-slot pool at the high-water mark + receding-side retention (virtualization.md
+    // §6.1a "slot pool"). A Wavee fling census read 8–12 COLD TableSlot mounts per frame against a pool of ~37 slots:
+    // the realized window shrank on every budget-limited / direction-reversal frame (surplus slots removed) and grew
+    // back over the following frames (fresh rowBind + Mount, 50–90 KB each). Now a surplus slot is PARKED (detached,
+    // NodeFlags.Parked, images unpinned, index signal kept so no channel evaluates for an invisible row) and taken back
+    // before rowBind — an exact index match is a zero-write re-attach — and the clip keeps receding rows under motion
+    // so the window never shrinks mid-fling in the first place.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    static void SlotPoolChecks(StringTable strings)
+    {
+        static bool Reaches(SceneStore s, NodeHandle n, NodeHandle target)
+        {
+            for (var p = n; !p.IsNull; p = s.Parent(p)) if (p == target) return true;
+            return false;
+        }
+        static NodeHandle LastChild(SceneStore s, NodeHandle parent)
+        {
+            var last = NodeHandle.Null;
+            for (var c = s.FirstChild(parent); !c.IsNull; c = s.NextSibling(c)) last = c;
+            return last;
+        }
+        static void Settle(AppHost host, int max = 40) { for (int i = 0; i < max && host.HasActiveWork; i++) host.RunFrame(); }
+
+        // ── (a) grow → shrink → grow mounts nothing on the second grow; (c) parked slots are detached, Parked, unreachable
+        // from the root, and hold no focus. The window is resized at REST through the list's Overscan (a signal), so the
+        // shrink is the reconciler's own surplus path, not a scroll artefact. ─────────────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-slot-pool", new Size2(640, 480), 1f)); window.Show();
+            var probe = new SlotPoolOverscanProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            Settle(host);
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc0);
+            var content = sc0.ContentNode;
+            int slots0 = host.Scene.ChildCount(content), template0 = probe.TemplateCalls, spare0 = host.Reconciler.SpareSlotCount(vp);
+
+            // Focus the halo's tail row: it leaves the window on the shrink, so the park must take focus with it.
+            var tail = LastChild(host.Scene, content);
+            host.Input.SetFocus(tail);
+            host.RunFrame();
+            bool tailFocused = host.Input.Focused == tail;
+
+            probe.Overscan.Value = 1;
+            host.RunFrame();
+            Settle(host);
+            host.Scene.TryGetScroll(vp, out var sc1);
+            int slots1 = host.Scene.ChildCount(content), template1 = probe.TemplateCalls, spare1 = host.Reconciler.SpareSlotCount(vp);
+            bool shrank = slots1 < slots0 && sc1.LastRealized - sc1.FirstRealized == slots1;
+            bool conserved = slots1 + spare1 == slots0 && template1 == template0;   // parked, not removed; nothing rebuilt
+
+            bool parkedOk = spare1 > 0, focusOff = true, tailParked = false;
+            for (int i = 0; i < spare1; i++)
+            {
+                if (!host.Reconciler.TryGetSpareSlotRoot(vp, i, out var r)) { parkedOk = false; break; }
+                bool detached = host.Scene.IsLive(r) && host.Scene.Parent(r).IsNull && !Reaches(host.Scene, r, host.Scene.Root);
+                bool parked = (host.Scene.Flags(r) & NodeFlags.Parked) != 0;
+                bool focusable = (host.Scene.Flags(r) & (NodeFlags.Focused | NodeFlags.Hovered | NodeFlags.Pressed)) != 0;
+                parkedOk &= detached && parked && !focusable;
+                if (r == tail) tailParked = true;
+                if (!host.Input.Focused.IsNull && Reaches(host.Scene, host.Input.Focused, r)) focusOff = false;
+            }
+            bool focusCleared = host.Input.Focused != tail;
+
+            int nodes0 = host.Reconciler.MountedNodes;
+            probe.Overscan.Value = 12;
+            host.RunFrame();
+            Settle(host);
+            host.Scene.TryGetScroll(vp, out var sc2);
+            int slots2 = host.Scene.ChildCount(content), template2 = probe.TemplateCalls, spare2 = host.Reconciler.SpareSlotCount(vp);
+            int mounted = host.Reconciler.MountedNodes - nodes0;
+            var lastRow = LastChild(host.Scene, content);
+            string lastText = lastRow.IsNull ? "" : strings.Resolve(host.Scene.Paint(host.Scene.FirstChild(lastRow)).Text);
+            bool regrew = slots2 == slots0 && spare2 == 0 && sc2.LastRealized - sc2.FirstRealized == slots2;
+            bool rebound = lastText == $"row {sc2.LastRealized - 1}";   // a taken slot reads its NEW item after the flush
+
+            Check("gate.virt.slotPoolGrowShrinkGrow a bound list that shrinks its window at rest parks the surplus slots (Slots + Spare == the high-water window, zero removals) and the next grow takes them back with zero rowBind calls and zero mounts",
+                shrank && conserved && regrew && template2 == template0 && mounted == 0 && rebound,
+                $"slots {slots0}->{slots1}->{slots2} spare {spare0}->{spare1}->{spare2} template {template0}->{template1}->{template2} mounted={mounted} lastText='{lastText}' realized=[{sc2.FirstRealized},{sc2.LastRealized})");
+            Check("gate.virt.slotPoolParkedInvisibleUnfocusable every parked spare slot is live but detached (no parent, unreachable from the scene root ⇒ no layout/paint/hit-test), carries NodeFlags.Parked, holds no hover/press/focus flag, and the focused halo row lost focus when it was parked",
+                parkedOk && tailFocused && tailParked && focusCleared && focusOff,
+                $"spares={spare1} parkedOk={parkedOk} tailFocused={tailFocused} tailParked={tailParked} focusCleared={focusCleared} focusOff={focusOff} focus={host.Input.Focused.Raw.Index}");
+        }
+
+        // ── (d) the pool trims when ItemCount falls below it — at rest, on the same realize pass; the pool ends at
+        // exactly ItemCount slots (Slots + Spare == ItemCount), so a list that shrank for good frees its spares. ──────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-slot-pool-trim", new Size2(640, 480), 1f)); window.Show();
+            var probe = new BoundCountSignalProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            Settle(host);
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc);
+            var content = sc.ContentNode;
+            probe.Count.Value = 6;
+            host.RunFrame(); Settle(host);
+            int live6 = host.Scene.ChildCount(content), spare6 = host.Reconciler.SpareSlotCount(vp);
+            probe.Count.Value = 3;
+            host.RunFrame(); Settle(host);
+            int live3 = host.Scene.ChildCount(content), spare3 = host.Reconciler.SpareSlotCount(vp);
+            bool clean = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) == 0 && !host.Reconciler.HasBudgetDeferredVirtuals;
+            probe.Count.Value = 5;
+            host.RunFrame(); Settle(host);
+            int live5 = host.Scene.ChildCount(content), spare5 = host.Reconciler.SpareSlotCount(vp);
+            Check("gate.virt.slotPoolTrimsOnIdleCountShrink an idle bound list whose ItemCount falls below its slot pool frees the surplus spares on that pass (pool == ItemCount, list clean), and a later count growth mounts fresh slots again",
+                live6 == 6 && spare6 == 0 && live3 == 3 && spare3 == 0 && clean && live5 == 5 && spare5 == 0,
+                $"6: live={live6} spare={spare6}; 3: live={live3} spare={spare3} clean={clean}; 5: live={live5} spare={spare5}");
+        }
+
+        // ── (b) a direction reversal mid-fling on a budget-starved list produces no cold mounts: the clip retains the
+        // receding rows while the kernel moves (the window never shrinks under motion), so the halo swing recycles slots
+        // instead of removing and re-mounting them. Budget pinned to 1 row/frame — the regime where the old clip tore
+        // the receding side down every frame. ─────────────────────────────────────────────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-slot-pool-reversal", new Size2(640, 480), 1f)); window.Show();
+            var probe = new BoundVirtualProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            Settle(host);
+            var vp = host.Scene.Root;
+            // Mid-list, so neither halo is clipped by a content edge and the pool sits at the full E5 fixed-sum width.
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 200_000f, immediate: true));
+            for (int i = 0; i < 40; i++) host.RunFrame();
+            host.Reconciler.SteadyRealizeBudgetForTest = 1;
+            for (int i = 0; i < 10; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scWarm);
+            int poolWarm = (scWarm.LastRealized - scWarm.FirstRealized) + host.Reconciler.SpareSlotCount(vp);
+
+            var prod = new HeadlessScrollProducer(window, host, new Point2(150, 200)) { Device = (byte)ScrollDeviceClass.Touchpad };
+            prod.ContactBegin(0f); prod.Step(16);
+            for (int i = 0; i < 10; i++) { prod.ContactUpdate(60f); prod.Step(16); }
+            prod.ContactEnd();
+            int coastFrames = 0;
+            for (int f = 0; f < 12; f++) { prod.Step(16); host.Scene.TryGetScroll(vp, out var scC); if (MathF.Abs(scC.Velocity) <= VirtualWindowing.FlingGuardThreshold) break; coastFrames++; }
+            host.Scene.TryGetScroll(vp, out var scFwd);
+            bool movingForward = scFwd.Velocity > VirtualWindowing.FlingGuardThreshold;
+
+            int template0 = probe.TemplateCalls, nodes0 = host.Reconciler.MountedNodes;
+            int minWidth = int.MaxValue, maxPool = 0, reverseFrames = 0;
+            bool blanked = false, reversed = false;
+            prod.ContactBegin(0f); prod.Step(16);
+            for (int i = 0; i < 10; i++) { prod.ContactUpdate(-60f); prod.Step(16); }
+            prod.ContactEnd();
+            for (int f = 0; f < 90; f++)
+            {
+                prod.Step(16);
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.Velocity < -VirtualWindowing.FlingGuardThreshold) reversed = true;
+                int width = s.LastRealized - s.FirstRealized;
+                minWidth = Math.Min(minWidth, width);
+                maxPool = Math.Max(maxPool, width + host.Reconciler.SpareSlotCount(vp));
+                int vFirst = (int)MathF.Floor(s.OffsetY / 40f), vLast = Math.Min(BoundVirtualProbe.N, (int)MathF.Ceiling((s.OffsetY + s.ViewportH) / 40f));
+                if (!(s.FirstRealized <= vFirst && s.LastRealized >= vLast)) blanked = true;
+                if (MathF.Abs(s.Velocity) <= VirtualWindowing.FlingGuardThreshold && f > 12) break;
+                reverseFrames++;
+            }
+            int coldTemplates = probe.TemplateCalls - template0, mounted = host.Reconciler.MountedNodes - nodes0;
+            Check("gate.virt.slotPoolReversalNoColdMounts a direction reversal mid-fling on a 1-row/frame budget runs zero rowBind calls and zero mounts (receding rows are retained under motion, the window never narrows below its pool, the pool never exceeds its high-water mark by more than the one-row viewport-alignment flutter) and never blanks a visible row",
+                movingForward && reversed && coldTemplates == 0 && mounted == 0 && !blanked && minWidth >= poolWarm && maxPool <= poolWarm + 1,
+                $"poolWarm={poolWarm} minWidth={minWidth} maxPool={maxPool} coldTemplates={coldTemplates} mounted={mounted} blanked={blanked} coast={coastFrames} reverseFrames={reverseFrames} fwd={movingForward} rev={reversed}");
+        }
+
+        // ── (e) hot-phase allocation during a synthetic fling over a 10k bound list, once warm. Ceiling: 0 bytes in frame
+        // phases 6–13 — the standing corpus contract (the pool adds no allocation category there: park/take are a Detach,
+        // an AppendChild, flag/pin bookkeeping and at most one signal write). The whole-frame delta is reported in the
+        // detail for the census, not gated: the reconcile edge is "bounded Gen0" by canon, not zero. ─────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-slot-pool-alloc", new Size2(640, 480), 1f)); window.Show();
+            // Fill-only rows: a bound TEXT channel formats a string on every recycle ($"row {i}"), which is the
+            // template's own allocation and the reason BoundVirtualFillOnlyProbe exists — this gate measures the pool.
+            var probe = new SlotPoolFillOnlyProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            Settle(host);
+            var vp = host.Scene.Root;
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 100_000f, immediate: true));
+            for (int i = 0; i < 40; i++) host.RunFrame();
+            var prod = new HeadlessScrollProducer(window, host, new Point2(150, 200)) { Device = (byte)ScrollDeviceClass.Touchpad };
+
+            (long WorstHot, long WorstFrame, int Templates) Fling(float dy, bool measure)
+            {
+                long worstHot = 0, worstFrame = 0; int t0 = probe.TemplateCalls;
+                void Acc(FrameStats f, long frameBytes)
+                {
+                    if (!measure) return;
+                    if (f.HotPhaseAllocBytes > worstHot) worstHot = f.HotPhaseAllocBytes;
+                    if (frameBytes > worstFrame) worstFrame = frameBytes;
+                }
+                prod.ContactBegin(0f); Acc(prod.Step(16), 0);
+                for (int i = 0; i < 10; i++) { prod.ContactUpdate(dy); long b = GC.GetAllocatedBytesForCurrentThread(); var f = prod.Step(16); Acc(f, GC.GetAllocatedBytesForCurrentThread() - b); }
+                prod.ContactEnd();
+                for (int f = 0; f < 120; f++)
+                {
+                    long b = GC.GetAllocatedBytesForCurrentThread();
+                    var fs = prod.Step(16);
+                    Acc(fs, GC.GetAllocatedBytesForCurrentThread() - b);
+                    host.Scene.TryGetScroll(vp, out var s);
+                    if (MathF.Abs(s.Velocity) <= VirtualWindowing.FlingGuardThreshold) break;
+                }
+                return (worstHot, worstFrame, probe.TemplateCalls - t0);
+            }
+            Fling(60f, measure: false);    // warm: the pool reaches its high-water mark, every code path JITs
+            Fling(-60f, measure: false);
+            var fwd = Fling(60f, measure: true);
+            var rev = Fling(-60f, measure: true);
+            Check("gate.virt.slotPoolFlingAllocCeiling a warm forward+reverse fling over a 10k bound list allocates 0 bytes in frame phases 6–13 on every frame and runs zero rowBind calls (whole-frame worst reported for the census, not gated)",
+                fwd.WorstHot == 0 && rev.WorstHot == 0 && fwd.Templates == 0 && rev.Templates == 0,
+                $"hotWorst fwd={fwd.WorstHot}B rev={rev.WorstHot}B; frameWorst fwd={fwd.WorstFrame}B rev={rev.WorstFrame}B; templates fwd={fwd.Templates} rev={rev.Templates}");
         }
     }
 
@@ -5108,6 +5479,128 @@ static class ScrollSuite
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // e11virt.comp-pin — THE FOOTGUN, DOCUMENTED BY A TEST: a scroll bind must sit on a RAW element, never on a
+    // component's rendered root.
+    //
+    // `ScrollBindEval.ApplyPin` clamps a pin to its IMMEDIATE parent (`limit = parent.H − node.H`) and a component
+    // anchor MIRRORS its rendered child's size (`Reconciler.MirrorParticipation`), so a `.Collapse`/`.Sticky` placed on
+    // what a component RETURNS sees `limit == 0`: it never translates, `NodeFlags.StickyPinned` is never set,
+    // `ScrollState.StuckTopBit` never lights and the `:stuck` callback never fires. Wavee's playlist/Liked hero arm hit
+    // exactly this — its two persistent prefix slots are `Embed.Comp(...)` and the binds had migrated onto the item
+    // component's root, leaving an empty band under the toolbar where a pinned hero + chrome were still being reserved.
+    // The cure, and the shape this gate pins down: wrap the component in a raw `BoxEl` and put the bind on the WRAPPER.
+    // Both arms are mounted here, identical but for that one placement, so the negative twin keeps the trap visible.
+    // Neighbours: e11virt.5c (the persistent prefix itself), e11virt.prefix-disp.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    static void CompRootPinChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        (bool HeroPinned, bool ChromePinned, bool StuckTop, int Edges, bool Stuck, float HeroDy, float ChromeDy) Arm(bool onCompRoot)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("comp-pin", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new CompRootPinProbe(onCompRoot);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc0);
+            var content = sc0.ContentNode;
+
+            // Past the hero's collapse distance (HeroH − BandH = 144) and then some: both prefix slots are pinned by now.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(160f, 240f), 0, 0, 1600f));
+            for (int i = 0; i < 24 && host.HasActiveWork; i++) host.RunFrame();
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc1);
+
+            // The BIND TARGETS: the two slot roots. In the raw-wrapper arm those roots ARE the wrappers; in the
+            // component-root arm they are the component anchors, whose rendered child carries the (never-pinning) bind.
+            var r0 = host.Scene.FirstChild(content);
+            var r1 = host.Scene.NextSibling(r0);
+            var b0 = onCompRoot ? host.Scene.FirstChild(r0) : r0;
+            var b1 = onCompRoot ? host.Scene.FirstChild(r1) : r1;
+            return ((host.Scene.Flags(b0) & NodeFlags.StickyPinned) != 0,
+                    (host.Scene.Flags(b1) & NodeFlags.StickyPinned) != 0,
+                    (sc1.ScrollFlags & ScrollState.StuckTopBit) != 0,
+                    probe.StuckEdges, probe.Stuck,
+                    host.Scene.Paint(b0).LocalTransform.Dy, host.Scene.Paint(b1).LocalTransform.Dy);
+        }
+
+        var ok = Arm(onCompRoot: false);
+        Check("e11virt.comp-pin a collapse/sticky bind on a RAW WRAPPER around an Embed.Comp prefix slot really pins: StickyPinned on both wrapper roots, StuckTop on the scroller, and the :stuck callback fired exactly once",
+            ok.HeroPinned && ok.ChromePinned && ok.StuckTop && ok.Edges == 1 && ok.Stuck
+            && ok.HeroDy > 1f && ok.ChromeDy > 1f,
+            $"hero={ok.HeroPinned}/dy={ok.HeroDy:0.#} chrome={ok.ChromePinned}/dy={ok.ChromeDy:0.#} stuckTop={ok.StuckTop} edges={ok.Edges} stuck={ok.Stuck}");
+
+        var bad = Arm(onCompRoot: true);
+        Check("e11virt.comp-pin-neg the SAME binds moved onto the component's RENDERED ROOT never pin — the anchor mirrors its child's size so ApplyPin's limit is 0: no StickyPinned, no StuckTop, the :stuck callback never fires (the Wavee hero-band bug, kept visible)",
+            !bad.HeroPinned && !bad.ChromePinned && !bad.StuckTop && bad.Edges == 0 && !bad.Stuck
+            && Near(bad.HeroDy, 0f) && Near(bad.ChromeDy, 0f),
+            $"hero={bad.HeroPinned}/dy={bad.HeroDy:0.#} chrome={bad.ChromePinned}/dy={bad.ChromeDy:0.#} stuckTop={bad.StuckTop} edges={bad.Edges} stuck={bad.Stuck}");
+    }
+
+    /// <summary>Two persistent prefix slots (a 200-DIP hero, a 56-DIP chrome band) whose content is an
+    /// <c>Embed.Comp</c> child, over an ordinary recyclable 40-DIP row window. <paramref name="onComponentRoot"/> is the
+    /// ONE difference between the two arms: false puts the collapse/sticky binds on the raw <see cref="BoxEl"/> wrapper
+    /// (correct), true puts the identical rows on the component's rendered root (the footgun).</summary>
+    sealed class CompRootPinProbe : Component
+    {
+        public const int N = 400;
+        public const float HeroH = 200f;
+        public const float BandH = 56f;
+        public const float RowH = 40f;
+        static ColorF RowFill => ColorF.FromRgba(38, 44, 52);
+
+        readonly bool _onCompRoot;
+        readonly RepeatLayout _layout = RepeatLayout.Extents(ExtentOf, RowH);
+        public int StuckEdges;
+        public bool Stuck;
+
+        public CompRootPinProbe(bool onComponentRoot) => _onCompRoot = onComponentRoot;
+
+        static float ExtentOf(int i) => i == 0 ? HeroH : i == 1 ? BandH : RowH;
+
+        /// <summary>The prefix slot's CONTENT — an autonomous component, exactly as Wavee's <c>TableVerticalItem</c> is.
+        /// It carries the binds only in the negative arm.</summary>
+        sealed class PrefixBody : Component
+        {
+            readonly float _h;
+            readonly ScrollBindDsl[] _binds;
+            public PrefixBody(float h, ScrollBindDsl[] binds) { _h = h; _binds = binds; }
+            public override Element Render() => new BoxEl { Height = _h, Fill = RowFill, ScrollBinds = _binds };
+        }
+
+        public override Element Render()
+            => ItemsView.CreateBound(N,
+                scope =>
+                {
+                    int initial = scope.Index.Peek();          // the prefix never recycles, so this is its identity
+                    if (initial > 1) return new BoxEl { Height = RowH, Fill = RowFill };
+                    float h = initial == 0 ? HeroH : BandH;
+                    // Item 0 = the hero's pin (the PIN half of `.Collapse`); item 1 = the chrome's `.Sticky` at the band.
+                    ScrollBindDsl[] binds = initial == 0
+                        ? [new ScrollBindDsl { PinTop = 0f }]
+                        : [new ScrollBindDsl { PinTop = BandH, OnFlag = OnStuck }];
+                    var empty = Array.Empty<ScrollBindDsl>();
+                    Element child = Embed.Comp(() => new PrefixBody(h, _onCompRoot ? binds : empty));
+                    return _onCompRoot
+                        ? child                                                    // ✗ bind on the component's root
+                        : new BoxEl { Direction = 1, Height = h, Children = [child], ScrollBinds = binds };   // ✓ raw wrapper
+                },
+                _layout,
+                new ListOptions { Overscan = 4, PersistentPrefixCount = 2 });
+
+        void OnStuck(bool stuck)
+        {
+            StuckEdges++;
+            Stuck = stuck;
+        }
+    }
+
     static void ListConsolidationChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -5327,11 +5820,19 @@ static class ScrollSuite
                 return true;
             }
 
+            // ATTACHED slots only (index inside the published window at snapshot time). A slot the pool parked on an
+            // earlier shrink keeps its stale index off-window; when a grow takes it back for an entering row its signal
+            // changes exactly as a fresh mount's would have been CREATED before the pool existed — an entering row's
+            // rebind, not an overlap violation — so it is excluded the same way a brand-new signal always was.
             Dictionary<IReadSignal<int>, int> SignalSnapshot()
             {
+                host.Scene.TryGetScroll(vp, out var win);
                 var values = new Dictionary<IReadSignal<int>, int>(probe.SlotSignals.Count);
                 for (int i = 0; i < probe.SlotSignals.Count; i++)
-                    values[probe.SlotSignals[i]] = probe.SlotSignals[i].Peek();
+                {
+                    int v = probe.SlotSignals[i].Peek();
+                    if (v >= win.FirstRealized && v < win.LastRealized) values[probe.SlotSignals[i]] = v;
+                }
                 return values;
             }
 
@@ -5370,8 +5871,10 @@ static class ScrollSuite
             host.Scene.TryGetScroll(vp, out var kState);
             var map3 = Snapshot();
             int kChanges = ChangedSignals(signals2);
+            // At most k rebinds: rows parked by the earlier shifts come back still bound to the entering index (the
+            // slot pool's exact-match reservation), so the rebind count is an upper bound, never a fixed 3.
             bool shiftK = kState.FirstRealized == first0 + 3 &&
-                          kChanges == 3 &&
+                          kChanges >= 1 && kChanges <= 3 &&
                           OverlapPreserved(map2, map3);
 
             var signals3 = SignalSnapshot();
@@ -7123,78 +7626,86 @@ static class ScrollSuite
                 Near(asbR.H, SlotH, 1f), $"h={asbR.H:0.#} slot={SlotH}");
         }
 
-        // ── Wheel-through sticky overlay: HitTestPassThrough band still scrolls via OnPointerWheel → ScrollBy ──
+        // ── Wheel-through header (S5): Element.WheelTarget glides the LIST from a header laid out ABOVE it. The header
+        //    names the list's IScrollController as its WheelTarget; one device notch over the header must (a) travel
+        //    exactly PerNotchDip(viewport, LineDip) — the same distance a notch over the rows gets, (b) arrive as a
+        //    GLIDE (the kernel's Driven|Wheel chase: the offset changes over ≥ 3 frames, never in one), (c) leave the
+        //    header itself where it was laid out, and (d) keep the header clickable (no pass-through, no OnPointerWheel).
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("cp4-wheel-overlay", new Size2(320, 280), 1f));
+            var window = new HeadlessWindow(new WindowDesc("cp4-wheel-header", new Size2(320, 280), 1f));
             window.Show();
-            var listCtl = new ItemsViewController();
-            int overlayClicks = 0, overlayWheels = 0;
-            float lastWheelDelta = 0f;
+            var rail = new AnnotatedScrollBarController();   // an IScrollController IS an IWheelTarget
+            int headerClicks = 0;
             const float Band = 48f;
+            var headerFill = ColorF.FromRgba(0x2A, 0x3B, 0x4C);
             using var host = new AppHost(app, window, new HeadlessGpuDevice(),
                 new HeadlessFontSystem(strings), strings, new W0fStaticProbe
                 {
                     Build = () => new BoxEl
                     {
-                        Width = 280f, Height = 240f, ZStack = true, ClipToBounds = true,
+                        Width = 280f, Height = 240f, Direction = 1, ClipToBounds = true,
                         Children =
                         [
+                            new BoxEl
+                            {
+                                Height = Band, Fill = headerFill, WheelTarget = rail,
+                                Children = [new BoxEl { Height = Band, Grow = 1f, OnClick = () => headerClicks++ }],
+                            },
                             ItemsView.Create(40,
                                 i => new BoxEl { Height = 40f, Children = [new TextEl($"row {i}") { Size = 13f }] },
                                 RepeatLayout.Stack(40f),
                                 new ListOptions
                                 {
-                                    Controller = listCtl,
                                     SelectionMode = ItemsSelectionMode.None,
                                     Selector = SelectorVisual.None,
                                     Grow = 1f,
+                                    Scroll = new ScrollOptions { VerticalScrollController = rail },
                                 }),
-                            new BoxEl
-                            {
-                                Height = Band, HitTestPassThrough = true,
-                                OnPointerWheel = e =>
-                                {
-                                    overlayWheels++;
-                                    lastWheelDelta = e.Delta;
-                                    listCtl.ScrollBy(e.Delta);
-                                    e.Handled = true;
-                                },
-                                Children =
-                                [
-                                    new BoxEl { Height = Band, Grow = 1f, OnClick = () => overlayClicks++ },
-                                ],
-                            },
                         ],
                     },
                 });
             host.RunFrame();
             host.RunFrame();
             var vp = FindScrollable(host.Scene, host.Scene.Root);
-            var below = new Point2(140f, 120f);
-            var onBand = new Point2(140f, 24f);
-            uint t = 16;
-            window.QueueInput(new InputEvent(InputKind.Wheel, below, 0, 0, ScrollDelta: 48f, TimestampMs: t));
-            host.RunFrame(); host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var scBelow);
-            float offBelow = scBelow.OffsetY;
-            int wheelsAfterBelow = overlayWheels;
-            window.QueueInput(new InputEvent(InputKind.Wheel, onBand, 0, 0, ScrollDelta: 48f, TimestampMs: t += 16));
-            host.RunFrame(); host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var scBand);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, onBand, 0, 0));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, onBand, 0, 0));
+            var header = FindFillNode(host.Scene, host.Scene.Root, headerFill);
+            var headerBefore = host.Scene.AbsoluteRect(header);
+            host.Scene.TryGetScroll(vp, out var sc0);
+            float start = sc0.OffsetY;
+            float expected = ScrollFeel.Shipping.PerNotchDip(sc0.ViewportH, sc0.LineDip);
+            var onHeader = new Point2(140f, 24f);
+            window.QueueInput(new InputEvent(InputKind.Wheel, onHeader, 0, 0, WheelNotch: 1f, TimestampMs: 16));
+            // Follow the glide frame by frame: count the frames that moved the offset and stop once it has rested for
+            // three consecutive frames after moving (bounded — a notch settles in ~10 frames in this scene).
+            int movingFrames = 0, restFrames = 0;
+            float prev = start, firstStep = 0f;
+            for (int i = 0; i < 90 && restFrames < 3; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sci);
+                float step = sci.OffsetY - prev;
+                if (MathF.Abs(step) > 0.01f)
+                {
+                    if (movingFrames == 0) firstStep = step;
+                    movingFrames++;
+                    restFrames = 0;
+                }
+                else if (movingFrames > 0) restFrames++;
+                prev = sci.OffsetY;
+            }
+            host.Scene.TryGetScroll(vp, out var scEnd);
+            float travelled = scEnd.OffsetY - start;
+            var headerAfter = host.Scene.AbsoluteRect(header);
+            bool headerStill = Near(headerAfter.Y, headerBefore.Y, 0.01f) && Near(headerAfter.H, headerBefore.H, 0.01f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, onHeader, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, onHeader, 0, 0));
             host.RunFrame();
-            float offBeforeHiRes = scBand.OffsetY;
-            window.QueueInput(new InputEvent(InputKind.Wheel, onBand, 0, 0, ScrollDelta: 2f, TimestampMs: t += 16));
-            host.RunFrame(); host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var scHiRes);
-            Check("gate.scroll.wheel-through-sticky-overlay pass-through header band forwards wheel via OnPointerWheel→ScrollBy, still clicks, and routes high-res 2 DIP deltas",
-                offBelow > 1f && wheelsAfterBelow == 0
-                && overlayWheels >= 2 && scBand.OffsetY > offBelow
-                && overlayClicks == 1
-                && Near(lastWheelDelta, 2f, 0.01f) && scHiRes.OffsetY > offBeforeHiRes,
-                $"offBelow={offBelow:0.#} wheelsBelow={wheelsAfterBelow} wheels={overlayWheels} offBand={scBand.OffsetY:0.#} clicks={overlayClicks} lastΔ={lastWheelDelta:0.#} hiRes={scHiRes.OffsetY:0.#}");
+            Check("gate.scroll.wheel-through-sticky-overlay a header laid out above its list names the list's IScrollController as WheelTarget: one notch over the header glides the list over ≥ 3 frames (not in one) to exactly PerNotchDip(viewport, LineDip), the header stays put, and it still clicks",
+                sc0.LineDip > 0f && expected > 0f
+                && movingFrames >= 3 && MathF.Abs(firstStep) < expected - 0.5f
+                && Near(travelled, expected, 1f)
+                && headerStill && headerClicks == 1,
+                $"lineDip={sc0.LineDip:0.#} expected={expected:0.#} travelled={travelled:0.##} movingFrames={movingFrames} firstStep={firstStep:0.##} headerY={headerBefore.Y:0.#}→{headerAfter.Y:0.#} clicks={headerClicks}");
         }
 
         // ── GroupedListVirtualLayout sticky vs IndexAt after a programmatic jump (Issue 2 candidate a) ──

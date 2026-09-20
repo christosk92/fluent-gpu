@@ -2,20 +2,22 @@ using FluentGpu.Scene;
 
 namespace FluentGpu.Media;
 
-/// <summary>The outcome of a fetch attempt. On success it hands back a buffer RENTED FROM
-/// <see cref="System.Buffers.ArrayPool{Byte}.Shared"/> plus the valid length — the scheduler returns it to the pool
-/// after decode, so a fetch costs no net managed allocation. On failure it carries a classified
-/// <see cref="ImageFailureKind"/> the scheduler uses to pick transient-retry vs permanent-fail.</summary>
+/// <summary>The outcome of a fetch attempt. On success it hands back a POOLED buffer plus the valid length — the
+/// scheduler hands it back through <see cref="IImageFetcher.ReturnBuffer"/> after decode (the fetcher's own pool, or
+/// <see cref="System.Buffers.ArrayPool{Byte}.Shared"/> for a fetcher that keeps the default), so a fetch costs no net
+/// managed allocation. On failure it carries a classified <see cref="ImageFailureKind"/> the scheduler uses to pick
+/// transient-retry vs permanent-fail.</summary>
 public readonly struct FetchResult
 {
-    /// <summary>Pooled buffer (rent from <c>ArrayPool&lt;byte&gt;.Shared</c>); the SCHEDULER returns it. May be larger than <see cref="Length"/>.</summary>
+    /// <summary>Pooled buffer; the SCHEDULER returns it via <see cref="IImageFetcher.ReturnBuffer"/>. May be larger than <see cref="Length"/>.</summary>
     public readonly byte[]? Buffer;
     public readonly int Length;
     public readonly ImageFailureKind Failure;   // None on success
     private FetchResult(byte[]? buffer, int length, ImageFailureKind f) { Buffer = buffer; Length = length; Failure = f; }
     public bool Ok => Buffer != null && Failure == ImageFailureKind.None;
     public ReadOnlySpan<byte> Span => Buffer is null ? default : Buffer.AsSpan(0, Length);
-    /// <summary><paramref name="buffer"/> MUST be rented from <c>ArrayPool&lt;byte&gt;.Shared</c>; the scheduler returns it.</summary>
+    /// <summary><paramref name="buffer"/> MUST be a rental the producing fetcher's <see cref="IImageFetcher.ReturnBuffer"/>
+    /// accepts (<c>ArrayPool&lt;byte&gt;.Shared</c> for the default member); the scheduler returns it.</summary>
     public static FetchResult Pooled(byte[] buffer, int length) => new(buffer, length, ImageFailureKind.None);
     public static FetchResult Fail(ImageFailureKind f) => new(null, 0, f);
 }
@@ -29,6 +31,13 @@ public readonly struct FetchResult
 public interface IImageFetcher
 {
     System.Threading.Tasks.Task<FetchResult> FetchAsync(string source, System.Threading.CancellationToken ct);
+
+    /// <summary>Give a <see cref="FetchResult.Buffer"/> back to the pool it was rented from, once the decoder has read
+    /// it. The scheduler calls this (worker thread) instead of naming a pool itself, so a fetcher owns its buffer policy
+    /// end to end: <see cref="DefaultImageFetcher"/> rents from a dedicated pool sized for encoded images (the app caps
+    /// <c>ArrayPool&lt;byte&gt;.Shared</c> small enough that ≥ 85 KB covers missed it and became LOH garbage). Default
+    /// routes to <c>ArrayPool&lt;byte&gt;.Shared</c>, which is where every other fetcher (tests, harness fakes) rents.</summary>
+    void ReturnBuffer(byte[] buffer) => System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
 }
 
 /// <summary>Decode/fetch robustness policy. Defaults tuned for album art over flaky links (slow internet, transient 5xx).</summary>

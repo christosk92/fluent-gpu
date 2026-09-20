@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
@@ -18,6 +19,15 @@ namespace FluentGpu.Hooks;
 /// AOT binary — zero bytes, zero probe allocation. When compiled in it is simply ON: there is no env flag, because a
 /// tripwire you have to remember to enable only ever fires for someone who already suspected the bug.
 /// "Production safety == CI coverage": the value is catching the regression in dev/CI, not in the customer's hands.
+/// </para>
+/// <para>
+/// ONE report is the exception to all of the above: <see cref="KeyIgnoredInSingleChildSlot"/> is UNCONDITIONAL — no
+/// <see cref="CompiledIn"/> gate, no <see cref="Enabled"/> gate. Every OTHER report here names a bug the author can
+/// only hit by writing new code wrong (a frozen field, a re-pushed delegate), so catching it in dev/CI is enough. This
+/// one names a STRUCTURAL limit of the engine (a key that can never be honored in a single-child slot) that a caller
+/// can trip with no code change at all — a click handler starts minting a different key — so "production safety ==
+/// CI coverage" does not hold for it: the exact build that needs to see it is the Release build a user runs. See its
+/// own doc for the dedupe that keeps that unconditional cost bounded.
 /// </para>
 /// See <c>design/subsystems/component-props-contract.md</c> for the authoring contract this enforces.
 /// </summary>
@@ -53,8 +63,9 @@ public static class ReuseGuard
     /// <summary>The most recent violation message (gate accessor).</summary>
     public static string? LastViolation { get; private set; }
 
-    /// <summary>Reset the accumulators (between gate scenarios).</summary>
-    public static void Reset() { Violations = 0; LastViolation = null; }
+    /// <summary>Reset the accumulators (between gate scenarios) — including <see cref="_reportedSites"/>, so a fresh
+    /// scenario doesn't inherit another scenario's <see cref="KeyIgnoredInSingleChildSlot"/> dedupe state.</summary>
+    public static void Reset() { Violations = 0; LastViolation = null; _reportedSites.Clear(); }
 
     /// <summary>Report a frozen-field violation: a control's <see cref="Component.DebugCheckReuse"/> override detected
     /// that <paramref name="field"/> (carrying caller data) changed on a reused instance. <paramref name="guidance"/>
@@ -75,20 +86,54 @@ public static class ReuseGuard
     /// pairs old↔new by <c>ElementTypeId</c> alone — only <c>ReconcileChildren</c> reads <c>Key</c> — so a changed key
     /// there is a silently-dropped remount request and every field frozen at that child's mount stays frozen. The fix is
     /// to make it a keyed CHILD: wrap it in a container element (<c>new BoxEl { Children = [keyed] }</c>).
+    /// <para>UNCONDITIONAL — unlike every other report on this type, this one is gated by neither <see cref="CompiledIn"/>
+    /// nor <see cref="Enabled"/>: a Release build (where both are compiled-out/false) is exactly the build with no other
+    /// way to see a remount request silently dropped. De-duplicated via <see cref="ShouldReportSite"/> (element type + a
+    /// stable prefix of the NEW key, capped at <see cref="MaxReportedSites"/> distinct sites) so a key that legitimately
+    /// varies every frame (a measured width or a generation counter baked into a root key — the audited sites the
+    /// contract comment already calls out) logs ONCE per site, not once per frame.</para>
     /// <para>Report-only by design — it does NOT honour <see cref="ThrowOnViolation"/>. The semantic is unchanged (the
     /// subtree is still updated in place), so this is a diagnostic about a request that was dropped, not a corrupted
-    /// state, and it must not brick a debug run for a pre-existing inert key.</para></summary>
+    /// state, and it must not brick a run for a pre-existing inert key.</para></summary>
     public static void KeyIgnoredInSingleChildSlot(string elementType, string? oldKey, string? newKey)
     {
+        if (!ShouldReportSite(elementType, newKey)) return;
         Violations++;
         string msg = $"[reuseguard] {elementType}.Key '{oldKey}' → '{newKey}' in a SINGLE-child slot was IGNORED "
                    + "(ReconcileSingleChild pairs by element type; only ReconcileChildren honors Key), so the subtree was "
                    + "UPDATED in place instead of remounted and its frozen fields kept their mount-time values. "
-                   + "Wrap the keyed element in a container so the key lands on a keyed CHILD "
+                   + "Put remount keys on a CHILD of this slot — wrap the keyed element in a container "
+                   + "(the content root of Skel.Region/Show/a provider/a component IS this slot) "
                    + "— see design/subsystems/component-props-contract.md";
         LastViolation = msg;
         if (Diag.Sink is { } sink) sink(msg);
         else Console.Error.WriteLine(msg);
+    }
+
+    /// <summary>Sites already reported by <see cref="KeyIgnoredInSingleChildSlot"/> this run — a plain dedupe latch, not
+    /// bounded by <see cref="CompiledIn"/> because the report it guards isn't either. Cleared by <see cref="Reset"/>.</summary>
+    private static readonly HashSet<string> _reportedSites = new(StringComparer.Ordinal);
+
+    /// <summary>Cap on <see cref="_reportedSites"/> so a pathological key story (many genuinely distinct sites in one
+    /// run) cannot grow this unbounded; a site past the cap just reports every time, exactly as if the dedupe did not
+    /// exist — never worse than before this facility was added.</summary>
+    private const int MaxReportedSites = 32;
+
+    /// <summary>Length of the NEW-key prefix the dedupe keys on. A full-key dedupe would never collapse the case this
+    /// exists for (a key whose tail moves every frame — a measured width, a generation counter): every frame mints a
+    /// "new" full key and the set would grow forever. A short PREFIX collapses those to the site's stable head while
+    /// still separating genuinely different call sites that happen to share an element type.</summary>
+    private const int KeyPrefixLength = 24;
+
+    /// <summary>True the FIRST time this (elementType, key-prefix) pair is seen — i.e. report — false on every repeat.
+    /// A per-SITE latch, not a per-message-content one: see <see cref="KeyPrefixLength"/> for why it truncates.</summary>
+    private static bool ShouldReportSite(string elementType, string? newKey)
+    {
+        string prefix = newKey is null ? "" : newKey.Length <= KeyPrefixLength ? newKey : newKey[..KeyPrefixLength];
+        string site = elementType + "|" + prefix;
+        if (_reportedSites.Contains(site)) return false;                  // already reported this site — stay quiet
+        if (_reportedSites.Count < MaxReportedSites) _reportedSites.Add(site);   // room to latch it: the NEXT occurrence goes quiet
+        return true;   // first occurrence — or the cap is full and this site can no longer be latched, so it reports every time
     }
 
     /// <summary>Report a re-pushed DELEGATE prop whose <c>Method</c> changed on a mounted component. A props record that

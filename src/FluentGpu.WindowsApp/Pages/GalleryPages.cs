@@ -38,6 +38,7 @@ sealed class TypographyPage : Component
                     SizeScaleCard(),
                     WeightsCard(),
                     ColorsCard(),
+                    EmojiCard(),
                     ParagraphCard(),
                     FontFamiliesCard()
                 ]
@@ -170,6 +171,16 @@ sealed class TypographyPage : Component
                     }
                 ]
             });
+
+    // Colour emoji: the layout engine falls the emoji back to Segoe UI Emoji, and the Windows glyph renderer bakes each
+    // COLR v0 palette layer as its own quad through the alpha atlas (GlyphRenderer.ColorLayersFor). Body text, because
+    // Wavee's "Now playing" strip is the case that motivated it. Real pixels: `--screenshot <png> --shot
+    // page-content:typography` (the layered fills survive any foreground; a text-presentation ✅ keeps its palette too).
+    Element EmojiCard() =>
+        Section("Colour emoji",
+            Text("Emoji keep their CPAL palette colours; a foreground layer follows the run colour like any glyph.").Foreground(Grey).FontSize(13f),
+            new TextEl("Now playing 🎵🔥 ✅") { Size = 14f, Color = Theme.WindowText },
+            new TextEl("Now playing 🎵🔥 ✅") { Size = 20f, Color = Grey });
 
     // Font families (moved here from the old Icons & fonts page — Iconography is now the full glyph catalog).
     Element FontFamiliesCard() =>

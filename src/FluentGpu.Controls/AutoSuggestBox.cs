@@ -185,8 +185,9 @@ public sealed class AutoSuggestBox : Component
     /// <summary>Suggestion host. Inline never opens a nested overlay and mounts the presenter directly below the field.</summary>
     public AutoSuggestBoxSuggestionPresentation SuggestionPresentation;
     /// <summary>Inline ghost completion (empty = no ghost). A muted copy of the full string sits under the editor so
-    /// the typed prefix stays <see cref="Tok.TextPrimary"/> and the suffix shows through. Hidden when the caret is not
-    /// at the end, a suggestion is highlighted, or the completion does not start with the live document.</summary>
+    /// the typed prefix stays <see cref="Tok.TextPrimary"/> and the suffix shows through. Hidden when the editor is
+    /// not focused, the caret is not at the end, a suggestion is highlighted, or the completion does not start with
+    /// the live document.</summary>
     public IReadSignal<string>? Completion;
 
     public static Element Create(
@@ -549,7 +550,11 @@ public sealed class AutoSuggestBox : Component
 
         string completionText = Completion?.Value ?? "";
         int hi = highlight.Value;
-        bool showGhost = hi < 0 && caretAtEnd.Value
+        // The ghost is a FOCUSED-editor affordance only: a completion published while the field is blurred (a late
+        // debounce answer, a programmatic query write) must not stay painted under the text, where the grey suffix
+        // reads as typed characters. 'focused' is a tracked signal read (OnFocusChanged writes it), so the blur
+        // re-render drops the ghost on the same commit that removes the caret.
+        bool showGhost = focused.Value && hi < 0 && caretAtEnd.Value
             && completionText.Length > q.Length
             && completionText.StartsWith(q, StringComparison.OrdinalIgnoreCase);
         Element ghost = showGhost
@@ -715,10 +720,12 @@ public sealed class AutoSuggestBox : Component
                 Children = [root, FieldVisuals.MessageRow(vfield.Error)],
             };
 
-        if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline || !open.Value)
+        if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline)
             return field;
 
-        Element suggestions = Presenter is { } inlinePresenter
+        // Keep the editor at the same depth and child slot while the inline list opens/closes. Returning the field
+        // directly when closed reparented its EditableText after the first typed character and discarded focus.
+        Element? suggestions = !open.Value ? null : Presenter is { } inlinePresenter
             ? inlinePresenter.Build(new AutoSuggestBoxPresenterContext(query, popupWidth, SubmitPresented, Close))
             : Embed.Comp(() => new SuggestionsList
             {
@@ -730,7 +737,7 @@ public sealed class AutoSuggestBox : Component
             Width = Grow > 0f ? float.NaN : width,
             Grow = Grow,
             MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
-            Children = [field, suggestions],
+            Children = suggestions is null ? [field] : [field, suggestions],
         };
     }
 

@@ -14,6 +14,12 @@ public enum ScrollInputKind : byte
     ThumbSet,                                 // A = absolute offset, immediate, Activity stays Idle
     Restore,                                  // A = x, B = y (latched until geometry can hold it)
     AnchorShift,                              // A = delta (main axis) — coordinate-frame shift; rebases every intent
+    ImpulseSample,                            // bug-B/A3: A = position in the phase-delta domain (router-tracked running
+                                               // sum, NOT the clamped scroll offset), T = qpc sec, I = ScrollTrace src tag
+                                               // (0 = pre-coalesce side ring, 1 = direct per-packet), Flags bit
+                                               // ImpulseReset = start a new estimator window (gesture latch/re-grab).
+                                               // Feeds ScrollBody.Impulse ONLY — never moves DragRaw/position (that stays
+                                               // the once-per-frame FrameDelta's job). See ScrollInputRouter.AccumulatePhaseDelta.
 }
 
 [System.Flags]
@@ -32,6 +38,10 @@ public enum ScrollInputFlags : byte
     /// wheel's target to [min, max] even under BouncingScrollPhysics, and the engine's own detented
     /// <see cref="ScrollInputKind.WheelNotch"/> chase already hard-stops. Latched per gesture by the kernel.</summary>
     NoOverscroll = 2,
+    /// <summary>ImpulseSample: start a new estimator window (<c>ScrollBody.Impulse.Reset</c>) instead of feeding the
+    /// live one (<c>.Sample</c>) — the gesture's first packet after a latch or a re-grab. A distinct bit from
+    /// <see cref="Immediate"/>/<see cref="NoOverscroll"/> because ImpulseSample commands never carry either of those.</summary>
+    ImpulseReset = 4,
 }
 
 /// <summary>A viewport's geometry + snap/zoom configuration, copied verbatim into the owning <see cref="ScrollBody"/>
@@ -73,6 +83,15 @@ public readonly record struct ScrollInput(ScrollInputKind Kind, int Node, double
     public static ScrollInput Restore(int node, float x, float y) => new(ScrollInputKind.Restore, node, 0.0, A: x, B: y);
 
     public static ScrollInput AnchorShift(int node, float delta) => new(ScrollInputKind.AnchorShift, node, 0.0, A: delta);
+
+    /// <summary>bug-B/A3: one raw (pre-frame-coalesce) sample for the body's release-velocity estimator. <paramref
+    /// name="pos"/> is the router's running phase-delta-domain position (NOT applied to the body's offset — see
+    /// <see cref="ScrollInputKind.ImpulseSample"/>); <paramref name="reset"/> starts a fresh estimator window;
+    /// <paramref name="src"/> is a <c>ScrollTrace.VelSample</c> provenance tag only (0 = drained from the pre-coalesce
+    /// velocity side ring, 1 = fed directly from a Phase()-consumed packet) — meaningless to the kernel itself.</summary>
+    public static ScrollInput ImpulseSample(int node, double tSec, float pos, bool reset, int src = 1)
+        => new(ScrollInputKind.ImpulseSample, node, tSec, A: pos, I: src,
+               Flags: reset ? (byte)ScrollInputFlags.ImpulseReset : (byte)0);
 
     public static ScrollInput SetZoom(int node, float zoom, float focalOffset) => new(ScrollInputKind.SetZoom, node, 0.0, A: zoom, B: focalOffset);
 

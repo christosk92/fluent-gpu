@@ -140,16 +140,32 @@ public static partial class ProtocolRegistrar
 
     /// <summary>
     /// Register the app to auto-start at user logon by writing <c>HKCU\Software\Microsoft\Windows\CurrentVersion\Run\&lt;taskId&gt;</c>
-    /// = the (quoted) exe path — the same plain <c>Run</c>-key mechanism WASDK uses for <c>StartupTask</c>
-    /// (<c>ActivationRegistrationManager.h:15</c>; not Task Scheduler). The value is the quoted exe so paths with spaces work.
+    /// = the (quoted) exe path plus optional <paramref name="arguments"/> — the same plain <c>Run</c>-key mechanism WASDK
+    /// uses for <c>StartupTask</c> (<c>ActivationRegistrationManager.h:15</c>; not Task Scheduler). The arguments are how
+    /// an unpackaged app tells its sign-in launch from a click (e.g. <c>--tray</c> to start hidden): the shell runs the
+    /// value as a command line, so they arrive in <see cref="Environment.GetCommandLineArgs"/>, and a switch token
+    /// (leading <c>-</c>) never changes <see cref="ActivationArgs.Classify"/>'s answer. A packaged app's manifest
+    /// <c>StartupTask</c> cannot carry arguments — it is recognised as <see cref="ActivationKind.StartupTask"/> instead.
+    /// Idempotent: re-registering overwrites the value, so toggling the arguments is just another call.
     /// </summary>
     /// <param name="taskId">A stable per-app value name (e.g. <c>"WAVEE"</c>).</param>
-    public static void RegisterStartup(string taskId, string exePath)
+    /// <param name="exePath">Absolute path to the exe (quoted in the value, so paths with spaces work).</param>
+    /// <param name="arguments">Command-line text appended after the quoted exe, verbatim (quote your own tokens); null or
+    /// whitespace writes the bare quoted exe.</param>
+    public static void RegisterStartup(string taskId, string exePath, string? arguments = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
         ArgumentException.ThrowIfNullOrWhiteSpace(exePath);
-        SetValue(@"Software\Microsoft\Windows\CurrentVersion\Run", taskId, $"\"{exePath}\"");
+        SetValue(@"Software\Microsoft\Windows\CurrentVersion\Run", taskId, StartupCommandLine(exePath, arguments));
         // Startup is not a file association — no SHChangeNotify needed.
+    }
+
+    /// <summary>The <c>Run</c> value's command line: the exe quoted, then a single space and the arguments trimmed, or the
+    /// quoted exe alone when there are none. Pure — the shape <see cref="RegisterStartup"/> writes.</summary>
+    internal static string StartupCommandLine(string exePath, string? arguments)
+    {
+        string quoted = "\"" + exePath + "\"";
+        return string.IsNullOrWhiteSpace(arguments) ? quoted : quoted + " " + arguments.Trim();
     }
 
     /// <summary>Remove the logon-startup <c>Run</c> value. Safe when it was never set.</summary>

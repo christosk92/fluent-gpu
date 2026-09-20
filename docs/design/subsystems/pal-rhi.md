@@ -268,6 +268,35 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
   and when `DefWindowProc` returns without having entered a loop (the button was released before the post was
   handled) the backend enqueues it itself. Always-on `[window.move] begin/end` lines, one per gesture. Headless
   counts calls (`BeginSystemMoveCount`) and accepts every windowed request; gates end it by queueing the Win32 pair.
+- **Window lifecycle — close veto, hide, park** *(as-built 2026-09; the notification-area app's seams).* Three
+  default-interface members on `IPlatformWindow` plus portable decision types in `FluentGpu.Pal`
+  (`Seams/Pal/WindowLifecycle.cs`):
+
+  | Member / type | Contract | Win32 |
+  |---|---|---|
+  | `Func<CloseReason, bool>? CloseRequested` (default none) | asked on every close request; `true` keeps the window (the handler hid it), `false`/none closes. `CloseReason.SessionEnding` is reported but a veto is ignored (`WindowCloseGate.Decide`) | `WM_CLOSE` asks the gate before `DestroyWindow` and is consumed either way; `WM_QUERYENDSESSION` latches SessionEnding (not consumed — `DefWindowProc` answers TRUE); `WM_ENDSESSION(FALSE)` clears it |
+  | `void Hide()` (default no-op) | leave the screen, taskbar and Alt+Tab without destroying anything | `ShowWindow(SW_HIDE)` |
+  | `bool IsVisible` (default true) | the pull side, read every frame | the live `WS_VISIBLE` style (`IsWindowVisible`), never a mirrored field — an app's own `ShowWindow` is seen |
+  | `WindowStatus(Placement, Visible)` / `.Parked` | parked = minimized OR hidden | — |
+  | `WindowStateRelay` → `WindowStateChange` | per-frame samples → edges (`Minimized`/`Restored`/`Maximized`/`Hidden`/`Shown`/`Parked`/`Unparked`, several at once); the first sample seeds silently | — |
+
+  **The host parks a hidden window exactly like a minimized one** (`AppHost.IsParked`): the minimize gate became the
+  park gate (no Paint, `Activation.IsActive` false with the one-shot edge flush, the render thread paused via
+  `_renderVisible`, `RecommendedWaitMs` −1, `ClampWaitToTimers` untouched). Two additions the hidden case needs: an
+  UNCONSUMED park/un-park edge returns a 0 wait (a `Hide()`/`Show()` from app code posts nothing that would otherwise
+  wake the loop; skipped during the device-lost rendezvous), and the parked branch delivers the stashed OS events —
+  activation redirect, thumbnail click, app navigation, taskbar button created — before its flush, because Paint (their
+  normal delivery point) never runs while parked; the OS colour change stays Paint-only (it feeds Paint's theme
+  detection) and lands on the un-park frame. `AppHost.WindowStateChanged` is sampled once per `RunFrame` after the pump,
+  parked frames included, and raised BEFORE the park gate so a minimize-to-tray handler can `Hide()` in the same frame;
+  the park decision re-samples after a handler ran. Headless: `HeadlessWindow.IsVisible` is settable (default TRUE, so an
+  unshown headless window is not parked), `Hide()` clears it, `CloseRequested` is a stored property. Relayed to apps as
+  `FluentApp.CloseRequested`/`CloseWindow()`/`SetWindowVisible(bool)`/`WindowVisible`/`WindowStateChanged` and
+  `AppOptions.StartHidden` (the window is created, never shown, so the first frame is already parked); the taskbar's own
+  light/dark (`Personalize\SystemUsesLightTheme`, distinct from the app mode) is `Win32Theme.TaskbarUsesLightTheme` /
+  `FluentApp.TaskbarUsesLightTheme()`. The icon itself is outside the PAL: `FluentGpu.WindowsApi.Shell.NotifyIcon`
+  (its own hidden top-level callback window, `NOTIFYICON_VERSION_4`, re-add on `TaskbarCreated`). Gates:
+  `FluentGpu.Engine.Tests` `WindowCloseGateTests`/`WindowStateRelayTests`/`HiddenWindowHostTests`.
 - **Flat C exports:** `[LibraryImport]` for `D3D12CreateDevice`, `CreateDXGIFactory2`,
   `DCompositionCreateDevice`, `DWriteCreateFactory`, `RegisterClassExW`, `CreateWindowExW`,
   `SetProcessDpiAwarenessContext`, `GetDpiForWindow` (blittable `nint`/`Guid*`/`void**` no-marshal

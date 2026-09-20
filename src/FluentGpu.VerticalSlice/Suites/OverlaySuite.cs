@@ -93,6 +93,9 @@ static class OverlaySuite
         ToolTipTimerChecks(strings);
         G5fPopupToastChecks(strings);
         FlyoutAcrylicChecks(strings);
+        InWindowAcrylicLayerChecks(strings);
+        MenuWindowingChecks(strings);
+        AcrylicFallbackPolicyChecks(strings);
         VideoHoleBackdropChecks(strings);
         AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);
@@ -2396,9 +2399,10 @@ static class OverlaySuite
                 $"minEdge={minEdge} monitor={monitor} secondary={secondary} (pwA.Y={pwA.Y:0.#} pwB.Y={pwB.Y:0.#} pwC.X={pwC.X:0.#})");
         }
 
-        // e4popup.3 — MenuFlyout always windows when supported; other Flyouts window when
-        // ConstrainToRootBounds=false. Each gets a PAL popup + swapchain and subtree DrawList while the main record
-        // skips it. A constrained ordinary Flyout stays in-window; PopupWindowsEnabled=false falls back silently.
+        // e4popup.3 — an UNCONSTRAINED popup whose chrome carries an OS window material windows: it gets a PAL popup +
+        // swapchain and subtree DrawList while the main record skips it. A CONSTRAINED popup stays in-window whatever
+        // its chrome (that is gate.overlay.menu-windowing-is-constraint-keyed below); PopupWindowsEnabled=false falls
+        // back silently.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("e4win", new Size2(480, 360), 1f));
@@ -2414,7 +2418,7 @@ static class OverlaySuite
             var popupBody = new PopupExitProbeBody();
             var hWin = svc.Open(() => root.Anchor,
                 () => Embed.Comp(() => popupBody),
-                FlyoutPlacement.BottomLeft);
+                FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
             host.RunFrame();
 
             bool leased = host.PopupWindows.Count == 1 && app.PopupWindows.Count == 1;
@@ -2506,7 +2510,7 @@ static class OverlaySuite
             hFb.Close();
             for (int i = 0; i < 20; i++) host.RunFrame();
 
-            Check("e4popup.3 windowing: menus always HWND+DesktopAcrylic; FlyoutPresenter stays in-window (constrained OR not); disabled falls back",
+            Check("e4popup.3 windowing: an unconstrained menu gets HWND+DesktopAcrylic; FlyoutPresenter stays in-window (constrained OR not); disabled falls back",
                 leased && shown && placed && osBackdrop && routed && noEngineAcrylic && reorigined && mainSkips && presented
                 && popupExitRouted && defaultInWindow && keptWhileFading && released
                 && ordinaryInWindow && fallback,
@@ -2540,7 +2544,7 @@ static class OverlaySuite
 
             var hReveal = svc.Open(() => root.Anchor,
                 () => new BoxEl { Width = 200, Height = 120, Children = [new TextEl("reveal-body") { Size = 12f }] },
-                FlyoutPlacement.BottomLeft);
+                FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
             for (int i = 0; i < 5; i++) host.RunFrame();
 
             var slot = host.PopupWindows.Count > 0 ? host.PopupWindows[0] : null;
@@ -3201,6 +3205,404 @@ static class OverlaySuite
         finally { Tok.Use(ThemeKind.Dark); }
     }
 
+    // WHO gets an HWND, and what that costs. Until 2026-09-20 every PopupChrome.Flyout leased a popup window whether or
+    // not it could ever leave the root bounds, and a windowed popup renders into its OWN swapchain - which is not the
+    // primary one, so its engine acrylic PushLayer is dropped by the backend and its material becomes whatever the
+    // window's composition chrome manages. Shipped, that turned every menu in the app into a flat opaque grey panel.
+    // The lease is now keyed on the one thing that actually requires a window: ConstrainToRootBounds. These two gates
+    // pin BOTH sides of that decision, because either one alone is satisfiable by a mistake (never windowing anything
+    // would pass the first; windowing everything would pass the second).
+    static void MenuWindowingChecks(StringTable strings)
+    {
+        var spec = Tok.AcrylicFlyout;
+
+        // gate.overlay.menu-inwindow-acrylic - a CONSTRAINED menu (PopupChrome.Flyout, ConstrainToRootBounds = true,
+        // i.e. default PopupOptions) leases NO popup window - not from the host and not from the PAL - and its plate
+        // carries the engine acrylic: the scene-side spec, the elevation shadow, the FallbackColor resting fill, and a
+        // real Acrylic PushLayer over the plate rect in the MAIN window's DrawList, on every frame it is up.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("menu-inwindow", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            // Popup windows stay ENABLED: the claim is "it did not want one", never "it could not have one".
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+
+            var hMenu = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
+
+            int framesChecked = 0, framesWithLayer = 0;
+            bool recipeOk = false, coversPlate = false;
+            for (int i = 0; i < 24; i++)
+            {
+                host.RunFrame();
+                if (svc.Entries.Count != 1 || svc.Entries[0].PlateNode.IsNull) continue;
+                framesChecked++;
+                var plateRect = host.Scene.AbsoluteRect(svc.Entries[0].PlateNode);
+                foreach (var l in device.LastLayers)
+                {
+                    if (l.Kind != 0) continue;   // 0 = acrylic
+                    framesWithLayer++;
+                    if (ColorClose(l.Tint, spec.Tint, 0.004f) && ColorClose(l.Fallback, spec.Fallback, 0.004f)
+                        && Near(l.TintOpacity, spec.TintOpacity, 0.005f) && Near(l.LuminosityOpacity, spec.LuminosityOpacity, 0.005f)
+                        && Near(l.BlurSigma, spec.BlurSigma, 0.5f)) recipeOk = true;
+                    if (l.DeviceRect.W >= plateRect.W - 1f && l.DeviceRect.H >= plateRect.H - 1f) coversPlate = true;
+                    break;
+                }
+            }
+            var e0 = svc.Entries.Count == 1 ? svc.Entries[0] : null;
+            bool noLease = host.PopupWindows.Count == 0 && app.PopupWindows.Count == 0
+                && e0 is { PopupWindowToken: < 0, PopupWindowRefused: false };
+            bool plateChrome = e0 is not null && !e0.PlateNode.IsNull
+                && host.Scene.TryGetAcrylic(e0.PlateNode, out _) && host.Scene.TryGetShadow(e0.PlateNode, out _)
+                && ColorClose(host.Scene.Paint(e0.PlateNode).Fill, spec.Fallback, 0.004f);
+            bool everyFrame = framesChecked > 0 && framesWithLayer == framesChecked;
+            hMenu.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            Check("gate.overlay.menu-inwindow-acrylic a constrained menu leases NO popup window and records the engine Acrylic PushLayer over its plate on every frame",
+                noLease && plateChrome && everyFrame && recipeOk && coversPlate,
+                $"noLease={noLease} plate={plateChrome} frames={framesWithLayer}/{framesChecked} recipe={recipeOk} covers={coversPlate}");
+        }
+
+        // gate.overlay.menu-windowed-when-unconstrained - the other side. ConstrainToRootBounds = false is a DECLARED
+        // "this may leave the window", so the same chrome takes the windowed path with its fallback chrome intact: a
+        // TransientAcrylic PAL window, placed at the plate rect INFLATED by the WinUI medium-popup shadow insets
+        // (L10 T2 R10 B18) so the composition drop shadow has margin to render into, and a plate that has handed its
+        // material to the window - acrylic spec and engine shadow CLEARED, fill down to the presenter's residual tint
+        // (Tint at TintOpacity) rather than the near-opaque coverage that would occlude the window's own backdrop.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("menu-windowed", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+
+            var hEsc = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+            for (int i = 0; i < 12; i++) host.RunFrame();
+
+            var slot = host.PopupWindows.Count == 1 ? host.PopupWindows[0] : null;
+            var pal = app.PopupWindows.Count == 1 ? app.PopupWindows[0] : null;
+            bool leased = slot is { Material: PopupWindowMaterial.TransientAcrylic } && pal is not null;
+            // The composition chrome is what draws this popup, so the window MUST keep its shadow margin.
+            bool shadowInset = slot is not null
+                && Near(slot.WindowBoundsDip.X, slot.BoundsDip.X - 10f) && Near(slot.WindowBoundsDip.Y, slot.BoundsDip.Y - 2f)
+                && Near(slot.WindowBoundsDip.W, slot.BoundsDip.W + 20f) && Near(slot.WindowBoundsDip.H, slot.BoundsDip.H + 20f);
+            var e1 = svc.Entries.Count == 1 ? svc.Entries[0] : null;
+            var residual = spec.Tint with { A = spec.TintOpacity };
+            bool plateHandedOver = e1 is not null && !e1.PlateNode.IsNull
+                && !host.Scene.TryGetAcrylic(e1.PlateNode, out _) && !host.Scene.TryGetShadow(e1.PlateNode, out _)
+                && ColorClose(host.Scene.Paint(e1.PlateNode).Fill, residual, 0.004f)
+                && Near(host.Scene.Paint(e1.PlateNode).Fill.A, spec.TintOpacity, 0.005f);
+            // …and the MAIN window's stream carries no acrylic for it: the subtree is recorded into the popup's own
+            // DrawList, and the popup swapchain is not the primary one.
+            int mainAcrylicOps = 0;
+            foreach (var l in device.LastLayers) if (l.Kind == 0) mainAcrylicOps++;
+            hEsc.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool released = host.PopupWindows.Count == 0 && pal is { Disposed: true };
+
+            Check("gate.overlay.menu-windowed-when-unconstrained an unconstrained menu takes the windowed path with its composition fallback chrome (shadow insets) and hands its material to the window",
+                leased && shadowInset && plateHandedOver && mainAcrylicOps == 0 && released,
+                $"leased={leased} insets={shadowInset} plate={plateHandedOver} mainAcrylicOps={mainAcrylicOps} released={released}");
+        }
+
+        // gate.overlay.static-chrome-acrylic - the AutoSuggestBox SuggestionsContainer (PopupChrome.Static: a bare
+        // WinUI Popup with no transitions). WinUI gives that surface AutoSuggestBoxSuggestionsListBackground =
+        // AcrylicBackgroundFillColorDefaultBrush + SurfaceStrokeColorFlyout + OverlayCornerRadius - it is acrylic, not
+        // a solid plate, and it was reported live as a flat dark panel over a strongly red page. Same pair of claims as
+        // the frosted flyout above: the LAYER is emitted every frame with the flyout recipe over the surface rect, and
+        // the recipe it carries composites to something materially different from the flat FallbackColor it degrades
+        // to. Static is never windowed (its chrome carries no window material), so the layer is the only backdrop it
+        // will ever get.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("static-acrylic", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+
+            var hSug = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 300f, Height = 180f, Direction = 1 },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Static));
+
+            int framesChecked = 0, framesWithLayer = 0;
+            bool recipeOk = false, coversSurface = false;
+            for (int i = 0; i < 20; i++)
+            {
+                host.RunFrame();
+                if (svc.Entries.Count != 1 || svc.Entries[0].SurfaceNode.IsNull) continue;
+                framesChecked++;
+                var surf = host.Scene.AbsoluteRect(svc.Entries[0].SurfaceNode);
+                foreach (var l in device.LastLayers)
+                {
+                    if (l.Kind != 0) continue;
+                    framesWithLayer++;
+                    if (ColorClose(l.Tint, spec.Tint, 0.004f) && ColorClose(l.Fallback, spec.Fallback, 0.004f)
+                        && Near(l.TintOpacity, spec.TintOpacity, 0.005f) && Near(l.LuminosityOpacity, spec.LuminosityOpacity, 0.005f)
+                        && Near(l.BlurSigma, spec.BlurSigma, 0.5f)) recipeOk = true;
+                    if (l.DeviceRect.W >= surf.W - 1f && l.DeviceRect.H >= surf.H - 1f) coversSurface = true;
+                    break;
+                }
+            }
+            var eS = svc.Entries.Count == 1 ? svc.Entries[0] : null;
+            bool inWindow = host.PopupWindows.Count == 0 && eS is { PopupWindowToken: < 0 };
+            bool surfaceChrome = eS is not null && !eS.SurfaceNode.IsNull
+                && host.Scene.TryGetAcrylic(eS.SurfaceNode, out _) && host.Scene.TryGetShadow(eS.SurfaceNode, out _)
+                && ColorClose(host.Scene.Paint(eS.SurfaceNode).Fill, spec.Fallback, 0.004f);
+            bool everyFrame = framesChecked > 0 && framesWithLayer == framesChecked;
+
+            // The composite is not the flat plate: over a saturated red page the luminosity blend keeps the page's hue
+            // and only pins its lightness, so the result is red-grey - far from the FallbackColor, and far from the
+            // same recipe over a neutral page of equal luminance (which DOES land near the fallback).
+            var red = ColorF.FromRgba(0x8E, 0x1B, 0x22);
+            var over = AcrylicSpec.Flyout.CompositeOver(red);
+            float lum = red.R * 0.2126f + red.G * 0.7152f + red.B * 0.0722f;
+            var overNeutral = AcrylicSpec.Flyout.CompositeOver(new ColorF(lum, lum, lum, 1f));
+            float FromFlat(ColorF c) => MathF.Max(MathF.Abs(c.R - AcrylicSpec.Flyout.Fallback.R),
+                                        MathF.Max(MathF.Abs(c.G - AcrylicSpec.Flyout.Fallback.G), MathF.Abs(c.B - AcrylicSpec.Flyout.Fallback.B)));
+            bool notFlat = FromFlat(over) > 0.05f && FromFlat(overNeutral) < 0.06f
+                && MathF.Max(MathF.Abs(over.R - overNeutral.R), MathF.Abs(over.B - overNeutral.B)) > 0.05f;
+
+            hSug.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            Check("gate.overlay.static-chrome-acrylic the AutoSuggestBox suggestions surface (PopupChrome.Static) stays in-window, records the flyout Acrylic PushLayer every frame, and composites away from its flat fallback",
+                inWindow && surfaceChrome && everyFrame && recipeOk && coversSurface && notFlat,
+                $"inWindow={inWindow} surface={surfaceChrome} frames={framesWithLayer}/{framesChecked} recipe={recipeOk} covers={coversSurface} notFlat={notFlat}");
+        }
+
+        // gate.overlay.acrylic-plate-does-not-occlude-itself - the FILL half of the same bug, and the one that made
+        // every frosted popup read flat even where the layer DID run. A frosted surface authors Fill =
+        // <its acrylic>.Fallback so it stays solid wherever the layer cannot run; but an Acrylic PushLayer composites
+        // at PUSH time (blurred backdrop, SourceOver that same opaque Fallback, luminosity, tint, noise) and the node's
+        // own draw lands ON TOP of the result - so re-filling the node with the Fallback paints a flat slab straight
+        // over the frost. SceneRecorder therefore drops a node's own fill when it is EXACTLY the emitted layer's
+        // Fallback. Asserted as a property of the recorded stream: with the layer on, no FillRoundRect anywhere in the
+        // frame carries the fallback colour at the plate's own rect; with the material policy off (no layer), the very
+        // same plate DOES fill, because then the solid plate is all there is.
+        {
+            bool prevAdv = Materials.AdvancedEffectsEnabled;
+            try
+            {
+                (int Layers, bool PlateFilled) Run(string tag)
+                {
+                    using var app = new HeadlessPlatformApp();
+                    var window = new HeadlessWindow(new WindowDesc(tag, new Size2(480, 400), 1f));
+                    window.Show();
+                    var device = new HeadlessGpuDevice();
+                    var fonts = new HeadlessFontSystem(strings);
+                    var root = new OverlayProbe();
+                    using var host = new AppHost(app, window, device, fonts, strings, root);
+                    host.RunFrame();
+                    var svc = (OverlayServiceImpl)root.Service!;
+                    svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                        FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
+                    for (int i = 0; i < 8; i++) host.RunFrame();
+                    var plate = svc.Entries.Count == 1 ? svc.Entries[0].PlateNode : default;
+                    var pr = plate.IsNull ? default : host.Scene.AbsoluteRect(plate);
+                    int layers = 0;
+                    foreach (var l in device.LastLayers) if (l.Kind == 0) layers++;
+                    bool filled = false;
+                    foreach (var r in device.LastRects)
+                        if (ColorClose(r.Fill, spec.Fallback, 0.004f) && r.Fill.A > 0.99f
+                            && MathF.Abs(r.Rect.W - pr.W) < 1.5f && MathF.Abs(r.Rect.H - pr.H) < 1.5f) filled = true;
+                    return (layers, filled);
+                }
+
+                var on = Run("plate-occlusion-on");
+                Materials.AdvancedEffectsEnabled = false;
+                var off = Run("plate-occlusion-off");
+
+                Check("gate.overlay.acrylic-plate-does-not-occlude-itself a frosted plate stops painting its own FallbackColor over the acrylic layer it emitted, and paints it again when no layer runs",
+                    on.Layers >= 1 && !on.PlateFilled && off.Layers == 0 && off.PlateFilled,
+                    $"layerOn=(ops={on.Layers},plateFilled={on.PlateFilled}) layerOff=(ops={off.Layers},plateFilled={off.PlateFilled})");
+            }
+            finally { Materials.AdvancedEffectsEnabled = prevAdv; }
+        }
+    }
+
+    // Is the in-window acrylic LAYER actually reaching the draw stream, and is it worth anything when it does? Two
+    // separate questions, and the reported symptom — "flyouts read neutral grey over a coloured page" — is only
+    // diagnostic if both have answers. FlyoutAcrylicChecks above proves the RECIPE on the layer; these prove the layer
+    // is EMITTED in the shipping configuration (nothing disabled, popup windows ON) and that the recipe it carries is
+    // nothing like the flat plate it degrades to.
+    static void InWindowAcrylicLayerChecks(StringTable strings)
+    {
+        // gate.overlay.inwindow-acrylic-layer-emitted — a frosted in-window flyout (PopupChrome.Popup, the reactions-
+        // picker shape) records an Acrylic PushLayer over its own rect, on EVERY frame it is up, with popup windows
+        // ENABLED. The distinction matters: PopupChrome.Flyout (every menu) leases an HWND and deliberately carries no
+        // engine layer — the window material is its backdrop — so a suite that only ever looked at menus would see zero
+        // acrylic ops and could not tell "correctly delegated to the OS" from "silently never emitted".
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("inwin-acrylic", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+
+            // The reactions picker: a 56-tall pill of round buttons — a single-card FlyoutSurface, not a menu plate.
+            var hPick = svc.Open(() => root.Anchor,
+                () => new BoxEl
+                {
+                    Width = 296f, Height = 56f, Direction = 1,
+                    Children = [new BoxEl { Width = 40f, Height = 40f, Corners = new CornerRadius4(20f, 20f, 20f, 20f), Fill = Tok.FillCardDefault }],
+                },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Popup));
+
+            int framesWithLayer = 0, framesChecked = 0;
+            bool rectCovers = false, recipeOk = false;
+            var spec = Tok.AcrylicFlyout;
+            for (int i = 0; i < 24; i++)
+            {
+                host.RunFrame();
+                if (svc.Entries.Count != 1 || svc.Entries[0].SurfaceNode.IsNull) continue;
+                framesChecked++;
+                var surf = host.Scene.AbsoluteRect(svc.Entries[0].SurfaceNode);
+                foreach (var l in device.LastLayers)
+                {
+                    if (l.Kind != 0) continue;   // 0 = acrylic; opacity/self-blur/edge-fade groups ride the same opcode
+                    framesWithLayer++;
+                    if (ColorClose(l.Tint, spec.Tint, 0.004f) && ColorClose(l.Fallback, spec.Fallback, 0.004f)
+                        && Near(l.TintOpacity, spec.TintOpacity, 0.005f) && Near(l.LuminosityOpacity, spec.LuminosityOpacity, 0.005f)
+                        && Near(l.BlurSigma, spec.BlurSigma, 0.5f)) recipeOk = true;
+                    if (l.DeviceRect.W >= surf.W - 1f && l.DeviceRect.H >= surf.H - 1f) rectCovers = true;
+                    break;
+                }
+            }
+            // The whole point of this gate: it is IN-WINDOW, so the layer is the only backdrop it will ever get.
+            bool stayedInWindow = host.PopupWindows.Count == 0;
+            bool everyFrame = framesChecked > 0 && framesWithLayer == framesChecked;
+            hPick.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            Check("gate.overlay.inwindow-acrylic-layer-emitted an in-window frosted flyout records an Acrylic PushLayer over its own rect on every frame",
+                stayedInWindow && everyFrame && recipeOk && rectCovers,
+                $"inWindow={stayedInWindow} frames={framesWithLayer}/{framesChecked} recipe={recipeOk} covers={rectCovers}");
+        }
+
+        // gate.overlay.inwindow-acrylic-not-flat — the composite is NOT the flat plate. AcrylicSpec.CompositeOver is the
+        // CPU reference of the backdrop shader (blur is identity over a uniform colour, so over a flat page it IS the
+        // shader's answer). Over a saturated page the luminosity blend keeps the page's HUE and only pins its lightness,
+        // so a dark flyout over purple composites purple-grey — far from both the opaque FallbackColor the plate shows
+        // when the layer does not run AND the same recipe over a neutral page of equal luminance. That last pair is the
+        // reported symptom stated as an assertion: a flyout that reads the same over purple as over grey is not
+        // compositing at all.
+        {
+            var spec = AcrylicSpec.Flyout;                                   // the dark in-app recipe (Tok.AcrylicFlyout, dark)
+            var purple = ColorF.FromRgba(0x6B, 0x21, 0xA8);                  // a saturated page behind the flyout
+            var over = spec.CompositeOver(purple);
+            float lum = purple.R * 0.2126f + purple.G * 0.7152f + purple.B * 0.0722f;
+            var overNeutral = spec.CompositeOver(new ColorF(lum, lum, lum, 1f));
+
+            float FromFlat(ColorF c) => MathF.Max(MathF.Abs(c.R - spec.Fallback.R),
+                                        MathF.Max(MathF.Abs(c.G - spec.Fallback.G), MathF.Abs(c.B - spec.Fallback.B)));
+            float chroma = MathF.Max(over.R, MathF.Max(over.G, over.B)) - MathF.Min(over.R, MathF.Min(over.G, over.B));
+            float vsNeutral = MathF.Max(MathF.Abs(over.R - overNeutral.R),
+                              MathF.Max(MathF.Abs(over.G - overNeutral.G), MathF.Abs(over.B - overNeutral.B)));
+
+            // Thresholds are deliberately loose: the claim is "materially coloured", not a pinned colour.
+            bool notFlat = FromFlat(over) > 0.1f;
+            bool keepsChroma = chroma > 0.25f;                                // the page keeps most of its saturation
+            bool neutralIsFlat = FromFlat(overNeutral) < 0.06f;               // a grey page really does composite near the fallback
+            bool distinguishes = vsNeutral > 0.15f;
+            // Darkened toward the tint, not lightened: the luminosity blend pins lightness at the tint's.
+            float outLum = over.R * 0.2126f + over.G * 0.7152f + over.B * 0.0722f;
+            bool pinnedLightness = MathF.Abs(outLum - (spec.Tint.R * 0.2126f + spec.Tint.G * 0.7152f + spec.Tint.B * 0.0722f)) < 0.06f;
+
+            Check("gate.overlay.inwindow-acrylic-not-flat the acrylic composite over a saturated page keeps its chroma and differs from the flat fallback fill",
+                notFlat && keepsChroma && neutralIsFlat && distinguishes && pinnedLightness,
+                $"over=({over.R:0.00},{over.G:0.00},{over.B:0.00}) vsFlat={FromFlat(over):0.000} chroma={chroma:0.000} " +
+                $"vsNeutral={vsNeutral:0.000} neutralFlat={neutralIsFlat} lum={outLum:0.000}");
+        }
+    }
+
+    // gate.overlay.acrylic-fallback-policy — WinUI's AcrylicBrush stops compositing and resolves to its FallbackColor
+    // when the user turns transparency off, when the device reports effects would be slow, or under energy saver
+    // (MaterialHelper). Materials carries those three as one value; the recorder reads it at the single emission point.
+    // The gate asserts the WHOLE consequence, not just the flag: with the policy off the DrawList holds ZERO acrylic
+    // ops (so no blur is paid at all) and the plate is left at the authored FallbackColor — the surface still reads as
+    // a solid card, never as an empty ring around floating text. Each of the three inputs is exercised on its own, so
+    // wiring one of them up later cannot quietly stop gating.
+    static void AcrylicFallbackPolicyChecks(StringTable strings)
+    {
+        bool prevAdv = Materials.AdvancedEffectsEnabled, prevFast = Materials.EffectsAreFast, prevSaver = Materials.EnergySaver;
+        try
+        {
+            (int Layers, ColorF Fill, bool Spec) Run(string tag)
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc(tag, new Size2(480, 400), 1f));
+                window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                var root = new OverlayProbe();
+                using var host = new AppHost(app, window, device, fonts, strings, root);
+                host.PopupWindowsEnabled = false;   // in-window plate: the engine layer is the only backdrop in play
+                host.RunFrame();
+                var svc = (OverlayServiceImpl)root.Service!;
+                svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                    FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
+                for (int i = 0; i < 6; i++) host.RunFrame();
+                var plate = svc.Entries.Count == 1 ? svc.Entries[0].PlateNode : default;
+                int acrylicOps = 0;
+                foreach (var l in device.LastLayers) if (l.Kind == 0) acrylicOps++;
+                return (acrylicOps,
+                        plate.IsNull ? default : host.Scene.Paint(plate).Fill,
+                        !plate.IsNull && host.Scene.TryGetAcrylic(plate, out _));
+            }
+
+            var on = Run("acrylic-policy-on");
+
+            Materials.AdvancedEffectsEnabled = false;
+            var transparencyOff = Run("acrylic-policy-transparency");
+            Materials.AdvancedEffectsEnabled = true;
+
+            Materials.EffectsAreFast = false;
+            var slow = Run("acrylic-policy-slow");
+            Materials.EffectsAreFast = true;
+
+            Materials.EnergySaver = true;
+            var saver = Run("acrylic-policy-saver");
+            Materials.EnergySaver = false;
+
+            ColorF fallback = Tok.AcrylicFlyout.Fallback;
+            bool baseline = on.Layers >= 1 && on.Spec && ColorClose(on.Fill, fallback, 0.004f);
+            bool Off((int Layers, ColorF Fill, bool Spec) r) => r.Layers == 0 && !r.Spec && ColorClose(r.Fill, fallback, 0.004f);
+            bool allOff = Off(transparencyOff) && Off(slow) && Off(saver);
+
+            Check("gate.overlay.acrylic-fallback-policy transparency-off / slow-effects / energy-saver each drop every Acrylic op and leave the plate on its FallbackColor",
+                baseline && allOff,
+                $"on=(ops={on.Layers},spec={on.Spec}) transparency=(ops={transparencyOff.Layers},spec={transparencyOff.Spec},a={transparencyOff.Fill.A:0.00}) " +
+                $"slow=(ops={slow.Layers},spec={slow.Spec}) saver=(ops={saver.Layers},spec={saver.Spec})");
+        }
+        finally
+        {
+            Materials.AdvancedEffectsEnabled = prevAdv;
+            Materials.EffectsAreFast = prevFast;
+            Materials.EnergySaver = prevSaver;
+        }
+    }
+
     // OverlayHost.SyncWindowedMenuBackdrop reconciles a popup's frosted backdrop EVERY frame for EVERY entry, and it
     // has three inputs: an OS popup-window lease, the caller's OpaqueSurface declaration, and the geometric question
     // "is this plate over a video hole?". These gates pin the two things that shipped broken:
@@ -3232,7 +3634,7 @@ static class OverlaySuite
             host.PopupWindowsEnabled = false;   // the shipping configuration: in-window plate, engine acrylic
             host.RunFrame();
             var svc = (OverlayServiceImpl)root.Service!;
-            svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+            var hRest = svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
                 FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
             for (int i = 0; i < 3; i++) host.RunFrame();
 
@@ -3241,13 +3643,22 @@ static class OverlaySuite
             bool acrylicOn = opened && host.Scene.TryGetAcrylic(plate, out _);
             ColorF fill = opened ? host.Scene.Paint(plate).Fill : default;
             bool solid = opened && fill.A > 0f && ColorClose(fill, fallback, 0.004f);
-            // The lease latch: PopupWindowsEnabled is off, so the host refuses — and must be asked exactly once, not
-            // once per frame for as long as the menu is up.
-            bool refusedLatched = opened && svc.Entries[0].PopupWindowRefused && svc.Entries[0].PopupWindowToken < 0;
+            // A CONSTRAINED menu never asks for a window at all — the lease question is keyed on ConstrainToRootBounds,
+            // so there is nothing to refuse and nothing to latch.
+            bool neverAsked = opened && !svc.Entries[0].PopupWindowRefused && svc.Entries[0].PopupWindowToken < 0;
+
+            // …whereas an UNCONSTRAINED menu does ask, the host refuses (PopupWindowsEnabled is off), and the refusal
+            // LATCHES: asked exactly once, not once per frame for as long as the menu is up.
+            hRest.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+            for (int i = 0; i < 3; i++) host.RunFrame();
+            bool refusedLatched = svc.Entries.Count == 1 && svc.Entries[0].PopupWindowRefused && svc.Entries[0].PopupWindowToken < 0;
 
             Check("gate.overlay.flyout-resting-fill-solid the menu plate's acrylic-on resting fill is the acrylic fallback, not Transparent",
-                opened && acrylicOn && solid && refusedLatched,
-                $"opened={opened} acrylicOn={acrylicOn} fillA={fill.A:0.000} rgb=({fill.R:0.00},{fill.G:0.00},{fill.B:0.00}) refusedLatched={refusedLatched}");
+                opened && acrylicOn && solid && neverAsked && refusedLatched,
+                $"opened={opened} acrylicOn={acrylicOn} fillA={fill.A:0.000} rgb=({fill.R:0.00},{fill.G:0.00},{fill.B:0.00}) neverAsked={neverAsked} refusedLatched={refusedLatched}");
         }
 
         // gate.overlay.video-hole-plate-opaque — a Flyout plate over a full-bleed video hole drops the (useless)
@@ -3516,35 +3927,72 @@ static class OverlaySuite
 
         // gate.acrylic.scrollHoldCadence (E10): the scroll-cadence decision (AcrylicScrollHold.ShouldRefresh). A
         // scrolling page damages EVERY frame, so the damage test above misses every frame and the whole snapshot+Kawase
-        // chain re-ran at frame rate. During the user-scroll hold a layer that already HAS a retained snapshot of the
-        // SAME geometry stretches it, refreshing only every Nth frame — the same lever the self-blur groups' holdBlur
-        // pulls. The hold may NEVER manufacture a backdrop: no retained snapshot, or a changed stamp, refreshes now.
+        // chain re-ran at frame rate — and so does an inertial coast, a programmatic scroll, or ordinary row-realize
+        // damage under a still popup, none of which carry a literal user drag/wheel. A layer that already HAS a
+        // retained snapshot of the SAME geometry stretches it, refreshing only every Nth frame — the same lever the
+        // self-blur groups' holdBlur pulls — REGARDLESS of what caused the miss (the fix widened this from "only
+        // while a literal user-scroll flag is set" to "any damage-driven miss with an unchanged stamp"). The hold
+        // may NEVER manufacture a backdrop: no retained snapshot, or a changed stamp, refreshes now.
         const int cad = AcrylicScrollHold.ScrollRefreshCadence;
-        // (a) no retained snapshot (first frame / post-resize / LayerId == 0) ⇒ always refresh, hold or not.
-        bool noRetainedAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(true, hasRetained: false, stampUnchanged: true, 0, cad)
-            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: false, stampUnchanged: true, cad - 1, cad)
-            && AcrylicScrollHold.ShouldRefresh(false, hasRetained: false, stampUnchanged: true, 0, cad);
-        // (b) hold + retained + same stamp ⇒ hold for cad-1 frames, refresh on the cad-th.
+        // (a) no retained snapshot (first frame / post-resize / LayerId == 0) ⇒ always refresh, whatever framesHeld reads.
+        bool noRetainedAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(hasRetained: false, stampUnchanged: true, 0, cad)
+            && AcrylicScrollHold.ShouldRefresh(hasRetained: false, stampUnchanged: true, cad - 1, cad);
+        // (b) retained + same stamp ⇒ hold for cad-1 frames, refresh on the cad-th — with NO scroll-input signal at
+        //     all: an inertial coast / programmatic scroll / row-realize miss now gets the exact same cadence a
+        //     literal user scroll used to get exclusively.
         bool cadenceHolds = true;
         for (int i = 0; i < cad - 1; i++)
-            if (AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, i, cad)) cadenceHolds = false;
-        bool cadenceRefreshes = AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, cad - 1, cad)
-            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, cad + 5, cad);
+            if (AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, i, cad)) cadenceHolds = false;
+        bool cadenceRefreshes = AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad - 1, cad)
+            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad + 5, cad);
         // (c) a CHANGED stamp is never held — the snapshot belongs to a different rect/sigma/scale/source/clip, so
         //     reusing it would MISPLACE the frost, not merely date it.
-        bool stampChangeAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: false, 0, cad)
-            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: false, 1, cad);
-        // (d) hold released ⇒ damage-driven again, and a stale (held) entry heals on that very first frame.
-        bool releasedHeals = AcrylicScrollHold.ShouldRefresh(false, hasRetained: true, stampUnchanged: true, 0, cad)
-            && AcrylicScrollHold.ShouldRefresh(false, hasRetained: true, stampUnchanged: true, 1, cad);
+        bool stampChangeAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: false, 0, cad)
+            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: false, 1, cad);
+        // (d) staleness is bounded to cad-1 frames even under a PERMANENT damage-driven miss — no separate "hold
+        //     released" event is needed: the cadence itself is the heal, so the (cad)-th consecutive held frame
+        //     always forces a real refresh regardless of whether anything about the CAUSE of the damage changed.
+        bool boundedStaleness = !AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad - 2, cad)
+            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad - 1, cad);
         // (e) cadence ≤ 1 degenerates to "never hold" (the pre-E10 behavior), and the shipped cadence bounds staleness
         //     to cad-1 frames (≤25 ms at 120 Hz).
-        bool degenerate = AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, 0, 1)
-            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, 0, 0)
+        bool degenerate = AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, 0, 1)
+            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, 0, 0)
             && cad >= 2 && cad <= 8;
-        Check("gate.acrylic.scrollHoldCadence: scroll hold stretches an EXISTING same-geometry backdrop every Nth frame; no-retained/stamp-change/hold-release always re-blur",
-            noRetainedAlwaysBlurs && cadenceHolds && cadenceRefreshes && stampChangeAlwaysBlurs && releasedHeals && degenerate,
-            $"cad={cad} noRetained={noRetainedAlwaysBlurs} holds={cadenceHolds} refresh={cadenceRefreshes} stamp={stampChangeAlwaysBlurs} released={releasedHeals} degen={degenerate}");
+        Check("gate.acrylic.scrollHoldCadence: an unchanged-stamp retained backdrop is held every Nth frame regardless of what caused the damage miss; no-retained/stamp-change always re-blur, and staleness is cadence-bounded",
+            noRetainedAlwaysBlurs && cadenceHolds && cadenceRefreshes && stampChangeAlwaysBlurs && boundedStaleness && degenerate,
+            $"cad={cad} noRetained={noRetainedAlwaysBlurs} holds={cadenceHolds} refresh={cadenceRefreshes} stamp={stampChangeAlwaysBlurs} bounded={boundedStaleness} degen={degenerate}");
+
+        // gate.acrylic.scrollHoldNonUserMiss (E10 follow-up): AcrylicCompositor.BlurAndComposite drives its
+        // LayersThisFrame/CacheHitsThisFrame diagnostics from exactly this stale/clean/hold algorithm (see the
+        // stampSame/stale/clean/hold sequence around its FindPinned branch) — reproduced headlessly here because the
+        // D3D12 leaf itself has no headless framebuffer (needs-pixels, per this file's header). A still popup's
+        // flyout acrylic sits over a list that damages EVERY frame from something OTHER than a literal drag on the
+        // popup (inertial coast / programmatic scroll / row-realize), so its own geometry stamp never changes:
+        // simulate consecutive always-damaged frames and confirm the resulting hit/refresh counts land on the
+        // cadence — mostly cache hits, with a real refresh landing on schedule rather than never.
+        {
+            var stamp = AcrylicBackdropMath.Stamp(new RectF(200f, 160f, 200f, 120f), 30f, 1f, 1920, 1080);
+            AcrylicBackdropMath.SnapshotRegionTight(new RectF(200f, 160f, 200f, 120f), 1f, 1920, 1080, out int stx, out int sty, out int stw, out int sth);
+            var tight2 = new RectF(stx, sty, stw, sth);
+            var damageEveryFrame = new RectF(210f, 170f, 20f, 20f);   // squarely inside the tight region ⇒ misses every frame
+            int heldFrames = 0, hits = 0, refreshes = 0;
+            const int simFrames = 20;
+            for (int f = 0; f < simFrames; f++)
+            {
+                bool stale = heldFrames > 0;
+                bool clean = !stale && AcrylicBackdropMath.BackdropReusable(stamp, stamp, tight2, damageEveryFrame);
+                bool hold = !clean && !AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, heldFrames, cad);
+                if (clean || hold) { hits++; heldFrames = hold ? heldFrames + 1 : 0; }
+                else { refreshes++; heldFrames = 0; }
+            }
+            bool everyFrameIsHitOrRefresh = hits + refreshes == simFrames;
+            bool mostlyHits = hits >= simFrames - (simFrames / cad + 2);      // ~ (cad-1)/cad of frames are cache hits
+            bool refreshesBounded = refreshes >= simFrames / cad - 1;        // a real refresh lands on schedule, not "never"
+            Check("gate.acrylic.scrollHoldNonUserMiss: consecutive always-damaged frames over a still popup (no user-scroll signal) mostly cache-hit via the cadence hold, with periodic bounded refreshes",
+                everyFrameIsHitOrRefresh && mostlyHits && refreshesBounded,
+                $"frames={simFrames} cad={cad} hits={hits} refreshes={refreshes}");
+        }
 
         SampleWindowPairingChecks();
         KawaseChainChecks();

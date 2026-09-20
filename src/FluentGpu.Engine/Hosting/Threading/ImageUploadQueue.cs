@@ -6,16 +6,21 @@ namespace FluentGpu.Hosting.Threading;
 /// <summary>Producer→consumer handoff for image GPU work under the ASYNC render thread (render-thread-seam landing plan
 /// §9, Step 1). Every threaded host uses it, including force-sync because independent compositor turns can run between
 /// UI drains. Single-thread hosts retain direct device sinks. The UI thread (<see cref="ImageCache.Pump"/>) PRODUCES upload/evict jobs — an upload
-/// transfers an owned <c>ArrayPool&lt;byte&gt;</c> buffer (the pump copies the transient decode pixels into it) — and the
-/// render thread CONSUMES them inside its submit, immediately before <c>FlushUploads</c> opens the frame's command list.
-/// The transferred buffer is rented from the host's bounded <see cref="BufferPool"/> (a <c>PixelBufferPool</c>); the
-/// render thread returns it through <see cref="ReturnUploadBuffer"/> after <c>Stage</c> copies it (ArrayPool.Shared
-/// fallback when no host pool is set).
+/// transfers an OWNED pixel buffer — and the render thread CONSUMES them inside its submit, immediately before
+/// <c>FlushUploads</c> opens the frame's command list. The transferred buffer is a rental from the ONE shared
+/// <see cref="BufferPool"/> (the pipeline's <c>PixelBufferPool</c>): normally it is the <c>DecodeScheduler</c> worker's own
+/// decode buffer, whose ownership the host sink TOOK during the pump (<c>DecodeScheduler.TryTakeDecodeBuffer</c>) instead
+/// of renting a second buffer and memcpy-ing the pixels on the UI thread; for a span the sink cannot take (the
+/// blur-hash LQIP scratch, the fake/headless decoder) it is a fresh pool rental the sink copied into. Either way the
+/// render thread returns it through <see cref="ReturnUploadBuffer"/> after <c>Stage</c> copies it, and because
+/// <see cref="BufferPool"/> IS the scheduler's pool (FluentApp builds one pool; <c>AppHost.PixelPool</c> re-points this
+/// queue at it) a taken decode buffer completes exactly one Rent→Return cycle on the pool it came from
+/// (ArrayPool.Shared fallback when no host pool is set).
 /// That makes <c>ImageTextureStore</c>'s Stage/Free/FlushUploads have exactly ONE toucher (the render thread) → safe by
 /// confinement, no lock. Upload-before-referencing-submit ordering is preserved (drain + FlushUploads precede any draw).
 ///
-/// (Historically that buffer was a bare <c>ArrayPool&lt;byte&gt;.Shared</c> rental; it is now a <see cref="BufferPool"/>
-/// rental with Shared fallback — the transfer/ownership contract is unchanged.)
+/// (Historically that buffer was a bare <c>ArrayPool&lt;byte&gt;.Shared</c> rental the pump copied into, then a
+/// <see cref="BufferPool"/> rental it copied into; the copy is gone but the transfer/ownership contract is unchanged.)
 ///
 /// Admission is <b>+1-frame async</b> (matching the existing +1-frame decode-latency contract): an upload is optimistically
 /// admitted <c>Ready</c> on the UI thread; the render thread stages it and, ONLY on rejection (atlas/pool exhaustion),
@@ -69,14 +74,17 @@ public sealed class ImageUploadQueue
     }
     private readonly ConcurrentQueue<(int Id, ImageUploadResult Result)> _rejects = new();  // render → UI (rejections only)
 
-    /// <summary>The host's bounded CPU pixel pool that upload buffers are rented from (by the UI sink) and returned to
-    /// (by the render thread via <see cref="ReturnUploadBuffer"/>). Null ⇒ fall back to <c>ArrayPool&lt;byte&gt;.Shared</c>.
-    /// The <c>AppHost.PixelPool</c> setter re-points this so decode + upload share ONE retained-bytes budget.</summary>
+    /// <summary>The bounded CPU pixel pool upload buffers are returned to (by the render thread via
+    /// <see cref="ReturnUploadBuffer"/>) — the SAME pool the <c>DecodeScheduler</c> rents decode buffers from, so a decode
+    /// buffer the sink took flows back where it came from; the sink's fallback copies are rented from it too. Null ⇒
+    /// fall back to <c>ArrayPool&lt;byte&gt;.Shared</c>. The <c>AppHost.PixelPool</c> setter re-points this so decode +
+    /// upload share ONE retained-bytes budget. The pool tolerates a foreign array (drops non-bucket sizes, never throws).</summary>
     public FluentGpu.Media.PixelBufferPool? BufferPool { get; set; }
 
     /// <summary>UI thread: hand a decoded upload to the render thread, transferring ownership of <paramref name="buffer"/>
-    /// (rented from <see cref="BufferPool"/>, or <c>ArrayPool&lt;byte&gt;.Shared</c> when none is set); the render thread
-    /// returns it via <see cref="ReturnUploadBuffer"/> after <c>Stage</c> copies it.</summary>
+    /// (the scheduler's decode buffer taken via <c>DecodeScheduler.TryTakeDecodeBuffer</c>, or a <see cref="BufferPool"/> /
+    /// <c>ArrayPool&lt;byte&gt;.Shared</c> rental the sink copied into); the render thread returns it via
+    /// <see cref="ReturnUploadBuffer"/> after <c>Stage</c> copies it. Only <c>buffer[0..byteLen)</c> are pixels.</summary>
     public void EnqueueUpload(int id, byte[] buffer, int w, int h, int byteLen)
         => _jobs.Enqueue(new Job { Id = id, Buffer = buffer, W = w, H = h, ByteLen = byteLen, Evict = false });
 

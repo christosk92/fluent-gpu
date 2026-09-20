@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using FluentGpu.WindowsApi.Media.PlayReady;
 using Xunit;
 
@@ -106,4 +107,65 @@ public sealed class DashManifestParserTests
     [Fact]
     public void Parse_MalformedXml_ThrowsTyped()
         => Assert.Throws<DashManifestException>(() => DashManifestParser.Parse("<MPD><not-closed>", "https://x/y.mpd"));
+
+    // ── the seek index hints (segment length, presentation duration, keyframe-aligned segment starts) ────────────────
+
+    [Fact]
+    public void Parse_AxinomSingleKey_ExtractsTheSeekIndexHints()
+    {
+        var d = DashManifestParser.Parse(AxinomMpd, AxinomMpdUrl);
+
+        Assert.Equal(5_000, d.SegmentLengthMs);   // @duration 60000 / @timescale 12000
+        Assert.Equal(30_000, d.DurationMs);       // PT30S
+        Assert.True(d.SegmentsStartWithKeyframe); // startWithSAP="1"
+    }
+
+    [Theory]
+    [InlineData("""startWithSAP="1" """, true)]
+    [InlineData("""startWithSAP="2" """, true)]
+    [InlineData("""startWithSAP="3" """, false)]
+    [InlineData("""startWithSAP="0" """, false)]
+    [InlineData("", true)]   // undeclared: the DASH-IF segment-template profiles require it
+    public void Parse_OnlyStartWithSapOneOrTwo_PromisesKeyframeSegmentStarts(string sapAttribute, bool startsWithKeyframe)
+    {
+        string mpd = $"""
+            <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT8S">
+              <Period>
+                <AdaptationSet contentType="video" {sapAttribute}>
+                  <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1" duration="4" timescale="1"/>
+                  <Representation id="v" codecs="avc1.640028" bandwidth="1000000" width="1280" height="720"/>
+                </AdaptationSet>
+              </Period>
+            </MPD>
+            """;
+
+        var d = DashManifestParser.Parse(mpd, "https://cdn.example.com/v/manifest.mpd");
+
+        Assert.Equal(startsWithKeyframe, d.SegmentsStartWithKeyframe);
+        Assert.Equal(4_000, d.SegmentLengthMs);
+        Assert.Equal(2, d.SegmentCount);
+    }
+
+    [Fact]
+    public void Parse_TheGateClipFixture_ReadsItsTemplateGrid()
+    {
+        // The seek-gate clip (Fixtures/video/README.md): an ffmpeg DASH export, 5 × 4 s segments on a 2 s GOP.
+        string xml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "video", "gate.mpd"));
+
+        var d = DashManifestParser.Parse(xml, "https://cdn.test/gate/gate.mpd");
+
+        Assert.Equal("https://cdn.test/gate/init-stream0.m4s", d.InitUrl);
+        Assert.Equal("https://cdn.test/gate/", d.SegmentBaseUrl);
+        Assert.Equal("chunk-stream0-", d.SegmentPrefix);
+        Assert.Equal(".m4s", d.SegmentSuffix);
+        Assert.Equal(1, d.StartNumber);
+        Assert.Equal(5, d.SegmentCount);          // S r="4"
+        Assert.Equal(4_000, d.SegmentLengthMs);   // S@d 61440 / @timescale 15360
+        Assert.Equal(20_000, d.DurationMs);       // PT20.0S
+        Assert.True(d.SegmentsStartWithKeyframe);
+        Assert.Equal("0", d.RepresentationId);
+        Assert.Equal("avc1.64001e", d.Codecs);
+        Assert.True(d.Pssh.IsEmpty);              // a clear clip carries no PlayReady protection
+        Assert.Null(d.DefaultKid);
+    }
 }

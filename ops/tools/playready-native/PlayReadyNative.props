@@ -1,0 +1,20 @@
+<Project>
+  <!-- Where FluentGpu.PlayReady.Native.dll lives for THIS build, shared by every project that ships or loads it
+       (FluentGpu.WindowsApp builds + copies it; FluentGpu.Windows.Tests copies it for the demuxer gate).
+
+       The architecture is the one the managed process will RUN as, which is not what the shell says:
+         1. an explicit RuntimeIdentifier (a publish) wins;
+         2. otherwise the SDK's own RID - `dotnet build` gives the exe an apphost of the SDK's architecture and
+            `dotnet test` / `dotnet run` start it under that same muxer.
+       PROCESSOR_ARCHITECTURE is NOT used: an x64-emulated shell on an ARM64 box reports AMD64 while the native arm64
+       dotnet builds and runs an arm64 process, which then cannot load an x64 DLL (the demuxer tests silently skipped). -->
+  <PropertyGroup>
+    <_PlayReadyNativeRid>$(RuntimeIdentifier)</_PlayReadyNativeRid>
+    <_PlayReadyNativeRid Condition="'$(_PlayReadyNativeRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_PlayReadyNativeRid>
+    <_PlayReadyNativeArch Condition="$(_PlayReadyNativeRid.EndsWith('-arm64'))">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="$(_PlayReadyNativeRid.EndsWith('-x64'))">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeDir>$(MSBuildThisFileDirectory.TrimEnd('\'))</_PlayReadyNativeDir>
+    <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
+  </PropertyGroup>
+</Project>

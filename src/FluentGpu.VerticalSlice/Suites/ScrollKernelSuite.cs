@@ -21,15 +21,35 @@ static class ScrollKernelSuite
         ChainLiftHandoffCheck();
         ChainBallisticEdgeCheck();
         WheelAccumulateHardStopCheck();
+        WheelColdSeedCheck();
+        WheelCadenceFlatCheck();
+        WheelSecondClickCheck();
+        WheelDtInvarianceCheck();
+        WheelReversalCheck();
+        WheelSlowCadenceStiffCheck();
+        WheelEdgeDegenerateCheck();
+        WheelFlingCarryCheck();
+        WheelNoSubpixelTailCheck();
         ProgrammaticGlideRetargetCheck();
         RestoreLatchUntilExtentCheck();
         RestoreGoalExtentGrowsCheck();
         RestoreCancelOnInputCheck();
         RestoreDeadlineCheck();
         AnchorShiftUnderDragCheck();
+        AnchorShiftNotMotionCheck();
         EdgePendingResolvesOnGrowCheck();
+        EdgePinNoLostTravelCheck();
+        FlingLandsFiniteCheck();
+        PreciseResumeNoRewindCheck();
+        PreciseBurstBoundedCheck();
+        PreciseBackwardsStampsCheck();
+        ContactHeldCheck();
         UndersampledFlickCheck();
         SnapFlingLandsCheck();
+        ParkSettlesLiveMotionCheck();
+        PreciseReleaseNoGapCheck();
+        PrecisePacingJitterCheck();
+        ProgrammaticLandsExactlyCheck();
         AllocZeroTickCheck();
         BodySparseCheck();
         SlotReuseCheck();
@@ -86,6 +106,20 @@ static class ScrollKernelSuite
     }
 
     private static ScrollClock ClockAt(double t, float dtSec = 0.00833f) => new(t, dtSec, t, 0.00833f);
+
+    /// <summary>bug-B/A3: posts a <see cref="ScrollInputKind.FrameDelta"/> AND the <see cref="ScrollInputKind.ImpulseSample"/>
+    /// that now carries the release-velocity estimator's feed (<c>ScrollInputRouter.AccumulatePhaseDelta</c> posts
+    /// both together for every real phase-producer packet — see ScrollKernel.ApplyImpulseSample's doc). A test that
+    /// posts raw <c>ScrollInput.FrameDelta</c> commands directly, bypassing the router, must post this too or its
+    /// body's Impulse estimator sees zero samples and never flings — <paramref name="impulsePos"/> is the caller's
+    /// own running cumulative-delta tracker (mirrors the router's <c>_phaseTotalX/Y</c>), <paramref name="reset"/>
+    /// true only on the FIRST call of a fresh gesture/re-grab.</summary>
+    private static void PostFrameDeltaWithImpulse(ScrollKernel k, int node, double t, float delta, ref float impulsePos, bool reset)
+    {
+        k.Port.Post(ScrollInput.FrameDelta(node, t, delta));
+        impulsePos += delta;
+        k.Port.Post(ScrollInput.ImpulseSample(node, t, impulsePos, reset));
+    }
 
     // ── gate.kernel.dt-invariance ─────────────────────────────────────────────────────────────────────────────
     // Exercises the ported physics formulas directly (CoastStep/ChaseStep/StepSpring are the shared per-body time
@@ -161,19 +195,49 @@ static class ScrollKernelSuite
         var k = new ScrollKernel(sink, ScrollFeel.Shipping);
         SetupViewport(k, 1, 2000f, 400f);
 
+        // The precise stream is PACED: a packet is a sample of the cumulative position that Tick resamples against the
+        // frame clock, not a 1:1 write on arrival — so 1:1 is asserted at REST. The release velocity is the raw
+        // packet slope over the newest ≥24 ms, so a stream that TAPERS (the touchpad driver's own inertia running
+        // out) releases under FlingSeedGate: the End lands the paced residual and the rest is exactly the total.
         double t = 0;
         float total = 0f;
+        ReadOnlySpan<float> taper = [12.5f, 12.5f, 12.5f, 0.3f, 0.2f, 0.1f];
+        for (int i = 0; i < taper.Length; i++)
+        {
+            t = (i + 1) * 0.00833;
+            total += taper[i];
+            k.Port.Post(ScrollInput.FrameDelta(1, t, taper[i]));
+            k.Tick(ClockAt(t));
+        }
+        t += 0.00833;
+        k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
+        k.Tick(ClockAt(t));
+        k.TryGetBody(1, out var body);
+        Check("gate.kernel.framedelta-1to1", MathF.Abs(body.PositionMain - total) < 0.01f && body.Activity == ScrollActivity.Idle,
+            $"pos={body.PositionMain} total={total} activity={body.Activity}");
+
+        // The same stream stopping ABRUPTLY at 1500 DIP/s is a fling: the raw slope seeds the coast, which carries
+        // the travel past the packets' total instead of parking short of it.
+        var sink2 = new RecordingSink();
+        var k2 = new ScrollKernel(sink2, ScrollFeel.Shipping);
+        SetupViewport(k2, 1, 2000f, 400f);
+        t = 0; float total2 = 0f;
         for (int i = 1; i <= 5; i++)
         {
             t = i * 0.00833;
-            const float d = 12.5f;
-            total += d;
-            k.Port.Post(ScrollInput.FrameDelta(1, t, d));
+            total2 += 12.5f;
+            k2.Port.Post(ScrollInput.FrameDelta(1, t, 12.5f));
+            k2.Tick(ClockAt(t));
         }
-        var clock = ClockAt(t);
-        k.Tick(in clock);
-        k.TryGetBody(1, out var body);
-        Check("gate.kernel.framedelta-1to1", MathF.Abs(body.PositionMain - total) < 0.01f, $"pos={body.PositionMain} total={total}");
+        t += 0.00833;
+        k2.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
+        k2.Tick(ClockAt(t));
+        k2.TryGetBody(1, out var flung);
+        bool coasting = flung.Activity == ScrollActivity.Ballistic && flung.Velocity > ScrollFeel.Shipping.FlingSeedGate;
+        int guard = 0;
+        while (guard++ < 2000 && flung.Activity != ScrollActivity.Idle) { t += 0.00833; k2.Tick(ClockAt(t)); k2.TryGetBody(1, out flung); }
+        Check("gate.kernel.framedelta-abrupt-stop-flings", coasting && flung.PositionMain >= total2 - 0.01f,
+            $"coasting={coasting} final={flung.PositionMain:F2} total={total2} activity={flung.Activity}");
     }
 
     // ── gate.kernel.fling-distance ────────────────────────────────────────────────────────────────────────────
@@ -200,11 +264,12 @@ static class ScrollKernelSuite
 
         const double dtS = 0.00833;
         double t = 0;
+        float impulsePos = 0f;
         const float deltaPerFrame = 10f; // ≈1200 DIP/s at 8.33ms — constant-velocity samples give an EXACT IMPULSE estimate.
         for (int i = 1; i <= 6; i++)
         {
             t = i * dtS;
-            k.Port.Post(ScrollInput.FrameDelta(1, t, deltaPerFrame));
+            PostFrameDeltaWithImpulse(k, 1, t, deltaPerFrame, ref impulsePos, reset: i == 1);
             var c = ClockAt(t, (float)dtS);
             k.Tick(in c);
         }
@@ -275,11 +340,16 @@ static class ScrollKernelSuite
         k.Reclamp();
 
         double t = 0.00833;
-        k.Port.Post(ScrollInput.FrameDelta(2, t, 5f)); // 90→95, fully absorbed by child
+        float impulsePos = 0f;
+        PostFrameDeltaWithImpulse(k, 2, t, 5f, ref impulsePos, reset: true); // 90→95, fully absorbed by child
         k.Tick(ClockAt(t));
         t += 0.00833;
-        k.Port.Post(ScrollInput.FrameDelta(2, t, 20f)); // 95→115 clamps to 100; 15 excess → parent absorbs LAST
+        PostFrameDeltaWithImpulse(k, 2, t, 20f, ref impulsePos, reset: false); // 95→115 clamps to 100; 15 excess → parent absorbs LAST
         k.Tick(ClockAt(t));
+        // The paced stream shows a packet one latency (~11 ms at this cadence) late: two more frames carry its travel
+        // into the child's clamp and the excess on to the parent before the lift.
+        t += 0.00833; k.Tick(ClockAt(t));
+        t += 0.00833; k.Tick(ClockAt(t));
         t += 0.00833;
         k.Port.Post(ScrollInput.ContactEnd(2, t, 0f));
         k.Tick(ClockAt(t));
@@ -303,14 +373,15 @@ static class ScrollKernelSuite
             SetupViewport(k, 2, 500f, 400f);  // child maxOff=100
 
             double t = 0.00833;
+            float impulsePos = 0f;
             k.Port.Post(ScrollInput.ThumbSet(2, 90f));
             k.Reclamp();
             // Two FrameDeltas (not one) — the impulse estimator needs ≥2 samples to compute a release velocity;
-            // the FIRST FrameDelta only seeds Impulse.Reset (one sample), so a single-delta drag releases at v=0.
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 6f)); // 90→96
+            // the FIRST ImpulseSample only seeds Impulse.Reset (one sample), so a single-delta drag releases at v=0.
+            PostFrameDeltaWithImpulse(k, 2, t, 6f, ref impulsePos, reset: true); // 90→96
             k.Tick(ClockAt(t));
             t += 0.00833;
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 4f)); // 96→100 exactly, no excess yet
+            PostFrameDeltaWithImpulse(k, 2, t, 4f, ref impulsePos, reset: false); // 96→100 exactly, no excess yet
             k.Tick(ClockAt(t));
             t += 0.00833;
             k.Port.Post(ScrollInput.ContactEnd(2, t, 0f)); // seeds child Ballistic
@@ -320,12 +391,18 @@ static class ScrollKernelSuite
             k.Port.Post(ScrollInput.Chain(2, 1));
             k.Reclamp();
 
-            t += 0.00833;
-            k.Tick(ClockAt(t)); // coast — child is already AT its clamp with positive velocity → hits edge this tick
-            k.Reclamp();           // resolves the edge: hands off to parent (has room)
-
-            k.TryGetBody(1, out var parent);
-            k.TryGetBody(2, out var child);
+            // Coast until the child hits its clamp (the paced stream released it a DIP or two short of the edge) and
+            // Reclamp resolves the edge: hands off to parent (has room).
+            ScrollBody parent = default, child = default;
+            for (int i = 0; i < 12; i++)
+            {
+                t += 0.00833;
+                k.Tick(ClockAt(t));
+                k.Reclamp();
+                k.TryGetBody(1, out parent);
+                k.TryGetBody(2, out child);
+                if (parent.Activity == ScrollActivity.Ballistic) break;
+            }
             Check("gate.kernel.chain-ballistic-edge.handoff",
                 parent.Activity == ScrollActivity.Ballistic && child.Activity == ScrollActivity.Idle,
                 $"parent={parent.Activity} child={child.Activity}");
@@ -339,28 +416,35 @@ static class ScrollKernelSuite
             SetupViewport(k, 2, 500f, 400f);  // child maxOff=100
 
             double t = 0.00833;
+            float impulsePos = 0f;
             k.Port.Post(ScrollInput.ThumbSet(1, 100f)); // parent already pinned at ITS max
             k.Port.Post(ScrollInput.ThumbSet(2, 90f));
             k.Port.Post(ScrollInput.Chain(2, 1));
             k.Reclamp();
 
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 6f)); // 90→96
+            PostFrameDeltaWithImpulse(k, 2, t, 6f, ref impulsePos, reset: true); // 90→96
             k.Tick(ClockAt(t));
             t += 0.00833;
-            k.Port.Post(ScrollInput.FrameDelta(2, t, 4f)); // 96→100 exactly
+            PostFrameDeltaWithImpulse(k, 2, t, 4f, ref impulsePos, reset: false); // 96→100 exactly
             k.Tick(ClockAt(t));
             t += 0.00833;
             k.Port.Post(ScrollInput.ContactEnd(2, t, 0f));
             k.Tick(ClockAt(t));
 
-            t += 0.00833;
-            k.Tick(ClockAt(t)); // coast hits the edge again — EdgeHitPending
-            k.Reclamp();        // parent is ALSO at its own max → cannot absorb → child bounces instead
-
-            k.TryGetBody(1, out var parent);
-            k.TryGetBody(2, out var child);
-            // "Bounce" is Activity=Idle + Flags.Bouncing (overscroll is a property, not a fifth ScrollActivity — §2.1).
-            bool childBounced = child.Activity == ScrollActivity.Idle && (child.Flags & ScrollActivityFlags.Bouncing) != 0;
+            // Coast until the child hits the edge (EdgeHitPending); Reclamp finds the parent ALSO at its own max →
+            // cannot absorb → the child bounces instead.
+            ScrollBody parent = default, child = default;
+            bool childBounced = false;
+            for (int i = 0; i < 12 && !childBounced; i++)
+            {
+                t += 0.00833;
+                k.Tick(ClockAt(t));
+                k.Reclamp();
+                k.TryGetBody(1, out parent);
+                k.TryGetBody(2, out child);
+                // "Bounce" is Activity=Idle + Flags.Bouncing (overscroll is a property, not a fifth ScrollActivity — §2.1).
+                childBounced = child.Activity == ScrollActivity.Idle && (child.Flags & ScrollActivityFlags.Bouncing) != 0;
+            }
             Check("gate.kernel.chain-ballistic-edge.bounce-when-parent-maxed",
                 parent.Activity != ScrollActivity.Ballistic && childBounced,
                 $"parent={parent.Activity} child={child.Activity} childFlags={child.Flags} childBand={child.BandMain:F2}");
@@ -397,6 +481,335 @@ static class ScrollKernelSuite
         k.TryGetBody(1, out var final);
         bool ok = targetClamped && !everBanded && MathF.Abs(final.PositionMain - 600f) < 0.5f;
         Check("gate.kernel.wheel-accumulate-hardstop", ok, $"target={body0.Target} final={final.PositionMain:F2} everBanded={everBanded}");
+    }
+
+    // ── gate.kernel.wheel-* — the S1 wheel plan (ScrollPhysics.WheelPlanNotch / WheelStep) ───────────────────
+    // Every scenario drives a REAL ScrollKernel (notch → ApplyWheelNotch → ScrollBody.Advance → WheelStep) at
+    // 8.333 ms ticks with D = 120 DIP per notch (three 40-DIP rows — S6's Windows rule) over a 100 000-DIP extent so
+    // no clamp interferes unless the check wants one. Thresholds are the D = 120 values of the plan's own
+    // simulation, re-run at this notch size (the plan quotes D = 83): cold notch 12.9 DIP on the first tick, peak on
+    // the second, Idle after 21 ticks (175 ms); 110 ms cadence min/max 0.59 over notches 6..11, Idle 250 ms after
+    // the last notch; a reversal at a cadence slot carries on 1.4 DIP and moves back on the next tick.
+
+    private const float WheelD = 120f;
+    private const float WheelDt120 = 1f / 120f;
+
+    private static ScrollKernel WheelKernel(float extent = 100000f, float viewport = 400f)
+    {
+        var k = new ScrollKernel(new RecordingSink(), ScrollFeel.Shipping);
+        SetupViewport(k, 1, extent, viewport);
+        return k;
+    }
+
+    /// <summary>One kernel tick of <paramref name="dt"/> seconds on node 1 (RefreshSec = dt, so the wake-tick rule
+    /// substitutes the same lattice); returns the signed main-axis displacement of that tick.</summary>
+    private static float WheelTick(ScrollKernel k, ref double t, float dt)
+    {
+        k.TryGetBody(1, out var before);
+        t += dt;
+        var c = new ScrollClock(t, dt, t, dt);
+        k.Tick(in c);
+        k.TryGetBody(1, out var after);
+        return after.PositionMain - before.PositionMain;
+    }
+
+    /// <summary>Posts <paramref name="notches"/> notches of <see cref="WheelD"/> at a <paramref name="gapS"/> cadence
+    /// (the LAST one carries <paramref name="lastDelta"/> instead), each posted just before the first tick at or past
+    /// its slot time — the way a paced host consumes a packet on the vblank — ticking at <paramref name="dt"/> until
+    /// the body is Idle after the last notch. Fills the per-tick displacement and the tick index each notch was posted
+    /// on; returns the tick count (the last tick is the landing tick).</summary>
+    private static int WheelCadenceRun(ScrollKernel k, float gapS, int notches, float lastDelta, float dt, float[] d, int[] notchTick)
+    {
+        double t = 0, next = 0;
+        int posted = 0, n = 0;
+        while (n < d.Length)
+        {
+            if (posted < notches && t >= next - 1e-6)
+            {
+                k.Port.Post(ScrollInput.WheelNotch(1, t, posted == notches - 1 ? lastDelta : WheelD));
+                notchTick[posted++] = n;
+                next += gapS;
+            }
+            d[n++] = WheelTick(k, ref t, dt);
+            k.TryGetBody(1, out var b);
+            if (posted == notches && b.Activity == ScrollActivity.Idle) break;
+        }
+        return n;
+    }
+
+    private static bool WheelBodyNaN(in ScrollBody b)
+        => float.IsNaN(b.PositionMain) || float.IsNaN(b.Velocity) || float.IsNaN(b.Target) || float.IsNaN(b.DrivenHalflifeMs)
+           || float.IsNaN(b.WheelSinceS) || float.IsNaN(b.WheelGapS);
+
+    // ── gate.kernel.wheel-cold-seed ───────────────────────────────────────────────────────────────────────────
+    // A cold notch seeds κ·R·y: the first tick already moves 6–14 DIP (no t·e^{−yt} ease-in), the per-tick shift is
+    // monotone from the third tick on (the seed peaks on the second), it never crosses the target, no tick before the
+    // landing one is a sub-pixel (0 < |d| < 0.667 DIP = one device pixel at scale 1.5) creep, and it is Idle within
+    // 185 ms (the D = 120 simulation lands on tick 21 = 175 ms; the D = 83 figure in the plan is 158 ms).
+
+    private static void WheelColdSeedCheck()
+    {
+        var k = WheelKernel();
+        var d = new float[64];
+        double t = 0;
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        int n = 0; bool idle = false;
+        while (n < d.Length && !idle)
+        {
+            d[n++] = WheelTick(k, ref t, WheelDt120);
+            k.TryGetBody(1, out var b);
+            idle = b.Activity == ScrollActivity.Idle;
+        }
+        int land = n - 1;
+        bool firstOk = d[0] >= 6f && d[0] <= 14f;
+        bool monotone = true, noSubPixel = true, noOvershoot = true;
+        float pos = 0f, peak = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            pos += d[i];
+            peak = MathF.Max(peak, d[i]);
+            if (d[i] < 0f || pos > WheelD + 0.01f) noOvershoot = false;
+            if (i >= 2 && i < land && d[i] > d[i - 1] + 0.01f) monotone = false;
+            if (i < land && d[i] > 0f && d[i] < 0.667f) noSubPixel = false;
+        }
+        k.TryGetBody(1, out var fin);
+        float settleMs = n * WheelDt120 * 1000f;
+        bool landed = idle && MathF.Abs(fin.PositionMain - WheelD) < 0.01f;
+        bool ok = firstOk && monotone && noOvershoot && noSubPixel && landed && settleMs <= 185f;
+        Check("gate.kernel.wheel-cold-seed", ok,
+            $"first={d[0]:F2} peak={peak:F2} monotone={monotone} noOvershoot={noOvershoot} noSubPixel={noSubPixel} settle={settleMs:F0}ms final={fin.PositionMain:F2} idle={idle}");
+    }
+
+    // ── gate.kernel.wheel-cadence-flat ────────────────────────────────────────────────────────────────────────
+    // 12 notches at 110 ms (9 notches/s): the cadence-planned half-life keeps the per-tick shift steady — min/max
+    // over the ticks between notch 6 and notch 11 ≥ 0.55 (today's kernel: 0.20) — every notch lands (final = 12·D),
+    // and the tail stiffening settles the body within 260 ms of the last notch (D = 120 simulation: 250 ms; the plan's
+    // ≤ 240 ms acceptance is its D = 83 Pareto point; one tick of margin on top of the measured value).
+
+    private static void WheelCadenceFlatCheck()
+    {
+        var k = WheelKernel();
+        var d = new float[512]; var nt = new int[12];
+        int n = WheelCadenceRun(k, 0.110f, 12, WheelD, WheelDt120, d, nt);
+        float min = float.MaxValue, max = 0f;
+        for (int i = nt[5]; i < nt[11]; i++) { min = MathF.Min(min, d[i]); max = MathF.Max(max, d[i]); }
+        float ratio = max > 0f ? min / max : 0f;
+        k.TryGetBody(1, out var fin);
+        float settleMs = (n - nt[11]) * WheelDt120 * 1000f;
+        bool landed = fin.Activity == ScrollActivity.Idle && MathF.Abs(fin.PositionMain - 12f * WheelD) < 0.01f;
+        bool ok = ratio >= 0.55f && landed && settleMs <= 260f;
+        Check("gate.kernel.wheel-cadence-flat", ok,
+            $"min/max={ratio:F2} (min={min:F2} max={max:F2}) settleAfterLast={settleMs:F0}ms final={fin.PositionMain:F1} idle={fin.Activity == ScrollActivity.Idle}");
+    }
+
+    // ── gate.kernel.wheel-second-click ────────────────────────────────────────────────────────────────────────
+    // The second click of a stream arrives when the first glide has decayed to ~3.5 DIP/tick; the cadence kick
+    // (vel ≥ 0.65·D/gap) makes the tick that receives it move ≥ 4 DIP on its own (today: a 2 px dip and a re-ramp).
+
+    private static void WheelSecondClickCheck()
+    {
+        var k = WheelKernel();
+        double t = 0;
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        float lastBefore = 0f;
+        for (int i = 0; i < 13; i++) lastBefore = WheelTick(k, ref t, WheelDt120);   // 108 ms in — mid-tail of the first notch
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        float second = WheelTick(k, ref t, WheelDt120);
+        k.TryGetBody(1, out var b);
+        bool ok = second >= 4f && b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Wheel) != 0
+                  && MathF.Abs(b.Target - 2f * WheelD) < 0.01f;
+        Check("gate.kernel.wheel-second-click", ok, $"tickBefore={lastBefore:F2} secondClickTick={second:F2} target={b.Target:F1} activity={b.Activity}");
+    }
+
+    // ── gate.kernel.wheel-dt-invariance ───────────────────────────────────────────────────────────────────────
+    // The same three notches (0 / 100 / 200 ms) on a 60 Hz and a 120 Hz lattice: the closed-form chase, the
+    // split-at-the-switch tail stiffening and the velocity-valued floor keep the two trajectories within 0.33 DIP at
+    // every shared instant.
+
+    private static void WheelDtInvarianceCheck()
+    {
+        static void Lattice(float dt, int notchEvery, float[] pos)
+        {
+            var k = WheelKernel();
+            double t = 0;
+            for (int i = 0; i < pos.Length; i++)
+            {
+                if (i % notchEvery == 0 && i / notchEvery < 3) k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+                WheelTick(k, ref t, dt);
+                k.TryGetBody(1, out var b);
+                pos[i] = b.PositionMain;
+            }
+        }
+        var p120 = new float[120]; var p60 = new float[60];
+        Lattice(1f / 120f, 12, p120);
+        Lattice(1f / 60f, 6, p60);
+        float maxDiff = 0f;
+        for (int i = 0; i < p60.Length; i++) maxDiff = MathF.Max(maxDiff, MathF.Abs(p60[i] - p120[2 * i + 1]));
+        bool ok = maxDiff <= 0.33f && MathF.Abs(p120[^1] - 3f * WheelD) < 0.01f && MathF.Abs(p60[^1] - 3f * WheelD) < 0.01f;
+        Check("gate.kernel.wheel-dt-invariance", ok, $"maxDiff={maxDiff:F3} final120={p120[^1]:F2} final60={p60[^1]:F2}");
+    }
+
+    // ── gate.kernel.wheel-reversal ────────────────────────────────────────────────────────────────────────────
+    // Six forward notches at 110 ms, then a −D notch at the seventh slot (the cycle's velocity trough, ~740 DIP/s):
+    // the plan rebases Target = off − D (the unconsumed lag is dropped), keeps the velocity, and the ζ=1 chase brakes
+    // through zero inside the reversal tick — carry-on ≤ 2 DIP — and moves back on the very next tick.
+
+    private static void WheelReversalCheck()
+    {
+        var k = WheelKernel();
+        k.Port.Post(ScrollInput.ScrollTo(1, 5000f, immediate: true));   // start mid-content so the reversal has room
+        k.Reclamp();
+        var d = new float[512]; var nt = new int[7];
+        int n = WheelCadenceRun(k, 0.110f, 7, -WheelD, WheelDt120, d, nt);
+        int rev = nt[6];
+        float posBefore = 5000f;
+        for (int i = 0; i < rev; i++) posBefore += d[i];
+        float carryOn = d[rev];
+        float next = rev + 1 < n ? d[rev + 1] : 0f;
+        k.TryGetBody(1, out var fin);
+        bool rebased = MathF.Abs(fin.PositionMain - (posBefore - WheelD)) < 0.01f && fin.Activity == ScrollActivity.Idle;
+        bool ok = carryOn <= 2f && next < 0f && rebased;
+        Check("gate.kernel.wheel-reversal", ok,
+            $"carryOn={carryOn:F2} nextTick={next:F2} posBefore={posBefore:F1} final={fin.PositionMain:F1} expected={posBefore - WheelD:F1} ticksAfter={n - rev}");
+    }
+
+    // ── gate.kernel.wheel-slow-cadence-stiff ──────────────────────────────────────────────────────────────────
+    // Clicks 150 ms apart (> WheelGapMaxS) are independent: no cadence plan is armed, the half-life stays at
+    // WheelHalflifeMs, and each notch's own tick moves ≥ 6 DIP (kicked back up to the cold seed).
+
+    private static void WheelSlowCadenceStiffCheck()
+    {
+        var k = WheelKernel();
+        double t = 0, next = 0;
+        var firsts = new float[5]; var hls = new float[5];
+        int posted = 0;
+        for (int i = 0; i < 200 && posted < firsts.Length; i++)
+        {
+            int idx = -1;
+            if (t >= next - 1e-6) { k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); idx = posted++; next += 0.150; }
+            float d = WheelTick(k, ref t, WheelDt120);
+            if (idx >= 0) { k.TryGetBody(1, out var b); firsts[idx] = d; hls[idx] = b.DrivenHalflifeMs; }
+        }
+        bool ok = true;
+        for (int i = 0; i < firsts.Length; i++)
+            if (firsts[i] < 6f || MathF.Abs(hls[i] - ScrollFeel.Shipping.WheelHalflifeMs) > 0.01f) ok = false;
+        Check("gate.kernel.wheel-slow-cadence-stiff", ok,
+            $"firsts={firsts[0]:F2}/{firsts[1]:F2}/{firsts[2]:F2}/{firsts[3]:F2}/{firsts[4]:F2} hl={hls[0]:F1}/{hls[1]:F1}/{hls[2]:F1}/{hls[3]:F1}/{hls[4]:F1}");
+    }
+
+    // ── gate.kernel.wheel-edge-degenerate ─────────────────────────────────────────────────────────────────────
+    // The 0/0 cases: a notch with nowhere to go (maxOff = 0), a live glide whose target is already clamped onto the
+    // edge and gets another notch, a notch while parked exactly at the edge, and a zero-delta notch mid-glide — none
+    // may produce a NaN, and every one lands Idle on the clamp.
+
+    private static void WheelEdgeDegenerateCheck()
+    {
+        // (1) maxOff = 0: target clamps onto the current offset — seed is 0, the next tick snaps and settles.
+        var k1 = WheelKernel(400f, 400f);
+        double t = 0;
+        k1.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); WheelTick(k1, ref t, WheelDt120);
+        k1.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); WheelTick(k1, ref t, WheelDt120);
+        k1.TryGetBody(1, out var a);
+        bool aOk = !WheelBodyNaN(in a) && a.Activity == ScrollActivity.Idle && a.PositionMain == 0f;
+
+        // (2) maxOff = 120: the glide is 15 ticks in (≈ 8 DIP short), a second notch re-clamps the target onto the
+        //     edge (a live re-plan against a tiny |R|), then a notch while Idle at the edge (cold, r = 0).
+        var k2 = WheelKernel(520f, 400f);
+        t = 0;
+        k2.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        for (int i = 0; i < 15; i++) WheelTick(k2, ref t, WheelDt120);
+        k2.TryGetBody(1, out var mid);
+        bool midLive = mid.Activity == ScrollActivity.Driven;
+        k2.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        bool bNaN = false;
+        for (int i = 0; i < 64; i++)
+        {
+            WheelTick(k2, ref t, WheelDt120);
+            k2.TryGetBody(1, out var b);
+            if (WheelBodyNaN(in b)) bNaN = true;
+            if (b.Activity == ScrollActivity.Idle) break;
+        }
+        k2.Port.Post(ScrollInput.WheelNotch(1, t, WheelD)); WheelTick(k2, ref t, WheelDt120);
+        k2.TryGetBody(1, out var edge);
+        bool bOk = midLive && !bNaN && !WheelBodyNaN(in edge) && edge.Activity == ScrollActivity.Idle && MathF.Abs(edge.PositionMain - 120f) < 0.01f;
+
+        // (3) a zero-delta notch during a live glide: not a reversal, target unchanged, glide continues forward.
+        var k3 = WheelKernel();
+        t = 0;
+        k3.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        for (int i = 0; i < 3; i++) WheelTick(k3, ref t, WheelDt120);
+        k3.Port.Post(ScrollInput.WheelNotch(1, t, 0f));
+        float dz = WheelTick(k3, ref t, WheelDt120);
+        k3.TryGetBody(1, out var z);
+        bool cOk = !WheelBodyNaN(in z) && z.Activity == ScrollActivity.Driven && dz > 0f && MathF.Abs(z.Target - WheelD) < 0.01f;
+
+        Check("gate.kernel.wheel-edge-degenerate", aOk && bOk && cOk,
+            $"maxOff0: pos={a.PositionMain} vel={a.Velocity} act={a.Activity}; edge: pos={edge.PositionMain:F2} vel={edge.Velocity:F2} act={edge.Activity} nan={bNaN}; zeroDelta: d={dz:F2} act={z.Activity}");
+    }
+
+    // ── gate.kernel.wheel-fling-carry ─────────────────────────────────────────────────────────────────────────
+    // A Ballistic fling (a lifted finger at ~4000 DIP/s) followed by a same-direction notch: the wheel plan carries the
+    // fling velocity instead of resetting it (the first wheel tick moves far more than a cold notch's 12.9 DIP), caps
+    // it at the exact no-overshoot bound 0.95·|R|·y, never crosses the target and lands exactly on it.
+
+    private static void WheelFlingCarryCheck()
+    {
+        var k = WheelKernel();
+        k.Port.Post(ScrollInput.ContactBegin(1, 0.0, 0f));
+        k.Port.Post(ScrollInput.ContactEnd(1, 0.02, 80f));   // 80 DIP in 20 ms ⇒ 4000 DIP/s, Begin+End only
+        double t = 0.02;
+        var c0 = new ScrollClock(t, WheelDt120, t, WheelDt120);
+        k.Tick(in c0);
+        k.TryGetBody(1, out var fl);
+        bool ballistic = fl.Activity == ScrollActivity.Ballistic && fl.Velocity > 0f;
+        float vFling = fl.Velocity;
+        float posAtNotch = fl.PositionMain;
+
+        k.Port.Post(ScrollInput.WheelNotch(1, t, WheelD));
+        var d = new float[128];
+        int n = 0; bool idle = false, over = false;
+        float target = 0f;
+        while (n < d.Length && !idle)
+        {
+            d[n++] = WheelTick(k, ref t, WheelDt120);
+            k.TryGetBody(1, out var b);
+            if (n == 1) target = b.Target;
+            if (b.PositionMain > b.Target + 0.01f) over = true;
+            idle = b.Activity == ScrollActivity.Idle;
+        }
+        k.TryGetBody(1, out var fin);
+        float yBase = 1.3862944f / (ScrollFeel.Shipping.WheelHalflifeMs * 0.001f);
+        float capFirstTick = 0.95f * WheelD * yBase * WheelDt120;   // a velocity at the bound can travel at most this on the first tick
+        bool carried = d[0] >= 20f && d[0] <= capFirstTick + 0.01f;   // a cold notch moves 12.9; the carried fling ~26
+        bool targetOk = MathF.Abs(target - (posAtNotch + WheelD)) < 0.01f;
+        bool landed = idle && MathF.Abs(fin.PositionMain - target) < 0.01f;
+        bool ok = ballistic && carried && targetOk && !over && landed;
+        Check("gate.kernel.wheel-fling-carry", ok,
+            $"ballistic={ballistic} vFling={vFling:F0} first={d[0]:F2} cap={capFirstTick:F2} over={over} landed={landed} final={fin.PositionMain:F2} target={target:F2}");
+    }
+
+    // ── gate.kernel.wheel-no-subpixel-tail ────────────────────────────────────────────────────────────────────
+    // After the last notch of a 110 ms stream, no tick before the landing one changes the offset by less than one
+    // device pixel at scale 1.5 (0 < |d| < 0.667 DIP): the 160 DIP/s floor and the 1-DIP snap replace the 4–5
+    // change-without-motion frames that forced a glyph re-snap every frame (S4).
+
+    private static void WheelNoSubpixelTailCheck()
+    {
+        var k = WheelKernel();
+        var d = new float[512]; var nt = new int[12];
+        int n = WheelCadenceRun(k, 0.110f, 12, WheelD, WheelDt120, d, nt);
+        int last = nt[11], sub = 0, tailTicks = 0;
+        float minTail = float.MaxValue;
+        for (int i = last; i < n - 1; i++)
+        {
+            float a = MathF.Abs(d[i]);
+            tailTicks++;
+            if (a > 0f) minTail = MathF.Min(minTail, a);
+            if (a > 0f && a < 0.667f) sub++;
+        }
+        k.TryGetBody(1, out var fin);
+        bool ok = sub == 0 && tailTicks > 0 && fin.Activity == ScrollActivity.Idle;
+        Check("gate.kernel.wheel-no-subpixel-tail", ok, $"subPixelTicks={sub} tailTicks={tailTicks} minTail={minTail:F2} landing={d[n - 1]:F2}");
     }
 
     // ── gate.kernel.programmatic-glide-retarget ───────────────────────────────────────────────────────────────
@@ -552,20 +965,26 @@ static class ScrollKernelSuite
         SetupViewport(k, 1, 500f, 400f); // maxOff=100 — tight
 
         double t = 0.00833;
+        float impulsePos = 0f;
         k.Port.Post(ScrollInput.ThumbSet(1, 95f));
         k.Reclamp();
-        k.Port.Post(ScrollInput.FrameDelta(1, t, 3f)); // 95→98
+        PostFrameDeltaWithImpulse(k, 1, t, 3f, ref impulsePos, reset: true); // 95→98
         k.Tick(ClockAt(t));
         t += 0.00833;
-        k.Port.Post(ScrollInput.FrameDelta(1, t, 2f)); // 98→100 exactly — zero excess so the drag itself does not band
+        PostFrameDeltaWithImpulse(k, 1, t, 2f, ref impulsePos, reset: false); // 98→100 exactly — zero excess so the drag itself does not band
         k.Tick(ClockAt(t));
         t += 0.00833;
         k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
         k.Tick(ClockAt(t)); // seeds Ballistic pushing further past the (currently tight) edge
 
-        t += 0.00833;
-        k.Tick(ClockAt(t)); // coast hits the clamp this tick → EdgeHitPending, pinned
-        k.TryGetBody(1, out var pinned);
+        // Coast until the clamp is hit → EdgeHitPending, pinned (the paced stream released a couple of DIP short).
+        ScrollBody pinned = default;
+        for (int i = 0; i < 12 && !pinned.EdgeHitPending; i++)
+        {
+            t += 0.00833;
+            k.Tick(ClockAt(t));
+            k.TryGetBody(1, out pinned);
+        }
         bool wasPending = pinned.EdgeHitPending;
 
         // Geometry grows BEFORE Reclamp resolves it — the fresh extent should let the Ballistic continue.
@@ -575,6 +994,348 @@ static class ScrollKernelSuite
 
         bool ok = wasPending && !resolved.EdgeHitPending && resolved.Activity == ScrollActivity.Ballistic;
         Check("gate.kernel.edge-pending-resolves-on-grow", ok, $"wasPending={wasPending} resolvedActivity={resolved.Activity} edgePending={resolved.EdgeHitPending}");
+    }
+
+    /// <summary>Seed a Ballistic coast on node 1 from a precise stream of <paramref name="packets"/> FrameDelta packets of
+    /// <paramref name="step"/> DIP at the tick cadence, then the producer's End. Returns with the seed tick done (the
+    /// body already coasted one step); <paramref name="t"/> is the seed tick's time.</summary>
+    private static void SeedFling(ScrollKernel k, ref double t, float step, int packets, float dt = 0.00833f)
+    {
+        float impulsePos = 0f;
+        for (int i = 1; i <= packets; i++)
+        {
+            t += dt;
+            PostFrameDeltaWithImpulse(k, 1, t, step, ref impulsePos, reset: i == 1);
+            k.Tick(ClockAt(t, dt));
+        }
+        t += dt;
+        k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
+        k.Tick(ClockAt(t, dt));
+    }
+
+    // ── gate.kernel.edge-pin-no-lost-travel ──────────────────────────────────────────────────────────────────
+    // A coast step that crosses the clamp against last frame's geometry pins at the bound but still decays the
+    // velocity for the whole step. When Reclamp then finds fresh layout gave room, the coast used to just continue
+    // from the pinned position: one step lower, the pinned frame's travel gone (`8.3 0.0 8.1` in the trace) — and the
+    // physics is per-frame dt, so nothing ever caught up. ResolveEdge now re-applies the withheld travel (bounded by
+    // the new room) so the frame after the grow sits exactly where an unclamped coast would.
+
+    private static void EdgePinNoLostTravelCheck()
+    {
+        const float dt = 0.00833f;
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        var refSink = new RecordingSink();
+        var r = new ScrollKernel(refSink, ScrollFeel.Shipping);   // the same inputs against the large extent from the start
+        SetupViewport(k, 1, 100000f, 400f);
+        SetupViewport(r, 1, 100000f, 400f);
+
+        double t = 0, tr = 0;
+        SeedFling(k, ref t, 10f, 6, dt);
+        SeedFling(r, ref tr, 10f, 6, dt);
+        for (int i = 0; i < 2; i++) { t += dt; k.Tick(ClockAt(t, dt)); tr += dt; r.Tick(ClockAt(tr, dt)); }
+        k.TryGetBody(1, out var b0);
+        bool coasting = b0.Activity == ScrollActivity.Ballistic && b0.Velocity > 0f;
+        float pos0 = b0.PositionMain;
+        float v = b0.Velocity;
+        float step = ScrollPhysics.CoastStep(ref v, dt, ScrollFeel.Shipping.FlingDecayPerS);
+
+        // Shrink the extent so the next step crosses the clamp half-way: maxOff = pos0 + step/2.
+        float tightExtent = 400f + pos0 + 0.5f * step;
+        k.Port.Post(ScrollInput.SetFrame(1, Frame(tightExtent, 400f)));
+        k.Reclamp();
+        t += dt; k.Tick(ClockAt(t, dt));
+        tr += dt; r.Tick(ClockAt(tr, dt));
+        k.TryGetBody(1, out var pinned);
+        int pins = k.Summary.EdgePins;
+        bool wasPinned = pinned.EdgeHitPending && pins == 1 && MathF.Abs(pinned.PositionMain - (tightExtent - 400f)) < 0.01f;
+
+        // Layout grows before Reclamp resolves it: the withheld half step lands this same frame.
+        k.Port.Post(ScrollInput.SetFrame(1, Frame(tightExtent + 200f, 400f)));
+        k.Reclamp();
+        k.TryGetBody(1, out var grown);
+        r.TryGetBody(1, out var refGrown);
+        bool noLostTravel = !grown.EdgeHitPending && grown.Activity == ScrollActivity.Ballistic
+            && MathF.Abs(grown.PositionMain - (pos0 + step)) < 0.01f
+            && MathF.Abs(grown.PositionMain - refGrown.PositionMain) < 0.01f
+            && k.Summary.EdgePins == 0;
+
+        // The continuation is the pure coast: the next two steps match the reference run.
+        bool continues = true;
+        for (int i = 0; i < 2 && continues; i++)
+        {
+            t += dt; k.Tick(ClockAt(t, dt));
+            tr += dt; r.Tick(ClockAt(tr, dt));
+            k.TryGetBody(1, out var a);
+            r.TryGetBody(1, out var e);
+            continues = MathF.Abs(a.PositionMain - e.PositionMain) < 0.01f && MathF.Abs(a.Velocity - e.Velocity) < 0.01f;
+        }
+
+        Check("gate.kernel.edge-pin-no-lost-travel", coasting && wasPinned && noLostTravel && continues,
+            $"coasting={coasting} pinned={pinned.EdgeHitPending} pins={pins} pinnedPos={pinned.PositionMain:F2} grown={grown.PositionMain:F2} expected={pos0 + step:F2} ref={refGrown.PositionMain:F2} continues={continues}");
+    }
+
+    // ── gate.kernel.fling-lands-finite ───────────────────────────────────────────────────────────────────────
+    // The exponential coast never finishes: remaining/step ≡ 1/(k·dt) — about 40 frames at 120 Hz at ANY speed — so a
+    // fling settling at FlingSettleVel (13 DIP/s) crawled from 1.5 to 0.5 DIP a frame for ~60 frames and then stopped
+    // v/k short of its asymptote. Below FlingLandVel (120 DIP/s) the body hands a short horizon (pos + v·FlingLandHorizonS) to the
+    // Driven landing (Programmatic; LandingStep at the hand-off speed, LandFloorDipPerS): equal steps no larger than
+    // the hand-off frame's, none under 0.25 DIP, exact on the target, Idle in 9 frames at 120 Hz / 5 at 60 Hz. The
+    // fling rests v·(1/k − horizon) ≈ 15 DIP short of the exponential's asymptote by design — landing on the full
+    // asymptote from 60 DIP/s needs a tug, and the landing must never accelerate.
+
+    private static void FlingLandsFiniteCheck()
+    {
+        static bool RunAt(float dt, int landingBudget, out string detail)
+        {
+            var sink = new RecordingSink();
+            var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+            SetupViewport(k, 1, 100000f, 400f);
+            var feel = ScrollFeel.Shipping;
+            float decayK = -MathF.Log(feel.FlingDecayPerS);
+
+            double t = 0;
+            SeedFling(k, ref t, 8f, 8, dt);   // ~960 DIP/s at 8.33 ms packets, ~480 at 16.67
+            k.TryGetBody(1, out var seeded);
+            bool ballistic = seeded.Activity == ScrollActivity.Ballistic && seeded.Velocity > 0f;
+            int expectedHandoff = (int)MathF.Ceiling(MathF.Log(seeded.Velocity / feel.FlingLandVel) / decayK / dt);
+
+            int handoff = -1, landedAt = -1;
+            float handoffShift = 0f, target = float.NaN, minTail = float.MaxValue, peakTail = 0f;
+            bool programmaticDuringLanding = true;
+            for (int i = 1; i <= 4000 && landedAt < 0; i++)
+            {
+                t += dt;
+                k.Tick(ClockAt(t, dt));
+                k.TryGetBody(1, out var b);
+                float shift = k.Summary.MaxAbsDeltaDip;
+                if (handoff < 0 && b.Activity == ScrollActivity.Driven)
+                {
+                    handoff = i;
+                    handoffShift = shift;   // this frame's coast step: the ceiling every landing step stays under
+                    target = b.Target;
+                }
+                else if (handoff >= 0)
+                {
+                    minTail = MathF.Min(minTail, shift);
+                    peakTail = MathF.Max(peakTail, shift);
+                }
+                if (handoff >= 0 && b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Programmatic) == 0) programmaticDuringLanding = false;
+                if (b.Activity == ScrollActivity.Idle) landedAt = i;
+            }
+            k.TryGetBody(1, out var fin);
+            int landingFrames = handoff >= 0 && landedAt >= 0 ? landedAt - handoff : -1;
+            bool handoffOk = handoff > 0 && handoff <= expectedHandoff + 2;
+            bool finite = landedAt > 0 && landingFrames <= landingBudget;
+            bool exact = MathF.Abs(fin.PositionMain - target) <= 0.05f && fin.Velocity == 0f
+                && (fin.Flags & ScrollActivityFlags.Programmatic) == 0 && fin.LandFloorDipPerS == 0f;
+            bool neverFaster = peakTail <= handoffShift * 1.01f;
+            bool noSubPixel = minTail >= 0.25f;
+            detail = $"dt={dt * 1000f:F2} v0={seeded.Velocity:F0} handoff={handoff}(≤{expectedHandoff + 2}) handoffShift={handoffShift:F3} landingFrames={landingFrames}(≤{landingBudget}) final={fin.PositionMain:F3} target={target:F3} minTail={minTail:F3} peakTail={peakTail:F3} programmatic={programmaticDuringLanding}";
+            return ballistic && handoffOk && finite && exact && neverFaster && noSubPixel && programmaticDuringLanding;
+        }
+
+        bool ok120 = RunAt(0.00833f, 15, out string d120);
+        bool ok60 = RunAt(0.016667f, 8, out string d60);
+        Check("gate.kernel.fling-lands-finite", ok120 && ok60, $"[{d120}] [{d60}]");
+    }
+
+    // ── gate.kernel.anchor-shift-not-motion ──────────────────────────────────────────────────────────────────
+    // An AnchorShift moves PositionMain without being motion (the content was rebased under the viewport). It used to
+    // leave SummaryMain behind, so a shift drained in Tick printed as that frame's displacement (`70.6 52.8 88.2 90.5`
+    // after a window restore). The baseline moves with the rebase; the rebase is reported on its own column.
+
+    private static void AnchorShiftNotMotionCheck()
+    {
+        const float dt = 0.00833f;
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 100000f, 400f);
+
+        double t = 0;
+        SeedFling(k, ref t, 10f, 6, dt);
+        for (int i = 0; i < 2; i++) { t += dt; k.Tick(ClockAt(t, dt)); }
+        k.TryGetBody(1, out var b0);
+        float pos0 = b0.PositionMain, v = b0.Velocity;
+        float step = ScrollPhysics.CoastStep(ref v, dt, ScrollFeel.Shipping.FlingDecayPerS);
+
+        const float shift = 50f;
+        k.Port.Post(ScrollInput.AnchorShift(1, shift));   // drained by this Tick, before the advance
+        t += dt; k.Tick(ClockAt(t, dt));
+        k.TryGetBody(1, out var after);
+        var s = k.Summary;
+        bool motionIsTheStep = MathF.Abs(s.MaxAbsDeltaDip - step) < 0.01f;
+        bool structural = MathF.Abs(s.MaxAbsStructuralDip - shift) < 0.001f;
+        bool position = MathF.Abs(after.PositionMain - (pos0 + shift + step)) < 0.01f && after.Activity == ScrollActivity.Ballistic;
+
+        t += dt; k.Tick(ClockAt(t, dt));
+        bool cleared = k.Summary.MaxAbsStructuralDip == 0f;
+
+        Check("gate.kernel.anchor-shift-not-motion", b0.Activity == ScrollActivity.Ballistic && motionIsTheStep && structural && position && cleared,
+            $"delta={s.MaxAbsDeltaDip:F3} step={step:F3} structural={s.MaxAbsStructuralDip:F2} pos={after.PositionMain:F2} expected={pos0 + shift + step:F2} cleared={cleared}");
+    }
+
+    // ── gate.kernel.precise-resume-no-rewind ─────────────────────────────────────────────────────────────────
+    // A packet reaching a stream the kernel released by inference resumes it. The resume kept the pre-release sample
+    // history, so the paced resample spanned the silent gap against a LastResampleX that had the coast folded in —
+    // the first resumed frame could apply about minus the coast travel. The history restarts at the resuming packet
+    // (the accumulator carries the coast), so the resumed frame applies that packet's own travel, never a rewind.
+
+    private static void PreciseResumeNoRewindCheck()
+    {
+        const double dtS = 0.008;
+        const float packet = 8f;
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 50000f, 400f);
+
+        double t = 0;
+        float impulsePos = 0f;
+        for (int i = 1; i <= 10; i++)
+        {
+            t = i * dtS;
+            PostFrameDeltaWithImpulse(k, 1, t, packet, ref impulsePos, reset: i == 1);
+            k.Tick(ClockAt(t, (float)dtS));
+        }
+        for (int i = 0; i < 6; i++) { t += dtS; k.Tick(ClockAt(t, (float)dtS)); }   // silence — released by inference
+        k.TryGetBody(1, out var coasting);
+        bool inferred = coasting.Activity == ScrollActivity.Ballistic && coasting.InferredRelease;
+
+        t += dtS;
+        PostFrameDeltaWithImpulse(k, 1, t, packet, ref impulsePos, reset: false);   // a late packet resumes the stream
+        k.Tick(ClockAt(t, (float)dtS));
+        k.TryGetBody(1, out var resumed);
+        float shift = resumed.TickDeltaMain;
+        bool resumedDrag = resumed.Activity == ScrollActivity.Drag && resumed.DragMode == 2 && !resumed.InferredRelease;
+        bool forward = shift >= 0f && shift <= 2f * packet && MathF.Abs(k.Summary.MaxAbsDeltaDip - MathF.Abs(shift)) < 0.001f;
+
+        Check("gate.kernel.precise-resume-no-rewind", inferred && resumedDrag && forward,
+            $"inferred={inferred} activity={resumed.Activity} mode={resumed.DragMode} shift={shift:F2} (expected 0..{2f * packet:F0}) pos={resumed.PositionMain:F2}");
+    }
+
+    // ── gate.kernel.precise-backwards-stamps ─────────────────────────────────────────────────────────────────
+    // A frame-pumped packet stamped with the frame instant can arrive AFTER an idle-pumped packet stamped `now`, so the
+    // history ran backwards for one slot and the touch resampler's Math.Clamp(tStar, oldest, newest) threw out of
+    // Tick (2026-09-17, first JIT run of the paced stream). PushHistory folds such a stamp into the next microsecond;
+    // the resamplers never see a reversed span, and the stream keeps its travel.
+
+    private static void PreciseBackwardsStampsCheck()
+    {
+        const float dt = 0.008f, packet = 6f;
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 50000f, 400f);
+
+        double t = 0.008;
+        float impulsePos = 0f, rawTotal = 0f, maxShift = 0f;
+        bool threw = false;
+        try
+        {
+            PostFrameDeltaWithImpulse(k, 1, t, packet, ref impulsePos, reset: true); rawTotal += packet;
+            PostFrameDeltaWithImpulse(k, 1, t + 0.006, packet, ref impulsePos, reset: false); rawTotal += packet;
+            PostFrameDeltaWithImpulse(k, 1, t + 0.002, packet, ref impulsePos, reset: false); rawTotal += packet;   // stamped BEFORE the newest
+            t += dt;
+            k.Tick(ClockAt(t, dt));
+            maxShift = MathF.Max(maxShift, k.Summary.MaxAbsDeltaDip);
+            for (int i = 0; i < 6; i++)
+            {
+                t += dt;
+                PostFrameDeltaWithImpulse(k, 1, t - 0.003 * (i % 2), packet, ref impulsePos, reset: false); rawTotal += packet;   // alternating late stamps
+                k.Tick(ClockAt(t, dt));
+                maxShift = MathF.Max(maxShift, k.Summary.MaxAbsDeltaDip);
+            }
+        }
+        catch (Exception) { threw = true; }
+        k.TryGetBody(1, out var body);
+        bool dragging = !threw && body.Activity == ScrollActivity.Drag && body.DragMode == 2;
+        bool bounded = maxShift <= 2f * packet + 0.01f;
+        bool progressed = body.PositionMain > rawTotal * 0.5f && body.PositionMain <= rawTotal + 0.01f;
+        Check("gate.kernel.precise-backwards-stamps", !threw && dragging && bounded && progressed,
+            $"threw={threw} activity={body.Activity} mode={body.DragMode} maxShift={maxShift:F2} pos={body.PositionMain:F2} raw={rawTotal:F2}");
+    }
+
+    // ── gate.kernel.precise-burst-bounded ────────────────────────────────────────────────────────────────────
+    // Packets stamped sub-ms apart (a producer burst, a frame stamp next to an idle-pump stamp) made the paced
+    // resampler's line fit and its last-segment extrapolation read tens of thousands of DIP/s: 8 DIP packets printed
+    // as 180–980 DIP frames, and the release velocity inherited the same slope (every coast started at the FlingMax
+    // 65.8 DIP/frame). The resampler now interpolates between the bracketing samples only, extrapolates on the whole
+    // history's slope (min 4 ms base), and a frame never moves more than twice the largest packet or the backlog plus
+    // one packet; the total still equals the raw total, and the release velocity comes from the raw packet totals.
+
+    private static void PreciseBurstBoundedCheck()
+    {
+        const float dt = 0.008f;
+        const float burstPacket = 8f, trickle = 0.3f;   // the trickle keeps the release under FlingSeedGate so the rest is measurable
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 50000f, 400f);
+
+        double t = 0.008;
+        float impulsePos = 0f, rawTotal = 0f, maxShift = 0f;
+        for (int i = 0; i < 5; i++)   // five packets inside 0.5 ms
+        {
+            PostFrameDeltaWithImpulse(k, 1, t + i * 0.0001, burstPacket, ref impulsePos, reset: i == 0);
+            rawTotal += burstPacket;
+        }
+        t += 0.0005;
+        k.Tick(ClockAt(t, dt));
+        maxShift = MathF.Max(maxShift, k.Summary.MaxAbsDeltaDip);
+        k.TryGetBody(1, out var afterBurst);
+        bool dragging = afterBurst.Activity == ScrollActivity.Drag && afterBurst.DragMode == 2;
+
+        for (int i = 0; i < 10; i++)   // then a regular 8 ms cadence
+        {
+            t += dt;
+            PostFrameDeltaWithImpulse(k, 1, t, trickle, ref impulsePos, reset: false);
+            rawTotal += trickle;
+            k.Tick(ClockAt(t, dt));
+            maxShift = MathF.Max(maxShift, k.Summary.MaxAbsDeltaDip);
+        }
+        t += dt;
+        k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
+        k.Tick(ClockAt(t, dt));
+        maxShift = MathF.Max(maxShift, k.Summary.MaxAbsDeltaDip);
+        k.TryGetBody(1, out var rest);
+
+        bool bounded = maxShift <= 2f * burstPacket + 0.01f;
+        bool noDrift = MathF.Abs(rest.PositionMain - rawTotal) <= 0.5f;
+        bool rested = rest.Activity == ScrollActivity.Idle && MathF.Abs(rest.LastReleaseVelocity) < ScrollFeel.Shipping.FlingSeedGate;
+        Check("gate.kernel.precise-burst-bounded", dragging && bounded && noDrift && rested,
+            $"dragging={dragging} maxShift={maxShift:F2} (≤{2f * burstPacket:F0}) final={rest.PositionMain:F2} raw={rawTotal:F2} activity={rest.Activity} releaseV={rest.LastReleaseVelocity:F1}");
+    }
+
+    // ── gate.kernel.contact-held ─────────────────────────────────────────────────────────────────────────────
+    // A touch contact that is down and still is live motion the host budgets for, yet it applies no delta: the
+    // summary names it (AnyContactHeld) once the newest sample is older than the resample latency plus a frame, so a
+    // trace can tell "finger held" from "frame produced nothing". A precise stream (DragMode 2) only ever holds inside
+    // the DragExtrapolateMaxMs window before its release is inferred, so the touch path is what is gated here.
+
+    private static void ContactHeldCheck()
+    {
+        const float dt = 0.00833f;
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 5000f, 400f);
+
+        double t = 0;
+        k.Port.Post(ScrollInput.ContactBegin(1, t, 0f));
+        k.Port.Post(ScrollInput.ContactMove(1, 0.008, 40f));
+        t = 0.016; k.Tick(ClockAt(t, dt));   // resamples inside the history (t − 12 ms = 4 ms): the finger moved
+        bool movedFirst = k.Summary.MaxAbsDeltaDip > 0f && !k.Summary.AnyContactHeld;
+
+        t += dt; k.Tick(ClockAt(t, dt));   // first quiet frame: 16 ms since the newest sample, under latency + a frame
+        bool notHeldYet = !k.Summary.AnyContactHeld;
+
+        for (int i = 0; i < 4; i++) { t += dt; k.Tick(ClockAt(t, dt)); }   // five quiet frames in total (~41 ms still)
+        var s = k.Summary;
+        k.TryGetBody(1, out var b);
+        bool held = s.AnyContactHeld && s.AnyLiveMotion && s.MaxAbsDeltaDip == 0f && b.Activity == ScrollActivity.Drag;
+
+        t += dt; k.Port.Post(ScrollInput.ContactMove(1, t, 60f)); k.Tick(ClockAt(t, dt));
+        bool releasedByMotion = !k.Summary.AnyContactHeld;
+
+        Check("gate.kernel.contact-held", movedFirst && notHeldYet && held && releasedByMotion,
+            $"movedFirst={movedFirst} notHeldYet={notHeldYet} held={s.AnyContactHeld} live={s.AnyLiveMotion} delta={s.MaxAbsDeltaDip:F2} activity={b.Activity} releasedByMotion={releasedByMotion}");
     }
 
     // ── gate.kernel.undersampled-flick ────────────────────────────────────────────────────────────────────────
@@ -605,10 +1366,11 @@ static class ScrollKernelSuite
 
         const double dtS = 0.00833;
         double t = 0;
+        float impulsePos = 0f;
         for (int i = 1; i <= 4; i++)
         {
             t = i * dtS;
-            k.Port.Post(ScrollInput.FrameDelta(1, t, 30f)); // constant-velocity samples, ~3600 DIP/s
+            PostFrameDeltaWithImpulse(k, 1, t, 30f, ref impulsePos, reset: i == 1); // constant-velocity samples, ~3600 DIP/s
             k.Tick(ClockAt(t, (float)dtS));
         }
         t += dtS;
@@ -636,6 +1398,175 @@ static class ScrollKernelSuite
         float tolerance = ScrollFeel.Shipping.FlingSettleVel / k2 + 1.5f;
         Check("gate.kernel.snap-fling-lands", seededBallistic && bestDist <= tolerance,
             $"seeded={seededBallistic} landed={landed.PositionMain:F2} nearestSnap={nearestSnap} dist={bestDist:F2} tol={tolerance:F2}");
+    }
+
+    // ── gate.kernel.park-settles-live-motion ─────────────────────────────────────────────────────────────────
+    // A parked body is never ticked, so a fling parked by Flow.KeepAlive used to stay Ballistic — and AnyLiveMotion
+    // true — for as long as the page stayed parked (41 s observed; the host armed its frame budget every frame).
+
+    private static void ParkSettlesLiveMotionCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 20000f, 400f);
+
+        const double dtS = 0.00833;
+        double t = 0;
+        float impulsePos = 0f;
+        for (int i = 1; i <= 6; i++)
+        {
+            t = i * dtS;
+            PostFrameDeltaWithImpulse(k, 1, t, 10f, ref impulsePos, reset: i == 1);
+            k.Tick(ClockAt(t, (float)dtS));
+        }
+        t += dtS;
+        k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
+        k.Tick(ClockAt(t, (float)dtS));
+        k.TryGetBody(1, out var flinging);
+        bool wasLive = flinging.Activity == ScrollActivity.Ballistic && k.Summary.AnyLiveMotion;
+
+        k.Port.Post(ScrollInput.Park(1, true));
+        t += dtS;
+        k.Tick(ClockAt(t, (float)dtS));
+        k.TryGetBody(1, out var parked);
+        bool parkedQuiet = parked.Parked && parked.Activity == ScrollActivity.Idle && parked.Velocity == 0f
+            && !k.Summary.AnyLiveMotion && !k.Summary.AnyUserActive && k.Summary.MaxVisualSpeed == 0f;
+        t += dtS;
+        k.Tick(ClockAt(t, (float)dtS));
+        bool stillQuiet = !k.Summary.AnyMoved && !k.Summary.AnyLiveMotion;
+
+        k.Port.Post(ScrollInput.Park(1, false));
+        t += dtS;
+        k.Tick(ClockAt(t, (float)dtS));
+        k.TryGetBody(1, out var unparked);
+        bool idleAfter = !unparked.Parked && unparked.Activity == ScrollActivity.Idle && unparked.Velocity == 0f
+            && !k.Summary.AnyLiveMotion && k.Summary.ActiveCount == 0;
+
+        Check("gate.kernel.park-settles-live-motion", wasLive && parkedQuiet && stillQuiet && idleAfter,
+            $"wasLive={wasLive} parked(activity={parked.Activity} v={parked.Velocity:F1} live={k.Summary.AnyLiveMotion}) stillQuiet={stillQuiet} unparked(activity={unparked.Activity} active={k.Summary.ActiveCount})");
+    }
+
+    // ── gate.kernel.precise-release-no-gap ───────────────────────────────────────────────────────────────────
+    // A precise stream (touchpad / free-spin wheel, DragMode 2) whose packets stop at speed: the producer's End
+    // arrives 1–6 frames later, and those frames used to show 0 displacement before the coast resumed at the
+    // pre-release speed (`8.0 1.0 0.0 0.7 0.0 0.0 0.0 0.0 0.0 7.0 6.8`). The paced resampler carries the last frames
+    // and the kernel infers the release once the stream is silent past the extrapolation window, so there is no
+    // zero-shift frame between the last input frame and the first coast frame, and the late End is a no-op.
+
+    private static void PreciseReleaseNoGapCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 50000f, 400f);
+
+        const double dtS = 0.008;
+        const float step = 8f;   // 1000 DIP/s at an 8 ms cadence
+        double t = 0;
+        float impulsePos = 0f;
+        var shifts = new float[32];
+        var acts = new ScrollActivity[32];
+        int n = 0;
+        void Record() { k.TryGetBody(1, out var b); shifts[n] = k.Summary.MaxAbsDeltaDip; acts[n] = b.Activity; n++; }
+
+        for (int i = 1; i <= 10; i++)
+        {
+            t = i * dtS;
+            PostFrameDeltaWithImpulse(k, 1, t, step, ref impulsePos, reset: i == 1);
+            k.Tick(ClockAt(t, (float)dtS));
+            Record();
+        }
+        int lastInput = n - 1;
+        for (int i = 0; i < 6; i++) { t += dtS; k.Tick(ClockAt(t, (float)dtS)); Record(); }   // silence — the End is late
+        t += dtS;
+        k.Port.Post(ScrollInput.ContactEnd(1, t, 0f));
+        k.Tick(ClockAt(t, (float)dtS));
+        Record();
+        for (int i = 0; i < 3; i++) { t += dtS; k.Tick(ClockAt(t, (float)dtS)); Record(); }
+
+        int firstCoast = -1;
+        for (int i = lastInput + 1; i < n; i++) if (acts[i] == ScrollActivity.Ballistic) { firstCoast = i; break; }
+        float minShift = float.MaxValue;
+        for (int i = lastInput; i < n; i++) minShift = MathF.Min(minShift, shifts[i]);
+        k.TryGetBody(1, out var fin);
+        bool ok = firstCoast > lastInput && firstCoast - lastInput <= 4 && minShift >= 0.5f
+            && fin.Activity == ScrollActivity.Ballistic && MathF.Abs(fin.Velocity) > ScrollFeel.Shipping.FlingSettleVel;
+        var trace = new System.Text.StringBuilder();
+        for (int i = lastInput; i < n; i++) trace.Append(shifts[i].ToString("F1")).Append(i == firstCoast ? "* " : " ");
+        Check("gate.kernel.precise-release-no-gap", ok,
+            $"lastInput={lastInput} firstCoast={firstCoast} minShift={minShift:F2} final={fin.Activity}/{fin.Velocity:F0} shifts(from last input, *=first coast)={trace}");
+    }
+
+    // ── gate.kernel.precise-pacing-jitter ────────────────────────────────────────────────────────────────────
+    // 1:1 application of a 60 Hz packet stream drawn at 120 Hz frames alternates 0 / 2× (`18.9 0.0! 48.0 24.6`), and
+    // a packet landing just after a frame shows as 0 then a double. Paced against the frame clock minus the
+    // observed packet interval, the per-frame shifts stay even while packets keep arriving.
+
+    private static void PrecisePacingJitterCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 100000f, 400f);
+
+        const double frameS = 1.0 / 120.0, packetS = 1.0 / 60.0;
+        const float v = 1000f;   // DIP/s
+        const int packets = 20;
+        double tPrev = 0;
+        float impulsePos = 0f;
+        int packet = 1, seen = 0;
+        var shifts = new float[64];
+        int n = 0;
+        for (int f = 1; f <= 44; f++)
+        {
+            double tf = f * frameS;
+            // Deliver every packet stamped at or before this frame; the jitter is a fixed ±3 ms pattern on the lattice.
+            while (packet <= packets)
+            {
+                double tp = packet * packetS + ((packet * 5) % 7 - 3) * 0.001;
+                if (tp > tf) break;
+                PostFrameDeltaWithImpulse(k, 1, tp, (float)(v * (tp - tPrev)), ref impulsePos, reset: packet == 1);
+                tPrev = tp; packet++; seen++;
+            }
+            k.Tick(ClockAt(tf, (float)frameS));
+            if (seen >= 3 && packet <= packets) shifts[n++] = k.Summary.MaxAbsDeltaDip;   // steady state, packets still arriving
+        }
+
+        var sorted = new float[Math.Max(n, 1)];
+        Array.Copy(shifts, sorted, n);
+        Array.Sort(sorted, 0, n);
+        float median = n > 0 ? sorted[n / 2] : 0f, max = n > 0 ? sorted[n - 1] : 0f, min = n > 0 ? sorted[0] : 0f;
+        bool ok = n >= 20 && median > 0f && max / median < 1.6f && min >= 0.5f;
+        Check("gate.kernel.precise-pacing-jitter", ok, $"frames={n} median={median:F2} max={max:F2} min={min:F2} max/median={(median > 0f ? max / median : float.PositiveInfinity):F2}");
+    }
+
+    // ── gate.kernel.programmatic-lands-exactly ───────────────────────────────────────────────────────────────
+    // The ζ=1 programmatic chase settled on |off−target| < 0.5 && |vel| < FlingSettleVel, which let a restore/ScrollTo
+    // creep 0.1–0.5 DIP a frame for 15–24 frames at page open. It now carries the wheel plan's displacement floor and
+    // distance snap: at most the landing frame is sub-pixel, and the body lands exactly on the target.
+
+    private static void ProgrammaticLandsExactlyCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        SetupViewport(k, 1, 5000f, 400f);
+
+        double t = 0;
+        k.Port.Post(ScrollInput.ScrollTo(1, 300f));
+        int tail = 0, frames = 0;
+        float lastPos = 0f;
+        bool landed = false;
+        for (int i = 0; i < 600 && !landed; i++)
+        {
+            t += 0.00833;
+            k.Tick(ClockAt(t));
+            k.TryGetBody(1, out var b);
+            float shift = MathF.Abs(b.PositionMain - lastPos);
+            lastPos = b.PositionMain;
+            frames++;
+            if (shift > 0f && shift < 0.75f) tail++;
+            landed = b.Activity == ScrollActivity.Idle;
+        }
+        bool ok = landed && lastPos == 300f && tail <= 2 && frames < 240;
+        Check("gate.kernel.programmatic-lands-exactly", ok, $"landed={landed} final={lastPos:F3} subPixelFrames={tail} frames={frames}");
     }
 
     // ── gate.kernel.alloc-zero-tick ───────────────────────────────────────────────────────────────────────────

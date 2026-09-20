@@ -77,11 +77,19 @@ literal.
 
 ## FGRP008 — the no-hardcoded-string analyzer
 
-The shared analyzer assembly ships `FGRP008` (Warning), which **arms only in the `FluentGpu.Controls` compilation**.
-It flags a bare string literal flowing into a user-facing sink — a `TextEl` constructor argument, a `Text` assignment,
-or an `AutomationName` assignment. A literal is allowed when it is empty/whitespace, contains no ASCII letter (a glyph,
-format specifier, ratio, or separator), or the line carries a `// loc-allow` marker (the deliberate-literal escape
-hatch — font names, key names, or the skeleton shimmer templates whose text only sizes a bar).
+The shared analyzer assembly ships `FGRP008` (Warning), which **arms in the `FluentGpu.Controls` compilation** and in any
+assembly listed in the MSBuild property `FluentGpuLocHardcodedAssemblies` (comma-separated names, e.g. `Wavee`).
+It flags a bare string literal flowing into a user-facing sink — a `TextEl` constructor argument, a `Text` /
+`AutomationName` / `Placeholder` / `Title` / `Message` assignment, `Button.Create|Standard|Subtle`,
+`HyperlinkButton.Create`, `MenuFlyoutItem`, `Announcer.Say` / `Notify.Say`, or a file-picker filter tuple
+`("JPEG", "*.jpg")`. A literal is allowed when it is empty/whitespace, contains no ASCII letter (a glyph,
+format specifier, ratio, or separator), the line carries a `// loc-allow` marker, or the file carries
+`// loc-allow-file`. Types under `Wavee.Screens.Diagnostics` are skipped.
+
+`FLLOC003` (Warning) fires on a `Loc.Get`/`Format`/`Bind` string literal that is not in the base loc JSON.
+`FLLOC004` (Warning, one per satellite file) fires when a satellite JSON is missing keys from the base.
+`FLLOC005` (Info) fires on an unreferenced base key; list keepers in `$unusedAllow`.
+`FLLOC006` (Info) fires on satellite keys that are not in the base.
 
 To add a new user-facing string to a control: add the key to `en-US.json`, then use `Loc.Bind(Strings.…)` (for
 `TextEl.Text`) or `Loc.Get`/`Loc.Format` (for a label read in `Render`) — never a literal.

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -41,6 +41,37 @@ static class TextSuite
         WaveCSpanTextChecks(strings);
         BoundSpansChecks(strings);
         GlyphAtlasUploadChecks();
+        ColorGlyphBakeChecks();
+    }
+
+    // Colour emoji (COLR/CPAL) bake decisions — the Windows GlyphRenderer is DirectWrite-bound, so the two rules it
+    // applies while baking a colour glyph's per-quad Colors live in the engine-free FluentGpu.Text.ColorGlyphBake and
+    // are pinned here. The replay contract they feed: a per-quad colour with A == 0 inherits the run colour.
+    static void ColorGlyphBakeChecks()
+    {
+        var palette = ColorF.FromRgba(0xF4, 0x90, 0x0C);   // a CPAL entry (the flame's orange)
+        var span = ColorF.FromRgba(0x20, 0x60, 0xFF);       // the enclosing span's tint
+        var inherit = ColorF.Transparent;                    // A == 0 ⇒ "inherit the run colour at replay" (a plain run)
+
+        // T-color-1: a FOREGROUND layer (palette index 0xFFFF) takes the span colour — which is the inherit sentinel
+        // for a plain run — and a palette layer keeps its CPAL colour whatever the span says.
+        ColorF fgSpan = ColorGlyphBake.LayerColor(foreground: true, palette, span);
+        ColorF fgPlain = ColorGlyphBake.LayerColor(foreground: true, palette, inherit);
+        ColorF palSpan = ColorGlyphBake.LayerColor(foreground: false, palette, span);
+        ColorF palPlain = ColorGlyphBake.LayerColor(foreground: false, palette, inherit);
+        Check("T-color-1 a foreground layer inherits the span colour and a palette layer overrides it",
+            fgSpan == span && fgPlain == inherit && palSpan == palette && palPlain == palette,
+            $"fg/span={fgSpan} fg/plain={fgPlain} pal/span={palSpan} pal/plain={palPlain}");
+
+        // T-color-2: the retain rule — an all-inherit list (a plain run, or an emoji made only of foreground layers)
+        // keeps the cached run at Colors = null; a single palette (or span) quad retains the whole list.
+        ReadOnlySpan<ColorF> allInherit = [inherit, inherit, inherit];
+        ReadOnlySpan<ColorF> onePalette = [inherit, palette, inherit];
+        ReadOnlySpan<ColorF> oneSpan = [span, inherit];
+        bool keepsNull = !ColorGlyphBake.RetainColors(allInherit) && !ColorGlyphBake.RetainColors(ReadOnlySpan<ColorF>.Empty);
+        bool retains = ColorGlyphBake.RetainColors(onePalette) && ColorGlyphBake.RetainColors(oneSpan);
+        Check("T-color-2 an all-inherit run retains no Colors array", keepsNull && retains,
+            $"allInherit={ColorGlyphBake.RetainColors(allInherit)} empty={ColorGlyphBake.RetainColors(ReadOnlySpan<ColorF>.Empty)} onePalette={ColorGlyphBake.RetainColors(onePalette)} oneSpan={ColorGlyphBake.RetainColors(oneSpan)}");
     }
 
     static void WaveCTextPipelineChecks(StringTable strings)
@@ -647,12 +678,6 @@ static class TextSuite
         return true;
     }
 
-    static void ClickAt(AppHost host, HeadlessWindow window, Point2 p)
-    {
-        window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
-        window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
-        host.RunFrame();
-    }
 
 
     sealed class BoundSpanRowsProbe : Component

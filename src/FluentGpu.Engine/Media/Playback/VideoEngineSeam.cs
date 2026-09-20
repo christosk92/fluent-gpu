@@ -80,6 +80,13 @@ public struct VideoEngineSnapshot
     public uint ErrorCode;
     /// <summary>The underlying HRESULT for the error, valid iff <see cref="VideoEngineFlags.Error"/> is set.</summary>
     public int ErrorHr;
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which FIRSTFRAMEREADY landed for the
+    /// current <see cref="SourceEpoch"/>; 0 until it does (or when the backend does not report it). The moment a
+    /// surface may drop its poster — an event, never a state guess.</summary>
+    public long FirstFrameTimestamp;
+    /// <summary>Media buffered ahead of the playhead, in ms; 0 when empty or not reported by this backend. What a seek
+    /// planner checks before it asks for a fetch, and what a scrub bar's loaded band starts from.</summary>
+    public long BufferedAheadMs;
 }
 
 /// <summary>Single-writer seqlock around one <see cref="VideoEngineSnapshot"/>. Publish: engine thread only, never

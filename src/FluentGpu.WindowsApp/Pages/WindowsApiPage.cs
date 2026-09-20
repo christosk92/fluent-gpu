@@ -63,6 +63,7 @@ sealed class WindowsApiPage : Component
             Embed.Comp(() => new MediaCard()),
             Embed.Comp(() => new DialogsCard()),
             Embed.Comp(() => new ShellCard()),
+            Embed.Comp(() => new NotifyIconCard()),
             Embed.Comp(() => new PowerCard()),
             Embed.Comp(() => new NetworkCard()),
             Embed.Comp(() => new StorageCard()),
@@ -84,6 +85,9 @@ static class WindowsApiLive
     public static IDisposable? NetworkSub;
     public static IDisposable? KeepAwake;
     public static IDisposable? PowerSub;
+    public static NotifyIcon? Tray;
+    // The tray card's UI-thread sink (the icon raises Activated on the UI thread from its own window's procedure).
+    public static Action<NotifyIconEvent, int, int>? TraySink;
 
     // PROCESS-GLOBAL event sinks. ToastNotifier.Default and PowerSession's static events live for the whole process, so
     // subscribing them per page-mount would stack handlers across navigations. Instead we attach ONE forwarder per
@@ -131,6 +135,9 @@ static class WindowsApiLive
         ActivationRedirectedSink = null;
         SuspendingSink = null;
         ResumedSink = null;
+        TraySink = null;
+        FluentGpu.FluentApp.SetWindowVisible(true);   // never leave a hidden gallery behind a disposed icon
+        Swap(ref Tray, null);
         Swap(ref Smtc, null);
         Swap(ref NetworkSub, null);
         Swap(ref KeepAwake, null);
@@ -858,6 +865,149 @@ sealed class ShellCard : Component
             JumpList.SetTasks(aumid: null,
                 new JumpTask("Play liked songs", exe, "fluentgpu-demo:play?list=liked"),
                 new JumpTask("Open gallery", exe, "fluentgpu-demo:hello?from=jumplist"));
+            """);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// (7b) Notification area — NotifyIcon: add/remove, tooltip, the native menu, and hide-the-window-to-the-tray.
+// The manual test for the engine's tray seams: Shell_NotifyIconW v4 events, the dark menu on a dark taskbar,
+// TaskbarCreated re-add (restart explorer), and FluentApp.SetWindowVisible parking the host while hidden.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+[SupportedOSPlatform("windows6.1")]
+sealed class NotifyIconCard : Component
+{
+    const int IdCaption = -1, IdShow = 1, IdTip = 2, IdRemove = 3;
+
+    public override Element Render()
+    {
+        var status = UseSignal("Add the icon, then right-click it in the notification area.");
+        var statusColor = UseSignal(WinApiUi.Info);
+        var log = UseSignal("—");
+        var lg = UseRef<EventLog?>(null);
+        lg.Value ??= new EventLog(log);
+        var tips = UseRef(0);
+
+        static string IconPath() => System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "AppIcon", "appicon.ico");
+
+        void Refresh(NotifyIcon icon)
+        {
+            icon.SetIcon(IconPath());   // auto-sized: the frame the taskbar DPI selects, reloaded when it changes
+        }
+
+        UseEffect(() =>
+        {
+            var l = lg.Value!;
+            WindowsApiLive.TraySink = (e, x, y) =>
+            {
+                if (WindowsApiLive.Tray is not { } icon) return;
+                l.Add($"{e} @ ({x},{y})  dpi={icon.TaskbarDpi} light={icon.TaskbarUsesLightTheme}");
+                switch (e)
+                {
+                    case NotifyIconEvent.Select:
+                    case NotifyIconEvent.KeySelect:
+                    case NotifyIconEvent.DoubleClick:
+                        FluentGpu.FluentApp.SetWindowVisible(true);
+                        break;
+                    case NotifyIconEvent.ContextMenu:
+                        ReadOnlySpan<NotifyMenuItem> rows =
+                        [
+                            new(IdCaption, "FluentGpu gallery", Enabled: false),
+                            NotifyMenuItem.Separator,
+                            new(IdShow, "Show gallery", Default: true),
+                            new(IdTip, "Change tooltip"),
+                            NotifyMenuItem.Separator,
+                            new(IdRemove, "Remove icon"),
+                        ];
+                        int id = icon.ShowMenu(rows, x, y);
+                        l.Add($"menu → {id}");
+                        if (id == IdShow) FluentGpu.FluentApp.SetWindowVisible(true);
+                        else if (id == IdTip) icon.SetTip($"FluentGpu gallery — tooltip #{++tips.Value}");
+                        else if (id == IdRemove) { FluentGpu.FluentApp.SetWindowVisible(true); icon.Hide(); }
+                        break;
+                    case NotifyIconEvent.Recreated:
+                    case NotifyIconEvent.ShellChanged:
+                        Refresh(icon);
+                        break;
+                }
+            };
+        }, WinApiUi.MountOnce);
+
+        NotifyIcon? Ensure()
+        {
+            if (WindowsApiLive.Tray is { } existing) return existing;
+            try
+            {
+                var icon = new NotifyIcon(Guid.Empty, "FluentGpu gallery");   // unsigned dev build → window + id identity
+                icon.Activated += (e, x, y) => WindowsApiLive.TraySink?.Invoke(e, x, y);
+                Refresh(icon);
+                WindowsApiLive.Swap(ref WindowsApiLive.Tray, icon);
+                return icon;
+            }
+            catch (Exception ex) { status.Value = "NotifyIcon unavailable: " + ex.Message; statusColor.Value = WinApiUi.Bad; return null; }
+        }
+
+        Action show = () =>
+        {
+            if (Ensure() is not { } icon) return;
+            bool shown = icon.Show();
+            status.Value = shown ? "Icon added — Windows 11 may put it behind the ˄ overflow arrow." : "The shell refused the icon (retried when explorer restarts).";
+            statusColor.Value = shown ? WinApiUi.Ok : WinApiUi.Warn;
+        };
+
+        Action hide = () =>
+        {
+            FluentGpu.FluentApp.SetWindowVisible(true);
+            WindowsApiLive.Tray?.Hide();
+            status.Value = "Icon removed.";
+            statusColor.Value = WinApiUi.Info;
+        };
+
+        Action hideWindow = () =>
+        {
+            if (Ensure() is not { } icon || !icon.Show())
+            {
+                status.Value = "No icon to come back through — the window stays.";
+                statusColor.Value = WinApiUi.Warn;
+                return;
+            }
+            FluentGpu.FluentApp.SetWindowVisible(false);   // parked like minimized; click the icon to bring it back
+            status.Value = "Window hidden — click the tray icon to bring it back.";
+            statusColor.Value = WinApiUi.Info;
+        };
+
+        var form = new BoxEl
+        {
+            Direction = 1, Gap = 12f,
+            Children =
+            [
+                Body("A notification-area icon on its own hidden callback window: left click shows the gallery, right click opens a native menu (dark on a dark taskbar), and restarting explorer re-adds it.").Secondary() with { MaxWidth = 460f },
+                new BoxEl
+                {
+                    Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        Button.Accent("Show icon", show),
+                        Button.Standard("Remove icon", hide),
+                        Button.Standard("Hide window to tray", hideWindow),
+                    ],
+                },
+            ],
+        };
+
+        return ExampleCard.Build("Notification area icon",
+            form,
+            output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
+            code: """
+            var icon = new NotifyIcon(Guid.Empty, "FluentGpu gallery");
+            icon.SetIcon(icoPath);                       // the frame the taskbar DPI selects
+            icon.Activated += (e, x, y) =>
+            {
+                if (e == NotifyIconEvent.Select) FluentApp.SetWindowVisible(true);
+                if (e == NotifyIconEvent.ContextMenu) Run(icon.ShowMenu(rows, x, y));
+            };
+            icon.Show();
+            FluentApp.SetWindowVisible(false);          // hidden: the host parks exactly as if minimized
             """);
     }
 }

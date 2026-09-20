@@ -28,9 +28,25 @@
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
     <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
-    <!-- M5: the protected-video DRM types (DrmLicenseBridge / ProtectedMediaSession / ProtectedMediaBackend) live in
-         WindowsApi; the routing + relay tests reference them directly. -->
+    <!-- M5: the protected-video types (ProtectedVideoRuntime + its license relay / LicenseCachePolicy / ProtectedMediaSession /
+         ProtectedMediaBackend / DashManifestParser) live in WindowsApi, whose internals are visible to this assembly; the
+         routing, relay, cache and session tests reference them directly. -->
     <ProjectReference Include="..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+  </ItemGroup>
+
+  <!-- Video fixtures (Fixtures/video/README.md) land under $(OutDir)Fixtures\video\; tests resolve them from
+       AppContext.BaseDirectory. -->
+  <ItemGroup>
+    <None Update="Fixtures\video\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- CencDemuxTests call FgPrProbeFile in FluentGpu.PlayReady.Native.dll. Copied beside the test assembly ONLY when it has
+       been built (ops/tools/playready-native/build.cmd <arch>, or any build of FluentGpu.WindowsApp); a box without it
+       still builds and those tests skip. The architecture is the test HOST's (PlayReadyNative.props), shared with the
+       gallery so the two can never disagree. -->
+  <Import Project="..\..\ops\tools\playready-native\PlayReadyNative.props" />
+  <ItemGroup Condition="Exists('$(_PlayReadyNativeDll)')">
+    <None Include="$(_PlayReadyNativeDll)" Link="FluentGpu.PlayReady.Native.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
 </Project>

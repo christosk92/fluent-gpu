@@ -792,18 +792,27 @@ have deliberately different reach:
 - **FILL-ONLY** (`HoverFill`/`PressedFill` with no reveal and no scale) — never cascades; it owns no
   `InteractionAnim` row and tracks the real pointer.
 
-The **boundary** is `HandlerMask & (ClickBit | PointerBit | PressedBit)` — "does this node own its own interaction
-scope" — and it gates the scale leg *and* the recursion, never the reveal leg. Hover and press apply the **same**
-predicate (press formerly used a looser bare interact-row gate, so the two could disagree about who was driven), and
-the reconciler's lazy-affordance mount seed applies it too — otherwise a button that mounts or re-keys inside a hovered
-card lights up with no pointer edge at all. `SceneRecorder`'s record-time `nodeInteractive` test uses the same mask.
+The **boundary** is `HandlerMask & (ClickBit | PointerBit | PressedBit)` **and not `HoverScopeTransparentBit`** —
+"does this node own its own interaction scope" — and it gates the scale leg *and* the recursion, never the reveal leg.
+`BoxEl.HoverScopeTransparent` (`InteractionInfo.HoverScopeTransparentBit = 1<<20`, a discriminator owned by
+`scene-memory.md`) marks a pointer **listener** that is not a scope — the ToolTip service wrapper, whose four pointer
+handlers give it `PointerBit`: the cascade recurses through it, the reconciler's lazy-affordance **mount seed**
+(`MountsInsideHoveredScope`) skips it and reads the first non-transparent interactive ancestor, and `SetHover(node,
+false)` on a **reveal** whose nearest real scope is still `Hovered | HoverWithin` **re-resolves to on** (the pointer
+left a card's play FAB back onto the card; the reveal is the card's affordance). Hit-testing and handler delivery are
+unchanged. Hover and press apply the **same** predicate (press formerly used a looser bare interact-row gate, so the
+two could disagree about who was driven), and the mount seed applies it too — otherwise a button that mounts or
+re-keys inside a hovered card lights up with no pointer edge at all. `SceneRecorder`'s record-time `nodeInteractive`
+test uses the plain interactive mask (a transparent wrapper's own eased `HoverT` still reaches fill-only children).
 
 Both cascades formerly computed the boundary and then drove the child **anyway**, stopping only *beneath* it, so every
 nested control carrying a scale grew when any interactive ancestor was hovered and dipped when it was pressed — a
 container's whole button cluster responding to a gesture aimed at the container. A node carrying **both** a reveal and a
 scale is driven (the reveal leg wins): opting into a container-driven reveal *is* the declaration that the container
 drives it, which is why a reveal-and-zoom affordance keeps working unchanged. Gated by VerticalSlice `58b` (hover),
-`58c` (press, superseding its own earlier assertion that a boundary is driven) and `58d` (the mount seed).
+`58c` (press, superseding its own earlier assertion that a boundary is driven), `58d` (the mount seed), `58e`/`58f`
+(the transparent listener: eager cascade + lazy seed), `58g` (the un-hover re-resolve) and `58h` (a real
+`ToolTip.WrapStable` FAB under `AppHost`).
 
 ```csharp
 // POD seed passed to AnimEngine.Seed — picks the mode; stackalloc-friendly, [InlineArray] for multi-channel.

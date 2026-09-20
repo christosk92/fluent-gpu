@@ -169,4 +169,30 @@ public sealed class MediaPlayerElementLogicTests
         Assert.Equal("0:00", MediaPlayerElement.FormatTime(TimeSpan.FromSeconds(-5)));
         Assert.Equal("0:00", MediaPlayerElement.FormatTime(TimeSpan.MinValue));
     }
+
+    [Fact]
+    public void VideoAreaMinHeight_Drops_on_host_or_overlay_fullscreen()
+    {
+        Assert.Equal(160f, MediaPlayerElement.VideoAreaMinHeight(presentingFullscreen: false, decorative: false));
+        Assert.Equal(0f, MediaPlayerElement.VideoAreaMinHeight(presentingFullscreen: true, decorative: false));
+        Assert.Equal(0f, MediaPlayerElement.VideoAreaMinHeight(presentingFullscreen: false, decorative: true));
+    }
+
+    [Fact]
+    public void PumpClampsOverflow_skips_crop_so_UniformToFill_keeps_overflow()
+    {
+        Assert.True(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Uniform));
+        Assert.True(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Fill));
+        Assert.True(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Native));
+        Assert.False(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.UniformToFill));
+    }
+
+    [Fact]
+    public void ClampUniformToViewport_does_not_run_for_crop_overflow()
+    {
+        var area = new RectF(0, 0, 320, 180);
+        var crop = MediaPlayerElement.FitVideoRect(area, new SizeI(100, 50), VideoAspectMode.UniformToFill, 0);
+        Assert.True(crop.W > area.W || crop.H > area.H);
+        Assert.False(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.UniformToFill));
+    }
 }

@@ -7,12 +7,15 @@
 // SetSource hard-wedges the PMP protected pipeline. Microsoft's sample instead demuxes fMP4/CENC IN-APP and hands the
 // engine already-encrypted samples with the CENC metadata the CDM needs to decrypt. This is that source.
 //
-// This header is #included from Helper.cpp (FG_UWP build) AFTER all the shared helpers it leans on are defined:
-//   LogLine, HttpGetBytes, CreateAndPrepareCdm, MediaEngineProtectionManager, EmeNeedKeyNotify, MediaEngineNotify,
-//   CdmSessionCallbacks, HandleCdmKeyMessage, QueryCdmKeyStatus, WriteCoord, StopRequested, and the g_* CDM globals.
+// This header is #included from PrInternal.h AFTER the platform headers (Media Foundation, C++/WinRT) and the log
+// entry points (`LogLine`, `fgpr::RaiseLog`) are declared. It pulls SegmentStore.h in right after `namespace cenc`
+// closes: the streams' time-window retention, their buffered ranges and CanSeekTo are the store's algorithms applied to
+// each stream's sample list. Nothing here depends on the runtime, which is what lets FgPrProbeFile run ParseInit +
+// ParseMoof on a box with no CDM, no D3D device and no network.
 //
-// Scope of the demuxer (H.264 video, single track): moov{trak/mdia(mdhd)/minf/stbl/stsd(encv|avc1 → avcC + sinf →
-// schm(cenc/cbcs)/schi/tenc)}, pssh (PlayReady init data), and per media segment moof{traf/tfhd/trun/senc}+mdat.
+// Scope of the demuxer (H.264 video or AAC audio, ONE track per InitInfo): moov{mvhd, mvex/trex, pssh (PlayReady init
+// data), trak{tkhd, edts/elst, mdia(mdhd)/minf/stbl/stsd(encv|avc1|avc3 → avcC | enca|mp4a → esds, + sinf →
+// schm(cenc/cbcs)/schi/tenc)}}, and per fragment moof{traf{tfhd, tfdt, trun…, senc | saiz+saio}} with its sample data.
 
 #pragma once
 
@@ -26,10 +29,6 @@
 #include <map>        // per-stream ITA cache (a single slot thrashes once there are two streams)
 #include <set>        // announced / ended stream ids
 #include <iterator>   // make_move_iterator — appending fetched samples without copying them
-
-// ── MF_MT_PROTECTED is not in the 26100 SDK headers; its documented GUID (media type "content is protected"). ──
-// {5FA1B54B-B61A-4d76-A99B-8FD7F0EA8F55}
-static const GUID FG_MF_MT_PROTECTED = { 0x5FA1B54B, 0xB61A, 0x4d76, { 0xA9, 0x9B, 0x8F, 0xD7, 0xF0, 0xEA, 0x8F, 0x55 } };
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Big-endian box reader helpers.
@@ -74,13 +73,29 @@ static bool FindBox(const uint8_t* data, size_t len, uint32_t type, Box& out)
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Parsed init-segment info.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// Which kind of track an init segment described. Spotify addresses every representation as its own single-track file
-// (video profile N, audio profile M), so one InitInfo == one track and there is no multi-track-per-file case to handle.
+// Which kind of track an InitInfo describes. Spotify addresses every representation as its own single-track file (video
+// profile N, audio profile M), but a self-contained fragmented MP4 (the Chromium vectors FgPrProbeFile reads) muxes a
+// video and an audio `trak` in ONE moov and interleaves their `traf`s in every `moof`. So one InitInfo is ONE track,
+// chosen by ParseInit, and the media parser follows that track's `track_ID` through the fragments.
 enum class TrackKind { Video, Audio };
+
+/// Which track ParseInit picks out of a moov. `Any` prefers the first usable video track and falls back to the first
+/// usable audio track (what a probe of a muxed file wants); a representation's init segment asks for its own kind.
+enum class TrackPick { Any, Video, Audio };
 
 struct InitInfo
 {
     TrackKind kind = TrackKind::Video;
+    uint32_t trackId = 0;              // tkhd track_ID — which `traf` of a moof belongs to this track (0 = the only one)
+    // The edit list's shift, in MEDIA timescale ticks: presentation time = decode time + composition offset - this.
+    // An encoder with B-frames delays every composition time by the reorder depth and writes the same amount as the
+    // first edit's media_time, so the first frame PRESENTS at 0 (ffmpeg: 2 frames; AAC: its priming samples). Ignoring
+    // it put the gate clip's keyframes at 66, 2066, … ms — off the manifest's timeline, which is the one the seek planner
+    // and the segment grid (index = ms / segmentLengthMs) are written against.
+    int64_t editOffsetTicks = 0;
+    // mvex/trex defaults for this track: the fallback when neither tfhd nor trun carries a sample's duration, size or
+    // flags (a muxer that states them once per track, as the Chromium vectors do).
+    uint32_t defaultSampleDuration = 0, defaultSampleSize = 0, defaultSampleFlags = 0;
     uint32_t codec4cc = 0;             // original sample format (e.g. 'avc1'/'avc3'/'mp4a') from frma, else stsd entry type
     std::vector<uint8_t> avcC;         // raw AVCDecoderConfigurationRecord (from the 'avcC' box)
     std::vector<uint8_t> spspps;       // SPS+PPS as Annex-B (for MF_MT_MPEG_SEQUENCE_HEADER)
@@ -277,44 +292,134 @@ static void ParseStsd(const Box& stsd, InitInfo& info)
     });
 }
 
-// Parse the whole init segment (moov + any pssh).
-static bool ParseInit(const std::vector<uint8_t>& data, InitInfo& info)
+/// The timescale field of an `mvhd` / `mdhd` payload (version 1 widens creation + modification time to 64 bits), or 0
+/// when the box is too short to hold it.
+static uint32_t HeaderTimescale(const Box& box)
+{
+    if (box.payloadLen < 4) return 0;
+    const size_t at = box.payload[0] == 1 ? 20 : 12;
+    return box.payloadLen >= at + 4 ? rd32(box.payload + at) : 0;
+}
+
+/// The edit list's presentation shift for one trak, in media ticks (see InitInfo::editOffsetTicks). Only what a
+/// fragmented stream uses is honoured: leading EMPTY edits (media_time = -1, a presentation delay stated in the MOVIE
+/// timescale) and the first media edit's start. Every value is saturated — an `elst` is container data from a CDN, and a
+/// hostile 64-bit media_time must yield a wrong clock, never an overflow.
+static int64_t EditOffsetTicks(const Box& trak, uint32_t movieTimescale, uint64_t mediaTimescale)
+{
+    Box edts, elst;
+    if (!FindBox(trak.payload, trak.payloadLen, fourcc("edts"), edts) ||
+        !FindBox(edts.payload, edts.payloadLen, fourcc("elst"), elst) || elst.payloadLen < 8)
+        return 0;
+    static constexpr int64_t kLimit = (int64_t)1 << 62;
+    const uint8_t version = elst.payload[0];
+    const uint32_t count = rd32(elst.payload + 4);
+    const size_t entrySize = version == 1 ? 20 : 12;
+    int64_t delayTicks = 0;
+    size_t off = 8;
+    for (uint32_t i = 0; i < count && off + entrySize <= elst.payloadLen; i++, off += entrySize)
+    {
+        const uint8_t* e = elst.payload + off;
+        const uint64_t segmentDuration = version == 1 ? rd64(e) : rd32(e);
+        const int64_t mediaTime = version == 1 ? (int64_t)rd64(e + 8) : (int64_t)(int32_t)rd32(e + 4);
+        if (mediaTime == -1)
+        {
+            if (movieTimescale == 0) continue;
+            const uint64_t whole = segmentDuration / movieTimescale;
+            const uint64_t part = segmentDuration % movieTimescale;
+            if (whole > (uint64_t)kLimit / (mediaTimescale ? mediaTimescale : 1)) return 0;
+            delayTicks += (int64_t)(whole * mediaTimescale + (part * mediaTimescale) / movieTimescale);
+            if (delayTicks > kLimit) return 0;
+            continue;
+        }
+        if (mediaTime < 0) return 0;
+        return (mediaTime > kLimit ? kLimit : mediaTime) - delayTicks;
+    }
+    return 0;
+}
+
+/// The mvex/trex defaults of one track.
+struct TrexDefaults { uint32_t trackId = 0, duration = 0, size = 0, flags = 0; };
+
+/// Parse ONE trak into `info`. True when it is a usable H.264 video or AAC audio track.
+static bool ParseTrak(const Box& trak, uint32_t movieTimescale, const std::vector<TrexDefaults>& trex, InitInfo& info)
+{
+    Box tkhd;
+    if (FindBox(trak.payload, trak.payloadLen, fourcc("tkhd"), tkhd) && tkhd.payloadLen >= 4)
+    {
+        const size_t at = tkhd.payload[0] == 1 ? 20 : 12;   // version/flags + creation + modification
+        if (tkhd.payloadLen >= at + 4) info.trackId = rd32(tkhd.payload + at);
+    }
+    Box mdia, mdhd, minf, stbl, stsd;
+    if (!FindBox(trak.payload, trak.payloadLen, fourcc("mdia"), mdia)) return false;
+    if (FindBox(mdia.payload, mdia.payloadLen, fourcc("mdhd"), mdhd)) info.timescale = HeaderTimescale(mdhd);
+    if (!FindBox(mdia.payload, mdia.payloadLen, fourcc("minf"), minf) ||
+        !FindBox(minf.payload, minf.payloadLen, fourcc("stbl"), stbl) ||
+        !FindBox(stbl.payload, stbl.payloadLen, fourcc("stsd"), stsd))
+        return false;
+    ParseStsd(stsd, info);
+    // Validate against the kind actually found: a video track needs its avcC, an audio track needs its
+    // AudioSpecificConfig + sample rate. Validating audio against the VIDEO rule is how an audio init segment gets
+    // reported as "no usable sample entry" even when it parsed perfectly.
+    const bool ok = info.kind == TrackKind::Video ? (info.width > 0 && !info.avcC.empty())
+                                                  : (info.sampleRate > 0 && !info.asc.empty());
+    if (!ok) return false;
+    if (info.kind == TrackKind::Video) ExtractSpsPps(info.avcC, info);
+    if (info.timescale == 0) info.timescale = info.kind == TrackKind::Audio ? 48000 : 90000;
+    info.editOffsetTicks = EditOffsetTicks(trak, movieTimescale, info.timescale);
+    for (auto const& t : trex)
+    {
+        if (t.trackId != info.trackId) continue;
+        info.defaultSampleDuration = t.duration;
+        info.defaultSampleSize = t.size;
+        info.defaultSampleFlags = t.flags;
+        break;
+    }
+    return true;
+}
+
+/// Parse an init segment (moov + any pssh) into the ONE track `pick` asks for. Every trak is parsed into its own
+/// InitInfo — merging them (what this once did) left a muxed file's video described by its audio trak's sample entry
+/// and timescale, so a probe of an av file reported an audio track and no keyframes. `info` is written only on success.
+static bool ParseInit(const std::vector<uint8_t>& data, InitInfo& info, TrackPick pick = TrackPick::Any)
 {
     Box moov;
     if (!FindBox(data.data(), data.size(), fourcc("moov"), moov)) return false;
-    // Collect pssh boxes at moov level (PlayReady init data for GenerateRequest).
+    std::vector<uint8_t> pssh;          // moov-level pssh boxes: the PlayReady init data for GenerateRequest
+    uint32_t movieTimescale = 0;
+    std::vector<TrexDefaults> trex;
     ForEachBox(moov.payload, moov.payloadLen, [&](const Box& b) {
-        if (b.type == fourcc("pssh")) info.pssh.insert(info.pssh.end(), b.boxStart, b.boxStart + b.boxLen);
+        if (b.type == fourcc("pssh")) pssh.insert(pssh.end(), b.boxStart, b.boxStart + b.boxLen);
+        else if (b.type == fourcc("mvhd")) movieTimescale = HeaderTimescale(b);
+        else if (b.type == fourcc("mvex"))
+            ForEachBox(b.payload, b.payloadLen, [&](const Box& t) {
+                // trex: version/flags(4) track_ID(4) default_sample_description_index(4) duration(4) size(4) flags(4)
+                if (t.type != fourcc("trex") || t.payloadLen < 24) return;
+                trex.push_back(TrexDefaults{ rd32(t.payload + 4), rd32(t.payload + 12), rd32(t.payload + 16), rd32(t.payload + 20) });
+            });
     });
-    // trak → mdia → (mdhd timescale) + minf → stbl → stsd.
-    bool ok = false;
+
+    bool found = false, haveFallback = false;
+    InitInfo chosen, fallback;
     ForEachBox(moov.payload, moov.payloadLen, [&](const Box& trak) {
-        if (trak.type != fourcc("trak")) return;
-        Box mdia;
-        if (!FindBox(trak.payload, trak.payloadLen, fourcc("mdia"), mdia)) return;
-        Box mdhd;
-        if (FindBox(mdia.payload, mdia.payloadLen, fourcc("mdhd"), mdhd) && mdhd.payloadLen >= 20)
+        if (found || trak.type != fourcc("trak")) return;
+        InitInfo candidate;
+        if (!ParseTrak(trak, movieTimescale, trex, candidate)) return;
+        const bool video = candidate.kind == TrackKind::Video;
+        if ((pick == TrackPick::Video && !video) || (pick == TrackPick::Audio && video)) return;
+        if (pick == TrackPick::Any && !video)
         {
-            uint8_t v = mdhd.payload[0];
-            info.timescale = v == 1 ? rd32(mdhd.payload + 4 + 16) : rd32(mdhd.payload + 4 + 8);
+            if (!haveFallback) { fallback = std::move(candidate); haveFallback = true; }
+            return;
         }
-        Box minf, stbl, stsd;
-        if (FindBox(mdia.payload, mdia.payloadLen, fourcc("minf"), minf) &&
-            FindBox(minf.payload, minf.payloadLen, fourcc("stbl"), stbl) &&
-            FindBox(stbl.payload, stbl.payloadLen, fourcc("stsd"), stsd))
-        {
-            ParseStsd(stsd, info);
-            // Validate against the kind actually found: a video track needs its avcC, an audio track needs its
-            // AudioSpecificConfig + sample rate. Validating audio against the VIDEO rule is how an audio init segment
-            // gets reported as "no usable sample entry" even when it parsed perfectly.
-            ok = info.kind == TrackKind::Video
-                     ? (info.width > 0 && !info.avcC.empty())
-                     : (info.sampleRate > 0 && !info.asc.empty());
-        }
+        chosen = std::move(candidate);
+        found = true;
     });
-    if (ok && info.kind == TrackKind::Video) ExtractSpsPps(info.avcC, info);
-    if (info.timescale == 0) info.timescale = info.kind == TrackKind::Audio ? 48000 : 90000;
-    return ok;
+    if (!found && haveFallback) { chosen = std::move(fallback); found = true; }
+    if (!found) return false;
+    chosen.pssh = std::move(pssh);
+    info = std::move(chosen);
+    return true;
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -368,181 +473,322 @@ static bool ConvertAvccToAnnexBInPlace(Sample& sample, uint8_t nalLenSize)
     return off == sample.data.size();
 }
 
-// Parse one media segment (moof + mdat) and append its samples. runningDecodeTicks tracks decode time across segments.
-static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, std::vector<Sample>& out, uint64_t& runningDecodeTicks)
+/// One sample's CENC auxiliary information: its IV and its clear/encrypted byte runs.
+struct AuxEntry { std::vector<uint8_t> iv; std::vector<Subsample> subs; };
+
+/// Read one sample's aux entry at `p` (advancing it): `ivSize` IV bytes, then — when `withSubsamples` — a u16 run count
+/// and that many {u16 clear, u32 encrypted} runs. False when the entry does not fit before `end`.
+static bool ReadAuxEntry(const uint8_t*& p, const uint8_t* end, uint8_t ivSize, bool withSubsamples, AuxEntry& e)
 {
-    // Locate moof + mdat at the top level (record moof's absolute start for trun data_offset base).
-    Box moof{}, mdat{}; bool haveMoof = false, haveMdat = false; size_t moofAbs = 0;
-    ForEachBox(seg.data(), seg.size(), [&](const Box& b) {
-        if (b.type == fourcc("moof") && !haveMoof) { moof = b; haveMoof = true; moofAbs = (size_t)(b.boxStart - seg.data()); }
-        else if (b.type == fourcc("mdat") && !haveMdat) { mdat = b; haveMdat = true; }
+    if ((size_t)(end - p) < ivSize) return false;
+    e.iv.assign(p, p + ivSize);
+    p += ivSize;
+    if (!withSubsamples) return true;
+    if (end - p < 2) return false;
+    const uint16_t runs = rd16(p);
+    p += 2;
+    if ((size_t)(end - p) < (size_t)runs * 6) return false;
+    e.subs.reserve(runs);
+    for (uint16_t r = 0; r < runs; r++, p += 6) e.subs.push_back(Subsample{ rd16(p), rd32(p + 2) });
+    return true;
+}
+
+/// The traf's per-sample encryption data. `senc` (inline, what every DASH packager writes) wins; otherwise the
+/// `saiz` sizes + `saio` offsets point at the same records elsewhere in the file (the older CENC layout, and what
+/// Chromium's `bear-*-cenc` vectors use). `base` is the traf's data base (saio offsets are relative to it, as data offsets
+/// are). Unreadable aux data yields fewer entries, never a read past the buffer: the samples it misses are delivered with
+/// the tenc defaults and the decryptor, not this parser, reports them.
+static void ReadTrafAuxInfo(const uint8_t* file, size_t fileLen, const Box& traf, size_t base, const InitInfo& info,
+                            size_t sampleCount, std::vector<AuxEntry>& aux)
+{
+    const uint8_t ivSize = info.perSampleIvSize;
+    Box senc;
+    if (FindBox(traf.payload, traf.payloadLen, fourcc("senc"), senc) && senc.payloadLen >= 8)
+    {
+        const bool withSubsamples = (rd32(senc.payload) & 0x000002) != 0;
+        const uint32_t count = rd32(senc.payload + 4);
+        const uint8_t* p = senc.payload + 8;
+        const uint8_t* end = senc.payload + senc.payloadLen;
+        for (uint32_t i = 0; i < count && i < sampleCount; i++)
+        {
+            AuxEntry e;
+            if (!ReadAuxEntry(p, end, ivSize, withSubsamples, e)) break;
+            aux.push_back(std::move(e));
+        }
+        return;
+    }
+
+    Box saiz, saio;
+    if (!FindBox(traf.payload, traf.payloadLen, fourcc("saiz"), saiz) || saiz.payloadLen < 9 ||
+        !FindBox(traf.payload, traf.payloadLen, fourcc("saio"), saio) || saio.payloadLen < 8)
+        return;
+    // saiz: version/flags(4) [aux_info_type(4) aux_info_type_parameter(4) when flags & 1] default_size(1) count(4) [sizes]
+    const uint8_t* zp = saiz.payload + 4;
+    const uint8_t* zend = saiz.payload + saiz.payloadLen;
+    if (rd32(saiz.payload) & 0x000001) zp += 8;
+    if (zend - zp < 5) return;
+    const uint8_t defaultSize = zp[0];
+    uint32_t count = rd32(zp + 1);
+    zp += 5;
+    if (defaultSize == 0 && (size_t)(zend - zp) < count) count = (uint32_t)(zend - zp);
+    // saio: version/flags(4) [type(4) parameter(4) when flags & 1] entry_count(4) offsets (u32, or u64 for version 1)
+    const uint8_t* op = saio.payload + 4;
+    const uint8_t* oend = saio.payload + saio.payloadLen;
+    if (rd32(saio.payload) & 0x000001) op += 8;
+    if (oend - op < 4) return;
+    const uint32_t offsets = rd32(op);
+    op += 4;
+    const size_t offsetSize = saio.payload[0] == 1 ? 8 : 4;
+    if (offsets != 1 || (size_t)(oend - op) < offsetSize) return;   // one contiguous run per traf: every packager's layout
+    const uint64_t rel = offsetSize == 8 ? rd64(op) : rd32(op);
+    if (rel > fileLen || base > fileLen - rel) return;
+    const uint8_t* p = file + base + rel;
+    const uint8_t* end = file + fileLen;
+    for (uint32_t i = 0; i < count && i < sampleCount; i++)
+    {
+        const uint8_t size = defaultSize ? defaultSize : zp[i];
+        if ((size_t)(end - p) < size) break;
+        const uint8_t* recordEnd = p + size;
+        AuxEntry e;
+        if (!ReadAuxEntry(p, recordEnd, ivSize, size > ivSize, e)) break;
+        p = recordEnd;
+        aux.push_back(std::move(e));
+    }
+}
+
+// Parse ONE movie fragment (a `moof` and the sample data its runs point at, anywhere in `file`) and append this track's
+// samples. runningDecodeTicks tracks decode time across fragments (tfdt resets it). `outKeyframeMs`, when supplied,
+// receives the presentation time (ms) of every VIDEO sync sample — the per-session keyframe table (SegmentStore.h) the
+// seek planner reads through FgPrSessionGetKeyframes.
+//
+// What a fragment can hold and this reads (ISO/IEC 14496-12 §8.8):
+//   * several `traf`s — a muxed file interleaves its tracks in one moof; this track's is the one whose tfhd track_ID
+//     matches the init's tkhd (the only traf when the init did not say, or the representation renumbered its track);
+//   * several `trun`s per traf — each continues the previous one's data unless it states its own data_offset;
+//   * sample duration / size / flags from the trun, else the tfhd defaults, else the init's trex defaults;
+//   * the data base: tfhd base_data_offset (file-relative) when present, else the moof's first byte for EVERY traf (the
+//     reading every muxer writes and Chromium parses; default-base-is-moof says the same thing explicitly);
+//   * encryption records inline (`senc`) or through `saiz`/`saio`.
+// Every count and offset is container data from a CDN: each one is bounded by the bytes that actually hold it.
+static int ParseMoof(const uint8_t* file, size_t fileLen, const Box& moof, const InitInfo& info, std::vector<Sample>& out,
+                     uint64_t& runningDecodeTicks, std::vector<int64_t>* outKeyframeMs)
+{
+    const size_t moofAbs = (size_t)(moof.boxStart - file);
+
+    Box traf{}, firstTraf{};
+    bool haveTraf = false;
+    int trafCount = 0;
+    ForEachBox(moof.payload, moof.payloadLen, [&](const Box& b) {
+        if (b.type != fourcc("traf")) return;
+        if (trafCount++ == 0) firstTraf = b;
+        if (haveTraf) return;
+        Box tfhd;
+        if (!FindBox(b.payload, b.payloadLen, fourcc("tfhd"), tfhd) || tfhd.payloadLen < 8) return;
+        if (info.trackId == 0 || rd32(tfhd.payload + 4) == info.trackId) { traf = b; haveTraf = true; }
     });
-    if (!haveMoof || !haveMdat) return 0;
+    if (!haveTraf)
+    {
+        if (trafCount != 1) return 0;
+        traf = firstTraf;
+    }
 
-    Box traf;
-    if (!FindBox(moof.payload, moof.payloadLen, fourcc("traf"), traf)) return 0;
-
-    // tfhd — defaults + base offset flags.
-    uint32_t defSampleDur = 0, defSampleSize = 0, defSampleFlags = 0;
-    bool defaultBaseIsMoof = false; uint64_t baseDataOffset = 0; bool haveBaseDataOffset = false;
+    // tfhd — defaults + the data base.
+    uint32_t defSampleDur = info.defaultSampleDuration, defSampleSize = info.defaultSampleSize,
+             defSampleFlags = info.defaultSampleFlags;
+    size_t base = moofAbs;
     Box tfhd;
     if (FindBox(traf.payload, traf.payloadLen, fourcc("tfhd"), tfhd) && tfhd.payloadLen >= 8)
     {
-        uint32_t flags = rd32(tfhd.payload) & 0x00FFFFFF;
-        const uint8_t* p = tfhd.payload + 8; // skip version/flags(4) + track_ID(4)
-        if (flags & 0x000001) { baseDataOffset = rd64(p); haveBaseDataOffset = true; p += 8; }
-        if (flags & 0x000002) { p += 4; } // sample_description_index
-        if (flags & 0x000008) { defSampleDur = rd32(p); p += 4; }
-        if (flags & 0x000010) { defSampleSize = rd32(p); p += 4; }
-        if (flags & 0x000020) { defSampleFlags = rd32(p); p += 4; }
-        defaultBaseIsMoof = (flags & 0x020000) != 0;
+        const uint32_t flags = rd32(tfhd.payload) & 0x00FFFFFF;
+        const uint8_t* p = tfhd.payload + 8;   // version/flags(4) + track_ID(4)
+        const uint8_t* end = tfhd.payload + tfhd.payloadLen;
+        auto take = [&](size_t n) { if ((size_t)(end - p) < n) return false; p += n; return true; };
+        if (flags & 0x000001)
+        {
+            if (!take(8)) return 0;
+            const uint64_t o = rd64(p - 8);
+            if (o >= fileLen) return 0;
+            base = (size_t)o;
+        }
+        if ((flags & 0x000002) && !take(4)) return 0;                                   // sample_description_index
+        if (flags & 0x000008) { if (!take(4)) return 0; defSampleDur = rd32(p - 4); }
+        if (flags & 0x000010) { if (!take(4)) return 0; defSampleSize = rd32(p - 4); }
+        if (flags & 0x000020) { if (!take(4)) return 0; defSampleFlags = rd32(p - 4); }
     }
 
-    // tfdt — base media decode time (optional).
+    // tfdt — the base media decode time of this fragment (optional: without it decode time continues).
     Box tfdt;
     if (FindBox(traf.payload, traf.payloadLen, fourcc("tfdt"), tfdt) && tfdt.payloadLen >= 8)
-        runningDecodeTicks = tfdt.payload[0] == 1 ? rd64(tfdt.payload + 4) : rd32(tfdt.payload + 4);
-
-    // trun — per-sample sizes/durations/flags/composition offsets.
-    Box trun;
-    if (!FindBox(traf.payload, traf.payloadLen, fourcc("trun"), trun) || trun.payloadLen < 8) return 0;
-    uint32_t trFlags = rd32(trun.payload) & 0x00FFFFFF;
-    uint32_t sampleCount = rd32(trun.payload + 4);
-    const uint8_t* tp = trun.payload + 8;
-    int32_t dataOffset = 0; bool haveDataOffset = false;
-    if (trFlags & 0x000001) { dataOffset = (int32_t)rd32(tp); tp += 4; haveDataOffset = true; }
-    uint32_t firstSampleFlags = 0; bool haveFirstFlags = false;
-    if (trFlags & 0x000004) { firstSampleFlags = rd32(tp); tp += 4; haveFirstFlags = true; }
-
-    // senc — per-sample IVs + subsample mapping (inline aux info).
-    struct SencEntry { std::vector<uint8_t> iv; std::vector<Subsample> subs; };
-    std::vector<SencEntry> senc;
-    Box sencBox;
-    bool haveSenc = FindBox(traf.payload, traf.payloadLen, fourcc("senc"), sencBox);
-    if (haveSenc && sencBox.payloadLen >= 8)
     {
-        uint32_t sflags = rd32(sencBox.payload) & 0x00FFFFFF;
-        uint32_t count = rd32(sencBox.payload + 4);
-        const uint8_t* sp = sencBox.payload + 8;
-        const uint8_t* send = sencBox.payload + sencBox.payloadLen;
-        uint8_t ivSize = info.perSampleIvSize ? info.perSampleIvSize : 0;
-        for (uint32_t i = 0; i < count && sp <= send; i++)
-        {
-            SencEntry e;
-            if (ivSize > 0) { if (sp + ivSize > send) break; e.iv.assign(sp, sp + ivSize); sp += ivSize; }
-            if (sflags & 0x000002)
-            {
-                if (sp + 2 > send) break;
-                uint16_t subCount = rd16(sp); sp += 2;
-                for (uint16_t s = 0; s < subCount && sp + 6 <= send; s++)
-                {
-                    Subsample ss; ss.clearBytes = rd16(sp); ss.encBytes = rd32(sp + 2); sp += 6;
-                    e.subs.push_back(ss);
-                }
-            }
-            senc.push_back(std::move(e));
-        }
+        if (tfdt.payload[0] == 1) { if (tfdt.payloadLen >= 12) runningDecodeTicks = rd64(tfdt.payload + 4); }
+        else runningDecodeTicks = rd32(tfdt.payload + 4);
     }
 
-    // Sample data base: default-base-is-moof => moof start; else explicit base-data-offset; else 0 (segment-relative).
-    size_t base = defaultBaseIsMoof ? moofAbs : (haveBaseDataOffset ? (size_t)baseDataOffset : moofAbs);
-    size_t cursor = base + (haveDataOffset ? (size_t)(int64_t)dataOffset : 0);
+    // How many samples the runs declare (bounded by the bytes that carry them), so the aux reader never over-reads.
+    size_t declared = 0;
+    ForEachBox(traf.payload, traf.payloadLen, [&](const Box& b) {
+        if (b.type == fourcc("trun") && b.payloadLen >= 8) declared += rd32(b.payload + 4);
+    });
+    std::vector<AuxEntry> aux;
+    if (info.encrypted) ReadTrafAuxInfo(file, fileLen, traf, base, info, declared, aux);
 
+    static constexpr int64_t kTickLimit = (int64_t)1 << 62;
     int produced = 0;
-    for (uint32_t i = 0; i < sampleCount; i++)
-    {
-        uint32_t sz = defSampleSize, dur = defSampleDur, flags = defSampleFlags;
-        // Per-sample fields in order: duration, size, flags, composition-offset.
-        if (trFlags & 0x000100) { dur = rd32(tp); tp += 4; }
-        if (trFlags & 0x000200) { sz = rd32(tp); tp += 4; }
-        if (trFlags & 0x000400) { flags = rd32(tp); tp += 4; }
-        int64_t cto = 0;
-        if (trFlags & 0x000800) { cto = (int32_t)rd32(tp); tp += 4; }
-        if (i == 0 && haveFirstFlags) flags = firstSampleFlags;
-
-        if (cursor + sz > seg.size()) break;
-        Sample s;
-        s.data.assign(seg.data() + cursor, seg.data() + cursor + sz);
-        s.durTicks = dur;
-        s.decodeTicks = runningDecodeTicks;
-        int64_t t = (int64_t)s.decodeTicks + cto;
-        s.timeTicks = t < 0 ? 0 : (uint64_t)t;
-        // Every AAC access unit is independently decodable, so an audio track is all sync samples regardless of what the
-        // trun flags happen to say (some muxers set the non-sync bit on audio, which would leave a seek with no
-        // reposition target and — worse — make the first delivered sample look like a non-clean point).
-        s.keyframe = info.kind == TrackKind::Audio || (flags & 0x00010000) == 0;
-        s.encrypted = info.encrypted;
-
-        // IV: per-sample from senc, else constant IV (cbcs). Preserve the declared byte length exactly.
-        // MFSampleExtension_Encryption_SampleID expects m_bIVSize bytes; padding an 8-byte CENC IV to 16 changes
-        // the counter block interpreted by the PlayReady decryptor and leaves the decoder with ciphertext.
-        std::vector<uint8_t> iv;
-        const std::vector<uint8_t>* src = nullptr;
-        if (i < senc.size() && !senc[i].iv.empty()) src = &senc[i].iv;
-        else if (!info.constIv.empty()) src = &info.constIv;
-        if (src) iv = *src;
-        s.iv = std::move(iv);
-        if (i < senc.size()) s.subsamples = senc[i].subs;
-
-        // ── AVC-ONLY transforms. An AAC access unit is already exactly what the decoder wants: no length prefixes to
-        // rewrite and no parameter sets to prepend (its configuration travels out-of-band in the media type's
-        // AudioSpecificConfig). Running either transform over audio would corrupt the payload AND desynchronise the CENC
-        // subsample mapping, so both are gated on the track kind rather than on "did it happen to parse".
-        if (info.kind == TrackKind::Audio)
+    size_t cursor = base;
+    size_t sampleIndex = 0;
+    bool firstRun = true, stop = false;
+    ForEachBox(traf.payload, traf.payloadLen, [&](const Box& trun) {
+        if (stop || trun.type != fourcc("trun") || trun.payloadLen < 8) return;
+        const uint8_t version = trun.payload[0];
+        const uint32_t trFlags = rd32(trun.payload) & 0x00FFFFFF;
+        uint32_t sampleCount = rd32(trun.payload + 4);
+        const uint8_t* tp = trun.payload + 8;
+        const uint8_t* tend = trun.payload + trun.payloadLen;
+        if (trFlags & 0x000001)
         {
-            out.push_back(std::move(s));
+            if (tend - tp < 4) { stop = true; return; }
+            const int64_t at = (int64_t)base + (int64_t)(int32_t)rd32(tp);
+            tp += 4;
+            if (at < 0 || (uint64_t)at > fileLen) { stop = true; return; }
+            cursor = (size_t)at;
+        }
+        else if (firstRun)
+        {
+            cursor = base;
+        }
+        firstRun = false;
+        uint32_t firstSampleFlags = 0;
+        bool haveFirstFlags = false;
+        if (trFlags & 0x000004)
+        {
+            if (tend - tp < 4) { stop = true; return; }
+            firstSampleFlags = rd32(tp);
+            tp += 4;
+            haveFirstFlags = true;
+        }
+        const size_t perSample = ((trFlags & 0x100) ? 4u : 0u) + ((trFlags & 0x200) ? 4u : 0u) +
+                                 ((trFlags & 0x400) ? 4u : 0u) + ((trFlags & 0x800) ? 4u : 0u);
+        if (perSample > 0 && sampleCount > (size_t)(tend - tp) / perSample) sampleCount = (uint32_t)((size_t)(tend - tp) / perSample);
+
+        for (uint32_t i = 0; i < sampleCount; i++)
+        {
+            uint32_t sz = defSampleSize, dur = defSampleDur, flags = defSampleFlags;
+            // Per-sample fields in order: duration, size, flags, composition offset (unsigned in version 0).
+            if (trFlags & 0x000100) { dur = rd32(tp); tp += 4; }
+            if (trFlags & 0x000200) { sz = rd32(tp); tp += 4; }
+            if (trFlags & 0x000400) { flags = rd32(tp); tp += 4; }
+            int64_t cto = 0;
+            if (trFlags & 0x000800) { const uint32_t raw = rd32(tp); tp += 4; cto = version == 0 ? (int64_t)raw : (int64_t)(int32_t)raw; }
+            if (i == 0 && haveFirstFlags) flags = firstSampleFlags;
+            const size_t auxIndex = sampleIndex++;
+
+            if (sz > fileLen || cursor > fileLen - sz) { stop = true; return; }
+            const size_t dataAt = cursor;
             cursor += sz;
+            const uint64_t decodeTicks = runningDecodeTicks;
             runningDecodeTicks += dur;
-            produced++;
-            continue;
-        }
 
-        // The decoder accepts Annex-B, not the MP4/AVCC payload stored in mdat. Four-byte replacement preserves every
-        // CENC byte offset. Refuse malformed/unsupported samples rather than delivering a packet the decoder can only
-        // report later as the opaque MF_E_INVALIDREQUEST (0xC00D36B2).
-        if (!ConvertAvccToAnnexBInPlace(s, info.nalLenSize))
-        {
-            LogLine("[cenc] AVCC->AnnexB failed sample=" + std::to_string(i) +
-                    " nalLenSize=" + std::to_string(info.nalLenSize) +
-                    " bytes=" + std::to_string(s.data.size()) +
-                    " subs=" + std::to_string(s.subsamples.size()));
-            break;
-        }
+            // PRESENTATION time on the manifest's timeline: decode + composition offset - the edit list's shift.
+            int64_t pts = (int64_t)(decodeTicks > (uint64_t)kTickLimit ? (uint64_t)kTickLimit : decodeTicks) + cto -
+                          info.editOffsetTicks;
+            // An audio sample that ends at or before 0 is outside the edit (AAC priming): it is not part of the
+            // presentation, and delivering it at 0 would put two access units on one timestamp.
+            if (pts < 0 && info.kind == TrackKind::Audio && pts + (int64_t)dur <= 0) continue;
+            if (pts < 0) pts = 0;
 
-        // Annex-B keyframes must carry their parameter sets IN-BAND: avc1 samples reference SPS/PPS only via the
-        // container's avcC, and after the byte-stream conversion the decoder never sees them (the first NAL here is
-        // typically an SEI) — MF_MT_MPEG_SEQUENCE_HEADER alone does not save the protected pipeline, which fails the
-        // very first sample with MF_E_INVALIDREQUEST. Firefox's proven desktop MFCDM path prepends the Annex-B
-        // SPS/PPS to every keyframe and widens the FIRST CLEAR subsample by the prepended length so the CENC byte
-        // mapping still describes the same ciphertext (gecko AnnexB::ConvertAVCCSampleToAnnexB, aAddSPS).
-        if (s.keyframe && !info.spspps.empty())
-        {
-            s.data.insert(s.data.begin(), info.spspps.begin(), info.spspps.end());
-            if (s.encrypted)
+            Sample s;
+            s.data.assign(file + dataAt, file + dataAt + sz);
+            s.durTicks = dur;
+            s.decodeTicks = decodeTicks;
+            s.timeTicks = (uint64_t)pts;
+            // Every AAC access unit is independently decodable, so an audio track is all sync samples regardless of what
+            // the flags happen to say (some muxers set the non-sync bit on audio, which would leave a seek with no
+            // reposition target and — worse — make the first delivered sample look like a non-clean point).
+            s.keyframe = info.kind == TrackKind::Audio || (flags & 0x00010000) == 0;
+            s.encrypted = info.encrypted;
+
+            // IV: per-sample from the aux info, else the constant IV (cbcs). Preserve the declared byte length exactly:
+            // MFSampleExtension_Encryption_SampleID expects m_bIVSize bytes; padding an 8-byte CENC IV to 16 changes the
+            // counter block interpreted by the PlayReady decryptor and leaves the decoder with ciphertext.
+            if (auxIndex < aux.size() && !aux[auxIndex].iv.empty()) s.iv = aux[auxIndex].iv;
+            else if (!info.constIv.empty()) s.iv = info.constIv;
+            if (auxIndex < aux.size()) s.subsamples = aux[auxIndex].subs;
+
+            // ── AVC-ONLY transforms. An AAC access unit is already exactly what the decoder wants: no length prefixes to
+            // rewrite and no parameter sets to prepend (its configuration travels out-of-band in the media type's
+            // AudioSpecificConfig). Running either transform over audio would corrupt the payload AND desynchronise the
+            // CENC subsample mapping, so both are gated on the track kind rather than on "did it happen to parse".
+            if (info.kind == TrackKind::Audio)
             {
-                if (s.subsamples.empty())
+                out.push_back(std::move(s));
+                produced++;
+                continue;
+            }
+
+            // The decoder accepts Annex-B, not the MP4/AVCC payload stored in mdat. Four-byte replacement preserves every
+            // CENC byte offset. Refuse malformed/unsupported samples rather than delivering a packet the decoder can only
+            // report later as the opaque MF_E_INVALIDREQUEST (0xC00D36B2).
+            if (!ConvertAvccToAnnexBInPlace(s, info.nalLenSize))
+            {
+                LogLine("[cenc] AVCC->AnnexB failed sample=" + std::to_string(i) +
+                        " nalLenSize=" + std::to_string(info.nalLenSize) +
+                        " bytes=" + std::to_string(s.data.size()) +
+                        " subs=" + std::to_string(s.subsamples.size()));
+                stop = true;
+                return;
+            }
+
+            // Annex-B keyframes must carry their parameter sets IN-BAND: avc1 samples reference SPS/PPS only via the
+            // container's avcC, and after the byte-stream conversion the decoder never sees them (the first NAL here is
+            // typically an SEI) — MF_MT_MPEG_SEQUENCE_HEADER alone does not save the protected pipeline, which fails the
+            // very first sample with MF_E_INVALIDREQUEST. Firefox's proven desktop MFCDM path prepends the Annex-B
+            // SPS/PPS to every keyframe and widens the FIRST CLEAR subsample by the prepended length so the CENC byte
+            // mapping still describes the same ciphertext (gecko AnnexB::ConvertAVCCSampleToAnnexB, aAddSPS).
+            if (s.keyframe && !info.spspps.empty())
+            {
+                s.data.insert(s.data.begin(), info.spspps.begin(), info.spspps.end());
+                if (s.encrypted)
                 {
-                    Subsample ss;
-                    ss.clearBytes = (uint32_t)info.spspps.size();
-                    ss.encBytes = (uint32_t)(s.data.size() - info.spspps.size());
-                    s.subsamples.push_back(ss);
-                }
-                else
-                {
-                    s.subsamples[0].clearBytes += (uint32_t)info.spspps.size();
+                    if (s.subsamples.empty())
+                    {
+                        Subsample ss;
+                        ss.clearBytes = (uint32_t)info.spspps.size();
+                        ss.encBytes = (uint32_t)(s.data.size() - info.spspps.size());
+                        s.subsamples.push_back(ss);
+                    }
+                    else
+                    {
+                        s.subsamples[0].clearBytes += (uint32_t)info.spspps.size();
+                    }
                 }
             }
-        }
 
-        out.push_back(std::move(s));
-        cursor += sz;
-        runningDecodeTicks += dur;
-        produced++;
-    }
+            if (outKeyframeMs && s.keyframe && info.timescale)
+                outKeyframeMs->push_back((int64_t)((s.timeTicks * 1000ULL) / info.timescale));
+            out.push_back(std::move(s));
+            produced++;
+        }
+    });
+    return produced;
+}
+
+// Parse one media segment and append this track's samples: every `moof` in it (a packager may cut a segment into
+// several fragments), each against the segment's own bytes.
+static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, std::vector<Sample>& out, uint64_t& runningDecodeTicks,
+                        std::vector<int64_t>* outKeyframeMs = nullptr)
+{
+    int produced = 0;
+    ForEachBox(seg.data(), seg.size(), [&](const Box& b) {
+        if (b.type == fourcc("moof")) produced += ParseMoof(seg.data(), seg.size(), b, info, out, runningDecodeTicks, outKeyframeMs);
+    });
     return produced;
 }
 
 } // namespace cenc
+
+// The session store's algorithms (time-window trim, buffered ranges, CanSeekTo, the keyframe table) are written against
+// cenc::Sample, which is complete from here on.
+#include "SegmentStore.h"
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Custom IMFMediaStream — serves the demuxed encrypted samples with CENC per-sample attributes.
@@ -568,7 +814,23 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     std::vector<winrt::com_ptr<::IUnknown>> m_starvedRequests;
     std::mutex m_mx;
 
+    // ── the session this stream serves (PrSession.cpp) ──────────────────────────────────────────────────────────────
+    uint64_t m_session = 0;                          // stamps every diagnostic line with its FgPrSession handle
+    std::shared_ptr<fgpr::SegmentStore> m_store;     // the time window, the byte budget, the keyframe table
+    uint64_t m_bytes = 0;                            // what m_samples costs the budget (m_mx); mirrored into the store
+    // The feeder's demand hook, invoked under m_mx when delivery drains the forward window below bufferAheadMs. It only
+    // sets a flag on a LEAF lock and notifies (Session::Kick) — which is what replaces the old 50 ms backpressure sleep:
+    // the feeder is woken by the playhead consuming the buffer, never by a timer.
+    std::function<void()> m_demand;
+    // Below how many forward ms the hook fires; 0 = the store's bufferAheadMs. The feeder LOWERS it (by one segment)
+    // when it could not fetch — over its byte budget, or backing off a failed GET — so a playhead that keeps delivering
+    // samples does not wake it for every single one of them while nothing can change.
+    std::atomic<int64_t> m_demandBelowMs{ 0 };
+
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
+
+    /// Every diagnostic line from this stream carries its session handle (shadows the runtime-level ::LogLine).
+    void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
 
     // IMFMediaEventGenerator (delegate to the queue).
     IFACEMETHODIMP BeginGetEvent(IMFAsyncCallback* c, ::IUnknown* s) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->BeginGetEvent(c, s); }
@@ -659,7 +921,15 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         }
         if (m_next == 0 || (m_next % 100) == 0) LogLine("[cenc-src] RequestSample #" + std::to_string(m_next) + " (encrypted sample delivered)");
         m_next++;
-        return m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
+        hr = m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
+        // Demand-driven feeding: the playhead consuming the forward window is what wakes the feeder — only while more
+        // can still arrive (a complete track has nothing left to fetch) and only once below the forward target.
+        if (m_demand && !m_complete && m_store)
+        {
+            const int64_t below = m_demandBelowMs.load(std::memory_order_relaxed);
+            if (AheadDurationMsLocked() < (below > 0 ? below : m_store->bufferAheadMs)) m_demand();
+        }
+        return hr;
     }
 
     // Complete one Start operation on the stream. An explicit position repositions to the nearest keyframe at or
@@ -728,49 +998,135 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
     }
 
-    /// How much already-delivered history stays resident behind the playhead. Without a bound the vector grows for the
-    /// whole track AND for every seek (the memory half of the feeder wedge). What is retained is also exactly what a
-    /// short backward scrub can be served from without a refetch.
-    static constexpr size_t kRetainBehind = 300;
+    /// How much already-delivered history stays resident behind the playhead used to be `kRetainBehind = 300` SAMPLES
+    /// (~10 s of 30 fps video, ~6 s of AAC — two different windows for two tracks of one presentation). It is now the
+    /// session's `retainBehindMs` in presentation TIME, capped by its byte budget (SegmentStore.h TrimBehindByTime).
+    /// Without a bound the vector grows for the whole track AND for every seek (the memory half of the feeder wedge).
+    /// What is retained is also exactly what a short backward scrub can be served from without a refetch.
 
     /// Insert a freshly demuxed run so the buffer stays MONOTONIC in presentation time.
     ///
-    /// The feeder rewinds its cursor on a seek and on a representation switch, so an incoming run can overlap what is
-    /// already buffered. Appending it at the tail (what this used to do) left the vector non-monotonic and duplicated:
-    /// Ahead()/AheadDurationMs() then over-reported and the feeder parked in its backpressure sleep. Instead, drop
-    /// everything at or after the incoming start time first — but NEVER anything already handed to Media Foundation,
-    /// which owns those samples. Returns the index the run landed at.
-    size_t SpliceLocked(std::vector<cenc::Sample>&& incoming)
+    /// The feeder rewinds on a seek and on a representation switch, so an incoming run can overlap what is already
+    /// buffered. Appending it at the tail (what this once did) left the vector non-monotonic and duplicated:
+    /// Ahead()/AheadDurationMs() then over-reported and the feeder parked in its backpressure sleep. The previous fix cut
+    /// everything from the first sample at or after the run's start (searching from m_next) to the END and appended — which
+    /// was monotonic only while the run lay AHEAD of the playhead. A seek BACKWARD into a range the time window had not
+    /// retained put the run after history that is later in time, and the time-window trim, the buffered ranges and
+    /// CanSeekTo all read an ascending vector. So the run now lands at its own presentation time: the overlapped samples
+    /// [lo, hi) are replaced in place and everything past the run survives (it is still valid media ahead).
+    ///
+    /// NEVER re-deliver what Media Foundation already has: a run that straddles the delivery point is spliced from
+    /// m_next forward (the original rule); a run wholly behind it only refreshes history and m_next keeps pointing at the
+    /// same logical sample. `truncateAfter` restores the cut-to-end for a representation switch, whose samples past the
+    /// splice are the OLD representation and must be refetched in the new one. Returns the index the run landed at.
+    size_t SpliceLocked(std::vector<cenc::Sample>&& incoming, bool truncateAfter = false)
     {
         const uint64_t startTicks = incoming.front().timeTicks;
-        size_t cut = m_samples.size();
-        for (size_t i = m_next; i < m_samples.size(); i++)
-            if (m_samples[i].timeTicks >= startTicks) { cut = i; break; }
-        if (cut < m_samples.size())
-            m_samples.erase(m_samples.begin() + (ptrdiff_t)cut, m_samples.end());
-        m_samples.insert(m_samples.end(), std::make_move_iterator(incoming.begin()),
+        uint64_t endTicks = startTicks;
+        uint64_t incomingBytes = 0;
+        for (auto const& s : incoming)
+        {
+            if (s.timeTicks + s.durTicks > endTicks) endTicks = s.timeTicks + s.durTicks;
+            incomingBytes += fgpr::SampleFootprint(s);
+        }
+
+        size_t lo = m_samples.size();
+        for (size_t i = 0; i < m_samples.size(); i++)
+            if (m_samples[i].timeTicks >= startTicks) { lo = i; break; }
+        size_t hi = lo;
+        while (hi < m_samples.size() && m_samples[hi].timeTicks < endTicks) hi++;
+
+        if (lo < m_next && hi > m_next)
+        {
+            lo = m_next;
+            while (lo < m_samples.size() && m_samples[lo].timeTicks < startTicks) lo++;
+            hi = lo;
+            while (hi < m_samples.size() && m_samples[hi].timeTicks < endTicks) hi++;
+        }
+        if (truncateAfter && lo >= m_next) hi = m_samples.size();
+
+        uint64_t freed = 0;
+        for (size_t i = lo; i < hi; i++) freed += fgpr::SampleFootprint(m_samples[i]);
+        const size_t removed = hi - lo;
+        const size_t added = incoming.size();
+        m_samples.erase(m_samples.begin() + (ptrdiff_t)lo, m_samples.begin() + (ptrdiff_t)hi);
+        m_samples.insert(m_samples.begin() + (ptrdiff_t)lo, std::make_move_iterator(incoming.begin()),
                          std::make_move_iterator(incoming.end()));
-        return cut;
+        if (lo < m_next) m_next = m_next - removed + added;   // wholly behind the playhead: same logical sample
+        m_bytes = (m_bytes > freed ? m_bytes - freed : 0) + incomingBytes;
+        PublishBytesLocked();
+        return lo;
     }
 
-    /// Drop history beyond the retention window, keeping m_next pointing at the same sample.
+    /// Drop history beyond the retention window (time, then bytes), keeping m_next pointing at the same sample.
     void TrimBehindLocked()
     {
-        if (m_next <= kRetainBehind) return;
-        const size_t drop = m_next - kRetainBehind;
-        m_samples.erase(m_samples.begin(), m_samples.begin() + (ptrdiff_t)drop);
-        m_next -= drop;
+        if (!m_store) return;
+        const uint64_t budget = m_streamId == 1 ? m_store->VideoBudget() : m_store->AudioBudget();
+        fgpr::TrimBehindByTime(m_samples, m_next, m_info.timescale, m_store->retainBehindMs, budget, m_bytes);
+        PublishBytesLocked();
+    }
+
+    void PublishBytesLocked()
+    {
+        if (!m_store) return;
+        (m_streamId == 1 ? m_store->videoBytes : m_store->audioBytes).store(m_bytes, std::memory_order_relaxed);
     }
 
     /// Append freshly demuxed samples (the background fetcher) and release any request that was parked on starvation.
-    /// Called from the fetch thread; the stream lock serialises it against RequestSample.
+    /// Called from the fetch thread; the stream lock serialises it against RequestSample. A stream Media Foundation has
+    /// already shut down (its source was replaced by a detach) still ACCEPTS samples: the session's buffer outlives the
+    /// MF object, and the re-attach moves it into a fresh source (TakeSamples).
     void AppendSamples(std::vector<cenc::Sample>&& more)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || more.empty()) return;
+        if (more.empty()) return;
         SpliceLocked(std::move(more));
         TrimBehindLocked();
-        ReleaseStarvedLocked();
+        if (!m_shutdown) ReleaseStarvedLocked();
+    }
+
+    /// Trim history now (the feeder, before it weighs the byte budget): appends are not the only moment the playhead has
+    /// moved, and a session over its budget that only trimmed on append could never append again.
+    void TrimNow()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        TrimBehindLocked();
+    }
+
+    void SetDemandBelowMs(int64_t ms) { m_demandBelowMs.store(ms > 0 ? ms : 0, std::memory_order_relaxed); }
+
+    /// Move the whole buffer out, with its byte cost, for the fresh source a re-attach builds.
+    std::vector<cenc::Sample> TakeSamples(uint64_t& bytes)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        std::vector<cenc::Sample> out = std::move(m_samples);
+        m_samples.clear();
+        m_next = 0;
+        bytes = m_bytes;
+        m_bytes = 0;
+        return out;
+    }
+
+    /// FgPrSessionGetBuffered for this stream: ascending (startMs, endMs) pairs, a hole starts a new pair.
+    int BufferedPairs(int64_t* out, int capPairs)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return fgpr::ComputeBufferedPairs(m_samples, m_info.timescale, out, capPairs);
+    }
+
+    /// A seek into a range the feeder has not fetched re-opens a track that had been marked complete — otherwise the
+    /// stream would report end-of-stream the moment it drained the target segment while the next one is still on the wire.
+    void MarkIncomplete()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_complete = false;
+    }
+
+    bool IsComplete()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_complete;
     }
 
     /// Splice the target representation's segment into the timeline at ITS OWN presentation time, then announce the new
@@ -784,7 +1140,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return;
         const uint64_t spliceTicks = replacement.front().timeTicks;
-        const size_t at = SpliceLocked(std::move(replacement));
+        const size_t at = SpliceLocked(std::move(replacement), true);
         m_info = nextInfo;
         // Only the sample delivered NEXT may be flagged discontinuous. When the splice lands ahead of the playhead the
         // next sample is still old-representation continuous video; flagging it would make the decoder drop frames all
@@ -837,6 +1193,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     int64_t AheadDurationMs()
     {
         std::lock_guard<std::mutex> g(m_mx);
+        return AheadDurationMsLocked();
+    }
+    int64_t AheadDurationMsLocked() const
+    {
         if (m_info.timescale == 0 || m_next >= m_samples.size()) return 0;
         uint64_t start = m_samples[m_next].timeTicks;
         auto const& last = m_samples.back();
@@ -855,27 +1215,12 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// instant reposition instead of three serial TLS-handshaking GETs. Video needs a KEYFRAME at or before the target
     /// (that is what Start() repositions to); audio only needs coverage. Both need CONTIGUOUS coverage past the target
     /// — a buffer with a hole in it (left by an earlier forward seek) must not report the far side as seekable.
+    /// The algorithm moved verbatim to SegmentStore.h (fgpr::CanSeekToIn). The m_shutdown refusal is gone: the samples
+    /// are the SESSION's buffer and stay valid after Media Foundation shuts a detached source down.
     bool CanSeekTo(int64_t targetMs, bool requireKeyframe)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || m_info.timescale == 0 || m_samples.empty()) return false;
-        if (targetMs < 0) targetMs = 0;
-        const uint64_t target = ((uint64_t)targetMs * m_info.timescale) / 1000ULL;
-        size_t anchor = m_samples.size();
-        for (size_t i = 0; i < m_samples.size(); i++)
-        {
-            if (m_samples[i].timeTicks > target) break;
-            if (!requireKeyframe || m_samples[i].keyframe) anchor = i;
-        }
-        if (anchor == m_samples.size()) return false;
-        uint64_t reach = m_samples[anchor].timeTicks;
-        for (size_t i = anchor; i < m_samples.size(); i++)
-        {
-            if (m_samples[i].timeTicks > reach) break;   // gap in the buffer — coverage ends here
-            const uint64_t end = m_samples[i].timeTicks + m_samples[i].durTicks;
-            if (end > reach) reach = end;
-        }
-        return reach > target;
+        return fgpr::CanSeekToIn(m_samples, m_info.timescale, targetMs, requireKeyframe);
     }
 
     /// The buffered presentation range, for the always-on log.
@@ -983,7 +1328,21 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     bool m_started = false, m_paused = false, m_shutdown = false;
     std::mutex m_mx;
 
+    uint64_t m_session = 0;                           // the FgPrSession this source was built for
+    std::shared_ptr<fgpr::SegmentStore> m_store;      // shared with the session: MF may hold this source past its session
+    LONGLONG m_startPosition100ns = 0;                // m_mx — where the FIRST Start lands (consumed once; see Start)
+    std::atomic<bool> m_handedToEngine{ false };      // an attach SetSource'd this object; a re-attach needs a fresh one
+
     CencMediaSource() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
+
+    /// Every diagnostic line from this source carries its session handle (shadows the runtime-level ::LogLine).
+    void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
+
+    void SetStartPosition100ns(LONGLONG position100ns)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_startPosition100ns = position100ns > 0 ? position100ns : 0;
+    }
 
     // IMFMediaEventGenerator
     IFACEMETHODIMP BeginGetEvent(IMFAsyncCallback* c, ::IUnknown* s) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->BeginGetEvent(c, s); }
@@ -1021,6 +1380,21 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
             if (FAILED(PropVariantCopy(&startVar, startPos))) return E_OUTOFMEMORY;
 
             wasActive = m_started;
+            // THE CARRIED START POSITION (plan bug S1). The media engine opens a source from the beginning — VT_EMPTY or
+            // an explicit 0 — so a switch to a video at 1:23 used to present 0:00 first and then jump. The session hands
+            // the source its start position; the first Start that asks for "the beginning" is rewritten to it, the
+            // streams reposition to the keyframe at or before it, and MESourceStarted carries the ACTUAL start time so the
+            // presentation clock begins there too. Consumed once: a later Start(0) is a real seek to 0.
+            if (!wasActive && m_startPosition100ns > 0 &&
+                (startVar.vt == VT_EMPTY || (startVar.vt == VT_I8 && startVar.hVal.QuadPart == 0)))
+            {
+                PropVariantClear(&startVar);
+                startVar.vt = VT_I8;
+                startVar.hVal.QuadPart = m_startPosition100ns;
+                LogLine("[cenc-src] first Start rewritten to the carried start position " +
+                        std::to_string((long long)(m_startPosition100ns / 10000)) + "ms");
+            }
+            if (!wasActive) m_startPosition100ns = 0;
             explicitPosition = startVar.vt == VT_I8;
             seeking = wasActive && explicitPosition;
 
@@ -1249,9 +1623,14 @@ static winrt::com_ptr<IMFMediaType> BuildAacMediaType(const cenc::InitInfo& a)
 /// streaming build: deriving the presentation duration from the samples in hand would declare the track to be as long as
 /// the initial burst (~8s), and the media engine then treats every later position as past the end — the seek bar pins,
 /// the clock overshoots ("0:36 / 0:08"), and Play() after a Pause does nothing because the presentation already ended.</param>
+/// <param name="sessionHandle">The FgPrSession the source serves — every diagnostic line it writes carries it.</param>
+/// <param name="store">The session's SegmentStore: the streams trim against its time window and byte budget.</param>
+/// <param name="startPosition100ns">Where the source's FIRST Start lands (plan bug S1); 0 = the beginning.</param>
 static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& info, std::vector<cenc::Sample>&& samples,
-                                                       CencAudioFeed* audio = nullptr, bool streaming = false,
-                                                       uint64_t totalDuration100ns = 0)
+                                                       CencAudioFeed* audio, bool streaming,
+                                                       uint64_t totalDuration100ns, uint64_t sessionHandle,
+                                                       std::shared_ptr<fgpr::SegmentStore> store,
+                                                       LONGLONG startPosition100ns)
 {
     auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
 
@@ -1269,16 +1648,13 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     // what tells the media engine's modern EME pipeline "insert the CDM's decryptor before the decoder for this
     // stream"; without it the engine wires our encrypted samples STRAIGHT into the H.264 decoder, which rejects the
     // first ciphertext-bearing sample as MF_E_INVALIDREQUEST (decode error 3). NOTE this is NOT the earlier failed
-    // experiment: stamping the raw MF_MT_PROTECTED *attribute* on an UNWRAPPED clear type (FG_CENC_MARK_SD_PROTECTED=1
-    // diagnostics) selects the legacy ITA/OTA topology whose trust verification fails 0xC00D715B. The wrapped type is
-    // unwrapped by the pipeline (MFUnwrapMediaType) after the decryptor, so the decoder still sees the real H.264 type.
-    // Set FG_CENC_NO_PROTECTED_WRAP=1 to A/B the old clear-typed wiring.
-    bool markProtected = info.encrypted && GetEnvironmentVariableW(L"FG_CENC_MARK_SD_PROTECTED", nullptr, 0) != 0;
-    if (markProtected) mt->SetUINT32(FG_MF_MT_PROTECTED, TRUE);
-
+    // experiment: stamping the raw MF_MT_PROTECTED *attribute* on an UNWRAPPED clear type (the retired
+    // FG_CENC_MARK_SD_PROTECTED diagnostics) selects the legacy ITA/OTA topology whose trust verification fails
+    // 0xC00D715B. The wrapped type is unwrapped by the pipeline (MFUnwrapMediaType) after the decryptor, so the decoder
+    // still sees the real H.264 type. The wrap is now the ONLY wiring: the environment A/B arms (the raw attribute, and
+    // FG_CENC_NO_PROTECTED_WRAP's clear-typed stream) were deleted with every other env switch in this directory.
     winrt::com_ptr<IMFMediaType> streamType = mt;
-    bool wrapProtected = info.encrypted && !markProtected &&
-                         GetEnvironmentVariableW(L"FG_CENC_NO_PROTECTED_WRAP", nullptr, 0) == 0;
+    const bool wrapProtected = info.encrypted;
     if (wrapProtected)
     {
         winrt::com_ptr<IMFMediaType> wrapped;
@@ -1290,7 +1666,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     winrt::com_ptr<IMFStreamDescriptor> sd;
     IMFMediaType* mts[1] = { streamType.get() };
     winrt::check_hresult(MFCreateStreamDescriptor(1 /*streamId*/, 1, mts, sd.put()));
-    if (markProtected || wrapProtected) sd->SetUINT32(MF_SD_PROTECTED, 1);
+    if (wrapProtected) sd->SetUINT32(MF_SD_PROTECTED, 1);
     {
         winrt::com_ptr<IMFMediaTypeHandler> mth;
         winrt::check_hresult(sd->GetMediaTypeHandler(mth.put()));
@@ -1303,9 +1679,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     {
         auto audioMt = BuildAacMediaType(audio->info);
         winrt::com_ptr<IMFMediaType> audioStreamType = audioMt;
-        bool wrapAudio = audio->info.encrypted && !markProtected &&
-                         GetEnvironmentVariableW(L"FG_CENC_NO_PROTECTED_WRAP", nullptr, 0) == 0;
-        if (audio->info.encrypted && markProtected) audioMt->SetUINT32(FG_MF_MT_PROTECTED, TRUE);
+        const bool wrapAudio = audio->info.encrypted;
         if (wrapAudio)
         {
             winrt::com_ptr<IMFMediaType> wrapped;
@@ -1315,7 +1689,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
         }
         IMFMediaType* amts[1] = { audioStreamType.get() };
         winrt::check_hresult(MFCreateStreamDescriptor(2 /*streamId*/, 1, amts, audioSd.put()));
-        if (audio->info.encrypted && (markProtected || wrapAudio)) audioSd->SetUINT32(MF_SD_PROTECTED, 1);
+        if (wrapAudio) audioSd->SetUINT32(MF_SD_PROTECTED, 1);
         winrt::com_ptr<IMFMediaTypeHandler> amth;
         winrt::check_hresult(audioSd->GetMediaTypeHandler(amth.put()));
         winrt::check_hresult(amth->SetCurrentMediaType(audioStreamType.get()));
@@ -1341,7 +1715,12 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     if (dur100ns) pd->SetUINT64(MF_PD_DURATION, (UINT64)dur100ns);
 
     auto source = winrt::make_self<CencMediaSource>();
+    source->m_session = sessionHandle;
+    source->m_store = store;
+    source->m_startPosition100ns = startPosition100ns > 0 ? startPosition100ns : 0;
     auto stream = winrt::make_self<CencMediaStream>();
+    stream->m_session = sessionHandle;
+    stream->m_store = store;
     stream->m_sd = sd;
     stream->m_source = (IMFMediaSource*)source.get();   // weak — source holds the strong ref
     stream->m_info = info;
@@ -1349,12 +1728,16 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     stream->m_streamId = 1;
     stream->m_label = "video";
     stream->m_complete = !streaming;
+    stream->m_bytes = fgpr::SampleFootprint(stream->m_samples);
+    stream->PublishBytesLocked();   // not yet visible to any other thread
     source->m_pd = pd;
     source->m_streams.push_back(stream);
 
     if (audio)
     {
         auto astream = winrt::make_self<CencMediaStream>();
+        astream->m_session = sessionHandle;
+        astream->m_store = store;
         astream->m_sd = audioSd;
         astream->m_source = (IMFMediaSource*)source.get();
         astream->m_info = audio->info;
@@ -1362,6 +1745,8 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
         astream->m_streamId = 2;
         astream->m_label = "audio";
         astream->m_complete = !streaming;
+        astream->m_bytes = fgpr::SampleFootprint(astream->m_samples);
+        astream->PublishBytesLocked();
         source->m_streams.push_back(astream);
     }
 

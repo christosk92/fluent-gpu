@@ -85,8 +85,11 @@ static partial class ControlsSuite
         PolylineStrokeChecks(strings);
         ContextMenuChecks(strings);
         ToolTipStableWrapChecks(strings);
+        ToolTipCloseOpenChecks(strings);
         SemanticZoomChecks(strings);
         AutoSuggestProgrammaticFocusChecks(strings);
+        AutoSuggestInlineFocusChecks(strings);
+        AutoSuggestGhostChecks(strings);
         ChartsChecks(strings);
         InfoBarClosePlateChecks(strings);
     }
@@ -258,6 +261,45 @@ static partial class ControlsSuite
     // put ToolTip×N in nearly every idle reconcile flush. WrapStable takes the target as a MOUNT-STABLE factory, so an
     // unchanged (delegate, text) pair compares equal and the re-push short-circuits — while a real TEXT change still
     // re-renders, and the factory (invoked inside the ToolTip's OWN render) still delivers live content.
+    // gate.tooltip.closeOpen — ToolTip.CloseOpen(): the host-side close for a bubble whose owner stays mounted and
+    // under a still pointer (a KeepAlive-parked page after a route commit). Open on mount, close through the static,
+    // and the bubble is gone on the next commit; a second call with nothing open is a no-op.
+    static void ToolTipCloseOpenChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("tt-close-open", new Size2(320, 160), 1f)); window.Show();
+        // Under a real OverlayHost: the bubble is an overlay entry, so a root without one never paints it. A manual
+        // frame clock: the close is a 167 ms fade, and only virtual time (clock.Advance + Paint) retires the entry.
+        var clock = new ManualFrameTimeSource();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+            new OverlayHost
+            {
+                Child = new BoxEl
+                {
+                    Width = 320f, Height = 160f, Padding = Edges4.All(12),
+                    Children =
+                    [
+                        Embed.Comp(() => new ToolTip
+                        {
+                            Target = new BoxEl { Width = 100f, Height = 20f, Fill = Tok.AccentDefault },
+                            Text = "close-open-tip", OpenOnMount = true,
+                        }),
+                    ],
+                },
+            }, frameTime: clock);
+        void Settle() { for (int i = 0; i < 8; i++) { clock.Advance(40f); host.Paint(0); } }   // 320 ms > the 167 ms fade
+        host.RunFrame(); Settle();
+        int open = CountTextEquals(host.Scene, strings, host.Scene.Root, "close-open-tip");
+        ToolTip.CloseOpen();
+        Settle();
+        int closed = CountTextEquals(host.Scene, strings, host.Scene.Root, "close-open-tip");
+        ToolTip.CloseOpen();   // nothing open: must be a silent no-op
+        Settle();
+        int still = CountTextEquals(host.Scene, strings, host.Scene.Root, "close-open-tip");
+        Check("gate.tooltip.closeOpen ToolTip.CloseOpen() closes the open bubble from outside its owner and is a no-op when none is open",
+            open == 1 && closed == 0 && still == 0, $"open={open} closed={closed} still={still}");
+    }
+
     static void ToolTipStableWrapChecks(StringTable strings)
     {
         // (a) Wrap — a fresh target per parent render REACHES the mounted core (its new width lands, no remount).
@@ -10243,6 +10285,89 @@ static partial class ControlsSuite
         Check("gate.controls.autosuggest-programmatic-focus focusing AutoSuggestBox chrome swallows chars; FirstFocusableIn lands on the editor",
             chromeTrap && typed && editorRole,
             $"chromeTrap={chromeTrap} text='{text.Peek()}' focusedRole={focusedRole} editorNull={editor.IsNull}");
+    }
+
+    // Opening/closing inline results must preserve the editor node, caret and keyboard focus.
+    static void AutoSuggestInlineFocusChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("asb-inline-focus", new Size2(420, 320), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var text = new Signal<string>("");
+        var suggestions = new Signal<IReadOnlyList<string>>(["abc"]);
+        using var host = new AppHost(app, window, device, fonts, strings,
+            new W0fStaticProbe { Build = () => AutoSuggestBox.Create([], "Search", 260f, text,
+                debounceMs: 0f, suggestionsSignal: suggestions,
+                suggestionPresentation: AutoSuggestBoxSuggestionPresentation.Inline) });
+        host.RunFrame();
+        var chrome = FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox);
+        var editor = host.Input.FirstFocusableIn(chrome);
+        host.Input.SetFocus(editor, visual: false);
+
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'a'));
+        host.RunFrame(); host.RunFrame();
+        bool opened = host.Input.Focused == editor && host.Scene.IsLive(editor) && text.Peek() == "a";
+        suggestions.Value = ["abacus", "absolute"];
+        host.RunFrame(); host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'b'));
+        host.RunFrame(); host.RunFrame();
+        bool continued = host.Input.Focused == editor && text.Peek() == "ab";
+
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+        host.RunFrame(); host.RunFrame();
+        bool closed = host.Input.Focused == editor && text.Peek() == "";
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'c'));
+        host.RunFrame(); host.RunFrame();
+        bool reopened = host.Input.Focused == editor && text.Peek() == "c";
+        Check("gate.controls.autosuggest-inline-focus editor survives open, async results, clear and reopen",
+            opened && continued && closed && reopened,
+            $"opened={opened} continued={continued} closed={closed} reopened={reopened} text='{text.Peek()}'");
+    }
+
+    // The inline completion ghost is a focused-editor affordance and disappears on the blur commit.
+    static void AutoSuggestGhostChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("asb-ghost", new Size2(420, 160), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var text = new Signal<string>("");
+        var completion = new Signal<string>("abc");
+        using var host = new AppHost(app, window, device, fonts, strings,
+            new W0fStaticProbe { Build = () => AutoSuggestBox.Create([], "Search", 260f, text, completion: completion) });
+        host.RunFrame();
+        // Unfocused, empty query, a completion already published: the old predicate painted the ghost here.
+        int ghostBefore = CountTextEquals(host.Scene, strings, host.Scene.Root, "abc");
+
+        var chrome = FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox);
+        var editor = host.Input.FirstFocusableIn(chrome);
+        // Pointer focus, then TYPE: the ghost also requires the caret at the end of the document (a Tab focus selects
+        // all, a pointer focus on a non-empty document parks the caret where the press landed), and typing is the one
+        // path that leaves the caret at the end — the flow a user actually takes.
+        host.Input.SetFocus(editor, visual: false);
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'a'));
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'b'));
+        host.RunFrame(); host.RunFrame();
+        int ghostFocused = CountTextEquals(host.Scene, strings, host.Scene.Root, "abc");
+
+        host.Input.SetFocus(host.Scene.Root);
+        host.RunFrame(); host.RunFrame();
+        int ghostBlurred = CountTextEquals(host.Scene, strings, host.Scene.Root, "abc");
+
+        Check("gate.controls.autosuggest-ghost the inline completion ghost shows only while the editor is focused",
+            ghostBefore == 0 && ghostFocused == 1 && ghostBlurred == 0,
+            $"before={ghostBefore} focused={ghostFocused} blurred={ghostBlurred} text='{text.Peek()}'");
+    }
+
+    static int CountTextEquals(SceneStore s, StringTable strings, NodeHandle n, string text)
+    {
+        if (n.IsNull) return 0;
+        ref var p = ref s.Paint(n);
+        int c = p.VisualKind == VisualKind.Text && strings.Resolve(p.Text) == text ? 1 : 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c += CountTextEquals(s, strings, ch, text);
+        return c;
     }
 }
 
