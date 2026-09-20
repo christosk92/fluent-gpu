@@ -1672,6 +1672,43 @@ static class ImageSuite
                 $"idA={idA} idB={idB} aReady={aReady} held={held} dissolving={dissolving} committed={committed} draws={device.LastImages.Count}");
         }
 
+        // A pending decode on a reused slot belongs to its NEW item, never the outgoing cover.
+        {
+            var dec = new SelectiveIdDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virtual-image-identity", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new VirtualImageIdentityProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+            host.RunFrame();
+            int a = dec.LastBeginId;
+            dec.Release(a);
+            host.RunFrame();
+            bool ready = device.LastImages.Count == 1 && device.LastImages[0].ImageId == a && device.LastImages[0].Ready == 1;
+            probe.Src.Value = "virtual/b";
+            host.RunFrame();
+            int b = dec.LastBeginId;
+            bool cleared = b != a && cache.RefsOf(new ImageHandle(a)) == 0
+                && device.LastImages.Count == 1 && device.LastImages[0].ImageId == b && device.LastImages[0].Ready == 0;
+            probe.Src.Value = "virtual/c";
+            host.RunFrame();
+            int c = dec.LastBeginId;
+            dec.Release(b); // late completion of the superseded request cannot replace C
+            host.RunFrame();
+            bool staleIgnored = cache.RefsOf(new ImageHandle(b)) == 0
+                && device.LastImages.Count == 1 && device.LastImages[0].ImageId == c;
+            dec.Release(c);
+            host.RunFrame();
+            bool landed = device.LastImages.Count == 1 && device.LastImages[0].ImageId == c
+                && device.LastImages[0].Ready == 1 && cache.RefsOf(new ImageHandle(c)) == 1;
+            Check("46n3b. recycled images clear old artwork and ignore superseded decode completions",
+                ready && cleared && staleIgnored && landed,
+                $"ready={ready} cleared={cleared} staleIgnored={staleIgnored} landed={landed}");
+        }
+
         // 46n4: the steady-frame alloc gate (gate.icon.alloc's idiom) extended through a hold + commit sequence — the
         // TRANSITION frames themselves legitimately allocate (a real component re-render for the Px change; a real
         // pixel upload — including this test's OWN SelectiveIdDecoder growing its scratch buffer to the new decode

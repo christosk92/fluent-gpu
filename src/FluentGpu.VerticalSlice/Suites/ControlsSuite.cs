@@ -88,6 +88,7 @@ static partial class ControlsSuite
         ToolTipCloseOpenChecks(strings);
         SemanticZoomChecks(strings);
         AutoSuggestProgrammaticFocusChecks(strings);
+        AutoSuggestInlineFocusChecks(strings);
         AutoSuggestGhostChecks(strings);
         ChartsChecks(strings);
         InfoBarClosePlateChecks(strings);
@@ -10286,9 +10287,46 @@ static partial class ControlsSuite
             $"chromeTrap={chromeTrap} text='{text.Peek()}' focusedRole={focusedRole} editorNull={editor.IsNull}");
     }
 
-    // The inline grey completion ghost is a focused-editor affordance: a completion published while the field is
-    // blurred used to stay painted under the text and read as typed characters. The ghost must be absent before
-    // focus, present while the editor has focus, and gone again on the same commit that blurs it.
+    // Opening/closing inline results must preserve the editor node, caret and keyboard focus.
+    static void AutoSuggestInlineFocusChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("asb-inline-focus", new Size2(420, 320), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var text = new Signal<string>("");
+        var suggestions = new Signal<IReadOnlyList<string>>(["abc"]);
+        using var host = new AppHost(app, window, device, fonts, strings,
+            new W0fStaticProbe { Build = () => AutoSuggestBox.Create([], "Search", 260f, text,
+                debounceMs: 0f, suggestionsSignal: suggestions,
+                suggestionPresentation: AutoSuggestBoxSuggestionPresentation.Inline) });
+        host.RunFrame();
+        var chrome = FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox);
+        var editor = host.Input.FirstFocusableIn(chrome);
+        host.Input.SetFocus(editor, visual: false);
+
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'a'));
+        host.RunFrame(); host.RunFrame();
+        bool opened = host.Input.Focused == editor && host.Scene.IsLive(editor) && text.Peek() == "a";
+        suggestions.Value = ["abacus", "absolute"];
+        host.RunFrame(); host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'b'));
+        host.RunFrame(); host.RunFrame();
+        bool continued = host.Input.Focused == editor && text.Peek() == "ab";
+
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+        host.RunFrame(); host.RunFrame();
+        bool closed = host.Input.Focused == editor && text.Peek() == "";
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'c'));
+        host.RunFrame(); host.RunFrame();
+        bool reopened = host.Input.Focused == editor && text.Peek() == "c";
+        Check("gate.controls.autosuggest-inline-focus editor survives open, async results, clear and reopen",
+            opened && continued && closed && reopened,
+            $"opened={opened} continued={continued} closed={closed} reopened={reopened} text='{text.Peek()}'");
+    }
+
+    // The inline completion ghost is a focused-editor affordance and disappears on the blur commit.
     static void AutoSuggestGhostChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();

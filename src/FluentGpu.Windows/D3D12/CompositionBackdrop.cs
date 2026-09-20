@@ -96,6 +96,7 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     private ICompositionVisualSurface* _maskSurface;   // captures the rounded acrylic group's alpha → the shadow's rounded shape
     private IContainerVisual* _group;           // backdrop + tint, rounded-clipped to the content rect
     private IVisual* _groupVisual;
+    private ISpriteVisual* _fallback;           // opaque FallbackColor plate UNDER the host backdrop (WinUI no-transparency fallback)
     private ISpriteVisual* _backdrop;
     private ISpriteVisual* _tint;
     private ISpriteVisual* _content;
@@ -167,6 +168,20 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         AddChild(_chrome, AsVisual((IUnknown*)_shadow));   // shadow at the BOTTOM of chrome
         AddChild(_chrome, _groupVisual);                    // acrylic group ON TOP of the shadow
 
+        // 0) WinUI FallbackColor, OPAQUE, at the bottom of the acrylic group. Two jobs, both load-bearing:
+        //    (a) it IS the no-transparency fallback (#2C2C2C dark / #F9F9F9 light). CreateHostBackdropBrush is the
+        //        UWP-era mechanism and renders EMPTY on plenty of desktop windows; without this sprite that failure is a
+        //        see-through menu, and the only cover for it was a ~0.97-opaque plate painted in the swapchain - which
+        //        then occluded the acrylic everywhere the brush DID work. That is the flat, shadowless plate people saw.
+        //    (b) it makes the group alpha 1 inside the rounded clip, and the group alpha is what the drop shadow is
+        //        MASKED by. With the tint sprite alone the mask topped out near 0.5, so the shadow rendered at half
+        //        strength and read as no shadow at all.
+        _fallback = MakeSprite();
+        Color fc = new() { A = 255, R = (byte)(tint.R * 255f), G = (byte)(tint.G * 255f), B = (byte)(tint.B * 255f) };
+        ICompositionColorBrush* fb; Check(s_comp->CreateColorBrushWithColor(fc, &fb), "CreateColorBrushWithColor(fallback)");
+        SetBrush(_fallback, (IUnknown*)fb); fb->Release();
+        AddChild(_group, AsVisual((IUnknown*)_fallback));
+
         // 1) host-backdrop (desktop-sampling, pre-blurred) sprite
         _backdrop = MakeSprite();
         ICompositionBackdropBrush* host; Check(s_comp3->CreateHostBackdropBrush(&host), "CreateHostBackdropBrush");
@@ -226,6 +241,7 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         Check(_animRootVisual->put_Size(size), "put_Size(animRoot)");
         Check(_chromeVisual->put_Size(size), "put_Size(chrome)");
         Check(_groupVisual->put_Size(size), "put_Size(group)");
+        PutSpriteSize(_fallback, size);
         PutSpriteSize(_backdrop, size);
         PutSpriteSize(_tint, size);
         PutSpriteSize(_content, size);
@@ -348,6 +364,7 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     {
         if (_content != null) { _content->Release(); _content = null; }
         if (_tint != null) { _tint->Release(); _tint = null; }
+        if (_fallback != null) { _fallback->Release(); _fallback = null; }
         if (_backdrop != null) { _backdrop->Release(); _backdrop = null; }
         if (_surface != null) { _surface->Release(); _surface = null; }
         if (_shadowDrop != null) { _shadowDrop->Release(); _shadowDrop = null; }

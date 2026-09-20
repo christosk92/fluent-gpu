@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using FluentGpu.Pal;
 
 namespace FluentGpu.Pal.Windows;
@@ -86,6 +86,21 @@ public static partial class Win32Theme
     /// Same <c>WM_SETTINGCHANGE("ImmersiveColorSet")</c> broadcast as the app value when it changes.</summary>
     public static bool TaskbarUsesLightTheme() => ReadPersonalizeLight("SystemUsesLightTheme");
 
+    /// <summary>Settings - Personalization - Colors - "Transparency effects": the value WinUI reads as
+    /// <c>UISettings.AdvancedEffectsEnabled</c> and gates every AcrylicBrush on. Registry
+    /// <c>HKCU\...\Themes\Personalize\EnableTransparency</c>. Defaults to TRUE when the value is absent or
+    /// unreadable - the opposite default from the two theme reads above, and deliberately so: failing closed here would
+    /// silently strip every frosted surface in the app. Re-read on the same
+    /// <c>WM_SETTINGCHANGE("ImmersiveColorSet")</c> broadcast that carries a theme flip.</summary>
+    public static bool TransparencyEffectsEnabled()
+    {
+        uint data = 0, cb = 4;
+        int rc = RegGetValueW(HKEY_CURRENT_USER,
+            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "EnableTransparency",
+            RRF_RT_REG_DWORD, 0, out data, ref cb);
+        return rc != 0 || data != 0;
+    }
+
     private static bool ReadPersonalizeLight(string valueName)
     {
         uint data = 0, cb = 4;
@@ -150,30 +165,35 @@ public static partial class Win32Theme
         }
     }
 
-    /// <summary>Apply the OS material used by windowed popup HWNDs. WinUI MenuFlyout uses a transparent presenter over
-    /// <c>AcrylicBackgroundFillColorDefaultBackdrop</c> (DesktopAcrylicBackdrop); for Win32 that maps to DWM's transient
-    /// window backdrop, with the client glass-extended so transparent DirectComposition pixels reveal it.</summary>
+    /// <summary>Apply the OS material used by windowed popup HWNDs. WinUI's <c>MenuFlyoutPresenter</c> is a TRANSPARENT
+    /// presenter over <c>DesktopAcrylicBackdrop</c>; on Win32 the popup HWND is a near-bare composition VIEWPORT and
+    /// the material, the rounding and the shadow are all COMPOSITION visuals under one animated root, so they reveal
+    /// WITH the menu (popup-system-backdrop.md).
+    /// <para>We deliberately do NOT ask for <c>DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW</c> here. It was
+    /// tried (2026-09-20) and is a trap on this window shape: the call SUCCEEDS on Windows 11 — so it cannot be probed
+    /// for — yet DWM paints nothing behind a <c>WS_EX_NOREDIRECTIONBITMAP</c> composition-hosted popup, and every
+    /// downstream decision that had been keyed off that success (drop the composition acrylic group, drop the tint,
+    /// drop the masked shadow, stop inflating the window for the shadow, let DWM round it) then removed the only chrome
+    /// that was actually drawing. The result on real hardware was a flat opaque grey slab with no blur and no depth.
+    /// The composition chrome below is the ONE owner of a windowed popup's material; it degrades honestly (the acrylic
+    /// group's opaque FallbackColor sprite) instead of vanishing.</para>
+    /// <para>DWM's *rounded-window* chrome (rounded border + drop shadow) is drawn full-size and cannot follow the open
+    /// clip, so rounding is turned OFF (<c>DWMWCP_DONOTROUND</c>): the engine draws the rounded plate + 1px border into
+    /// the swapchain and <c>CompositionBackdrop</c> rounds the acrylic group and masks its own drop shadow to that
+    /// shape. The glass extend stays — the host-backdrop brush samples through it.</para></summary>
     public static void ApplyPopupMaterial(nint hwnd, bool dark, PopupWindowMaterial material)
     {
         int d = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
         if (material != PopupWindowMaterial.TransientAcrylic) return;
 
-        // The popup HWND is a near-bare composition VIEWPORT — WinUI does the same for windowed popups
-        // (popup-system-backdrop.md): border, shadow, rounded corners and acrylic are all composition visuals under one
-        // animated root so they reveal WITH the menu. DWM's *rounded-window* chrome (the rounded border + its drop
-        // shadow) is drawn full-size and can't follow the open clip, so we turn rounding OFF (DONOTROUND): the engine
-        // draws the rounded plate + 1px border into the swapchain, and CompositionBackdrop rounds the host-acrylic
-        // sprite. We KEEP the glass-extend (the host-backdrop brush samples through it) but set NO DWMSBT_* system
-        // backdrop, so nothing grey fills the window.
         int corner = DWMWCP_DONOTROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, in corner, sizeof(int));
         MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
         DwmExtendFrameIntoClientArea(hwnd, in m);
 
-        // THE missing piece: enable host-backdrop sampling so CreateHostBackdropBrush (CompositionBackdrop) actually
-        // feeds the content behind the popup instead of rendering dark/empty. Without this the whole windowed-popup
-        // acrylic was inert — the frost we saw earlier was the (now-removed) DWMSBT_TRANSIENTWINDOW system backdrop.
+        // Enable host-backdrop sampling so CreateHostBackdropBrush (CompositionBackdrop) actually feeds the content
+        // behind the popup instead of rendering dark/empty.
         unsafe
         {
             ACCENT_POLICY accent = new() { AccentState = ACCENT_ENABLE_HOSTBACKDROP };

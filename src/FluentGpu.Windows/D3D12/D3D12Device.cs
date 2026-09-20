@@ -2689,8 +2689,33 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     break;
                 }
                 case DrawOp.PushLayer:
-                    pos += Unsafe.SizeOf<PushLayerCmd>();         // wired to the backdrop subsystem (phase 5)
+                {
+                    // This route composites NO layers: it is the layerKind == 0 path, i.e. a NON-PRIMARY swapchain (a
+                    // popup window, a detached pop-out) where the shared acrylic canvas is unavailable, or a stream
+                    // with no layer ops at all. An Acrylic layer's opaque FallbackColor base — the first thing
+                    // AcrylicCompositor lays down under the blur — is therefore never produced here, and the recorder
+                    // has already dropped the node's duplicate Fallback fill (it would occlude the frost wherever the
+                    // layer DOES run). Paint the fallback in its place: WinUI's own no-transparency answer for the
+                    // surface, instead of a see-through plate of floating text. Rect + radii are already device-space,
+                    // so the transform is identity.
+                    var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<PushLayerCmd>();
+                    if (L.Kind != (int)LayerKind.Acrylic || L.Fallback.A <= 0f || L.GroupAlpha <= 0f) break;
+                    if (Cull(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip);
+                    var linst = new RectInstance
+                    {
+                        PosX = L.DeviceRect.X, PosY = L.DeviceRect.Y, W = L.DeviceRect.W, H = L.DeviceRect.H,
+                        RTL = L.Radii.TopLeft, RTR = L.Radii.TopRight, RBR = L.Radii.BottomRight, RBL = L.Radii.BottomLeft,
+                        R = L.Fallback.R, G = L.Fallback.G, B = L.Fallback.B, A = L.Fallback.A,
+                        M11 = 1f, M12 = 0f, M21 = 0f, M22 = 1f, Dx = 0f, Dy = 0f, Opacity = L.GroupAlpha,
+                    };
+                    ApplyRoundedClip(ref linst);
+                    _rectInsts.Add(linst);
+                    _frameRectCount++;
+                    PushRun(PrimKind.Rect);
                     break;
+                }
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
                     break;
@@ -4116,12 +4141,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     float dmgX = carve ? L.OwnDmgX : ctx.Damage.X, dmgY = carve ? L.OwnDmgY : ctx.Damage.Y;
                     float dmgW = carve ? L.OwnDmgW : ctx.Damage.W, dmgH = carve ? L.OwnDmgH : ctx.Damage.H;
                     SceneCat(CatComposite);
-                    // §2.3/E10: ctx.ScrollHold lets a layer that already HAS a retained snapshot of this exact geometry
-                    // stretch it across the scroll (refreshing on the cadence) instead of re-blurring on the every-frame
-                    // damage a scrolling backdrop emits. A first-frame / post-resize / uncached layer still blurs now.
+                    // §2.3/E10: a layer that already HAS a retained snapshot of this exact geometry (stamp unchanged)
+                    // stretches it across a damage-driven miss (refreshing on the cadence) instead of re-blurring on
+                    // the every-frame damage a scrolling backdrop, an inertial coast, a programmatic scroll, or
+                    // row-realize damage all emit. A first-frame / post-resize / uncached layer still blurs now.
                     _acrylic!.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
                         dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
-                        acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv, ctx.ScrollHold);
+                        acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
                     // The frosted surface is composited by AcrylicCompositor's own PSOs, which carry no stencil state:
                     // inside a tier-3 scope it is clipped by the SCISSOR only (documented + counted, never silent).

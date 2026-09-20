@@ -59,7 +59,17 @@ public sealed unsafe partial class Win32App : IPlatformApp
 
         ReadWheelScrollParams();
         ReadReducedMotion();
+        ReadAdvancedEffects();
     }
+
+    /// <summary>Publish the OS transparency preference into <see cref="FluentGpu.Dsl.Materials.AdvancedEffectsEnabled"/>
+    /// - the engine's material VALUE, read where acrylic is emitted rather than branched on per surface. Exactly the
+    /// <see cref="ReadReducedMotion"/> shape: read once at startup and again from every window's WM_SETTINGCHANGE (the
+    /// theme broadcast carries it, but unconditionally is cheaper than parsing the area name twice), a plain bool write
+    /// on the UI thread. Without this the blur was paid unconditionally - the user turning "Transparency effects" off
+    /// changed nothing at all.</summary>
+    internal static void ReadAdvancedEffects()
+        => FluentGpu.Dsl.Materials.AdvancedEffectsEnabled = Win32Theme.TransparencyEffectsEnabled();
 
     /// <summary>Publish the OS animation preference into <see cref="FluentGpu.Dsl.Motion.ReducedMotion"/> — the engine's
     /// reduced-motion VALUE (never a branch in an authoring path: the motion helpers and the scroll/pager glides read it at
@@ -680,6 +690,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
     private long _lastModalPaintMs;
+    // One modal loop's cost, reported once at WM_EXITSIZEMOVE: "sluggish" is otherwise unfalsifiable. ticks = how many
+    // keep-alive WM_TIMERs the loop let through at all (the loop peeks for mouse input and can starve them), paints =
+    // how many of those actually asked for a frame.
+    private long _moveLoopStartMs;
+    private int _moveLoopTicks, _moveLoopPaints;
     private const int ModalResizeMinIntervalMs = 33;   // ~30 Hz live relayout for redirection-bitmap windows / move ticks
     private static readonly Point2 OffscreenDip = new(-10000f, -10000f);
 
@@ -1942,6 +1957,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // …and the reduced-motion accessibility preference (SPI_GETCLIENTAREAANIMATION), for the same reason: the
                 // broadcast carries no area name for it, so refresh unconditionally (one cheap SPI read).
                 Win32App.ReadReducedMotion();
+                // …and the transparency preference (Personalize\EnableTransparency), the WinUI AcrylicBrush gate.
+                Win32App.ReadAdvancedEffects();
                 return false;
             case WM_ENTERSIZEMOVE:
                 // Entered the OS modal move/size loop. Arm a ~120 Hz timer so frames keep flowing (animations, caret,
@@ -1949,6 +1966,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 _inMoveSizeLoop = true;
                 _sizedInMoveSizeLoop = false;
                 _lastModalPaintMs = 0;
+                _moveLoopStartMs = Environment.TickCount64;
+                _moveLoopTicks = 0;
+                _moveLoopPaints = 0;
                 SetTimer(hWnd, MoveLoopTimerId, 8, null);
                 return true;
             case WM_EXITSIZEMOVE:
@@ -1958,7 +1978,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // EVERY loop's end reaches the engine (edge resizes included — consumers filter): a video drag started by
                 // BeginSystemMove holds its chrome for the loop's duration and releases it here.
                 _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
-                if (_engineMoveLoop) { _engineMoveLoop = false; Diag.Line("[window.move] end"); }
+                {
+                    long loopMs = Environment.TickCount64 - _moveLoopStartMs;
+                    string cost = $"ms={loopMs} ticks={_moveLoopTicks} paints={_moveLoopPaints} " +
+                        $"fps={(loopMs > 0 ? _moveLoopPaints * 1000.0 / loopMs : 0):0.#} video={(_hasLiveVideo ? 1 : 0)}";
+                    if (_engineMoveLoop) { _engineMoveLoop = false; Diag.Line($"[window.move] end {cost}"); }
+                    else Diag.Line($"[window.size] end {cost}");
+                }
                 // A pure titlebar drag between two monitors fires no WM_DISPLAYCHANGE (the desktop topology didn't
                 // change) and no WM_DPICHANGED either when the two monitors share a DPI but differ in refresh rate —
                 // so this settle point is the one reliable place a cross-monitor drag ends. Re-derive here too.
@@ -1970,8 +1996,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 {
                     // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
                     // keep-alives so ambient animation can advance without flooding the modal loop.
+                    if (_inMoveSizeLoop) _moveLoopTicks++;
                     if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo) return true;
-                    if (_inMoveSizeLoop && ThrottleModalTickPaint()) return true;
+                    // A move WE started is never throttled. Measured: an 8 s content-initiated drag delivered 490
+                    // keep-alive ticks and painted 167 of them — 21 fps — because a snap preview / DPI event latches
+                    // _sizedInMoveSizeLoop true and turns the 33 ms edge-resize throttle on for the rest of the loop.
+                    // An edge resize is expensive per frame and deserves the cap; sliding a window is not.
+                    if (_inMoveSizeLoop && !_engineMoveLoop && ThrottleModalTickPaint()) return true;
+                    if (_inMoveSizeLoop) _moveLoopPaints++;
                     PaintRequested?.Invoke();
                     return true;
                 }
@@ -2183,7 +2215,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     int rb = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi);
                     if (pt.y < rb)
                     {
-                        result = (LRESULT)(pt.x < rb ? HTTOPLEFT : pt.x >= _w - rb ? HTTOPRIGHT : HTTOP);
+                        if (pt.x < rb) { result = (LRESULT)HTTOPLEFT; return true; }
+                        if (pt.x >= _w - rb) { result = (LRESULT)HTTOPRIGHT; return true; }
+                        int caption = HitTestRegions(pt.x, pt.y, buttonsOnly: false);
+                        if (caption == HTCAPTION) { result = (LRESULT)HTCAPTION; return true; }
+                        result = (LRESULT)HTTOP;
                         return true;
                     }
                 }
@@ -2261,6 +2297,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             // player would hold its chrome up (the WindowMove hold) until some unrelated resize.
             case WM_NCLBUTTONDOWN when _engineMovePending:
                 _engineMovePending = false;
+                // THE POST IS ASYNCHRONOUS BY DESIGN (see BeginSystemMove), so the button may have come up in the gap
+                // between the request and this dispatch. Handing DefWindowProc a caption press with nothing held
+                // starts a move loop that has no release to wait for: Windows then trails the window after the cursor
+                // until the next click — "I am not holding anything and it is still moving". The PHYSICAL button is
+                // the only truth available here; the engine contact was already cancelled by BeginSystemMove, and no
+                // WM_LBUTTONUP is coming for a press the loop never took. SM_SWAPBUTTON because the primary button is
+                // the RIGHT one for a left-handed pointer, and VK_LBUTTON is physical, not logical.
+                const int VkLButton = 0x01, VkRButton = 0x02, SmSwapButton = 23;   // winuser.h; not in the static-import set
+                if ((GetAsyncKeyState(GetSystemMetrics(SmSwapButton) != 0 ? VkRButton : VkLButton) & 0x8000) == 0)
+                {
+                    if (_engineMoveLoop)
+                    {
+                        _engineMoveLoop = false;
+                        _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
+                        Diag.Line("[window.move] end released-before-loop");
+                    }
+                    result = 0;
+                    return true;
+                }
                 result = DefWindowProcW(hWnd, msg, wParam, lParam);
                 if (_engineMoveLoop)
                 {

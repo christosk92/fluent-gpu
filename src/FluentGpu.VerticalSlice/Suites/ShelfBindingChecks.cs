@@ -27,6 +27,7 @@ static class ShelfBindingChecks
         {
             CheckRetainedRows(strings);
             CheckMeasurement(strings);
+            CheckMeasurementWidthDrivenFirstRender(strings);
             CheckLazyGridVisibility(strings);
             CheckLazyGridRenderGate(strings);
             CheckPropsDataGate(strings);
@@ -57,15 +58,19 @@ static class ShelfBindingChecks
         int mounts = probe.Mounts;
         scene.TryGetScroll(viewport, out var before);
         probe.Items.Value = Items("new", 12);
-        // Prop delivery and every mounted item settle in the same flush/frame.
-        host.RunFrame();
+        // Ordinary metadata delivery uses the hosted reactive slice, which may yield between the shelf,
+        // Responsive and card renders. Wait for the observed page-one card's label with the same finite
+        // ceiling as Settle. The virtual shelf need not realize/update every offscreen item; cumulative mount
+        // count is not the current realized window. Identity, focus, popup and current action are still checked.
+        bool metadataReady = SettleUntil(host,
+            () => !FindTextNode(scene, strings, viewport, "new-3").IsNull, out int metadataFrames);
         var updatedTitle = FindTextNode(scene, strings, viewport, "new-3");
         scene.TryGetScroll(viewport, out var after);
         Check("gate.shelf.binding.metadata retains viewport, row nodes, pager and focus",
-            !title.IsNull && updatedTitle == title && FindScrollNode(scene, scene.Root) == viewport
+            metadataReady && !title.IsNull && updatedTitle == title && FindScrollNode(scene, scene.Root) == viewport
             && probe.Mounts == mounts && probe.Pager.Page == 1 && MathF.Abs(before.OffsetX - after.OffsetX) < 0.5f
             && !focused.IsNull && FocusedNode(scene, scene.Root) == focused,
-            $"sameTitle={updatedTitle == title} mounts={mounts}->{probe.Mounts} page={probe.Pager.Page} offset={before.OffsetX}->{after.OffsetX}");
+            $"ready={metadataReady} frames={metadataFrames} sameTitle={updatedTitle == title} mounts={mounts}->{probe.Mounts} page={probe.Pager.Page} offset={before.OffsetX}->{after.OffsetX}");
         Check("gate.shelf.binding.popup retains an open controlled popup across metadata replacement",
             card.Open.Peek() && !FindTextNode(scene, strings, scene.Root, "popup-3").IsNull,
             $"open={card.Open.Peek()}");
@@ -125,7 +130,91 @@ static class ShelfBindingChecks
             $"heights={before.ViewportH}->{taller.ViewportH}->{shorter.ViewportH} sameViewport={same}");
     }
 
-    static void Settle(AppHost host) { for (int i = 0; i < 12; i++) host.RunFrame(); }
+    // ── Regression: a measured shelf whose card HEIGHT is WIDTH-DRIVEN (16:9 thumb + fixed text block, exactly the
+    // shape of a real Album/Artist shelf card) with a small enough item count to complete its probe in ONE pass
+    // (ShelfProbeMath.Chunk=4, 3 items here). At mount the shelf's self-measured width is 0 for its first render
+    // (FillRowVirtualLayout.Fit(0, …) ⇒ cardW=minCardW), so a WIDTH-DRIVEN card's height at that fit differs from its
+    // height at the real fit that lands moments later (a fixed/square card would not reproduce this — its height is
+    // the same regardless of cardW). Before the ResetProbePass fix this races: the min-width pass can complete and
+    // lock _measuredH, ResetProbePass then clears the probe node handles, and the immediately-following real-width
+    // re-probe re-emits the SAME KEYED cells while the old ones are still mounted — the reconciler reuses the nodes,
+    // OnRealized never refires (mount-only), and the handles stay null forever (maxH=0, ArmProbeRetry × MaxProbeRetries,
+    // stuck). The gate is simply: after Settle, the locked viewport height matches the REAL fit's card height (never
+    // the w=0 min-width one, and never zero/stuck), and it stays quiet — no probe cells still mounted, no further churn.
+    static void CheckMeasurementWidthDrivenFirstRender(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("shelf-measure-width-driven", new Size2(640, 400), 1f));
+        window.Show();
+        var probe = new WidthDrivenProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+        Settle(host);
+        var scene = host.Scene;
+        var viewport = FindScrollNode(scene, scene.Root);
+        scene.TryGetScroll(viewport, out var vp);
+
+        // The shelf's own available width is its parent's content width (320f — same fixed parent shape CheckMeasurement
+        // uses), the fit a real width-driven card lands at once the real width is known. Computed the SAME way PagedShelf
+        // itself computes it (the public, exposed-static Fit), not re-derived some other way.
+        var (_, fitCardW) = FillRowVirtualLayout.Fit(320f, WidthDrivenProbe.MinCardW, WidthDrivenProbe.MaxCardW, WidthDrivenProbe.Gap);
+        float expectedCardH = MathF.Round(fitCardW * 9f / 16f) + 72f;
+        // PagedShelfCore.ShadowClearance + LiftClearance (12f each): the vertical-halo headroom the viewport reserves
+        // above/below the locked card height.
+        float expectedViewportH = expectedCardH + 24f;
+        bool lockedRight = !viewport.IsNull && MathF.Abs(vp.ViewportH - expectedViewportH) < 1f;
+
+        // A stuck/oscillating pass keeps re-arming its UseTimeout continuation (ArmProbeRetry/AdvanceProbe), so a
+        // still frame right after Settle would still show component renders and probe-node allocations; a converged
+        // shelf renders nothing further.
+        var steady = host.RunFrame();
+        scene.TryGetScroll(viewport, out var afterSteady);
+        bool quiet = MathF.Abs(afterSteady.ViewportH - vp.ViewportH) < 0.5f && steady.HotPhaseAllocBytes == 0
+                  && steady.ComponentsRendered == 0;
+
+        Check("gate.shelf.binding.measurement a width-driven card whose first-render (w=0) fit differs from the real fit still locks the correct height",
+            lockedRight && quiet,
+            $"cardW={fitCardW:0.#} expectedH={expectedCardH:0.#} expectedViewport={expectedViewportH:0.#} actualViewport={vp.ViewportH:0.#} quiet={quiet} steadyBytes={steady.HotPhaseAllocBytes} steadyRenders={steady.ComponentsRendered}");
+    }
+
+    sealed class WidthDrivenProbe : Component
+    {
+        public const float MinCardW = 140f, MaxCardW = 200f, Gap = 12f;
+        static readonly IReadOnlyList<Item> WidthDrivenItems = ShelfBindingChecks.Items("wd", 3);
+
+        public override Element Render() => new BoxEl
+        {
+            Width = 320f, Direction = 1,
+            Children =
+            [
+                PagedShelf.Create(WidthDrivenItems, Card,
+                    minCardW: MinCardW, maxCardW: MaxCardW, gap: Gap,
+                    headerGap: 0f, edgeFade: 0f, measured: true,
+                    keyOf: static (item, _) => item.Id.ToString()),
+            ],
+        };
+
+        // The shape that makes the bug reproducible: a 16:9 thumb sized to the fitted card WIDTH plus a fixed text
+        // block below it. Its height therefore MOVES between the w=0 first-render fit (cardW=minCardW) and the real
+        // fit that lands moments later — a fixed/square card's height would not move and could never reproduce the race.
+        static Element Card(Item item, int index, float width)
+        {
+            float h = MathF.Round(width * 9f / 16f) + 72f;
+            return new BoxEl { Width = width, Height = h, Direction = 1, Children = [Text(item.Title)] };
+        }
+    }
+
+    const int MaxSettleFrames = 12;
+    static void Settle(AppHost host) { for (int i = 0; i < MaxSettleFrames; i++) host.RunFrame(); }
+    static bool SettleUntil(AppHost host, Func<bool> ready, out int frames)
+    {
+        for (frames = 1; frames <= MaxSettleFrames; frames++)
+        {
+            host.RunFrame();
+            if (ready()) return true;
+        }
+        frames = MaxSettleFrames;
+        return false;
+    }
     static void CheckLazyGridVisibility(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();

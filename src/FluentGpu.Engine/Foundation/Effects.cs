@@ -171,6 +171,63 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     // `Tok.AcrylicFlyout` (FluentGpu.Dsl Tokens.cs) instead of hard-binding the dark constant.
     public static AcrylicSpec Flyout => InAppDefault;
     public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
+
+    /// <summary>The CPU reference of the acrylic composite — what the backdrop shader produces for ONE already-blurred
+    /// backdrop sample (noise excluded: it is a per-pixel dither, not part of the colour). Blur is a no-op over a
+    /// uniform backdrop, so over a flat colour this IS the shader's answer, which is what makes it gateable headlessly.
+    /// <para>Recipe, in the shader's order (AcrylicBrush.cpp:446-452,500-517 → AcrylicCompositor's PSMain): resolve the
+    /// possibly-transparent backdrop over the opaque <see cref="Fallback"/>; LUMINOSITY-blend the tint at
+    /// <see cref="LuminosityOpacity"/> (takes the tint's lightness, KEEPS the backdrop's hue and saturation); then
+    /// COLOR-blend the tint at <see cref="TintOpacity"/> (takes the tint's hue/saturation at the luminosity result's
+    /// lightness).</para>
+    /// <para>The luminosity step is why acrylic is not a flat plate and why "how opaque is it?" is the wrong question:
+    /// the dark in-app recipe pins lightness hard (LuminosityOpacity .96) yet passes the backdrop's CHROMA through
+    /// almost untouched, so a dark flyout over a saturated page reads as that page's hue, desaturated and darkened —
+    /// never neutral grey. A surface that reads neutral grey over a coloured page is not running this at all.</para></summary>
+    public ColorF CompositeOver(ColorF backdrop)
+    {
+        // WinUI resolves the backdrop over the OPAQUE FallbackColor first (a transparent backdrop acrylics against the
+        // fallback, not against black).
+        float ia = 1f - Math.Clamp(backdrop.A, 0f, 1f);
+        float br = backdrop.R * backdrop.A + Fallback.R * ia;
+        float bg = backdrop.G * backdrop.A + Fallback.G * ia;
+        float bb = backdrop.B * backdrop.A + Fallback.B * ia;
+
+        float tl = Luminance(Tint.R, Tint.G, Tint.B);
+        SetLuminance(br, bg, bb, tl, out float lr, out float lg, out float lb);
+        float lum = Math.Clamp(LuminosityOpacity, 0f, 1f);
+        lr = br + (lr - br) * lum; lg = bg + (lg - bg) * lum; lb = bb + (lb - bb) * lum;
+
+        SetLuminance(Tint.R, Tint.G, Tint.B, Luminance(lr, lg, lb), out float cr, out float cg, out float cb);
+        float tOp = Math.Clamp(TintOpacity, 0f, 1f);
+        return new ColorF(lr + (cr - lr) * tOp, lg + (cg - lg) * tOp, lb + (cb - lb) * tOp, 1f);
+    }
+
+    /// <summary>Rec.709 relative luminance — the shader's <c>Lum()</c>, and the quantity the luminosity blend transplants.</summary>
+    private static float Luminance(float r, float g, float b) => r * 0.2126f + g * 0.7152f + b * 0.0722f;
+
+    /// <summary>The Photoshop non-separable <c>SetLum</c> + <c>ClipColor</c> pair (identical to the shader): shift the
+    /// colour to the target luminance, then compress it back toward that luminance if the shift pushed a channel out of
+    /// [0,1] — which is what keeps hue stable instead of clipping it toward white/black.</summary>
+    private static void SetLuminance(float r, float g, float b, float target, out float or_, out float og, out float ob)
+    {
+        float d = target - Luminance(r, g, b);
+        r += d; g += d; b += d;
+        float l = Luminance(r, g, b);
+        float n = Math.Min(r, Math.Min(g, b));
+        float x = Math.Max(r, Math.Max(g, b));
+        if (n < 0f)
+        {
+            float k = l / Math.Max(l - n, 1e-5f);
+            r = l + (r - l) * k; g = l + (g - l) * k; b = l + (b - l) * k;
+        }
+        if (x > 1f)
+        {
+            float k = (1f - l) / Math.Max(x - l, 1e-5f);
+            r = l + (r - l) * k; g = l + (g - l) * k; b = l + (b - l) * k;
+        }
+        or_ = Math.Clamp(r, 0f, 1f); og = Math.Clamp(g, 0f, 1f); ob = Math.Clamp(b, 0f, 1f);
+    }
 }
 
 /// <summary>Renderer policy for a per-node self-blur layer.</summary>

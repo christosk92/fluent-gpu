@@ -228,7 +228,7 @@ public static class PaletteBuilder
             StrokeCardDefault    = strokeCard,
             StrokeDividerDefault = strokeDiv,
             StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
-            StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),   // edge definition for the near-solid light flyout plate
+            StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // WinUI SurfaceStrokeColorFlyout light = #0F000000 (dark #33000000 already matches)
             StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
             StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
             StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
@@ -427,7 +427,7 @@ public static class PaletteBuilder
             StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
             StrokeDividerDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
             StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
-            StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),
+            StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // WinUI SurfaceStrokeColorFlyout light = #0F000000
             StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
             StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
             StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
@@ -511,7 +511,7 @@ public static class PaletteBuilder
         StrokeCardDefault    = ColorF.FromRgba(0xDC, 0xDA, 0xD4),
         StrokeDividerDefault = ColorF.FromRgba(0xE3, 0xE2, 0xDF),
         StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
-        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),   // edge definition for the near-solid light flyout plate
+        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // WinUI SurfaceStrokeColorFlyout light = #0F000000 (dark #33000000 already matches)
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
         StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),

@@ -154,7 +154,7 @@ public sealed class MediaPlayerElement : Component
     /// pre-existing defaults unchanged: decoration still follows its own (square-by-default) shape (a decorative
     /// surface's shape IS the caller's shape), and everything else still keeps the standard overlay radius.</summary>
     private CornerRadius4 FrameCorners =>
-        IsFullscreenPresentation ? default
+        PresentingFullscreen ? default
         : CornerRadius > 0f ? CornerRadius4.All(CornerRadius)
         : IsDecorative ? CornerRadius4.All(CornerRadius)
         : Radii.OverlayAll;
@@ -208,6 +208,12 @@ public sealed class MediaPlayerElement : Component
     /// which is mpv's <c>--cursor-autohide-fs-only</c> and what every windowed player does: hiding the cursor over a
     /// small inline video steals it from the page around it, and the user cannot tell whether the app has hung.</summary>
     public CursorAutoHidePolicy CursorAutoHide { get; init; } = CursorAutoHidePolicy.FullscreenOnly;
+    /// <summary>The idle machine's ONE output, published for a host that draws its own on-media chrome instead of this
+    /// element's transport. Bind it rather than building a second timer: dwell, the leave debounce, the scrub / menu /
+    /// keyboard / window-move holds and the accessibility override all live in one pure machine, and the cursor hides
+    /// off the same edge — two machines would mean a host strip that is up while the cursor is gone. The element only
+    /// ever writes it (from the timer sync, never from Render); a host only reads.</summary>
+    public Signal<bool>? ChromeVisibleOut { get; init; }
     /// <summary>A press on the VIDEO (never on a control) that travels past the drag box moves the WINDOW through the OS
     /// move loop (<see cref="InputHooks.WindowBeginMove"/>) — Aero Snap, the snap bar, shake and monitor hops all work,
     /// because it is the system's own loop. A press that does not travel stays a click (reveal) / double-click
@@ -219,13 +225,46 @@ public sealed class MediaPlayerElement : Component
     /// <summary>The host is presenting this element fullscreen (its own surface, not the element's overlay path).
     /// Drives the transport glyph, the ⋯ row label and Esc handling so a host-owned fullscreen does not render a
     /// control named for the state the user is already in. Distinct from the internal overlay-owned
-    /// <see cref="IsFullscreenPresentation"/>; the two are OR-ed everywhere the presentation state is consulted.</summary>
+    /// <see cref="IsFullscreenPresentation"/>; the two are OR-ed everywhere the presentation state is consulted.
+    /// Frozen at mount — prefer <see cref="HostFullscreen"/> when the bit can change without remounting the hole.</summary>
     public bool IsHostFullscreen { get; init; }
+
+    /// <summary>Live host-fullscreen bit. Read each render so a stay-mounted hole can fill the monitor without a
+    /// generation remount. When set, OR-ed with <see cref="IsHostFullscreen"/> into <see cref="PresentingFullscreen"/>.</summary>
+    public IReadSignal<bool>? HostFullscreen { get; init; }
 
     /// <summary>The element is being PRESENTED fullscreen, by either route (its own overlay, or a host surface that set
     /// <see cref="IsHostFullscreen"/>). Every label, glyph, Escape guard and cursor-policy decision reads this, never
     /// the overlay-only flag — a control named for the state the user is already in reads as a dead button.</summary>
-    private bool PresentingFullscreen => IsFullscreenPresentation || IsHostFullscreen;
+    private bool PresentingFullscreen => IsFullscreenPresentation || HostPresenting;
+
+    /// <summary>Host-owned fullscreen from EITHER route: the frozen <see cref="IsHostFullscreen"/> bit or the live
+    /// <see cref="HostFullscreen"/> signal. Every exit decision reads this. Testing only the frozen bool left Escape a
+    /// silent no-op for a host that drives fullscreen through the signal — which is exactly the shape a stay-mounted
+    /// hole has, and the shape the signal exists to serve.</summary>
+    private bool HostPresenting => IsHostFullscreen || (HostFullscreen?.Peek() ?? false);
+
+    /// <summary>The ways OUT of a fullscreen presentation.</summary>
+    internal enum FullscreenExit : byte { None, OverlayPresentation, Host, OwnOverlay }
+
+    /// <summary>Which way out Escape takes. Escape only ever EXITS — never enters, never quits. The overlay
+    /// presentation leaves through its own exit; a host-owned fullscreen leaves through the HOST, because the host put
+    /// us there and only it knows how to put us back; the element's own overlay is torn down locally. Pure, so the
+    /// three-way choice is a unit test rather than something you can only find by pressing Escape in the one placement
+    /// that gets it wrong.</summary>
+    internal static FullscreenExit ExitRouteFor(bool overlayPresentation, bool hostPresenting, bool ownOverlayOpen)
+        => overlayPresentation ? FullscreenExit.OverlayPresentation
+         : hostPresenting ? FullscreenExit.Host
+         : ownOverlayOpen ? FullscreenExit.OwnOverlay
+         : FullscreenExit.None;
+
+    /// <summary>Host (or overlay) fullscreen drops the floor so a stretched host path can fill the monitor.</summary>
+    internal static float VideoAreaMinHeight(bool presentingFullscreen, bool decorative)
+        => presentingFullscreen || decorative ? 0f : 160f;
+
+    /// <summary>Crop (UniformToFill) keeps an overflowing rect + viewport clip. The pump clamp would shrink that overflow
+    /// back into the stage and crop would silently stretch like Fill.</summary>
+    internal static bool PumpClampsOverflow(VideoAspectMode mode) => mode != VideoAspectMode.UniformToFill;
     /// <summary>When set, F11 and the transport's fullscreen button DELEGATE instead of opening this element's own
     /// overlay — the host app owns where fullscreen lives. Unset keeps the standalone behaviour verbatim.</summary>
     public Action? FullscreenRequested { get; init; }
@@ -267,6 +306,7 @@ public sealed class MediaPlayerElement : Component
     private Action<Action>? _postToUi;
     private readonly Action _drainPumpRequest;
     private int _pumpPostQueued;
+    (VideoAspectMode Mode, int Aw, int Ah, int Nw, int Nh, int Vw, int Vh, int Rw, int Rh, int Host, int Pres) _loggedPump;
 
     /// <summary>Create the control's stable delegates once: the UI-post drain reused by every native media event, and the
     /// chrome machine's handlers (the wake, the pointer, the window-move gesture) — so no input allocates a delegate.</summary>
@@ -352,6 +392,7 @@ public sealed class MediaPlayerElement : Component
         if (_vis is not { } vis) return;
         double now = _wake.NowMs;
         vis.Tick(now);
+        if (ChromeVisibleOut is { } outSig && outSig.Peek() != vis.ChromeVisible) outSig.Value = vis.ChromeVisible;
         if (_chromeVisible is { } sig && sig.Peek() != vis.ChromeVisible)
         {
             sig.Value = vis.ChromeVisible;
@@ -581,6 +622,7 @@ public sealed class MediaPlayerElement : Component
         var localFullscreen = UseSignal(false);
         var fullscreen = FullscreenState ?? localFullscreen;
         _fullscreenState = fullscreen;
+        _ = HostFullscreen?.Value;
         var localAspect = UseSignal(ToAspectMode(Stretch));
         var localCustomAspect = UseSignal(16.0 / 9.0);
         var aspectSig = AspectMode ?? localAspect;                 // materialized controlled signals (no write-sniffing)
@@ -670,7 +712,6 @@ public sealed class MediaPlayerElement : Component
         });
 
         RectF area = areaBounds.Value;
-        RectF videoRect = (audioOnly || area.W <= 0f) ? area : FitVideoRect(area, natural, aspect, customAspect, _lastPumpScale);
 
         // ── the chrome machine: ONE pure policy, ONE timer, ONE sync ────────────────────────────────────────────────
         // Buffering, a stall, an ABR quality switch and Opening are deliberately NOT inputs: none of them reveals the
@@ -686,9 +727,19 @@ public sealed class MediaPlayerElement : Component
 
         // gate.media.el.transport-suppressed reads this exact spelling: auto-hide is gated on the transport existing.
         bool autoHideArmed = AreTransportControlsEnabled && AutoHideTransportControls && !SuppressTransport && !IsDecorative;
+        // ...but the CURSOR is not the transport's. A host that draws its OWN on-media chrome turns this transport off
+        // and still wants mpv's cursor: idle over the picture and the pointer goes away. Gating the machine on the
+        // transport existing is why CursorAutoHide was inert on every suppressed surface — the Disabled hold pins
+        // ChromeVisible true, and the cursor only ever hides once the conceal has finished. Running it for the cursor
+        // costs one wake, armed only while the pointer is inside, and publishes a ChromeVisible the host may bind (it
+        // is what its own strip should fade on, so the two can never disagree about what "idle" means).
+        bool cursorArmed = !IsDecorative && AutoHideTransportControls && CursorAutoHide != CursorAutoHidePolicy.Never;
+        // A host that binds ChromeVisibleOut is asking the machine to run FOR IT. Its strip is not our element, so
+        // nothing else here can tell that idle still matters on this surface.
+        bool hostChromeArmed = ChromeVisibleOut is not null && !IsDecorative && AutoHideTransportControls;
         bool a11y = IsAccessibilityActive?.Invoke() ?? false;
-        UseEffect(() => { double t = Now(); vis.SetEnabled(autoHideArmed, t); vis.SetAccessibility(a11y, t); Sync(); },
-            HashCode.Combine(autoHideArmed, a11y));
+        UseEffect(() => { double t = Now(); vis.SetEnabled(autoHideArmed || cursorArmed || hostChromeArmed, t); vis.SetAccessibility(a11y, t); Sync(); },
+            HashCode.Combine(autoHideArmed, cursorArmed || hostChromeArmed, a11y));
 
         // Only USER-VISIBLE stops reveal and hold (paused / ended / failed / audio-only) — see ChromePlaybackOf.
         ChromePlayback chromePlayback = ChromePlaybackOf(playIntent, state, audioOnly);
@@ -811,11 +862,12 @@ public sealed class MediaPlayerElement : Component
         // one key a panicking user reaches for, and the only thing it is allowed to do is give the window back.
         void ExitFullscreenOnly()
         {
-            if (IsFullscreenPresentation) { ExitFullscreen?.Invoke(); return; }
-            // Host-owned fullscreen leaves through the HOST, never through the element's overlay path: the host put us
-            // there and only it knows how to put us back.
-            if (IsHostFullscreen) { FullscreenRequested?.Invoke(); FullscreenChanged?.Invoke(false); return; }
-            if (fullscreen.Peek()) LeaveFullscreen();
+            switch (ExitRouteFor(IsFullscreenPresentation, HostPresenting, fullscreen.Peek()))
+            {
+                case FullscreenExit.OverlayPresentation: ExitFullscreen?.Invoke(); break;
+                case FullscreenExit.Host: FullscreenRequested?.Invoke(); FullscreenChanged?.Invoke(false); break;
+                case FullscreenExit.OwnOverlay: LeaveFullscreen(); break;
+            }
         }
 
         // A terminal failure wins over the opening spinner: otherwise a Failed state with a lingering play intent would
@@ -864,7 +916,10 @@ public sealed class MediaPlayerElement : Component
             Key = "media-hole",
             Grow = 1f,
             AlignSelf = FlexAlign.Start,
-            Margin = LetterboxInsets(area, videoRect),   // area MINUS these insets == the fitted video rect
+            // area MINUS these insets == the fitted video rect. This is the TERMINAL (it is right whenever `area` is
+            // current, and it is what the reconciler re-asserts on every patch); the SAME-SOLVE corrector for the frame
+            // the area itself changes on is SyncHoleLetterbox, called from the area's OnBoundsChanged below.
+            Margin = HoleInsets(area, natural, aspect, customAspect, _lastPumpScale),
             VideoHole = holeActive,
             VideoSurfaceId = binding.Token,
             OnRealized = h => { holeRef.Value = h; binding.RequestPump(); },
@@ -904,16 +959,24 @@ public sealed class MediaPlayerElement : Component
             Direction = 1,
             Grow = 1f,
             Shrink = 1f, MinWidth = 0f,
-            MinHeight = IsFullscreenPresentation || IsDecorative ? 0f : 160f,
+            MinHeight = VideoAreaMinHeight(PresentingFullscreen, IsDecorative),
             ClipToBounds = true,
             Corners = FrameCorners,
             Fill = ColorF.Transparent,
             OnRealized = h => { areaRef.Value = h; binding.RequestPump(); },
             OnBoundsChanged = b =>
             {
+                // SAME-SOLVE letterbox (the resize-desync fix). FlexLayout delivers this from SetArrangedBounds for the
+                // AREA (FlexLayout.cs:718) BEFORE it recurses into this ZStack's children (:723), so writing the hole's
+                // Margin into the layout column here places the hole at the fitted rect IN THIS PASS. The signal write
+                // below can never do that: a value written during layout only marks stale, so its consumer re-renders
+                // NEXT frame (RenderContext.Measure.cs:18-20) — which is precisely how the picture came to lag the
+                // chrome by a frame (and, when the stale hole overflowed the clipped card, to be squashed by the pump's
+                // overflow net). The signal write stays: the transport's width tier and the caption lift read it.
+                SyncHoleLetterbox(b);
                 if (b != areaBounds.Peek()) areaBounds.Value = b;
                 binding.RequestPump();
-            },   // resize → recompute letterbox + one settled video placement
+            },   // resize → same-frame letterbox + one settled video placement
             Children = videoChildren,
         };
 
@@ -1054,8 +1117,8 @@ public sealed class MediaPlayerElement : Component
             Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
             Corners = FrameCorners,
             ClipToBounds = true,
-            BorderColor = IsFullscreenPresentation || IsDecorative ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
-            BorderWidth = IsFullscreenPresentation || IsDecorative ? 0f : 1f,
+            BorderColor = PresentingFullscreen || IsDecorative ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
+            BorderWidth = PresentingFullscreen || IsDecorative ? 0f : 1f,
             Focusable = true,
             OnRealized = h => { playerRoot.Value = h; _playerRoot = h; },
             OnKeyDown = HandleKey,
@@ -1176,16 +1239,64 @@ public sealed class MediaPlayerElement : Component
             b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
         // Overflow safety net: a layout defect that widens the element past its host must degrade to a SMALLER
         // video, never to a video composited at a rect that is not on screen (plus an oversized ABR request).
-        if (videoRect.W > viewport.W + 0.5f || videoRect.H > viewport.H + 0.5f)
-        {
-            float rx = MathF.Max(videoRect.X, viewport.X), ry = MathF.Max(videoRect.Y, viewport.Y);
-            float rr = MathF.Min(videoRect.X + videoRect.W, viewport.X + viewport.W);
-            float rb = MathF.Min(videoRect.Y + videoRect.H, viewport.Y + viewport.H);
-            videoRect = new RectF(rx, ry, MathF.Max(0f, rr - rx), MathF.Max(0f, rb - ry));
-        }
+        VideoAspectMode pumpMode = _aspectForPump?.Peek() ?? VideoAspectMode.Uniform;
+        if (PumpClampsOverflow(pumpMode)
+            && (videoRect.W > viewport.W + 0.5f || videoRect.H > viewport.H + 0.5f))
+            videoRect = ClampUniformToViewport(videoRect, viewport);
+        LogPump(pumpMode, area, natural, videoRect, viewport, s);
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
         Player.PumpVideo(b, videoRect, s);
         if (audioOnly) b.SetVisible(false);
+    }
+
+    /// <summary>The SAME-SOLVE letterbox: place the video hole at the fitted rect for <paramref name="area"/> inside the
+    /// layout pass that just arranged the area, by writing the hole's <c>Margin</c> straight into the layout column.
+    ///
+    /// <para><b>Why this and not a bound prop.</b> The fit needs BOTH extents of the area, so it cannot be expressed as
+    /// a flex rule (<c>AspectRatio</c> derives the missing extent from the offered WIDTH only — a width-driven aspect
+    /// box overflows a short host instead of pillarboxing in it). It therefore has to be computed from a measured rect,
+    /// and every render-side road to that rect is one frame late: the area's rect only becomes available during LAYOUT,
+    /// and a value written then merely marks stale, so its reader re-renders NEXT frame
+    /// (<c>RenderContext.Measure.cs:18-20</c>). A bound <c>Margin</c> would not change that even if <c>Margin</c> were a
+    /// <c>Prop&lt;Edges4&gt;</c> (it is a plain value — <c>Dsl/Element.cs:111</c>): bound layout props are flush-phase
+    /// effects (<c>Reconciler.cs:2416-2447</c>) and the flush runs BEFORE layout, so an effect fed by a layout-written
+    /// signal still lands a frame later. The one place that is both after the area's arrange and before the hole's is
+    /// the area's own bounds-changed dispatch: <c>FlexLayout.SetArrangedBounds</c> fires it (<c>FlexLayout.cs:374-392</c>)
+    /// from the top of <c>Arrange</c> (<c>:718</c>), and the ZStack recursion into the children follows at <c>:723</c>,
+    /// reading each child's <c>Margin</c> out of the column it snapshots there (<c>:1363-1377</c>). So this write lands
+    /// in the same solve that moved the area — the hole and the sibling chrome move together, in one frame.</para>
+    ///
+    /// <para>Value-gated, and it marks the hole <c>LayoutDirty</c> exactly like the engine's own bound layout-prop
+    /// effects do. The mark is consumed by this same frame (the host clears it right after <c>_layout.Run</c>,
+    /// <c>AppHost.cs:3729</c>), so it can never become a per-frame relayout. Zero managed allocation.</para></summary>
+    private void SyncHoleLetterbox(in RectF area)
+    {
+        var scene = _scene;
+        NodeHandle hole = _holeRef?.Value ?? default;
+        if (scene is null || hole.IsNull || !scene.IsLive(hole)) return;
+        Edges4 next = HoleInsets(area, Player.NaturalSize.Peek(),
+            _aspectForPump?.Peek() ?? VideoAspectMode.Uniform,
+            _customAspectForPump?.Peek() ?? (16.0 / 9.0), _lastPumpScale);
+        // Two indexed touches instead of one held `ref`: a ref into the SoA column must not be alive across a call that
+        // can touch the store (ArrangeZStack's own snapshot comment makes the same rule explicit).
+        if (scene.Layout(hole).Margin == next) return;
+        scene.Layout(hole).Margin = next;
+        scene.Mark(hole, NodeFlags.LayoutDirty);
+    }
+
+    void LogPump(VideoAspectMode mode, RectF area, SizeI natural, RectF videoRect, RectF viewport, float scale)
+    {
+        var line = (
+            Mode: mode,
+            Aw: (int)area.W, Ah: (int)area.H,
+            Nw: natural.Width, Nh: natural.Height,
+            Vw: (int)viewport.W, Vh: (int)viewport.H,
+            Rw: (int)videoRect.W, Rh: (int)videoRect.H,
+            Host: PresentingFullscreen && !IsFullscreenPresentation ? 1 : 0,
+            Pres: IsFullscreenPresentation ? 1 : 0);
+        if (line.Equals(_loggedPump)) return;
+        _loggedPump = line;
+        Diag.Line($"[video] pump mode={mode} natural={natural.Width}x{natural.Height} area={(int)area.W}x{(int)area.H} viewport={(int)viewport.W}x{(int)viewport.H} videoRect={(int)videoRect.X},{(int)videoRect.Y} {(int)videoRect.W}x{(int)videoRect.H} hostFs={line.Host} overlayFs={line.Pres} scale={scale:0.##}");
     }
 
     /// <summary>Intersect <paramref name="rect"/> with the bounds of every <c>ClipsToBounds</c> ancestor.
@@ -1916,6 +2027,35 @@ public sealed class MediaPlayerElement : Component
             { Size = 13f, Color = Tok.OnMediaSecondary },
         ],
     };
+
+    /// <summary>The video hole's letterbox insets for an area — the ONE definition of that geometry, shared by the
+    /// render-time terminal (<see cref="Render"/>'s <c>Margin</c>) and the same-solve corrector
+    /// (<see cref="SyncHoleLetterbox"/>), so the two roads can never compute different rects. Audio-only (and a
+    /// not-yet-laid-out area) means no fit at all: the hole is inert and sits on the whole area.</summary>
+    internal static Edges4 HoleInsets(RectF area, SizeI natural, VideoAspectMode mode, double customAspect, float scale)
+        => area.W <= 0f || IsAudioOnly(natural)
+            ? default
+            : LetterboxInsets(area, FitVideoRect(area, natural, mode, customAspect, scale));
+
+    /// <summary>The pump's overflow safety net, as pure geometry: fit <paramref name="videoRect"/> into its
+    /// intersection with <paramref name="viewport"/> with ONE scale for both axes, centred on that intersection. The
+    /// presenter scales the frame into whatever rect it is handed, PER AXIS, so an anisotropic clamp IS a distorted
+    /// picture — the old per-axis intersection turned a one-axis overflow into a stretched frame with no letterboxing.
+    /// Scaling uniformly can only ever produce a SMALLER, correctly-proportioned video, which is what the net is for. A
+    /// fully clipped-away rect degrades to the empty intersection exactly as before: there is no aspect to preserve in
+    /// a zero-area rect, and the caller's pump/session semantics stay unchanged.</summary>
+    internal static RectF ClampUniformToViewport(RectF videoRect, RectF viewport)
+    {
+        float ix = MathF.Max(videoRect.X, viewport.X), iy = MathF.Max(videoRect.Y, viewport.Y);
+        float iw = MathF.Min(videoRect.X + videoRect.W, viewport.X + viewport.W) - ix;
+        float ih = MathF.Min(videoRect.Y + videoRect.H, viewport.Y + viewport.H) - iy;
+        if (videoRect.W <= 0f || videoRect.H <= 0f || iw <= 0.5f || ih <= 0.5f)
+            return new RectF(ix, iy, MathF.Max(0f, iw), MathF.Max(0f, ih));
+        float k = MathF.Min(iw / videoRect.W, ih / videoRect.H);   // ONE scale, both axes => the aspect survives
+        if (k >= 1f) return videoRect;                             // already inside: nothing to clamp
+        float w = videoRect.W * k, h = videoRect.H * k;
+        return new RectF(ix + (iw - w) * 0.5f, iy + (ih - h) * 0.5f, w, h);
+    }
 
     /// <summary>The per-edge letterbox insets (DIP) that place <paramref name="video"/> inside <paramref name="area"/> —
     /// the ONE piece of geometry the video stage is built from. The hole child is laid out with exactly these as its

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -59,6 +59,7 @@ public static class SuiteRegistry
         new("path", "path", PathSuite.Run),
         new("lottie", "lottie", LottieSuite.Run),
         new("text", "text", TextSuite.Run),
+        new("span-links", "text", SpanLinkDispatchChecks.Run),   // inline-hyperlink dispatch ownership; runs with --suite text
         new("bound", "bound", BoundTemplateSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),

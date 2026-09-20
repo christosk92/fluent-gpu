@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -678,12 +678,6 @@ static class TextSuite
         return true;
     }
 
-    static void ClickAt(AppHost host, HeadlessWindow window, Point2 p)
-    {
-        window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
-        window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
-        host.RunFrame();
-    }
 
 
     sealed class BoundSpanRowsProbe : Component

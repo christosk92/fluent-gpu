@@ -7,12 +7,16 @@ namespace FluentGpu.Render;
 /// <para>The problem: a scrolling page emits damage EVERY frame, and that damage legitimately overlaps a chrome
 /// acrylic's tight damage-test region, so <see cref="AcrylicBackdropMath.BackdropReusable"/> misses on every scroll
 /// frame and the compositor re-runs its whole pipeline (backdrop snapshot + dual-Kawase chain + composite) at frame
-/// rate. Measured on the Wavee scroll path that is the dominant component of a ~5 ms composite pass.</para>
+/// rate. Measured on the Wavee scroll path that is the dominant component of a ~5 ms composite pass. The same miss
+/// happens for an inertial coast, a programmatic scroll, or ordinary row-realize damage under a list — none of
+/// those carry a literal user-drag/wheel input, so gating the hold on "is the user's hand on the wheel right now"
+/// left every one of them re-blurring at frame rate too.</para>
 ///
 /// <para>The fix is the SAME lever the self-blur groups already pull (`SceneRecorder`'s <c>holdBlur</c>, driven by
-/// AppHost's ~0.12 s <c>SelfBlurHold</c> window): while a user scroll is active, a layer that ALREADY HAS a retained
-/// blurred snapshot stretches it across a few frames instead of re-blurring, refreshing on every
-/// <see cref="ScrollRefreshCadence"/>-th frame (30 Hz at 120 Hz, 15 Hz at 60 Hz). A heavily blurred backdrop is
+/// AppHost's ~0.12 s <c>SelfBlurHold</c> window), but applied unconditionally to any damage-driven miss whose
+/// backdrop stamp is unchanged: a layer that ALREADY HAS a retained blurred snapshot of the SAME geometry stretches
+/// it across a few frames instead of re-blurring, refreshing on every <see cref="ScrollRefreshCadence"/>-th frame
+/// (30 Hz at 120 Hz, 15 Hz at 60 Hz) — regardless of what caused the damage. A heavily blurred backdrop is
 /// low-frequency by construction — the blur destroys exactly the high-frequency detail that would make ≤3 frames of
 /// lag legible under fast-moving content — which is why WinUI likewise decouples acrylic refresh from frame rate.</para>
 ///
@@ -21,16 +25,15 @@ namespace FluentGpu.Render;
 /// (rect / sigma / scale / canvas / backdrop-source / clip) ⇒ blur immediately, because that snapshot was blurred for a
 /// different rect and reusing it would MISPLACE the frost rather than merely date it. There is no fallback tint path.</para>
 ///
-/// <para><b>Healing.</b> When the hold releases, the entry's held-frame counter is still nonzero, and the compositor
-/// treats a nonzero counter as "this snapshot is known-stale" — so the first non-hold frame runs a full refresh even
-/// though nothing moved that frame (the plain damage test would otherwise report a clean HIT and freeze the stale
-/// snapshot in place until the next unrelated damage). After that refresh the counter is 0 and ordinary damage-driven
-/// behavior resumes.</para>
+/// <para><b>Healing.</b> A held entry's held-frame counter only ever grows to <paramref name="cadence"/> − 1 before
+/// <see cref="ShouldRefresh"/> forces a real refresh — so staleness is bounded to the cadence regardless of how long
+/// the damage keeps missing, with no separate "hold released" signal needed: the very next real refresh resets the
+/// counter to 0 (<c>AcrylicCompositor.BlurAndComposite</c>) and ordinary damage-driven behavior resumes from there.</para>
 /// </summary>
 public static class AcrylicScrollHold
 {
-    /// <summary>Refresh every Nth frame while the scroll hold is live: 4 ⇒ 30 Hz at 120 Hz (≤25 ms of backdrop lag),
-    /// 15 Hz at 60 Hz (≤50 ms). 1 disables the hold entirely (every frame refreshes).</summary>
+    /// <summary>Refresh every Nth frame while a same-stamp retained snapshot is being held: 4 ⇒ 30 Hz at 120 Hz
+    /// (≤25 ms of backdrop lag), 15 Hz at 60 Hz (≤50 ms). 1 disables the hold entirely (every frame refreshes).</summary>
     public const int ScrollRefreshCadence = 4;
 
     /// <summary>
@@ -45,22 +48,20 @@ public static class AcrylicScrollHold
     /// <list type="bullet">
     /// <item>no retained snapshot ⇒ <see langword="true"/> (blur now — the hold can only stretch an existing one)</item>
     /// <item>stamp changed ⇒ <see langword="true"/> (the snapshot belongs to a different rect/sigma/scale/source)</item>
-    /// <item>scroll hold released ⇒ <see langword="true"/> (damage-driven again; also the heal of a stale entry)</item>
-    /// <item>hold + retained + same stamp ⇒ <see langword="true"/> only on every <paramref name="cadence"/>-th frame</item>
+    /// <item>retained + same stamp ⇒ <see langword="true"/> only on every <paramref name="cadence"/>-th frame — for
+    /// ANY damage-driven miss, whatever the cause (a literal user drag/wheel, an inertial coast, a programmatic
+    /// scroll, or row-realize damage from virtualization): the decision no longer distinguishes them.</item>
     /// </list></para>
     /// </summary>
-    /// <param name="scrollHold">The frame's user-scroll hold (AppHost's SelfBlurHold window: any user scroll this frame,
-    /// plus a ~0.12 s tail), carried to the backend on <c>FrameInfo.ScrollHold</c> — a property of the PUBLISHED frame.</param>
     /// <param name="hasRetained">This layer has a live retained (pinned) blurred snapshot.</param>
     /// <param name="stampUnchanged">The retained snapshot's <see cref="AcrylicBackdropMath.BackdropStamp"/> equals this
     /// frame's — same rect (quantized), sigma, scale, canvas, backdrop source and clip.</param>
     /// <param name="framesHeld">Consecutive frames this entry has already been composited stale (0 = fresh).</param>
     /// <param name="cadence">Refresh period in frames; ≤1 means "never hold".</param>
-    public static bool ShouldRefresh(bool scrollHold, bool hasRetained, bool stampUnchanged, int framesHeld, int cadence)
+    public static bool ShouldRefresh(bool hasRetained, bool stampUnchanged, int framesHeld, int cadence)
     {
         if (!hasRetained) return true;
         if (!stampUnchanged) return true;
-        if (!scrollHold) return true;
         if (cadence <= 1) return true;
         return framesHeld + 1 >= cadence;
     }

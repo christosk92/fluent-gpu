@@ -2303,6 +2303,19 @@ public sealed partial class TreeReconciler
 
         ImageState newState = Images is not null && newId != 0 ? Images.StateOf(new ImageHandle(newId)) : ImageState.None;
         bool oldDrawable = Images is not null && oldId != 0 && Images.StateOf(new ImageHandle(oldId)) == ImageState.Ready;
+        // A virtual slot is a presentation shell, not an item identity. Different sources
+        // must not borrow its previous item's ready cover during a pending decode.
+        bool wrongItem = oldDrawable && newId != 0
+            && !Images!.SameSource(new ImageHandle(oldId), new ImageHandle(newId))
+            && IsVirtualImage(node);
+        if (wrongItem)
+        {
+            FinishImageSwap(node);
+            UnpinImageNode(node, oldId);
+            paint.ImageId = 0;
+            oldId = 0;
+            oldDrawable = false;
+        }
         bool holdable = oldDrawable && newState == ImageState.Pending;
 
         if (holdable)
@@ -2363,6 +2376,14 @@ public sealed partial class TreeReconciler
     // node index → the swap in flight: the OUTGOING texture stays pinned and is drawn opaque under the incoming image
     // for ImageCache.SwapCrossfadeMs (SceneRecorder, ImageVisualEffects.SwapOutgoingId). Lives here, not only on
     // ImageVisualEffects, because that struct is rewritten wholesale from the element every reconcile.
+    // Image-key changes only: includes nested components rendered outside the realization pass.
+    private bool IsVirtualImage(NodeHandle node)
+    {
+        for (var parent = _scene.Parent(node); !parent.IsNull && _scene.IsLive(parent); parent = _scene.Parent(parent))
+            if (_virtuals.ContainsKey(parent)) return true;
+        return false;
+    }
+
     private readonly record struct ImageSwap(NodeHandle Node, int OutgoingId, int IncomingId, float StartMs, float DurationMs);
     private readonly Dictionary<int, ImageSwap> _imageSwaps = new();
     private readonly List<int> _imageSwapSweep = new(4);

@@ -69,12 +69,29 @@ public sealed partial class FlexLayout
         public ulong PInputSig;                                          // LayoutSig at that moment (see LayoutSig)
         // P4 (Operation ultra-fast GPU engine): a CROSS-PASS 2-entry ring — typically one slot per (measure-width,
         // arrange-width) pair a stretched child is asked for every pass (layout.md §2.3). Valid ONLY while
-        // SceneStore.IsLayoutClean(node) holds (no dirty node anywhere in the subtree this frame) AND NodeGen matches
-        // (an ABA guard against a recycled node index) AND, defensively, LayoutSig matches (the same conservative
-        // superset TryResolveSizeStable already trusts) — a hit returns the stored size WITHOUT descending at all.
+        // SceneStore.IsLayoutClean(node) holds (no dirty node anywhere in the subtree THIS frame) AND
+        // SceneStore.SubtreeVersion(node) still reads the value it read at StoreRing time (a MONOTONIC, cross-FRAME
+        // signal — see SceneStore.Aux.cs — that nothing in this node's subtree has been marked layout-dirty since;
+        // the frame-scoped clean bit alone is NOT enough, see the 2026-09-19 fix note below) AND
+        // NodeGen matches (an ABA guard against a recycled node index) AND, defensively, LayoutSig matches (the same
+        // conservative superset TryResolveSizeStable already trusts) — a hit returns the stored size WITHOUT
+        // descending at all.
         public uint Ring0NodeGen, Ring1NodeGen;
         public float Ring0AvailW, Ring0W, Ring0H; public ulong Ring0Sig;
         public float Ring1AvailW, Ring1W, Ring1H; public ulong Ring1Sig;
+        // P4 fix (2026-09-19, "the drawer-under-context-flyout overflow"): the subtree-content version read at
+        // StoreRing time. Before this field, a ring hit was validated only by SceneStore.IsLayoutClean(node) — TRUE
+        // means "nothing under here was marked dirty THIS FRAME", which says nothing about frames before it. A ring
+        // slot recorded for this (node, availW) BEFORE an expanded row's drawer opened (its CLOSED size) is never
+        // re-stored by the reflow ticks that follow (they only refresh the width(s) they actually visit); a LATER
+        // frame's unrelated full-root layout (a "…" context flyout opening forces one) revisits the row at the same
+        // availW with IsLayoutClean(row) true again (nothing touched it THIS frame) and that stale CLOSED-size slot
+        // hits, so Measure returns without descending, ArrangeVirtualMeasured commits the closed RowH to the extent
+        // table, and the open drawer overflows into the rows below. SubtreeVersion is bumped on every LayoutDirty
+        // mark for the node AND every ancestor and NEVER resets, so comparing it (not just the frame-scoped clean
+        // flag) at hit time is the only thing that proves "no one has touched this subtree in ANY frame since this
+        // slot was written".
+        public uint Ring0Ver, Ring1Ver;
     }
     private MeasureMemo[] _memo = System.Array.Empty<MeasureMemo>();
     private uint _measureGen;
@@ -106,16 +123,26 @@ public sealed partial class FlexLayout
         if (Verifying) return false;   // FG_LAYOUT_VERIFY: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
+        // Two complementary validators, both required (P4 fix, 2026-09-19):
+        //  - IsLayoutClean(node): SAME-FRAME dirtiness — something in this subtree is marked dirty and not yet
+        //    processed/cleared, so any stored answer for it is suspect regardless of version (the parity gate's
+        //    shape: a root ring slot stored by one pass, then a repeat edit to a still-dirty leaf before any clear —
+        //    without this gate Measure(root) hit the ring, never descended, and Arrange read the leaf's stale
+        //    measured Bounds).
+        //  - SubtreeVersion(node): CROSS-FRAME staleness — see the field comment on Ring0Ver/Ring1Ver. The clean flag
+        //    alone only proves "clean THIS frame", which a ring slot written frames earlier can satisfy on a later
+        //    frame's full-root re-layout even though the subtree changed in between (the drawer-overflow bug).
         if (!_scene.IsLayoutClean(node)) return false;
         uint gen = node.Raw.Gen;
+        uint curVer = _scene.SubtreeVersion(node);
         ref MeasureMemo m = ref _memo[i];
         ulong sig = 0; bool sigComputed = false;
-        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW)
+        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW && m.Ring0Ver == curVer)
         {
             sig = LayoutSig(node); sigComputed = true;
             if (sig == m.Ring0Sig) { size = new Size2(m.Ring0W, m.Ring0H); return true; }
         }
-        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW)
+        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW && m.Ring1Ver == curVer)
         {
             if (!sigComputed) sig = LayoutSig(node);
             if (sig == m.Ring1Sig) { size = new Size2(m.Ring1W, m.Ring1H); return true; }
@@ -131,12 +158,13 @@ public sealed partial class FlexLayout
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return;
         uint gen = node.Raw.Gen;
+        uint ver = _scene.SubtreeVersion(node);   // P4 fix (2026-09-19): stamp the version TryRingHit will require unchanged
         ulong sig = LayoutSig(node);
         ref MeasureMemo m = ref _memo[i];
-        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW) { m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; return; }
-        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW) { m.Ring1W = size.Width; m.Ring1H = size.Height; m.Ring1Sig = sig; return; }
-        m.Ring1NodeGen = m.Ring0NodeGen; m.Ring1AvailW = m.Ring0AvailW; m.Ring1W = m.Ring0W; m.Ring1H = m.Ring0H; m.Ring1Sig = m.Ring0Sig;
-        m.Ring0NodeGen = gen; m.Ring0AvailW = availW; m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig;
+        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW) { m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; m.Ring0Ver = ver; return; }
+        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW) { m.Ring1W = size.Width; m.Ring1H = size.Height; m.Ring1Sig = sig; m.Ring1Ver = ver; return; }
+        m.Ring1NodeGen = m.Ring0NodeGen; m.Ring1AvailW = m.Ring0AvailW; m.Ring1W = m.Ring0W; m.Ring1H = m.Ring0H; m.Ring1Sig = m.Ring0Sig; m.Ring1Ver = m.Ring0Ver;
+        m.Ring0NodeGen = gen; m.Ring0AvailW = availW; m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; m.Ring0Ver = ver;
     }
 
     private Size2 StoreMemo(NodeHandle node, float availW, Size2 size)

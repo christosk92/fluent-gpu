@@ -245,6 +245,7 @@ internal sealed class OverlayEntry
     /// property of the HOST (its device/async-render-loop configuration), not of this popup's placement, so it cannot
     /// become a grant later in this entry's life — see the lease site.</summary>
     public bool PopupWindowRefused;
+    public bool WantWindowedLogged;
     public bool OwnerWasLive;         // latch: this entry's owner node has been observed live at least once
     public bool AnchorDeathNotified;  // one-shot: don't re-BeginClose every frame after a vetoed dead-anchor close
     public long CloseStartTicks;      // BeginClose stamp; AfterAnimations force-finalizes past ClosingDeadlineMs
@@ -864,11 +865,12 @@ public sealed class OverlayHost : Component
     // for 83ms, then reaches one over 83ms linear. TAS_HIDEPOPUP is an 83ms linear opacity-only close.
     const float PopupTranslateMs = 367f, PopupOpacityDelayMs = 83f;
 
-    // WinUI MenuFlyout renders into its OWN windowed popup over DesktopAcrylicBackdrop (it samples the desktop). The
-    // Win32 analogue is a transparent composited popup HWND carrying DWM's DWMSBT_TRANSIENTWINDOW acrylic + rounded
-    // corners + system shadow (native Windows 11 menu). CommandBar shares that host material. Every other chrome maps
-    // to None — and since a popup HWND is only leased when the material is non-None (see the wantWindowed gate), those
-    // chromes stay in-window on the engine acrylic compositor.
+    // WHICH material a popup HWND would carry IF one is leased. This answers "what kind of window", NOT "window or
+    // not" — the lease itself is decided by ConstrainToRootBounds (see the wantWindowed gate). Menu + CommandBar chrome
+    // ask for the transparent composited acrylic host (CompositionBackdrop's rounded host-backdrop group + tint over an
+    // opaque FallbackColor, plus its masked drop shadow); every other chrome maps to None, which means a popup HWND is
+    // never leased for it at all — a material-less popup window gets no CompositionBackdrop, and the engine acrylic
+    // compositor inside a popup swapchain would blur that swapchain's own transparent-cleared back buffer.
     private static PopupWindowMaterial WindowMaterialFor(OverlayEntry e)
         => e.Chrome is PopupChrome.Flyout or PopupChrome.CommandBar ? PopupWindowMaterial.TransientAcrylic : PopupWindowMaterial.None;
 
@@ -895,6 +897,27 @@ public sealed class OverlayHost : Component
         return a.Tint with { A = coverage };
     }
 
+    /// <summary>What an OS-BACKED popup plate paints: the presenter's RESIDUAL tint only — the acrylic recipe's tint
+    /// color at its own <c>TintOpacity</c> (dark #2C2C2C @ .15; light #FCFCFC @ 0 = fully transparent). This is WinUI's
+    /// <c>MenuFlyoutPresenter</c>: a transparent presenter over <c>DesktopAcrylicBackdrop</c>, NOT a plate carrying the
+    /// whole material.
+    /// <para>It replaces <see cref="FlatAcrylicFill"/> on this path, and that substitution is the bug the flat,
+    /// shadowless menus were. A windowed popup renders into its own swapchain, composited OVER the backdrop the WINDOW
+    /// carries (CompositionBackdrop's rounded host-backdrop group + tint). Painting the recipe's ~96.6%-opaque coverage
+    /// there occludes that backdrop completely: whatever blur the compositor produced, the user saw a flat slab of
+    /// #2C2C2C. The material belongs to the WINDOW on this path; the plate owes it only the tint the presenter itself
+    /// carries.</para>
+    /// <para>The plate can be this transparent because the window always has something opaque behind it:
+    /// CompositionBackdrop's opaque FallbackColor sprite sits at the BOTTOM of the acrylic group (under the
+    /// host-backdrop brush, so it only shows where that brush renders empty). That sprite is also what the composition
+    /// drop shadow is masked by — WinUI's no-transparency fallback is the solid FallbackColor WITH its elevation
+    /// shadow, and both hold.</para></summary>
+    private static ColorF OsBackedTintFill()
+    {
+        var a = Tok.AcrylicFlyout;
+        return a.Tint with { A = a.TintOpacity };
+    }
+
     /// <summary>How much of a popup plate has to sit inside a video hole before its acrylic is dropped. Half: a plate
     /// mostly over the video blurs mostly nothing, and the fraction that DOES overlap real content is what the flat
     /// fill approximates. Deliberately not 1.0 — a plate that clears the hole by a few pixels would otherwise keep
@@ -915,9 +938,10 @@ public sealed class OverlayHost : Component
     /// idempotent write (it only mutates + marks paint-dirty when something actually changed, so it is safe to run
     /// every frame for every entry):
     /// <list type="bullet">
-    /// <item><b>OS-backed</b> (a popup HWND was leased) — renders TRANSPARENT over DWM acrylic, so clear the engine
-    /// acrylic AND the engine drop shadow (the transparent plate would otherwise reveal the shadow primitive drawn
-    /// behind it, and DWM draws the window shadow) and paint <see cref="FlatAcrylicFill"/> over the DWM blur.</item>
+    /// <item><b>OS-backed</b> (a popup HWND was leased) — the WINDOW carries the material, so clear the engine acrylic
+    /// AND the engine drop shadow (the window's own chrome owns both: DWM's system backdrop + its rounded-window shadow,
+    /// or CompositionBackdrop's acrylic group + masked drop shadow in the fallback regime) and paint only
+    /// <see cref="OsBackedTintFill"/> — the presenter's residual tint — over it.</item>
     /// <item><b>Over a video hole</b> — clear the acrylic, keep the shadow, paint <see cref="FlatAcrylicFill"/>. The
     /// acrylic there is pure loss: <c>DrawOp.DrawVideo</c> is a DestOut erase and the video is a sibling DComp visual
     /// z-BELOW the UI swapchain, so the backdrop the plate samples is premultiplied ZERO — it blurs NOTHING — while an
@@ -952,7 +976,12 @@ public sealed class OverlayHost : Component
         // OpaqueSurface is the caller's DECLARED form of the same fact (a media transport knows its pickers are over
         // the video), so it wins from frame one without waiting for a geometry answer.
         bool overVideo = !osBacked && (e.OpaqueSurface || e.VideoHoleLatched);
-        bool wantAcrylic = !osBacked && !overVideo;
+        // The WinUI fallback policy (Materials.AcrylicEnabled: transparency off / slow effects / energy saver). The
+        // recorder already refuses to emit the layer; clearing the scene-side spec too keeps the host's own view of the
+        // surface honest — otherwise every frame would author an acrylic nothing consumes, and the plate would keep the
+        // acrylic-on resting fill while the surface is really running its fallback.
+        bool policyOff = !FluentGpu.Dsl.Materials.AcrylicEnabled;
+        bool wantAcrylic = !osBacked && !overVideo && !policyOff;
         bool wantShadow = !osBacked;
         bool hasAcrylic = scene.TryGetAcrylic(target, out _);
         bool hasShadow = scene.TryGetShadow(target, out _);
@@ -981,7 +1010,15 @@ public sealed class OverlayHost : Component
         // chromes transparent-over-acrylic — stripped exactly the fallback FlyoutSurface's comment says must never be
         // stripped, and over a fullscreen video hole produced a menu that was nothing but its 1px ring and its item
         // text. Combined with the frame-to-frame flip above, that is the flyout that alternated solid/invisible.
-        ColorF desiredFill = wantAcrylic ? Tok.AcrylicFlyout.Fallback : FlatAcrylicFill();
+        // An OS-backed plate is the ONE case where a near-opaque resting fill is wrong rather than merely redundant:
+        // its backdrop is the window's, underneath this swapchain, so the fill does not sit on top of a layer that
+        // might not run — it sits on top of the material itself and hides it.
+        ColorF desiredFill = wantAcrylic ? Tok.AcrylicFlyout.Fallback
+                           : osBacked ? OsBackedTintFill()
+                           // Effects off is not the video-hole case: WinUI cross-fades to the FallbackColor itself,
+                           // not to an approximation of the recipe's coverage.
+                           : policyOff ? Tok.AcrylicFlyout.Fallback
+                           : FlatAcrylicFill();
         ref NodePaint tp = ref scene.Paint(target);
         if (changed || !tp.Fill.Equals(desiredFill))
         {
@@ -1060,18 +1097,36 @@ public sealed class OverlayHost : Component
                         // (WinUI FlyoutBase_Partial.cpp:3382-3392 useMonitorBounds = IsWindowedPopup()); constrained
                         // popups place against the viewport. The work-area seam is host-wired (AppHost → IPlatformApp
                         // GetWorkArea via MonitorFromPoint/GetMonitorInfo).
-                        // WinUI: "MenuFlyouts are always windowed, whereas other flyouts are windowed if
-                        // ShouldConstrainToRootBounds is false" (FlyoutBase_Partial.cpp:965-966; only
-                        // MenuFlyout::ShowAtCore calls SetIsWindowedPopup, MenuFlyout_Partial.cpp:145). We honour that
-                        // ONLY for chromes that carry an OS window material. DELIBERATE DEVIATION: a material-less
-                        // popup HWND gets no CompositionBackdrop (D3D12Device.cs:614 creates one only for
+                        // WINDOW OR NOT. WinUI's stated rule is "MenuFlyouts are always windowed, whereas other
+                        // flyouts are windowed if ShouldConstrainToRootBounds is false" (FlyoutBase_Partial.cpp:965-966)
+                        // — but the REASON a MenuFlyout is windowed is that it MAY need to escape the window, and
+                        // MenuFlyout::ShowAtCore is exactly where ShouldConstrainToRootBounds is forced false
+                        // (MenuFlyout_Partial.cpp:145 SetIsWindowedPopup). So the two clauses are one clause, and the
+                        // one thing that actually decides is ConstrainToRootBounds. A menu that CANNOT escape has no
+                        // reason to pay for an HWND — and paying for it is not free, it is a REGRESSION: a windowed
+                        // popup renders into its OWN swapchain, so it loses the engine's in-window acrylic (the proven
+                        // one — gate.overlay.inwindow-acrylic-layer-emitted) and gets whatever the window's composition
+                        // chrome manages instead. Shipped as "every menu is windowed", that produced the flat opaque
+                        // grey audio-device menu (2026-09-20): no acrylic, no blur, no depth.
+                        //
+                        // So: windowed IFF the caller declared the popup may leave the root bounds, AND its chrome
+                        // carries an OS window material. The material clause is a DELIBERATE DEVIATION from WinUI: a
+                        // material-less popup HWND gets no CompositionBackdrop (D3D12Device creates one only for
                         // DesktopAcrylic), and the engine's in-app acrylic compositor snapshots THE CANVAS IT IS
                         // RENDERING INTO — inside a popup swapchain that canvas is the popup's own transparent-cleared
-                        // back buffer, so the FlyoutPresenter would composite a flat, unfrosted ~0.97-coverage slab
-                        // instead of blurred app content (and ConfigurePopupChrome/AnimatePopupOpen/Close would all be
-                        // silent no-ops). A FlyoutPresenter therefore stays IN-WINDOW, where its acrylic has a backdrop
-                        // to sample. Revisit if a popup swapchain ever gains access to the owner window's canvas.
-                        bool wantWindowed = (e.Chrome == PopupChrome.Flyout || !e.ConstrainToRootBounds)
+                        // back buffer, so a windowed FlyoutPresenter would composite a flat, unfrosted ~0.97-coverage
+                        // slab instead of blurred app content (and ConfigurePopupChrome/AnimatePopupOpen/Close would
+                        // all be silent no-ops). Such a popup therefore stays IN-WINDOW even when it asked to escape.
+                        //
+                        // Everything ELSE about a menu is chrome-keyed, not window-keyed, and is unchanged either way:
+                        // FlyoutSurface still builds the two-layer plate+items MenuFlyoutPresenter for
+                        // PopupChrome.Flyout, ClosedRatioFor still yields the 0.5/0.67 unfold, BackdropNodeOf still
+                        // puts the acrylic + shadow on the PLATE, and the corner-join squaring still runs. The only
+                        // difference an in-window menu sees is that it now drives the MenuPopupThemeTransition
+                        // clip/translate itself (the `e.PopupWindowToken < 0` branch of the open seed) instead of
+                        // handing the slide to the composition root — which is the same code path a windowed lease
+                        // REFUSAL already took.
+                        bool wantWindowed = !e.ConstrainToRootBounds
                                             && WindowMaterialFor(e) != PopupWindowMaterial.None
                                             && svc.Hooks is { OpenPopupWindow: not null };
                         RectF container = vpRect;
@@ -1082,6 +1137,11 @@ public sealed class OverlayHost : Component
                             FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: wantWindowed),
                             e.AnchorOffsetX, in aRect);
 
+                        if (wantWindowed && e.PopupWindowToken < 0 && !e.PopupWindowRefused && !e.WantWindowedLogged)
+                        {
+                            e.WantWindowedLogged = true;
+                            Diag.Line($"[overlay] wantWindowed chrome={e.Chrome}");
+                        }
                         if (wantWindowed)
                         {
                             // Lease a platform popup window for this subtree (host records it into its own DrawList +

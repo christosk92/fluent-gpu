@@ -1084,30 +1084,24 @@ public sealed class InputDispatcher
                     bool sameOwner = sameNode || (!upOwner.IsNull && upOwner == NearestClickOwner(_down));
                     if (sameOwner)
                     {
-                        DispatchPointerReleased(up, e.PositionPx);
-                        // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
-                        // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
-                        // Commits on the OWNER, never on the inert hit node (which has no handler to fire).
-                        //
                         // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
                         // Hyperlink commits on the release over the pressed hyperlink, RichTextBlock.cpp:2996-3001).
-                        // Still strictly release-over-the-SAME-node: a span action is the leaf's, not the owner's, so
-                        // the widened owner-equality above must not let a press elsewhere on the plate fire a link.
-                        // A hit link IS the click: the nearest clickable ancestor does NOT also activate. SpanLinksBit
-                        // is not ClickBit, so NearestClickOwner walks past the text leaf to the plate - firing both
-                        // made "click the artist link on a track card" navigate AND play/open the card (WinUI: the
-                        // Hyperlink handles the pointer event, so the ancestor Button never sees the click).
-                        int linkSpan = sameNode && (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0
-                            ? HitLinkSpan(up, PointToLocal(up, e.PositionPx)) : -1;
-                        if (linkSpan >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)linkSpan < (uint)linkSpans.Length)
+                        // A hit link owns the WHOLE gesture — resolved FIRST, before the release dispatch, because the
+                        // ancestor must see neither the release nor the click. SpanLinksBit is neither PressedBit nor
+                        // ClickBit, so both NearestGestureOwner and NearestClickOwner walk past the text leaf to the
+                        // plate; letting either fire made "click the artist link on a track row" navigate AND
+                        // select/play the row. The release channel is the one that mattered in practice: a list row
+                        // raises its ItemContainer tap from OnPointerReleased (SelectorVisualsBound), not OnClick.
+                        int linkSpan = ResolveLinkSpan(up, sameNode, e.PositionPx);
+                        if (linkSpan >= 0) FireLinkSpan(up, linkSpan);
+                        else
                         {
-                            // Index-resolved click (P2): the span's OWN action wins; else the node's OnSpanClick(i) —
-                            // the bound-row case, where the span carries IsLink but no per-span closure.
-                            var onClick = linkSpans[linkSpan].OnClick;
-                            if (onClick is not null) onClick();
-                            else if (_scene.TryGetSpanClickHandler(up, out var onSpanClick)) onSpanClick(linkSpan);
+                            DispatchPointerReleased(up, e.PositionPx);
+                            // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
+                            // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
+                            // Commits on the OWNER, never on the inert hit node (which has no handler to fire).
+                            if (!wasRepeat) InvokeActivation(upOwner.IsNull ? up : upOwner, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
                         }
-                        else if (!wasRepeat) InvokeActivation(upOwner.IsNull ? up : upOwner, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
                         handled++;
                     }
                     else if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget) &&
@@ -1273,7 +1267,11 @@ public sealed class InputDispatcher
             OnRepeatReleased?.Invoke(_down);
         // The captured OnDrag gesture owner learns its gesture died (WinUI PointerCaptureLost): controls reset the
         // scrub/hover preview in OnPointerExit — a RatingControl alt-tabbed mid-sweep must not keep its downRef.
-        if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget)) _scene.GetPointerExit(_dragTarget)?.Invoke();
+        if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget))
+        {
+            _scene.GetPointerExit(_dragTarget)?.Invoke();
+            _scene.GetDragCanceled(_dragTarget)?.Invoke();
+        }
         _down = NodeHandle.Null;
         _dragTarget = NodeHandle.Null;
         _scrollDragNode = NodeHandle.Null;
@@ -2573,25 +2571,22 @@ public sealed class InputDispatcher
                 handled = true;
             else if (up == _down)
             {
-                DispatchPointerReleased(up, e.PositionPx);
                 // Same activation-ownership walk as the mouse release: a tap on a CanDrag-only (or cursor-only) child
                 // commits on the nearest clickable ancestor. Touch keeps the STRICT same-node gate — the pan/slop
                 // machinery above already owns "did this contact stay put", and widening it here would let a contact
                 // that wandered to a sibling still tap the plate.
-                // A tapped hyperlink span IS the tap (same rule as the mouse release): the link fires and the clickable
-                // ancestor stays silent, instead of both running.
-                var tapOwner = NearestClickOwner(up);
-                int linkSpan = (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0
-                    ? HitLinkSpan(up, PointToLocal(up, e.PositionPx)) : -1;
-                if (linkSpan >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)linkSpan < (uint)linkSpans.Length)
-                {
-                    // Index-resolved click (P2): the span's OWN action wins; else the node's OnSpanClick(i).
-                    var onClick = linkSpans[linkSpan].OnClick;
-                    if (onClick is not null) onClick();
-                    else if (_scene.TryGetSpanClickHandler(up, out var onSpanClick)) onSpanClick(linkSpan);
-                }
+                // A tapped hyperlink span IS the tap (same rule as the mouse release): resolved FIRST, so the link
+                // fires and the ancestor sees neither the RELEASE nor the click. Both channels matter — a list row
+                // raises its ItemContainer tap from OnPointerReleased, so suppressing only InvokeActivation still let a
+                // tap on an artist link select/play the row behind it.
+                int linkSpan = ResolveLinkSpan(up, sameNode: true, e.PositionPx);
+                if (linkSpan >= 0) FireLinkSpan(up, linkSpan);
                 else
+                {
+                    DispatchPointerReleased(up, e.PositionPx);
+                    var tapOwner = NearestClickOwner(up);
                     InvokeActivation(tapOwner.IsNull ? up : tapOwner, ContextRequestTrigger.Invoke);   // tap = release-over-same click (or context-invoke on a ClickRequestsContext node)
+                }
                 handled = true;
             }
             _panTarget = NodeHandle.Null;   // the pan candidate ends with the tap / completed late-pan
@@ -2652,6 +2647,35 @@ public sealed class InputDispatcher
     /// cursor-only glyph, a selectable run) must not swallow its plate's release, and does not: those bits are
     /// hit-testability, not activation ownership. Same shape as <see cref="DispatchMiddleRelease"/> /
     /// <see cref="DispatchContextRequest"/>, and self-first like <c>DragController.TryArm</c>'s barrier.</para></summary>
+    /// <summary>Resolve a hyperlink span under a release, as the ONE question both release paths ask BEFORE anything
+    /// else runs. A hit link owns the whole pointer gesture: WinUI's inline Hyperlink handles the pointer event, so the
+    /// ancestor sees neither the click NOR the release (RichTextBlock.cpp:2996-3001). Answering this first is what makes
+    /// that true — resolving it after <see cref="DispatchPointerReleased"/> suppressed only <see cref="InvokeActivation"/>
+    /// and still let an ancestor's <c>OnPointerReleased</c> run, which is how "click the artist link on a track row"
+    /// navigated AND selected/played the row: a list row raises its ItemContainer tap from <c>OnPointerReleased</c>
+    /// (SelectorVisualsBound), not from <c>OnClick</c>, so it rode the one channel the old suppression did not cover.
+    /// <para>Returns -1 when there is no link under the point, or when <paramref name="sameNode"/> is false: a span
+    /// action is the LEAF's, so the widened owner-equality that lets a plate absorb a wandering press must not let a
+    /// press elsewhere fire a link.</para></summary>
+    private int ResolveLinkSpan(NodeHandle up, bool sameNode, Point2 positionPx)
+    {
+        if (!sameNode || up.IsNull) return -1;
+        if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) == 0) return -1;
+        int span = HitLinkSpan(up, PointToLocal(up, positionPx));
+        if (span < 0) return -1;
+        return _scene.TryGetSpanText(up, out var spans) && (uint)span < (uint)spans.Length ? span : -1;
+    }
+
+    /// <summary>Fire the resolved span's action: the span's OWN closure wins, else the node's index-resolved
+    /// <c>OnSpanClick(i)</c> (P2, bound-row links that carry IsLink but no per-span closure).</summary>
+    private void FireLinkSpan(NodeHandle up, int span)
+    {
+        if (!_scene.TryGetSpanText(up, out var spans) || (uint)span >= (uint)spans.Length) return;
+        var onClick = spans[span].OnClick;
+        if (onClick is not null) { onClick(); return; }
+        if (_scene.TryGetSpanClickHandler(up, out var onSpanClick)) onSpanClick(span);
+    }
+
     private void DispatchPointerReleased(NodeHandle node, Point2 positionPx)
     {
         var owner = NearestGestureOwner(node);

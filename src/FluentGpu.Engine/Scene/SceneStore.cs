@@ -296,6 +296,7 @@ public sealed partial class SceneStore : ISceneBackend
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
         _aux = new byte[capacity];
+        _subtreeVersion = new uint[capacity];
         _recordDirty = new byte[capacity];
         _recordDirtySelf = new byte[capacity];
         _recordDirtyDescendant = new byte[capacity];
@@ -1392,12 +1393,20 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         NodeFlags old = _flags[idx];
-        if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0)
+        if ((flags & NodeFlags.LayoutDirty) != 0)
         {
-            _layoutDirty.Add(h);
-            // P4 (Operation ultra-fast GPU engine): propagate a subtree-dirty bit up to the layout boundary so
-            // Measure/Arrange can skip a whole clean subtree without walking it — see SceneStore.Aux.cs.
-            MarkSubtreeLayoutDirtyChain(idx);
+            // P4 fix (2026-09-19): the subtree-content version bumps on EVERY LayoutDirty mark, edge or not. A second
+            // mark on an already-dirty node (a second edit before this frame's ClearLayoutDirty; a realize/rebind
+            // between the D1 loop's two RunDirty passes) changes content a ring slot stored in between may already
+            // answer for, and the 0→1 edge below never fires for it — see SceneStore.Aux.cs and FlexLayout.TryRingHit.
+            BumpSubtreeVersionChain(idx);
+            if ((old & NodeFlags.LayoutDirty) == 0)
+            {
+                _layoutDirty.Add(h);
+                // P4 (Operation ultra-fast GPU engine): propagate a subtree-dirty bit up to the layout boundary so
+                // Measure/Arrange can skip a whole clean subtree without walking it — see SceneStore.Aux.cs.
+                MarkSubtreeLayoutDirtyChain(idx);
+            }
         }
         if ((flags & NodeFlags.TransformDirty) != 0 && (old & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
         if ((flags & NodeFlags.BoundsAnimated) != 0 && (old & NodeFlags.BoundsAnimated) == 0) _boundsAnimated.Add(h);
@@ -2182,6 +2191,7 @@ public sealed partial class SceneStore : ISceneBackend
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _aux, n);
+        Array.Resize(ref _subtreeVersion, n);   // P4 fix: per-node subtree-content version, parallel to _aux (SceneStore.Aux.cs)
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
         Array.Resize(ref _recordDirtyWrote, n); Array.Resize(ref _recordDirtyStamp, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;

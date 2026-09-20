@@ -611,6 +611,12 @@ instead **holds**: when the OLD id is `Ready` and the NEW id is `Pending`, `Node
 from the element every reconcile, so it cannot carry state across a hold). A synchronous cache hit or an instant
 failure on the new key (both already terminal) skip the hold and commit immediately — today's behavior, unchanged.
 
+**Virtualized item identity.** Inside a virtual viewport, a different source is never held or
+cross-faded from the outgoing item's texture. The reconciler releases the outgoing pin immediately,
+adopts the new pending image (or a resident rendition of that same source), and shows its placeholder
+until ready. Superseded completions cannot restore the prior image. Same-source decode-size changes
+still use hold-last-good. Nonvirtualized media surfaces retain the intentional source-change dissolve.
+
 The hold resolves on `MarkImageDirty` (the `ImageStatusChanged` → dirty-node fan-out, §5): when the id that just
 reached a terminal state (`Ready` or `Failed`) is a node's *pending* id, that is the commit — `NodePaint.ImageId`
 is reassigned to it (a plain field write; the id is already pinned + tracked by the hold, never re-pinned) and the

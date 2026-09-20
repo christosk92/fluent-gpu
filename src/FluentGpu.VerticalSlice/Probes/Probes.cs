@@ -2508,6 +2508,14 @@ sealed class BoundHoldLastGoodProbe : Component
     };
 }
 
+// A virtual item changing identity must not borrow the previous item's decoded cover.
+sealed class VirtualImageIdentityProbe : Component
+{
+    public readonly Signal<string> Src = new("virtual/a");
+    public override Element Render() => Virtual.ListBound(1, 80f,
+        _ => new ImageEl { Source = Prop.Of(() => Src.Value), Width = 64, Height = 64 });
+}
+
 // A responsive (aspect-ratio) image tile inside a fixed-width card: no fixed extent — it fills the card's content width
 // and derives a square height. CardWidth varies per host to prove the art scales with the cell (the overflow fix).
 sealed class AspectTileProbe : Component

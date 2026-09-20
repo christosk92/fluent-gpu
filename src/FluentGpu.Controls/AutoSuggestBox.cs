@@ -720,10 +720,12 @@ public sealed class AutoSuggestBox : Component
                 Children = [root, FieldVisuals.MessageRow(vfield.Error)],
             };
 
-        if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline || !open.Value)
+        if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline)
             return field;
 
-        Element suggestions = Presenter is { } inlinePresenter
+        // Keep the editor at the same depth and child slot while the inline list opens/closes. Returning the field
+        // directly when closed reparented its EditableText after the first typed character and discarded focus.
+        Element? suggestions = !open.Value ? null : Presenter is { } inlinePresenter
             ? inlinePresenter.Build(new AutoSuggestBoxPresenterContext(query, popupWidth, SubmitPresented, Close))
             : Embed.Comp(() => new SuggestionsList
             {
@@ -735,7 +737,7 @@ public sealed class AutoSuggestBox : Component
             Width = Grow > 0f ? float.NaN : width,
             Grow = Grow,
             MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
-            Children = [field, suggestions],
+            Children = suggestions is null ? [field] : [field, suggestions],
         };
     }
 

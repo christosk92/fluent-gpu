@@ -238,6 +238,7 @@ static class ScrollSuite
         ScrollV2ValidationChecks(strings);
         TouchpadFeelChecks(strings);
         E11VirtChecks(strings);
+        CompRootPinChecks(strings);
         PagerSnapChecks(strings);
         ListConsolidationChecks(strings);
         D1CollectionHostSizingChecks(strings);
@@ -5475,6 +5476,128 @@ static class ScrollSuite
             Check("e11virt.18 ItemsView Multiple over 10k: toggle clicks, Ctrl+A = ONE range realizing nothing (bounded window re-skin) + checkbox chrome",
                 on && off && allSel && bounded && chrome,
                 $"count={sel.SelectedCount} ranges={sel.RangeCount} realized={realized} templateΔ={templateDelta}");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // e11virt.comp-pin — THE FOOTGUN, DOCUMENTED BY A TEST: a scroll bind must sit on a RAW element, never on a
+    // component's rendered root.
+    //
+    // `ScrollBindEval.ApplyPin` clamps a pin to its IMMEDIATE parent (`limit = parent.H − node.H`) and a component
+    // anchor MIRRORS its rendered child's size (`Reconciler.MirrorParticipation`), so a `.Collapse`/`.Sticky` placed on
+    // what a component RETURNS sees `limit == 0`: it never translates, `NodeFlags.StickyPinned` is never set,
+    // `ScrollState.StuckTopBit` never lights and the `:stuck` callback never fires. Wavee's playlist/Liked hero arm hit
+    // exactly this — its two persistent prefix slots are `Embed.Comp(...)` and the binds had migrated onto the item
+    // component's root, leaving an empty band under the toolbar where a pinned hero + chrome were still being reserved.
+    // The cure, and the shape this gate pins down: wrap the component in a raw `BoxEl` and put the bind on the WRAPPER.
+    // Both arms are mounted here, identical but for that one placement, so the negative twin keeps the trap visible.
+    // Neighbours: e11virt.5c (the persistent prefix itself), e11virt.prefix-disp.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    static void CompRootPinChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        (bool HeroPinned, bool ChromePinned, bool StuckTop, int Edges, bool Stuck, float HeroDy, float ChromeDy) Arm(bool onCompRoot)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("comp-pin", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new CompRootPinProbe(onCompRoot);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc0);
+            var content = sc0.ContentNode;
+
+            // Past the hero's collapse distance (HeroH − BandH = 144) and then some: both prefix slots are pinned by now.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(160f, 240f), 0, 0, 1600f));
+            for (int i = 0; i < 24 && host.HasActiveWork; i++) host.RunFrame();
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc1);
+
+            // The BIND TARGETS: the two slot roots. In the raw-wrapper arm those roots ARE the wrappers; in the
+            // component-root arm they are the component anchors, whose rendered child carries the (never-pinning) bind.
+            var r0 = host.Scene.FirstChild(content);
+            var r1 = host.Scene.NextSibling(r0);
+            var b0 = onCompRoot ? host.Scene.FirstChild(r0) : r0;
+            var b1 = onCompRoot ? host.Scene.FirstChild(r1) : r1;
+            return ((host.Scene.Flags(b0) & NodeFlags.StickyPinned) != 0,
+                    (host.Scene.Flags(b1) & NodeFlags.StickyPinned) != 0,
+                    (sc1.ScrollFlags & ScrollState.StuckTopBit) != 0,
+                    probe.StuckEdges, probe.Stuck,
+                    host.Scene.Paint(b0).LocalTransform.Dy, host.Scene.Paint(b1).LocalTransform.Dy);
+        }
+
+        var ok = Arm(onCompRoot: false);
+        Check("e11virt.comp-pin a collapse/sticky bind on a RAW WRAPPER around an Embed.Comp prefix slot really pins: StickyPinned on both wrapper roots, StuckTop on the scroller, and the :stuck callback fired exactly once",
+            ok.HeroPinned && ok.ChromePinned && ok.StuckTop && ok.Edges == 1 && ok.Stuck
+            && ok.HeroDy > 1f && ok.ChromeDy > 1f,
+            $"hero={ok.HeroPinned}/dy={ok.HeroDy:0.#} chrome={ok.ChromePinned}/dy={ok.ChromeDy:0.#} stuckTop={ok.StuckTop} edges={ok.Edges} stuck={ok.Stuck}");
+
+        var bad = Arm(onCompRoot: true);
+        Check("e11virt.comp-pin-neg the SAME binds moved onto the component's RENDERED ROOT never pin — the anchor mirrors its child's size so ApplyPin's limit is 0: no StickyPinned, no StuckTop, the :stuck callback never fires (the Wavee hero-band bug, kept visible)",
+            !bad.HeroPinned && !bad.ChromePinned && !bad.StuckTop && bad.Edges == 0 && !bad.Stuck
+            && Near(bad.HeroDy, 0f) && Near(bad.ChromeDy, 0f),
+            $"hero={bad.HeroPinned}/dy={bad.HeroDy:0.#} chrome={bad.ChromePinned}/dy={bad.ChromeDy:0.#} stuckTop={bad.StuckTop} edges={bad.Edges} stuck={bad.Stuck}");
+    }
+
+    /// <summary>Two persistent prefix slots (a 200-DIP hero, a 56-DIP chrome band) whose content is an
+    /// <c>Embed.Comp</c> child, over an ordinary recyclable 40-DIP row window. <paramref name="onComponentRoot"/> is the
+    /// ONE difference between the two arms: false puts the collapse/sticky binds on the raw <see cref="BoxEl"/> wrapper
+    /// (correct), true puts the identical rows on the component's rendered root (the footgun).</summary>
+    sealed class CompRootPinProbe : Component
+    {
+        public const int N = 400;
+        public const float HeroH = 200f;
+        public const float BandH = 56f;
+        public const float RowH = 40f;
+        static ColorF RowFill => ColorF.FromRgba(38, 44, 52);
+
+        readonly bool _onCompRoot;
+        readonly RepeatLayout _layout = RepeatLayout.Extents(ExtentOf, RowH);
+        public int StuckEdges;
+        public bool Stuck;
+
+        public CompRootPinProbe(bool onComponentRoot) => _onCompRoot = onComponentRoot;
+
+        static float ExtentOf(int i) => i == 0 ? HeroH : i == 1 ? BandH : RowH;
+
+        /// <summary>The prefix slot's CONTENT — an autonomous component, exactly as Wavee's <c>TableVerticalItem</c> is.
+        /// It carries the binds only in the negative arm.</summary>
+        sealed class PrefixBody : Component
+        {
+            readonly float _h;
+            readonly ScrollBindDsl[] _binds;
+            public PrefixBody(float h, ScrollBindDsl[] binds) { _h = h; _binds = binds; }
+            public override Element Render() => new BoxEl { Height = _h, Fill = RowFill, ScrollBinds = _binds };
+        }
+
+        public override Element Render()
+            => ItemsView.CreateBound(N,
+                scope =>
+                {
+                    int initial = scope.Index.Peek();          // the prefix never recycles, so this is its identity
+                    if (initial > 1) return new BoxEl { Height = RowH, Fill = RowFill };
+                    float h = initial == 0 ? HeroH : BandH;
+                    // Item 0 = the hero's pin (the PIN half of `.Collapse`); item 1 = the chrome's `.Sticky` at the band.
+                    ScrollBindDsl[] binds = initial == 0
+                        ? [new ScrollBindDsl { PinTop = 0f }]
+                        : [new ScrollBindDsl { PinTop = BandH, OnFlag = OnStuck }];
+                    var empty = Array.Empty<ScrollBindDsl>();
+                    Element child = Embed.Comp(() => new PrefixBody(h, _onCompRoot ? binds : empty));
+                    return _onCompRoot
+                        ? child                                                    // ✗ bind on the component's root
+                        : new BoxEl { Direction = 1, Height = h, Children = [child], ScrollBinds = binds };   // ✓ raw wrapper
+                },
+                _layout,
+                new ListOptions { Overscan = 4, PersistentPrefixCount = 2 });
+
+        void OnStuck(bool stuck)
+        {
+            StuckEdges++;
+            Stuck = stuck;
         }
     }
 
