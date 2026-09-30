@@ -56,6 +56,84 @@ public sealed class CompositorTickFilterTests
         public long LastStamp => Stamps[^1];
     }
 
+    /// <summary>Deterministic ±300 µs arrival jitter for tick <paramref name="i"/> (a fixed LCG — the same script every run).</summary>
+    private static long Jitter(int i)
+    {
+        uint x = (uint)(i * 1103515245 + 12345);
+        x ^= x >> 13;
+        return (long)(x % 601) - 300;
+    }
+
+    /// <summary>Runs the owner's "half fps after scrolling a lot" script in the filter's own domain: a 120 Hz compositor
+    /// with ±0.3 ms arrival jitter, 20 observed ticks, then a LOADED stretch of 40 ticks where the waiter observes only
+    /// every second hardware tick (it was busy for the other one), then load ends. Returns the tick index after the load.</summary>
+    private static int RunMissedTickLoad(Feeder feed, Func<int, long> trueTick)
+    {
+        int tick = 0;
+        for (int i = 0; i < 20; i++) feed.At(trueTick(tick++));                 // warm, every tick observed
+        for (int i = 0; i < 40; i++) { tick++; feed.At(trueTick(tick++)); }     // loaded: every other tick missed
+        return tick;
+    }
+
+    /// <summary>The loaded stretch's 2P gaps are MISSED ticks, not evidence that the display period changed: the period
+    /// the filter publishes (the host's refresh period — present-time prediction, pacing) must stay the true 120 Hz beat
+    /// on EVERY tick once the load ends, every tick must be accepted one period apart, and decimation must never engage.
+    /// Current code: the median of accepted gaps drifts to 2P during the load (16.6 ms published for a 8.33 ms display)
+    /// and only recovers as 1P samples re-fill the median.</summary>
+    [Fact]
+    public void MissedTicksUnderLoadNeverChangeThePublishedPeriod()
+    {
+        var feed = new Feeder(hintQpc: P120, startQpc: 0);
+        const long T0 = 1_000_000;
+        long TrueTick(int k) => T0 + k * P120 + Jitter(k);
+        int tick = RunMissedTickLoad(feed, TrueTick);
+        int before = feed.Verdicts.Count, stampsBefore = feed.Stamps.Count;
+        var periods = new List<long>();
+        for (int i = 0; i < 40; i++) { feed.At(TrueTick(tick++)); periods.Add(feed.Filter.PeriodQpc); }
+
+        Assert.All(feed.Verdicts.GetRange(before, feed.Verdicts.Count - before), v => Assert.Equal(TickVerdict.Tick, v));
+        Assert.False(feed.Filter.Decimating);
+        Assert.All(periods, p => Assert.InRange(p, P120 - 700, P120 + 700));
+        for (int i = stampsBefore + 1; i < feed.Stamps.Count; i++)
+            Assert.InRange(feed.Stamps[i] - feed.Stamps[i - 1], P120 - 700, P120 + 700);
+    }
+
+    /// <summary>After the same loaded stretch, the double-tick guard must still be ARMED: a spurious second return 1 ms
+    /// after a real tick is a duplicate and must be Ignored (holds on the current code — kept as the invariant any fix
+    /// of the published-period defect above must preserve).</summary>
+    [Fact]
+    public void MissedTicksUnderLoadLeaveTheDoubleTickGuardArmed()
+    {
+        var feed = new Feeder(hintQpc: P120, startQpc: 0);
+        const long T0 = 1_000_000;
+        long TrueTick(int k) => T0 + k * P120 + Jitter(k);
+        int tick = RunMissedTickLoad(feed, TrueTick);
+        for (int i = 0; i < 10; i++) feed.At(TrueTick(tick++));                 // load gone
+        long real = TrueTick(tick++);
+        Assert.Equal(TickVerdict.Tick, feed.At(real));
+        Assert.Equal(TickVerdict.Ignored, feed.At(real + 1_000));             // a double return 1 ms later
+    }
+
+    /// <summary>The double-tick reference must stay on the IDEAL lattice across a missed tick. A tick the waiter did not
+    /// observe (it was busy) leaves a 2P gap before the next accepted return; that return is still the tick on the
+    /// lattice, so a spurious second return 0.1 ms after it is a duplicate and must be Ignored. The defect clamped the
+    /// reference to <c>min(expected + P, now)</c> — one period BEHIND the real tick after a miss — so the spurious return
+    /// looked 1.0x a period after the reference and was published as a second tick 0.1 ms after the first.</summary>
+    [Fact]
+    public void ASpuriousReturnJustAfterARealTickThatFollowedAMissedTickIsIgnored()
+    {
+        var feed = new Feeder(hintQpc: P120, startQpc: 0);
+        const long T0 = 1_000_000;
+        long TrueTick(int k) => T0 + k * P120 + Jitter(k);
+        int tick = 0;
+        for (int i = 0; i < 20; i++) feed.At(TrueTick(tick++));   // warm, every tick observed
+        tick++;                                                   // one hardware tick the waiter missed
+        long real = TrueTick(tick++);
+        Assert.Equal(TickVerdict.Tick, feed.At(real));            // the next tick lands 2P after the last accepted one
+        Assert.Equal(TickVerdict.Ignored, feed.At(real + 100));   // a spurious return 0.1 ms later is a duplicate
+        Assert.Equal(TickVerdict.Tick, feed.At(TrueTick(tick++))); // and the beat continues on schedule
+    }
+
     [Fact]
     public void SpacedHardwareTicksProduceAConstantLatticeAndAMeasuredPeriod()
     {
@@ -140,6 +218,52 @@ public sealed class CompositorTickFilterTests
 
         Assert.Equal(TickVerdict.Tick, feed.Step(P120));            // and the lattice was rebased there
         Assert.Equal(lattice + 3_000 + P120, feed.LastStamp);
+    }
+
+    // Item D: the double-tick ignore window used to be measured from the RAW last-accepted return, so one late
+    // return (this tick's own observation landing well into what should have been its neighbour's window — a
+    // scheduling delay, not a duplicate vblank) dragged that reference forward and swallowed the genuinely NEXT
+    // tick, which was still on the original hardware cadence, as if it were a duplicate of the late one.
+    [Fact]
+    public void ALateReturnFollowedByAnOnTimeTickKeepsTheOnTimeTick()
+    {
+        var feed = new Feeder(hintQpc: P120);
+        feed.Beat(9, P120);                              // warm the median so the ignore window is a real half-period
+        long lastOnTime = feed.Now;
+
+        // This tick's own observation lands 5 ms into what should have been the NEXT tick's window — still clearly
+        // its own (distinct) tick, not a burst return, so it must be accepted.
+        Assert.Equal(TickVerdict.Tick, feed.Step(P120 + 5_000));
+
+        // The following tick is genuinely on the ORIGINAL hardware cadence — only 3.33 ms after the late one's raw
+        // arrival, comfortably inside the naive "since the raw last-accepted return" ignore window (half of ~8.33 ms).
+        // Measuring against the lattice's own idealized slot instead means the late observation never drags that
+        // reference forward, so this real, on-time tick is still accepted (the bug this test guards against).
+        Assert.Equal(TickVerdict.Tick, feed.At(lastOnTime + 2 * P120));
+    }
+
+    // Item D: an always-on tally of every Ignored verdict, not just the bursts long enough to earn their own
+    // fast-burst log line (FastBurstLogMin = 8 in Win32CompositorClock) — a single swallowed double tick must still
+    // be countable.
+    [Fact]
+    public void IgnoredCountTalliesEverySwallowedReturnEvenBelowTheBurstLogThreshold()
+    {
+        var feed = new Feeder(hintQpc: P120);
+        feed.Beat(9, P120);
+        Assert.Equal(0, feed.Filter.IgnoredCount);
+
+        Assert.Equal(TickVerdict.Ignored, feed.Step(100));   // one lone double-tick return — well under FastBurstLogMin
+        Assert.Equal(1, feed.Filter.IgnoredCount);
+
+        Assert.Equal(TickVerdict.Ignored, feed.Step(100));
+        Assert.Equal(2, feed.Filter.IgnoredCount);
+
+        // The counter survives the burst ending (unlike FastBurst) and is NOT cleared by Reset — a reprobe/idle-park
+        // does not make the session's double-tick noise disappear.
+        Assert.Equal(TickVerdict.Tick, feed.At(feed.Now + P120));
+        Assert.Equal(2, feed.Filter.IgnoredCount);
+        feed.Filter.Reset();
+        Assert.Equal(2, feed.Filter.IgnoredCount);
     }
 
     [Fact]

@@ -131,12 +131,40 @@ Flexbox (Yoga-style) is the default; CSS-grid is available via `GridEl`. Key `Bo
 Sizes are in DIP (device-independent pixels); the host scales by the monitor DPI. `Viewport.Size` (via
 `UseContext`) gives the client size in DIP for responsive layout.
 
+### `GridEl` auto-fill: `MinColWidth`, `MaxColumns`, `GridEl.AutoFillColumnCount`
+
+`MinColWidth > 0` turns a `GridEl` into a responsive auto-fill grid (`Columns` ignored): it packs as many equal `1fr`
+tracks as fit at that minimum and stretches them to the full width — CSS `repeat(auto-fill, minmax(min, 1fr))`.
+`MaxColumns` (auto-fill only; `0` = unlimited) caps the packed count; the capped tracks **still share the whole width**
+(they just grow past the minimum), so a "2–4 columns" grid is `MinColWidth = 232, MaxColumns = 4`.
+
+The count is one public pure formula, shared by the layout engine (`FlexLayout.GridColCount`) and any app-side rule
+that must predict it (a "2 rows × columns − 1 cells" plan, a skeleton with the loaded page's column count):
+
+```csharp
+int cols = GridEl.AutoFillColumnCount(innerW, minColWidth: 232f, colGap: 12f, maxColumns: 4);
+// max(1, ⌊(innerW + gap) / (min + gap)⌋), clamped to maxColumns when > 0; 1 when innerW is ≤ 0 / NaN / ∞ or min ≤ 0
+```
+
+`innerW` is the grid's content width (its arranged width minus padding) — feed it the same width the grid will be laid
+out at (e.g. from `UseMeasuredWidth`). Gate: `gate.grid.auto-fill-max-columns`.
+
 ## Visuals on a `BoxEl`
 
 `Fill`, `HoverFill`, `PressedFill`, `BorderColor`+`BorderWidth`, `Corners` (`CornerRadius4`), `Shadow` (`ShadowSpec`),
 `Gradient` (`GradientSpec`, supersedes `Fill`), `BorderBrush` (gradient stroke — WinUI elevation border), `Acrylic`
 (`AcrylicSpec`, per-node frosted glass). Composited (animate with no relayout): `OffsetX/OffsetY`, `ScaleX/ScaleY`,
 `Rotation`, `Opacity`, plus interaction-driven `HoverScale`/`PressScale` (eased pop on hover/press).
+
+**Where record-time hover/press comes from (interaction scopes).** A non-interactive box's `HoverFill`/`PressedFill`/
+`HoverOpacity`/`TextHoverColor` follow the nearest *interaction scope* above it — the closest ancestor with a
+click/pointer/pressed handler that is not `HoverScopeTransparent` (the same boundary rule as the hover cascade,
+`IsNestedHoverBoundary`). Every scope starts its subtree from **its own** state: its eased `InteractionAnim` progress
+when it has one, else its instant `Hovered`/`HoverWithin`/`Pressed` flags — never its ancestor's. So a card slot root
+that only handles `OnPointerPressed`/`OnPointerReleased` (no anim row) still lights its own `HoverFill` children when
+the pointer is on it, and an interactive row container that is merely `HoverWithin` (the pointer is somewhere in the
+row) does not paint every card in it hovered. Want a listener that is *not* a scope (a ToolTip wrapper)? Set
+`HoverScopeTransparent = true` — its subtree keeps reading the enclosing scope. Gate: `gate.record.hover-fill-scope`.
 
 ### `.Interactive(recipe)` — the one interactive-styling surface (`src/FluentGpu.Controls/Interaction.cs`)
 
@@ -176,6 +204,8 @@ rules it honors:
 | `Interaction.Subtle` | transparent → `FillSubtleSecondary` → `FillSubtleTertiary` | none | none |
 | `Interaction.ListRow` | same as Subtle (separate preset so list tuning can diverge) | none | none |
 | `Interaction.Card` | `FillCardDefault` → `FillCardSecondary` | `Flat(StrokeCardDefault)` | `PressScale 0.985` + `StandardSpring` |
+| `Interaction.Control` | `FillControlDefault` → `FillControlSecondary` → `FillControlTertiary` | `Flat(StrokeControlDefault)` | none |
+| `Interaction.Tile` | `FillCardDefault` → `FillControlSecondary` → `FillControlTertiary` | `Flat(StrokeCardDefault)` | none |
 | `Interaction.AccentGhost` | transparent → `AccentSubtle` → dimmer `AccentSubtle` | none | none |
 
 > **Presets are an APP-AUTHORING surface. Framework controls keep their own WinUI-exact hand ramps — do NOT restyle a
@@ -199,6 +229,14 @@ These seed `AnimValue` slab channels on the component's node and animate by re-r
 re-render, never relayout.** Prefer these (or a signal bound to a transform) for motion. `UseAnimatedValue(target, ms,
 easing)` returns an eased scalar (lerp a color with it) and `UseSpringValue` its spring-backed sibling; under the
 landed slab both advance on the compositor frame, so they are fine for continuous motion too.
+
+**Enter/Exit delay (E20, Wavee Home redesign).** `EnterExit.DelayMs` (default `0f`) is an ENTER-only extra start
+delay on an `Element.Enter` terminal (`(Opacity: 0f, Active: true, DelayMs: …)`), added on top of any parent
+`Element.Stagger` delay a list/shelf already bakes in per child index (`index * Stagger`) — `AnimEngine.SeedEnter`,
+the one place both Presence reveals and ordinary mounts seed a declarative enter, sums the two. A staggered zone's
+own rows can therefore each carry a further individual hold (e.g. a card that should lag its siblings for a reason
+besides its list position) without a second stagger group. Default `0f` sums to the pre-E20 delay exactly — no
+behavior change for every existing `Enter`. `Exit` does not read this field.
 
 ### Images
 ```csharp
@@ -258,10 +296,14 @@ compose them directly, but `Create` is the documented path.)
 ```csharp
 // Button = TWO orthogonal axes (Radix/CVA precedent): appearance selects the token ramp, size the geometry.
 Button.Create(string label, Action onClick, ButtonAppearance appearance = Standard, ControlSize size = Medium,
-              string? glyph = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)  // canonical
+              string? glyph = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null,
+              ButtonPalette? palette = null)  // canonical — palette: swaps ONLY the color axis (Button.ButtonPalette.ForAccent(pageAccent) for a page/cover-accent Play button)
 Button.Accent / Standard / Subtle / Outline(string label, Action onClick, Style? style = null, …)   // one-line sugar
 IconButton.Create(string glyph, Action onClick, Style? style = null, …, ControlSize size = Medium)   // clamps Large→Medium (square)
-ToggleButton.Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null, …, ControlSize size = Medium)
+ToggleButton.Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null, …, ControlSize size = Medium,
+                     string? glyph = null, string? checkedGlyph = null, string? checkedLabel = null)   // glyph/checkedGlyph/checkedLabel: optional icon + checked-state content swap (E2)
+ToggleButton.Controlled(string label, bool isChecked, Action<bool> onToggle, string? glyph = null, string? checkedGlyph = null,
+                        string? checkedLabel = null, Style? style = null, …, ControlSize size = Medium)   // VALUE-CONTROLLED (no internal state) — a click calls onToggle(!isChecked) only; the checked value lives in the caller
 RepeatButton.Create(string label, Action onClick, Style? style = null, …, ControlSize size = Medium)
 HyperlinkButton.Create(string text, Action onClick, Style? style = null, …, ControlSize size = Medium)   // no appearance axis (link text, no fill)
 
@@ -285,6 +327,79 @@ set `Button.StyleHook = (appearance, size) => …` (return a `Style`, or `null` 
 value it can't honor (a small per-control table, Radix precedent): `IconButton` clamps `Large`→`Medium` to keep its
 square glyph box sane, and `HyperlinkButton` doesn't expose the appearance axis at all (it is link text with no fill
 chrome, so Subtle/Outline are meaningless).
+
+**`AccentSet` — a palette from any color.** `Tok.AccentDefault`/`AccentSecondary`/`AccentTertiary` shade the LIVE
+system/override accent; `FluentGpu.Dsl.AccentSet.From(ColorF)` (`Dsl/Tokens.cs`) derives the SAME tiers (fill @
+1.0/.90/.80 alpha, `.Subtle` @ .16, `.Text` the `AccentTextFillColorPrimary` shade, `.Ink`/`.InkSecondary` a
+WCAG-picked on-fill ink) for a caller-held base color instead — a page/cover-extracted accent that never touches the
+global `Tok` override. It shares its shade tier math with `Tok` (one function, `Tok.AccentFillShade`), so a custom
+palette and the live accent read identically at the same base. `Button.ButtonPalette.ForAccent(ColorF)` builds an
+Accent-shaped `ButtonPalette` from it — pass to `Button.Create(…, palette:)` for a Play button tinted by its page's
+own accent rather than the OS/app accent.
+
+**`ToggleButton`'s optional glyph/checked-label/pop (Follow, filter chips).** `glyph`/`checkedGlyph` add a leading
+icon-font slot (`PartIcon` a `Style.GlyphSize`-square `BoxEl`, `PartGlyph` the `TextEl`); the glyph node's identity is
+stable across a checked flip — only its codepoint swaps, never a remount — so `Style.OffGlyphForeground`/
+`OnGlyphForeground` (null ⇒ ride the label's own ramp) and a checked-glyph POP both keep riding the same node.
+`checkedLabel` swaps the label text while checked (`Style.LabelSwap` cross-fades it — the label IS keyed per logical
+state there, so it *does* remount on the flip); `Style.ContentReflow` (a `LayoutTransition`, applied as the root's
+`Animate`) lets that swap's width change reflow instead of snap. The pop (`Style.CheckedPopScale`/`CheckedPopMs`,
+`MotionRecipes.Pulse`) fires ONLY on a USER-initiated false→true click — a click sets a `UseRef<bool>` flag *before*
+writing the checked value, and a `UseLayoutEffect` keyed on the logical checked state consumes it exactly once;
+a programmatic/data-driven flip (no click) never sets that flag, so it never pops. No glyph and no `checkedLabel` ⇒
+the tree is byte-identical to the pre-E2 `ToggleButton` (still `[label]`, `Gap = 0`).
+`ToggleButton.Controlled(label, isChecked, onToggle, …)` is the VALUE-CONTROLLED sibling of `Create` — the checked
+value lives entirely in the caller (a signal, a saved-set membership check, …); a click calls
+`onToggle(!isChecked)` and the control writes no checked state of its own (only the pop's click-vs-programmatic
+bookkeeping is component-local, and it is never exposed).
+
+**`Segmented` — presets via Parts, not knobs (E3, Wavee Home redesign).** `Segmented.Create(items, selectedIndex?,
+onChange?, SegmentedOptions?)` is the compact 2–5-choice selector (`RadioButton` items by default; a `SelectionPill`
+row tracks the selected item). Two named parts route content/chrome restyling per §6's rule ("could the caller write
+`Parts[PartX] = el => el with {…}` instead? then they must"): `PartLabel` (the item's `TextEl` — e.g. a page-title
+pivot's 28px/600 type in place of the default 14px control label) and `PartSelectionPillSlot` (the whole 3px
+indicator ROW, not just the pill itself — `PartSelectionPill` — so `Visible = false` collapses the row out of
+layout/paint/hit-test for a preset that carries selection through label weight/color instead). Two options extend the
+keyboard/a11y surface without new knobs: `WrapFocus` (Left/Right wrap the roving focus stop at the ends instead of
+clamping — off by default, byte-identical to pre-E3 output) and `ItemRole` (the per-item `AutomationRole`, default
+`RadioButton`; set `AutomationRole.Tab` for a facet/pivot preset presented as a tablist). **The keyboard model is
+unchanged:** arrows move the single roving focus stop only, they never select; click/Space/Enter commit selection on
+the FOCUSED item. A facet pivot and a compact scroll-band preset (`FluentGpu.WindowsApp/Pages/BasicInputPages.cs`,
+`SegmentedControlPage`) both read/write the SAME facet signal — two `Style`/`Parts` skins over one control, one
+selection source of truth, the same pattern Home's `FacetRow` and its `CompactBand` use.
+`SegmentedOptions.OnItemHoverChanged`/`OnItemFocusChanged` (E13, Wavee Home redesign, F24) hand back the hovered/
+focused item's index (or `-1` for none) directly — they fire on EDGES only (once on enter/gain, once on leave/lose),
+never a continuous stream of pointer moves and never a duplicate fire for the same edge. `OnItemFocusChanged` tracks
+the roving FOCUS stop, same as arrows — not selection. Both replace the old per-item `Segmented.PartItem` closure
+counter some callers used to recover an item's index and install their own `OnHoverMove`/`OnPointerExit`/
+`OnFocusChanged` (an undocumented control internal); null (the default for both) wires nothing, so the tree is
+byte-identical to pre-E13 output. `Style.ItemGap` (default `0f`, today's flush layout) is the root's item-row `Gap` —
+a token bundle value, not a per-item margin. `Style.ItemPadding` (E19, Wavee Home redesign; default `default` — an
+all-zero `Edges4`) is each item root's own `Padding`, applied independently of `ItemMinWidth` — e.g. a compact facet
+band preset sets `(12,0,12,0)` so short pivot words ("All"/"Music"/…) get horizontal breathing room without widening
+via a min-width floor that would also pad an already-wide label. Default zero is today's layout unchanged.
+
+**`SelectorBar` — an optional `SelectorBarStyle` (E28, Wavee Home page-title pivot).** `SelectorBar.Create(items,
+selectedIndex?, onChange?, parts?, icons?, style?)`; `style: null` is the stock WinUI template, byte-identical
+(`gate.selectorbar.style-default-identical`). A style sets the label type (`LabelSize`/`LineHeight`/`FontFamily`/
+`CharSpacing`, and `RestWeight`/`SelectedWeight` — the label weight FOLLOWS selection), the foreground ramp
+(`RestColor`/`SelectedColor`/`HoverColor`/`PressedColor`, null = the stock tokens), an optional hover/press plate
+(`HoverFill`/`PressedFill` on the item's engine-serviced fill ramp — the 83 ms ControlFaster fade, radius 4),
+`ShowPill = false` (no pill AND no reserved pill row), `ItemPadding`/`ItemHeight`/`ItemGap`, and `LeadingInset`
+(a negative left margin on the first item so its TEXT, not its padding, sits on the page edge). Behaviour — roving
+keys, the single tab stop, `onChange`, parts — is identical in every style (`gate.selectorbar.style-title`).
+
+**Trimmed rich text ends in the cut span's "…" (E29).** A `SpanTextEl` paragraph trimmed with `CharacterEllipsis`
+draws the ellipsis in the style of the span the cut lands in (its face/weight, size and colour) — a 20-px semibold
+title span + a 12-px tertiary subtitle span cut inside the subtitle ends in a small tertiary "…", not a base-size one —
+and the cut reserves that ellipsis's own advance, so measure and render agree (`LineBreaker.FitEllipsisBySpan`,
+`gate.text.span-ellipsis-style`). A glyph in a gap between spans, and plain `TextEl`, keep the base-style "…".
+
+**`ProgressBar` — stretch to the parent (E5, Wavee Home redesign).** `ProgressBar.Indeterminate(width: float.NaN)` fills
+whatever width its parent offers instead of a fixed DIP value (the facet-switch busy bar pinned across the content width
+over a dimmed page). The resolved width is measured back from layout (quantum 4) and the sweep re-arms on every parent
+resize; a finite `width` keeps the original bar untouched. The track is transparent in every indeterminate state — show a
+1px track through the part, `parts[ProgressBar.PartTrack] = b => b with { Opacity = 1f }`.
 
 ### Charts (`src/FluentGpu.Controls/Charts/`)
 
@@ -324,7 +439,7 @@ One uniform contract, so binding any stateful control is the same everywhere:
 1. **Signal-in.** The canonical factory takes the controlled value as a **concrete signal** (`Signal<T>` / `FloatSignal`) — e.g. `ToggleSwitch.Create(Signal<bool> isOn)`, `CheckBox.Create(string, Signal<bool>)`, `RadioButtons.Create(items, Signal<int> selectedIndex)`. The control reads that signal *directly* (live) — you do **not** re-render the parent to change the value.
 2. **`onChange` sugar.** An optional `Action<T>? onChange = null` runs on user interaction. Order is fixed: the control writes the signal **first**, then invokes `onChange`. A **programmatic** signal write (`sig.Value = …`) re-skins the control with **no** `onChange` echo (and never re-renders the owner) — so app code and user input can't feedback-loop.
 3. **Auto-materialize.** Pass no signal and the control creates its own internal one (`isOn = null` ⇒ one code path — "uncontrolled" just means "the control made the signal"). `ToggleSwitch.Create()` toggles on its own; `ToggleSwitch.Create(mySig)` is externally controlled — same code path.
-4. **The signal instance freezes at mount** (bind wiring is mount-only). Swap the signal by re-keying the control.
+4. **The signal instance is a mount-time contract.** Swap the signal by re-keying the control (the reconciler re-wires element binds bound→bound on a re-render, but a control core's hooks/effects may hold the instance it mounted with).
 5. **Closed callback-name set:** `onChange` (the controlled value), `onClick` / `onInvoked` (actions), `onCommit` / `onCancel` (editors), `onOpenChanged` (open state). There is no `onToggle` / `onSelect` / `onTextChanged` / `OnValueChanged`; `onChange` receives the NEW value (peek your own signal for the old one). The one documented exception is the **leaf `RadioButton`** (`bool isSelected, Action? onChange`) — the owning group/`RadioButtons` owns the shared selection signal.
 ```csharp
 var on = UseSignal(false);
@@ -505,6 +620,44 @@ new ListOptions {
   (exactly `N × extent` for a same-list move, capped for a cross-list copy), the 2px accent line + terminal dot, the
   in-gap preview lifecycle, the source-row hide and the optimistic-membership handoff. You declare which payloads it
   takes, which rows they came from, and what to do on deposit — never a coordinate. See the drag & drop section below.
+
+### `PagedShelf` — the size-reactive paged card rail (`src/FluentGpu.Controls/PagedShelf.cs`)
+`PagedShelf.Create(items, cardAt, cardHeight, …)` fits equal cards to the measured width (`FillRowVirtualLayout.Fit`,
+`[minCardW, maxCardW]`, `maxColumns`), virtualizes them through `ItemsView.CreateBound`, and pages them (chevrons /
+`PipsPager` / hover edges / a `customPager`, or an external `ShelfController` when the pager lives in an app header).
+The lead item (item 0) can be a wide hero:
+```csharp
+PagedShelf.Create(items, cardAt: SquareItem, cardHeight: CoverHeight,
+    leadSpan: 2,                 // item 0 asks for 2 cells (a LIVE prop — re-pushed every render, like title/header)
+    leadCardAt: WideLead,        // built for item 0 ONLY while that span is in effect; else cardAt, like any item
+    leadMinColumns: 4);          // honour the span from 4 columns up (0 = the engine's half-row rule, 2*span+1)
+```
+- **The span is a request; the layout decides** (`FillRowVirtualLayout.EffectiveLeadSpan`): a single-row shelf honours
+  `leadSpan` only once a page holds `FillRowVirtualLayout.MinColsFor(span, leadMinColumns)` columns — `2*span+1` by
+  default (at least `span+1` ordinary cells beside the lead), or `max(span+1, leadMinColumns)` when the shelf sets its
+  own minimum. Below that the lead collapses to a plain cell (never a lead that IS the row). Multi-row grids never span.
+  That one helper is what the layout's geometry, the shelf's page count and the lead slot's template choice all share.
+- **The template follows the cell, not the data** (`leadCardAt`): the shelf publishes the *effective* span on a
+  signal only item 0's slot reads, so a resize that crosses the column threshold (or a live `leadSpan` push) re-renders
+  exactly one card — `leadCardAt` mounts in a `2*cardW+gap` cell, `cardAt` in a plain one — as a keyed remount, never a
+  hero patched into a square. With no `leadCardAt`, `cardAt` builds item 0 at every span, exactly as before.
+- A span change also re-arranges the strip's viewport itself (`LayoutDirty | VirtualRangeDirty`) — the layout's
+  `SetLeadSpan` is a field write, and nothing else would re-query `ItemRect` for cells already realized.
+- `leadMinColumns`, like `snap`/`rows`/`lift`, is frozen mount configuration (it configures the hoisted layout instance);
+  `leadSpan`/`leadCardAt` ride the re-pushed props. Gates: `gate.shelf.lead.*`, `gate.shelf.lead-template-follows-span`,
+  `gate.shelf.lead-min-columns`.
+
+**The `SkeletonProxy` idiom** — `PagedShelf`'s `ShelfProxy` above and `SettingsCard.Create`'s proxy
+(`src/FluentGpu.Controls/SettingsCard.cs`) are both the same shape: `SkeletonDeriver` walks the author's real Element
+tree to build the shimmer, but it can't see INTO a `ComponentEl` boundary — an opaque one falls back to one default
+160-DIP bar, which is wrong for a control whose real content is a whole subtree (a shelf's cards; a settings card's
+icon + header + description). The fix is `Embed.Comp(new ResponsiveBox.Props(w => RealContentAt(w), 0f, 0f), static
+() => new ResponsiveBox()) with { DeriveRenderedOutput = true }` as the `Element.SkeletonProxy`: `DeriveRenderedOutput`
+tells the reconciler to re-run the deriver over the `ResponsiveBox`'s OWN rendered output (the real content built at
+its measured width) instead of stopping at the boundary, so the shimmer is the real icon/text/card shapes, sized to
+the real slot — never a placeholder that reflows the moment data lands. `SettingsCard.Create`'s proxy hands
+`Build(options, w)` straight through (gate `gate.settingscard.skeleton-proxy`: derives an icon bar + at least two text
+bars, not one bar); `PagedShelf`'s `ShelfProxy` hands real cards at the fitted width instead of a placeholder.
 
 ## Drag & drop (declare intent, never coordinates)
 

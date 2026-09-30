@@ -335,3 +335,127 @@ sealed class ContextMenuPage : Component
                 """));
     }
 }
+
+// A size-reactive, virtualized, paged card shelf (Controls/PagedShelf.cs). The sample below is the E4 shape: the
+// pager (chevrons + PipsPager) is built and owned entirely OUTSIDE the shelf — a `ShelfController` mirrors the
+// shelf's live page state into it — the same split Wavee's Home uses for a page section whose pager sits in its own
+// sticky chapter header while the shelf scrolls underneath.
+[GalleryPage("PagedShelf", "PagedShelf", "Collections", Icon = Icons.Picture)]
+sealed partial class PagedShelfPage : Component
+{
+    sealed record ShelfCard(int Id, string Title);
+
+    static readonly IReadOnlyList<ShelfCard> Cards = BuildCards();
+    // A ShelfController is a propless factory capture (frozen at mount, like every PagedShelf.Create argument) — its
+    // identity must be stable for the shelf's lifetime, so it lives as a field here, not `new`'d per render.
+    static readonly ShelfController _controller = new();
+
+    static IReadOnlyList<ShelfCard> BuildCards()
+    {
+        var cards = new ShelfCard[18];
+        for (int i = 0; i < cards.Length; i++) cards[i] = new ShelfCard(i, "Mix " + (i + 1));
+        return cards;
+    }
+
+    public override Element Render() => GalleryPage.Shell("PagedShelf",
+        "A size-reactive, virtualized, paged horizontal card shelf that fits as many equal cards as the available width allows.",
+        ExampleCard.Show(ExternalControllerSample),
+        ExampleCard.Show(LeadSpanSample));
+
+    [Sample("An external chapter header", Description = "pager: ShelfPager.None on the shelf itself — the chevrons and PipsPager live in a header built and owned entirely OUTSIDE it (ExternalChapterHeader below), wired only through a ShelfController. GoTo/Prev/Next drive the shelf; a free drag/wheel settle on the shelf itself is mirrored straight back into the header, with no action taken.")]
+    static Element ExternalController() => new BoxEl
+    {
+        Direction = 1, Width = 480f, Gap = 12f,
+        Children =
+        [
+            Embed.Comp(() => new ExternalChapterHeader(_controller)),
+            PagedShelf.Create(Cards, Card,
+                cardHeight: static w => w + 40f,
+                pager: ShelfPager.None,
+                minCardW: 120f, maxCardW: 150f, gap: 12f,
+                controller: _controller,
+                keyOf: static (c, _) => c.Id.ToString()),
+        ],
+    };
+
+    static Element Card(ShelfCard card, int index, float width) => new BoxEl
+    {
+        Direction = 1, Width = width, Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault,
+        BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = Edges4.All(10f), Gap = 6f,
+        Children =
+        [
+            new BoxEl
+            {
+                Height = width, Corners = Radii.ControlAll, Fill = Tok.AccentSubtle,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Children = [ new TextEl((index + 1).ToString()) { Size = 24f, Weight = 700, Color = Tok.AccentDefault } ],
+            },
+            new TextEl(card.Title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+        ],
+    };
+
+    [Sample("A wide lead card (leadSpan)", Description = "leadSpan: 2 — item 0 occupies two cells, the Wavee Home CoverShelf/MixedCovers shape when the lead item carries a header image (a 428×206 hero at the 6-up tier, wide rather than doubled-square). It's a LIVE prop (Controls/PagedShelf.cs): a caller can flip it after mount, and the lead cell re-fits with no remount — the SAME pattern as this page's title/pager chrome.")]
+    static Element LeadSpan() => PagedShelf.Create(Cards, LeadCard,
+        cardHeight: static w => w + 40f,
+        minCardW: 120f, maxCardW: 150f, gap: 12f,
+        leadSpan: 2,
+        keyOf: static (c, _) => c.Id.ToString());
+
+    // A SEPARATE template from Card above (rather than special-casing it): the lead cell's image band clamps its
+    // height to a normal card's (MathF.Min(width, 150f)) instead of squaring the doubled width — a wide rectangle,
+    // not a giant square, matching the real CoverShelf hero's shape.
+    static Element LeadCard(ShelfCard card, int index, float width) => new BoxEl
+    {
+        Direction = 1, Width = width, Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault,
+        BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = Edges4.All(10f), Gap = 6f,
+        Children =
+        [
+            new BoxEl
+            {
+                Height = MathF.Min(width, 150f), Corners = Radii.ControlAll, Fill = Tok.AccentSubtle,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Children = [ new TextEl(index == 0 ? "Lead" : (index + 1).ToString()) { Size = 24f, Weight = 700, Color = Tok.AccentDefault } ],
+            },
+            new TextEl(card.Title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+        ],
+    };
+}
+
+/// <summary>The app-owned sticky chapter header for <see cref="PagedShelfPage"/>'s external-controller sample — a
+/// title, a stock <see cref="PipsPager"/>, and two chevrons, none of them children of the shelf. E12
+/// (home-redesign-remediation.md §2 E12/§3.2, C:\wavee\waveemusic) retired the old mirror-signal workaround
+/// (<c>ShelfController.Page</c> is read-only, so the pips used to need a caller-owned MUTABLE <c>Signal&lt;int&gt;</c>
+/// synced by a plain signal-direct <c>UseEffect</c> every render): <see cref="PipsPager.Controlled"/> takes the
+/// controller's page as a plain VALUE and writes no selection state of its own, so this component just reads
+/// <c>controller.Page.Value</c> straight into it — no mirror, no effect. Every pip/chevron action still routes
+/// back OUT through the controller (<c>GoTo</c>/<c>Prev</c>/<c>Next</c>), never writing the shelf's page directly.</summary>
+sealed class ExternalChapterHeader(ShelfController controller) : Component
+{
+    public override Element Render()
+    {
+        int count = controller.PageCount.Value;
+        int page = controller.Page.Value;
+        bool canPrev = controller.CanPrev.Value;
+        bool canNext = controller.CanNext.Value;
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
+            Children =
+            [
+                new TextEl("Made for you") { Size = 20f, Weight = 700, Grow = 1f },
+                PipsPager.Controlled(count, page, controller.GoTo),
+                NavChevron(Icons.ChevronLeft, canPrev, controller.Prev),
+                NavChevron(Icons.ChevronRight, canNext, controller.Next),
+            ],
+        };
+    }
+
+    static Element NavChevron(string glyph, bool enabled, Action onClick) => new BoxEl
+    {
+        Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(16f), Fill = Tok.FillControlDefault,
+        HoverFill = enabled ? Tok.FillControlSecondary : Tok.FillControlDefault,
+        Opacity = enabled ? 1f : 0.35f, OnClick = enabled ? onClick : null,
+        Children = [ Icon(glyph, 13f, Tok.TextSecondary) ],
+    };
+}

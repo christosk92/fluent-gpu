@@ -53,54 +53,22 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private Action? _completionWake;
     private int _inflight, _queued;
     private long _completionSequence;
-    // Max decoded images APPLIED (GPU-uploaded) per Pump = per frame. An UNBOUNDED drain uploaded a whole fast-scroll's
-    // worth of album art in ONE frame → a 10-35ms GPU submit spike (the frame lands late → a stale composited frame =
-    // the edge "another viewport" flash). Bounding it spreads uploads over frames: un-applied decodes stay in _out and
-    // their ImageCache entries stay State==Pending. HasReadyCompletions keeps only actionable UI work awake until the
-    // queue drains (rows show their skeleton/blur-hash meanwhile). FG_IMG_UPLOADS overrides; default tuned for ~120fps.
-    private static readonly int s_maxAppliesPerFrame =
-        int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOADS"), out int __u) && __u > 0 ? __u : 3;
-    private static readonly int s_maxApplyBytesPerFrame =
-        int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOAD_BYTES"), out int __b) && __b > 0
-            ? __b : 2 * 1024 * 1024;
-    // Scroll-time BURST budget + the lane-classification threshold. It is NOT a size ceiling: like the at-rest budget it
-    // only refuses ADDITIONAL applies once the frame's head has been applied (see Pump). A frame's head always makes
-    // progress, whatever it weighs.
-    private const int ScrollApplyBytesPerFrame = 512 * 1024;
+    // What one Pump (= one frame) may APPLY is metered against the ONE permanent upload budget, UploadBudget.BytesPerTurn
+    // (retained tiles §C — a live tunable, never an environment variable, never scroll-keyed, the same on every GPU tier):
+    // applies continue while their decoded bytes fit, and the head of a frame always lands whatever it weighs (a 1 MiB
+    // cover can never wedge behind a small budget). An UNBOUNDED drain once uploaded a whole fast-scroll's worth of album
+    // art in one frame (a 10-35 ms submit spike); the budget spreads that over frames — un-applied decodes stay queued and
+    // their ImageCache entries Pending (rows show their skeleton / blur-hash meanwhile).
+    // The two completion lanes split at this size (small thumbs vs covers) — a classification, not a cap: the pump merges
+    // both heads back into completion order.
+    private const int LargeLaneBytes = 512 * 1024;
     private const int ControlDrainPerFrame = 256;
-    // E2 (adreno-hang-fixes.md M0): the AT-REST apply-count cap on a weak tier — same as discrete (3), not the tight
-    // 1 a naive "weak == throttled" read would suggest. The byte budget is what actually protects a weak GPU (it
-    // stays pinned to ScrollApplyBytesPerFrame in every state, see byteCap below); three SMALL Home-feed thumbnails
-    // comfortably clear that budget, and gating the COUNT down to 1 too just made a passive feed load trickle in one
-    // thumbnail per frame for no VRAM/fence-stall benefit.
-    private const int WeakRestApplies = 3;
 
-    /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 1 —
-    /// each apply stages a GPU CopyTextureRegion into the SAME command list the present then fences on (the
-    /// frame-latency waitable couples production to present retirement), so an upload burst mid-scroll reads as a
-    /// fence-wait hitch (traced as the dominant GPU hitch class). ONE completion still lands per frame regardless of
-    /// its size — the same "head always makes progress" rule the at-rest budget uses — because the alternative
-    /// (deferring every oversized completion to rest) left every 512x512 cover as a BlurHash smear for the whole
-    /// gesture and popped them all in at the end. One ~1 MiB upload per frame is amortizable; a permanent LQIP smear
-    /// is not. This throttle is ALSO the retained mitigation for the historical Adreno DXGI_ERROR_DEVICE_HUNG suspect
-    /// (an unthrottled upload burst under deeper buffering): it bounds that burst class at ANY buffer depth, which is
-    /// why it stays on now that FRAME_COUNT is 3 — see D3D12Device.FRAME_COUNT.
-    ///
-    /// The throttle bounds how many uploads a frame STAGES; two further rules bound what one apply COSTS the UI thread,
-    /// because the 2026-09-16 real-mode scroll recordings showed covers landing late and allocating (20 MB hotAllocKB,
-    /// gen2 GCs per fling) even at one apply per frame: (1) the decode buffer's OWNERSHIP is handed to the host sink
-    /// instead of being copied — see <see cref="TryTakeDecodeBuffer"/>; (2) a budget-bounded pump is guaranteed its
-    /// own minimum slice — see <see cref="PumpMinSliceMs"/> — so the head apply is never starved by a realize deadline
-    /// the rest of the frame already consumed.</summary>
-    public bool ScrollThrottled { get; set; }
 
-    /// <summary>The smallest UI-thread slice a budget-bounded <see cref="Pump(ImageCompleteHandler, ImageReadyHandler, long)"/>
-    /// is handed: the host passes <c>max(FrameBudget.DeadlineTicks, now + PumpMinSliceTicks)</c>. The realize budget is
-    /// measured from FRAME START, and on a fling frame where flush + realize + layout + animation had already spent it,
-    /// a pump sharing that deadline applied ZERO images (the deadline is checked before the first apply) — covers
-    /// landed only when the gesture stopped. 1.5 ms is ample for one head apply (under the async render thread the
-    /// apply is an ownership handoff + cache bookkeeping, no memcpy) and small against an 8.3 ms 120 Hz frame. One
-    /// const, no env knob — a host-loop pacing budget, the sibling of <c>FrameBudget.MotionUiSliceMs</c>.</summary>
+    /// <summary>The smallest UI-thread slice a deadline-bounded <see cref="Pump(ImageCompleteHandler, ImageReadyHandler, long)"/>
+    /// is handed by a caller that bounds it at all (the host pumps unbounded — <c>long.MaxValue</c> — every frame since
+    /// the scroll rework: there is no frame budget). 1.5 ms is ample for one head apply (under the async render thread
+    /// the apply is an ownership handoff + cache bookkeeping, no memcpy) and small against an 8.3 ms 120 Hz frame.</summary>
     public const float PumpMinSliceMs = 1.5f;
     /// <summary><see cref="PumpMinSliceMs"/> in <see cref="Stopwatch"/> ticks, computed once.</summary>
     public static readonly long PumpMinSliceTicks = (long)(PumpMinSliceMs * Stopwatch.Frequency / 1000.0);
@@ -143,12 +111,6 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         buffer = null;
         return false;
     }
-    /// <summary>E2: the weak/UMA tier decision, set ONCE by <see cref="FluentGpu.Scene.ImageCache"/>'s ctor from its
-    /// own <c>weak</c> argument — never read from <c>GpuProfile</c> here (adreno-hang-fixes.md M0's original bug: a
-    /// process-global tier read that lands after this scheduler is constructed, and is always false headlessly, so
-    /// the weak arm was unreachable both in production and under every gate). Only changes the AT-REST apply-count
-    /// cap (<see cref="WeakRestApplies"/>); the byte budget is unconditionally the tight scroll figure on this tier.</summary>
-    public bool WeakTier { get; set; }
     /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
     public int LastPumpAppliedCount { get; private set; }
     /// <summary>Decoded pixel bytes applied by the most recent UI-thread <see cref="Pump"/>.</summary>
@@ -250,16 +212,13 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // UI thread: drain finished decodes; upload pixels; report completion. Idle ⇒ one empty TryDequeue, zero alloc.
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) => Pump(onComplete, onPixels, long.MaxValue);
 
-    /// <summary>Frame-budget-aware overload (scroll-v3 §3.3 item 6 / §4, <c>Hosting.FrameBudget</c>): stops APPLYING
-    /// further completions once <see cref="Stopwatch.GetTimestamp"/> passes <paramref name="deadlineTicks"/> — the
-    /// un-applied decodes stay queued (their <c>ImageCache</c> entries stay <c>State==Pending</c>) for a later Pump,
-    /// same visible effect as the existing per-frame apply cap running out early. The deadline is an ADDITIONAL, independent
-    /// stop condition checked BETWEEN applies (never mid-apply) — the 1-apply-cap-while-<see cref="ScrollThrottled"/>
-    /// rule is unchanged and still guarantees a frame's head always makes progress. <c>long.MaxValue</c> (the
-    /// two-arg overload above; every steady frame) never reads the clock — zero extra cost. Because the deadline IS
-    /// checked before the first apply, the host must never pass one that has already elapsed: it hands this pump
-    /// <c>max(FrameBudget.DeadlineTicks, now + <see cref="PumpMinSliceTicks"/>)</c>, so a fling frame whose realize
-    /// budget is spent still lands its head apply inside its own small slice.</summary>
+    /// <summary>Deadline-bounded overload: stops APPLYING further completions once <see cref="Stopwatch.GetTimestamp"/>
+    /// passes <paramref name="deadlineTicks"/> — the un-applied decodes stay queued (their <c>ImageCache</c> entries stay
+    /// <c>State==Pending</c>) for a later Pump, same visible effect as the per-frame apply cap running out early. The
+    /// deadline is an ADDITIONAL, independent stop condition checked BETWEEN applies (never mid-apply); the head-apply
+    /// exemption still guarantees a frame's head always makes progress. <c>long.MaxValue</c> (the two-arg overload
+    /// above — what the host passes every frame) never reads the clock — zero extra cost. A caller that does bound the
+    /// pump must never pass an already-elapsed deadline: hand it <c>max(deadline, now + <see cref="PumpMinSliceTicks"/>)</c>.</summary>
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels, long deadlineTicks)
     {
         LastPumpAppliedCount = 0;
@@ -275,18 +234,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
 
         int applied = 0;
-        // Weak/UMA GPUs (Adreno UBWC DEVICE_HUNG mitigation, adreno-hang-fixes.md M0): the byte budget stays pinned
-        // to the tight 512 KiB scroll figure EVERY frame — throttled or not — so a passive Home-feed load can't
-        // stream uploads at the full at-rest byte rate. The apply-COUNT is looser at rest (WeakRestApplies, same as
-        // discrete) — see the const's remark. ScrollThrottled still forces the single-apply cap on every tier.
-        // WeakTier is set once by ImageCache from its ctor's `weak` argument — never GpuProfile here (E2), which
-        // keeps this cadence exercisable headlessly (gate 46d6).
-        int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame)
-            : WeakTier ? Math.Min(WeakRestApplies, s_maxAppliesPerFrame)
-            : s_maxAppliesPerFrame;
-        int byteCap = (WeakTier || ScrollThrottled) ? ScrollApplyBytesPerFrame : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
-        while (applied < cap && (!bounded || Stopwatch.GetTimestamp() < deadlineTicks) && TryPeekPixels(out var next, out bool large))
+        var meter = new FluentGpu.Rhi.UploadTurnMeter();
+        meter.Begin(FluentGpu.Rhi.UploadBudget.BytesPerTurn);
+        while ((!bounded || Stopwatch.GetTimestamp() < deadlineTicks) && TryPeekPixels(out var next, out bool large))
         {
             // A row may recycle after the worker published pixels but before this UI-thread pump. Discard that buffer
             // as control work: no upload, no apply slot, and no byte-budget charge.
@@ -299,13 +250,9 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (++controlDrained >= ControlDrainPerFrame) break;
                 continue;
             }
-            // The byte budget is a burst budget, not an absolute size ceiling: one oversized HEAD item may use the whole
-            // frame so it can never wedge, and the budget then refuses only the applies BEHIND it. This "head always makes
-            // progress" exemption is mandatory on EVERY tier — including Weak — because byteCap does not grow: a cover whose
-            // decoded size exceeds byteCap (e.g. a 512px editorial cover ≈ 1 MiB > 512 KiB) would otherwise be deferred on
-            // EVERY frame and never load. On Weak the cadence is already bounded to ONE apply per frame by cap=1 above, so
-            // the head still lands at most once per frame — that is the throttle, not this byte gate.
-            if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
+            // The budget meters bytes, not items: the frame's HEAD is always admitted (an oversized cover can never wedge),
+            // and it refuses only the applies BEHIND it once they no longer fit.
+            if (!meter.TryAdmit(next.ByteLen)) break;
             if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
             // cancellation between TryPeek and TryDequeue.
@@ -478,7 +425,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         };
         if (ok && buffer is not null && byteLen > 0)
         {
-            if (byteLen <= ScrollApplyBytesPerFrame) _pixelOut.Enqueue(done);
+            if (byteLen <= LargeLaneBytes) _pixelOut.Enqueue(done);
             else _largePixelOut.Enqueue(done);
         }
         else _controlOut.Enqueue(done);

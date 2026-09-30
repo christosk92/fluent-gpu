@@ -13,8 +13,8 @@ namespace FluentGpu.Controls;
 /// (click-outside) or Escape writes the signal BACK to <c>false</c> and fires <c>onOpenChanged(false)</c> exactly once
 /// (cause-mapped — a programmatic close, i.e. the caller writing <c>false</c>, does NOT echo <c>onOpenChanged</c>). The
 /// flip/nudge/live-anchor-follow/focus-restore/light-dismiss all come free from the overlay host + FlyoutPositioner.
-/// The signal freezes at mount (bind wiring is mount-only) — swapping the signal requires a re-key (the controlled-input
-/// contract); the <paramref name="anchor"/> and <paramref name="content"/>, by contrast, are RE-PUSHED live on every
+/// The signal freezes at mount (a plain field the run-once core factory sets — component-props-contract.md) — swapping
+/// the signal requires a re-key (the controlled-input contract); the <paramref name="anchor"/> and <paramref name="content"/>, by contrast, are RE-PUSHED live on every
 /// parent re-render (<see cref="Popup.Props"/> + <c>UseProps</c>), so a re-rendered trigger stays current. For an
 /// event-driven, self-managed flyout button use <see cref="Flyout.Attach"/>.
 /// </summary>
@@ -46,8 +46,8 @@ public static class Popup
     /// content factory are rebuilt by the caller on every parent re-render, so they ride the props channel and stay
     /// LIVE on the reused core (a reused ComponentEl never re-runs its factory — see
     /// design/subsystems/component-props-contract.md). The core reads them with <c>UseProps</c>. Everything else
-    /// (the open signal, onOpenChanged, placement, options) is a documented MOUNT-ONLY seed: the bind/effect wiring
-    /// is mount-only, so those stay plain fields set in the factory closure and a swap requires a re-key.</summary>
+    /// (the open signal, onOpenChanged, placement, options) is a documented MOUNT-ONLY seed: plain fields set in the
+    /// run-once factory closure, so a swap requires a re-key.</summary>
     internal sealed record Props(Element Anchor, Func<Element> Content);
 }
 
@@ -57,7 +57,7 @@ public static class Popup
 /// back + fires onOpenChanged(false) once.</summary>
 internal sealed class PopupCore : Component
 {
-    // Mount-only seeds (the controlled-input contract: the bind/effect wiring below is mount-once). The LIVE inputs —
+    // Mount-only seeds (the controlled-input contract: plain fields the run-once factory sets). The LIVE inputs —
     // the anchor element + the content factory — arrive through Popup.Props (UseProps in Render).
     public Signal<bool>? IsOpenSignal;
     public Action<bool>? OnOpenChanged;

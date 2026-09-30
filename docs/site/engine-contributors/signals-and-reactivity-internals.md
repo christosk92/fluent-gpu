@@ -178,9 +178,10 @@ Three things to internalize before editing `Prop.cs`:
   `FloatSignal` (in `Signal.cs`), not on `Prop<T>`, and why `Prop<T>.FromSignal(IReadSignal<T>)` is a static factory.
   Through an interface-typed variable, use the thunk form: `chan = Prop.Of(() => s.Value)`.
 
-The reconciler's contract: a **bound** channel is wired into an `Effect` **once at mount** and that effect is immortal
-until unmount — *a fresh thunk supplied on a later re-render is ignored* (the signals-first rule: change the signal's
-value, not the bind). A **static** channel is re-asserted on every reconcile **iff `!IsBound`**. This single
+The reconciler's contract: a **bound** channel is wired into ONE effect (a `BindEffect<T>`) **at mount**, and that
+effect lives until unmount — *a re-render that binds the channel again with a different thunk/signal RE-WIRES it*
+(bound→bound: swap the source, re-run once, re-track; an equal payload re-runs nothing — `Reconciler.Rewire.cs`,
+`gate.bind.rewire-*`). A static↔bound flip is never re-wired (the `BindContract` tripwire). A **static** channel is re-asserted on every reconcile **iff `!IsBound`**. This single
 `!IsBound` chokepoint is what fixed the historical bound-value clobbers (Opacity reappearing at `1f`, Fill/TextColor
 overwritten on re-render) by construction. Never use `default(Prop<T>)` to mean "unset" — it is the static `default(T)`.
 
@@ -381,11 +382,14 @@ the core, hooks, `Prop<T>`, or the bind-wiring path:
   forces an **owner re-render**, and asserts the **bound value survives** the re-render (the static re-assert does not
   clobber it). It also proves the re-render really rewrote static columns on a control node (`BorderWidth`,
   underline) — so the test can't pass vacuously.
-- **`PropUnionChecks`** (the `prop.signal-direct.*` and `bind.mount-only.stale` checks) — the two bind kinds.
-  Signal-direct: a concrete `Signal<T>`/`FloatSignal` assigned straight to a channel drives it with no user closure, and
-  paint-channel writes stay compositor-only (`!st.Rendered`). Mount-only: a **fresh thunk on re-render is ignored** —
-  after `rr.Value = 1` re-renders with a new `Prop.Of(() => 0.1f + 0.2f*r)`, the painted opacity is still `0.1f`
-  (`0.3` would mean illegal re-wiring happened).
+- **`PropUnionChecks`** (the `prop.signal-direct.*` checks) — signal-direct: a concrete `Signal<T>`/`FloatSignal`
+  assigned straight to a channel drives it with no user closure, and paint-channel writes stay compositor-only
+  (`!st.Rendered`).
+- **`BindRewireChecks`** (`gate.bind.rewire-*`) — the bound→bound re-wire: a reused node re-rendered with a NEW thunk
+  (a fresh closure over a render-time value, no signal change) or a NEW signal instance evaluates the new source
+  (Width/Fill/Opacity/Text, a component anchor's `Visible`, the `ProgressBar.Create` indicator at a re-rendered width);
+  the old signal is unsubscribed; an unchanged thunk/signal fires nothing; the swap allocates 0 bytes. (It replaced
+  `bind.mount-only.stale`, which had locked the opposite.)
 
 When you add a check, assert on `FrameStats` for the interaction you changed: `Rendered` (did reconcile/layout run),
 `ComponentsRendered` (how many `Render()` bodies ran), and `HotPhaseAllocBytes` (**must be 0** on steady frames). GPU

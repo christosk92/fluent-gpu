@@ -1,5 +1,8 @@
 # Scroll Feel Rework v2 — ground-up redesign
 
+> **SUPERSEDED (2026-09-23) by [`scroll-rework-implementation.md`](scroll-rework-implementation.md)** — the single-writer
+> integrator this doc introduced is itself replaced by a stateless analytic `p(t)` plan with no writer to coordinate.
+
 Status: **DECIDED — supersedes `docs/plans/scroll-feel-rework-design.md` (2026-07-01) in full and amends `docs/plans/generic-hookable-scroll-engine-design.md` at the offset-write chokepoint.** This is a from-scratch replacement of the shipped scroll algorithm, not a patch series. It keeps the one rule the ScrollBind doc got right ("binds read post-physics, never re-integrate; one integrator") and discards everything the v1 rework left half-built (the `ScrollMode 0/1/2/3` split-ownership integrator, the per-event apply-at-dispatch pipeline, the soft-knee band, the Riemann fling, the dual velocity gate).
 
 Where v1 was wrong and this spec reverses it:

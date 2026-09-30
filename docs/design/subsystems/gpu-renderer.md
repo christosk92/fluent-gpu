@@ -30,8 +30,8 @@ Decisions are stated as **MADE** with the losing option and reason. Residual unk
 |---|---|
 | **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the as-built 6-field hole-punch shape: `Dst` + `Radii` + `SurfaceId` + `VideoReady` + `Transform` + `Opacity`; §3.1 authority, raster/ordering §7.3), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, **`DrawSelectionRectCmd`** (text-selection highlight; the UNION shape: `Rect` + `Radii` + `SelectionBrush` + `Affinity` + `Clip` + `Flags`; §3.6 authority — `text.md` owns the geometry source, `input-a11y.md` owns the `SelectionState` semantics), **`DrawScrimCmd`** (overlay dismiss-layer fill; §3.6 authority — `input-a11y.md` owns the light-dismiss FSM), `DrawAccessKeyBadgeCmd`. **`DrawFocusRingCmd`:** the *struct shape* AND its **rasterization** are owned here (§3.6 + §4.4 — the focus-ring SDF + overlay/portal composition); `input-a11y.md` §8.4 only EMITS it. It is the single production focus-visual opcode (the rounded, clip-chain-anchored Fluent focus ring); the rectangular `DrawFocusRect(Cmd)` is a superseded debug placeholder. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`); `SelectionState`/`GetSelectionRects` geometry (→ `text.md`); overlay light-dismiss FSM + placement-flip (→ `input-a11y.md`/`layout.md`). |
 | **GPU instance structs** | `QuadInstance` (80B; rect/shadow/border/image), `GlyphInstance` (48B) |
-| **Render-thread algorithms** | `DrawListRecorder` (clean-span memcpy), `RenderLane` classifier, `Batcher` (LSD radix over `ulong[]`), `OverlapGrid` painter-order break, `PathTessellator` (monotone/trapezoidal sweep), `DamageAccumulator`, `LayerPool`, `UploadRing`, `TextureStagingRing` |
-| **RHI methods I drive** | `SubmitDrawList` (PRIMARY hot path), `ICommandEncoder.*` (incl. **`CopyBufferToTexture`**), `CreateGraphicsPipeline`/`CreatePipeline`, the multi-visual present tree |
+| **Render-thread algorithms** | `DrawListRecorder` (clean-span memcpy), `RenderLane` classifier, `Batcher` (LSD radix over `ulong[]`), `OverlapGrid` painter-order break, `PathTessellator` (monotone/trapezoidal sweep), `DamageAccumulator`, `UploadRing`, `TextureStagingRing`; **the retained tiled composite (§13.1)** — the composite plan (`SliceRecorder.Place`/`BuildComposite`), `SliceTable`, `TileGrid`, `TileBudget`, `EdgeFeatherMask`, `SliceOpBounds`, `TileCensus`, and the D3D12 leaf's tile rasterizer / `SurfacePool` / `SliceCompositor` |
+| **RHI methods I drive** | **`SubmitComposite`** (the primary window — §13.1; seam registered in `pal-rhi.md` §2.3), `SubmitDrawList` (secondary swapchains; the same streaming decoder rasters tiles), `ICommandEncoder.*` (incl. **`CopyBufferToTexture`**), `CreateGraphicsPipeline`/`CreatePipeline`, the multi-visual present tree |
 | **Shaders** | the entire HLSL VS/PS set (authored HLSL→DXC→DXIL `byte[]`) |
 | **Color contract** | UNORM buffer / `_UNORM_SRGB` RTV / linear blend / premul output / text gamma exception (designed-to; pinned in architecture-spec §5.2) |
 | **Hooks** | none of its own. It *consumes* `UseImage`/`UseMosaic`/`UseDerivedBrush` realizations (owned by `FluentGpu.Media`/`FluentGpu.Theme`) via handle tables. |
@@ -57,9 +57,9 @@ residency (`FluentGpu.Media`).
  └────────────────────────────────────────────────┘    │     LSD radix(ulong[]) → OverlapGrid│
         immutable SceneFrame (POD)                       │     break → InstanceBatch[]; resolve│
         + stable refs into retained tables               │     glyph/image UVs at batch time  │
-        (Brush/Clip/GlyphRun/ImageRef/TessCache,          │ 10 SUBMIT: SubmitDrawList → encoder │──► ID3D12
+        (Brush/Clip/GlyphRun/ImageRef/TessCache,          │ 10 SUBMIT: SubmitComposite → tiles │──► ID3D12
          content-epoch stamped)                           │     ExecuteCommandLists→Signal(fence)│   queue
-                                                          │ 11 PRESENT: canvas-RT → DComp      │──► DComp
+                                                          │ 11 PRESENT: back buffer → DComp    │──► DComp
  ┌─ WORKER POOL ─────────────────────┐                   │     multi-visual Commit            │   scanout
  │ pure decode/tessellate-cold/glyph-│──results by handle►│ (RENDER THREAD OWNS EVERY ComPtr)  │
  │ raster (DESCOPED until seam green) │                   └──────────────────────────────────┘
@@ -89,7 +89,10 @@ The graphics-specific members of `FluentGpu.Rhi` (interface assembly, portable, 
 shape is fixed by architecture-spec §4.7; the members below are the ones this subsystem drives.
 **`SubmitDrawList` is the PRIMARY hot path** — the leaf walks the POD opcode stream with concrete
 devirtualized types; per-call `ICommandEncoder` use is the secondary/explicit path (layers, stencil,
-texture upload).
+texture upload). **AS-BUILT (2026-09):** the primary window submits through **`IGpuDevice.SubmitComposite`** (the
+retained tiled composite, §13.1; seam registered in `pal-rhi.md` §2.3), whose tile rasterizer replays each slice
+segment through that same streaming decoder; `SubmitDrawList` remains the secondary swapchains' route
+(`RepaintRoute.FullDirect`).
 
 ```csharp
 // FluentGpu.Rhi  (interface assembly; portable; [assembly: DisableRuntimeMarshalling] on Render/Pal)
@@ -107,7 +110,7 @@ public readonly ref struct GraphicsPipelineDesc {
     public RhiPrimitive Topology; public BlendPreset Blend;
     public byte SampleCount;                       // 1 = analytic AA / fringe; 4 = MSAA path fallback only
     public bool StencilEnable; public StencilOpDesc Stencil;
-    public RhiFormat ColorFormat;                  // _UNORM_SRGB for canvas/layer RTs
+    public RhiFormat ColorFormat;                  // _UNORM_SRGB for back-buffer/tile/surface RTs
 }
 
 public interface IGpuDevice : IDisposable {
@@ -141,8 +144,8 @@ seed. The interface is the exact substitution point for a future `Rhi.Metal` lea
 (`MTLRenderPipelineState`/`MTLRenderCommandEncoder`/`CAMetalLayer`).
 
 **Present tree (amended, multi-visual):** the swapchain is **NOT** a single DComp visual. It is a
-multi-visual DComp present tree — a UI swapchain/canvas visual z-**above** a **video child visual**;
-`DrawVideoCmd.Dst` is hole-punched by erasing that region of the UI canvas to premultiplied-0 so the video
+multi-visual DComp present tree — a UI swapchain visual z-**above** a **video child visual**;
+`DrawVideoCmd.Dst` is hole-punched by erasing that region of the UI swapchain to premultiplied-0 so the video
 child shows through (§7.3). A window-Mica/Acrylic backdrop sibling visual sits **below** everything via
 `IBackdropSource` (PAL). As built, the hole flushes with the UI present and the child placement with the
 per-frame DComp `Commit` (§7.3, §11).
@@ -197,6 +200,11 @@ public enum DrawOp : byte {
 // must stay in lockstep. DrawFocusRect is the superseded rectangular placeholder; DrawFocusRing is production.
 // AS-BUILT: FillPath = 19, StrokePath = 20 on the real `int`-tagged DrawOp (src/FluentGpu.Engine/Render/DrawList.cs).
 // AS-BUILT: PushStencilClip = 21, PopStencilClip = 22 on that same enum (§6's AS-BUILT block owns the tier).
+// AS-BUILT: CompositeSlice = 23 — the retained-tile SLICE MARKER (scene-memory.md §4.3b). Payload CompositeSliceCmd
+//   { NodeIndex, Gen, Sub (role: 0 main / 1 thumb / 2 item band / 3 pinned band), Kind (SliceKind), Flags
+//   (OuterClip / Layer / InnerClip / ParamsUp), Clip, OuterClip : ClipCmd, Layer : PushLayerCmd, InnerClip : ClipCmd,
+//   PopRect, SortKey, LayerSortKey }. Recorder-internal: framed by RepaintStreamSafety.TryBodySize; it splits its
+//   slice into segments and a tile replay SKIPS it — the child slice composites as its own item (§13.1a).
 ```
 
 Representative payloads (POD; handle/index refs only; never GC pointers):
@@ -259,10 +267,11 @@ public struct FillPathCmd { public PathRef Path; public BrushHandle Fill; public
 public struct DrawIconMaskCmd { public RectF Rect; public ColorF Tint; public int PathId; public Affine2D Transform; public float Opacity; }
 public struct PushLayerCmd { public RectF DeviceBounds; public float Opacity; public BlendPreset Blend;
                              public EffectHandle Effect; public ClipHandle Clip; }
-// SPEC form (above) — the as-built acrylic path carries additional POD fields (LayerId, tint/fallback/sigma recipe,
-// FeatherFrac, and the retained-backdrop-cache own-damage payload `OwnDmg{X,Y,W,H}` + `DamageEpoch`). Those acrylic-
-// cache fields are OWNED by backdrop-effects-animation.md §2.3 (the region-aware reuse / own-subtree carve-out contract);
-// this doc owns only the base layer-boundary shape. Adding an acrylic-cache field ⇒ update §2.3, not this struct.
+// SPEC form (above) — the as-built struct carries additional POD fields (tint/fallback/sigma recipe, FeatherFrac, the
+// edge-fade bands, CompositeClip, and the LayerId / OwnDmg{X,Y,W,H} / DamageEpoch payload of the deleted LayerId-keyed
+// acrylic backdrop cache). As built, an effect slice's layer rides its CompositeSliceCmd marker and becomes composite
+// parameters (§13.1e); the retained backdrop is keyed by what lies beneath it, not by LayerId/OwnDmg, so no backend
+// reads those three cache fields any more. Semantics of the effect fields: backdrop-effects-animation.md.
 // AUTHORITY (this doc owns the SHAPE + raster). `DrawGradientStroke` = a gradient-tinted SDF OUTLINE — the WinUI
 // (Accent)ControlElevationBorder. Payload = the gradient-rect command + a stroke width; the gradient SPEC comes from
 // the sparse `_borderBrushes` side-table (scene-memory.md, mirrors `_gradients`), keyed by the `BoxEl.BorderBrush`
@@ -915,11 +924,10 @@ early-out and reusing `PathFlatten` + `PathHitTest.Contains` with the same ViewB
 bakes, so click and pixels agree. This is a CLIP, not paint-derived hit-testing — input has always followed
 clips (see §5.1's licensed-exception note for the one opt-in that IS paint-derived).
 
-**Partial repaint (§13.1): layer-disjoint scopes.** `RepaintStreamSafety.Scan` admits balanced stencil scopes
-outside layers, including nested stencil masks. The outer clear, mask draw and inner erase all use the same
-damage-clamped target scissor. Layer siblings are independent; layer/stencil nesting in either direction remains
-excluded because target coordinates or source-halo coverage can change within the scope. See §13.1a for the
-owning replay-safety policy and the real-pixel identity scenarios. `RepaintStreamSafety.TryBodySize` frames both ops.
+**Retained tiles (§13.1).** A stencil scope may straddle tiles and segments: a per-tile replay reconstructs the
+scopes still open at its segment's first byte from the segment PREFIX (§13.1a) and rasters the mask under the same
+canonical viewport as every other op, so a clipped subtree composites identically from any tile (`tile-static-identity`
+sub-scenes `stencil-sibling-blur` and `nested-stencil`). `RepaintStreamSafety.TryBodySize` frames both ops.
 
 **Span reuse.** A stencil push/pop inside a copied span is EXACT under translation — the `ClipCmd` patch and
 the `FillPathCmd` patch combined (`DeviceRect` is device space, the mask geometry is authored-space with all
@@ -944,122 +952,57 @@ clip-to-path applied to a whole subtree with its own AA.
 
 As-built `LayerKind`s on the `PushLayer`/`PopLayer` opcode pair: **`Acrylic`** (backdrop blur+tint recipe),
 **`Opacity`** (flat group alpha — the overlap case above), **`Blur`** (per-node **self-blur**, the Expressive
-Motion Kit — `NodePaint.BlurSigma > 0`): the subtree renders to a pooled offscreen RT, a separable **dynamic-σ**
-Gaussian runs over it, and it composites once at the group alpha; and **`EdgeFade`** (below). The `Blur` kind reuses the
-`Opacity` group's `OpacityLayerCompositor` RT pool + composite (it IS an opacity group that blurs first), so it is the
-cheapest path that supports an animating blur. Semantics + the curve/token vocabulary: `backdrop-effects-animation.md`
-FA-2. The cross-frame retained self-blur **pin cache** and its position-independent key (and the `PushLayerCmd.InMotion`
-payload field — 1 = the self-blur node's world transform moved this frame; drives the compositor's settle re-mint, and is
-**not** folded into the pin key) are owned by `backdrop-effects-animation.md` §FA-2a.
+Motion Kit — `NodePaint.BlurSigma > 0`: a separable **dynamic-σ** Gaussian over the group's content, composited once
+at the group alpha) and **`EdgeFade`** (feathers the subtree's premultiplied alpha to 0 over a per-edge band, following
+the rounded corners — the arc). Semantics + the curve/token vocabulary: `backdrop-effects-animation.md` FA-2.
 
-**`EdgeFade` realization — two paths, split by eligibility.** An edge fade feathers the subtree's premultiplied alpha to
-0 over a per-edge band, following the rounded corners (the arc). It has **two** backend realizations and the split is a
-contract, not an optimization detail:
-
-- **Legacy (blur-carrying or alpha-faded fades — `BlurSigma > 0` ∨ `GroupAlpha < 1`)**: the `Opacity` recipe exactly —
-  lease a canvas-sized RT, clear it (**full canvas iff `σ > 0`**, because `BlurInPlace` reads a tap halo past the
-  composite clip; a zero-σ lease clears only the composite-clip box — `EdgeFadeLayerClear` owns that decision), render
-  the subtree into it, optionally Gaussian-blur it, then composite it back through the feather shader.
-- **Strip path (PURE fades — `BlurSigma == 0` ∧ `GroupAlpha == 1`)**: **no offscreen intermediate at all.** The backend
-  snapshots only the fade **strips** of the current target (`D`), lets the subtree draw **straight** onto the target, then
-  snapshots the same strips again (`F`) and writes them back as `lerp(D, F, feather)`. This is algebraically **exact**
-  for any backdrop alpha — legacy is `C·f + D·(1 − a·f)`, direct drawing gives `F = C + D·(1 − a)`, and
-  `lerp(D, F, f) = C·f + D·(1 − a·f)` — up to the 8-bit UNORM snapshot round-trip (~1/255). The **≤ 4 strips are
-  pairwise disjoint and cover every pixel whose feather is < 1**; both invariants, and the corner-arc fold into the
-  top/bottom band depth, are owned by `FluentGpu.Render.EdgeFadeStrips` (portable, headless-gated as
-  `gate.edgefade.strips`). The two shaders share ONE HLSL feather body, so a strip-restored fade matches a
-  legacy-composited one. Both snapshots share ONE pooled scratch lease — `D` in the top half, `F` in the bottom — and
-  **where each strip sits inside a half is owned by `FluentGpu.Render.EdgeFadeStripPack`** (portable; the lease size,
-  the copy destination and the restore's source-UV constants all call its `Measure`/`Place`, so they cannot disagree).
-  That layout is a **shelf**, not a vertical stack: wide bands stack on one column, tall bands sit side by side on one
-  shelf below them, so the lease is sized by the strips' actual area (`max(maxColumnW, ΣshelfW) × (ΣcolumnH +
-  maxShelfH)` per half) instead of max-width × total-height — a full-window four-edge fade at 1770×1140 asks for
-  1770×2280 and leases 28 MiB after the power-of-two bucket ladder above 2048 rows (15.4 MiB tight) rather than 56.
-  **Where it may run** is the second half of eligibility, owned by
-  `EdgeFadeStrips.GroupAllowsStrip(openGroupCount, innermostKind, innermostLocalUsedW)` (portable, headless-gated as
-  `gate.edgefade.strip-in-blur-group`) and decided by the **innermost open group alone** — the snapshot reads, and the
-  restore writes, exactly the one surface the subtree draws into, and nothing enclosing it is touched until its own
-  `PopLayer`. Admitted:
-  - **no pooled group open** — either top-level target (the back buffer, or the acrylic offscreen canvas): both are
-    full-swapchain-sized, 1:1 with `SV_Position`, and cleared at frame start, and the snapshot reads whichever one is
-    actually bound;
-  - **inside a FULL-CANVAS `Blur` group** (`LayerKind.Blur` ∧ `LocalBlur.UsedW == 0`): a `Blur` lease **always** takes a
-    full clear (only `EdgeFade` and a recorder-patched `Opacity` compute a partial clear rect), so every texel of that RT
-    is defined, and it binds canvas-sized under the **full** viewport, so `SV_Position` is still the canvas-space device
-    pixel the restore assumes. Both properties hold, so the same `lerp(D, F, feather)` algebra applies verbatim inside
-    the group; the group's own later Gaussian + composite then treat the feathered result exactly as they would have
-    treated a nested legacy edge-fade composite's output.
-
-  Excluded (they fall back to the legacy lease): an enclosing **plain `Opacity`** group (cleared only over its patched
-  extent) or **`EdgeFade`** group (only over its box) — a strip could snapshot uncleared pool texels; and a
-  **region-local self-blur** group (`LocalBlur.UsedW > 0`), which runs a shifted viewport into a bucketed scratch and so
-  breaks the restore's 1:1 canvas-space assumption. Note that a patched plain `Opacity` group is now itself a BOUNDED
-  target (§7.1 "BOUNDED targets"), i.e. it reports `LocalBlur.UsedW > 0` — so the exclusion holds for two independent
-  reasons and `GroupAllowsStrip`'s decision is unchanged either way. Reaching a strip fade INSIDE a bounded group is
-  impossible from the other side too: a strip fade is a nested `PushLayer`, which `LayerSubtreeProbe` refuses.
+**Realization (AS-BUILT 2026-09 — the retained tiled composite, §13.1).** A node carrying one of these kinds is cut
+as an **`Effect` slice** (`scene-memory.md` §4.3b): its layer rides the child's `CompositeSliceCmd` marker and
+becomes COMPOSITE parameters, while the slice records only the group's CONTENT.
+- A LEAF effect slice composites its own region tiles (`CompositeKind.Region`) at the group alpha × the analytic
+  edge feather, self-blurred when σ > 0; an effect slice WITH child slices is a `CompositeKind.Group` — its children
+  composite into ONE group surface, which then composites once (exact group semantics: overlapping children never
+  double-blend).
+- **`EdgeFade` is the analytic feather in the composite pixel shader** (`EdgeFeatherMask`, §13.1e): no offscreen
+  intermediate, no back-buffer strip copies, no render-target read at all. A blur-carrying fade blurs its source
+  first and feathers the result.
+- **Self-blur** blurs the group's crisp source (its reach = `SelfBlurRegion.TapRadius(σ)`) and the result is
+  (for a leaf effect slice) **retained** across turns under a key of what it is made of — σ, its source / output regions and placement, every
+  placed tile's surface + raster serial — so a stationary blurred surface whose tiles did not change re-draws its cached
+  blur instead of re-blurring; a move, a σ change or a re-rastered tile re-blurs (§13.1e).
+- **`Acrylic`** becomes a `CompositeKind.Backdrop` item painted before the slice: a mini-composite of everything
+  beneath it, dual-Kawase blurred and tinted, retained while nothing beneath changes (§13.1e and §7.2).
+- Past `SliceRecorder.EffectSliceCap` the group records INLINE in its containing slice and the tile rasterizer realizes
+  it inside each tile it touches (below), with the same alpha / feather / blur semantics.
 
 ```
-PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]
-PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
-            BeginRenderPass(parentRT) → draw a quad sampling layerRT, alpha = Opacity, blend = Blend
+Inline (folded) group, per tile — TileRasterizer:
+PushLayer → scratch surface of the tile's size (+ the blur halo; origin on TileGrid.OriginGrid), CLEAR
+            → [children draw into the scratch]
+PopLayer  → (blur) → composite the scratch back into the tile at alpha × feather
 ```
-- **`LayerPool`**: pooled RT textures keyed by quantized size buckets, reused across frames (no per-frame texture
-  alloc), released through the **deferred-release queue** (keyed by in-flight fence). Layers are the ONLY offscreen
-  RTs — the analytic shadow path deliberately avoids them, so the common case has **zero offscreen passes**.
+- **Surface pool** (the design's `LayerPool`; as built the D3D12 `SurfacePool`, §13.1g). Offscreen targets — tile
+  surfaces, region surfaces, and the scratch for groups, degraded segments, blur levels, acrylic backdrops and inline
+  groups — are pooled textures reused across frames (no per-frame texture alloc), released through the
+  **deferred-release queue** keyed by the in-flight fence. The analytic shadow path deliberately avoids them.
 
-  **Target SIZE (what a lease is worth).** Two ladders, deliberately different, both portable and headless-gated:
-  - `AcrylicBackdropMath.BucketDim` — **next power of two, floor 64**. The acrylic pool keeps it because its
-    dual-Kawase pyramid *halves each level*, so halving-friendly dimensions are the point.
+  **Target SIZE (what a surface is worth).** Two ladders, deliberately different, both portable and headless-gated:
+  - `AcrylicBackdropMath.BucketDim` — **next power of two, floor 64**, because the dual-Kawase pyramid *halves each
+    level*, so halving-friendly dimensions are the point.
   - `FluentGpu.Render.LayerTargetBucket.Dim` — **64-px steps up to `LinearCeiling` = 2048, powers of two above**
-    (`gate.layerpool.bucket-ladder`). The opacity/blur pool's targets are sized to a *damage box*, which clusters in
-    the few-hundred-pixel range where next-power-of-two wastes up to 4x the area (a 364x144 guarded blur strip becomes
-    512x256). The ceiling sits past a typical window dimension deliberately: the po2 step that mattered most is the one
-    straddling a window WIDTH (1195 → 2048, a 1.7x waste on that axis alone), which was enough to cancel a full-width
-    bounded band's whole saving (`gate.layerpool.bucket-window-width`). Reuse survives the finer ladder because every
-    lease is **best-fit >= the bucket** (the smallest free slot that fits) and the shader clamps to the used sub-rect
-    (`AcrylicBackdropMath.SampleWindow`), so a finer ladder shrinks what a COLD lease creates without fragmenting the
-    WARM free list (`gate.layerpool.bucketed-reuse-without-growth`). A bucketed pair CAN coincide with the canvas size
-    (a 1280x768 window buckets to itself); harmless, because the pool classifies a slot by its SIZE, not its
-    provenance.
+    (`gate.layerpool.bucket-ladder`). Surfaces cut at painted bounds and scratch boxes cluster in the few-hundred-pixel
+    range where next-power-of-two wastes up to 4x the area; the ceiling sits past a typical window dimension because
+    the po2 step that mattered most straddles a window WIDTH (1195 → 2048, a 1.7x waste on that axis alone —
+    `gate.layerpool.bucket-window-width`). Reuse survives the finer ladder because every scratch lease is **best-fit
+    >= the bucket** (the smallest free slot that fits), so a finer ladder shrinks what a COLD lease creates without
+    fragmenting the WARM free list (`gate.layerpool.bucketed-reuse-without-growth`).
 
-  **BOUNDED targets (a group need not be canvas-sized).** A group RT is canvas-sized only when the backend cannot
-  bound what the subtree paints. Three cases are bounded instead — each a small bucketed surface entered under a
-  viewport shifted by `-Origin` (still `canvasW x canvasH` wide, so recorded clip-space positions need no rewrite),
-  with the scissor chokepoint translating every absolute clip into that space:
-  - the **region-local self blur** (`LayerKind.Blur`, `SelfBlurRegion.ComputeWork` + a tap-radius guard);
-  - the **exact (`down == 1`) blur's ping-pong scratch**, which used to lease a whole second canvas purely to hold a
-    region-scissored pass. It is now the region + a full tap guard, cleared transparent, with the H pass scissored to
-    the region's image inside it — which makes it **pixel-identical** to the canvas scratch, because every texel the V
-    pass can reach beyond the region was transparent there too (`gate.layerpool.guard-covers-taps`);
-  - a **recorder-patched plain `Opacity` group** whose subtree is FLAT and STENCIL-FREE
-    (`FluentGpu.Render.LayerSubtreeProbe`, `gate.layerpool.probe-*`), sized to `BoundedGroupRegion.Compute` over
-    `PushLayerCmd.CompositeClip`. Nothing is lost: the composite has been scissored to that same box since the
-    patched-extent change, so pixels outside it were already discarded — the box is byte-identical to the one the
-    full-canvas path clears (`gate.layerpool.bounded-group-extent-equals-clear`).
-
-  The bounded composite's uv sub-rect is `LayerTargetMap.For` and a pass's source sweep is `LayerTargetMap.Sweep`
-  (both against the SURFACE dims, never the used extent — leases are best-fit). Composing the two sweeps must return
-  every region pixel to its own centre, which is what makes a non-canvas-sized target legal at all
-  (`gate.layerpool.sweep-roundtrip-nested`). A group the recorder left UNPATCHED means "extent unknown" and stays
-  full-canvas; so does one that would save too little to be worth the shifted-viewport restrictions
-  (`BoundedGroupRegion.MinAreaSavingRatio`).
-
-  **IDLE TRIM (`FluentGpu.Render.LayerTargetTrim`, shared by both pools).** A slot is created lazily on lease and
-  aged once per submitted frame it is not leased; `Classify` then returns Keep/Retire on the fenced frame boundary:
-  | class | window | on expiry |
-  |---|---|---|
-  | in use | — | never retired, at any age |
-  | retained region pin | `PinIdleFrames` = 120, both tiers | retired (a live pin is `FindPin`-hit every submit, so only an ORPHAN ages) |
-  | bucketed scratch | `IdleFramesWeak` = 120 / `IdleFramesStrong` = 600 | retired |
-  | canvas-sized | the same window | retired EXCEPT the `WarmCanvasReserve` = 2 most-recently-used |
-  | canvas-sized | `ColdIdleFrames` = 900 | retired, warm reserve included |
-  | canvas-sized, weak tier | immediate | idle slots beyond `WeakCanvasHardCap` = 4 retired at age 0 (adreno M5) |
-
-  The warm reserve is the trade: the common frame opens 1–2 groups and a cold canvas lease is a multi-MiB
-  `CreateCommittedResource` *inside the submit*. The cold window is the other half — ~15 s with no layer at all means
-  the surface that used them is closed, and holding two canvas targets against a possible return is a leak with a
-  nice name. `ColdIdleFrames` must stay strictly greater than both ordinary windows or a discrete adapter gets no
-  reserve stage at all (`gate.layerpool.warm-reserve`).
+  **IDLE TRIM (`FluentGpu.Render.LayerTargetTrim`).** A scratch slot is created lazily on lease and aged once per
+  submitted frame it is not leased; `Classify(inUse, idleFrames, weak)` returns Keep/Retire on the fenced frame
+  boundary: in use — never; idle — retired past `IdleFramesWeak` = 120 (UMA / iGPU / WARP, where every byte is
+  resident host memory) or `IdleFramesStrong` = 600 (discrete). Tile slots follow the tile table's own lifetime
+  (`SurfacePool.TileTrimTurns`, §13.1g) and a retained blur / backdrop result returns to the scratch pool after
+  `SurfacePool.RetainTurns`.
 
   **"Retire" is not "release".** Retiring moves the resource to the fence-gated queue; the release itself is gated on
   `LayerTargetTrim.CanRelease(lastUseFence, completedFence)` — the deferred-reclaim convention of
@@ -1069,11 +1012,11 @@ PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
   recreation never rewrites a descriptor an in-flight frame references.
 
   **CENSUS.** `gpu bytes` is one tracked-resource total and cannot say whether the biggest class is doing work or
-  merely resident — and on a UMA adapter all of it is pinned host memory, i.e. working set. Each compositor therefore
-  publishes a `FluentGpu.Render.LayerTargetCensus` (in-use / free / pin / retired bytes + counts), summed into the
-  `gpu` census line as `rt: inuse=… free=… pin=… retire=…` (`gate.layerpool.census-bytes`). The `BakedBlur` scratch
-  banks are created lazily on the first bake for the same reason: an app that has not baked an image blur should
-  report zero, not 6 MiB.
+  merely resident — and on a UMA adapter all of it is pinned host memory, i.e. working set. The surface pool and the
+  baked-blur pool therefore publish a `FluentGpu.Render.LayerTargetCensus` (in-use / free / retained / retired bytes +
+  counts; retained = tiles and retained blur / backdrop results), summed into the `gpu` census line as
+  `rt: inuse=… free=… retained=… retire=…` (`gate.layerpool.census-bytes`). The `BakedBlur` scratch banks are created
+  lazily on the first bake for the same reason: an app that has not baked an image blur should report zero.
 - **Shimmer/skeleton is explicitly NOT a layer** (WaveeMusic fold-in): it's a per-row animated gradient
   FILL (gradient-atlas row + animated UV in phase 7), preserving the zero-offscreen-pass budget.
 - Nesting: a stack of active layer RTs in the `FrameGraph`; `RecordSeq`/`PassClass` keep each layer's
@@ -1090,9 +1033,11 @@ PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
   (`FluentGpu.Windows` Pal/ → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` or a DComp backdrop sibling visual
   **below** our visual). Our root clears transparent (premul 0); DWM composes Mica through. **Zero renderer
   change.** HC → opaque fill. macOS → `NSVisualEffectView`.
-- **In-app live Acrylic** (toast/add-to-playlist sampling content behind) = a backdrop layer that samples
-  the persistent canvas RT (§13) + blur via `IEffectRunner`. It is the heaviest GPU item and **wants the
-  render thread before it is stress-safe under simultaneous scroll+video** — gated, not v1-default-on.
+- **In-app live Acrylic** (toast/add-to-playlist sampling content behind) = a `CompositeKind.Backdrop` item
+  (§13.1e): a mini-composite of the clear colour and every item painted before it under its rounded rect, dual-Kawase
+  blurred and tinted with its `AcrylicRecipe`, retained while nothing beneath it changes — **zero back-buffer reads**.
+  Its refresh while content scrolls beneath it is the plan's named cost risk (estimated ~0.1–0.2 ms for a 1700×100
+  bar; not measured).
 
 ### 7.3 Video hole-punch (`DrawVideoCmd`)
 
@@ -1108,7 +1053,8 @@ public interface IVideoPresenter {            // PAL seam; FluentGpu.Windows Pal
 }
 ```
 Render-thread cost per frame: re-record the scrubber (tiny damage), emit a `DrawVideoCmd` that **erases `Dst`
-in the UI canvas** (the hole), and poke the presenter's placement. PiP persists across nav as a retained
+in the UI's pixels** (the hole — in the retained tile, and in the back buffer through the composite's
+`EraseVideoHole` item, §13.1e), and poke the presenter's placement. PiP persists across nav as a retained
 visual.
 
 **AS-BUILT (2026-07) — the erase, not a clear.** Replay is a **DestOut blend** (`SrcBlend=ZERO`,
@@ -1131,6 +1077,21 @@ order (`key = depth`), so "below all chrome" is a tree-shape property the layout
 a `PassClass` enum for one opcode was considered and **rejected** (`docs/plans/video-compositing-spine-design.md`
 §5.3); revisit only if a hole must punch below an *unrelated shallower* node.
 
+**Composite order (retained tiles, as built 2026-09-30).** The paint-slot order above holds inside the tile the hole is
+punched in; the composite (§13.1e) carries it to the back buffer by placing the hole's `EraseVideoHole` item **before
+the segment that punched it**: the erase clears what EARLIER items (earlier segments, earlier slices) composited under
+the hole, then the segment composites over it — its tile already holds the hole with every later op of that segment
+(transport, captions, a mini-player's strip or ✕, a loading notice) painted back over it — and later items paint over it
+as before. Painter order is exact: under-video content erased, same-segment chrome kept. The segment's own content painted
+before the hole needs no composite erase — the in-tile `DrawVideo` already cleared it (with the hole's radii and rounded
+clip, so a rounded PiP's corner pixels of that segment survive). Placed after the segment (until 2026-09-30), the
+full-strength erase wiped that chrome every frame: hover revealed the transport and nothing showed
+(`gate.video.chrome-over-hole`). **One exception keeps the erase after its segment:** a hole punched inside an INLINE
+(folded) group layer (opacity / self-blur / edge fade, §13.1e) erased only that layer's scratch, so the tile still holds
+the segment's content from before the layer under it — the scan tracks the open group layers per op
+(`InlineLayerNesting`) and `VideoHoleErase.Order` places that hole's erase after the segment, where the chrome over it
+is lost (the limitation below).
+
 **`VideoReady` semantics pin.** Replay erases at strength `VideoReady` — it is the erase weight, not a fade
 curve the renderer interprets. The recorder emits a **constant `1f`** (the app's poster↔hole swap is discrete);
 the **graded art→poster→live crossfade is deferred**, and the field ships so it can land without a payload
@@ -1138,20 +1099,24 @@ change. A poster-drawn-*after* pattern must therefore emit `VideoReady = 1` and 
 by `(1 − w)` (the premultiplied math in spine design §5.2) — grading the erase instead leaves residual UI alpha
 and the page bleeds through the video.
 
-**Limitation — main canvas only (canonical home for this caveat).** The erase hits whatever render target is
-bound. Inside an **offscreen layer** (opacity/blur/acrylic) that is the layer RT, not the back buffer, so the
-hole does not reach the swapchain: it vanishes during an enter/exit opacity fade (transient) and under an
-acrylic layer covering the video rect (the video must simply not bleed over the acrylic). Related: cumulative
-parent `Opacity` attenuates the erase, so a plain-parent fade ghosts the UI over the video for the duration.
-Both are **accepted and transient** — the supported scope is a video node on the main canvas. Consistent with
-that, the self-blur pin key treats the op as uncacheable (`BlurPinKey` has no case ⇒ conservative miss).
+**Limitation — the erase is target-local (canonical home for this caveat).** The DestOut erase hits whatever
+render target is bound. As built (§13.1): the in-stream `DrawVideo` erases the TILE (or inline-group scratch) it
+rasters into, and the composite plan adds an `EraseVideoHole` item — a DestOut quad over the hole's rect, clipped to
+its slice's composite clip — right BEFORE the segment that punched it (Composite order, above), so the hole reaches the
+back buffer from a static, scroll or leaf-effect slice. The item is the hole's bounding rect (no radii): an earlier
+item's pixels in a rounded hole's corners are cleared with it. A hole punched inside an inline group layer keeps its
+erase after its segment, which clears the chrome over that hole too. Inside a `CompositeKind.Group`'s item range that
+item erases the GROUP surface instead, so a video under a non-leaf opacity / blur / acrylic group does not reach the
+swapchain, and an acrylic backdrop over the video rect frosts what the tiles hold there (the video must simply not bleed
+under the acrylic). Cumulative parent `Opacity` attenuates the in-stream erase (the composite item stays full strength:
+under an attenuated hole the punching segment's own earlier content keeps the attenuated remainder, earlier items are
+cleared). These are **accepted and transient** — the supported scope is a video node outside a non-leaf group.
 
-**Damage / re-punch.** Under `FLIP_DISCARD` the back buffer is discarded after every present and the surface
-is re-rendered whole, so the hole is re-punched every frame with no extra rule. The damage-inflation rule —
-inflate the video node's damage to the full `Dst` whenever any node overlapping it is dirty — is **deferred**
-until partial present exists. Flush-wise the hole rides the UI swapchain `Present` while the child placement
-rides the per-frame DComp `Commit` the video pump issues: two flushes on one frame turn, not one
-(`docs/plans/video-phase1-plan.md §2`, correction #4).
+**Damage / re-punch.** The composite redraws the whole back buffer on every presented frame, so every hole item is
+re-punched every frame with no extra rule, and the retained tile keeps its own erased pixels; there is no
+video-hole damage-inflation rule (the partial-canvas decode that needed one is deleted). Flush-wise the hole rides the
+UI swapchain `Present` while the child placement rides the per-frame DComp `Commit` the video pump issues: two flushes
+on one frame turn, not one (`docs/plans/video-phase1-plan.md §2`, correction #4).
 
 ---
 
@@ -1201,10 +1166,10 @@ row cannot punch a window through its list's edge and a rounded card gets a roun
 constant and divided it back out on every spotlight subtree. That mutated a channel the nodes themselves own:
 it double-lit translucent targets (a 0.6-alpha card came back at 0.6/0.28), it could not be scoped to a region
 at all, and it forced the exemption registry so hoisted bands escaped the divide. The group makes the veil one
-explicit primitive: the fill lands at alpha 1 in the group's RT, the erases scrub windows in **that RT only**
-(never the canvas beneath — the §7.3 limitation, used here deliberately), and the composite lays exactly one
-uniform veil at `ScrimOpacity`. Cost: one offscreen composite sized to `scrim`, only while a drag has
-destinations. Honest residual: the erase is a **layer-local** effect, so the scrim band must never itself be
+explicit primitive: the fill lands at alpha 1 in the group's surface, the erases scrub windows in **that surface
+only** (never the pixels beneath — the §7.3 target-local erase, used here deliberately), and the composite lays
+exactly one uniform veil at `ScrimOpacity`. Cost: one group surface sized to `scrim` (an effect slice's region
+tiles, or an inline group — §7.1), only while a drag has destinations. Honest residual: the erase is a **layer-local** effect, so the scrim band must never itself be
 nested in an acrylic layer.
 
 **`EraseRoundRectCmd` (payload shape owned here; enum registration: `scene-memory.md` §4.1).**
@@ -1217,10 +1182,11 @@ public readonly record struct EraseRoundRectCmd(
 Raster is `DrawVideo`'s, exactly: the same rounded-box SDF shader, the same `RectInstance`, the same **DestOut**
 PSO and the same `PrimKind.VideoHole` run class (`dst' = dst × (1 − Strength·cov·Opacity)`), so coverage AA,
 per-corner radii and both clip tiers come free — **no new shader, PSO, texture or RHI method**. The two opcodes
-are deliberately separate rather than one: `DrawVideoCmd` carries a `SurfaceId` and the "erase the canvas so a
-DComp child shows through" contract, while this one is pure geometry with no surface identity and is meant to
-run **inside** a group. Using `DrawVideo` for a scrim cutout would put a non-video in the video registry's
-diagnostic path; using this one on the main canvas erases to transparent and is a bug.
+are deliberately separate rather than one: `DrawVideoCmd` carries a `SurfaceId` and the "erase the UI pixels so a
+DComp child shows through" contract (the composite re-punches it in the back buffer, §7.3), while this one is pure
+geometry with no surface identity and is meant to run **inside** a group. Using `DrawVideo` for a scrim cutout would
+put a non-video in the video registry's diagnostic path; using this one outside a group erases a retained tile to
+transparent and is a bug.
 
 ---
 
@@ -1334,7 +1300,9 @@ batcher: glyph instances sort into PassClass=Glyph runs keyed by (atlas page, cl
 **Windows glyph-capacity preflight (2026-09-12):** glyph, gradient-glyph and icon demand is prepared before
 `cmdList.Reset` and before image-upload owners stamp `_fenceValue + 1`. This ordering is mandatory because the
 rare atlas-growth fence drain advances that value. The active bank then uploads the full prepared dirty band
-before glyph draws; atlas-epoch changes invalidate the retained canvas ledger. Capacity and lifetime semantics
+before glyph draws. A retained tile holds pixels, not atlas references, so an atlas-epoch change never invalidates
+one; a tile whose replay dropped glyph instances reports itself not rastered and re-rasters (§13.1d). Capacity and
+lifetime semantics
 are owned by `text.md` §5.3–5.4.
 
 A memcpy'd clean DrawList span is **valid IFF**:
@@ -1356,17 +1324,15 @@ cached instanced quads at submit (no re-record)** — composition-style independ
 **Walk-gate scoping (spatial reuse-blocking).** Beyond the per-span IFF above, the Walk's reuse gates carry a
 second, spatial guard: a node on the **ancestor chain of a special-cased visual** (popup skipRoot, connected-anim
 fly anchor, overlay/drag-ghost, or exit orphan's visual parent) is BLOCKED from reuse **and** stores no span this
-frame (`&& !spans.IsBlocked(nodeIndex, frame)` on both the exact and translated copy gates; the store + culled-store
+frame (`&& !spans.IsBlocked(nodeIndex, frame)` on the exact-copy and keep-whole gates; the store + culled-store
 sites skip blocked nodes). This replaces the old whole-tree `SpanReuseDisabledReason` kill for those four reasons
 with a scoped ancestor-chain block, so an open flyout / in-flight fly / exit no longer forces an O(scene) re-record.
 The mechanism + the containment/not-store-while-blocked safety argument are owned by **scene-memory.md §4.3a**;
 `FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global.
 
-**Translated (rebased) copies.** A span whose subtree only MOVED is copied and patched per payload rather than
-re-recorded — including glyph runs, clips and non-acrylic layers, with `InMotion` raised on rebased glyph/self-blur
-commands so moving text keeps riding sub-pixel (§7 owns the field). ACRYLIC vetoes the copy (its pixels depend on
-where it sits). The per-opcode coverage, the veto, the clip-offset soundness argument and the settle re-snap rule
-are owned by **scene-memory.md §4.3b**.
+**The slice partition (retained tiles P1).** Translated (rebased) copies are DELETED: scroll content, sticky/parallax
+roots and the scrollbar thumb record POSE-FREE into their own slice arenas and their poses are composite parameters;
+a clean slice is kept whole, and span validity is per arena buffer. Owned by **scene-memory.md §4.3b**.
 
 ---
 
@@ -1414,7 +1380,8 @@ public sealed class TextureStagingRing { /* MB-sized, fence-gated; backs CopyBuf
   deferred-freed behind its fence), never freed. `BindBuffer` points at the ring with a byte offset → zero
   alloc, zero copy. (A `DEFAULT` copy is an optional optimization `OQ-6`.)
 - **Texture upload** rides the **separate `TextureStagingRing`** (the original wrongly claimed images ride
-  the instance ring — corrected).
+  the instance ring — corrected); as built, discrete image uploads are recorded on the COPY `UploadQueue` and gated by
+  a fence compare, never a wait (§13.1f).
 - **Root constants** (viewport size, sRGB flag, global alpha, current clip params) via `BindConstants` —
   no CB churn.
 - **Frames-in-flight = 3** (`OQ-8`, settled AS-BUILT 2026-08: `D3D12Device.FRAME_COUNT` = back buffers = per-frame
@@ -1427,93 +1394,460 @@ public sealed class TextureStagingRing { /* MB-sized, fence-gated; backs CopyBuf
   allocations in phases 6–13: **0** (verified by the alloc-tripwire + process-wide BDN backstop, since
   `GC.GetAllocatedBytesForCurrentThread` does not follow work across the seam).
 
-### 13.1 Damage / partial present — persistent canvas RT
+### 13.1 Retained tiled composite — the primary window's route (OWNER, AS-BUILT 2026-09)
 
-**MADE: v1 = engine-owned persistent canvas RT** (folds the partial-present MAJOR; the original's `OQ-7`
-is now decided). **LANDED (2026-08)** — this subsection is AS-BUILT, not a plan. The four numbered points
-below stand; each carries the delta the implementation settled on, and §13.1a states the contracts §13.1
-now owns.
+**MADE: the primary window composites RETAINED TILES in-engine into its swapchain** (design + as-built deltas:
+`docs/plans/scroll-gpu-retained-tiles-implementation.md` §A–§E and its "P2 status 2026-09-24 (landed), as built" note —
+the note overrides the plan's sketch wherever they differ). The loser was native DirectComposition surfaces per slice:
+the effects the engine owes (acrylic sampling scrolled content, analytic edge feather, self-blur, rounded AA clips,
+nested scrollers inside effect groups) cannot be expressed in an `IDCompositionVisual` tree without WinRT composition,
+and a half-native split (chrome in the swapchain, content in DComp visuals) makes Present and Commit non-atomic. The
+earlier persistent-canvas / partial-repaint subsystem (canvas RT, replay rects, the canvas ledger, the layered submit
+family, strip edge fades, the self-blur pin cache) is **deleted outright**, not kept as a fallback. `RepaintRoute` keeps
+two values: **`Composite`** — the primary window, always — and **`FullDirect`** — a secondary swapchain (windowed popup,
+detached pop-out) clearing and replaying its whole stream straight into its back buffer through `SubmitDrawList`.
+That direct route composites **no layers**: opacity / blur / edge-fade groups draw their content flat, and an acrylic
+paints its opaque `FallbackColor` (WinUI's no-transparency answer) instead of a frost.
 
-1. **Incremental record** (P8): dirty subtrees re-record into the front arena; clean spans memcpy from the
-   render-thread-private back arena (per §11.1). Recording cost ∝ changed subtree.
-2. **Damage region** (`RepaintDamageRegion`, ≤16 accumulated rects): old∪new **world AABBs from all four
-   transformed corners** (handles rotation/skew); each node's damage **inflated by its effect extent**
-   (shadow blur radius, backdrop margin); repaint includes **all nodes intersecting that region in
-   z-order** (not just the dirty node). **AS-BUILT:** the accumulator is a POD value on `FrameInfo`
-   (`pal-rhi.md` owns the seam type; §13.1a owns the payload contract) carrying world-space **float DIP**
-   rects, not `IntRect` — the DIP→device conversion is at the RHI leaf, per point 3. At capacity it merges
-   the **least-waste** pair rather than surrendering, and a forced-full region names its cause
-   (`RepaintFullReason`) instead of being an untyped flag.
-3. **Partial repaint:** damaged regions scissor-repainted into the **persistent canvas RT**, then composited
-   to the back buffer. `Present1` dirty-rects are a **pure DWM hint layered on top, NOT the correctness
-   mechanism**. World-space float damage converts to integer back-buffer pixels **at the RHI leaf,
-   rounding OUT** (DPI applied once, Windows-side). **AS-BUILT, three deltas:**
-   - The ≤16 accumulated rects **coalesce to ≤4 replay rects** (least-waste merge again, clamped to the
-     target); each is replayed as its own full pass over the stream under a root scissor clamp.
-   - The damaged region is **CLEARED per rect**, not `LoadOp.Load`-preserved. The DrawList assumes a
-     cleared base — the clear is not an opcode — so replaying translucent fills, AA edges and glyphs over
-     last frame's final pixels would double-blend and darken progressively. `LoadOp.Load` describes the
-     **undamaged** region only, which is exactly what a per-rect clear leaves alone. Whole-target clears
-     keep `NumRects = 0` so the fast-clear path survives.
-   - The replay rects are re-disjointed **on the device pixel grid**, after the round-OUT, not only in float
-     DIP space. Two rects with a sub-pixel gap round out into a shared device column that one clear covers
-     once and two replays blend twice — a permanent hairline. After the fold, the clear list, the scissor
-     and the cull describe **one** pixel set by construction.
-4. **Full-redraw fallback → `FullDirect`:** ≥60 % target-visible coverage after clipping and coalescing
-   to the replay budget, layer resize, DPI/swapchain resize, first frame, or a stream the replay
-   cannot reproduce (§13.1a). **AS-BUILT:** the fallback is `FullDirect` — today's straight-to-back-buffer
-   path, byte for byte — **not** a full redraw into the canvas. It is the permanent safe harbor and the
-   cheapest full frame available (no canvas, no blit); scroll lands here by policy and therefore costs
-   exactly what it did. The canvas is only rebuilt (`FullIntoCanvas`) when partial repaint is otherwise
-   eligible and the canvas alone is stale — i.e. when the rebuild pays for the *next* frame.
-   The accumulator merges at its 16-rect capacity; that alone does not force full. Off-target tails never count
-   toward the cutoff. `offscreen-damage-visible-tail` checks this with real pixel identity.
+This section owns the contracts below; the recorder partition that feeds them is `scene-memory.md` §4.3b, the
+`CompositeSliceCmd` payload is §3.1, the `IGpuDevice.SubmitComposite` seam member + its POD types
+(`CompositeFrame`, `CompositeItem`, `CompositeKind`, `PresentParams`, `src/FluentGpu.Engine/Seams/Rhi/Composite.cs`) are
+registered in `pal-rhi.md` §2.3, and the gates are `validation.md` §2.3a (pixels) + §3.6b/§3.6c (headless).
+**Where the poses come from** — the scroll plans, the render-thread `ScrollPoser` evaluated at present time, the
+coverage clamp that the needed set agrees with, `MotionFeel.LookaheadS`, sticky/parallax/collapse effect rows and the
+thumb's shown offset — is owned by [`scroll.md`](./scroll.md) (§5, §7, §9); this section owns only what the composite does
+with them.
 
-The canvas RT is also the natural sample source for in-app Acrylic (§7.2). Animated transforms dirty only
-old∪new bounds → a spinner repaints a tiny region.
+```
+render turn (render thread; the UI thread inline in SingleThread) — AppHost "three-way render turn"
+  nothing changed (SliceRecorder.CompositeHash equal, empty repaint set, no live crossfade) → elide submit + Present
+  only slice POSES moved (scroll offset, sticky/parallax translation, thumb) → composite-only turn: records 0 bytes
+  otherwise (fresh publication, compositor animation, a pose the slices cannot honour) → SceneRecorder.Record → slice arenas
+  SliceRecorder.BuildComposite  — SliceTable: BeginFrame → OpenSlice per segment → image cross-fades
+                                  → Request(TileGrid.Needed, the segment's content: a resident tile whose want moved re-rasters)
+                                  → Resolve(TileBudget.Current) → items, placements, raster list, PresentParams
+  IGpuDevice.SubmitComposite(CompositeFrame) — ONE command list, no back-buffer read, no copy of any RT:
+     1 TILE RASTER  per raster-list entry (visible first): one CLEAR→STORE render pass into its surface
+     2 OFFSCREEN    degraded segments, group surfaces, self-blur, acrylic backdrops (retained when unchanged)
+     3 COMPOSITE    ONE CLEAR→STORE pass on the back buffer: every CompositeItem in painter order
+  SliceRecorder.EndComposite(RasterDone) → SliceTable.MarkRastered;  TileCensus captured
+  Present — the whole frame (FLIP_DISCARD)
+```
 
-#### 13.1a Contracts this section owns (as-built)
+#### 13.1a Slices
+
+`FluentGpu.Render.SliceRecorder` (mechanism: `scene-memory.md` §4.3b) partitions the scene walk into per-slice arenas:
+**`SliceKind`** `Static` (the root and everything not under a scroll root or an effect), `Scroll` (one per scroll
+content root, recorded pose-free so a scroll offset changes no byte) and `Effect` (a node with composite-time
+parameters: group opacity, self-blur, edge fade, acrylic, and the translation-only sticky/parallax roots). `SliceRole`
+names what a slice is for its node (`Main`, the scrollbar `Thumb`, a virtual list's item `Band` and its `PinnedBand`,
+the `Layer` a slice ROOT's own group layer is cut as — the scene root / a content root that is itself a fading scroller,
+whose Main stream is then that one marker — and a sliced fading scroller's `Chrome`: its rail, arrows and edge-cue
+chevrons, trailing its content like the `Thumb`).
+A parent stream carries a `CompositeSlice` marker at each child's paint position; a tile replay SKIPS the marker (the
+child composites as its own item).
+
+- **Segments.** A slice whose stream holds child markers is split at them into painter-ordered SEGMENTS. Every segment
+  is one `SliceRow` in the `SliceTable`, keyed by `(NodeIndex, Gen, Sub = segment·8 + role)`, with a segment
+  `Identity` (its slot, index, bracketing markers and scroll base — a change is `SliceGeometry`) and a `StreamBase`: the
+  bytes before the segment are its PREFIX, from which a per-tile replay reconstructs the clips / stencil clips / inline
+  layers still open at the segment's first byte.
+- **The composite plan.** `SliceRecorder.Place` lays out the slices at the scene's CURRENT poses without writing a
+  stream: each slot's segments, each child at its marker with its accumulated posed offset and composite clip, a
+  `Group` around a non-leaf layer slice, a `Backdrop` before an acrylic slice, an `EraseVideoHole` before the segment that
+  punched it (§7.3 Composite order). Each slot's arena is scanned once per buffer generation, so a composite-only turn
+  reads cached data only.
+- **Effect budget (as built 2026-09-24).** Each cut effect slice counts against ONE bound (`SliceRecorder.BudgetClass`):
+  a FOLDABLE effect (opacity group, self-blur, an edge fade over its own paint, sticky/parallax translation) against
+  `SliceRecorder.EffectSliceCap` = 16 (WebRender squashes past 8) — later candidates record INLINE in their containing
+  slice (`SliceRecordStats.Folded`) and raster as inline groups inside its tiles (§13.1e); an **ACRYLIC** surface against
+  its own `AcrylicSliceCap` = 16 — a frost exists only as a composite `Backdrop` item, so acrylic is **never folded**:
+  one that still cannot be cut (its cap, a node reached twice, walk headroom, inside an inline layer, a top band) records
+  NO acrylic layer and keeps its opaque `FallbackColor` plate (WinUI's no-backdrop answer; `AcrylicFallbacks`, expected
+  0) — the plate fill is dropped only in an acrylic slice's own walk, where the Backdrop frosts it; a **distributable
+  edge fade** (`CompositeSliceFlags.DistributeFade`: fade mode, alpha 1, no paint of its own) against nothing
+  (`FreeFades`, §13.1e). **Inside an inline group layer nothing is cut** (`InlineLayerDepth`): a tile replay skips a
+  child's marker, so an inline opacity / blur / edge-fade layer wrapped around one would wrap nothing — the subtree
+  records inline with its poses baked (it re-records when they move). The host sizes its `SliceTable` for SEGMENTS, not
+  composited slices: 256 rows × 64 tile entries × 64 surface slots (`AppHost`; `SliceTable.DefaultSliceCap` = 16 is
+  the class default only).
+
+#### 13.1b Tiles
+
+- **Grid.** `TileGrid.W × H` = **1024 × 512** device px, BGRA8 — `TileBudget.TileBytes` = 2 MiB for a full tile. Tile
+  `(Tx, Ty)` of a slice covers slice-space device px `[Tx·W, (Tx+1)·W) × [Ty·H, (Ty+1)·H)` (`TileKey`, `TileState`).
+- **Origins.** `SliceFrame` = the slice origin floored to whole device px, the dropped residual fraction (baked into
+  the raster so text keeps one subpixel phase at rest and in motion) and the raster scale. **Every raster target's
+  origin sits on `TileGrid.OriginGrid` = 64 px of its slice** — tiles, degraded-segment chunks, blur scratches, inline
+  group scratches: a pixel shader's derivatives come from 2×2 quads aligned to the render target and a blur's 2×
+  downsample pairs align to it too, so targets whose origins differ by an odd pixel raster a rounded corner or a blur
+  differently. With every origin on the grid a tile, a direct region and an inline group see the same quads and blur
+  phase — which is what makes `tile-static-identity` 0 px at every scale.
+- **Surfaces are cut at the painted bounds.** A tile's surface extent is its cell cut at the content's far edge
+  (`LayerTargetBucket.Dim`, capped at the tile): on both axes for a static or effect slice (an effect slice's tile is a
+  REGION surface) and for a NON-virtual scroll segment (its origin floored to the grid at its content, like a static
+  one); on the cross axis only for a VIRTUAL list's scroll segments (`SliceRow.MainAxisGrows`: `ItemCount` > 0), whose
+  main-axis extent grows as rows realize. A 40-DIP heading between two shelves thus charges a ~Dim(40 + 64)-row surface,
+  not a 512-row cell per column (`gate.tiles.segment-extent`). The budget charges every surface its real extent.
+- **Canonical replay viewport.** The D3D12 tile rasterizer (`TileRasterizer.cs`) replays a segment through the SAME
+  streaming decoder every primitive goes through, under a viewport whose TopLeft is the target's offset into slice px
+  and whose extent is a fixed `CanonicalViewport` = 16384 px (logical `16384/scale`), so a primitive's device position
+  is computed identically for every tile and every direct region; a target the window cannot reach is brought into it
+  by an integer device-px shift of every op (`DrawOpTranslate`), never a fractional one.
+- **Per-tile culling (decode-time; a correctness requirement, not an optimization).** The per-segment span index
+  (`SliceSpan`: pre-order clean-subtree bounds + byte ranges; an entry holding a child marker is never skipped) skips
+  clean subtrees that miss the tile, and the decode-time cull drops every primitive whose AABB — all four transformed
+  corners, plus a **per-kind halo derived from what its shader actually rasterizes** (`RepaintCull`: AA floor, stroke
+  half-width, shadow offset/spread/blur, glyph overhang) — misses it. `SliceOpBounds` unions the SAME footprints into a
+  segment's painted bounds (the tiles it requests), so a primitive is never kept by one and dropped by the other; an
+  under-covered halo would leave a chopped shape in a retained tile.
+
+#### 13.1c Invalidation (`InvalidationReason`)
+
+Scroll content is recorded in content space, so a pure scroll invalidates nothing. Every reason is counted per turn
+by the census, so a surprise re-raster names its cause.
+
+**Tile validity is derived from content (as built 2026-09-25, issue #1).** A tile's pixels are a pure function of the ops
+its replay draws, so the table keeps, per surface, the content hash the stream WANTS for the tile it holds
+(`TileContentHash.TileWant`: the segment's ops whose footprint reaches the tile + the scopes open at the segment start, in
+stream order — the same `SliceOpBounds` footprints the replay culls with, §13.1b) and the hash its pixels were RASTERED
+for, each with its op count. `SliceTable.Request<TContent>` asks the segment's `ITileContent` (`SliceRecorder.Content.cs`:
+the per-op table `ScanSlot` fills once per arena buffer) for a resident, valid tile's want only when the segment's key —
+(arena buffer generation, segment, device grid, scale) — moved since that want was folded, and invalidates the tile when
+the two hashes differ: `PrimCount` if the number of ops it draws changed, else `Content`. A kept slice's key never
+moves, so a composite-only turn folds nothing (0 bytes, 0 tiles — `gate.slices.stickyclip-composite`,
+`scroll-tick-zero-bytes`, `chrome-over-feather`, `gate.tiles.scroll-no-copy`); the fold runs only for walked slots
+(`TileCensus.ContentChecked` / `ContentCaught`). A surface acquired in the turn gets its want in the post-resolve pass and
+rasters for exactly it. **The recorder emits no damage rects for tiles:** the per-node slice damage (a node's old ∪ new
+extent, a removal's presented extent, a structural-cancel band — `SliceDamageRect`, `AddDamage`/`AddWindowDamage`,
+`CompositeFrame.SliceDamage`) is deleted. It missed every byte change that is not a dirty node's own extent — a nested
+slice re-walked on a signature miss with its inherited alpha baked in (the artist band's tab row, #1), the scrollbar
+thumb's fill alpha (only the enclosing slot was damaged), an op's safety halo (glyphs ±18 px, fills ±2 px) reaching a
+tile the node's model rect did not — and over-invalidated wherever a rect crossed a tile whose ops did not change. Across
+the full VerticalSlice run, content-derived validity rasters 40 091 tiles against 42 241 for damage + content (no suite
+more). What no byte describes stays explicit: the image clock (a cross-fade), the scale, the grid, the theme / a
+forced-full repaint, eviction, coverage.
+
+| Reason | Triggered by | Scope |
+|---|---|---|
+| `NoTexture` | the first request of a tile | that tile |
+| `Content` | the ops the tile draws changed in place (same count, different bytes: a colour, an inherited alpha, a glyph, a sub-tile move) — its content want differs from its raster hash; an image cross-fade window the image clock passed through (byte-identical commands, advancing pixels) | that tile / the tiles the fade's rect touches in its own segment |
+| `PrimCount` | the NUMBER of ops the tile draws changed: a primitive entered or left it (a row realized into / parked out of it, a node that appeared, vanished or moved across it) | that tile |
+| `ValidRectChanged` | realized coverage grew past the span a tile covered when it was last scheduled | that tile |
+| `ScaleChanged` | the slice's raster scale changed (DPI hop, zoom step, pinch settle) | whole slice |
+| `SliceGeometry` | the slice's device origin, residual, kind or segment identity changed; an effect tile's region extent changed | whole slice / that tile |
+| `BackgroundOrTheme` | a theme epoch or clear-colour change, or a FORCED-FULL repaint set (`RepaintDamageRegion.IsFull`: first frame, resize, DPI, device recovery, an undescribable change) → `SliceTable.InvalidateAll` | every tile |
+| `Evicted` | the budget or the idle sweep took the tile's surface; re-rastered when next needed | that tile |
+| `Degraded` | the slice could not fit its visible tiles this frame and draws direct (§13.1d) | that frame |
+
+**Layout re-windows re-raster only what they changed:** a re-window that re-appends rows at the positions they held
+leaves every tile's ops (and so its want) unchanged except where a row entered or left. The recorder still adds what
+moved (old ∪ new) to the window REPAINT set (§13.1i: the Present census and the forced-full detector); a slice whose
+PLACEMENT moved adds its old ∪ new footprint there, never to its own tiles.
+
+#### 13.1d Raster scheduling — never blank
+
+Per segment, `TileGrid.Needed` writes the needed set over the composite viewport ∩ the segment's painted bounds (a
+scroll slice also ∩ its realized coverage), grouped by order: every **visible** tile (order 0, rastered in the SAME
+submission that composites it — valid by construction), then the **ahead-of-motion** band of length
+`|v| · MotionFeel.LookaheadS` on the leading side (order 1, nearest row first), then **one tile row retained behind**
+(order 2 — the trailing side while moving, both sides at rest; WebRender's one-tile margin). A main-axis row outside
+realized coverage holds no rows and is never requested (it agrees with the poser's clamp).
+
+`SliceTable.Resolve` gives every queued tile a surface within the budget: all VISIBLE tiles of all slices first (each
+slice atomically — it gets every visible surface it lacks, evicting non-visible tiles, or it degrades), then the ahead
+band, then the behind rows (these take only free budget or tiles not needed this frame). **A visible tile is never
+evicted in the frame it is visible.** A slice that cannot fit its visible tiles is **`Degraded`** for the frame: its
+item becomes `CompositeKind.Direct` and its segment rasters into transient tile-grid chunks (the same target positions
+as its tiles) — the pre-tile cost, never a blank. The backend reports each raster it ACTUALLY completed
+(`CompositeFrame.RasterDone`); a tile whose replay dropped instances or sampled a not-yet-resident image stays invalid
+and is rastered again. `SliceTable.CountExposedMissing` counts visible tiles of non-degraded slices that composited
+nothing — the census's `ExposedMissing`, which must be 0.
+
+#### 13.1e The composite pass
+
+The painter-ordered `CompositeItem`s draw into the back buffer in ONE render pass whose CLEAR load op writes the clear
+colour (the previous frame is never read; measured 0.03 ms vs 0.18 ms for a full-window clear quad on the Adreno
+X1-85). `CompositeKind`, as built:
+
+| Kind | Draws |
+|---|---|
+| `Tiles` | the resident tiles of a static/scroll segment (`CompositeFrame.PlacementsOf(sliceId)`), placed by the item's whole-device-px `Transform` |
+| `Region` | the same for an effect segment's region surfaces; a LEAF effect slice carries its group alpha / feather / self-blur σ on the item |
+| `Group` | an effect slice WITH child slices that is not distributed (below): the next `GroupCount` items composite into ONE group surface covering its placed `Footprint` (its clip ∩ the window when the footprint exceeds `GroupCacheKey.MaxFootprintPx` = one tile's area), origin on the grid of the group's own `Transform` (its slice's posed offset, whole px), then that surface composites with the item's alpha / feather(s) / blur — exact group semantics, overlapping children never double-blend. The surface is RETAINED under its content key (below) |
+| `Backdrop` | in-app acrylic: a mini-composite of the clear colour + every earlier item under the item's rounded rect grown by the chain's reach, dual-Kawase blurred and tinted with its `AcrylicRecipe` — zero back-buffer reads |
+| `EraseVideoHole` | a DestOut quad over the video rect, emitted BEFORE the segment that punched it (that segment's tile holds the hole with its later chrome painted over it) — after it only for a hole punched inside an inline group layer (§7.3 Composite order) |
+| `Direct` | a degraded segment (§13.1d) |
+
+The composite PSOs (`SliceCompositor.cs` + `composite.hlsl`; 56 root constants — 57 of the 64 root DWORDs with the
+SRV table — point + linear clamp samplers, quads from `SV_VertexID`) place a whole-pixel surface with an **exact texel
+`Load`** (a 1:1 bilinear `Sample` is not bit-exact at high-contrast edges) × group alpha × up to TWO analytic **edge
+feathers** (`CompositeItem.Feather` and `Feather2`, K[5..8] and K[10..13]; the second's intensity 0 disables it) × an analytic
+**`sdRoundRect` clip**, sample scaled surfaces (blur results) bilinearly, and run the separable Gaussian + 2×
+downsample of self-blur and the dual-Kawase chain + AcrylicBrush recipe of acrylic. The feather has ONE source:
+`EdgeFeatherMask.Hlsl` is prepended to `composite.hlsl` verbatim, `EdgeFeatherMask.Pack` writes exactly the constants it
+reads, and `EdgeFeatherMask.Evaluate` is its line-for-line C# port (portable HLSL, so a Metal port re-implements it
+verbatim) — the headless reference and the GPU can differ only by float rounding, which `tile-feather-identity` holds
+to ≤ 1/255. `EdgeFeather` (device px; bands per edge, corner radii — the feather follows the rounded-corner ARC where
+two adjacent edges fade — falloff, intensity) is built from an authored `EdgeFadeSpec` by `EdgeFeather.FromSpec`.
+
+**Distributed edge fades (as built 2026-09-24, `docs/plans/composite-fade-groups-implementation.md` §1).** For
+premultiplied source-over, feather(A over B) = feather(A) over feather(B) at a pixel iff f·αA·αB·(1−f) = 0, so an edge
+fade over child slices is composited WITHOUT a group surface — every item below it carries the fade's analytic feather
+(`CompositeItem.Inherited` = how many ancestor fades it carries, their layers in `CompositeFrame.ItemInherited`) —
+whenever `SliceRecorder.Distributable` holds for the turn: a pure fade (`DistributeFade`: fade mode, no blur, alpha ≈ 1);
+the fade's own segments paint nothing this turn (a fill or a border make it a group — its scroll CHROME does not, below); no
+acrylic backdrop or video hole lies below it; every item below carries at most two feathers (a nested distributed fade
+multiplies — the exact product, `Feather2`; a third makes the fade a group); and no two item footprints (placed, window
+DIP, + a self-blur's reach) overlap inside its band strips / active corner squares (everywhere, at intensity < 1). A
+turn that fails it composites the fade as a group — the two routes differ only by the group surface's 8-bit
+quantization (≤ 1/255, `fade-distribute-identity`, against the probe-only `GpuKnockouts.GroupFades` control). A nested
+fade's feather rect rides its containing slot's offset (a shelf feather follows the page scroll with no re-record).
+
+**Scroll chrome over the feather (as built 2026-09-24).** A scroller's chrome — its overlay scrollbar (rail, arrows,
+thumb) and its edge-cue chevrons — is drawn OVER its edge feather, never under it: the feather dissolves the content,
+not the control that scrolls it. The paint route closes the edge-fade layer before the chrome (`SceneRecorder`
+`chromeOverFade`: an edge fade at group alpha ≈ 1; under a partial alpha the chrome stays inside the group, as a
+whole-node opacity demands). A SLICED fade (its layer rides its marker) records the rail + chevrons into its `Chrome`
+slice and the thumb into its `Thumb` slice, both markers trailing its content (`SliceRecorder.IsScrollChrome`):
+`Distributable` ignores them, a distributed fade hands them the fades AROUND it (not its own), and a grouped fade lifts
+them out of its surface and places them after it (`ThumbsTrail` / `PlaceTrailingThumbs`). Before, a visible thumb
+overlapped the content inside the band, the fade could not distribute, and a virtual list re-rendered its whole
+viewport as a group every scroll frame. The `Chrome` slice lives as long as the bar shows (born with the thumb's, so a
+hover or drag that expands the rail allocates nothing mid-gesture). Gates: `gate.slices.chrome-over-feather`,
+`scroll-chrome-identity`.
+
+**The feather is evaluated only where it is not 1 (as built 2026-09-24).** A feathered item's quad is split by its
+feathers' UNIT INTERIOR (`EdgeFeatherMask.UnitInterior`: each enabled edge pulled in by its band and any corner radius it
+takes part in, rounded inward to whole pixels, so every pixel centre inside clears the ramp by ≥ ½ px and the mask is
+exactly 1.0f there): `FeatherQuadSplit.Split` yields the interior piece, drawn WITHOUT the feather, and ≤ 4 strips drawn
+with it — the same pixels bit for bit, but a scrolled viewport pays the per-pixel feather in its bands only
+(virtualization bench: ≈ 158 kpx a frame instead of the viewport's ≈ 1.18 Mpx; the composite pass back to its
+un-feathered cost). `GpuFrameCounters.FeatherPx` / the bench's `featherPx=` count the feathered pixels inside each
+item's scissor. Tests: `FeatherQuadSplitTests` (exactness at every interior pixel centre, a partition, the band-only
+bound).
+
+**Composite-time sticky clip (as built 2026-09-24).** A node's `NodePaint.StickyClipSpan` half-plane clip (the band
+line a pinned header cuts content at) is a COMPOSITE-TIME clip when the node is cut as a slice: the marker carries
+`CompositeSliceFlags.StickyClip`, the recorder records the node's content free of its `ClipRect`, and `Place` clips the
+node's own segments / group at `floor(StickyY·s) + round(StickyDy·s)` — the same arithmetic the tile scissor used — and
+its descendants at the exact line (a slice wholly cut away is not placed). The ClipTop pose channel then writes no
+bytes (`UiPoseSink.IsCompositeEffectChannel`), so a page scroll under a sticky band is composite-only (0 bytes, 0 tiles)
+and its groups / backdrops hit their caches. A shadow, an arc or an acrylic under the clip keeps it in paint
+(`StickyClipIsPlainScissor`); the probe-only `GpuKnockouts.StickyClipInPaint` forces the paint route for the identity
+gate. Gates: `gate.slices.stickyclip-composite`, `stickyclip-cuts-at-line`, `stickyclip-identity`.
+**`EdgeFadeSpec.WhileStuck` (2026-09-25).** An edge fade on a sticky-clipped node may be conditional on the clip: the
+recorder marks its slice `CompositeSliceFlags.FadeWhileStuck` (and drops the fade from an inline bake whose clip is
+released), and `PlaceChild` places the fade layer only while the clip is engaged (`sticky`), so the feather lands on the
+same render turn as the cut and never at rest (`CollectFootprints` applies the same rule). Gate:
+`gate.scroll.engaged-feather-composite`.
+
+**Retained group surfaces.** A group's surface is kept across turns under `GroupCacheKey` (engine-side; the headless
+model computes the same number and logs `CompositeRecordKind.PrepareGroup{Key, Hit}`): its blur σ, its region size, and
+per enclosed item its kind, slice, transform / clips / feathers RELATIVE to the region origin, alpha, σ, every placed
+tile's surface + raster serial, a nested group's own key — a Direct or Backdrop item inside makes it uncacheable. A page
+scroll that moves a group rigidly re-draws it (a hit); its own scroll, a re-rastered tile or a paint change inside
+re-render it. The group's own alpha / feathers / clip apply when its surface is DRAWN, so they are not in the key.
+
+**Inline (folded) layers** — an effect past the slice budget records its `PushLayer`/`PopLayer` inline: the tile
+rasterizer renders an opacity / blur / edge-fade group into a scratch of the target's size (+ the blur halo, origin on
+the grid) and composites it back at its alpha / feather / blur. No slice is cut inside one (§13.1a), so it wraps its
+whole subtree. An acrylic `PushLayer` — recorded only in an acrylic slice's own walk — erases its frosted rect from what
+the slice drew before it so the composite's `Backdrop` beneath reads through; a folded inline acrylic layer (which
+erased its plate over NO backdrop — a transparent hole, 2026-09-24) no longer exists.
+
+**Retained self-blur and acrylic surfaces.** A LEAF self-blur's (a `Tiles`/`Region` item with σ > 0) and an acrylic
+backdrop's result is kept across turns in the surface pool under a key of what it is made of (`SurfacePool.Retain` /
+`FindRetained`): σ, the source / output regions, the placement and every placed tile's surface + raster serial for a
+self-blur; the items beneath (kind, placement, alpha,
+clip, feather, each tile's surface + raster serial), the clear colour, the region and the Kawase chain for a backdrop.
+A turn that changed none of it re-draws the retained result (`D3D12Device.LastBlurCacheHits`); an unused result
+returns to the scratch pool after `SurfacePool.RetainTurns` = 30 turns; every retained result (groups, self-blurs, backdrops) is
+bounded by `TileBudget.RetainedShare` (0.25) of the tile budget — past it `SurfacePool.Retain` returns the least
+recently used ones to the pool first. Self-blur's halo is `SelfBlurRegion.TapRadius`
+(the downsample-then-Gaussian schedule's exact support). The earlier self-blur pin cache (a position-independent key
+in a separate region-pin pool) is deleted; `backdrop-effects-animation.md` §FA-2a records it as superseded.
+
+#### 13.1f Uploads and bakes off the timed frame
+
+- **Image uploads** ride a **COPY `UploadQueue`** (`UploadQueue.cs`: one list over a ring of `UploadQueue.Depth` = 4
+  allocators, its own fence signalled with a strictly increasing value). Textures stay `COMMON` for life (atlas pages
+  simultaneous-access), so the DIRECT list samples them without a barrier. **Readiness is a fence COMPARE, never a
+  wait** (`UploadFencePolicy` / `UploadFenceLedger`: resident iff `completedUploadFence ≥ image.UploadFence`, fence 0 =
+  never staged): until then the draw shows the placeholder at final size and cross-fades on arrival, and a re-stage
+  keeps the prior pixels until the new ones land. The CPU waits only when every allocator of the ring holds an
+  unfinished batch.
+- **The image bake** (a blurred derivative — mosaic / hero backdrops) runs dual-Kawase COMPUTE shaders on a **COMPUTE
+  `UploadQueue`** (`BakedBlurCompositor.cs`: resample to the output size, then the `AcrylicKawaseMath` down/up chain, the
+  last pass writing an RGBA8 UAV derivative), published behind its batch fence (`ImageTextureStore.CommitDerived`); one
+  job per turn; until it lands the frame keeps drawing the unblurred pixels / placeholder — never a hole.
+- **Glyph-atlas dirty bands stay on DIRECT** (a new glyph is visible the frame it appears; KB-sized), bracketed by
+  their own timestamps (`GpuPassKind.GlyphBand`).
+- **`UploadBudget.BytesPerTurn`** (default 8 MiB, clamped to [64 KiB, 256 MiB]; live-tunable, never an environment
+  variable) is the ONE per-turn upload budget: `DecodeScheduler`'s pump meters what it applies through an
+  `UploadTurnMeter` (the first job of a turn is always admitted, so a large cover never starves; the rest carries to
+  the next turn). The per-frame and weak-tier apply caps it replaced are deleted.
+
+#### 13.1g Budgets and lifetime
+
+- **`TileBudget`** = `clamp(WindowMultiplier × window BGRA8 bytes, FloorBytes, CeilingBytes)` with defaults **5.0 × /
+  48 MiB / 128 MiB** (≈ 78 MiB at 2560×1600; raised 2026-09-24 from 3.5 × / 32 / 96 — the artist page's visible need,
+  `TileCensus.VisibleNeedBytes`, exceeded the 32 MiB floor the old derivation gave it; owner decision 1 of the fade-groups
+  plan); `OverrideBytes` pins a fixed budget; `RetainedShare` (0.25) bounds the retained derived surfaces on top. Every term is LIVE-TUNABLE (UI
+  thread writes, `Version` bumps; the render thread reads `TileBudget.Current` once per turn) — never an environment
+  variable — because the defaults are a starting point to be replaced by measurement (plan §G decision 3). A ceiling
+  below the floor resolves to the floor.
+- **Eviction** is LRU weighted by distance from the slice's viewport (Chebyshev tiles × `SliceTable.DistanceWeightFrames`
+  = 8 frames of age), by class: tiles not needed this frame first, then the behind row, then the ahead band — never a
+  visible tile. A tile not requested for `SliceTable.IdleEvictFrames` = 240 turns is evicted.
+- **Surfaces** (`SurfacePool.cs`, render-thread-owned): one BGRA8 texture per logical tile slot plus up to
+  `SurfacePool.ScratchCap` = 128 scratch surfaces (group, degraded direct, blur levels, acrylic, inline groups), leased
+  best-fit at `LayerTargetBucket.Dim`. Every surface RESTS in `PIXEL_SHADER_RESOURCE`, is a render target only inside
+  its own raster pass, and is **never a copy source or destination**. SRVs live in a per-frame-in-flight bank, so a
+  recreated surface never rewrites a descriptor an in-flight frame samples. A tile slot's texture trims after
+  `SurfacePool.TileTrimTurns` = `IdleEvictFrames` + 120 turns (strictly after the table evicted it); idle scratch trims
+  on `LayerTargetTrim`'s windows (§7.1). **Retire ≠ release:** a trimmed or replaced texture retires behind the frame
+  fence and is released only when `LayerTargetTrim.CanRelease` allows.
+
+#### 13.1h Present
+
+**The frame presents WHOLE and the swapchain stays `FLIP_DISCARD`** (+ `SetMaximumFrameLatency(1)` + the waitable
+object). `Present1` partial presentation is refused under `FLIP_DISCARD` — a dirty-rect `Present1` after a full present
+is `DXGI_ERROR_INVALID_CALL`, pinned by `FluentGpu.Windows.Tests` `ComAbiBindingTests` — so the D3D12 target never
+passes dirty rects. `PresentParams` therefore stay the seam's **census**: `BuildComposite` fills its dirty rects with
+the frame's repaint set ∪ the visible re-rastered tiles' destinations through `RepaintPolicy.ToPixel` (empty ⇒
+`PresentParams.Full`), the headless model records them (`CompositeRecordKind.StagePresent`), and no backend consumes
+them today. Switching to `FLIP_SEQUENTIAL` to make them a DWM hint is a separate, unmade decision. The composite pass
+never reads the previous back buffer, so presenting whole costs no correctness.
+
+#### 13.1i The repaint set, carry and culling contracts (still owned here)
 
 | Contract | Rule |
 |---|---|
-| `RepaintRoute` | `FullDirect` (point 4 — the safe harbor) / `FullIntoCanvas` (canvas rebuild) / `Partial` (per-rect clear + N scissored replays; **0 rects = blit the retained canvas**, the "nothing changed" frame). Route is decided per PRIMARY submit only. |
-| `RepaintDamageRegion` | ≤16 accumulated float-DIP rects, pairwise disjoint, least-waste merge at capacity; `IsEmpty` is *count 0 **and** no forced-full reason*, so a `ForceFull` can never be mistaken for "nothing changed"; `RepaintFullReason` names the surrender. Rides `FrameInfo` (seam type: `pal-rhi.md`). |
-| `ReplayRects` | ≤4 rects, clamped to the target, disjoint **on the device pixel grid**. The layered route has its own, smaller budget (`MaxLayeredReplayRects`, currently **2**) because it pays an extra group-RT clear per walk — **not** because the stream can only be walked once. It can be: `Acquire` re-clears every lease, `Release` needs no fence on the same queue, and the clamp is value-level (`CurrentScissorRect`), so a second walk cannot observe the first — the same mechanism the streaming route has always used for N walks. What could not repeat was the backend's per-frame half (pool aging, the timestamp query pair, the single full-surface blit), now split into `BeginLayeredFrame` / `WalkLayered` / `EndLayeredFrame`. The precondition licensing it is `RepaintStreamSafety` admitting only plain `Opacity` groups here, which keeps the blur pin cache — position/content-keyed and replay-rect-unaware — out of reach of a culled walk. |
-| Decode-time culling | **A correctness requirement, not an optimization.** Every primitive-producing op is AABB-tested against the replay rect at decode time with a **per-kind halo derived from what its vertex shader actually rasterizes** — AA margin, stroke half-width, shadow offset/spread/blur, glyph overhang — plus a 1-DIP safety pad covering the scissor's round-OUT. Under-covering a halo drops a boundary primitive and leaves a chopped shape in the canvas; over-covering costs one scissored draw. |
-| Replay-unsafe streams | Acrylic layers, stencil/layer nesting in either direction, unbalanced layer/stencil scopes, any unrecognized opcode, any truncated payload → `FullDirect`. Stencil scopes outside layers (including nested masks) are admitted: their outer clear and mask draws use the same damage-clamped scissor; sibling layers are independent. Layers inside masks or masks inside layers remain excluded because a target change or blur-source halo can change the mask's coordinate or clear coverage. The real-pixel gates are `static-stencil-sibling-blur` and `nested-stencil-fractional-damage` in `--repaint-identity`. Safe, and admitted: plain `LayerKind.Opacity` (its pooled RT is written and composited entirely inside the clamp); the **plain σ=0 `EdgeFade` strip fade** — its restore intersects every strip with the clip before writing, and its shader is a per-pixel `lerp(D, F, feather)` over premultiplied alpha with no spatial tap, so it displaces nothing and owes no damage inflation; and **`LayerKind.Blur` / `EdgeFade` at σ > 0**. A Gaussian's taps DO read outside the clamp, so the σ > 0 admission is paid for in three places rather than assumed: the backend renders the group's SOURCE over `R ⊕ SelfBlurRegion.TapRadius(σ)` (a halo derived from the open-group stack, additive over nesting) and composites only `R` through the uninflated `CurrentScissorRect()`; the recorder grows a dirty node's damage band by the reach of any **blurred ancestor**, so the blurred output's outer ring repaints with it; and a clamped frame refuses to MINT a blur pin, since `BlurPinKey` is position/content-keyed and cannot express "correct only inside R". This is WebRender's and Chromium's rule — grow the dirty rect by ~3σ, render the source over it, write back only the dirty part — rather than a veto, and it is the admission that matters in practice: an app holding a blurred surface on screen took EVERY frame full without it. Pixel-verified on an Adreno X1-85 (`--repaint-identity` scenario `blur-group-straddle`); the headless reference cannot settle it, having no Gaussian at all. |
-| Publish-sequence carry | `SceneFramePublisher` unions a dropped frame's region forward, and `FrameInfo.CarriedFromSeq` records how far back the carry reaches. A sequence **gap is not a correctness event** — `DropOldest` makes gaps normal under exactly the load partial repaint exists for; the question is whether the gap's damage rode forward. A bare gap is a diagnostic counter. |
-| `canvasValid` ledger | ONE ledger for the ONE canvas (never a per-back-buffer pair). Cleared by: any `FullDirect` primary submit, a canvas size/scale/clear-colour change, a carry that did not cover a gap, an instance-bank overflow this frame (`DroppedInstanceCount != 0`), and device re-init / resize / recovery. Every one of these is a **one-frame** self-heal — the next frame rebuilds into the canvas. |
-| Blit-only self-check | The 0-rect route rests on *bytes differ ⇒ region non-empty*, which nothing structurally enforces. The canvas therefore remembers the `FrameInfo.DrawListHash` it was last painted from; a mismatch invalidates the canvas and takes one named full frame. This converts the whole "missed damage source" class from a **permanent** ghost into a transient one plus a diagnostic that points at the source. |
-| Route parity | A canvas frame must be **bit-identical** to the `FullDirect` render of the same scene state. §13.1 makes canvas frames the normal case, so any delta is a visible difference between an idle window and a scrolling one. As built, canvas and back buffer are the same size, the same buffer format and carry the same view, so the canvas→back-buffer blit must be an exact texel copy — an integer fetch, never a filtered sample (a 1:1 bilinear sample is *not* exact: fp interpolation error quantises the sub-texel weight to 255/256 and folds in ±1 LSB at high-contrast edges). §8's colour contract is the designed-to for the underlying spaces and is unchanged by this. |
-
-**Verification mechanism.** The policy arithmetic is gated headlessly in `FluentGpu.VerticalSlice`
-(`gate.repaint.*` / `gate.damage.*`), but pixels are not — that harness is headless by contract. The pixel
-check is **`FluentGpu.WindowsApp --repaint-identity`** (`validation.md` scope): per scenario it reaches one
-scene state twice, once by a full replay into the canvas and once through partial replays (each mutation is
-an involution), and asserts the two captures are byte-identical; a second gate compares the canvas route
-against the `FullDirect` render of the same state and requires **0 px**. Scenario coverage is deliberately
-adversarial — sub-pixel-gap twin animators, a glyph run straddling a rect edge, a stale prior extent after
-an ancestor rebase, an opacity group straddling the rect, a `DrawVideo` hole, and a genuine 3-rect frame.
-
-**Cost, honestly.** The floor is the **full-surface blit** — partial repaint saves scene raster, never the
-composite. On a tiler the win also depends on the driver's ability to skip untouched tiles behind a
-`ClearRenderTargetView` with `NumRects > 0` on a retained RT, which D3D12 cannot *declare* without
-`ID3D12GraphicsCommandList4::BeginRenderPass`; the conservative lowering loads and stores the whole canvas,
-which would put the saving nearer 2× than the ~3.7× the arithmetic suggests. **No multiplier is claimed
-here: field measurement (GPU-timed `CatComposite`/scene split on real hardware) is pending**, and
-`CoverageCutoff`'s 60 % remains a chosen constant awaiting that measurement. `BeginRenderPass` with
-PRESERVE/PRESERVE is the identified next lever.
+| `RepaintDamageRegion` | Up to **16** accumulated world-space **float-DIP** rects (`MaxRects`), pairwise disjoint (they do not even abut), least-waste merge at capacity so a newcomer always lands; old ∪ new world AABBs from all four transformed corners, each inflated by its effect halo; `IsEmpty` means *no rects **and** no forced-full reason*, so "nothing changed" and "repaint everything" are never confused; a forced-full region names its FIRST cause (`RepaintFullReason`). It rides `FrameInfo` (seam type: `pal-rhi.md`). Two consumers: `IsFull` invalidates every tile (`BackgroundOrTheme`), and the rects feed the `PresentParams` dirty-rect census. It is **not** `FrameInfo.Damage` (the acrylic-invalidation union over transform-moved nodes) — never substitute one for the other. |
+| DIP → device px | `RepaintPolicy.ToPixel` is the ONE conversion: DIP → device px, rounding OUT (floor/ceil), clamped to the target — the scissor helper, a tile's cull box and the dirty-rect census all go through it, so they describe the same pixels. |
+| Publish-sequence carry | `SceneFramePublisher` unions a dropped frame's region forward and `FrameInfo.CarriedFromSeq` records how far back the carry reaches. A sequence **gap is not a correctness event** (`DropOldest` makes gaps normal under load); the question is whether the gap's damage rode forward. A bare gap is a diagnostic counter. |
+| Opcode framing | `RepaintStreamSafety.TryBodySize` is the ONE opcode→payload-size table every stream walker (D3D12 decoder, tile rasterizer, slice recorder, headless replay) frames through; an unknown opcode stops the walk. |
 
 **Structural-track cancellation damages the last-presented extent.** A layout transition (FLIP translate/scale,
 or a `SizeMode.Reveal` presented-size) draws a node at a translated / size-inflated extent that lies OUTSIDE its
 model bounds. When such an in-flight track is CANCELLED rather than allowed to settle — a drag-suppression snap or a
 window-resize snap collapses it straight to final bounds (`AnimEngine.SnapStructuralToLayout` / `CancelStructuralAll`)
 — the node stops covering the band it drew last frame, and, unlike natural completion (which ends AT the target, so
-the settle is continuous), nothing re-touches that vacated band. The damage accumulator must therefore be seeded with
-each cancelled node's **last-presented absolute rect** (its `AbsoluteRect` origin — which already folds in the node's
-own composited translate — at its presented `PresentedW/H` extent, +AA pad) so the vacated region repaints; otherwise
-the region-aware canvas/Acrylic cache freezes last frame's pixels there (a persistent "ghost" band). Cancellation is
-the only discontinuous path that needs this — natural settles do not, and must not blanket-damage.
+the settle is continuous), nothing re-touches that vacated band. The recorder therefore seeds the frame's damage with
+each cancelled node's **last-presented absolute rect** (`AnimEngine.PendingStructuralDamage`: its `AbsoluteRect`
+origin — which already folds in the node's own composited translate — at its presented `PresentedW/H` extent, +AA
+pad), as window REPAINT damage. The retained tiles under it need nothing from that band: the snap re-records the node at
+its final transform, so every tile it left changes its content want and re-rasters (§13.1c); a retained acrylic
+backdrop re-blurs because the items beneath it re-rastered (its key holds their raster serials). Cancellation is the only
+discontinuous path that needs the repaint band — natural settles do not, and must not blanket-damage.
+
+#### 13.1j Diagnostics
+
+- **`TileCensus`** (`Render/Tiles/TileCensus.cs`) — ALWAYS-ON plain counters per composite turn, on
+  `RenderFrameCensus.Tiles` / `AppHost.LastTileCensus` (any thread): slices, live / resident tiles + resident bytes,
+  the budget, tiles scheduled / actually rastered / evicted, degraded slices, `ExposedMissing` and `CoverageClamps`
+  (scroll segments whose visible content reached past their realized rows — both must be 0), composite items, every
+  `InvalidationReason`'s count, the slice partition (`EffectSlices`, `Folded`, `AcrylicSlices`, `AcrylicFallbacks` —
+  an acrylic fallback means a surface lost its frost — and `FreeFades`), `VisibleNeedBytes` (Σ surface bytes of every
+  visible tile requested, resident or not — compare with the budget) and the group cache (`GroupSurfaces` rendered,
+  `GroupCacheHits`, `RetainedBytes`; `IGpuDevice.LastCompositeCache`). The gallery's census line prints them
+  (`need… fx…/f… ac…/fb… grp…/h…`); the D3D12 device adds `LastOffscreenSplit` (per-kind offscreen surfaces / px / hits).
+- **GPU pass timeline** (`AppHost.GpuPassTimingEnabled` — a runtime toggle, not a setting; `CopyGpuPassTimeline`
+  zero-alloc): the composite submit's intervals are `GpuPassKind.TileRaster`, `Offscreen` and `Composite`, alongside
+  `Uploads`, `BakedBlur`, `GlyphBand`, `Clear`, `Scene`. The device's always-on per-submit `GpuFrameCounters` report
+  the route taken, feather items, offscreen px / surfaces, pass breaks and back-buffer transitions; `D3D12Device` also
+  exposes `LastTilesRastered` / `LastRenderPasses` / `LastInlineGroups` / `LastDirectRegions` / `LastBlurCacheHits`.
+  The surface pool's bytes join the `gpu` census line as `rt: inuse=… free=… retained=… retire=…`
+  (`LayerTargetCensus`, §7.1); the first composite logs `[d3d12.present] renderPassesTier=… composite=retained-tiles …
+  present=whole-frame(FLIP_DISCARD)` once.
+- **Scroll probe:** `ScrollCostPhase.Composite` (building the composite plan: rows = items, nodes = exposed-missing
+  tiles) and `ScrollCostPhase.TileRaster` (the backend submit: rows = tiles rastered, nodes = their KiB) rows;
+  `BurstSummary` carries `TilesPerFrameMax` / `TilesPerFrameAvg` / `ExposedTileMissing` (must be 0).
+- **The app's view:** Wavee's Diagnostics page has a **Tiles** card (app repo, `Screens/Diagnostics.Tiles.cs`) that
+  reads `AppHost.LastTileCensus`, flags a non-zero `ExposedMissing` / `DegradedSlices` / `CoverageClamps` or resident
+  bytes past budget, and toggles the pass timeline.
+- **Evidence ledgers** (`Render/Evidence/*`, owned by the compositing recorder pair; `AppHost.RasterLedger` /
+  `WalkLedger` / `CompositeLedger`, any thread): the **raster ledger** (every scheduled tile raster: table frame, node,
+  slice, tile, reason, order, the item alpha, faithful / scratch-refused bits, the content hash it was rastered for;
+  4096 entries), the **composite item record** (the latest turn's items in painter order — kind, node, alpha, clip,
+  placement, both feathers exactly, the FEATHER QUAD SPLIT interior (`ItemRecord.InteriorL/T/R/B`: the intersection of
+  both feathers' `EdgeFeatherMask.UnitInterior`, device px), the sticky line (`StickyTopPx`, `StickyEngaged` for the
+  `CompositeSliceFlags.StickyClip` composite-time clip), blur, group-cache outcome — and its tile placements with
+  their raster ledger facts; published by swap under a lock), and the **walk ledger** (every slice re-record and why,
+  covering every slice role including `Layer` and `Chrome` — `WalkWhy`: RecordDirty, SigMiss, NoPriorSpan, PartialSpan,
+  Blocked, KeepDeny, RootTail, ReuseOff, SpansOff, ParentWalked, Invisible; 2048). The per-op want hash and the walk
+  ledger both cover every slice role including `Layer` and `Chrome`.
+- **The stale-tile invariant** — `TileCensus.StaleTiles` (must be 0): a VALID tile used this turn and not re-rastered
+  whose pixels were rastered for different content than the stream now wants. A tile's want is the per-OP content hash
+  of exactly what its replay draws (`TileContentHash.TileWant`: the ops of its segment whose effective footprint
+  overlaps it + the scopes open at the segment start, in stream order; child-slice markers excluded — they draw
+  nothing into the parent), computed only when the segment's (buffer gen, segment, grid) key changes; `SliceTable`
+  keeps want / raster hash / raster frame per SURFACE and sweeps the invariant inside `CountExposedMissing`. Since
+  2026-09-25 the same want IS tile validity (§13.1c: the content check in `Request`), so the invariant is a permanent
+  DETECTOR of a tile that check never saw — before, it named issue #1 and failed the sweep in 18 suites.
+  Process-wide tally: `TileInvariants.StaleTurns` / `LastStale`; the edge-gated always-on `[tiles.stale]` line names
+  node, role (`role=`), segment (`seg=`), tiles, want/have and the raster frame — formatted off the render thread (a
+  pooled work item), logged once per newly stale slice. The arena content hash `CompositeHash` reads is now the fold
+  of the op hashes (one pass).
+- **Pixel query** — `PixelQuery.Query(frame, x, y)` / `AppHost.QueryPixel(Dip)`: the items under a window pixel in
+  painter order with their feather values (`EdgeFeatherMask.Evaluate`, the shader's port), `PixelHit.InFeatherBand`
+  (whether the pixel was drawn through a feathered strip or the feather-free interior) and, for tiles, the tile's
+  raster frame, hashes and stale flag.
+- **Frame capture** — `AppHost.RequestFrameCapture` / `TryTakeFrameCapture`: the next composited present's back
+  buffer (`IGpuDevice.TryCaptureBackBuffer`, the `--repaint-identity` readback; the turn stalls once, on demand) with
+  the composite record of that same turn; an armed capture bypasses the skip-submit elision without invalidating a
+  tile.
+- `CompositeFrame.RasterFlags` / `ItemFlags` (evidence bits the backend ORs in: `CompositeFrameFlags.RasterScratchRefused`,
+  `ItemGroupHit`, `ItemGroupRendered`); `GpuFrameCounters.ScratchRefused` + the edge-gated `[d3d12.scratch]` line.
+- Wavee's Diagnostics ▸ **Evidence** card and the `wavee://diag` verbs export all of it as a bundle (app repo,
+  `Screens/EvidenceBundle.cs`); the bundle's `items.tsv` gains a `featherInterior` column and `pixel.tsv` a
+  `featherPiece` column (`band` / `interior` / `-`).
+
+**Measured, honestly.** One configuration is measured: a steady 3000 DIP/s scroll of the gallery list on the Adreno
+X1-85 costs **0.91 ms of GPU per frame (1.78 ms before the tiles)**, rastering 2.6 tiles per turn with 0 exposed-missing
+and 0 degraded tiles at the 32 MiB budget. That is the whole claim; other workloads, adapters and the budget defaults
+are unmeasured.
+
+#### 13.1k Gates
+
+Headless (`FluentGpu.VerticalSlice`, asserts in `validation.md` §3.6b/§3.6c): `gate.slices.*` (paint order, composite
+items, scroll tick records 0 bytes, hover → one `Content` tile, realize → `PrimCount`, theme → whole slice; and since
+2026-09-24 `fade-leaf`, `fade-follows-page`, `group-not-rerendered`, `fold-keeps-fade`, `acrylic-never-folds`,
+`blur-rows-follow-scroll`) and `gate.tiles.*` (`needed-order`, `coverage-clamp`, `exposed-only`, `invalidation-one`,
+`budget-never-drops-visible`, `memory-ceiling` (+ retained), `segment-extent`, `feather`, `composite-record`,
+`scroll-no-copy`, `no-blank-8000`, `alloc-zero`, `render-alloc-zero`); the structural invariants in
+`VerticalSlice/Harness/CompositeInvariants.cs` (every acrylic layer paired with a Backdrop item, no acrylic hole, no
+slice marker inside an inline group layer),
+plus the surviving `gate.repaint.*` / `gate.damage.*` repaint-set, cull-halo and carry gates. Pixels
+(`FluentGpu.WindowsApp --repaint-identity`, `validation.md` §2.3a): **`tile-static-identity`** (retained tiles vs every
+segment degraded to direct raster by the `GpuKnockouts.ForceFullDirect` knockout: 0 px at scales 1.0 / 1.25 / 1.5 /
+1.75 / 2.0), **`tile-scroll-identity`** (a list
+scrolled through the retained tiles vs a forced full re-raster at the same offset: 0 px at every scale) and
+**`tile-feather-identity`** (every captured pixel vs `EdgeFeatherMask.Evaluate`: ≤ 1/255; `/product`: two nested
+feathers on one item vs the product of two evaluations) — 65 checks; the P2 status note records 65/65. Added
+2026-09-24: **`tile-acrylic-budget-identity`** (a frosted plate with 0 vs 20 effect slices painted before it: 0 px on the
+plate, and the plate differs from the crisp page), **`fade-distribute-identity`** (distributed feathers vs the
+`GroupFades` knockout: ≤ 1/255) and **`group-cache-identity`** (a group re-drawn from its retained surface vs re-rendered:
+0 px), each at every scale. Added 2026-09-24 (sticky clip, edge cues, chrome): headless `gate.slices.stickyclip-composite`,
+`stickyclip-cuts-at-line`, `edge-cue-is-feather`, `slice-root-layer`, `chrome-over-feather`; pixels
+**`stickyclip-identity`** (`/group`, `/distributed`: the composite-time sticky clip vs `StickyClipInPaint`: 0 px),
+**`scroll-edge-identity`** (the default edge cue vs G + (B − G)·f of the viewport's analytic feather: ≤ 1/255) and
+**`scroll-chrome-identity`** (a visible thumb inside the feather band: distributed vs grouped vs the paint route, ≤ 1/255)
+— 105 checks. Added 2026-09-30 (video erase order, §7.3): headless `gate.video.chrome-over-hole` (chrome recorded after a
+hole in the same segment stays on top, the page an earlier slice composited under the hole is erased — modelled at window
+points from the composed stream and the headless `LastHoleErases`, which record each `EraseVideoHole` at its painter
+position); unit `VideoHoleEraseOrderTests` (the erase-order decision and the scan's inline group-layer nesting).
+
+Evidence gates (`Suites/EvidenceSuite.cs`, `--suite tiles`): `gate.tiles.stale-zero` (the PERMANENT sweep: the runner
+brackets every suite, `Harness/EvidenceGate.cs` `StaleSweep`), `gate.tiles.ledger-alloc-zero`,
+`gate.tiles.capture-seq-aligned`, `gate.tiles.item-record-matches-model`, and `gate.slices.inherited-opacity-rerasters`
+(issue #1's regression pin: a `.Reveal` band cut as a translation Effect slice with its Fade alpha RECORDED into its
+bytes, over a nested tab scroller that fits its lane; every page-scroll step that moves the alpha must re-raster the tab
+slice's tiles and no other step may — failing-first as a known-failing evidence gate with `stepsRastered=0/7
+staleTurns=12`, a plain check since content-derived validity; `EvidenceGate.KnownFailing` remains the harness form for
+the next failing-first reproduction). Unit: `SliceTableContentTests` (an unchanged key folds nothing, changed bytes
+re-raster exactly their tile as `Content`, a changed op count is `PrimCount`, restored bytes need no raster).
 
 ---
 
@@ -1532,7 +1866,7 @@ transpiler** (compute/D2D1-only).
 | `glyph.vs/ps.hlsl` | VS/PS | atlas-uv quad; coverage × gamma × premul color |
 | `image.ps.hlsl` | PS | atlas/standalone sample, rounded clip, crossfade, stretch |
 | `path.vs/ps.hlsl` | VS/PS | tessellated geometry + AA-fringe coverage attribute; brush select |
-| `composite.ps.hlsl` | PS | layer RT sample × group opacity × blend (PopLayer) |
+| `composite.ps.hlsl` | PS | layer RT sample × group opacity × blend (PopLayer). **As built** this is `D3D12/composite.hlsl`, the retained-tile SLICE COMPOSITOR (§13.1e): whole-pixel texel `Load` × alpha × `EdgeFeatherMask` feather × `sdRoundRect` clip, bilinear placement, DestOut erase, separable Gaussian + 2× downsample, dual-Kawase + acrylic recipe |
 | `clip_stencil.ps.hlsl` | PS | stencil-mask write (color write off) |
 | `shapes_common.hlsli` | — | shared `sdRoundRect`, `erf_approx`, gradient eval, gamma, brush select |
 
@@ -1601,8 +1935,8 @@ probe→raster→pack→upload re-architecture (do not assume the GetOrAdd-at-ba
 
 **Build order for this subsystem (mirrors hardened §6):**
 1. Single-thread-correct: UI thread produces+consumes the SceneFrame shape; quarantine=0; on-UI
-   tessellation; geometry cache; epoch chokepoint; `CleanSpanWitness` with baked-geometry capture; canvas
-   RT + damage; image pipeline + `CopyBufferToTexture` + bucket pool (unblocks every WaveeMusic screen).
+   tessellation; geometry cache; epoch chokepoint; `CleanSpanWitness` with baked-geometry capture; repaint
+   damage + retained tiles (§13.1); image pipeline + `CopyBufferToTexture` + bucket pool (unblocks every WaveeMusic screen).
 2. Move record/batch/submit/present to the render thread; migrate ComPtr ownership; ≥3 private arenas;
    retire-fence handshake; force-sync drain (no slot reuse in flight).
 3. Flip quarantine 0 → `RenderInFlightDepth` only after `seam.race` (swept channel-cap + reader-stall) is
@@ -1675,11 +2009,14 @@ list** (D2D is a Windows-only crutch).
   UV-resolve miss uses the reserved overflow region; a run/image may split into N page-batches (tolerated).
 - **Layer RT OOM:** degrade group opacity to per-instance approximate alpha (visually wrong for overlaps,
   no crash); log; full-redraw next frame.
+- **Tile budget exhausted / surface slots full:** a slice whose visible tiles do not fit is `Degraded` for that frame
+  and draws its segment direct — the pre-tile cost, never a blank (§13.1d); the census counts it and `ExposedMissing`
+  must stay 0.
 - **Image self-eviction race:** pin-before-trim (the documented WaveeMusic race, fixed in the contract);
   request-epoch survives slot recycle (a late callback whose epoch ≠ the cell's current epoch is dropped →
   no wrong-art flash).
-- **Video hole / `Place` desync:** hole-punch clear + canvas present + `IVideoPresenter.Place` commit in one
-  DComp Commit → never a black hole or chrome-under-video frame.
+- **Video hole / `Place` desync:** the composite's hole re-punch + the UI present + `IVideoPresenter.Place` commit
+  on one frame turn (§7.3) → never a black hole or chrome-under-video frame.
 - **Degenerate geometry** (zero-size rect, NaN radii, σ=0 shadow): clamped at record; zero-area quads culled
   before batching. **Huge σ** expanding beyond viewport: clamp expansion to viewport+margin (analytic `erf`
   still correct).
@@ -1688,8 +2025,9 @@ list** (D2D is a Windows-only crutch).
 - **DPI change:** invalidate `PathRealizationCache` (scale in key), re-bake gradients if needed, full
   redraw; back buffer is physical px (DPI change without client-size change does not resize the swapchain).
 - **App-zoom step:** rides the SAME scale-change route as a DPI change — the effective scale (`pal-rhi.md` §1.2:
-  OS DPI × zoom) changed, so the target is invalidated for a named full repaint (§13.1a's `canvasValid` clears on
-  any canvas scale change) and every scale-keyed cache re-realizes at the new bucket. This is WHY zoom is discrete
+  OS DPI × zoom) changed, so the target is invalidated for a named full repaint (every retained tile re-rasters:
+  `ScaleChanged` per slice, `BackgroundOrTheme` for the forced-full set — §13.1c) and every scale-keyed cache
+  re-realizes at the new bucket. This is WHY zoom is discrete
   (`FluentGpu.Foundation.ZoomLadder`): the glyph-atlas run/glyph keys quantize the device scale ×100 and the path
   realization key quantizes `DeviceScaleQ` (§5.1), so a fixed ladder of well-spaced steps bounds churn to one
   re-raster per step — a continuous zoom drag would rebuild both caches on nearly every frame of the drag.
@@ -1746,8 +2084,8 @@ clean-span citizen under the §11.1 reuse rule. **No part of the renderer was re
 - `OQ-6` Copy instance/vertex UPLOAD→DEFAULT vs read-from-UPLOAD (measure on real GPUs).
 - `OQ-8` Frames-in-flight 2 vs 3 default (latency vs throughput).
 
-*(`OQ-4` small-image atlas and `OQ-7` partial-present mechanism are now DECIDED — atlas is v1-required,
-partial present is the persistent canvas RT.)*
+*(`OQ-4` small-image atlas and `OQ-7` partial-present mechanism are now DECIDED — atlas is v1-required; the
+repaint mechanism is the retained tiled composite, §13.1, which superseded the persistent canvas RT.)*
 
 ---
 
@@ -1785,10 +2123,11 @@ Amendments folded into this actualization (everything else preserved from the or
 10. **Clean-span reuse rule amended** to require `ContentEpoch` unchanged for `GlyphRunRef`/`ImageRef` AND a
     **baked-geometry hash** unchanged, via a single `Mutate()` chokepoint + DEBUG `CleanSpanWitness`;
     epoch validation render-thread-LOCAL. (architecture-spec §4.5/§5.4, hardened §4.4)
-11. **Partial present DECIDED** (`OQ-7`): engine-owned **persistent canvas RT** with `LoadOp.Load`
-    scissored repaint, DComp-composited; `Present1` dirty-rects are a DWM hint only; damage from four
-    transformed corners, inflated by effect extent, repainting all z-order intersectors, ≤16 rects →
-    full-frame, rounding OUT at the RHI leaf. (architecture-spec §5.2)
+11. **Partial present DECIDED** (`OQ-7`), then **SUPERSEDED (2026-09)**: the engine-owned persistent canvas RT with
+    scissored per-rect repaint shipped (2026-08) and was deleted for the **retained tiled composite** (§13.1) — slices
+    of retained 1024×512 tiles, an engine composite into the swapchain, whole-frame `FLIP_DISCARD` presents with
+    `PresentParams` as a census. Kept from the canvas design: damage from four transformed corners, inflated by effect
+    extent, ≤16 rects, rounding OUT at the RHI leaf. (architecture-spec §5.2)
 12. **AA quality** re-labeled a **"corpus-gated regression net"** (16× supersampled CPU reference + CIEDE2000
     + edge-shift + A/B-vs-DWrite), **not** a "validated property"; uncovered-input caveat stated.
     (hardened §4.3, painpoints §5)

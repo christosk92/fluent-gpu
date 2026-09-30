@@ -46,12 +46,20 @@ public static class SuiteRegistry
         new("hooks", "hooks", HooksSuite.Run),
         new("anim", "anim", AnimSuite.Run),
         new("scroll", "scroll", ScrollSuite.Run),
-        new("scroll-pacing", "scroll", ScrollPacingChecks.Run),   // wheel distance / pacing evidence; runs with --suite scroll
-        new("kernel", "kernel", ScrollKernelSuite.Run),
+        new("scroll-motion", "scroll", FluentGpu.VerticalSlice.Suites.ScrollMotionSuite.Run),   // scroll rework: closed-form plans, coverage, zero-alloc flat lists
+        new("scroll-effects", "scroll", FluentGpu.VerticalSlice.Suites.ScrollEffectsSuite.Run),   // scroll-GPU plan §F: engaged edge, collapse, stretch, UseScroll, MeasureAll
+        new("engaged-feather", "scroll", FluentGpu.VerticalSlice.Suites.EngagedFeatherSuite.Run),   // F(ii) 2026-09-25: a WhileStuck edge fade engages on the sticky clip's own pose
+        new("item-band-deep", "scroll", FluentGpu.VerticalSlice.Suites.ItemBandDeepSuite.Run),   // G 2026-09-25: a deep jump in an item-band list keeps every row above the arrange origin
+        new("wake-present", "wake-present", IdleWakePresentChecks.Run),   // idle→wheel-notch first-frame present + missed-vsync artifact fix
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
         new("budgets", "budgets", BudgetsSuite.Run),
+        new("tiles", "tiles", FluentGpu.VerticalSlice.Suites.TileSuite.Run),   // scroll-GPU plan P0: retained-tile needed set, slice table, budget, feather, composite seam
+        new("slices", "tiles", FluentGpu.VerticalSlice.Suites.SliceSuite.Run),   // scroll-GPU plan P1: the recorder partition — paint order, zero-byte scroll tick, tile invalidation reasons
+        new("evidence", "tiles", FluentGpu.VerticalSlice.Suites.EvidenceSuite.Run),   // evidence ledgers: #1 failing-first (open), ledger alloc-zero, capture alignment, item record == model
         new("controls", "controls", ControlsSuite.Run),
+        new("zone-list-spikes", "controls", FluentGpu.VerticalSlice.Suites.ZoneListSpikeChecks.Run),   // Wave-0 spikes for Wavee's Home zone list: E17 sticky-in-realized-row, E18 controller rebind, KeepAlive same-key view, nested-shelf alloc
+        new("component-anchor", "controls", FluentGpu.VerticalSlice.Suites.ComponentAnchorChecks.Run),   // E14: WriteAnchorColumns applies a ComponentEl's base-Element props to its own anchor (sticky/visible/exit/alloc)
         new("titlebar", "titlebar", TitleBarSuite.Run),
         new("nav", "nav", NavSuite.Run),
         new("overlay", "overlay", OverlaySuite.Run),
@@ -62,9 +70,11 @@ public static class SuiteRegistry
         new("text", "text", TextSuite.Run),
         new("span-links", "text", SpanLinkDispatchChecks.Run),   // inline-hyperlink dispatch ownership; runs with --suite text
         new("bound", "bound", BoundTemplateSuite.Run),
+        new("listrow", "listrow", ListRowSuite.Run),   // scroll-rework Wave 0.E: ListRowEl one-node-per-row / zero-alloc-text-change / placeholder-geometry gates
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),
         new("continuity", "continuity", VisualContinuityChecks.Run),
+        new("detached-render", "detached-render", FluentGpu.VerticalSlice.Suites.DetachedRenderResilienceSuite.Run),
     ];
 
     public static IEnumerable<SuiteEntry> Filter(string? suiteSpec)

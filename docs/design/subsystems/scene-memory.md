@@ -516,13 +516,13 @@ deadlines from its existing slack/cooldown policies; the scheduling and no-frame
 `threading-render-seam.md` §0. Reclamation releases references/capacity; GC commitment and process residency may
 remain unchanged until the runtime/OS reclaim physical memory.
 
-Two instances are as-built, both converted from the dense form after `mem.sample`/`dotnet-gcdump` caught them on
+Two instances were built (the second has since been deleted with the scroll rework), both converted from the dense form after `mem.sample`/`dotnet-gcdump` caught them on
 the 32 768-node scene the native ARM64 tour reaches:
 
 | Side table | Owner of the payload | Dense cost at 32 768 nodes | Slot-pool cost | Gates |
 |---|---|---|---|---|
 | Compositor overlay rows (`SceneRecordingSnapshot`, per publisher slot) | `backdrop-effects-animation.md` / `../../plans/animation-engine-rework-design.md` | 508 B/node ⇒ 15.9 MiB per snapshot (47.6 MiB across the three slots) | 256 reserved rows ⇒ 381 KiB per snapshot (1.12 MiB across the three slots) | `gate.compositor-row-sparse`, `gate.compositor-row-alloc`, `gate.compositor-row-overflow` |
-| `ScrollKernel`'s scroll-body pool (`FluentGpu.Scroll`) | `input-a11y.md` §7B (integrator + one-offset-writer boundary) / `../../plans/scroll-v3-plan-2026-08-17.md` (the body's field semantics) | 376 B/node for the bodies plus four more node-indexed side columns (active list, in-active flag, touched list, touched stamp) ⇒ **12 746 752 B** | one slot per bound viewport plus the 4-byte lookup ⇒ **143 776 B** at 32 viewports (the tour's ~27 live viewports rounded up) | `gate.kernel.body-sparse`, `gate.kernel.slot-reuse`, `gate.kernel.alloc-zero-tick` |
+| ~~`ScrollKernel`'s scroll-body pool~~ — **deleted with the scroll rework (2026-09)**; per-viewport scroll state is now `PlanSlots` (`FluentGpu.Scroll.Runtime`): a fixed table of `PlanSlots.Capacity` = 64 seqlocked `ScrollPlan` slots allocated once, looked up by `ScrollViewportId` — never node-indexed | `input-a11y.md` §7B (the plan/poser mechanism) | — (no node-indexed columns) | 64 slots, allocated once in the constructor | Engine.Tests `ScrollRuntimeTests.PlanSlots_*` (round-trip, stale generation, seqlock never tears, capacity 64 then refuses) |
 
 The scroll case additionally shows the ordering constraint a pool has that a dense array does not: a slot released
 by an unbind is **still named by the current pass's active/touched lists**, so release is deferred to the end of
@@ -783,6 +783,12 @@ public enum DrawOp : byte {
                           //   ClipTable/Parent handle as-built). Value 22 on the as-built int-tagged DrawOp.
     PopClip,
     PushLayer, PopLayer, PushTransform, PopTransform,
+    CompositeSlice,       // = 23 (AS-BUILT 2026-09, retained tiles): the SLICE MARKER. Recorder-internal:
+                          //   it stands in a slice's own stream at the paint position of a CHILD slice (scroll
+                          //   content root / effect root / thumb / item band) whose commands live in that child's
+                          //   own arena (§4.3b). It splits the slice into segments; a tile replay skips it and the
+                          //   child composites as its own item (gpu-renderer.md §13.1). Payload
+                          //   shape (CompositeSliceCmd): gpu-renderer.md §3.1.
     // overlays (payloads: input-a11y.md / text.md)
     DrawFocusRect, DrawAccessKeyBadge,
     DrawFocusRing,        // FOLDED (L6/L4): the real two-tone Fluent focus ring (shape+raster: gpu-renderer.md
@@ -890,67 +896,49 @@ can go stale. The recorder blocks precisely those chains and nothing else:
   re-records. The off-screen subtree cull (which requires the span store) thus stays **alive** for the rest of
   the tree; blocked nodes self-gate (they hold no stored entry, so they simply can't be culled).
 
-**Which reasons stay GLOBAL** (whole-canvas, still kill reuse for the whole tree): `FirstRecord` (no prior),
+**Which reasons stay GLOBAL** (whole-scene, still kill reuse for the whole tree): `FirstRecord` (no prior),
 `Resize` and `ModalPaint` (every device rect moved), and **`DragGhost`** (drags are rare — scoped in a later
 wave). `PopupWindows`, `Overlays`, `Orphans`, and `Detached` are now **scoped** — their enum bits remain in the
 stats for diagnostics (plus a `ScopedBlocks` count) but no longer force the global off. Verified by
 `validation.md` gates `span.popupOpenKeepsMainReuse` / `span.orphanBlocksOnlyChain` / `span.blockedNodeNeverStores`
 / `span.detachedFlyScoped`.
 
-### 4.3b Translated (REBASED) copies — per-opcode coverage, the acrylic veto, the settle re-snap
+### 4.3b The slice partition (retained tiles P1) — translated copies DELETED
 
-A span whose subtree only **moved** is copied and then **patched in place** (`DrawList.CopySpanFromPriorTranslated`
-→ `TranslateCopiedSpan`) instead of re-recorded: every command's baked device geometry is offset by the world
-translation delta. Eligibility is upstream of the patch and unchanged — no descendant dirty, not the direct moving
-scroll content, `ClipComplete` at **both** ends (the stored span's own flag AND the translated subtree bounds inside
-the *current* clip), and a **non-zero** delta.
+**AS-BUILT 2026-09** (`docs/plans/scroll-gpu-retained-tiles-implementation.md` P1; `Render/SliceRecorder.cs`). The
+translated-copy branch (`CopySpanFromPriorTranslated`/`TranslateCopiedSpan`, the move signature, the translated-frame
+stamps, the InMotion patching) is **deleted**: a scroll, a sticky/parallax translation and a scrollbar thumb position
+are COMPOSITE parameters, never recorded bytes.
 
-**Coverage is decided per payload, not per opcode-count.** There is no "does this span contain a forbidden opcode"
-pre-check: the walk that has to patch each command IS the authority, and its `default` arm returns false, so an
-opcode nobody taught it about fails safe (the partial copy is rolled back and the node re-records). Three classes:
+- **Slices.** The main record walk records into per-slice ARENAS (one `DrawList` each): the static root; one
+  `Scroll` slice per scroll content root, recorded in its POSE-FREE space (the content's scroll translate is identity
+  inside its walk, under an unbounded clip, so the viewport moves over it without a byte changing); `Effect` slices
+  for translation-only scroll-effect roots (sticky, parallax — pose-free the same way), group opacity, self-blur,
+  edge fade and acrylic nodes (beyond `SliceRecorder.EffectSliceCap` they record inline); the overlay-scrollbar
+  THUMB (recorded at offset 0); a virtual list's recyclable ITEM BAND (its viewport-fixed clip + top feather ride
+  the band's marker one level up). A parent stream carries a `CompositeSlice` marker at each child's paint position;
+  a group whose parameters are composite-time rides the marker, the slice records the group's CONTENT.
+- **Keep, don't copy.** A slice root whose record-dirty aggregate is clear and whose span covers its whole current
+  arena is KEPT (arena untouched, zero bytes) and re-registers its child slices; a pure scroll tick records nothing.
+- **Span validity is per arena buffer.** `SpanTable` stamps each span with the arena buffer generation it was written
+  into and its slice slot; an exact copy reads only the arena's PRIOR buffer (`SpanTable.TryGet(…, bufGen, …)`), so a
+  slice kept for many frames still copies its clean rows when it next re-records. A clean span copied with child
+  markers re-registers (keeps) those child slices.
+- **Poses the slices cannot honour** (a transform recorded inline — a scaled effect, a folded effect, a pose that is
+  not a pure translation of the free one —, a viewport's offset-dependent chrome = `SliceRecorder.ChromeSig`, a
+  pose-locked slice) block their chains so they re-record (`SliceRecorder.MustRewalk`).
+- **Damage.** Every repaint rect a walk produces is in its slice's space and is mapped into the window by the slice's
+  record-time offset (clipped to the slice's composite clip); a prior extent is mapped by where its slice was last
+  PRESENTED. These rects are the window REPAINT set only (the Present census, the forced-full detector): the slice's
+  retained tiles are invalidated by their CONTENT wants, never by a damage rect (`gpu-renderer.md` §13.1c — a walked
+  arena's bytes are compared per tile with what each tile was rastered for). A slice whose placement moved adds its
+  old ∪ new footprint to the repaint set.
+- **The composite consumes slices directly (P2 — the P1 flattening seam is deleted).** `SliceRecorder.Place` lays out
+  the composite plan from the arenas at the current poses and `BuildComposite` turns it into the `CompositeFrame` every
+  backend composites (`IGpuDevice.SubmitComposite`); tiles, invalidation, budgets and the composite pass are owned by
+  `gpu-renderer.md` §13.1.
 
-- **Transform-carrying primitives** (fills, images, strokes, shadows, gradients, arcs, polylines, tab shapes, icon
-  masks, the video hole, erases) — patch `Transform.Dx/Dy`. Exact.
-- **Glyph runs** (`DrawGlyphRun`, `DrawGlyphRunGradient`) — patch the transform **and raise `InMotion`** (the field
-  is `gpu-renderer.md` §7's; a set flag means the renderer skips the device-grid baseline snap so moving text rides
-  sub-pixel with its plate). That is exactly what a *fresh* record during the same motion emits, because the
-  recorder's `inMotion` is true for any subtree whose transform was written this frame.
-- **Clip and layer geometry** (`PushClip`/`PopClip`, `PushLayer`/`PopLayer`) — these carry DEVICE rects directly
-  rather than a transform, so the rects are offset: `ClipCmd.DeviceRect` (+ `RoundedRect` when rounded),
-  `PushLayerCmd.DeviceRect`, `PopLayerCmd.DeviceRect`, and `PushLayerCmd.CompositeClip` when set (the self-blur /
-  edge-fade composite bound, and the back-patched drawn extent a plain opacity group parks in the same field).
-  A `Blur` layer also gets `InMotion = 1`, the layer twin of the glyph patch. `OwnDmg*`/`DamageEpoch` are
-  deliberately **left stale** — the mismatched epoch is what makes the compositor fall back to the whole-frame
-  damage union instead of trusting a carve-out computed at the old position.
-
-**ACRYLIC is the one veto.** An acrylic layer's pixels are a function of *where it sits* (it blurs whatever the
-canvas holds under `DeviceRect`), so the same bytes at a new position would composite the previous position's
-backdrop. `LayerKind.Acrylic` refuses the whole span; the rollback restores the destination list and the caller
-re-records. Non-acrylic layers render their own subtree into an offscreen RT, which the same translation moves
-consistently, so they translate.
-
-**Why offsetting a clip rect is sound.** `ClipComplete` at both ends means the stored subtree was inside the clip
-in force when it was recorded, and the translated subtree is inside the current clip. Both properties together give
-`translatedSubtree ⊆ originalClip + delta`, so a rebased scissor/composite bound still contains every pixel the
-span draws while nothing outside it is drawn — pixel-identical to a fresh record. An interior clip was therefore
-never clamped by the enclosing one, and a row straddling a viewport edge simply fails eligibility and re-records
-(the correct residual).
-
-**Settle re-snap.** `InMotion = 1` is a motion-only state, so it must not outlive the motion. The recorder mixes
-its `inMotion` into the span **input** signature (exact-copy key) but deliberately not into the **move** signature
-(which also omits translation — that is the point of a move key). A zero-delta translated copy would therefore mean
-"reuse bytes recorded under a *different* `inMotion`", which is exactly how a settled scroll used to resurrect its
-last motion frame's unsnapped glyph runs; requiring a real delta closes it. The at-rest frame then misses both
-gates once, re-records crisp, and exact-copies from the frame after. Residual, honestly: an ancestor whose own key
-is genuinely unchanged may exact-copy the motion frame wholesale and defer that re-snap — in practice a settling
-viewport is still walked (its `ScrollState.FadeT` decays for the scrollbar fade and is part of its span key).
-
-**Exact-copy is not gated on scroll motion.** The exact-copy branch requires the node's **aggregate** record-dirty
-bits (self ∪ descendants, which `MarkRecordDirty` propagates up every ancestor chain) to be zero, and the input
-signature carries the full world affine, `inMotion` and `userScrollActive` — so a span that moved cannot match its
-stored key. Stationary sticky/pinned chrome beside a scrolling viewport therefore exact-copies for the whole
-gesture instead of re-recording every frame. Gates: `span.textRowScrollRebase`, `span.rebaseSettleResnap`,
-`span.acrylicNeverTranslates`, `span.stationaryReusesDuringScroll` (`validation.md`).
+Gates: `gate.slices.*` (`validation.md` §3.6b), `gate.tiles.*` (§3.6c), `gate.repaint.span-reuse-equals-full-record`.
 
 ### 4.4 `Mutate()` epoch chokepoint + DEBUG `CleanSpanWitness`
 

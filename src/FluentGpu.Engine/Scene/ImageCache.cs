@@ -82,14 +82,6 @@ public interface IImageDecoder
     void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels);
     /// <summary>Cancel an in-flight (or queued) decode — e.g. a virtualized row recycled off-screen. Idempotent.</summary>
     void Cancel(int id) { }
-    /// <summary>While true, per-frame GPU upload applies are throttled (scroll-scoped fence-stall guard). Default no-op
-    /// for decoders without an upload stage (headless fakes).</summary>
-    bool ScrollThrottled { get => false; set { } }
-    /// <summary>True on a weak/UMA GPU tier — set once by <see cref="ImageCache"/>'s ctor <c>weak:</c> argument and
-    /// forwarded here, never read from <c>GpuProfile</c> directly by a decoder (adreno-hang-fixes.md M0), so the
-    /// cadence it drives (<see cref="Media.DecodeScheduler.WeakTier"/>) stays exercisable headlessly. Default no-op
-    /// for decoders without a weak-tier cadence (headless fakes).</summary>
-    bool WeakTier { get => false; set { } }
     /// <summary>Number of decoded images applied by the most recent <see cref="Pump"/>.</summary>
     int LastPumpAppliedCount => 0;
     /// <summary>Decoded pixel bytes applied by the most recent <see cref="Pump"/>.</summary>
@@ -120,6 +112,25 @@ public delegate void ImageCompleteHandler(int id, bool ok, int w, int h, ImageFa
 /// (a pinned/on-screen image is never evicted — the single biggest real-world cache bug, per the research), and an
 /// LRU byte budget over decoded images. Decode happens off-thread behind <see cref="IImageDecoder"/>; <see cref="Pump"/>
 /// applies completions (+1-frame latency). The GPU texture upload is a needs-pixels leaf concern; this owns the logic.
+/// <para><b>State machine</b> of a full-image entry (<c>State/Failure</c>; derived bakes mirror it through
+/// <c>RestartDerived</c>). <c>Refs</c> is the pin count — a realized node holding the handle:</para>
+/// <code>
+///  miss ─Request─▶ Pending ─decode ok (upload admitted)──────────▶ Ready ─LRU evict (Refs==0)─▶ None/None tombstone
+///                  Pending ─Begin refused (off-screen backpressure)▶ None/Canceled    ┐ "canceled leftover"
+///                  Pending ─decode Canceled, Refs==0──────────────▶ Failed/Canceled   ┘
+///                  Pending ─decode Canceled, Refs&gt;0──────────────▶ RestartDecode(Visible)
+///                  Pending ─decode/upload failed──────────────────▶ Failed/{Network,Timeout,ServerError,Decode,
+///                                                                    NotFound,HttpError,GpuUpload,GpuResourceExhausted}
+///  None | Failed ─ShouldRestart (Request / Pin)─▶ RestartDecode ─▶ Pending (a refused Begin lands None/Canceled again)
+///  canceled leftover, Refs&gt;0 ─Promote (a virtualized row turning visible)─▶ RestartDecode(promoted lane)
+///  canceled leftover, Refs&gt;0 ─Pump: RestartPinnedLeftovers, once CanceledLeftoverRetryMs has passed since the
+///                               entry's last restart; no Request/Pin needed─▶ RestartDecode(Visible)
+///  Failed/GpuResourceExhausted, Refs&gt;0 ─Pump: RetryPinnedExhausted (RestartBackoffMs)─▶ RestartDecode(Visible)
+///  Failed/{NotFound,HttpError,GpuUpload} are terminal: never swept, never restarted by a re-pin.
+/// </code>
+/// The leftover sweep exists because a STATIC mounted node never calls Request/Pin again: a card unmounted mid-decode
+/// (UnpinImageNode → Cancel) and remounted in an Overscan lane that is full, or any pinned re-Begin the scheduler
+/// dropped, would otherwise paint its placeholder forever — neither Ready, Pending nor Failed-with-a-reason.
 /// </summary>
 public sealed class ImageCache
 {
@@ -140,10 +151,11 @@ public sealed class ImageCache
         public int Attempts;               // fetch attempts the decoder made (>1 ⇒ transient retries occurred)
         public float TextureMs = float.NaN;   // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
         public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
-        // Duration of the CURRENT reveal. Normally Transition.DurationMs; halved for a texture that lands mid-scroll
+        // Duration of the CURRENT reveal. Normally Transition.DurationMs; shortened to ShortRevealMs for a warm re-landing
         // (BeginReveal). Every deadline/progress read uses THIS, so a shortened reveal keeps the wake bookkeeping exact.
         public float RevealMs;
         public float RequestedMs = float.NegativeInfinity;   // clock (ms) when the current decode was requested → the cache-adjacent test
+        public long RequestedTicks;   // Stopwatch ticks of that request; ImageLatencyCensus.Fetch at the first texture (0 = noted)
         public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
         // Sticky: true once this entry has EVER reached Ready. Persists through RestartDecode/eviction (the Entry
         // object survives in _byId — a tombstone keeps its key), so a LATER re-decode of an already-known-good key
@@ -172,21 +184,37 @@ public sealed class ImageCache
         // so one image completion invalidates only its own observers instead of every unsettled image component.
         public Signal<int>? StatusEpoch;
         // The previous entry (older decode size) of the SAME source — a per-source chain threaded through _sourceHead,
-        // linked once on the miss path. ResidentRenditionOf walks it; 0 ends the chain. Entries are never removed from
-        // _byId (evicted ones stay as tombstones), so the chain never dangles.
+        // linked once on the miss path. ResidentRenditionOf walks it; 0 ends the chain. A reclaimed tombstone is
+        // unlinked from its chain (ReclaimEntry), so the chain never dangles.
         public int PrevSameSource;
         // Image-swap crossfade (BeginSwap): this entry is some node's OUTGOING texture, drawn opaque under the incoming
         // image until this reveal-clock deadline. Folded into the crossfade deadline so both the UI wake and the render
         // thread's clock-driven presents keep going for the whole swap window.
         public float SwapHoldUntilMs = float.NegativeInfinity;
+        // Indexed LRU (EvictOneLru): an entry is LINKED into one of the two eviction lists exactly while it is evictable
+        // (Ready and unpinned) — LruList 1 = full images, 2 = derived — ordered by when it became evictable or was last
+        // used (LastUsed is re-stamped on every link/touch). 0 ids end the list (ids start at 1).
+        public int LruPrev, LruNext;
+        public byte LruList;
+        // A derived entry's own dedup key, so a reclaim can drop it from _byDerivedKey without a scan.
+        public DerivedKey DKey;
+        // True while this id sits in _leftovers (the pinned canceled-leftover retry list) — dedups NoteCanceledLeftover.
+        public bool LeftoverListed;
     }
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
-    // Mid-scroll reveals (see SuppressReveals): the fade runs at HALF its authored duration — short enough not to trail
-    // behind moving content, long enough that a cover landing under the cursor doesn't hard-pop. A texture that lands
-    // within InstantRevealWindowMs of its request is cache-adjacent (a disk/OS-cache hit): it gets ShortRevealMs — a
-    // quick fade over the one placeholder frame it still had, never an instant pop.
-    const float ScrollRevealScale = 0.5f;
+    /// <summary>How long a PINNED canceled leftover (None/Canceled or Failed/Canceled — a dropped or canceled decode, not
+    /// a failure of the URL) waits after its last restart before Pump's leftover sweep re-begins it at
+    /// <see cref="ImagePriority.Visible"/>. Shorter than <see cref="RestartBackoffMs"/> on purpose: that backoff guards a
+    /// dead URL from being hammered, and a cancel says nothing about the URL. It still has to be long enough for a
+    /// fling's overscan halo to pass: a row that scrolls away inside this window unpins and is dropped from the sweep,
+    /// so only nodes that STAY mounted are promoted to the Visible lane (which the scheduler never refuses).</summary>
+    public const float CanceledLeftoverRetryMs = 500f;
+    // Per-pump cap on leftover restarts, so a burst of dropped requests re-Begins over a few frames, not in one.
+    const int MaxLeftoverRestartsPerPump = 32;
+    // A texture that lands within InstantRevealWindowMs of its request is cache-adjacent (a disk/OS-cache hit): it gets
+    // ShortRevealMs — a quick fade over the one placeholder frame it still had, never an instant pop. Reveal length is
+    // never keyed on scrolling (scroll rework §7).
     const float InstantRevealWindowMs = 100f;
     /// <summary>The reveal a cache-adjacent landing gets (a warm re-decode, a disk/OS-cache hit inside
     /// <see cref="InstantRevealWindowMs"/>): short, never instant. Such a landing still had a PRESENTED placeholder frame
@@ -259,8 +287,8 @@ public sealed class ImageCache
     private int _pendingCount;
     // O(1) maintained mirror of the former ReadyCount scan (E8): incremented at every transition INTO Ready (a fresh
     // decode landing, a bake completing), decremented at every transition OUT of Ready (LRU eviction, a device-lost
-    // RestartDecode/RestartDerived, an async upload rejection). Tombstones are never reclaimed from _byId, so this
-    // counts the LIVE Ready set only — never the historical id count.
+    // RestartDecode/RestartDerived, an async upload rejection). It counts the LIVE Ready set only — never the historical
+    // id count (tombstones are neither Ready nor Pending; see ReclaimTombstonesIfDue).
     private int _readyCount;
     private float _maxCrossfadeDeadlineMs = float.NegativeInfinity;
     private float _clockMs;   // monotonic ms clock for cross-fade timing (advanced by Tick once per painted frame)
@@ -284,26 +312,28 @@ public sealed class ImageCache
     // once RestartBackoffMs has passed since the last failure/scan, then clears the flag.
     private bool _exhaustedPinnedSeen;
     private float _lastExhaustedScanMs;
+    // T10: ids of PINNED canceled leftovers (see the class state table) awaiting a retry — appended at the one
+    // transition that can produce one with Refs>0 (RestartDecode's refused Begin; see NoteCanceledLeftover), pruned
+    // IN PLACE by RestartPinnedLeftovers. Fixed capacity like _contentChanged: past it _leftoverOverflow makes the sweep
+    // fall back to one bounded scan of _byId. _leftoverDueMs is the earliest image-clock time any listed entry becomes
+    // due (+∞ = nothing listed), so a steady pump pays one float compare and a sweep never polls ahead of time.
+    private readonly int[] _leftovers = new int[256];
+    private int _leftoverCount;
+    private bool _leftoverOverflow;
+    private float _leftoverDueMs = float.PositiveInfinity;
     private const int BlurW = 32, BlurH = 32;
     private readonly byte[] _blurScratch = new byte[BlurW * BlurH * 4];   // reused (UI thread only) for LQIP decode
 
     // ── image-pipeline trace (DIAGNOSTIC ONLY) ───────────────────────────────────────────────────────────────────
-    // Turn on with FG_DIAG=1 (Diag.Enabled); narrow with FG_IMG_TRACE=<substring of the source url>. Answers the
+    // Turn on with --fg diag (Diag.Enabled); narrow with --fg img=FILTER=<substring of the source url>. Answers the
     // questions you cannot answer from pixels: did the SOURCE change (same art, different CDN size hash), did the
     // requested DECODE size change, was the entry resident when a node re-pinned it, or did it restart/evict.
     // Every helper here is called ONLY from inside a `Diag.CompiledIn && Diag.Enabled` guard, so a Release build (the
     // whole Diag.Event call site is [Conditional]-erased) AND a Debug diag-off run both allocate nothing — the
-    // VerticalSlice zero-alloc gates run Debug with FG_DIAG unset.
-    private static readonly string? DiagTraceFilter = ReadTraceFilter();
+    // VerticalSlice zero-alloc gates run Debug with Diag off.
+    private static string? DiagTraceFilter => FluentGpu.Hosting.EngineSwitches.ImageTrace;
 
-    static string? ReadTraceFilter()
-    {
-        // Const-folded away in Release; the read happens once, at ImageCache type init (host setup, never a frame phase).
-        string? v = Diag.CompiledIn ? System.Environment.GetEnvironmentVariable("FG_IMG_TRACE") : null;
-        return string.IsNullOrWhiteSpace(v) ? null : v;
-    }
-
-    /// <summary>FG_IMG_TRACE gate: unset ⇒ trace everything; set ⇒ only sources CONTAINING it (case-insensitive).</summary>
+    /// <summary>`--fg img=FILTER` gate: unset ⇒ trace everything; set ⇒ only sources CONTAINING it (case-insensitive).</summary>
     public static bool DiagTraced(string? source)
         => DiagTraceFilter is null
         || (source is not null && source.Contains(DiagTraceFilter, System.StringComparison.OrdinalIgnoreCase));
@@ -327,8 +357,7 @@ public sealed class ImageCache
     /// host from <see cref="GpuMemoryBudgets"/> rather than read from <c>GpuProfile</c> here — see the field.</param>
     /// <param name="weak">The tier decision, made ONCE by the host from <see cref="GpuMemoryBudgets"/> and handed
     /// down (never read from <c>GpuProfile</c> here — see <see cref="DerivedSoftBudgetBytes"/>'s remark for why that
-    /// matters). Forwarded to the decoder's <see cref="IImageDecoder.WeakTier"/> so its upload cadence (E2) tracks
-    /// the same decision without a second read.</param>
+    /// matters).</param>
     public ImageCache(IImageDecoder decoder, long budgetBytes = 96L * 1024 * 1024, long derivedSoftBudgetBytes = 0, bool weak = false)
     {
         _decoder = decoder;
@@ -339,13 +368,15 @@ public sealed class ImageCache
         _pixelSink = _noPixels;
         _evictSink = _noEvict;
         IsWeakTier = weak;
-        _decoder.WeakTier = weak;
     }
 
-    /// <summary>The tier this cache was constructed for — forwarded to <see cref="IImageDecoder.WeakTier"/> (E2's
-    /// upload cadence) instead of read from the process-global <c>GpuProfile.IsWeak</c>, which is always false
-    /// headlessly and lands too late in production (see the ctor's <c>weak</c> parameter).</summary>
+    /// <summary>The tier this cache was constructed for, instead of the process-global <c>GpuProfile.IsWeak</c>, which is
+    /// always false headlessly and lands too late in production (see the ctor's <c>weak</c> parameter).</summary>
     public bool IsWeakTier { get; }
+
+    /// <summary>Always-on latency census (request to texture, reveal kinds, cancels; the reconciler adds the source
+    /// waits). The host drains it per window.</summary>
+    public ImageLatencyCensus Latency { get; } = new();
 
     /// <summary>The host wires this to <c>IGpuDevice.UploadImage</c>; the cache forwards each decode's pixels through it
     /// during <see cref="Pump"/> (transiently — the sink must copy, not store). Set once at composition.</summary>
@@ -377,6 +408,30 @@ public sealed class ImageCache
 
     /// <summary>Install the render-thread handoff used by <see cref="RequestBakedBlur"/>. Set once by the host.</summary>
     public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
+
+    /// <summary>Entries the cache holds (live + tombstones). Diagnostics/gates.</summary>
+    internal int EntryCount => _byId.Count;
+
+    /// <summary>Entries the most recent LRU eviction examined. Diagnostics/gates.</summary>
+    internal int LastEvictVisited { get; private set; }
+
+    /// <summary>Install the host's enumeration of image ids something still HOLDS (a scene node's paint — parked nodes
+    /// included —, a row cell, an image effect's derived/outgoing id, a hold-last-good target) — the proof a tombstone
+    /// needs before it can be reclaimed. Without one the cache never reclaims (every tombstone may still be held).</summary>
+    public void SetHeldImageSource(System.Action<HashSet<int>> collectHeld) => _collectHeld = collectHeld;
+
+    private System.Action<HashSet<int>>? _collectHeld;
+    private readonly HashSet<int> _held = new();
+    private readonly List<int> _reclaimScratch = new();
+    // Indexed LRU heads/tails: [1] = full images, [2] = derived (index 0 unused). 0 = empty.
+    private readonly int[] _lruHead = new int[3], _lruTail = new int[3];
+
+    /// <summary>A reclaim sweep runs only once tombstones outnumber BOTH this floor and the live (Ready + Pending) set —
+    /// so the O(entries) sweep is amortized over at least as many evictions as it reclaims.</summary>
+    internal const int ReclaimFloor = 1024;
+
+    /// <summary>Entries neither Ready nor Pending (evicted / failed / canceled). O(1).</summary>
+    internal int TombstoneCount => _byId.Count - _readyCount - _pendingCount;
 
     public long UsedBytes { get; private set; }
     public long DerivedUsedBytes { get; private set; }
@@ -414,7 +469,7 @@ public sealed class ImageCache
             for (int r = 0; r < _revealingCount; r++)
             {
                 int id = _revealing[r];
-                if (!_byId.TryGetValue(id, out var e)) continue;   // can't happen (tombstones survive) — defensive drop
+                if (!_byId.TryGetValue(id, out var e)) continue;   // reclaimed since it was listed — nothing left to fade
                 bool hasSwapHold = e.SwapHoldUntilMs > float.NegativeInfinity;
                 if (float.IsNaN(e.TextureMs) && !hasSwapHold) continue;   // no active reveal, no outgoing hold — settled
                 float textureDeadline = float.IsNaN(e.TextureMs) ? float.NegativeInfinity : e.TextureMs + e.RevealMs;
@@ -460,9 +515,11 @@ public sealed class ImageCache
         {
             var hit = _byId[id];
             hit.LastUsed = _clock++;
+            LruTouch(id, hit);
             // Evicted entries keep their key as a tombstone so a retained ImageEl node can re-pin the same handle and
             // recover without needing its original URL. Capacity rejection is likewise retryable after all owners release.
             bool restart = ShouldRestart(hit, priority);
+            if (!restart) Latency.NoteHit();
             if (Diag.CompiledIn && Diag.Enabled && DiagTraced(source))
                 Diag.Event("img", $"request {(restart ? "restart" : "hit")} id={id} src={DiagSourceTail(source)} " +
                     $"decode={targetW}x{targetH} prio={priority} state={hit.State} fail={hit.Failure} " +
@@ -476,7 +533,9 @@ public sealed class ImageCache
 
         id = _nextId++;
         _byKey[key] = id;
-        var entry = new Entry { Key = key, State = ImageState.Pending, LastUsed = _clock++, RequestedMs = _clockMs, Transition = transition ?? ImageTransition.Default };
+        var entry = new Entry { Key = key, State = ImageState.Pending, LastUsed = _clock++, RequestedMs = _clockMs,
+            RequestedTicks = System.Diagnostics.Stopwatch.GetTimestamp(), Transition = transition ?? ImageTransition.Default };
+        Latency.NoteMiss();
         _byId[id] = entry;
         // Thread the new decode size onto its source's chain (ResidentRenditionOf) — once per key, on this miss path.
         entry.PrevSameSource = _sourceHead.TryGetValue(source, out int sameSourceHead) ? sameSourceHead : 0;
@@ -504,6 +563,9 @@ public sealed class ImageCache
 
         if (!_decoder.Begin(id, source, targetW, targetH, priority))
         {
+            // A canceled leftover with Refs==0 (a fresh entry has no pin yet), so nothing is listed for the sweep here:
+            // the node's Pin that follows re-Begins it through ShouldRestart, and if THAT is refused too it lands in
+            // RestartDecode's refusal arm with Refs>0, which lists it (NoteCanceledLeftover).
             _pendingCount--;
             entry.State = ImageState.None;
             entry.Failure = ImageFailureKind.Canceled;
@@ -535,6 +597,7 @@ public sealed class ImageCache
         {
             var hit = _byId[existing];
             hit.LastUsed = _clock++;
+            LruTouch(existing, hit);
             if (hit.State is ImageState.None or ImageState.Failed) RestartDerived(existing, hit);
             return new ImageHandle(existing);
         }
@@ -555,6 +618,7 @@ public sealed class ImageCache
             LastUsed = _clock++,
             RequestedMs = _clockMs,
             Transition = transition ?? ImageTransition.Default,
+            DKey = key,
         };
         _byDerivedKey[key] = id;
         _byId[id] = entry;
@@ -627,6 +691,7 @@ public sealed class ImageCache
         {
             if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
                 Diag.Event("img", $"cancel id={h.Id} src={DiagSourceTail(e.Key.Source)} state={e.State} refs={e.Refs}");
+            if (e.State == ImageState.Pending) Latency.NoteCanceled();
             _decoder.Cancel(h.Id);
         }
     }
@@ -670,15 +735,6 @@ public sealed class ImageCache
     /// <summary>Monotonic reveal clock (ms) — passed to the GPU replay path to resolve fade params baked into DrawImageCmd.</summary>
     public float ClockMs => _clockMs;
 
-    /// <summary>While true (scroll), a newly arriving texture reveals at HALF its authored duration instead of the full
-    /// fade — or with <see cref="ShortRevealMs"/> when it landed within <see cref="InstantRevealWindowMs"/> of its
-    /// request (a cache-adjacent hit). See <see cref="BeginReveal"/>: this used to finish EVERY mid-scroll reveal
-    /// instantly, which reads as a pop now that full-size covers actually land during the gesture.</summary>
-    public bool SuppressReveals { get; set; }
-
-    /// <summary>While true, per-frame GPU texture uploads are throttled (see <see cref="DecodeScheduler.ScrollThrottled"/>)
-    /// — set alongside <see cref="SuppressReveals"/> during scroll so upload bursts can't feed the present fence stall.</summary>
-    public bool ScrollThrottled { get => _decoder.ScrollThrottled; set => _decoder.ScrollThrottled = value; }
     public int LastPumpAppliedCount => _decoder.LastPumpAppliedCount;
     public int LastPumpAppliedBytes => _decoder.LastPumpAppliedBytes;
 
@@ -693,7 +749,7 @@ public sealed class ImageCache
             return false;
         }
         startMs = e.TextureMs;
-        durationMs = e.RevealMs;              // the CURRENT reveal's length (halved for a mid-scroll landing)
+        durationMs = e.RevealMs;              // the CURRENT reveal length (ShortRevealMs for a warm re-landing)
         easing = (int)e.Transition.Easing;
         return true;
     }
@@ -739,17 +795,18 @@ public sealed class ImageCache
             Diag.Event("img", $"reveal id={id} src={DiagSourceTail(e.Key.Source)} cause={cause} " +
                 $"enabled={(e.Transition.Enabled ? 1 : 0)} revealMs={e.Transition.DurationMs:0.#} " +
                 $"sinceRequestMs={(float.IsInfinity(e.RequestedMs) ? -1f : _clockMs - e.RequestedMs):0.#} " +
-                $"suppress={(SuppressReveals ? 1 : 0)} " +
                 $"size={e.W}x{e.H} derived={(e.Derived ? 1 : 0)}");
+        if (e.RequestedTicks != 0) { Latency.NoteFetched(e.RequestedTicks); e.RequestedTicks = 0; }
         if (!e.Transition.Enabled)
         {
             e.TextureMs = float.NaN;
             e.RevealMs = 0f;
+            Latency.NoteReveal(0f, 0f);
             return;
         }
         e.RevealMs = e.Transition.DurationMs;
         e.TextureMs = _clockMs;
-        if (_clockMs - e.RequestedMs <= InstantRevealWindowMs && (e.WasReady || SuppressReveals))
+        if (_clockMs - e.RequestedMs <= InstantRevealWindowMs && e.WasReady)
         {
             // A WARM landing — a re-decode of a key that has been Ready before (RestartDecode after eviction/failure, a
             // device-lost ReRealizeAllResident, a disk/OS-cache hit), or a cache-adjacent landing mid-scroll — gets a
@@ -761,13 +818,7 @@ public sealed class ImageCache
             // the (possibly synchronous test) decoder lands — WasReady is false there.
             e.RevealMs = MathF.Min(e.RevealMs, ShortRevealMs);
         }
-        else if (SuppressReveals)
-        {
-            // Scroll. Textures now LAND mid-gesture (DecodeScheduler admits one completion per frame whatever its
-            // size), so the old "already finished" reveal would hard-pop a full-size cover in under a moving finger —
-            // more visible than the fade it was avoiding. Give it a half-length fade instead.
-            e.RevealMs *= ScrollRevealScale;
-        }
+        Latency.NoteReveal(e.RevealMs, e.Transition.DurationMs);
         NoteCrossfadeDeadline(id, e);
     }
 
@@ -898,6 +949,7 @@ public sealed class ImageCache
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
         e.LastUsed = _clock++;
+        SyncLru(h.Id, e);   // pinned ⇒ no longer evictable
         // H3: "the node remounted and its cache entry was NOT resident" is exactly `state=None` (evicted tombstone) or
         // `state=Failed` here — a re-pin that has to re-decode is a blank cover for at least one frame.
         if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
@@ -932,6 +984,7 @@ public sealed class ImageCache
     {
         if (!_byId.TryGetValue(h.Id, out var e) || e.Refs <= 0) return;
         if (--e.Refs == 0 && e.Derived) e.BakeUpgradeAttempts = 0;
+        SyncLru(h.Id, e);   // a Ready entry scrolled off screen becomes the most recently used evictable one
         if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
             Diag.Event("img", $"unpin id={h.Id} src={DiagSourceTail(e.Key.Source)} refs={e.Refs} state={e.State}");
     }
@@ -1011,6 +1064,8 @@ public sealed class ImageCache
         if (e.State == ImageState.Ready) _readyCount--;
         e.LastRestartMs = _clockMs;
         e.RequestedMs = _clockMs;
+        e.RequestedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        Latency.NoteMiss();
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Bytes = 0;
@@ -1021,6 +1076,7 @@ public sealed class ImageCache
         e.BakeQuality = BakedBlurQueue.Quality.Minimal;
         e.BakeGeneration++;
         _pendingCount++;
+        SyncLru(id, e);
         NoteContentChanged(id);
         TryQueueDerived(id, e);
     }
@@ -1104,6 +1160,8 @@ public sealed class ImageCache
         if (e.State == ImageState.Ready) _readyCount--;
         e.LastRestartMs = _clockMs;
         e.RequestedMs = _clockMs;
+        e.RequestedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        Latency.NoteMiss();
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Attempts = 0;
@@ -1111,6 +1169,7 @@ public sealed class ImageCache
         e.Bytes = 0;
         e.TextureMs = float.NaN;
         _pendingCount++;
+        SyncLru(id, e);
         _totalRequested++;
         NoteContentChanged(id);
         Diag.Set("media", "requested", _totalRequested);
@@ -1119,19 +1178,44 @@ public sealed class ImageCache
             _pendingCount--;
             e.State = ImageState.None;
             e.Failure = ImageFailureKind.Canceled;
+            NoteCanceledLeftover(id, e);   // pinned ⇒ Pump's RestartPinnedLeftovers retries it; unpinned ⇒ no-op
         }
     }
+
+    static bool IsCanceledLeftover(Entry e)
+        => !e.Derived && e.Failure == ImageFailureKind.Canceled && e.State is ImageState.None or ImageState.Failed;
+
+    /// <summary>T10: list a PINNED canceled leftover for <see cref="RestartPinnedLeftovers"/>. The only transition that
+    /// can leave one with <c>Refs&gt;0</c> is a refused re-Begin in <see cref="RestartDecode"/> (a Pin/Request restart
+    /// dropped under off-screen backpressure, or a Visible-cancel restart refused by a decoder that refuses Visible): a
+    /// Request miss has no pin yet, and a Canceled completion with <c>Refs&gt;0</c> restarts itself. An unpinned leftover
+    /// is not listed — its next Pin/Request restarts it (ShouldRestart). Allocation-free: a fixed array + overflow flag.</summary>
+    private void NoteCanceledLeftover(int id, Entry e)
+    {
+        if (e.Refs <= 0 || e.LeftoverListed || !IsCanceledLeftover(e)) return;
+        float due = e.LastRestartMs + CanceledLeftoverRetryMs;
+        if (due < _leftoverDueMs) _leftoverDueMs = due;   // folded before the capacity test: an overflow must stay due too
+        if (_leftoverCount < _leftovers.Length)
+        {
+            _leftovers[_leftoverCount++] = id;
+            e.LeftoverListed = true;
+        }
+        else _leftoverOverflow = true;
+    }
+
+    /// <summary>Image-clock time (ms) at which the canceled-leftover sweep next has work (+∞ = none). The host turns it
+    /// into an idle wake (<c>AppHost.ImageLeftoverDueInMs</c>): a future due time shapes <c>RecommendedWaitMs</c>, a
+    /// passed one sets <c>WakeReasons.ImageLeftoverDue</c> so the woken frame's <see cref="Pump()"/> runs the sweep.</summary>
+    internal float LeftoverRetryDueMs => _leftoverDueMs;
 
     /// <summary>Apply finished decodes (UI thread, once per frame) then evict to budget. Returns completions this pump.
     /// Allocation-free when idle (cached callback; empty-queue Pump does nothing) — safe in the hot phase.</summary>
     public int Pump() => Pump(long.MaxValue);
 
-    /// <summary>Frame-budget-aware overload (scroll-v3 §3.3 item 6, <c>Hosting.FrameBudget.DeadlineTicks</c>): while a
-    /// viewport is Drag/Ballistic the host bounds decode-apply work to the frame's motion slice, same as the paired
-    /// <c>TreeReconciler.ReRealizeVirtuals(long)</c> overload. Only <see cref="Media.DecodeScheduler"/> — the real,
-    /// scroll-throttled leaf — honors the deadline (it already caps applies-per-frame internally); the headless/fake
-    /// <see cref="IImageDecoder"/> leaves used by tests have no burst to bound, so they fall back to the plain drain.
-    /// long.MaxValue (the parameterless overload above; every steady frame) is unbounded either way.</summary>
+    /// <summary>Deadline-bounded overload. Only <see cref="Media.DecodeScheduler"/> — the real leaf — honors the deadline
+    /// (it already caps applies-per-frame internally); the headless/fake <see cref="IImageDecoder"/> leaves used by tests
+    /// have no burst to bound, so they fall back to the plain drain. The host pumps unbounded (long.MaxValue, the
+    /// parameterless overload above) every frame — the scroll rework removed the frame budget.</summary>
     public int Pump(long deadlineTicks)
     {
         _pumpCompleted = 0;
@@ -1141,7 +1225,82 @@ public sealed class ImageCache
         else _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
         RetryPinnedExhausted();
+        RestartPinnedLeftovers();
+        ReclaimTombstonesIfDue();
         return _pumpCompleted;
+    }
+
+    /// <summary>T10: re-begin every PINNED canceled leftover (None/Canceled or Failed/Canceled with <c>Refs&gt;0</c> —
+    /// see the class state table) whose last restart is at least <see cref="CanceledLeftoverRetryMs"/> old, at
+    /// <see cref="ImagePriority.Visible"/> (never refused by the scheduler, so a pinned node converges instead of
+    /// being dropped at its off-screen lane again), with no Request/Pin from the node. Real failures (NotFound,
+    /// HttpError, Decode, GpuUpload, transient network kinds) are never touched — the predicate is Failure==Canceled.
+    /// Cost: one float compare per pump while nothing is due; a due sweep walks only the listed ids (≤256), restarts at
+    /// most <see cref="MaxLeftoverRestartsPerPump"/>, and prunes in place — no allocation. Only an overflowed list
+    /// (more than 256 pinned leftovers at once) falls back to one scan of <c>_byId</c>, re-listing what it cannot
+    /// restart yet.</summary>
+    private void RestartPinnedLeftovers()
+    {
+        if (_clockMs < _leftoverDueMs) return;
+        int budget = MaxLeftoverRestartsPerPump;
+        float nextDue = float.PositiveInfinity;
+        int n = _leftoverCount, w = 0;
+        for (int r = 0; r < n; r++)
+        {
+            int id = _leftovers[r];
+            if (!_byId.TryGetValue(id, out var e)) continue;   // reclaimed tombstone — nothing left to retry
+            // Unpinned since it was listed (a later Pin re-Begins it through ShouldRestart), or no longer a leftover
+            // (a Pin/Promote/Request restart got it going): drop it.
+            if (e.Refs <= 0 || !IsCanceledLeftover(e)) { e.LeftoverListed = false; continue; }
+            float due = e.LastRestartMs + CanceledLeftoverRetryMs;
+            if (_clockMs >= due)
+            {
+                if (budget > 0)
+                {
+                    budget--;
+                    RestartLeftover(id, e);
+                    if (!IsCanceledLeftover(e)) { e.LeftoverListed = false; continue; }   // Pending now
+                    due = e.LastRestartMs + CanceledLeftoverRetryMs;   // refused again: wait out a fresh window
+                }
+                else due = _clockMs;   // over this pump's cap — next pump
+            }
+            if (due < nextDue) nextDue = due;
+            _leftovers[w++] = id;
+        }
+        // Defensive: anything appended while the loop ran (RestartDecode's refusal arm only lists an UNLISTED id, and
+        // the loop's own id is still listed, so nothing is expected here) is kept, compacted behind the survivors.
+        for (int r = n; r < _leftoverCount; r++)
+        {
+            int id = _leftovers[r];
+            _leftovers[w++] = id;
+            if (_byId.TryGetValue(id, out var t)) nextDue = MathF.Min(nextDue, t.LastRestartMs + CanceledLeftoverRetryMs);
+        }
+        _leftoverCount = w;
+        _leftoverDueMs = nextDue;
+        if (!_leftoverOverflow) return;
+        // Overflow fallback: some pinned leftovers never made the list. Restart what is due (within the cap) and re-list
+        // the rest — NoteCanceledLeftover re-arms the overflow (and keeps _leftoverDueMs finite) if there is still no room.
+        _leftoverOverflow = false;
+        foreach (var (id, e) in _byId)   // mutates Entry fields only, never _byId's structure (RetryPinnedExhausted's rule)
+        {
+            if (e.LeftoverListed || e.Refs <= 0 || !IsCanceledLeftover(e)) continue;
+            if (budget > 0 && _clockMs >= e.LastRestartMs + CanceledLeftoverRetryMs)
+            {
+                budget--;
+                RestartLeftover(id, e);
+                if (!IsCanceledLeftover(e)) continue;
+            }
+            NoteCanceledLeftover(id, e);
+        }
+    }
+
+    private void RestartLeftover(int id, Entry e)
+    {
+        if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
+            Diag.Event("img", $"leftover-restart id={id} src={DiagSourceTail(e.Key.Source)} from={e.State} " +
+                $"refs={e.Refs} sinceLastRestartMs={_clockMs - e.LastRestartMs:0.#}");
+        Diag.Count("media", "leftoverRestart");
+        RestartDecode(id, e, ImagePriority.Visible);
     }
 
     /// <summary>E7: a PINNED (Refs&gt;0) entry that went <see cref="ImageFailureKind.GpuResourceExhausted"/> cannot
@@ -1230,6 +1389,7 @@ public sealed class ImageCache
                 _totalBakeReady++;
             }
             else { e.Bytes = 0; _totalBakeFailed++; }
+            SyncLru(result.Id, e);
             _pumpCompleted++;
             NoteContentChanged(result.Id);
             Diag.Set("media", "bakedBlurReady", _totalBakeReady);
@@ -1260,6 +1420,7 @@ public sealed class ImageCache
             e.State = ImageState.Failed;
             e.Failure = r.Result == ImageUploadResult.ResourceExhausted ? ImageFailureKind.GpuResourceExhausted : ImageFailureKind.GpuUpload;
             _readyCount--;   // E8: leaving Ready
+            SyncLru(r.Id, e);
             if (e.Refs > 0 && e.Failure == ImageFailureKind.GpuResourceExhausted)
             {
                 // E7: a PINNED entry just went exhausted with nobody re-rendering it to trigger a retry — arm the
@@ -1341,6 +1502,7 @@ public sealed class ImageCache
         // cache believe it was holding its cap while the GPU held roughly 3.5x that.
         e.Bytes = ok ? CommittedBytesFor(w, h) : 0;
         UsedBytes += e.Bytes;
+        SyncLru(id, e);
         _pumpCompleted++;
         NoteContentChanged(id);
 
@@ -1369,7 +1531,7 @@ public sealed class ImageCache
     /// indefinitely, holding a parked page's covers until something unrelated happened to complete. Parking a subtree
     /// unpins everything in it, which is exactly the moment the LRU has new candidates and none of them are on
     /// screen. Cheap when there is nothing to do: the loop's first predicate is two long compares.</para></summary>
-    public void TrimToBudget() => EvictToBudget();
+    public void TrimToBudget() { EvictToBudget(); ReclaimTombstonesIfDue(); }
 
     private void EvictToBudget()
     {
@@ -1385,16 +1547,21 @@ public sealed class ImageCache
     /// (<paramref name="preferDerived"/>) which are the cheapest to lose, and optionally excluding anything READY for
     /// less than <paramref name="minReadyAgeMs"/> (E4's grace window — see <see cref="ReadyGraceMs"/>) — and returns
     /// the bytes it freed, or 0 when nothing is evictable (everything left is pinned/visible/too-freshly-landed).
-    /// Allocation-free (a struct dictionary-enumerator scan, no closures). Shared by <see cref="EvictToBudget"/>
+    /// O(1) and allocation-free: the victim is the head of an indexed LRU list (<see cref="SyncLru"/>). Shared by <see cref="EvictToBudget"/>
     /// (0 ms — it must always be able to reach its cap) and <see cref="EvictToVramPressure"/> (<see cref="ReadyGraceMs"/>).
     /// </summary>
     private long EvictOneLru(bool preferDerived, float minReadyAgeMs = 0f)
     {
-        int victim = 0; long oldest = long.MaxValue;
-            foreach (var (id, e) in _byId)
-                if (e.Refs == 0 && e.State == ImageState.Ready && (!preferDerived || e.Derived)
-                    && _clockMs - e.ReadyMs >= minReadyAgeMs && e.LastUsed < oldest)
-                { oldest = e.LastUsed; victim = id; }
+            // Indexed: each list holds exactly the evictable entries in LRU order, so the victim is a list head — the
+            // walk past the head only skips entries inside the VRAM path's freshly-landed grace window.
+            int visited = 0;
+            int victim = FirstEvictable(2, minReadyAgeMs, ref visited);
+            if (!preferDerived)
+            {
+                int full = FirstEvictable(1, minReadyAgeMs, ref visited);
+                if (victim == 0 || (full != 0 && _byId[full].LastUsed < _byId[victim].LastUsed)) victim = full;
+            }
+            LastEvictVisited = visited;
             if (victim == 0) return 0;   // everything left is pinned (on screen) / too fresh to shed — never evict it
             var e2 = _byId[victim];
             long freed = e2.Bytes;
@@ -1403,6 +1570,7 @@ public sealed class ImageCache
             if (e2.Derived) DerivedUsedBytes -= e2.Bytes;
             bool activeDeadline = e2.Transition.Enabled && !float.IsNaN(e2.TextureMs)
                 && e2.TextureMs + e2.RevealMs >= _clockMs;
+            LruUnlink(victim, e2);
             e2.State = ImageState.None;
             e2.Failure = ImageFailureKind.None;
             e2.Attempts = 0;
@@ -1432,6 +1600,129 @@ public sealed class ImageCache
             NotifyStatus(e2);
             _evictSink(victim);   // free the GPU texture (the device defers the release behind the frame fence)
             return freed;
+    }
+
+    // ── indexed LRU ────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The first entry of eviction list <paramref name="list"/> Ready for at least <paramref name="minReadyAgeMs"/>.</summary>
+    private int FirstEvictable(int list, float minReadyAgeMs, ref int visited)
+    {
+        for (int id = _lruHead[list]; id != 0;)
+        {
+            var e = _byId[id];
+            visited++;
+            if (_clockMs - e.ReadyMs >= minReadyAgeMs) return id;
+            id = e.LruNext;
+        }
+        return 0;
+    }
+
+    /// <summary>Links / unlinks <paramref name="e"/> so it sits in an eviction list exactly while it is evictable
+    /// (Ready, unpinned). Called at every state/pin transition; O(1).</summary>
+    private void SyncLru(int id, Entry e)
+    {
+        byte want = e.State == ImageState.Ready && e.Refs == 0 ? (byte)(e.Derived ? 2 : 1) : (byte)0;
+        if (e.LruList == want) return;
+        if (e.LruList != 0) LruUnlink(id, e);
+        if (want != 0) LruAppend(id, e, want);
+    }
+
+    /// <summary>A use of an evictable entry: it becomes the most recently used of its list. O(1).</summary>
+    private void LruTouch(int id, Entry e)
+    {
+        byte list = e.LruList;
+        if (list == 0 || _lruTail[list] == id) return;
+        LruUnlink(id, e);
+        LruAppend(id, e, list);
+    }
+
+    private void LruAppend(int id, Entry e, byte list)
+    {
+        e.LastUsed = _clock++;
+        e.LruList = list;
+        e.LruNext = 0;
+        e.LruPrev = _lruTail[list];
+        if (e.LruPrev != 0) _byId[e.LruPrev].LruNext = id; else _lruHead[list] = id;
+        _lruTail[list] = id;
+    }
+
+    private void LruUnlink(int id, Entry e)
+    {
+        byte list = e.LruList;
+        if (list == 0) return;
+        if (e.LruPrev != 0) _byId[e.LruPrev].LruNext = e.LruNext; else _lruHead[list] = e.LruNext;
+        if (e.LruNext != 0) _byId[e.LruNext].LruPrev = e.LruPrev; else _lruTail[list] = e.LruPrev;
+        e.LruPrev = e.LruNext = 0;
+        e.LruList = 0;
+    }
+
+    // ── tombstone reclaim ──────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Reclaims the tombstones (neither Ready nor Pending, unpinned) that nothing HOLDS any more. A tombstone exists so a
+    /// retained node — a parked page's cover, a hold-last-good target — can re-pin its handle and recover without its
+    /// URL; once no holder remains (the host's <see cref="SetHeldImageSource"/> enumeration: every scene node's paint,
+    /// image effects and row cells, the reconciler's pending targets) it is dead weight that grew with every image ever
+    /// seen. A derived entry that is kept holds its source. Runs only when tombstones outnumber both
+    /// <see cref="ReclaimFloor"/> and the live set, so the O(entries) sweep amortizes to O(1) per eviction. Ids are never
+    /// reused (monotonic), so a stale id anywhere can only miss, never alias another image.
+    /// </summary>
+    private void ReclaimTombstonesIfDue()
+    {
+        if (_collectHeld is null) return;
+        int live = _readyCount + _pendingCount;
+        if (TombstoneCount <= Math.Max(ReclaimFloor, live)) return;
+        _held.Clear();
+        _collectHeld(_held);
+        foreach (var (id, e) in _byId)
+            if (e.Derived && (e.Refs > 0 || e.State is ImageState.Pending or ImageState.Ready || _held.Contains(id)))
+                _held.Add(e.SourceId);
+        _reclaimScratch.Clear();
+        foreach (var (id, e) in _byId)
+            if (e.Refs == 0 && e.State is ImageState.None or ImageState.Failed && !_held.Contains(id))
+                _reclaimScratch.Add(id);
+        for (int i = 0; i < _reclaimScratch.Count; i++) ReclaimEntry(_reclaimScratch[i]);
+        _reclaimScratch.Clear();
+        _held.Clear();
+    }
+
+    private void ReclaimEntry(int id)
+    {
+        var e = _byId[id];
+        LruUnlink(id, e);   // tombstones are never linked; defensive
+        if (e.Derived)
+        {
+            if (_byDerivedKey.TryGetValue(e.DKey, out int keyed) && keyed == id) _byDerivedKey.Remove(e.DKey);
+            if (_derivedBySource.TryGetValue(e.SourceId, out var dependents))
+            {
+                dependents.Remove(id);
+                if (dependents.Count == 0) _derivedBySource.Remove(e.SourceId);
+            }
+        }
+        else
+        {
+            if (_byKey.TryGetValue(e.Key, out int keyed) && keyed == id) _byKey.Remove(e.Key);
+            string source = e.Key.Source;
+            if (_sourceHead.TryGetValue(source, out int head))
+            {
+                if (head == id)
+                {
+                    if (e.PrevSameSource != 0) _sourceHead[source] = e.PrevSameSource;
+                    else _sourceHead.Remove(source);
+                }
+                else
+                {
+                    for (int at = head; at != 0;)
+                    {
+                        var link = _byId[at];
+                        if (link.PrevSameSource == id) { link.PrevSameSource = e.PrevSameSource; break; }
+                        at = link.PrevSameSource;
+                    }
+                }
+            }
+            _derivedBySource.Remove(id);   // only ever empty here: a kept dependent would have held this source
+        }
+        _byId.Remove(id);
     }
 
     /// <summary>
@@ -1479,6 +1770,7 @@ public sealed class ImageCache
             if (freed == 0) break;                      // everything left is pinned/visible/too-freshly-landed
             freedTotal += freed;
         }
+        ReclaimTombstonesIfDue();
         return freedTotal;
     }
 }

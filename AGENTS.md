@@ -3,20 +3,12 @@
 Guidance for AI agents (Codex, and others) working in this repo. Claude Code users also have `CLAUDE.md` (design-corpus
 discipline) and a `.claude/skills/fluentgpu` skill; the full human/agent guide is in `docs/guide/`.
 
-## Out-of-scope paths — do NOT read, search, edit, or summarize
+## Scope
 
 Agent scope in this repo is the **FluentGpu engine** (`src/`, `docs/design/`, `docs/`) and app UI.
-The paths below are out of scope and belong to a separate workspace. Unless the user names a
-specific file below **and** confirms it for this session, do not read, grep, edit, or summarize:
-
-- `src/apps/.native/**`, `src/apps/Wavee.PlayPlay/**`, `private-runtimes/**`
-- `src/apps/tmp_*`, `ops/scripts/pyghidra*`, `ops/tools/pyghidra*`, `ops/tools/playplay_*`, `ops/tools/x64_*`
-- `docs/plans/wavee/wavee-playplay*.md`, `docs/plans/wavee/playplay-*.md`, `docs/plans/wavee/spotiload-offline-path.md`
-- `**/playplay-runtime.json`
-
-These live in the separate `wavee-playplay-private` repo (see `docs/guide/playplay-private-split.md`).
-If a request would require these paths, ask the user to work in that repo instead.
-(Also enforced by `.codex/config.toml`, `.codexignore`, and `.githooks/pre-commit`.)
+PlayPlay (Spotify DRM) material lives in the private repo `christosk92/wavee-playplay-private`; agents may work on
+it there, but it never enters this public repo — `.gitignore` and `.githooks/pre-commit` block it. Never
+`git add -f` it or commit with `--no-verify`.
 
 ## What this is
 

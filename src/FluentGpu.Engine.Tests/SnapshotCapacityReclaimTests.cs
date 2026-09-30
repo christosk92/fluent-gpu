@@ -269,7 +269,7 @@ public sealed class SnapshotCapacityReclaimTests
         internal void Park() { Scene.Detach(Page); Scene.NoteBulkMutation(); }
         internal ulong PublishRaw() => Publisher.PublishScene(Scene, Images, Strings, default,
             default, default, default, Detached, Popups, Animation,
-            new FrameInfo(new(800, 600), 1, default), false, false);
+            new FrameInfo(new(800, 600), 1, default), false);
         internal RenderFrame PublishAndAcquire()
         {
             ulong seq = PublishRaw();

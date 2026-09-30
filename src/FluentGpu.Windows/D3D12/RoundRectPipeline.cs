@@ -434,7 +434,7 @@ float4 PSMain(VSO i) : SV_Target
     /// <summary>Reset this frame's per-frame policy cap + drop counter. Bank selection (and the fence discipline that
     /// makes writing it safe) belongs to the shared <see cref="UploadArena"/>, which the device begins once per frame
     /// before any pipeline records.</summary>
-    public void BeginFrame(int frameIndex) { _ = frameIndex; _cursor = 0; _dropped = 0; }
+    public void BeginFrame(int slot) { _ = slot; _cursor = 0; _dropped = 0; }
 
     /// <summary>Record one run. <paramref name="bindSharedState"/> binds the shared SDF root signature, viewport
     /// constants, topology, and quad VB; <paramref name="bindPipelineState"/> binds the PSO selected by
@@ -479,7 +479,7 @@ float4 PSMain(VSO i) : SV_Target
                 _ => _pso,
             });
         cmd->SetGraphicsRootShaderResourceView(1, gva);
-        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        cmd->DrawInstanced(4, (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
     }
 

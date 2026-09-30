@@ -149,7 +149,7 @@ public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split
 /// <summary>
 /// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
 /// through <see cref="Fallback"/>, blurs it (<see cref="BlurSigma"/>), then applies WinUI's luminosity/tint recipe.
-/// Realized by the <c>PushLayer</c>/<c>PopLayer</c> backdrop subsystem.
+/// Realized as an effect slice whose backdrop the composite blurs (gpu-renderer.md §13).
 /// </summary>
 // <paramref name="FeatherTop"/> (0 = off): feather the composited frost in from the TOP over this fraction of the
 // layer's own height, so the frosted band dissolves continuously into the crisp backdrop instead of a hard edge (the
@@ -175,7 +175,7 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     /// <summary>The CPU reference of the acrylic composite — what the backdrop shader produces for ONE already-blurred
     /// backdrop sample (noise excluded: it is a per-pixel dither, not part of the colour). Blur is a no-op over a
     /// uniform backdrop, so over a flat colour this IS the shader's answer, which is what makes it gateable headlessly.
-    /// <para>Recipe, in the shader's order (AcrylicBrush.cpp:446-452,500-517 → AcrylicCompositor's PSMain): resolve the
+    /// <para>Recipe, in the shader's order (AcrylicBrush.cpp:446-452,500-517 → the composite's acrylic recipe pass): resolve the
     /// possibly-transparent backdrop over the opaque <see cref="Fallback"/>; LUMINOSITY-blend the tint at
     /// <see cref="LuminosityOpacity"/> (takes the tint's lightness, KEEPS the backdrop's hue and saturation); then
     /// COLOR-blend the tint at <see cref="TintOpacity"/> (takes the tint's hue/saturation at the luminosity result's
@@ -230,17 +230,7 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     }
 }
 
-/// <summary>Renderer policy for a per-node self-blur layer.</summary>
-public enum BlurCachePolicy : byte
-{
-    Normal = 0,
-    /// <summary>During user-scroll hold, reuse a retained blur if available; otherwise draw the subtree inline for this frame.</summary>
-    HoldIfCached = 1,
-    /// <summary>During user-scroll hold, reuse a retained blur if available; otherwise skip this decorative blur for this frame.</summary>
-    HoldOrSkipOnMiss = 2,
-}
-
-/// <summary>A static bitmap blur baked once into a persistent derived image. Unlike <see cref="BlurCachePolicy"/>,
+/// <summary>A static bitmap blur baked once into a persistent derived image. Unlike a self-blur (<c>BoxEl.Blur</c>),
 /// this does not create a scene layer: after the bake completes the image is an ordinary textured quad and pure
 /// translation (scrolling) performs no blur work. <see cref="ResolutionScale"/> trades bake/residency cost for detail;
 /// large editorial blurs are low-frequency, so 0.5 is the production default.</summary>
@@ -301,6 +291,14 @@ public readonly record struct EdgeFadeSpec(
     /// <summary>Per-edge band depth (DIP) for an edge bit, 0 when that edge is not enabled.</summary>
     public readonly float Band(EdgeMask edge) => (Edges & edge) == 0 ? 0f
         : edge switch { EdgeMask.Left => BandLeft, EdgeMask.Top => BandTop, EdgeMask.Right => BandRight, _ => BandBottom };
+
+    /// <summary>The fade applies only while the element's own <c>.StickyClip</c> is ENGAGED — a composite-time parameter of
+    /// the clip, applied on the same render turn that poses the cut (the band line becomes the edge it dissolves at), and
+    /// absent at rest, when the element's own top must not be softened. The replacement for switching an <c>EdgeFade</c> on
+    /// and off by a re-render off an <c>engaged:</c> signal, which lands at least one publication after the clip (RCA
+    /// 2026-09-25 F(ii): <c>[scroll.engaged.present] ticksAfterCross=2</c>). Meaningful only on a <c>.StickyClip</c>
+    /// element; anywhere else the fade never applies.</summary>
+    public bool WhileStuck { get; init; }
 
     public static EdgeFadeSpec Horizontal(float band = 24f) => new(EdgeMask.Horizontal, band);
     public static EdgeFadeSpec Vertical(float band = 24f) => new(EdgeMask.Vertical, band);

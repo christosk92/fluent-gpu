@@ -1394,6 +1394,15 @@ var player = UseMediaPlayer(b => b
 // player.Qualities is a read-only variant list; TransportBar greys out Seek on live via the capability bitset.
 ```
 
+*ABR estimate rules (as-built 2026-09-22).* `ThroughputEstimator.Add` accepts a sample once it clears
+`MinSampleBytes` (64 KB); below `LargeSampleBytes` (2 MiB) it also needs `MinSampleMs` (200 ms), but at or above
+that payload the duration floor no longer applies — a multi-megabyte aggregate is a measurement whatever its
+duration. `AdaptiveBitrateController` acts only on measurements: while `EstimateIsPrior` is true (the 2 Mbps
+startup seed, or a remembered estimate handed in via `SeedEstimate`/`ThroughputEstimator.Seed`), rules 1
+(downswitch) and 3 (throughput climb) are skipped — a prior never moves the ladder off the rung the app opened.
+Rule 2 (buffer gate) and rule 4 (forced probe) still apply, so the forced probe is the only move off a prior; the
+first real sample then replaces the estimate outright and lifts the guard.
+
 **(E) Local audio file with a 5-band EQ** (each band gain is a signal — a slider write ramps smoothly, no zipper):
 
 ```csharp

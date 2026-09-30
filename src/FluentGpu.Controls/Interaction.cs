@@ -164,6 +164,17 @@ public static class Interaction
         StrokeWidth = 1f,
     };
 
+    /// <summary>A tile surface: opaque card fills ramping into the control secondary/tertiary hover/press legs (a
+    /// heavier ramp than <see cref="Card"/>'s card-to-card step) under a flat card stroke — the "clickable tile"
+    /// treatment for browse/genre/wide tiles. Fill + border only, no press geometry (WhileHover/WhilePressed);
+    /// theme-live like the other presets.</summary>
+    public static InteractionRecipe Tile => new()
+    {
+        Fill = new StateBrush(Tok.FillCardDefault, Tok.FillControlSecondary, Tok.FillControlTertiary, Tok.FillCardDefault),
+        Stroke = StateBrush.Flat(Tok.StrokeCardDefault),
+        StrokeWidth = 1f,
+    };
+
     /// <summary>Transparent at rest, an accent-subtle wash on hover, a dimmer accent on press — an accent-tinted ghost
     /// affordance (a toolbar toggle, an accent list action) that shows intent without a solid accent plate.</summary>
     public static InteractionRecipe AccentGhost => new()

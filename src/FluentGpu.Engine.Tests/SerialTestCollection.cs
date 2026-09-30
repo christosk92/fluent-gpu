@@ -12,6 +12,8 @@ namespace FluentGpu.Engine.Tests;
 /// test's queue.</description></item>
 /// <item><description><see cref="AudioGraphTests"/> drives a real decode producer thread to Ended under a bounded
 /// wait; on a saturated machine (the whole suite in parallel) that wait is what runs out, not the graph.</description></item>
+/// <item><description><see cref="ScrollProbeTests"/> reads the process-static probe rings, which every render-thread
+/// present writes a Turn row into — a render thread in a concurrently running class would land rows in its burst.</description></item>
 /// </list>
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]

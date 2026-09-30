@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -59,6 +59,50 @@ sealed class CbfCloseTimerProbeInner : Component
     }
 }
 
+/// <summary>gate.slices.acrylic-never-folds host: an OverlayHost whose page paints <see cref="Effects"/> opacity-group /
+/// self-blur boxes (each an effect slice candidate — past the effect budget) BEFORE the overlay layer, so an in-window
+/// frosted flyout is the first acrylic the recorder reaches after the budget is spent.</summary>
+sealed class AcrylicBudgetProbe : Component
+{
+    public const int Effects = 20;
+    public IOverlayService? Service;
+    public NodeHandle Anchor;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new AcrylicBudgetProbeInner(this)) });
+}
+
+sealed class AcrylicBudgetProbeInner : Component
+{
+    readonly AcrylicBudgetProbe _p;
+    public AcrylicBudgetProbeInner(AcrylicBudgetProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        var boxes = new Element[AcrylicBudgetProbe.Effects];
+        for (int i = 0; i < boxes.Length; i++)
+            boxes[i] = new BoxEl
+            {
+                Width = 18f, Height = 18f, Fill = ColorF.FromRgba(0xC0, (byte)(0x40 + i * 7), 0x40),
+                Opacity = (i & 1) == 0 ? 0.6f : 1f, OpacityGroup = (i & 1) == 0, Blur = (i & 1) == 0 ? 0f : 2f,
+            };
+        return new BoxEl
+        {
+            Width = 480, Height = 400, Padding = Edges4.All(12), Direction = 1, Gap = 8,
+            Children =
+            [
+                new BoxEl { Direction = 0, Gap = 4, Children = boxes },
+                new BoxEl
+                {
+                    Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+                    OnRealized = h => _p.Anchor = h,
+                    Children = [Text("anchor")],
+                },
+                // saturated page content under the flyout, so a hole would show it crisp
+                new BoxEl { Width = 440, Height = 200, Fill = ColorF.FromRgba(0xD0, 0x20, 0x30) },
+            ],
+        };
+    }
+}
+
     sealed class FocusClipProbe : Component
     {
         public override Element Render() => new BoxEl
@@ -94,6 +138,7 @@ static class OverlaySuite
         G5fPopupToastChecks(strings);
         FlyoutAcrylicChecks(strings);
         InWindowAcrylicLayerChecks(strings);
+        AcrylicNeverFoldsChecks(strings);
         MenuWindowingChecks(strings);
         AcrylicFallbackPolicyChecks(strings);
         VideoHoleBackdropChecks(strings);
@@ -256,13 +301,13 @@ static class OverlaySuite
 
             void Press(float x, float y, uint t, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(x, y), 0, 0, 0f, mods, PointerKind.Mouse, false, t));
-                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(x, y), 0, 0, 0f, mods, PointerKind.Mouse, false, t + 10));
+                window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(x, y), 0, 0, mods, PointerKind.Mouse, false, t));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(x, y), 0, 0, mods, PointerKind.Mouse, false, t + 10));
                 host.RunFrame();
             }
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
 
@@ -297,7 +342,7 @@ static class OverlaySuite
             Check("W0e.3 double-click selects the word at the hit; triple-click selects all", dbl && trp, $"dbl={dbl} trp={trp}");
 
             // W0e.4 — drag-select publishes rects into the scene slab (count + X/W math) while the button is held.
-            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 1f * Adv + 1f, wy), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 9_000));
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 1f * Adv + 1f, wy), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 9_000));
             host.RunFrame();
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(ta.X + 7f * Adv + 1f, wy), 0, 0));
             host.RunFrame();
@@ -318,7 +363,7 @@ static class OverlaySuite
             var dragSteady = host.RunFrame();
             Check("W0e.4b drag-select frame is 0-alloc on phases 6–13 (pooled slab, no re-render)",
                 dragSteady.HotPhaseAllocBytes == 0, $"{dragSteady.HotPhaseAllocBytes} bytes");
-            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 8f * Adv + 1f, wy), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 9_500));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 8f * Adv + 1f, wy), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 9_500));
             host.RunFrame();
 
             // W0e.5 — clipboard round-trip via the HeadlessClipboard seam.
@@ -496,7 +541,7 @@ static class OverlaySuite
             var tn = TextVisual(scene, field);
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
             ClickNode(host, window, field);
@@ -530,7 +575,7 @@ static class OverlaySuite
             var field = FindRole(scene, scene.Root, AutomationRole.Text);
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
             void Type(string s)
@@ -605,8 +650,8 @@ static class OverlaySuite
             var field = FindRole(scene, scene.Root, AutomationRole.Text);
             var tn = TextVisual(scene, field);
             var ta = scene.AbsoluteRect(tn);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 2f * Adv + 1f, ta.Y + ta.H / 2f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 2f * Adv + 1f, ta.Y + ta.H / 2f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_010));
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 2f * Adv + 1f, ta.Y + ta.H / 2f), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 2f * Adv + 1f, ta.Y + ta.H / 2f), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_010));
             host.RunFrame();
             bool caretOk = root.Edit!.Core.Active == 2;
             window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
@@ -615,7 +660,7 @@ static class OverlaySuite
             bool typingGated = root.Text!.Peek() == "locked";
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
             Key(Keys.A, KeyModifiers.Ctrl);
@@ -641,7 +686,7 @@ static class OverlaySuite
             var tn = TextVisual(scene, field);
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
             void Type(string s)
@@ -813,11 +858,11 @@ static class OverlaySuite
             var ta = scene.AbsoluteRect(tn);
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
-            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 2f * Adv + 1f, ta.Y + LineH * 0.5f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 2f * Adv + 1f, ta.Y + LineH * 0.5f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_010));
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 2f * Adv + 1f, ta.Y + LineH * 0.5f), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 2f * Adv + 1f, ta.Y + LineH * 0.5f), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_010));
             host.RunFrame();
             bool caretLine1 = root.Edit!.Core.Active == 2;
             Key(Keys.Down);
@@ -878,8 +923,8 @@ static class OverlaySuite
             // Empty the box, then type a fresh password — the empty→non-empty content change arms the button
             // (OnContentChanged, PasswordBox.cpp:366–377: "only allow password reveal button if transitioning from
             // empty to non-empty state").
-            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, 0f, KeyModifiers.Ctrl));
-            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back, 0f, KeyModifiers.None));
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, KeyModifiers.Ctrl));
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back, KeyModifiers.None));
             host.RunFrame();
             foreach (char c in "secret") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
             host.RunFrame();
@@ -894,13 +939,13 @@ static class OverlaySuite
 
             // Press-and-HOLD (no release yet) → the password shows in clear text.
             var bc = CenterOf(scene, btns[0]);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 2_000));
+            window.QueueInput(new InputEvent(InputKind.PointerDown, bc, 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 2_000));
             host.RunFrame();
             host.RunFrame();
             bool peeked = strings.Resolve(scene.Paint(tn).Text) == "secret";
 
             // Release → re-masks and the FIELD keeps focus (WinUI keeps the field focused across reveal interactions).
-            window.QueueInput(new InputEvent(InputKind.PointerUp, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 2_100));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, bc, 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 2_100));
             host.RunFrame();
             host.RunFrame();
             bool remasked = strings.Resolve(scene.Paint(tn).Text) == "●●●●●●";
@@ -943,7 +988,7 @@ static class OverlaySuite
             // PasswordBox.cpp:430–434) and the button unmounts.
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
             Key(Keys.A, KeyModifiers.Ctrl);
@@ -995,7 +1040,7 @@ static class OverlaySuite
             // Copy stays BLOCKED even while revealed (WinUI never allows copying out of a PasswordBox).
             void Key2(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window2.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window2.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host2.RunFrame();
             }
             Key2(Keys.A, KeyModifiers.Ctrl);
@@ -1352,7 +1397,7 @@ static class OverlaySuite
             var field = FindRole(scene, scene.Root, AutomationRole.Text);
             void Key(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host.RunFrame();
             }
             void Type(string s)
@@ -1377,7 +1422,7 @@ static class OverlaySuite
             var field2 = FindRole(scene2, scene2.Root, AutomationRole.Text);
             void Key2(int key, KeyModifiers mods = KeyModifiers.None)
             {
-                window2.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                window2.QueueInput(new InputEvent(InputKind.Key, default, 0, key, mods));
                 host2.RunFrame();
             }
             ClickNode(host2, window2, field2);
@@ -2778,8 +2823,7 @@ static class OverlaySuite
             // pending one-shot cannot be driven by RunFrame alone.
             void Step(float ms) { host.RunFrame(); clock.Advance(ms); host.Paint(0); }
             void Poll() { for (int i = 0; i < 4; i++) host.Paint(0); }
-            // scroll-v3: TargetY is gone as a scene column (wheel input is a Driven glide now, resolved kernel-side —
-            // ScrollBody.Target is internal to the kernel). OffsetY is the live result column and, after 6 frames of
+            // A wheel notch is a cubic glide plan; OffsetY is the live result column and, after 6 frames of
             // glide below, is by itself a faithful "how far did this wheel actually move the page" progress read.
             float ScrollProgress() { ref var st = ref s.ScrollRef(vp); return st.OffsetY; }
 
@@ -2790,12 +2834,12 @@ static class OverlaySuite
             var br = open ? s.AbsoluteRect(bubbleText) : default;
 
             // (a) wheel AT the open bubble: the page beneath must scroll (bubble + overlay wrappers all yield).
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(br.X + 2f, br.Y + 2f), 0, 0, 60f));
+            window.QueueInput(WheelEvent(new Point2(br.X + 2f, br.Y + 2f), 0, 0, 60f));
             for (int i = 0; i < 6; i++) Step(16f);
             float afterBubbleWheel = ScrollProgress();
 
             // (b) wheel far from the bubble while the entry is still open: must also reach the page scroller.
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(420f, 320f), 0, 0, 60f));
+            window.QueueInput(WheelEvent(new Point2(420f, 320f), 0, 0, 60f));
             for (int i = 0; i < 6; i++) Step(16f);
             float afterFarWheel = ScrollProgress();
 
@@ -3341,14 +3385,18 @@ static class OverlaySuite
                 () => new BoxEl { Width = 300f, Height = 180f, Direction = 1 },
                 FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Static));
 
-            int framesChecked = 0, framesWithLayer = 0;
-            bool recipeOk = false, coversSurface = false;
+            int framesChecked = 0, framesWithLayer = 0, framesFrosted = 0;
+            bool recipeOk = false, coversSurface = false, invariants = true;
+            string invDetail = "";
             for (int i = 0; i < 20; i++)
             {
                 host.RunFrame();
                 if (svc.Entries.Count != 1 || svc.Entries[0].SurfaceNode.IsNull) continue;
                 framesChecked++;
                 var surf = host.Scene.AbsoluteRect(svc.Entries[0].SurfaceNode);
+                // The frost is a composite BACKDROP item (a layer op alone proves nothing: a folded one is a hole).
+                if (FluentGpu.VerticalSlice.Harness.CompositeInvariants.HasBackdropCovering(device, surf)) framesFrosted++;
+                if (!FluentGpu.VerticalSlice.Harness.CompositeInvariants.AcrylicLayersHaveBackdrops(device, out invDetail)) invariants = false;
                 foreach (var l in device.LastLayers)
                 {
                     if (l.Kind != 0) continue;
@@ -3382,12 +3430,16 @@ static class OverlaySuite
             hSug.Close();
             for (int i = 0; i < 20; i++) host.RunFrame();
 
-            Check("gate.overlay.static-chrome-acrylic the AutoSuggestBox suggestions surface (PopupChrome.Static) stays in-window, records the flyout Acrylic PushLayer every frame, and composites away from its flat fallback",
-                inWindow && surfaceChrome && everyFrame && recipeOk && coversSurface && notFlat,
-                $"inWindow={inWindow} surface={surfaceChrome} frames={framesWithLayer}/{framesChecked} recipe={recipeOk} covers={coversSurface} notFlat={notFlat}");
+            Check("gate.overlay.static-chrome-acrylic the AutoSuggestBox suggestions surface (PopupChrome.Static) stays in-window, is FROSTED by a composite Backdrop item covering it every frame (its Acrylic PushLayer paired with that backdrop), and composites away from its flat fallback",
+                inWindow && surfaceChrome && everyFrame && framesFrosted == framesChecked && invariants && recipeOk && coversSurface && notFlat,
+                $"inWindow={inWindow} surface={surfaceChrome} frames={framesWithLayer}/{framesChecked} frosted={framesFrosted} {invDetail} recipe={recipeOk} covers={coversSurface} notFlat={notFlat}");
         }
 
         // gate.overlay.acrylic-plate-does-not-occlude-itself - the FILL half of the same bug, and the one that made
+        // (INTENT, re-stated 2026-09-24: the fill may drop ONLY where a Backdrop item frosts the plate. The first version
+        // asserted "no fallback fill when a layer op was recorded" — which a FOLDED acrylic also satisfies: its inline
+        // layer op erased the plate rect with no backdrop beneath, and the dropped fill made the plate a transparent hole.
+        // So the gate now pairs the dropped fill with a composite Backdrop covering the plate.)
         // every frosted popup read flat even where the layer DID run. A frosted surface authors Fill =
         // <its acrylic>.Fallback so it stays solid wherever the layer cannot run; but an Acrylic PushLayer composites
         // at PUSH time (blurred backdrop, SourceOver that same opaque Fallback, luminosity, tint, noise) and the node's
@@ -3400,7 +3452,7 @@ static class OverlaySuite
             bool prevAdv = Materials.AdvancedEffectsEnabled;
             try
             {
-                (int Layers, bool PlateFilled) Run(string tag)
+                (int Layers, bool PlateFilled, bool Frosted) Run(string tag)
                 {
                     using var app = new HeadlessPlatformApp();
                     var window = new HeadlessWindow(new WindowDesc(tag, new Size2(480, 400), 1f));
@@ -3422,16 +3474,19 @@ static class OverlaySuite
                     foreach (var r in device.LastRects)
                         if (ColorClose(r.Fill, spec.Fallback, 0.004f) && r.Fill.A > 0.99f
                             && MathF.Abs(r.Rect.W - pr.W) < 1.5f && MathF.Abs(r.Rect.H - pr.H) < 1.5f) filled = true;
-                    return (layers, filled);
+                    // frosted = the acrylic layer op(s) are each paired with a composite Backdrop item covering their rect (the
+                    // acrylic rides the flyout SURFACE, which the plate sits inside — so pair by the layer, not the plate)
+                    bool frosted = !plate.IsNull && layers >= 1 && FluentGpu.VerticalSlice.Harness.CompositeInvariants.AcrylicLayersHaveBackdrops(device, out _);
+                    return (layers, filled, frosted);
                 }
 
                 var on = Run("plate-occlusion-on");
                 Materials.AdvancedEffectsEnabled = false;
                 var off = Run("plate-occlusion-off");
 
-                Check("gate.overlay.acrylic-plate-does-not-occlude-itself a frosted plate stops painting its own FallbackColor over the acrylic layer it emitted, and paints it again when no layer runs",
-                    on.Layers >= 1 && !on.PlateFilled && off.Layers == 0 && off.PlateFilled,
-                    $"layerOn=(ops={on.Layers},plateFilled={on.PlateFilled}) layerOff=(ops={off.Layers},plateFilled={off.PlateFilled})");
+                Check("gate.overlay.acrylic-plate-does-not-occlude-itself a FROSTED plate (a composite Backdrop covers it) stops painting its own FallbackColor over the frost, and paints it again when no backdrop runs",
+                    on.Layers >= 1 && on.Frosted && !on.PlateFilled && off.Layers == 0 && !off.Frosted && off.PlateFilled,
+                    $"layerOn=(ops={on.Layers},frosted={on.Frosted},plateFilled={on.PlateFilled}) layerOff=(ops={off.Layers},frosted={off.Frosted},plateFilled={off.PlateFilled})");
             }
             finally { Materials.AdvancedEffectsEnabled = prevAdv; }
         }
@@ -3442,6 +3497,62 @@ static class OverlaySuite
     // diagnostic if both have answers. FlyoutAcrylicChecks above proves the RECIPE on the layer; these prove the layer
     // is EMITTED in the shipping configuration (nothing disabled, popup windows ON) and that the recipe it carries is
     // nothing like the flat plate it degrades to.
+    // ── gate.slices.acrylic-never-folds ─────────────────────────────────────────────────────────────────────────────
+    // The acrylic hole (2026-09-24): the page paints 20 opacity-group / self-blur boxes — effect slice candidates past
+    // SliceRecorder.EffectSliceCap = 16 — BEFORE the overlay layer, so the in-window frosted flyout is the first acrylic
+    // the recorder reaches after the budget is spent. It used to be FOLDED: recorded inline with an Acrylic PushLayer and
+    // its plate fill dropped, while the composite Backdrop item exists only for a CUT acrylic slice — the tile replay
+    // erased the plate rect expecting a backdrop beneath, and the dropdown showed the page straight through. A frost is not
+    // foldable: acrylic always cuts its own slice (its own AcrylicSliceCap), and an acrylic that still cannot be cut keeps
+    // its opaque FallbackColor plate (WinUI's no-backdrop answer) — never a hole.
+    static void AcrylicNeverFoldsChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("acrylic-never-folds", new Size2(480, 400), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new AcrylicBudgetProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        var svc = (OverlayServiceImpl)root.Service!;
+        var hPick = svc.Open(() => root.Anchor,
+            () => new BoxEl
+            {
+                Width = 296f, Height = 120f, Direction = 1,
+                Children = [new BoxEl { Width = 40f, Height = 40f, Corners = new CornerRadius4(20f, 20f, 20f, 20f), Fill = Tok.FillCardDefault }],
+            },
+            FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Popup));
+
+        int framesChecked = 0, framesFrosted = 0, maxFolded = 0, maxEffects = 0, maxAcrylic = 0, maxFallbacks = 0;
+        bool paired = true, surfaces = true, noMarkerInInline = true;
+        string pairDetail = "", surfDetail = "", markerDetail = "";
+        for (int i = 0; i < 24; i++)
+        {
+            host.RunFrame();
+            if (svc.Entries.Count != 1 || svc.Entries[0].SurfaceNode.IsNull) continue;
+            framesChecked++;
+            var surf = host.Scene.AbsoluteRect(svc.Entries[0].SurfaceNode);
+            if (FluentGpu.VerticalSlice.Harness.CompositeInvariants.HasBackdropCovering(device, surf)) framesFrosted++;
+            if (!FluentGpu.VerticalSlice.Harness.CompositeInvariants.AcrylicLayersHaveBackdrops(device, out pairDetail)) paired = false;
+            if (!FluentGpu.VerticalSlice.Harness.CompositeInvariants.AcrylicSurfacesFrostedOrSolid(host, device, out surfDetail)) surfaces = false;
+            if (!FluentGpu.VerticalSlice.Harness.CompositeInvariants.NoMarkerInsideInlineLayer(host, out markerDetail)) noMarkerInInline = false;
+            var st = host.UiSlices.LastStats;
+            maxFolded = Math.Max(maxFolded, st.Folded);
+            maxEffects = Math.Max(maxEffects, st.EffectSlices);
+            maxAcrylic = Math.Max(maxAcrylic, st.AcrylicSlices);
+            maxFallbacks = Math.Max(maxFallbacks, st.AcrylicFallbacks);
+        }
+        bool inWindow = host.PopupWindows.Count == 0;
+        hPick.Close();
+        for (int i = 0; i < 20; i++) host.RunFrame();
+
+        Check("gate.slices.acrylic-never-folds with the effect budget SPENT (20 opacity/blur effects before the overlay layer), an in-window frosted flyout still cuts its own acrylic slice: the composite holds a Backdrop item whose rounded rect covers the surface on every frame, every acrylic layer op is paired with a backdrop, no acrylic surface is a hole, and no slice marker sits inside an inline group layer",
+            inWindow && framesChecked > 0 && framesFrosted == framesChecked && paired && surfaces && noMarkerInInline
+            && maxFolded >= 1 && maxEffects <= SliceRecorder.EffectSliceCap && maxAcrylic >= 1 && maxFallbacks == 0,
+            $"inWindow={inWindow} frosted={framesFrosted}/{framesChecked} {pairDetail} {surfDetail} {markerDetail} effectSlices={maxEffects} folded={maxFolded} acrylicSlices={maxAcrylic} acrylicFallbacks={maxFallbacks}");
+    }
+
     static void InWindowAcrylicLayerChecks(StringTable strings)
     {
         // gate.overlay.inwindow-acrylic-layer-emitted — a frosted in-window flyout (PopupChrome.Popup, the reactions-
@@ -3449,6 +3560,10 @@ static class OverlaySuite
         // ENABLED. The distinction matters: PopupChrome.Flyout (every menu) leases an HWND and deliberately carries no
         // engine layer — the window material is its backdrop — so a suite that only ever looked at menus would see zero
         // acrylic ops and could not tell "correctly delegated to the OS" from "silently never emitted".
+        // (INTENT, re-stated 2026-09-24: the layer op alone proves nothing. A FOLDED acrylic — one recorded inline once
+        // the effect budget was spent — also wrote that op, and its tile replay erased the plate rect with no backdrop
+        // beneath: a transparent hole this gate passed. The frost exists only as a composite Backdrop item, so the gate
+        // now asserts that item covers the surface every frame and that every acrylic layer op is paired with one.)
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("inwin-acrylic", new Size2(480, 400), 1f));
@@ -3469,8 +3584,9 @@ static class OverlaySuite
                 },
                 FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Popup));
 
-            int framesWithLayer = 0, framesChecked = 0;
-            bool rectCovers = false, recipeOk = false;
+            int framesWithLayer = 0, framesChecked = 0, framesFrosted = 0;
+            bool rectCovers = false, recipeOk = false, paired = true;
+            string pairDetail = "";
             var spec = Tok.AcrylicFlyout;
             for (int i = 0; i < 24; i++)
             {
@@ -3478,6 +3594,8 @@ static class OverlaySuite
                 if (svc.Entries.Count != 1 || svc.Entries[0].SurfaceNode.IsNull) continue;
                 framesChecked++;
                 var surf = host.Scene.AbsoluteRect(svc.Entries[0].SurfaceNode);
+                if (FluentGpu.VerticalSlice.Harness.CompositeInvariants.HasBackdropCovering(device, surf)) framesFrosted++;
+                if (!FluentGpu.VerticalSlice.Harness.CompositeInvariants.AcrylicLayersHaveBackdrops(device, out pairDetail)) paired = false;
                 foreach (var l in device.LastLayers)
                 {
                     if (l.Kind != 0) continue;   // 0 = acrylic; opacity/self-blur/edge-fade groups ride the same opcode
@@ -3495,9 +3613,9 @@ static class OverlaySuite
             hPick.Close();
             for (int i = 0; i < 20; i++) host.RunFrame();
 
-            Check("gate.overlay.inwindow-acrylic-layer-emitted an in-window frosted flyout records an Acrylic PushLayer over its own rect on every frame",
-                stayedInWindow && everyFrame && recipeOk && rectCovers,
-                $"inWindow={stayedInWindow} frames={framesWithLayer}/{framesChecked} recipe={recipeOk} covers={rectCovers}");
+            Check("gate.overlay.inwindow-acrylic-layer-emitted an in-window frosted flyout records an Acrylic PushLayer over its own rect on every frame, FROSTED by a composite Backdrop item covering the surface (every acrylic layer op paired with one)",
+                stayedInWindow && everyFrame && recipeOk && rectCovers && framesFrosted == framesChecked && paired,
+                $"inWindow={stayedInWindow} frames={framesWithLayer}/{framesChecked} frosted={framesFrosted} {pairDetail} recipe={recipeOk} covers={rectCovers}");
         }
 
         // gate.overlay.inwindow-acrylic-not-flat — the composite is NOT the flat plate. AcrylicSpec.CompositeOver is the
@@ -3826,235 +3944,7 @@ static class OverlaySuite
             downOk && texelOk,
             $"down@1x={AcrylicBackdropMath.DownsampleFactor(30f, 1f)} @1.5x={AcrylicBackdropMath.DownsampleFactor(30f, 1.5f)} @2x={AcrylicBackdropMath.DownsampleFactor(30f, 2f)} texelOk={texelOk}");
 
-        // Snapshot region: the layer rect inflated by the FULL blur support (kernelRadiusTexels·down phys px ≈ 3·sigmaPhys)
-        // on every side (so blurred texels under the rect see real backdrop — bit-identical to blurring the whole backdrop
-        // inside the rect), clamped to the canvas at window edges. Pad is derived from the actual kernel, not a constant.
-        int down1 = AcrylicBackdropMath.DownsampleFactor(30f, 1f);                          // 8
-        int rTex1 = AcrylicBackdropMath.KernelRadiusTexels(AcrylicBackdropMath.EffectiveTexelSigma(30f, 1f, down1)); // 12
-        int pad = rTex1 * down1;                                                            // 96 px @ 100% (σ=30)
-        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 200f, 120f), 1f, down1, rTex1, 1920, 1080, out int x, out int y, out int w, out int h);
-        bool interiorOk = x == 200 - pad && y == 160 - pad && w == 200 + 2 * pad && h == 120 + 2 * pad;
-        AcrylicBackdropMath.SnapshotRegion(new RectF(2f, 2f, 60f, 40f), 1f, down1, rTex1, 480, 400, out int cx, out int cy, out int cw, out int ch);
-        bool clampOk = cx == 0 && cy == 0 && cw == 2 + 60 + pad && ch == 2 + 40 + pad;   // left/top clamped at the canvas edge
-        int down2 = AcrylicBackdropMath.DownsampleFactor(30f, 2f);                          // 16
-        int rTex2 = AcrylicBackdropMath.KernelRadiusTexels(AcrylicBackdropMath.EffectiveTexelSigma(30f, 2f, down2)); // 12
-        int pad2 = rTex2 * down2;                                                           // 192 px @ 200% (σ=30)
-        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 100f, 60f), 2f, down2, rTex2, 4000, 4000, out int sx, out int sy, out int sw, out int sh);
-        bool scaleOk = sx == 400 - pad2 && sy == 320 - pad2 && sw == 200 + 2 * pad2 && sh == 120 + 2 * pad2;   // DIP→phys at 200% DPI
-        Check("64n3. acrylic snapshot region: rect inflated by the actual kernel support and clamped to the canvas (phys px, DPI-aware)",
-            interiorOk && clampOk && scaleOk, $"interior={interiorOk} clamp={clampOk} scale={scaleOk} pad={pad}");
-
-        // LayerPool size buckets (gpu-renderer.md §7.1 quantized pow2 buckets, floor 64): monotone, covering, few
-        // distinct sizes ⇒ a steady-state frame re-acquires the same bucket and never creates a texture.
-        bool bucketOk = AcrylicBackdropMath.BucketDim(1) == 64 && AcrylicBackdropMath.BucketDim(64) == 64
-            && AcrylicBackdropMath.BucketDim(65) == 128 && AcrylicBackdropMath.BucketDim(240) == 256
-            && AcrylicBackdropMath.BucketDim(960) == 1024;
-        Check("64n4. acrylic LayerPool buckets: next-pow2 (floor 64) so pooled RTs reuse across layers and frames",
-            bucketOk,
-            $"b(1)={AcrylicBackdropMath.BucketDim(1)} b(65)={AcrylicBackdropMath.BucketDim(65)} b(960)={AcrylicBackdropMath.BucketDim(960)}");
-
-        // 64n5 — retained-backdrop cache decision (AcrylicBackdropMath.BackdropReusable): the §2.3 region-aware reuse
-        // gate (headless half of the AcrylicCompositor pinned-RT cache). A stationary layer reuses its blurred snapshot
-        // when nothing behind it moved; a geometry change OR a damage rect touching its snapshot region forces a re-blur.
-        var stampA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
-        var stampSame = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
-        var stampMoved = AcrylicBackdropMath.Stamp(new RectF(100f, 90f, 300f, 200f), 30f, 1f, 1920, 1080);   // rect moved 10 DIP
-        var stampSource = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
-            sourceId: 42, clipLeft: 90, clipTop: 70, clipRight: 410, clipBottom: 290);
-        var stampOtherSource = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
-            sourceId: 43, clipLeft: 90, clipTop: 70, clipRight: 410, clipBottom: 290);
-        var stampOtherClip = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
-            sourceId: 42, clipLeft: 100, clipTop: 70, clipRight: 410, clipBottom: 290);
-        int down5 = AcrylicBackdropMath.DownsampleFactor(30f, 1f);
-        int rTex5 = AcrylicBackdropMath.KernelRadiusTexels(AcrylicBackdropMath.EffectiveTexelSigma(30f, 1f, down5));
-        AcrylicBackdropMath.SnapshotRegion(new RectF(100f, 80f, 300f, 200f), 1f, down5, rTex5, 1920, 1080, out int qx, out int qy, out int qw, out int qh);
-        var region = new RectF(qx, qy, qw, qh);
-        bool reuseNone = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, default);                                 // nothing moved → reuse
-        bool reuseFar  = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(1500f, 900f, 100f, 80f));       // damage elsewhere (e.g. bottom player bar) → reuse
-        bool reblurHit = !AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(150f, 120f, 40f, 40f));        // damage inside the snapshot region → re-blur
-        bool reblurGeo = !AcrylicBackdropMath.BackdropReusable(stampA, stampMoved, region, default);                               // geometry changed → re-blur
-        bool reblurSource = !AcrylicBackdropMath.BackdropReusable(stampSource, stampOtherSource, region, default);
-        bool reblurClip = !AcrylicBackdropMath.BackdropReusable(stampSource, stampOtherClip, region, default);
-        Check("64n5. acrylic retained-backdrop cache invalidates on geometry, damage, source-target, or clip changes",
-            reuseNone && reuseFar && reblurHit && reblurGeo && reblurSource && reblurClip,
-            $"reuse(none)={reuseNone} reuse(far)={reuseFar} hit={reblurHit} geo={reblurGeo} source={reblurSource} clip={reblurClip}");
-
-        // gate.acrylic.stampSubPixelJitterHits (E7): the stamp rect + scale are QUANTIZED into the cache key, so a
-        // presence-spring settle's sub-pixel rect wobble (<0.5 device px) + a 1-ULP fractional-DPI scale wobble land in
-        // the SAME grid cell/scale bucket ⇒ the stamps compare equal ⇒ the cached blur is reused (no permanent per-frame
-        // re-blur). Composite position stays exact (it reads L.DeviceRect, not the stamp).
-        var jA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
-        var jB = AcrylicBackdropMath.Stamp(new RectF(100.3f, 80.2f, 300.1f, 199.9f), 30f, 1f + 1e-6f, 1920, 1080);
-        var jC = AcrylicBackdropMath.Stamp(new RectF(99.7f, 79.8f, 300.3f, 200.4f), 30f, 1f - 1e-6f, 1920, 1080);
-        bool jitterHits = jA.Equals(jB) && jA.Equals(jC)
-            && AcrylicBackdropMath.BackdropReusable(jA, jB, new RectF(0, 0, 100, 100), default);
-        Check("gate.acrylic.stampSubPixelJitterHits: sub-0.5px rect wobble + 1-ULP scale wobble quantize to the same stamp (reusable)",
-            jitterHits, $"AB={jA.Equals(jB)} AC={jA.Equals(jC)}");
-
-        // gate.acrylic.stampWholePixelMisses (E7): a ≥1 device-px move crosses a grid cell ⇒ the stamps differ ⇒ re-blur.
-        // Verified at 100% DPI (1 DIP = 1 device px) AND at 200% DPI (0.6 DIP = 1.2 device px) — a fractional-DPI-safe move.
-        var wA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
-        var wB = AcrylicBackdropMath.Stamp(new RectF(101.6f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);   // +1.6 device px
-        var wC0 = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 2f, 3840, 2160);
-        var wC1 = AcrylicBackdropMath.Stamp(new RectF(100.6f, 80f, 300f, 200f), 30f, 2f, 3840, 2160); // +1.2 device px @2x
-        bool wholeMisses = !wA.Equals(wB) && !wC0.Equals(wC1);
-        Check("gate.acrylic.stampWholePixelMisses: a >=1 device-px move changes the quantized stamp (re-blur) at 100% and 200% DPI",
-            wholeMisses, $"move1x={!wA.Equals(wB)} move2x={!wC0.Equals(wC1)}");
-
-        // gate.acrylic.tightDamageRegion (E8): reuse tests damage against the TIGHT rect+8, not the kernel-inflated
-        // snapshot region. A damage rect inside the ±KernelRadius·down halo but outside rect+8 ⇒ reusable; one overlapping
-        // the rect ⇒ re-blur. Layer rect (200,160,200,120): tight = (192,152,216,136); inflated pad @/4 = 88 ⇒ 112..488.
-        var tStamp = AcrylicBackdropMath.Stamp(new RectF(200f, 160f, 200f, 120f), 30f, 1f, 1920, 1080);
-        AcrylicBackdropMath.SnapshotRegionTight(new RectF(200f, 160f, 200f, 120f), 1f, 1920, 1080, out int ttx, out int tty, out int ttw, out int tth);
-        var tightR = new RectF(ttx, tty, ttw, tth);
-        bool haloReuse = AcrylicBackdropMath.BackdropReusable(tStamp, tStamp, tightR, new RectF(130f, 160f, 20f, 20f)); // in halo (112..), left of tight 192 → reuse
-        bool rectReblur = !AcrylicBackdropMath.BackdropReusable(tStamp, tStamp, tightR, new RectF(210f, 170f, 20f, 20f)); // inside rect → re-blur
-        bool tightBox = ttx == 192 && tty == 152 && ttw == 216 && tth == 136;
-        Check("gate.acrylic.tightDamageRegion: damage in the blur halo but outside rect+8 reuses; damage on the rect re-blurs",
-            haloReuse && rectReblur && tightBox, $"halo={haloReuse} rect={rectReblur} tight=({ttx},{tty},{ttw},{tth})");
-
-        // gate.acrylic.ownSubtreeDamageCarvedOut (E9): damage entries emitted by the layer's OWN subtree (the contiguous
-        // range [push,pop)) draw ON TOP of its snapshot ⇒ can never invalidate it ⇒ excluded from the reuse test; an entry
-        // OUTSIDE the range that overlaps the tight region still forces a re-blur; DamageOverflow ⇒ the whole-frame union
-        // is used (no carve-out — the safe fallback).
-        ReadOnlySpan<RectF> ownOnly = new[] { new RectF(1500f, 900f, 50f, 50f), new RectF(210f, 170f, 20f, 20f), new RectF(230f, 190f, 20f, 20f) };
-        bool ownCarved = AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, ownOnly, 3, 1, 3, false, default); // idx1,2 own (inside tight) carved; idx0 far → reuse
-        ReadOnlySpan<RectF> withExternal = new[] { new RectF(210f, 170f, 20f, 20f), new RectF(300f, 200f, 10f, 10f) };
-        bool externalBlocks = !AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, withExternal, 2, 1, 2, false, default); // idx0 external inside tight → re-blur
-        bool overflowUnion = !AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, ownOnly, 3, 0, 3, true, new RectF(210f, 170f, 20f, 20f)); // overflow → union inside tight → re-blur
-        Check("gate.acrylic.ownSubtreeDamageCarvedOut: own-subtree entries excluded; an external entry on the tight region re-blurs; overflow falls back to the union",
-            ownCarved && externalBlocks && overflowUnion, $"carved={ownCarved} external={externalBlocks} overflow={overflowUnion}");
-
-        // gate.acrylic.scrollHoldCadence (E10): the scroll-cadence decision (AcrylicScrollHold.ShouldRefresh). A
-        // scrolling page damages EVERY frame, so the damage test above misses every frame and the whole snapshot+Kawase
-        // chain re-ran at frame rate — and so does an inertial coast, a programmatic scroll, or ordinary row-realize
-        // damage under a still popup, none of which carry a literal user drag/wheel. A layer that already HAS a
-        // retained snapshot of the SAME geometry stretches it, refreshing only every Nth frame — the same lever the
-        // self-blur groups' holdBlur pulls — REGARDLESS of what caused the miss (the fix widened this from "only
-        // while a literal user-scroll flag is set" to "any damage-driven miss with an unchanged stamp"). The hold
-        // may NEVER manufacture a backdrop: no retained snapshot, or a changed stamp, refreshes now.
-        const int cad = AcrylicScrollHold.ScrollRefreshCadence;
-        // (a) no retained snapshot (first frame / post-resize / LayerId == 0) ⇒ always refresh, whatever framesHeld reads.
-        bool noRetainedAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(hasRetained: false, stampUnchanged: true, 0, cad)
-            && AcrylicScrollHold.ShouldRefresh(hasRetained: false, stampUnchanged: true, cad - 1, cad);
-        // (b) retained + same stamp ⇒ hold for cad-1 frames, refresh on the cad-th — with NO scroll-input signal at
-        //     all: an inertial coast / programmatic scroll / row-realize miss now gets the exact same cadence a
-        //     literal user scroll used to get exclusively.
-        bool cadenceHolds = true;
-        for (int i = 0; i < cad - 1; i++)
-            if (AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, i, cad)) cadenceHolds = false;
-        bool cadenceRefreshes = AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad - 1, cad)
-            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad + 5, cad);
-        // (c) a CHANGED stamp is never held — the snapshot belongs to a different rect/sigma/scale/source/clip, so
-        //     reusing it would MISPLACE the frost, not merely date it.
-        bool stampChangeAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: false, 0, cad)
-            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: false, 1, cad);
-        // (d) staleness is bounded to cad-1 frames even under a PERMANENT damage-driven miss — no separate "hold
-        //     released" event is needed: the cadence itself is the heal, so the (cad)-th consecutive held frame
-        //     always forces a real refresh regardless of whether anything about the CAUSE of the damage changed.
-        bool boundedStaleness = !AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad - 2, cad)
-            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, cad - 1, cad);
-        // (e) cadence ≤ 1 degenerates to "never hold" (the pre-E10 behavior), and the shipped cadence bounds staleness
-        //     to cad-1 frames (≤25 ms at 120 Hz).
-        bool degenerate = AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, 0, 1)
-            && AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, 0, 0)
-            && cad >= 2 && cad <= 8;
-        Check("gate.acrylic.scrollHoldCadence: an unchanged-stamp retained backdrop is held every Nth frame regardless of what caused the damage miss; no-retained/stamp-change always re-blur, and staleness is cadence-bounded",
-            noRetainedAlwaysBlurs && cadenceHolds && cadenceRefreshes && stampChangeAlwaysBlurs && boundedStaleness && degenerate,
-            $"cad={cad} noRetained={noRetainedAlwaysBlurs} holds={cadenceHolds} refresh={cadenceRefreshes} stamp={stampChangeAlwaysBlurs} bounded={boundedStaleness} degen={degenerate}");
-
-        // gate.acrylic.scrollHoldNonUserMiss (E10 follow-up): AcrylicCompositor.BlurAndComposite drives its
-        // LayersThisFrame/CacheHitsThisFrame diagnostics from exactly this stale/clean/hold algorithm (see the
-        // stampSame/stale/clean/hold sequence around its FindPinned branch) — reproduced headlessly here because the
-        // D3D12 leaf itself has no headless framebuffer (needs-pixels, per this file's header). A still popup's
-        // flyout acrylic sits over a list that damages EVERY frame from something OTHER than a literal drag on the
-        // popup (inertial coast / programmatic scroll / row-realize), so its own geometry stamp never changes:
-        // simulate consecutive always-damaged frames and confirm the resulting hit/refresh counts land on the
-        // cadence — mostly cache hits, with a real refresh landing on schedule rather than never.
-        {
-            var stamp = AcrylicBackdropMath.Stamp(new RectF(200f, 160f, 200f, 120f), 30f, 1f, 1920, 1080);
-            AcrylicBackdropMath.SnapshotRegionTight(new RectF(200f, 160f, 200f, 120f), 1f, 1920, 1080, out int stx, out int sty, out int stw, out int sth);
-            var tight2 = new RectF(stx, sty, stw, sth);
-            var damageEveryFrame = new RectF(210f, 170f, 20f, 20f);   // squarely inside the tight region ⇒ misses every frame
-            int heldFrames = 0, hits = 0, refreshes = 0;
-            const int simFrames = 20;
-            for (int f = 0; f < simFrames; f++)
-            {
-                bool stale = heldFrames > 0;
-                bool clean = !stale && AcrylicBackdropMath.BackdropReusable(stamp, stamp, tight2, damageEveryFrame);
-                bool hold = !clean && !AcrylicScrollHold.ShouldRefresh(hasRetained: true, stampUnchanged: true, heldFrames, cad);
-                if (clean || hold) { hits++; heldFrames = hold ? heldFrames + 1 : 0; }
-                else { refreshes++; heldFrames = 0; }
-            }
-            bool everyFrameIsHitOrRefresh = hits + refreshes == simFrames;
-            bool mostlyHits = hits >= simFrames - (simFrames / cad + 2);      // ~ (cad-1)/cad of frames are cache hits
-            bool refreshesBounded = refreshes >= simFrames / cad - 1;        // a real refresh lands on schedule, not "never"
-            Check("gate.acrylic.scrollHoldNonUserMiss: consecutive always-damaged frames over a still popup (no user-scroll signal) mostly cache-hit via the cadence hold, with periodic bounded refreshes",
-                everyFrameIsHitOrRefresh && mostlyHits && refreshesBounded,
-                $"frames={simFrames} cad={cad} hits={hits} refreshes={refreshes}");
-        }
-
-        SampleWindowPairingChecks();
         KawaseChainChecks();
-    }
-
-    // gate.acrylic.sampleWindowPairing — the portable half of a GPU corruption that had no headless surface: a blur pass
-    // sampling one pooled scratch while clamped with a SIBLING scratch's dimensions. Pooled RT leases are BEST-FIT ≥ the
-    // requested bucket (OpacityLayerCompositor.AcquireScratch), so two leases for the same (w,h) can be physically
-    // different sizes and everything outside a lease's used extent holds stale texels from a previous tenant. The shader's
-    // ONLY guard is the maxUv clamp uploaded with the pass, so a mismatched pair reads that garbage at a wrong texel step
-    // and — for a self-blur, via RetainPinFromScratch — bakes it into a retained region pin (the multicolour streak blocks
-    // in heavily-blurred lyric lines; only σ ≥ 5, i.e. downsample ≥ 2, took that path).
-    //
-    // The D3D12 leaves are unreachable headlessly (TerraFX/COM, render-thread-confined), so the CONTRACT is pinned here at
-    // the helper both leaves now compute through — AcrylicBackdropMath.SampleWindow, which derives texel size, used
-    // fraction and maxUv from ONE (texture dims, used extent) call so the two halves cannot come from different surfaces.
-    // OpacityLayerCompositor.DsBlurPass additionally reads the sampled slot's dims itself (they are no longer a caller
-    // parameter), making the mismatch unrepresentable at the call site.
-    static void SampleWindowPairingChecks()
-    {
-        // (a) Well-formed window for a lease that is LARGER than its used region (the normal bucketed case): texel size is
-        //     1/tex, usedFrac is used/tex, and maxUv sits exactly half a texel inside usedFrac (the bilinear guard).
-        int texW = AcrylicBackdropMath.BucketDim(200), texH = AcrylicBackdropMath.BucketDim(140);   // 256 × 256
-        var w1 = AcrylicBackdropMath.SampleWindow.For(texW, texH, 200, 140);
-        bool shapeOk = MathF.Abs(w1.TexelW - 1f / texW) < 1e-7f && MathF.Abs(w1.TexelH - 1f / texH) < 1e-7f
-            && MathF.Abs(w1.UsedFracX - 200f / texW) < 1e-7f && MathF.Abs(w1.UsedFracY - 140f / texH) < 1e-7f
-            && MathF.Abs(w1.MaxU - (w1.UsedFracX - w1.TexelW * 0.5f)) < 1e-7f
-            && MathF.Abs(w1.MaxV - (w1.UsedFracY - w1.TexelH * 0.5f)) < 1e-7f
-            && w1.MaxU < w1.UsedFracX && w1.MaxV < w1.UsedFracY   // strictly inside the written region
-            && w1.UsedFracX <= 1f && w1.UsedFracY <= 1f;          // never past the surface
-
-        // (b) THE BUG'S SIGNATURE. Pass H leases A (256²) and pass V samples B, which best-fit landed on a LARGER free
-        //     entry (512²). Clamping B with A's dims yields maxUv 0.78 while B's true used region ends at 0.39 — the pass
-        //     samples ~2× beyond everything it wrote, i.e. stale texels of the previous tenant, and at 2× the texel step.
-        //     Correctly pairing B's dims with B's extent keeps maxUv inside B's written region.
-        const int used = 200;
-        int aTex = AcrylicBackdropMath.BucketDim(used);        // 256 — A's lease
-        int bTex = aTex * 2;                                   // 512 — B best-fit onto a bigger free entry
-        var wrong = AcrylicBackdropMath.SampleWindow.For(aTex, aTex, used, used);   // A's dims × B's extent (the corruption)
-        var right = AcrylicBackdropMath.SampleWindow.For(bTex, bTex, used, used);   // B's own pair
-        float bTrueUsedFrac = (float)used / bTex;
-        bool bugSignature = wrong.MaxU > bTrueUsedFrac && wrong.MaxV > bTrueUsedFrac      // reads past B's written region
-            && wrong.TexelW > right.TexelW                                                // and at the wrong texel step
-            && right.MaxU < bTrueUsedFrac && right.MaxV < bTrueUsedFrac                   // the fix stays inside
-            && MathF.Abs(right.UsedFracX - bTrueUsedFrac) < 1e-7f;
-
-        // (c) Why it was INTERMITTENT: when both leases happen to land on the same bucket the mismatched call is
-        //     indistinguishable from the correct one — the corruption only appears once the pool is mixed-size.
-        var sameBucket = AcrylicBackdropMath.SampleWindow.For(aTex, aTex, used, used);
-        bool intermittent = sameBucket.Equals(AcrylicBackdropMath.SampleWindow.For(aTex, aTex, used, used))
-            && !sameBucket.Equals(right);
-
-        // (d) Degenerate/robustness: a full-surface lease clamps at 1 − half texel, and a 0/negative dim can't divide by 0.
-        var full = AcrylicBackdropMath.SampleWindow.For(64, 64, 64, 64);
-        var degen = AcrylicBackdropMath.SampleWindow.For(0, 0, 1, 1);
-        bool edgeOk = MathF.Abs(full.UsedFracX - 1f) < 1e-7f && full.MaxU < 1f
-            && float.IsFinite(degen.TexelW) && float.IsFinite(degen.MaxU);
-
-        Check("gate.acrylic.sampleWindowPairing: blur/copy sample bounds come from the SAMPLED texture's own dims+extent; a sibling lease's dims clamp past the written region",
-            shapeOk && bugSignature && intermittent && edgeOk,
-            $"shape={shapeOk} bug={bugSignature} intermittent={intermittent} edge={edgeOk} " +
-            $"wrongMaxU={wrong.MaxU:0.0000} bUsedFrac={bTrueUsedFrac:0.0000} rightMaxU={right.MaxU:0.0000}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)
@@ -4139,20 +4029,20 @@ static class OverlaySuite
             float cx = vpRect.X + vpRect.W * 0.5f;
             float y = vpRect.Y + vpRect.H * 0.8f;
             uint t = 5000;
-            void Packet(InputKind k, float dy)
+            void Packet(FluentGpu.Scroll.Runtime.ScrollGesture k, float dy)
             {
                 t += 16; y -= dy;
-                window.QueueInput(new InputEvent(k, new Point2(cx, y), 0, 0, ScrollDelta: dy,
-                    Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 7, DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+                window.QueueInput(ScrollPhaseEvent(k, new Point2(cx, y), 0, 0, ScrollDelta: dy,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 7, DeviceClassRaw: DeviceClassIgnored));
                 host.RunFrame();
                 // The command row never moves — its labels must stay recorded+visible on EVERY frame of the gesture,
                 // not just once it settles (a transient mid-motion blank would be just as visible to the user).
                 primaryOkThroughout &= VisibleNow(ContentDialogScrolledBodyProbe.PrimaryLabel);
                 closeOkThroughout &= VisibleNow(ContentDialogScrolledBodyProbe.CloseLabel);
             }
-            Packet(InputKind.ScrollBegin, 0f);
-            for (int i = 0; i < 30; i++) Packet(InputKind.ScrollDelta, 20f);
-            Packet(InputKind.ScrollEnd, 0f);
+            Packet(FluentGpu.Scroll.Runtime.ScrollGesture.Begin, 0f);
+            for (int i = 0; i < 30; i++) Packet(FluentGpu.Scroll.Runtime.ScrollGesture.Sample, 20f);
+            Packet(FluentGpu.Scroll.Runtime.ScrollGesture.End, 0f);
             for (int i = 0; i < 20; i++) host.RunFrame();   // settle after the gesture
         }
 
@@ -4574,21 +4464,16 @@ static class OverlaySuite
             $"σ14=({i14},{o14:0.00}) σ20=({i20},{o20:0.00}) σ30=({i30},{o30:0.00}) rt={roundTrip} bounded={bounded}");
 
         // gate.kawase.padCoversSupport: at each iteration count the snapshot pad (PadPx at the max offset) covers the
-        // chain's blur support, AND SnapshotRegion inflated by that pad actually contains the ±support halo on every side
-        // (mirrors 64n3: unclamped rect grows by 2·pad). down = 1 ⇒ the pad passes straight through as kernelRadius·1.
-        bool padOk = true, regionOk = true;
+        // chain's blur support, so every blurred texel under the rect samples real backdrop.
+        bool padOk = true;
         for (int it = 1; it <= AcrylicKawaseMath.MaxIterations; it++)
         {
             float support = AcrylicKawaseMath.SupportPx(it, AcrylicKawaseMath.OffsetMax);
             int pad = AcrylicKawaseMath.PadPx(it, AcrylicKawaseMath.OffsetMax);
             if (pad < support) padOk = false;
-            AcrylicBackdropMath.SnapshotRegion(new RectF(400f, 300f, 200f, 120f), 1f, 1, pad, 4000, 4000,
-                out int rx, out int ry, out int rw, out int rh);
-            // unclamped (region well inside a 4000² canvas): width = rect + 2·pad, origin = rect − pad
-            if (rx != 400 - pad || ry != 300 - pad || rw != 200 + 2 * pad || rh != 120 + 2 * pad) regionOk = false;
         }
-        Check("gate.kawase.padCoversSupport: snapshot pad ≥ chain support at every iteration count and inflates the region by ±pad",
-            padOk && regionOk, $"padOk={padOk} regionOk={regionOk} pad@4={AcrylicKawaseMath.PadPx(4, 2f)}");
+        Check("gate.kawase.padCoversSupport: snapshot pad ≥ chain support at every iteration count",
+            padOk, $"padOk={padOk} pad@4={AcrylicKawaseMath.PadPx(4, 2f)}");
     }
 
 

@@ -166,6 +166,26 @@ public static partial class Button
                                        GradientSpec.Solid(Tok.StrokeControlDefault), GradientSpec.Solid(Tok.StrokeControlDefault)),
                 Sizing: BackgroundSizing.InnerBorderEdge),
         };
+
+        /// <summary>A page/cover-accent-tinted Accent palette (E1, <c>docs/plans/wavee/home-redesign-implementation.md</c>
+        /// Workstream E) — the same AccentButtonStyle geometry/border as <see cref="For"/>'s <see cref="ButtonAppearance.Accent"/>
+        /// arm, but with the fill/foreground ramp swapped for <paramref name="base"/>'s own <see cref="AccentSet"/> instead
+        /// of the live <see cref="Tok"/> accent. Background = the fill tier (1.0/.90/.80 alpha); Foreground = the
+        /// luminance-picked ink (rest/hover share the primary ink, pressed steps to the secondary/muted ink, matching the
+        /// stock Accent ramp's own rest=hover shape); disabled legs stay the stock <see cref="Tok.AccentDisabled"/>/
+        /// <see cref="Tok.TextOnAccentDisabled"/> (a disabled custom-accent button reads as the neutral disabled accent,
+        /// not a washed-out custom hue). Pass to <see cref="Create"/>'s <c>palette:</c> parameter with
+        /// <see cref="ButtonAppearance.Accent"/> geometry (the default) to keep the stock 32/r4 accent-button shape.</summary>
+        public static ButtonPalette ForAccent(ColorF @base)
+        {
+            var set = AccentSet.From(@base);
+            return new ButtonPalette(
+                Background: new StateBrush(set.Fill, set.FillSecondary, set.FillTertiary, Tok.AccentDisabled),
+                Foreground: new StateBrush(set.Ink, set.Ink, set.InkSecondary, Tok.TextOnAccentDisabled),
+                Border: new BorderRamp(Tok.AccentControlElevationBorder, Tok.AccentControlElevationBorder,
+                                       GradientSpec.Solid(ColorF.Transparent), GradientSpec.Solid(ColorF.Transparent)),
+                Sizing: BackgroundSizing.OuterBorderEdge);
+        }
     }
 
     /// <summary>The border sibling of <see cref="StateBrush"/>: the four interaction-state border gradients (a

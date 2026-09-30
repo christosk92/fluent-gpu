@@ -142,7 +142,7 @@ Chip("signal", op);                             // FloatSignal  → Prop<float>
 Things that trip people up, all enforced by the type (`src/FluentGpu.Engine/Foundation/Signals/Prop.cs`):
 
 - **Inline lambdas need `Prop.Of`.** `Opacity = () => x` does *not* compile bare — C# cannot chain a lambda conversion into a user-defined conversion. Write `Opacity = Prop.Of(() => x)`, or assign a typed `Func<float>` local. A pure pass-through should assign the signal itself (`Opacity = op`) — no closure at all.
-- **A bound channel is wired once at mount and ignores its static sibling.** Pushing a *fresh* thunk on a later re-render is ignored — change the *signal's value*, not the bind. (A bound `with`-clone stays bound.)
+- **A bound channel is wired at mount and ignores its static sibling.** A later re-render that passes a *different* thunk or signal re-wires it to the new source (an unchanged one re-runs nothing); changing the *signal's value* is still the cheap path (one bind fire, no re-render). Keep the channel bound in every render — a static↔bound flip on a reused node silently loses. (A bound `with`-clone stays bound.)
 - **Never use `default(Prop<T>)` to mean "unset".** It is the static `default(T)` (e.g. `Opacity = 0`). Element initializers like `= 1f`/`= NaN` run the `T` conversion and survive `with` clones.
 - **Through an `IReadSignal<T>`-typed variable, use the thunk form** (`chan = Prop.Of(() => s.Value)`) — implicit conversions from the *interface* are illegal in C# (CS0552). The direct `= signal` form works for the concrete `Signal<T>`/`FloatSignal`/`Memo<T>` types.
 

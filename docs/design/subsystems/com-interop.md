@@ -54,7 +54,7 @@ The honest grade (carried from the hardened-v1 ledger): slot/convention is **SAF
 | 8 record | RENDER | reads POD DrawList; no COM call yet. |
 | 9 batch | RENDER | none. |
 | 10 submit | RENDER | hand-vtable `calli`: `ID3D12GraphicsCommandList` record, `ExecuteCommandLists`, `Signal(fence)`. |
-| 11 present | RENDER | hand-vtable `calli`: swapchain `Present1`, `IDCompositionDesktopDevice.Commit`, `IVideoPresenter.Place`. |
+| 11 present | RENDER | hand-vtable `calli`: swapchain `Present` (as built — `Present1` is bound but unused: the `FLIP_DISCARD` swapchain refuses partial presentation, `gpu-renderer.md` §13.1h), `IDCompositionDesktopDevice.Commit`, `IVideoPresenter.Place`. |
 | 13 arena-swap / retire | RENDER | `ComPtr.Dispose` of fence-retired resources via `RhiHandleTable.DrainRetired` (deferred-delete ring). |
 | 12 passive-effects | UI | none. |
 
@@ -348,7 +348,7 @@ The **transitive-forwarding gap** is honest: FGCOM0005 can't see a ComPtr launde
 
 We do **not** eliminate hand-vtable `calli`; we eliminate *hand-typed slots*. The generated structs of §3.1 *are* hand-vtable `calli` — that is the point, per the dotnet10 §4 ruling (`[GeneratedComInterface]` compiles to the same `calli`; on the hot path it only adds a wrapper object + a cache lookup we don't want). The residual surface, all on the render thread, all generated, all `AbiVerify`-checked:
 
-- **D3D12 consume:** `ID3D12GraphicsCommandList` record, `CommandQueue.ExecuteCommandLists`/`Signal`, `Fence`, swapchain `Present1` (phases 10–11).
+- **D3D12 consume:** `ID3D12GraphicsCommandList` record, `CommandQueue.ExecuteCommandLists`/`Signal`, `Fence`, swapchain `Present` (phases 10–11; `Present1` bound, unused as built — `gpu-renderer.md` §13.1h).
 - **DComp consume:** `IDCompositionDesktopDevice.Commit`, `IDCompositionVisual.SetContent`/`SetTransform` for the **multi-visual present tree** (UI swapchain visual z-above a video child visual; the transparent premul-0 hole-punch for `DrawVideoCmd.Dst`) and `IVideoPresenter.Place` (architecture-spec §5.1 amendment + WaveeMusic fold-in).
 - **DWrite consume + the one in-loop CCW:** `IDWriteTextAnalysisSource`/`Sink` callee CCW during `Analyze*` (architecture-spec §5.3, text.md). The *factory* is SHARED and serialized; the shaping CCW is **thread-confined to the single shaping thread** (render thread in v1).
 

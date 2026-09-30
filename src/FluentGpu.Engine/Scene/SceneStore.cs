@@ -257,28 +257,49 @@ public sealed partial class SceneStore : ISceneBackend
     /// host; null on backends that don't use the index-keyed side-tables.</summary>
     public Action<int>? OnFreeIndex { get; set; }
 
-    /// <summary>The kernel's command intake (scroll-v3-plan §3.1) — installed by the host
-    /// (<c>AppHost</c> wires <c>_scene.ScrollPort = _scrollKernel.Port</c>). Null until wired (headless suites /
-    /// probes that never touch scroll never post). <see cref="ScrollRef"/>'s first-create posts
-    /// <c>FluentGpu.Scroll.ScrollInputKind.Bind</c>; <see cref="FreeSubtree"/>'s scroll-row removal posts
-    /// <c>Unbind</c> — both structural, drained by <c>ScrollKernel.Reclamp</c>, no time advance.</summary>
-    public FluentGpu.Scroll.ScrollCommandPort? ScrollPort { get; set; }
+    /// <summary>Host hook: a viewport node's scroll row was just created (<see cref="ScrollRef"/>'s first touch). The
+    /// host binds a <c>ScrollHandle</c> to it (scroll rework §9). Null until wired (headless suites that never scroll).</summary>
+    public Action<int>? OnScrollNodeAdded { get; set; }
 
-    /// <summary>Per-viewport scrollbar "conscious" chrome side-table (scroll-v3-plan §3.1/§4) — FadeT/ExpandT/
-    /// PointerOver/PointerOverScrollbar/IdleMs, moved out of <see cref="ScrollState"/> so motion (kernel-owned) and
-    /// chrome (UI-ticker-owned) can never share a writer. Always present (never null) — construction is cheap (an
-    /// empty side-table) and every scroll-viewport caller (<c>SceneRecorder</c>, <c>ScrollBarChrome</c>) can assume it.</summary>
-    public FluentGpu.Scroll.ScrollBarChromeTable ScrollChrome { get; }
+    /// <summary>Host hook: a viewport node's scroll row is being freed (<see cref="FreeSubtree"/>). The host unbinds and
+    /// forgets its <c>ScrollHandle</c>.</summary>
+    public Action<int>? OnScrollNodeRemoved { get; set; }
 
-    /// <summary>Node-index → live <see cref="FluentGpu.Scroll.ScrollController"/> side-table (scroll-v3-plan §7.2) —
-    /// <see cref="FluentGpu.Scroll.SceneScrollSink.Apply"/>'s ONE-line <c>NotifyMoved</c> call is what republishes an
-    /// attached controller's <c>Offset</c>/<c>Extent</c>/<c>Viewport</c> edge-driven off a real kernel write, never a
-    /// per-frame poll. Always present (never null), same rationale as <see cref="ScrollChrome"/>.</summary>
-    public FluentGpu.Scroll.ScrollControllerRegistry ScrollControllers { get; } = new();
+    /// <summary>The window's plan table (scroll rework §2), installed by the host so layout can shift a viewport's
+    /// plan frame in the same call it commits a measured-extent correction (<c>Virtualizer.ApplyMeasured</c>). Null
+    /// until wired (headless suites that never scroll).</summary>
+    public FluentGpu.Scroll.Runtime.PlanSlots? PlanSlots { get; set; }
 
-    public SceneStore(int capacity = 64)
+    /// <summary>Host hook: the <c>ScrollHandle</c> bound to a live viewport node (controls reach their viewport's handle
+    /// through the scene they already hold). Null when unwired or when the node is not a live scroller.</summary>
+    public Func<NodeHandle, FluentGpu.Scroll.Runtime.ScrollHandle?>? ResolveScrollHandle { get; set; }
+
+    /// <summary>The scroll handle bound to <paramref name="viewport"/>, or null.</summary>
+    public FluentGpu.Scroll.Runtime.ScrollHandle? ScrollHandleFor(NodeHandle viewport) => ResolveScrollHandle?.Invoke(viewport);
+
+    /// <summary>Publisher hook (scroll rework §5): fills a publication's <see cref="FluentGpu.Scroll.Runtime.ScrollCoverageTable"/>
+    /// at capture from the host's UI-side coverage. Null ⇒ the table stays empty (no viewport is posed render-side).</summary>
+    public Action<FluentGpu.Scroll.Runtime.ScrollCoverageTable>? CaptureScrollCoverage { get; set; }
+
+    /// <summary>Per-viewport scrollbar "conscious" chrome side-table — FadeT/ExpandT/PointerOver/PointerOverScrollbar/
+    /// IdleMs, kept out of <see cref="ScrollState"/> so motion and chrome never share a writer. Always present.</summary>
+    public FluentGpu.Scroll.Runtime.ScrollBarChromeTable ScrollChrome { get; }
+
+    // ── app-authored scroll handles (Element.Handle) — the reconciler records the authored handle per viewport node;
+    //    the host binds it (or mints an internal one) when OnScrollNodeAdded fires / at its frame step. UI-thread only.
+    private readonly Dictionary<int, FluentGpu.Scroll.Runtime.ScrollHandle> _authoredHandles = new();
+    public void SetAuthoredScrollHandle(NodeHandle node, FluentGpu.Scroll.Runtime.ScrollHandle? handle)
     {
-        ScrollChrome = new FluentGpu.Scroll.ScrollBarChromeTable();
+        int idx = (int)node.Raw.Index;
+        if (handle is null) _authoredHandles.Remove(idx); else _authoredHandles[idx] = handle;
+    }
+    public bool TryGetAuthoredScrollHandle(int nodeIndex, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Scroll.Runtime.ScrollHandle? handle)
+        => _authoredHandles.TryGetValue(nodeIndex, out handle);
+
+    public SceneStore(int initialCapacity = 64)
+    {
+        ScrollChrome = new FluentGpu.Scroll.Runtime.ScrollBarChromeTable();
+        int capacity = initialCapacity;
         if (capacity < 4) capacity = 4;
         _gen = new uint[capacity];
         _nextFree = new int[capacity];
@@ -332,6 +353,11 @@ public sealed partial class SceneStore : ISceneBackend
 
     /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
     public int Capacity => _gen.Length;
+    /// <summary>A floor <see cref="TrimExcessCapacity"/> (and any other future column-shrinking path) will never cut
+    /// below, on top of its own built-in <c>FloorCap</c> (256): a host that knows its steady-state scene/snapshot size
+    /// (Wavee passes ~8192) sets this once so the idle trim stops re-growing the slab back onto the LOH every cold
+    /// navigation. 0 (the default) keeps today's trim behaviour exactly — the built-in floor alone decides.</summary>
+    public int CapacityFloor { get; set; }
     /// <summary>UI-owned allocation/free revision for one-shot cold tail reclamation; paint/motion do not change it.</summary>
     internal ulong CapacityRevision { get; private set; }
     /// <summary>Live scroll/virtual-viewport rows — O(1) census of the <c>_scroll</c> side-table.</summary>
@@ -450,20 +476,22 @@ public sealed partial class SceneStore : ISceneBackend
                 Debug.Assert(_activeVirtualDisclosureCount > 0);
                 if (_activeVirtualDisclosureCount > 0) _activeVirtualDisclosureCount--;
             }
-            // scroll-v3-plan §3.1: Unbind first (structural, drained by the next Reclamp — the kernel's own body row
-            // is a separate slab, so this must reach it before the row here disappears), then drop the two
-            // side-tables the kernel/chrome never see: this node's ScrollState row and its chrome (fade/expand/
-            // hover) row. Both are index-keyed like OnFreeIndex's other consumers, so they need the same symmetric
-            // teardown — done directly here (not via OnFreeIndex) since ScrollChrome/ScrollPort are SceneStore's own.
-            ScrollPort?.Post(new FluentGpu.Scroll.ScrollInput(FluentGpu.Scroll.ScrollInputKind.Unbind, idx, 0d));
+            // Tell the host first (it unbinds the viewport's ScrollHandle while the row still exists), then drop the
+            // index-keyed side-tables: this node's ScrollState row, its chrome row and its authored handle.
+            OnScrollNodeRemoved?.Invoke(idx);
             ScrollChrome.Clear(idx);
             _scroll.Remove(idx);
-            _extents.Remove(idx);
-            _scrollObs.Remove(idx);
+            _authoredHandles.Remove(idx);
         }
         _grids.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
         if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
+        // Scroll-linked effect rows are index-keyed: a freed slot must not hand its effects (or its engaged signals) to
+        // the next node that reuses the index.
+        if (_scrollEffects.Count != 0) _scrollEffects.Remove(idx);
+        if (_scrollEffectEngaged.Count != 0) _scrollEffectEngaged.Remove(idx);
+        if (_scrollScopes.Count != 0) _scrollScopes.Remove(idx);
+        if (_debugKeys is { Count: > 0 } dk) dk.Remove(idx);   // a reused slot must not inherit a freed node's key (evidence names)
         if ((flags & NodeFlags.InteractionAnim) != 0) _interact.Remove(idx);
         if ((flags & NodeFlags.SparsePaint) != 0)
         {
@@ -496,6 +524,8 @@ public sealed partial class SceneStore : ISceneBackend
             _selectionHighlight.Remove(idx);
             _glyphWipes.Remove(idx);
         }
+        if (_paint[idx].VisualKind == VisualKind.ListRow && (_rowCells.Count != 0 || _rowCellClickHandlers.Count != 0))
+            ReleaseRowCells(idx);
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
@@ -588,7 +618,7 @@ public sealed partial class SceneStore : ISceneBackend
         else _firstChild[p] = c;
         _lastChild[p] = c;
         _childCount[p]++;
-        MarkRecordDirty(c);
+        MarkRecordDirty(c, RecordDirtyLayout);
     }
 
     /// <summary>Attach <paramref name="child"/> as the first child without freeing/recreating it. Used by reverse
@@ -604,7 +634,7 @@ public sealed partial class SceneStore : ISceneBackend
         else _lastChild[p] = c;
         _firstChild[p] = c;
         _childCount[p]++;
-        MarkRecordDirty(c);
+        MarkRecordDirty(c, RecordDirtyLayout);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -617,7 +647,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int p = _parent[c];
         if (p == 0) return;
-        MarkRecordDirty(c);
+        MarkRecordDirty(c, RecordDirtyLayout);
         if (_prevSib[c] != 0) NoteCaptureChanged(_prevSib[c]);   // P8: its captured NextSibling changes below
         if (_prevSib[c] != 0) _nextSib[_prevSib[c]] = _nextSib[c]; else _firstChild[p] = _nextSib[c];
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
@@ -1196,7 +1226,14 @@ public sealed partial class SceneStore : ISceneBackend
     // Record-dirty is the recorder clean-span invalidation bit. It up-propagates because a parent span covers the
     // parent's whole emitted command range, including descendants.
     public const byte RecordDirtyTransform = 1;
+    /// <summary>The node's own paint changed (PaintDirty, creation, text / selection / glyph-wipe writes): its whole
+    /// subtree's pixels may differ — the recorder damages the subtree.</summary>
     public const byte RecordDirtyContent = 2;
+    /// <summary>The node's GEOMETRY or structure may have changed (LayoutDirty, child attach / detach) but not its paint:
+    /// it re-records, and the recorder damages only what actually moved or resized — the node's own old ∪ new extent
+    /// when its box or placement changed, each child the same way (a re-window that re-appends unchanged rows or grows
+    /// the realized range damages nothing but the rows that entered). Shares the content bit's publication stamp.</summary>
+    public const byte RecordDirtyLayout = 4;
 
     public bool AnyRecordDirty => _recordDirtyWroteCount > 0;
 
@@ -1223,9 +1260,6 @@ public sealed partial class SceneStore : ISceneBackend
         uint raw = h.Raw.Index;
         return raw > 0 && raw < (uint)_high && _gen[raw] == h.Raw.Gen ? _recordDirtyDescendant[raw] : (byte)0;
     }
-
-    public bool IsRecordContentDirty(NodeHandle h)
-        => (RecordDirtyBits(h) & RecordDirtyContent) != 0;
 
     public void ClearRecordDirty()
     {
@@ -1279,7 +1313,7 @@ public sealed partial class SceneStore : ISceneBackend
 
     private static byte UnconsumedRecordBits(byte bits, ulong transform, ulong content, ulong consumedSeq)
         => (byte)(bits & ((transform > consumedSeq ? RecordDirtyTransform : 0)
-                       | (content > consumedSeq ? RecordDirtyContent : 0)));
+                       | (content > consumedSeq ? RecordDirtyContent | RecordDirtyLayout : 0)));
 
     private void MarkRecordDirty(int idx, byte bits)
     {
@@ -1299,12 +1333,12 @@ public sealed partial class SceneStore : ISceneBackend
             if (n == idx)
             {
                 if ((bits & RecordDirtyTransform) != 0) stamps.SelfTransform = stamp;
-                if ((bits & RecordDirtyContent) != 0) stamps.SelfContent = stamp;
+                if ((bits & (RecordDirtyContent | RecordDirtyLayout)) != 0) stamps.SelfContent = stamp;
             }
             else
             {
                 if ((bits & RecordDirtyTransform) != 0) stamps.DescendantTransform = stamp;
-                if ((bits & RecordDirtyContent) != 0) stamps.DescendantContent = stamp;
+                if ((bits & (RecordDirtyContent | RecordDirtyLayout)) != 0) stamps.DescendantContent = stamp;
             }
             // P8: the MARKED node's own captured columns changed — that is why it is being marked (a paint ref write, a
             // glyph wipe, a text/layout change) — so its capture row must be re-copied even when its dirty bits were
@@ -1413,7 +1447,8 @@ public sealed partial class SceneStore : ISceneBackend
         if ((flags & NodeFlags.VirtualRangeDirty) != 0 && (old & NodeFlags.VirtualRangeDirty) == 0) _virtualRangeDirty.Add(h);
         byte recordBits = 0;
         if ((flags & NodeFlags.TransformDirty) != 0) recordBits |= RecordDirtyTransform;
-        if ((flags & (NodeFlags.LayoutDirty | NodeFlags.PaintDirty)) != 0) recordBits |= RecordDirtyContent;
+        if ((flags & NodeFlags.LayoutDirty) != 0) recordBits |= RecordDirtyLayout;
+        if ((flags & NodeFlags.PaintDirty) != 0) recordBits |= RecordDirtyContent;
         if (recordBits != 0) MarkRecordDirty(idx, recordBits);
         _flags[idx] = old | flags;
     }
@@ -1470,10 +1505,7 @@ public sealed partial class SceneStore : ISceneBackend
             // P4: a viewport's ArrangeViewport has continuous per-frame obligations that are NOT LayoutDirty-gated
             // (scrolling is layout-free) — mark every ancestor so the Arrange early-out never strands it unreached.
             MarkScrollDescendantChain(idx);
-            // scroll-v3-plan §3.1: a viewport's FIRST creation is the kernel's Bind — structural, drained by
-            // Reclamp() (no time advance), so it's safe to post before this frame's clock exists. T=0 is inert for a
-            // structural command. Null port = headless/no-scroll callers that never wired one.
-            ScrollPort?.Post(new FluentGpu.Scroll.ScrollInput(FluentGpu.Scroll.ScrollInputKind.Bind, idx, 0d));
+            OnScrollNodeAdded?.Invoke(idx);
         }
         return ref s;
     }
@@ -1481,9 +1513,8 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
 
-    /// <summary>Index-based scroll row lookup for the kernel sink (<c>FluentGpu.Scroll.SceneScrollSink.Apply</c>):
-    /// the kernel only ever carries a raw node INDEX (<c>IScrollSink.Apply(int node, …)</c> — no generation, by
-    /// design, scroll-v3-plan §2.1), so this re-derives liveness from the slot's own generation + the
+    /// <summary>Index-based scroll row lookup for callers that only carry a raw node INDEX (the scroll coverage / pose
+    /// sinks, the scrollbar chrome), so this re-derives liveness from the slot's own generation + the
     /// <see cref="NodeFlags.Scrollable"/> bit (set only by <see cref="ScrollRef"/>'s first-create, cleared by the row
     /// removal in <see cref="FreeSubtree"/>) instead of trusting a caller-supplied handle. A late/stray Apply for an
     /// index that was freed (or freed-and-reused by an unrelated node) since the command was posted lands harmlessly
@@ -1649,13 +1680,13 @@ public sealed partial class SceneStore : ISceneBackend
     // A list header laid out ABOVE its list names the list's scroller as the target for wheel input over the header
     // (InputDispatcher.RouteWheelTarget), so the notch glides the LIST instead of the header's own ancestor scroller.
     // Sparse — O(headers), same shape as _hitPassThrough; the slot wraps the reference because ColdSlab is struct-only.
-    private struct WheelTargetSlot { public FluentGpu.Scroll.IWheelTarget? Target; }
+    private struct WheelTargetSlot { public FluentGpu.Scroll.Runtime.ScrollHandle? Target; }
     private readonly ColdSlab<WheelTargetSlot> _wheelTargets = new();
 
     /// <summary>Live wheel-target rows — the dispatcher's O(1) early-out before it walks a hit chain.</summary>
     public int WheelTargetCount => _wheelTargets.Count;
 
-    public void SetWheelTarget(NodeHandle node, FluentGpu.Scroll.IWheelTarget? target)
+    public void SetWheelTarget(NodeHandle node, FluentGpu.Scroll.Runtime.ScrollHandle? target)
     {
         if (!IsLive(node)) return;
         int idx = (int)node.Raw.Index;
@@ -1663,7 +1694,7 @@ public sealed partial class SceneStore : ISceneBackend
         else _wheelTargets.GetOrAdd(idx).Target = target;
     }
 
-    public bool TryGetWheelTarget(NodeHandle node, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Scroll.IWheelTarget? target)
+    public bool TryGetWheelTarget(NodeHandle node, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Scroll.Runtime.ScrollHandle? target)
     {
         if (_wheelTargets.Count != 0 && _wheelTargets.TryGet((int)node.Raw.Index, out var slot) && slot.Target is not null)
         {
@@ -1674,37 +1705,49 @@ public sealed partial class SceneStore : ISceneBackend
         return false;
     }
 
-    // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
-    // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).
-
-    // ── generic scroll-binding slab (design/plans/generic-hookable-scroll-engine-design.md) ──────────────
-    // The reconciler-owned dense slab of ScrollBind rows. The host evaluates them at the offset-write chokepoint
-    // (offset/band/velocity/phase-sourced ops) and the phase-7 pin pass (PinKind ops). Sticky + overscroll-stretch are
-    // two configured rows here — not bespoke passes / private side-tables.
-    private readonly FluentGpu.Animation.ScrollBindTable _scrollBinds = new();
-    public FluentGpu.Animation.ScrollBindTable ScrollBinds => _scrollBinds;
-    /// <summary>O(1) census of live scroll-binding rows (subsumes the old StickyCount).</summary>
-    public int ScrollBindCount => _scrollBinds.Count;
-
-    // ── scroll-geometry observer registry (the change-only escape hatch; ScrollEl.OnScrollGeometryChanged) ──
-    // Node index → projection+action. The reconciler Set/Clears it; the host evaluates the projection after the
-    // integrator settles and fires the action only when the projected long key changes (SwiftUI onScrollGeometryChange).
-    private readonly Dictionary<int, FluentGpu.Animation.ScrollObserverRow> _scrollObs = new();
-    public Dictionary<int, FluentGpu.Animation.ScrollObserverRow> ScrollObservers => _scrollObs;
-    public int ScrollObserverCount => _scrollObs.Count;
-    public void SetScrollObserver(NodeHandle h, Func<FluentGpu.Animation.ScrollGeometry, long>? project, Action<FluentGpu.Animation.ScrollGeometry>? action)
+    // ── scroll-linked effects (scroll rework §8) — node index → its baked effect rows (scope resolved to a node
+    //    index at bake). The host evaluates them after layout (UI-side paint + coverage-table rows for the poser).
+    private readonly Dictionary<int, FluentGpu.Scroll.Effects.ScrollEffect[]> _scrollEffects = new();
+    private readonly Dictionary<int, string> _scrollScopes = new();
+    public Dictionary<int, FluentGpu.Scroll.Effects.ScrollEffect[]> ScrollEffects => _scrollEffects;
+    public int ScrollEffectCount => _scrollEffects.Count;
+    public void SetScrollEffects(NodeHandle h, FluentGpu.Scroll.Effects.ScrollEffect[]? effects)
     {
         int idx = (int)h.Raw.Index;
-        if (project is null || action is null) { _scrollObs.Remove(idx); return; }
-        ref var row = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_scrollObs, idx, out _);
-        // The row is keyed by NODE INDEX, which the handle allocator RECYCLES. A new node landing on a retired index
-        // inherits the previous scroller's projected key, and the change-only gate then swallows the new observer's FIRST
-        // projection — the very fire it needs to seed itself (a shelf remounted onto a recycled index rests off-grid
-        // forever because its settle key happened to equal the dead one's). The key belongs to the node, not the slot.
-        if (row.Node != h) { row.LastKey = 0L; row.HasLast = false; }
-        row.Node = h; row.Project = project; row.Action = action;
+        if (effects is null || effects.Length == 0) _scrollEffects.Remove(idx); else _scrollEffects[idx] = effects;
     }
-    public void ClearScrollObserver(NodeHandle h) => _scrollObs.Remove((int)h.Raw.Index);
+    public bool TryGetScrollEffects(int nodeIndex, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Scroll.Effects.ScrollEffect[]? effects)
+        => _scrollEffects.TryGetValue(nodeIndex, out effects);
+    // The authored engaged-edge signals (ScrollEffectSpec.Engaged), index-aligned with the node's effect rows; present only
+    // when at least one row declares one. UI-thread only (the host writes them before publish; never captured).
+    private readonly Dictionary<int, FluentGpu.Signals.Signal<bool>?[]> _scrollEffectEngaged = new();
+    public void SetScrollEffectEngaged(NodeHandle h, FluentGpu.Signals.Signal<bool>?[]? engaged)
+    {
+        int idx = (int)h.Raw.Index;
+        if (engaged is null) _scrollEffectEngaged.Remove(idx); else _scrollEffectEngaged[idx] = engaged;
+    }
+    public bool TryGetScrollEffectEngaged(int nodeIndex, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FluentGpu.Signals.Signal<bool>?[]? engaged)
+    {
+        if (_scrollEffectEngaged.Count == 0) { engaged = null; return false; }
+        return _scrollEffectEngaged.TryGetValue(nodeIndex, out engaged);
+    }
+    /// <summary>Names <paramref name="h"/> as a sticky scope (<c>Element.ScrollScope</c>); null clears.</summary>
+    public void SetScrollScope(NodeHandle h, string? name)
+    {
+        int idx = (int)h.Raw.Index;
+        if (name is null) _scrollScopes.Remove(idx); else _scrollScopes[idx] = name;
+    }
+    public bool TryGetScrollScope(int nodeIndex, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? name)
+        => _scrollScopes.TryGetValue(nodeIndex, out name);
+    /// <summary>The nearest ancestor of <paramref name="node"/> (inclusive of its parent chain) named <paramref name="scope"/>,
+    /// or Null.</summary>
+    public NodeHandle FindScrollScope(NodeHandle node, string scope)
+    {
+        if (_scrollScopes.Count == 0) return NodeHandle.Null;
+        for (var p = Parent(node); !p.IsNull; p = Parent(p))
+            if (_scrollScopes.TryGetValue((int)p.Raw.Index, out var n) && n == scope) return p;
+        return NodeHandle.Null;
+    }
 
     /// <summary>Get-or-create the variable-height extent table for a viewport, (re)building it on item-count change.</summary>
     public ExtentTable ExtentTableFor(NodeHandle h, int itemCount, float estimate)
@@ -2024,7 +2067,7 @@ public sealed partial class SceneStore : ISceneBackend
             // empty plates on rows that render nothing (B3). O(depth), allocation-free.
             if (!IsHitReachable(node))
             {
-                // Fork-closing trace (compiled out of Release, runtime-gated by FG_DIAG). A target that vanishes from
+                // Fork-closing trace (compiled out of Release, runtime-gated by --fg diag). A target that vanishes from
                 // the spotlight is otherwise indistinguishable from one that was never registered, which is exactly how
                 // a whole PAGE of dead targets reads as "drag is broken" rather than as "these are unreachable".
                 // The Enabled gate is hoisted so the int→object box in Set() cannot land on a drag frame's alloc budget
@@ -2197,13 +2240,41 @@ public sealed partial class SceneStore : ISceneBackend
 
     private NodeHandle Wrap(int idx) => idx == 0 ? NodeHandle.Null : new NodeHandle(new Handle((uint)idx, _gen[idx]));
 
-    /// <summary>Public index → handle wrap (scroll-v3-plan §3.1): <c>FluentGpu.Scroll.IScrollSink.Apply</c> and
-    /// <c>ScrollBarChrome</c> only ever carry a raw node index (the kernel is Scene-agnostic, §2), so this is how
+    /// <summary>Public index → handle wrap: the scroll pose sinks and <c>ScrollBarChrome</c> only ever carry a raw node
+    /// index (the scroll runtime is Scene-agnostic), so this is how
     /// they recover a <see cref="NodeHandle"/> to call the ordinary handle-based scene API (<see cref="Mark"/>,
     /// <see cref="Paint"/>, <see cref="Bounds"/>, …) for the one node they DO need a handle for. Stamps the SLOT'S
     /// CURRENT generation, so freeing bumps it out from under a stale index — callers still check
     /// <see cref="IsLive"/> (or, equivalently here, <see cref="NodeFlags.Scrollable"/>) before trusting the result.</summary>
     public NodeHandle HandleAt(int idx) => Wrap(idx);
+
+    // ── evidence names (docs/plans/evidence-diagnostics-implementation.md §A.5) ─────────────────────────────────────
+    // The Element.Key of every KEYED node, recorded at mount (the reconciler's Mount — mounts already allocate) and
+    // dropped when the node is freed. UI thread only: the render thread stores (index, gen) and the UI resolves names at
+    // export / log time (NodeDescriber). Created on the first keyed mount — a snapshot store never pays for it.
+    private Dictionary<int, string>? _debugKeys;
+
+    /// <summary>Record <paramref name="node"/>'s <c>Element.Key</c> (UI thread, at mount).</summary>
+    public void NoteDebugKey(NodeHandle node, string key)
+    {
+        if (node.IsNull || key.Length == 0) return;
+        (_debugKeys ??= new Dictionary<int, string>(256))[(int)node.Raw.Index] = key;
+    }
+
+    /// <summary>The <c>Element.Key</c> <paramref name="node"/> was mounted with, or null when it is unkeyed (UI thread).</summary>
+    public string? DebugKeyOf(NodeHandle node)
+        => _debugKeys is not null && IsLive(node) && _debugKeys.TryGetValue((int)node.Raw.Index, out var k) ? k : null;
+
+    /// <summary>Every live keyed node and its key (UI thread; the evidence bundle's keyed.tsv — allocates the rows).</summary>
+    public void CopyDebugKeys(List<(NodeHandle Node, string Key)> dst)
+    {
+        if (_debugKeys is null) return;
+        foreach (var kv in _debugKeys)
+        {
+            var h = HandleAt(kv.Key);
+            if (!h.IsNull && IsLive(h)) dst.Add((h, kv.Value));
+        }
+    }
 
     private void Grow() => ResizeColumns(_gen.Length * 2);
 
@@ -2247,7 +2318,10 @@ public sealed partial class SceneStore : ISceneBackend
     public int TrimExcessCapacity()
     {
         int cap = _gen.Length;
-        const int FloorCap = 256;   // never shrink below this — keeps a sane reusable working set, matches the guard
+        const int BuiltInFloorCap = 256;   // never shrink below this — keeps a sane reusable working set, matches the guard
+        // The caller-set floor (0 = none) only ever RAISES the effective floor — it can widen the reusable working
+        // set past BuiltInFloorCap, never shrink below it.
+        int FloorCap = CapacityFloor > BuiltInFloorCap ? CapacityFloor : BuiltInFloorCap;
         if (cap <= FloorCap) return 0;
 
         // Free indices below _high are exactly the freelist members; build the set (transient — idle-time only).

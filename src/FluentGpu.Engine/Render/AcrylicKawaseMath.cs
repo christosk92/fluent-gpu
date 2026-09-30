@@ -1,15 +1,14 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 
 namespace FluentGpu.Render;
 
 /// <summary>
 /// Portable math for the LIVE-BACKDROP acrylic blur run as a <b>dual-Kawase</b> downsample/upsample chain
-/// (ARM SIGGRAPH 2015 dual filter, Bjørge; shipped by KWin / picom / Plasma Better Blur). This replaces the separable
-/// Gaussian of passes B/C in <c>Rhi.D3D12 AcrylicCompositor</c> (design/subsystems/backdrop-effects-animation.md §2.3).
-/// The GPU leaf consumes these values so the σ→chain mapping, the snapshot pad, and the RT-pyramid level dims are all
-/// headless-verifiable in the VerticalSlice while the COM/HLSL stays render-thread-confined in the leaf. The self-blur
-/// (own-content) path in <c>OpacityLayerCompositor</c> keeps the separable pipeline (<see cref="AcrylicBackdropMath"/>);
-/// only the LIVE-BACKDROP path changes.
+/// (ARM SIGGRAPH 2015 dual filter, Bjørge; shipped by KWin / picom / Plasma Better Blur), run by the composite's
+/// backdrop pass (gpu-renderer.md §13) and the baked-blur compute port. The GPU leaf consumes these values so the
+/// σ→chain mapping, the snapshot pad, and the RT-pyramid level dims are all headless-verifiable in the VerticalSlice
+/// while the COM/HLSL stays render-thread-confined in the leaf. The self-blur (own-content) path keeps the separable
+/// pipeline (<see cref="AcrylicBackdropMath"/>).
 ///
 /// <para><b>The chain.</b> Pass A snapshots the backdrop region at FULL resolution (down = 1; see the pad note below);
 /// the chain then runs <c>iterations</c> downsample passes (each halving resolution — the pyramid ½, ¼, ⅛, 1/16 of the

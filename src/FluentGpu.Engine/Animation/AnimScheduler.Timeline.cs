@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Foundation;
 
@@ -53,7 +53,6 @@ public sealed partial class AnimEngine
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;
         _slab.BumpVersion();   // Loop + the row's cadence rewritten in place on a retarget — keep the census memo honest
-        if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Token-policy-aware one-shot keyframes for control primitives whose timeline cannot be represented by a
@@ -86,7 +85,6 @@ public sealed partial class AnimEngine
         r.DrivenSrc = (ushort)drivenRef;
         _keysBySlot[s] = keys;
         _slab.BumpVersion();   // Loop cleared in place on a retarget — keep the census memo honest
-        if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Advance a non-spring row (Eased two-point / Keyframes / Driven) to its value this tick; sets Done.

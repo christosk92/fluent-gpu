@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Layout;
@@ -30,11 +30,11 @@ public sealed class LayoutInvalidator
     /// <summary>LayoutDirty marks this frame's scoped relayout passes consumed — surfaced as
     /// <c>FrameStats.ScopedRelayoutMarks</c>. Always-on. Zero means the worklist was EMPTY, i.e. reconcile decided
     /// nothing about layout shape changed and no solve ran at all; it is the oracle the re-render LayoutDirty gate
-    /// asserts on (MeasureCount/ArrangeCount are only populated under FG_LAYOUT_DIAG).</summary>
+    /// asserts on (MeasureCount/ArrangeCount are only populated under --fg layout).</summary>
     public int DirtyMarksThisFrame { get; private set; }
 
     /// <summary>DEBUG-only best-effort node→key resolver for the escape message (wired by the host to the reconciler).
-    /// Invoked only inside the throttled, FG_DIAG-gated message path, so it costs nothing on Release / when quiet.</summary>
+    /// Invoked only inside the throttled, --fg diag-gated message path, so it costs nothing on Release / when quiet.</summary>
     public Func<NodeHandle, string?>? DebugKeyResolver;
 
     private double _frameNowMs;                       // the host frame clock at frame start (message throttle uses it, not wall time)
@@ -95,7 +95,7 @@ public sealed class LayoutInvalidator
 
     // A dirty node deeper than a direct child (depth > 1) whose relayout search found no boundary and fell back to the
     // scene root: a full-subtree relayout that a fixed-size ClipToBounds boundary (or `.Boundary()`) would have firewalled.
-    // Always counts; the human message is throttled (once per offending node per ~1s of frame time) and FG_DIAG-gated.
+    // Always counts; the human message is throttled (once per offending node per ~1s of frame time) and --fg diag-gated.
     private void NoteEscape(NodeHandle n)
     {
         EscapesThisFrame++;

@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <iterator>   // make_move_iterator — SpliceSamples moves incoming samples in without copying them
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -294,9 +295,24 @@ inline int ComputeBufferedPairs(const std::vector<cenc::Sample>& samples, uint64
 /// NOTHING at or after `next` is ever dropped: those samples have not been handed to Media Foundation yet, and the
 /// ones before `next` that MF already took are copies (MakeSample memcpy's into an IMFMediaBuffer), so erasing them
 /// here cannot pull memory out from under the pipeline. Returns how many samples were dropped.
+///
+/// `outByteBudgetCut` (optional): set to true iff rule 2 (the byte cap) is what removed at least one sample. A pure
+/// rule-1 time trim is normal per-segment housekeeping and must be invisible to a caller tracking "did coverage get
+/// cut out from under a reader" — the feeder's progress guard (PrSession.cpp) watches exactly that signal, and it
+/// firing every segment would reset the guard so often it could never notice a REAL cut (TakeSamples, a truncating
+/// SpliceSamples, or genuinely running out of budget).
+///
+/// `reserveBytes`: room rule 2 must leave FREE under the budget — the feeder passes the size of the segment it is
+/// about to fetch. Without it the cap and the time window deadlocked (2026-09-22, 1080p): the store filled to exactly
+/// the budget with ~30 s of history the 30 s window said to keep, the planner refused every fetch at `>= budget`,
+/// rule 2 evicted nothing at `> budget`, and playback ran into the end of the buffer and starved forever ("video
+/// starved at sample 672 — awaiting fetch", never followed by a fetch). History behind the playhead is the ONE thing
+/// that may yield to forward demand; nothing at/after `next` ever does, so an all-ahead buffer still refuses.
 inline size_t TrimBehindByTime(std::vector<cenc::Sample>& samples, size_t& next, uint64_t timescale,
-                               int64_t retainBehindMs, uint64_t budgetBytes, uint64_t& bytesCounter)
+                               int64_t retainBehindMs, uint64_t budgetBytes, uint64_t& bytesCounter,
+                               bool* outByteBudgetCut = nullptr, uint64_t reserveBytes = 0)
 {
+    if (outByteBudgetCut) *outByteBudgetCut = false;
     if (samples.empty() || next == 0) return 0;
     if (retainBehindMs < 0) retainBehindMs = 0;
 
@@ -313,21 +329,227 @@ inline size_t TrimBehindByTime(std::vector<cenc::Sample>& samples, size_t& next,
         freed += SampleFootprint(samples[drop]);
         drop++;
     }
-    // Rule 2: the byte cap overrides the time window.
+    const size_t droppedByTime = drop;   // rule 1's tally, before rule 2 gets a chance to add to it
+    // Rule 2: the byte cap overrides the time window — and it must leave `reserveBytes` free for the next fetch.
+    const uint64_t cap = budgetBytes > reserveBytes ? budgetBytes - reserveBytes : 0;
     uint64_t held = bytesCounter > freed ? bytesCounter - freed : 0;
-    while (drop < next && held > budgetBytes)
+    while (drop < next && held > cap)
     {
         const uint64_t cost = SampleFootprint(samples[drop]);
         freed += cost;
         held = held > cost ? held - cost : 0;
         drop++;
     }
+    if (outByteBudgetCut && drop > droppedByTime) *outByteBudgetCut = true;
     if (drop == 0) return 0;
 
     samples.erase(samples.begin(), samples.begin() + (ptrdiff_t)drop);
     next -= drop;
     bytesCounter = bytesCounter > freed ? bytesCounter - freed : 0;
     return drop;
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SpliceSamples / IsAscending / ContiguousAheadMs — pure, lock-free, over just the vector + cursor, so a console
+//  test exe can exercise the splice policy without linking Media Foundation.
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// ORDERING KEY DECISION: `samples` is kept ascending in `decodeTicks`, NOT `timeTicks`.
+//
+// Evidence:
+//   * `cenc::ParseMoof` (CencMediaSource.h) walks each `trun` in the order the muxer wrote it — DECODE order — and
+//     `runningDecodeTicks` only ever increases (`runningDecodeTicks += dur` per sample, CencMediaSource.h ~line 689).
+//     `timeTicks` (presentation) is computed from that same decode time plus a per-sample composition offset
+//     (`cto`), which is exactly what makes a B-frame's PRESENTATION time fall behind the frame before it in decode
+//     order — decodeTicks never does that.
+//   * The representation-switch feeder (PrSession.cpp ~511-523) reads `st.ticks[kVideo]` into `ParseSegment`'s
+//     `runningDecodeTicks` and writes it back — that counter is NEVER reset across a segment append OR a quality
+//     switch, so decodeTicks is monotonically non-decreasing across a stream's ENTIRE feed, not just within one
+//     segment. Nothing else in the feed offers that guarantee.
+//   * The existing coverage code already assumes decode-order storage and tolerates the resulting small
+//     presentation reordering rather than requiring strict ascent: `kContiguityToleranceMs`'s own comment says "in
+//     decode order a reordered P frame starts past the running reach of the frame before it; neither is missing
+//     media", and `ComputeBufferedPairs` never breaks on a sample whose `timeTicks` is merely less than a LATER
+///     sample's — it tracks a running MAX (`reach`) and only opens a new range when a start lands beyond
+//     `reach + kContiguityToleranceMs`. `ContiguousAheadMs` below and the hole detector in CencMediaStream follow
+//     the identical pattern for the same reason.
+//   * "Already delivered" is a DECODE-order fact: delivery walks the vector and the vector is in decode order, so
+//     the straddle filter drops `decodeTicks < samples[next].decodeTicks`. (It first filtered on `timeTicks` and lost
+//     the B frames decoded after the cursor's P frame but displayed before it — FeedTests B18b.)
+//   * The truncating splice's STALENESS test alone stays on `timeTicks`: its run starts at a keyframe, the earliest
+//     presentation time of its GOP, and the boundary it is checked against was picked in presentation ms
+//     (`NextSampleTimeMs()` in PrSession.cpp) — a keyframe earlier than the cursor's presentation time would rewind
+//     the picture whatever its decode position.
+//
+// Equal decodeTicks CAN legitimately occur (a muxer emitting a zero-duration sample at a segment's tail), so
+// `IsAscending` requires only NON-DECREASING order, not strict.
+
+/// The result of one SpliceSamples call — everything a caller needs to update its own byte ledger and
+/// generation counter without re-deriving it from the mutated vector.
+struct SpliceOutcome
+{
+    size_t at = 0;               // the array index the incoming run landed at (meaningless when `stale`)
+    size_t removed = 0;
+    size_t added = 0;
+    uint64_t freedBytes = 0;
+    uint64_t addedBytes = 0;
+    bool cutCoverage = false;    // buffered coverage was cut short — bump the caller's generation counter
+    bool stale = false;          // truncating splice refused: the cursor is already past the boundary
+};
+
+/// Insert `incoming` (already in decode order — see the ORDERING KEY DECISION above) so `samples` stays
+/// non-decreasing in `decodeTicks` and nothing the delivery cursor (`next`) has already reached, BY PRESENTATION
+/// TIME, is queued again. `next` is updated to keep pointing at the same logical sample.
+///
+///  - Pure append / wholly-ahead replace / wholly-behind replace: today's behaviour (search the array for the run's
+///    decode-time span, erase-and-insert there).
+///  - NON-truncating straddle (the run's decode span overlaps `next`): the delivery point cannot be moved backward,
+///    so every incoming sample whose PRESENTATION time is earlier than `samples[next]`'s is dropped from `incoming`
+///    BEFORE the span is recomputed and the splice proceeds. If nothing survives, `samples`/`next` are left
+///    untouched and `added == 0`.
+///  - TRUNCATING (`truncateAfter`, a representation switch): the replacement must start at a keyframe and is
+///    decoded from its first sample onward, so it can never be trimmed at the front — it lands whole or is refused.
+///    Refused (`stale = true`, nothing mutated) when the run's first PRESENTATION time is behind what the cursor
+///    has already reached: `samples[next].timeTicks` when the cursor is still inside the buffer, or
+///    `samples.back().timeTicks` when it has drained the buffer (`next == samples.size()`) — landing at/after the
+///    last delivered sample in that drained case is fine. Otherwise everything from the landing point to the end of
+///    the vector is erased (the old representation's tail) and `incoming` takes its place; `cutCoverage` is set
+///    whenever that erase was non-empty, because a truncating splice by definition discards whatever coverage used
+///    to be there.
+///  - `cutCoverage` is also set for a NON-truncating replace whose incoming run's presentation end lands earlier
+///    than the range it replaced (a short demux re-fetch covering less than what it overwrote).
+///  - Byte accounting uses `SampleFootprint`.
+inline SpliceOutcome SpliceSamples(std::vector<cenc::Sample>& samples, size_t& next,
+                                   std::vector<cenc::Sample>&& incoming, bool truncateAfter)
+{
+    SpliceOutcome out;
+    if (incoming.empty()) return out;
+
+    // The decode-time span [startTicks, endTicks) of `incoming` — the array-position search key.
+    auto decodeSpan = [](const std::vector<cenc::Sample>& v, uint64_t& startTicks, uint64_t& endTicks) {
+        startTicks = v.front().decodeTicks;
+        endTicks = startTicks;
+        for (auto const& s : v)
+        {
+            const uint64_t end = s.decodeTicks + s.durTicks;
+            if (end > endTicks) endTicks = end;
+        }
+    };
+
+    if (truncateAfter)
+    {
+        const bool stale = next < samples.size()
+            ? incoming.front().timeTicks < samples[next].timeTicks
+            : (!samples.empty() && incoming.front().timeTicks < samples.back().timeTicks);
+        if (stale) { out.stale = true; return out; }
+
+        uint64_t startTicks, endTicks;
+        decodeSpan(incoming, startTicks, endTicks);
+        size_t lo = samples.size();
+        for (size_t i = 0; i < samples.size(); i++)
+            if (samples[i].decodeTicks >= startTicks) { lo = i; break; }
+        if (lo < next) lo = next;                    // never splice earlier than the delivery cursor
+        const size_t hi = samples.size();             // cut everything from the landing point to the tail
+
+        uint64_t freed = 0;
+        for (size_t i = lo; i < hi; i++) freed += SampleFootprint(samples[i]);
+        out.at = lo;
+        out.removed = hi - lo;
+        out.added = incoming.size();
+        out.freedBytes = freed;
+        for (auto const& s : incoming) out.addedBytes += SampleFootprint(s);
+        out.cutCoverage = out.removed > 0;
+
+        samples.erase(samples.begin() + (ptrdiff_t)lo, samples.begin() + (ptrdiff_t)hi);
+        samples.insert(samples.begin() + (ptrdiff_t)lo, std::make_move_iterator(incoming.begin()),
+                       std::make_move_iterator(incoming.end()));
+        // `lo >= next` always holds here (clamped above), so the cursor's logical position never shifts.
+        return out;
+    }
+
+    uint64_t startTicks, endTicks;
+    decodeSpan(incoming, startTicks, endTicks);
+    size_t lo = samples.size();
+    for (size_t i = 0; i < samples.size(); i++)
+        if (samples[i].decodeTicks >= startTicks) { lo = i; break; }
+    size_t hi = lo;
+    while (hi < samples.size() && samples[hi].decodeTicks < endTicks) hi++;
+
+    if (lo < next && hi > next)
+    {
+        // Straddles the delivery cursor: Media Foundation already has everything before samples[next]. Delivery walks
+        // the vector, and the vector is in DECODE order — so "already delivered" is a decode-time fact, not a
+        // presentation-time one. Filtering on timeTicks (what this first did) also threw away the B frames that are
+        // decoded AFTER the cursor's P frame but displayed BEFORE it: undelivered samples, two per GOP, silently lost
+        // (FeedTests B18b: 38 samples where 40 went in).
+        const uint64_t deliveredDecode = samples[next].decodeTicks;
+        incoming.erase(std::remove_if(incoming.begin(), incoming.end(),
+                                      [&](const cenc::Sample& s) { return s.decodeTicks < deliveredDecode; }),
+                      incoming.end());
+        if (incoming.empty()) return out;   // nothing survives: leave samples/next untouched, added == 0
+        decodeSpan(incoming, startTicks, endTicks);
+        lo = next;
+        while (lo < samples.size() && samples[lo].decodeTicks < startTicks) lo++;
+        hi = lo;
+        while (hi < samples.size() && samples[hi].decodeTicks < endTicks) hi++;
+    }
+
+    uint64_t freed = 0;
+    for (size_t i = lo; i < hi; i++) freed += SampleFootprint(samples[i]);
+    out.at = lo;
+    out.removed = hi - lo;
+    out.added = incoming.size();
+    out.freedBytes = freed;
+    for (auto const& s : incoming) out.addedBytes += SampleFootprint(s);
+
+    if (out.removed > 0)
+    {
+        // A short demux: the incoming run's presentation coverage ends earlier than what it replaced.
+        // The max over the replaced range, not its last element: in decode order the last sample of a GOP is a B
+        // frame whose presentation end is EARLIER than the P frame decoded before it.
+        uint64_t oldEndTime = 0;
+        for (size_t i = lo; i < hi; i++) { const uint64_t e = samples[i].timeTicks + samples[i].durTicks; if (e > oldEndTime) oldEndTime = e; }
+        uint64_t newEndTime = 0;
+        for (auto const& s : incoming) { const uint64_t e = s.timeTicks + s.durTicks; if (e > newEndTime) newEndTime = e; }
+        if (newEndTime < oldEndTime) out.cutCoverage = true;
+    }
+
+    samples.erase(samples.begin() + (ptrdiff_t)lo, samples.begin() + (ptrdiff_t)hi);
+    samples.insert(samples.begin() + (ptrdiff_t)lo, std::make_move_iterator(incoming.begin()),
+                   std::make_move_iterator(incoming.end()));
+    if (lo < next) next = next - out.removed + out.added;   // wholly behind the cursor: same logical sample
+    return out;
+}
+
+/// True iff `samples` is non-decreasing in `decodeTicks` (see the ORDERING KEY DECISION comment above for why
+/// decodeTicks, and why non-decreasing rather than strict).
+inline bool IsAscending(const std::vector<cenc::Sample>& samples)
+{
+    for (size_t i = 1; i < samples.size(); i++)
+        if (samples[i].decodeTicks < samples[i - 1].decodeTicks) return false;
+    return true;
+}
+
+/// The contiguous PRESENTATION-time window starting at `samples[next]`, stopping at the first gap greater than
+/// `kContiguityToleranceMs` — the demand hook's real question ("is the window ahead actually full", not "what is
+/// the span between the first and last buffered sample", which is what AheadDurationMsLocked answers and which a
+/// hole can satisfy without there being anything playable past it). Walked in ARRAY order (decode order) tracking a
+/// running max reach, exactly like ComputeBufferedPairs, so B-frame reordering within a GOP is not mistaken for a
+/// hole. 0 when `next` is out of range.
+inline int64_t ContiguousAheadMs(const std::vector<cenc::Sample>& samples, size_t next, uint64_t timescale)
+{
+    if (timescale == 0 || next >= samples.size()) return 0;
+    const uint64_t tolerance = MsToTicks(kContiguityToleranceMs, timescale);
+    const uint64_t start = samples[next].timeTicks;
+    uint64_t reach = start;
+    for (size_t i = next; i < samples.size(); i++)
+    {
+        const uint64_t sStart = samples[i].timeTicks;
+        if (sStart > reach + tolerance) break;   // hole: the contiguous window stops here
+        const uint64_t sEnd = sStart + samples[i].durTicks;
+        if (sEnd > reach) reach = sEnd;
+    }
+    return reach > start ? (int64_t)(((reach - start) * 1000ULL) / timescale) : 0;
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════

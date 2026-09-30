@@ -13,10 +13,9 @@ namespace FluentGpu.Dsl;
 /// {
 ///     [Expander.PartHeader] = b => b with
 ///     {
-///         ScrollBinds = [ new() { PinTop = 8f, OnFlag = p => stuck.Value = p } ],  // CSS position:sticky + the :stuck observable
-///         Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // restyle ANYTHING off the signal
+///         Fill = Tok.FillSolidBase,                          // restyle ANYTHING
 ///         BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades
-///     },
+///     }.Sticky(top: 8f),                                     // CSS position:sticky (FluentGpu.Scroll.Effects.ScrollEffectDsl)
 /// }
 /// </code>
 ///

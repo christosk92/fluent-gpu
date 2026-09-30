@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -23,6 +23,9 @@ using Strings = FluentGpu.WindowsApp.Strings;
 [GalleryPage("localization", "Localization", "App services", Icon = Icons.Globe)]
 sealed class LocalizationPage : Component
 {
+    /// <summary>A culture to force on mount (<c>--loc-culture &lt;name&gt;</c>); null follows the OS / en-US.</summary>
+    internal static string? ForcedCulture;
+
     // Cultures offered by the picker (must have a loaded JSON table). qps-ploc is the pseudo dev-locale.
     static readonly (string Culture, string Label)[] Languages =
     {
@@ -43,9 +46,9 @@ sealed class LocalizationPage : Component
             Localization.DefaultCulture = "en-US";
             string dir = System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "loc");
             Localization.LoadFolder(dir);
-            // Screenshot/deep-link override: FLUENTGPU_LOC_CULTURE lets the shot harness render a specific language
+            // Screenshot/deep-link override: `--loc-culture <name>` lets the shot harness render a specific language
             // (e.g. pl-PL to capture the four-form plural) without clicking. Falls back to en-US.
-            string? forced = Environment.GetEnvironmentVariable("FLUENTGPU_LOC_CULTURE");
+            string? forced = ForcedCulture;
             if (!string.IsNullOrEmpty(forced)) Localization.SetCulture(forced);
             else if (string.IsNullOrEmpty(Localization.CurrentCulture) || !Localization.Has(Strings.App.Title))
                 Localization.SetCulture("en-US");

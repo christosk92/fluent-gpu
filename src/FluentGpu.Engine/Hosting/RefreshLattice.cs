@@ -5,16 +5,16 @@ namespace FluentGpu.Hosting;
 
 /// <summary>
 /// Pure, static, unit-testable helpers that build <see cref="FrameClock"/> — the ONE target time shared by
-/// DirectManipulation's per-frame <c>Update</c>, the scroll kernel's tick, and (Phase 6) the render-thread fling
-/// lease (scroll-v3-plan-2026-08-17.md §5.1, §13.2). No allocation, no I/O, no seam dependency — <c>AppHost</c> calls
-/// this on the UI thread once per <c>RunFrame</c>; the render thread will call the same statics for the lease (§6.2).
+/// DirectManipulation's per-frame <c>Update</c>, the scroll frame step (<c>AppHost.RunScrollFrame</c>), and the
+/// render-thread <c>ScrollPoser</c>'s present-time prediction. No allocation, no I/O, no seam dependency — <c>AppHost</c> calls
+/// this on the UI thread once per <c>RunFrame</c>.
 /// The frame time is the compositor tick's own vblank instant when the platform display clock is live; there is no
 /// lattice to snap onto because the tick IS the vblank.
 /// </summary>
 public static class RefreshLattice
 {
     /// <summary>
-    /// Builds a real-window <see cref="FrameClock"/> for one produced frame (scroll-v3-plan §5.1 / §13.2). With a live
+    /// Builds a real-window <see cref="FrameClock"/> for one produced frame. With a live
     /// display clock the frame belongs to a compositor tick: <c>FrameQpc</c> is that tick's vblank instant
     /// (<paramref name="tickQpc"/>) — exact, monotone by construction, one per vblank. A STALE tick (the clock was
     /// parked while idle/ambient and hasn't refreshed in over two periods) is re-snapped onto the same lattice instead

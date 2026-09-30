@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
@@ -28,13 +28,6 @@ public enum RepaintFullReason : byte
     /// <summary>The render target itself is not trustworthy: first frame, swapchain resize, DPI change, clear-color
     /// change, device recovery.</summary>
     TargetInvalidated,
-    /// <summary>The backend cannot honour a partial repaint for this frame's stream (blur/acrylic/unknown ops).</summary>
-    BackendUnsupported,
-    /// <summary>The frame claimed "nothing changed" (no rects, no forced full) but its command stream does NOT match the
-    /// one the retained canvas was painted from — so a damage source is missing. The backend repaints in full and
-    /// invalidates the canvas, converting what would be a PERMANENT stale-pixel ghost into one named full frame. Seeing
-    /// this token in <c>dmgFullReason</c> means "find the patch that changes bytes without dirtying a node".</summary>
-    EmptyDamageStreamMismatch,
 }
 
 /// <summary>Backing storage for <see cref="RepaintDamageRegion"/>'s rects — one [InlineArray] so the whole region is a
@@ -47,11 +40,12 @@ internal struct RepaintRectBuffer
 
 /// <summary>
 /// The <b>REPAINT set</b>: every region whose PIXELS may differ from the last presented frame, accumulated on the UI
-/// thread during record and carried across the render seam BY VALUE inside <see cref="FrameInfo"/>. Implements
-/// <c>gpu-renderer.md §13.1</c> / <c>architecture-spec.md</c> "Partial present": up to <see cref="MaxRects"/> merged
-/// rects (world-space float DIPs — the DIP→device rounding-OUT happens at the RHI leaf), or a forced full repaint with
-/// a named <see cref="RepaintFullReason"/>. An empty region with <see cref="RepaintFullReason.None"/> means <b>nothing
-/// changed</b>.
+/// thread during record and carried across the render seam BY VALUE inside <see cref="FrameInfo"/> (gpu-renderer.md
+/// §13): up to <see cref="MaxRects"/> merged rects (world-space float DIPs — the DIP→device rounding-OUT happens at the
+/// RHI leaf), or a forced full repaint with a named <see cref="RepaintFullReason"/>. An empty region with
+/// <see cref="RepaintFullReason.None"/> means <b>nothing changed</b>. The retained-tile composite reads it twice: a
+/// forced-full region invalidates every tile (<c>InvalidationReason.BackgroundOrTheme</c>), and the rects feed the
+/// frame's <see cref="PresentParams"/> dirty-rect census.
 /// <para>
 /// <b>This is NOT <see cref="FrameInfo.Damage"/>.</b> That field is the acrylic backdrop-cache invalidation union: a
 /// single bounding rect over TRANSFORM-moved nodes only, which deliberately EXCLUDES a scroll viewport's own content
@@ -66,7 +60,7 @@ internal struct RepaintRectBuffer
 /// </summary>
 public struct RepaintDamageRegion : IEquatable<RepaintDamageRegion>
 {
-    /// <summary>Accumulator capacity (canon §13.1: "≤16 merged rects"). Past this, the pair whose union wastes the
+    /// <summary>Accumulator capacity (canon §13: "≤16 merged rects"). Past this, the pair whose union wastes the
     /// least area is merged so the newcomer always lands — the region degrades in precision, never in correctness.</summary>
     public const int MaxRects = 16;
 
@@ -142,7 +136,7 @@ public struct RepaintDamageRegion : IEquatable<RepaintDamageRegion>
         Normalize();
     }
 
-    /// <summary>Give up on partial repaint for this frame. The FIRST cause wins — a later, less specific reason must not
+    /// <summary>Give up on a rect-described repaint for this frame. The FIRST cause wins — a later, less specific reason must not
     /// overwrite the one that actually surrendered.</summary>
     public void ForceFull(RepaintFullReason reason)
     {

@@ -106,6 +106,15 @@ internal sealed class CompositorTickFilter
     private long _nextLatticeQpc;
     private bool _hasAccepted;
     private long _lastAcceptedQpc;             // RAW observed instant of the last accepted tick (not its snapped stamp)
+    // The double-tick reference: an IDEALIZED lattice slot that advances by exactly one measured period per accepted
+    // tick, deliberately never the raw/publish instant of that tick. A tick's own OBSERVATION can land late (the waiter
+    // thread got scheduled late, a backstop fired a beat late) without that lateness being a genuine cadence change;
+    // if the ignore window were measured from that late raw instant (as it used to be), the NEXT tick — genuinely on
+    // the original hardware cadence — could land inside half a period of it and be wrongly swallowed as a duplicate
+    // (one late return dropping the next on-time tick). Resets exactly where the display-facing lattice resets (the
+    // first tick since Reset, or a real parked-clock gap over two periods) and otherwise never resyncs to raw.
+    private long _expectedSlotQpc;
+    private long _ignoredCount;                 // always-on: every Ignored verdict, burst or not (see IgnoredCount)
 
     private int _fastBurst;
     private long _burstStartQpc, _burstEndQpc;
@@ -164,6 +173,12 @@ internal sealed class CompositorTickFilter
     /// <summary>Consecutive synthesized ticks in the current run (0 once real hardware ticks resume).</summary>
     public int SynthesizedRun => _synthesizedRun;
 
+    /// <summary>Total <see cref="TickVerdict.Ignored"/> returns for the life of this filter (since construction, NOT
+    /// reset by <see cref="Reset"/> — a reprobe/idle-park does not make the session's double-tick noise disappear).
+    /// Always-on, unlike <see cref="FastBurst"/>'s logged-burst threshold: this is the counter a diagnostics reader
+    /// checks for the single ignored returns that never reach a burst log line.</summary>
+    public long IgnoredCount => _ignoredCount;
+
     /// <summary>Push the window's monitor period (0 = unknown). Re-anchors the slot lattice and cancels a half-made
     /// mode decision, because both are expressed in the period that just changed.</summary>
     public void SetWindowPeriodQpc(long qpc)
@@ -188,6 +203,7 @@ internal sealed class CompositorTickFilter
         _nextLatticeQpc = 0;
         _hasAccepted = false;
         _lastAcceptedQpc = 0;
+        _expectedSlotQpc = 0;
         _fastBurst = 0;
         _burstStartQpc = 0;
         _burstEndQpc = 0;
@@ -234,6 +250,7 @@ internal sealed class CompositorTickFilter
             // The synthesized point IS the assumed vblank: recording it keeps the next real return one period away
             // instead of looking like a multi-period gap that would force a pointless resync.
             _lastAcceptedQpc = synthesized;
+            _expectedSlotQpc = synthesized;   // a synthesized tick IS its own ideal slot — no raw jitter to guard against
             _hasAccepted = true;
             _synthesizedRun++;
             publishQpc = synthesized;
@@ -241,21 +258,27 @@ internal sealed class CompositorTickFilter
         }
 
         // ── success ───────────────────────────────────────────────────────────────────────────────────────────────
-        if (_hasAccepted && nowQpc - _lastAcceptedQpc < DoubleTickWindowQpc)
+        // Measured against the IDEALIZED slot (_expectedSlotQpc), never the raw instant of the last accepted return
+        // (item D). A late OBSERVATION of a real tick must not make the genuinely next, on-time tick look like its
+        // duplicate — see _expectedSlotQpc's remarks.
+        if (_hasAccepted && nowQpc - _expectedSlotQpc < DoubleTickWindowQpc)
         {
             if (_fastBurst == 0) _burstStartQpc = nowQpc;
             _burstEndQpc = nowQpc;
             _fastBurst++;
+            _ignoredCount++;
             return TickVerdict.Ignored;
         }
 
         long tickPeriod = TickPeriodQpc;
         long publish;
-        if (!_hasLattice)
+        bool isFirstTick = !_hasLattice;
+        bool isResyncGap = !isFirstTick && _hasAccepted && nowQpc - _lastAcceptedQpc > 2 * tickPeriod;
+        if (isFirstTick)
         {
             publish = nowQpc;                                   // first tick since Reset: the lattice starts here
         }
-        else if (_hasAccepted && nowQpc - _lastAcceptedQpc > 2 * tickPeriod)
+        else if (isResyncGap)
         {
             publish = nowQpc;                                   // parked clock / sleeping monitor: the phase is gone
         }
@@ -267,6 +290,28 @@ internal sealed class CompositorTickFilter
             // is still "close enough that a constant interval reads smoother" - so one comparison expresses both; the
             // wider of the two is the one that decides.
             publish = drift <= _driftQpc ? _nextLatticeQpc : nowQpc;
+        }
+
+        // Advance the idealized slot along the IDEAL lattice, REGARDLESS of how this tick's own publish/raw instant came
+        // out (unsnapped/late included) — only a first tick or a genuine parked-clock gap resets it to raw.
+        //  • Before the beat is measured, tickPeriod is only the window HINT (20 ms on a 50 Hz panel against an 8.3 ms
+        //    compositor beat): an ideal slot advanced by it would race AHEAD of reality and swallow every real beat as a
+        //    "duplicate", so the beat would never be measured and the slower-panel decimation would never engage. There
+        //    the slot advances one hint period, clamped to the raw instant.
+        //  • Once measured, the slot advances by the WHOLE number of periods that elapsed: a return 2P after the last
+        //    accepted one is the tick after a MISSED one (the waiter was busy), and its ideal slot is +2P. Clamping it to
+        //    +1P (as this used to) left the reference one period behind the real tick, so a spurious second return 0.1 ms
+        //    after it looked a full period late and was published as a second tick. The quarter-period bias rounds a
+        //    return that is merely LATE (observed up to 3/4 of a period after its slot) down to its own slot, so a late
+        //    observation still never makes the next on-time tick look like its duplicate.
+        long measured = _measuredPeriodQpc;
+        if (isFirstTick || isResyncGap) _expectedSlotQpc = nowQpc;
+        else if (measured <= 0) _expectedSlotQpc = Math.Min(_expectedSlotQpc + tickPeriod, nowQpc);
+        else
+        {
+            long periods = (nowQpc - _expectedSlotQpc + measured / 4) / measured;
+            if (periods < 1) periods = 1;
+            _expectedSlotQpc += periods * measured;
         }
 
         if (_hasAccepted) RecordPeriodSample(nowQpc - _lastAcceptedQpc);
@@ -348,6 +393,12 @@ internal sealed class CompositorTickFilter
     private void RecordPeriodSample(long delta)
     {
         if (delta < _minSampleQpc || delta > _maxSampleQpc) return;
+        // A gap of k whole periods (k >= 2) is k-1 MISSED ticks — the waiter was busy under load — not evidence that the
+        // display's period changed. Folding it into the median is what made the published period drift to 2P during a
+        // sustained load (present-time prediction and pacing then ran at half the real rate). A genuine refresh-rate
+        // change arrives with a display topology change, whose reprobe Resets the filter and re-measures from scratch.
+        long measured = _measuredPeriodQpc;
+        if (measured > 0 && delta >= measured + measured / 2) return;
 
         if (_periodCount < PeriodRingSize) _periodRing[_periodCount++] = delta;
         else { _periodRing[_periodHead] = delta; _periodHead = (_periodHead + 1) % PeriodRingSize; }

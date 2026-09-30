@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Reflection;
 using Bench.Contracts;
 using FluentGpu.Hosting;
@@ -70,10 +70,10 @@ internal static class FluentBenchHarness
             Frame();
         }
 
-        // FG_ALLOC_TYPES=1 attribution: AppHost drives AllocTypeProfiler.MaybeReport from its interactive loop, which
+        // `--fg alloc-types` attribution: AppHost drives AllocTypeProfiler.MaybeReport from its interactive loop, which
         // DiagnosticRun replaces — so the harness has to tick it itself or the profiler never prints. Diagnostic-only:
-        // the flag is off in every measured run, and the check is a cached bool.
-        bool allocTypes = Environment.GetEnvironmentVariable("FG_ALLOC_TYPES") is "1" or "true";
+        // the switch is off in every measured run, and the check is a cached bool.
+        bool allocTypes = FluentGpu.Hosting.EngineSwitches.AllocTypes;
         long componentRenders = 0;
 
         FluentPacingTrace.Begin(options.PacingTracePath, options.Iterations, host);

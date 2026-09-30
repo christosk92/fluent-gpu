@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Layout;
@@ -6,7 +6,7 @@ namespace FluentGpu.Layout;
 /// <summary>
 /// Operation ultra-fast GPU engine, P4 — the DEBUG-only correctness oracles for incremental layout. Two of them:
 /// <list type="number">
-/// <item><b><c>FG_LAYOUT_VERIFY=1</c> parity oracle</b> — after a real solve, re-solve the SAME root from scratch with
+/// <item><b><c>--fg layout-verify</c> parity oracle</b> — after a real solve, re-solve the SAME root from scratch with
 /// every incremental short-circuit disabled (the cross-pass Measure ring, the Arrange early-out,
 /// <see cref="TryResolveSizeStable"/>), compare every node's <c>Bounds</c>, then RESTORE the original rects. A
 /// divergence is the signature of a missing dirty mark — the class of bug where the screen keeps last frame's geometry
@@ -16,7 +16,7 @@ namespace FluentGpu.Layout;
 /// not just the node). A mismatch means someone wrote a layout-affecting field without
 /// <c>SceneStore.Mark(…, NodeFlags.LayoutDirty)</c>. Always counted in DEBUG
 /// (<see cref="DiagUnmarkedLayoutWrites"/>, asserted by <c>gate.layout.dirty-mark-tripwire</c>); logged per-node only
-/// under <c>FG_LAYOUT_VERIFY=1</c>.</item>
+/// under <c>--fg layout-verify</c>.</item>
 /// </list>
 /// <para><b>Diagnostics only — never a behaviour switch.</b> Both are compiled out of Release entirely. The oracle
 /// runs under a <c>_verifying</c> latch that suppresses every side effect a second solve would otherwise repeat
@@ -54,7 +54,7 @@ public sealed partial class FlexLayout
     /// <c>[Conditional]</c>-style erased, per the repo's "production safety == CI coverage" rule).</summary>
     public const bool VerifyCompiledIn = true;
 
-    private static readonly bool s_layoutVerify = Diag.EnvFlag("FG_LAYOUT_VERIFY");
+    private static bool s_layoutVerify => FluentGpu.Hosting.EngineSwitches.LayoutVerify;   // `--fg layout-verify`
 
     // The layout-input signature at each node's last REAL arrange (SetArrangedBounds). Superset of LayoutSig: it also
     // folds in the text inputs (TextStyle + the run itself), which LayoutSig deliberately omits because no ANCESTOR
@@ -94,7 +94,7 @@ public sealed partial class FlexLayout
                     _dUnmarkedLayoutWrites++;
                     if (s_layoutVerify)
                         System.Console.Error.WriteLine(
-                            $"[FG_LAYOUT_VERIFY] unmarked LayoutInput write: n#{i} changed under a clean Arrange early-out " +
+                            $"[--fg layout-verify] unmarked LayoutInput write: n#{i} changed under a clean Arrange early-out " +
                             $"rooted at n#{node.Raw.Index} (sig {_verifySig[i]:x} -> {now:x}). A writer skipped Mark(LayoutDirty).");
                     _verifySig[i] = now;   // report each divergence ONCE — a permanent mismatch must not spam every frame
                 }
@@ -130,7 +130,7 @@ public sealed partial class FlexLayout
         return h;
     }
 
-    /// <summary>Force ONE parity check right now, regardless of <c>FG_LAYOUT_VERIFY</c> — the oracle's own test hook
+    /// <summary>Force ONE parity check right now, regardless of <c>--fg layout-verify</c> — the oracle's own test hook
     /// (<c>gate.layout.parity-oracle</c>): it proves the machinery re-solves, compares and RESTORES, on a scene whose
     /// answer is already known to be right. Returns the number of node rects that diverged from a from-scratch solve
     /// (0 = clean), or -1 in a Release build where the oracle is compiled out.</summary>
@@ -143,7 +143,7 @@ public sealed partial class FlexLayout
         return VerifyParityCore(root, window.Width, 0f, 0f, w, h, "VerifyLayoutParityNow", log: false);
     }
 
-    /// <summary>The <c>FG_LAYOUT_VERIFY=1</c> parity oracle. <paramref name="availW"/>/<paramref name="x"/>/… replay
+    /// <summary>The <c>--fg layout-verify</c> parity oracle. <paramref name="availW"/>/<paramref name="x"/>/… replay
     /// exactly the arguments the real solve used.</summary>
     private void VerifyParity(NodeHandle root, float availW, float x, float y, float w, float h, string site)
     {
@@ -180,7 +180,7 @@ public sealed partial class FlexLayout
             if (Near(fresh.X, had.X) && Near(fresh.Y, had.Y) && Near(fresh.W, had.W) && Near(fresh.H, had.H)) continue;
             if (log && mismatches < 16)
                 System.Console.Error.WriteLine(
-                    $"[FG_LAYOUT_VERIFY] {site}: n#{node.Raw.Index} incremental={had} fromScratch={fresh}");
+                    $"[--fg layout-verify] {site}: n#{node.Raw.Index} incremental={had} fromScratch={fresh}");
             mismatches++;
         }
         // Restore unconditionally: the oracle observes, it never decides. Even a genuine divergence leaves the frame
@@ -189,7 +189,7 @@ public sealed partial class FlexLayout
 
         if (log && mismatches > 0)
             System.Console.Error.WriteLine(
-                $"[FG_LAYOUT_VERIFY] {site}: {mismatches}/{_verifyNodeCount} node rects diverge from a from-scratch solve " +
+                $"[--fg layout-verify] {site}: {mismatches}/{_verifyNodeCount} node rects diverge from a from-scratch solve " +
                 "— an incremental short-circuit trusted a subtree that had actually changed (a missing Mark(LayoutDirty)).");
         return mismatches;
 

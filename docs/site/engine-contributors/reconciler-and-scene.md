@@ -158,35 +158,40 @@ provider re-render with the same channel, `Update` writes the signal's value (`e
 **exactly** the subscribed consumers — no context-stack reconstruction, no prop drilling. `Context<T>`/`Ctx.Provide`
 live in `src/FluentGpu.Engine/Hooks/Context.cs`.
 
-## Bindings as mount-time effects (the `Prop<T>` wiring)
+## Bindings as mount-time effects, re-wired on re-render (the `Prop<T>` wiring)
 
 Every bindable channel is **one** `Prop<T>` taking a value, a `Func<T>` thunk, or a concrete signal (the canonical
 surface is owned by [`SPEC-INDEX.md` §2 "Reactive element-prop surface"](../../../design/SPEC-INDEX.md)). The
-reconciler wires a **bound** channel into an effect exactly once, at mount, in `TreeReconciler.BindNode`. Each effect
-reads whichever payload the channel carries (thunk or signal-direct — one null test per fire), writes **one** scene
-column, and marks the matching dirty axis. For example, a bound `BoxEl.Transform`:
+reconciler wires a **bound** channel into ONE effect at mount, in `TreeReconciler.BindNode` — a `BindEffect<T>`
+(`Reconciler.Rewire.cs`) that reads whichever payload the channel carries (thunk or signal-direct — one null test per
+fire) through itself, writes **one** scene column, and marks the matching dirty axis. For example, a bound
+`BoxEl.Transform`:
 
 ```csharp
 // TreeReconciler.BindNode — the compositor-bypass path
 if (b.Transform.IsBound)
 {
-    var tb = b.Transform.Thunk; var ts = b.Transform.Signal;
-    AddBinding(node, new Effect(Runtime, () =>
+    var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.Transform : default);
+    AddBinding(node, fx.Start(() =>
     {
-        if (_scene.IsLive(node))
-        {
-            _scene.Paint(node).LocalTransform = tb is not null ? tb() : ts!.Value;
-            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        }
-    }, owner: null, runNow: true));
+        if (!_scene.IsLive(node)) return;
+        Affine2D next = fx.Read();                       // the CURRENT source (re-wirable), never a captured local
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.LocalTransform == next) return;        // value gate
+        paint.LocalTransform = next;
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }));
 }
 ```
 
 Two contracts make this correct, and you must preserve both when you add a channel:
 
-1. **Bind wiring is mount-only.** A fresh thunk/signal supplied on a re-render is ignored — the signals-first rule is
-   *change the signal's value, not the bind* (`bind.mount-only.stale`). `BindNode` runs from `Mount`, never from
-   `Update`.
+1. **Created at mount, re-wired bound→bound.** `BindNode` runs from `Mount`, never from `Update`. On a re-render,
+   `Update` (behind the DiffProps `RecordChanged` gate) calls `RewireBinds`: a still-bound channel whose thunk/signal
+   payload changed swaps the effect's source and re-runs it once (re-tracking); an equal payload re-runs nothing
+   (`gate.bind.rewire-*`). So a body must read its source via `fx.Read()` and any static companion via `fx.El` (the
+   element last reconciled) — never a local captured at mount. A static↔bound **flip** is not re-wired
+   (`BindContract` flags it).
 2. **The static value is re-asserted on every reconcile only when `!IsBound`.** In `WriteColumns` you will see this
    guard on every bound channel — e.g. `if (!b.Opacity.IsBound) paint.Opacity = b.Opacity.Value;` and
    `if (!b.Width.IsBound) li.Width = b.Width.Value;`. This is the single chokepoint that fixed the historical Opacity

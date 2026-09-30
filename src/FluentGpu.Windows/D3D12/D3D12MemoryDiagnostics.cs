@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
@@ -50,7 +50,7 @@ public readonly struct GpuVideoMemorySnapshot
 
     /// <summary>The swapchain buffer count in flight (constant across swapchains today — <c>D3D12Device.FRAME_COUNT</c>).</summary>
     public uint SwapchainBufferCount { get; init; }
-    /// <summary>The <c>IDXGISwapChain2.SetMaximumFrameLatency</c> value applied at creation (<c>D3D12Device.MAX_FRAME_LATENCY</c>).</summary>
+    /// <summary>The <c>IDXGISwapChain2.SetMaximumFrameLatency</c> value in force (<c>D3D12Device.SetPresentQueueDepth</c>, starting at <c>InitialPresentQueueDepth</c>).</summary>
     public uint MaxFrameLatency { get; init; }
     /// <summary>Present-adapter topology for the primary swapchain — one of <c>D3D12Device.TopologyOwned</c> /
     /// <c>TopologyCross</c> / <c>TopologyNoOutputs</c> / <c>TopologyUnknown</c> (0, before the first resolve).</summary>
@@ -68,7 +68,7 @@ internal static unsafe class D3D12MemoryDiagnostics
     private static int _createCount;
     private static int _releaseCount;
     private static int _resizeCount;
-    private static readonly bool LogEnabled = Diag.EnvFlag("FG_D3D_MEM") || Diag.EnvFlag("FG_DIAG");
+    private static bool LogEnabled => FluentGpu.Hosting.EngineSwitches.D3DMemLog || FluentGpu.Hosting.EngineSwitches.DiagConsole;   // `--fg d3d-mem` / `--fg diag`
 
     public static void Track(ID3D12Resource* resource, string name, ulong bytes)
     {
@@ -78,10 +78,10 @@ internal static unsafe class D3D12MemoryDiagnostics
 
     /// <summary>Device-reported allocation requirement for the EXACT desc about to be handed to
     /// <c>CreateCommittedResource</c> — query this BEFORE creation, on the same <see cref="D3D12_RESOURCE_DESC"/>. The
-    /// ONE shared query every RT/DSV/texture owner uses (image textures via <c>ImageTextureStore</c>, the opacity/
-    /// acrylic/baked-blur canvases, the glyph atlas, the stencil-clip DSV) so none of them tracks a <c>w*h*bpp</c>
-    /// guess as if it were an exact byte count — audit gpu mem-02 (16.5 MiB of DXGI local usage the old pixel formulas
-    /// couldn't account for on the two-canvas partial-opacity route). Zero means unknown/unsupported: the driver
+    /// ONE shared query every RT/DSV/texture owner uses (image textures via <c>ImageTextureStore</c>, the surface pool's
+    /// tiles and scratch, the baked-blur derivatives, the glyph atlas, the stencil-clip DSV) so none of them tracks a
+    /// <c>w*h*bpp</c> guess as if it were an exact byte count — audit gpu mem-02 (16.5 MiB of DXGI local usage the old
+    /// pixel formulas couldn't account for). Zero means unknown/unsupported: the driver
     /// returned 0 or <c>UINT64_MAX</c>, never an inferred estimate. Callers that get 0 back must fall back to their own
     /// formula AND label that entry with <see cref="NameOrUnknown"/> (mirrors <c>ImageTextureStore.TrackTexture</c>'s
     /// labeling) so the diagnostics page keeps telling known bytes from estimated ones.</summary>

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Hosting;
 using FluentGpu.Hooks;
@@ -240,16 +240,13 @@ internal static class MinTrackSizing
 
 /// <summary>Pure classification/deadline math for display-paced native input waits.
 /// <para><b>Deferrable</b> = a message the paced wait may pump without ending the wait early, so the frame that consumes
-/// it is produced on the display tick: pointer MOTION and its companions, and the two wheel packets
-/// (<see cref="WmPointerWheel"/>/<see cref="WmPointerHWheel"/>). A wheel packet loses nothing by waiting for the tick —
-/// the input ring SUMS consecutive wheel deltas (Pal.cs <c>InputEventRing.Enqueue</c>), so the consuming frame sees the
-/// same total, produced IN PHASE instead of slipping one refresh (a wheel packet used to break the wait mid-vblank).
-/// This is safe for the first notch of a gesture because the paced wait only runs under
-/// <c>PlatformInputWakePolicy.CoalescePointerMotion</c>, which <c>AppHost.WaitRequest</c> selects for display-rate waits
-/// alone — an idle host waits with the Immediate policy and wakes on the first packet at once; only notches arriving
-/// during a live glide wait for the tick (≤ one refresh). Wheel packets are NOT <see cref="IsMotion"/> (that census
-/// counts pointer-motion messages only). This class owns no DIP scale: the hi-res wheel branch emits notch UNITS and
-/// the engine's <c>ScrollInputRouter</c> owns the per-viewport distance.</para></summary>
+/// it is produced on the display tick: pointer MOTION and its companions only. The two wheel packets
+/// (<see cref="WmPointerWheel"/>/<see cref="WmPointerHWheel"/>) are URGENT (scroll rework §1 #3): a notch authors its
+/// scroll plan synchronously during dispatch (the host's urgent scroll sink) and the render thread poses it on its next
+/// compositor tick, so a wheel packet parked behind the paced wait would only add a refresh of notch-to-present latency.
+/// Wheel packets are NOT <see cref="IsMotion"/> (that census counts pointer-motion messages only). This class owns no
+/// DIP scale: the hi-res wheel branch emits fractional notches (<c>WheelClassifier.HiResNotch</c>) the engine travels
+/// with the feel's <c>WheelNotchDip</c>.</para></summary>
 internal static class PacedInputWaitClassifier
 {
     internal const uint WmSetCursor = 0x0020;
@@ -260,9 +257,10 @@ internal static class PacedInputWaitClassifier
     internal const uint WmPointerWheel = 0x024E;
     internal const uint WmPointerHWheel = 0x024F;
 
+    // Wheel is URGENT (scroll rework §1 #3): a notch authors its plan during message dispatch and must never wait
+    // behind a paced frame, so WM_POINTERWHEEL/HWHEEL are deliberately NOT in this set.
     internal static bool IsDeferrable(uint message) => message is
-        WmSetCursor or WmNcMouseMove or WmMouseMove or WmNcPointerUpdate or WmPointerUpdate
-        or WmPointerWheel or WmPointerHWheel;
+        WmSetCursor or WmNcMouseMove or WmMouseMove or WmNcPointerUpdate or WmPointerUpdate;
 
     internal static bool IsMotion(uint message) => message is
         WmNcMouseMove or WmMouseMove or WmNcPointerUpdate or WmPointerUpdate;
@@ -282,6 +280,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
                        WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
+                       // Sent when the OS is about to run something that must own input exclusively (a system modal
+                       // dialog, a menu/scrollbar tracking loop it starts itself, drag-drop) — the one loss signal
+                       // neither WM_POINTERCAPTURECHANGED nor WM_CAPTURECHANGED covers, since some of those paths
+                       // never actually take capture away from us before running. Input-capture hardening cancels the
+                       // held primary contact on it and returns false so DefWindowProc still completes the cancel.
+                       WM_CANCELMODE = 0x001F,
                        WM_COPYDATA = 0x004A,   // single-instance activation redirect (SingleInstanceGate → ActivationRedirected)
                        WM_COMMAND = 0x0111,    // menu/accelerator/control; HIWORD==THBN_CLICKED (0x1800) = thumb-toolbar click
                        WM_APPCOMMAND = 0x0319, // mouse side buttons / Back-Forward keys (browser-style navigation)
@@ -298,7 +302,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        WM_DROPFILES = 0x0233;   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
-    private const nuint LiftTimerId = 2;       // SetTimer id for the hi-res fallback silence-lift check (fires even when no frames pump)
+    private const nuint LiftTimerId = 2;       // SetTimer id for the touchpad wheel-fallback silence-lift check (fires even when no frames pump)
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
     //    here as WM_POINTER* (PT_MOUSE/PT_TOUCH/PT_PEN/PT_TOUCHPAD). One contact = one PointerId; implicit contact→window capture
     //    replaces the SetCapture refcount. WM_POINTERWHEEL/HWHEEL REPLACE WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on.
@@ -308,41 +312,32 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        // DM_POINTERHITTEST (directmanipulation.h): the first message of a touchpad manipulation over a
                        // DManip-registered hwnd — the cue to SetContact(pointerId) for PT_TOUCHPAD (scroll-feel-rework-v2 §7).
                        DM_POINTERHITTEST = 0x0250;
-    // ── the wheel-FALLBACK phase producer (docs/plans/scroll-feel-rework-design.md §5) ─────────────────────────────
-    // The hi-res (sub-notch mouse / precision-touchpad-promoted) WM_POINTERWHEEL branch emits ScrollBegin/Update phase
-    // events carrying the raw delta in NOTCH UNITS (raw/120) — no DIP scale lives here any more (the frozen one-machine
-    // 0.11 DIP/unit calibration and its speed multiplier are deleted). The engine's ScrollInputRouter converts units →
-    // DIP with the SAME ScrollFeel.PerNotchDip(viewport, lineDip) scale the detented Wheel path uses, so 120 raw units
-    // always travel one notch whether they arrive as one packet or twenty. The old soft-knee (s_tpScale/s_tpKnee/
-    // s_tpMaxRaw) and the engine's second gain curve stay DELETED. Lift = packet silence (PumpInto / LiftTimerId).
-    /// <summary>Raw wheel-delta units per device notch (WHEEL_DELTA). The hi-res branch divides by this to emit notch units.</summary>
-    private const float WheelDeltaPerNotch = 120f;
-    /// <summary>Default packet-silence (ms) after which the fallback gesture ends before any cadence is observed. The live
-    /// threshold is <see cref="_hiResLiftMs"/>, adaptive = clamp(1.4×median inter-packet gap, 50, 120) — §5/§6 lift
-    /// adaptivity. ScrollEnd is stamped with the LAST packet's QPC/time, never the detection wall-clock.</summary>
-    private const uint HiResLiftDefaultMs = 80;
-    private const uint HiResLiftMinMs = 50, HiResLiftMaxMs = 120;
-    private uint _hiResLiftMs = HiResLiftDefaultMs;   // the live, cadence-adaptive silence threshold
-    private bool _fbActive;         // a fallback contact gesture is live (hi-res packets flowing)
-    private byte _fbSeq;            // per-gesture packet ordinal (diagnostics; wraps)
-    private uint _fbLastMs;         // last hi-res packet's message time — the synthesized lift stamp
-    private long _fbLastQpc;        // last hi-res packet's QPC stamp — the synthesized lift stamp
-    private Point2 _fbLastPos;      // last hi-res packet's position (the ScrollEnd position)
-    // Observed inter-packet gaps (ms), a fixed ring — the adaptive lift threshold is 1.4× their median. Zero-alloc: a
-    // small stackalloc + insertion sort at compute time (§6 lift adaptivity).
+    // ── hi-res wheel = fractional notches; touchpad wheel fallback = a contact stream ─────────────────────────────
+    // A hi-res (sub-notch) MOUSE wheel has no lift: each packet is a FRACTIONAL notch (raw/120,
+    // WheelClassifier.HiResNotch) on the same accumulating cubic a detented notch rides — WinUI InteractionTracker /
+    // Chromium / Firefox smooth-wheel — so 120 raw units travel exactly one notch whether they arrive as one packet or
+    // twenty, and the content stops where the wheel stopped (no silence-detected "lift", no coast).
+    // Only TOUCHPAD-evidenced packets outside DirectManipulation (e.g. a pan over a popup) still form a Begin/Sample/End
+    // contact stream (ScrollSource.Touchpad, DIP via WheelClassifier.TouchpadWheelSample) whose lift is packet silence
+    // (PumpInto / LiftTimerId) — that End is flagged LiftDetectedLate.
+    /// <summary>Default packet-silence (ms) after which a touchpad wheel-fallback gesture ends before any cadence is observed. The live
+    /// threshold is <see cref="_fbLiftMs"/>, adaptive = clamp(1.4×median inter-packet gap, 50, 120). The End is
+    /// stamped with the LAST packet's QPC/time, never the detection wall-clock.</summary>
+    private const uint FallbackLiftDefaultMs = 80;
+    private const uint FallbackLiftMinMs = 50, FallbackLiftMaxMs = 120;
+    private uint _fbLiftMs = FallbackLiftDefaultMs;   // the live, cadence-adaptive silence threshold
+    private bool _fbActive;         // a touchpad wheel-fallback contact stream is live (touchpad-evidenced packets flowing)
+    private uint _fbLastMs;         // last fallback packet's message time — the synthesized lift stamp
+    private long _fbLastQpc;        // last fallback packet's QPC stamp — the synthesized lift stamp
+    private Point2 _fbLastPos;      // last fallback packet's position (the End position)
+    private uint _fbPointerId;      // the pointer id the live stream opened with (one gesture at a time)
+    // Observed inter-packet gaps (ms), a fixed ring — the adaptive lift threshold is 1.4× their median.
     private const int GapRingSize = 8;
     private readonly uint[] _gapRing = new uint[GapRingSize];
     private int _gapCount, _gapHead;
-    // The silence-lift CHECK clock. MUST be monotonic wall time, never GetMessageTime: message time only advances when
-    // a message is RETRIEVED, and a two-finger pan moves no cursor — so after the last wheel packet nothing advanced
-    // Now() and the 80ms check could not trip until some unrelated message landed (measured on-device: ScrollEnd fired
-    // 83-843ms late, quantized to background message traffic — felt as "content freezes, then flings on its own", and
-    // an overscrolled pan held its band stretched until a random later message). The lift STAMP on the event stays the
-    // last packet's message time/QPC (design §2 — the velocity window must evaluate against the true lift).
-    private long _fbLastTick;       // Environment.TickCount64 when the last hi-res packet was handled
-    // The lift timer is re-armed at most once per half lift window, not per 4 ms packet (a SetTimer syscall per packet
-    // was measurable on the paced frame). With the timer periodic until KillTimer, the idle-loop backstop fires at most
-    // 1.5× _hiResLiftMs after the last packet; a live loop still detects the lift on the frame pump at exactly _hiResLiftMs.
+    // The silence-lift CHECK clock. MUST be monotonic wall time, never GetMessageTime (which only advances when a
+    // message is RETRIEVED — a two-finger pan moves no cursor, so after the last packet nothing advanced it).
+    private long _fbLastTick;       // Environment.TickCount64 when the last fallback packet was handled
     private long _fbLastArmTick;    // Environment.TickCount64 of the last SetTimer(LiftTimerId) arm
     private const long ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000L;
     private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
@@ -367,13 +362,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const uint MF_BYCOMMAND = 0x0, MF_ENABLED = 0x0, MF_GRAYED = 0x1;
     private const uint TPM_RETURNCMD = 0x0100;
     private const uint SWP_FRAMECHANGED = 0x0020, SWP_NOSIZE = 0x0001;
-    // DIP per wheel notch (120 units) for ELEMENT-level PointerWheel handlers ONLY (e.g. NumberBox). The VIEWPORT scroll
-    // distance no longer uses this flat value — it derives from the per-event WheelNotch count as max(48 DIP, 10%·viewport)·
-    // lines/3 per notch in the dispatcher (the WinUI content-relative wheel line height, ScrollTuning.PerNotchDip).
-    private const float WheelDipPerNotch = 60f;
-    // Page-mode (SPI WHEEL_PAGESCROLL) per-notch line-equivalent: the producer can't see the viewport, so it approximates
-    // ~0.875·vp by a fixed lines multiplier (0.10·vp·8.75 ≈ 0.875·vp where the viewport-relative term dominates the 48-DIP
-    // floor). The exact 0.875·vp needs the engine's WheelLinesMultiplier plumbing (scroll-feel-rework-v2 §3.2 / §6).
+    // Page-mode (SPI WHEEL_PAGESCROLL) per-notch line-equivalent: the producer cannot see the viewport, so it approximates
+    // ~0.875·vp by a fixed lines multiplier on the notch count.
     private const float PageScrollLinesEquivalent = 8.75f;
     // POINTER_INPUT_TYPE (winuser.h): the physical device class behind a WM_POINTER message.
     private const uint PT_TOUCH = 2, PT_PEN = 3, PT_MOUSE = 4, PT_TOUCHPAD = 5;
@@ -388,14 +378,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // with a real OS pointer id (and past InputEventRing.IdSlots so it is simply not coalesced against a real contact).
     private const uint NcSyntheticPointerId = 0xFFFFFFFE;
 
-    // FG_NC_DIAG=1: trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
+    // `--fg nc` (EngineSwitches.NcDiag): trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
     // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
     // fire" with evidence instead of guesses.
-    private static readonly bool s_ncDiag =
-        System.Environment.GetEnvironmentVariable("FG_NC_DIAG") is "1" or "true";
-    // Default-on production path; FG_PRECISE_WAIT=0 is the same-binary A/B/fallback switch.
-    private static readonly bool s_preciseWait =
-        System.Environment.GetEnvironmentVariable("FG_PRECISE_WAIT") != "0";
+    private static bool s_ncDiag => FluentGpu.Hosting.EngineSwitches.NcDiag;
+    // Default-on production path; `--fg no-precise-wait` is the same-binary A/B/fallback switch.
+    private static bool s_preciseWait => FluentGpu.Hosting.EngineSwitches.PreciseWait;
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
@@ -422,6 +410,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // OS file/folder drop is handled by Win32DropTarget (a hand-rolled OLE IDropTarget registered via RegisterDragDrop);
     // its shell32/ole32 P/Invokes live there. (The WM_DROPFILES constant below is retained but inert — RegisterDragDrop
     // suppresses WM_DROPFILES.)
+
+    // ── single-instance tag (docs/plans/evidence-diagnostics-implementation.md §A.7) ──
+    // The primary of a single-instance app stamped its instance id on FluentGpu.Pal.InstanceIdentity when it won the
+    // election; the window it creates carries that id's tag as a window property, so a secondary launch of the SAME id
+    // redirects here and one of ANOTHER id (a --profile run beside the user's own) never does (SingleInstanceGate).
+    [LibraryImport("user32.dll", EntryPoint = "SetPropW", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetInstanceProp(nint hWnd, string lpString, nint hData);
 
     // ── pointer-input interop (winuser.h; not in TerraFX's static-import set, declared locally like the Win32App P/Invokes) ──
     // EnableMouseInPointer is process-wide and irreversible: after it, the mouse no longer raises WM_MOUSE*/WM_MOUSEWHEEL —
@@ -455,7 +451,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetPointerPenInfo(uint pointerId, POINTER_PEN_INFO* penInfo);
 
-    // Display-refresh query (diagnostic-only, FG_FPS_LOG resize line). GetDeviceCaps(VREFRESH) on the window DC reports the
+    // Display-refresh query (diagnostic-only, --fg fps resize line). GetDeviceCaps(VREFRESH) on the window DC reports the
     // vertical refresh (Hz) of the display this window is on — the honest panel/mode rate to compare against the observed
     // present cadence (a maximize that locks to 60 on a logged 120 Hz panel is a present/GPU miss-vblank, not a mode drop).
     private const int VREFRESH = 116;   // wingdi.h GetDeviceCaps index
@@ -464,7 +460,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     [LibraryImport("gdi32.dll")] private static partial int GetDeviceCaps(nint hdc, int index);
 
     /// <summary>Vertical refresh (Hz) of the display this window is currently on, via <c>GetDeviceCaps(VREFRESH)</c> on the
-    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only (the FG_FPS_LOG
+    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only (the --fg fps
     /// resize line); call sparingly (once per size change), not per frame. DirectManipulation no longer has a pacer to
     /// re-point at this rate — it is driven once per PRODUCED frame from <see cref="FluentGpu.Pal.FrameClock"/>
     /// (scroll-v3-plan-2026-08-17.md §5.2), not a fixed millisecond interval.</summary>
@@ -550,47 +546,26 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // device API — is the reliable classifier. We latch the mode for the whole gesture and only re-evaluate after an idle
     // gap, so a stray 120-multiple mid-stream can't flip the physics path (a true mouse is always 120-multiples).
     private uint _lastWheelMs;
-    private bool _wheelHiRes;
-    // A hi-res stream the OS POSITIVELY identified as a physical mouse (a free-spin wheel) — latched per gesture like
-    // _wheelHiRes, and any touchpad evidence in the gesture wins. Its fallback phase events are tagged Mouse so the
-    // scroll kernel clamps at the edge instead of rubber-banding (a wheel has no contact to stretch against; Flutter's
-    // pointerScroll clamps wheel input under bouncing physics too). An UNRESOLVED source stays Touchpad: this hardware
-    // often cannot resolve a precision touchpad's PT_MOUSE-promoted packets (above), and a touchpad pan keeps its band.
-    private bool _wheelMouseSeen, _wheelTouchpadSeen;
-    private PointerKind _fbPointer = PointerKind.Touchpad;   // the tag of the live fallback gesture (its lift reuses it)
-    private const uint WheelGestureGapMs = 200;   // gap that ends a wheel gesture and re-evaluates the hi-res latch
-    // Detented signed per-axis carryover (§3.2, the SumatraPDF #3032 fix): accumulate raw ×120 units, emit whole notches
-    // per 120 crossed, keep the signed remainder, reset on a direction change. Reset (with the gesture) on an idle gap.
+    // The pure wheel classifier (FluentGpu.Scroll.Runtime.WheelClassifier): device evidence → Touchpad; sub-notch delta →
+    // hi-res; else a detented mouse — latched per gesture, re-evaluated after a WheelClassifier.GestureGapMs silence.
+    private FluentGpu.Scroll.Runtime.WheelClassifier _wheelClassifier;
+    // Detented signed per-axis carryover: accumulate raw ×120 units, emit whole notches per 120 crossed, keep the
+    // signed remainder. Reset with the gesture on an idle gap.
     private int _wheelAccumX, _wheelAccumY;
+    // The host's URGENT scroll sink (IPlatformWindow.SetScrollInputSink): a wheel notch is delivered synchronously from
+    // the message itself so its plan is authored before any frame runs; null ⇒ queue it like every other event.
+    private Action<FluentGpu.Scroll.Runtime.ScrollInputEvent>? _scrollSink;
 
-    /// <summary>ScrollTrace rawWheel i1 flag bits (see <see cref="FluentGpu.Foundation.ScrollTrace.RawWheel"/>): the
-    /// classifier's full verdict for one packet, so misclassification (e.g. an exact-±120 touchpad packet latching the
-    /// detented path) is directly visible in the trace.</summary>
-    private int WheelTraceFlags(bool horizontal, bool thisHiRes, bool streamIdle, bool ptTouchpad, bool ctrl, bool phasePath, bool fbActiveBefore)
-        => (horizontal ? 1 : 0) | (thisHiRes ? 2 : 0) | (streamIdle ? 4 : 0) | (_wheelHiRes ? 8 : 0)
-         | (ptTouchpad ? 16 : 0) | (ctrl ? 32 : 0) | (phasePath ? 64 : 0) | (fbActiveBefore ? 128 : 0);
+    /// <inheritdoc cref="IPlatformWindow.SetScrollInputSink"/>
+    public void SetScrollInputSink(Action<FluentGpu.Scroll.Runtime.ScrollInputEvent>? sink) => _scrollSink = sink;
 
-    // ── swallowed-packet trace row (observability only) ──────────────────────────────────────────────────────────────
-    // A wheel packet DM owns is swallowed above every rawWheel emit site (HandlePointerWheel), so it would otherwise
-    // leave NO trace row at all — in a capture that is indistinguishable from a notch the user never rolled. This row
-    // makes the swallow visible without duplicating the surviving packets' rows (it fires only on the one path that
-    // currently emits nothing, so the "one rawWheel row per delivered packet" invariant still holds; a swallow row is
-    // identified by bit 8 and delivers no InputEvent).
-    //   i1 bit 8 (256) = SWALLOWED by the producer; reason = (i1 >> 9) & 7 (bits 1-128 keep their classifier meaning):
-    //     1 = DM RUNNING owns this packet — device evidence says touchpad, or the source could not be positively
-    //         resolved to a physical mouse (a positively identified mouse takes over instead — HandlePointerWheel).
-    private const int WheelTraceSwallowed = 256;
-    private const int WheelSwallowDmLive = 1 << 9;
-
-    private void TraceWheelSwallow(int notch, int reason, bool horizontal, bool thisHiRes, bool streamIdle, bool ptTouchpad,
-                                   uint wheelGapMs, bool phasePath = false)
+    /// <summary>Deliver a scroll input: synchronously through the urgent sink when the host installed one, else queued.</summary>
+    private void DeliverScroll(in FluentGpu.Scroll.Runtime.ScrollInputEvent e, PointerKind pointer, uint timestampMs)
     {
-        if (!FluentGpu.Foundation.ScrollTrace.CompiledIn || !FluentGpu.Foundation.ScrollTrace.Enabled) return;
-        FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-            WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: phasePath, fbActiveBefore: _fbActive)
-                | WheelTraceSwallowed | reason,
-            _fbSeq, 0f, wheelGapMs, 0);
+        if (_scrollSink is { } sink) sink(e);
+        else _queue.Enqueue(InputEvent.ForScroll(in e, pointer, timestampMs));
     }
+
 
     private readonly Dictionary<nint, bool> _touchpadDeviceCache = new();   // source HANDLE -> POINTER_DEVICE_TYPE_TOUCH_PAD
     private readonly GCHandle _self;
@@ -662,13 +637,21 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private bool _ncTracking;     // TME_NONCLIENT leave-tracking armed (legacy WM_NCMOUSE* fallback only)
     private bool _ncPointerSeen;  // a WM_NCPOINTER* arrived → the legacy WM_NCMOUSE* fallback stands down (no double-fire)
     private bool _active = true;  // WM_(NC)ACTIVATE — IsActive pull side
-    // ── the content-driven window MOVE (BeginSystemMove — the chromeless pop-out video) ──────────────────────────────
+    // ── the primary contact (input-capture hardening) ───────────────────────────────────────────────────────────────
     // The primary mouse/pen contact currently down in the client (set/cleared in PointerDownUp, cleared on its
-    // WM_POINTERCAPTURECHANGED) — the contact an OS move loop started from it will capture.
+    // WM_POINTERCAPTURECHANGED and by every loss path through CancelPrimaryContact).
     private uint _primaryDownId;
     private bool _primaryDown;
-    private bool _engineMovePending;   // our WM_NCLBUTTONDOWN is posted and has not reached the WndProc yet
-    private bool _engineMoveLoop;      // the move we requested has not ended yet (pairs the [window.move] lines + the no-loop end)
+    // ── input capture hardening (2026-09-22) ────────────────────────────────────────────────────────────────────────
+    // Mouse-in-pointer's implicit per-contact capture (§ above) is the ONLY thing that used to hold a drag: nothing
+    // stopped that implicit capture from being silently dropped mid-gesture — a WM_POINTERLEAVE synthesizes a park move
+    // to OffscreenDip (-10000,-10000) for whatever contact is still "down" in engine terms, and a latched OnDrag node
+    // (a Slider track scrub, a captured drag) took that as a real sample: the picture (or the slider thumb) flings
+    // across the desktop to the offscreen park point. A REAL Win32 SetCapture on the primary mouse press closes every
+    // one of the OS-visible loss paths (WM_CAPTURECHANGED, WM_CANCELMODE) with one signal, on top of the existing
+    // per-pointer WM_POINTERCAPTURECHANGED; CancelPrimaryContact is the ONE place that tears the engine's notion of
+    // "primary contact held" down, so every loss path funnels through the same cancel + the same diagnostic line.
+    private bool _captureHeld;   // true between the primary MOUSE press's SetCapture and its release/loss
     private bool _fullscreen;
     private bool _windowedWasZoomed;
     private nint _windowedStyle;
@@ -768,6 +751,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }
         s_constructing = null;
+        if (InstanceIdentity.Current is { Length: > 0 } instanceId)
+            SetInstanceProp((nint)_hwnd.Value, InstanceIdentity.WindowPropertyName, (nint)InstanceIdentity.TagOf(instanceId));
         _textInput = new Win32TextInput(_hwnd);
         // The SIP occluded-rect arithmetic converts screen px → engine DIP, so it needs the EFFECTIVE scale
         // (DPI × zoom) — not the raw window DPI it could query itself.
@@ -810,10 +795,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // Drop points enter the engine as layout DIP, so the px→DIP divide must use the EFFECTIVE scale (DPI × zoom).
         _dropReg = Win32DropTarget.Register(_hwnd, () => _scale <= 0f ? 1f : _scale);
 
-        // The DirectManipulation touchpad producer (scroll-v3-plan §5.2): emits the ScrollBegin/ScrollDelta/ScrollEnd
-        // phase contract the kernel consumes, from real PT_TOUCHPAD contacts — PTP inertia is engine-owned (no
-        // Momentum* kind). Created AFTER the drop target so COM is already STA-init'd. Null on failure ⇒ the
-        // always-compiled §5.3 wheel-fallback classifier owns the touchpad (no regression).
+        // The DirectManipulation touchpad CONTACT producer: emits a Begin/Sample/End ScrollSource.Touchpad contact stream
+        // from real PT_TOUCHPAD contacts — no OS inertia is configured; the fling is authored by the engine from the
+        // contact ring at the lift. Created AFTER the drop target so COM is already STA-init'd. Null on failure ⇒ the
+        // touchpad wheel-fallback contact stream (WheelClassifier rule 1) owns the touchpad.
         _dm = Win32DirectManipulation.TryCreate(this, _hwnd);
 
         // A minimal UIA root provider for the window (served via WM_GETOBJECT) + the live-region announcer the app reaches
@@ -1002,34 +987,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     public void CloseWindow() => PostMessageW(_hwnd, WM_CLOSE, 0, 0);
 
-    /// <summary>The OS move loop from the current pointer — mpv's <c>begin_dragging</c> (<c>ReleaseCapture</c> + a caption
-    /// press). The video stays <c>HTCLIENT</c> (hover, the cursor override, click, double-click and right-click keep their
-    /// player meaning); only a press that travelled past the drag box on the picture reaches here.</summary>
-    public bool BeginSystemMove()
-    {
-        if (_fullscreen || _closed || !_primaryDown || _engineMovePending) return false;
-        POINT pt;
-        if (GetCursorPos(&pt) == 0) return false;
-        // POSTED, never sent: the caller is the dispatcher, mid-frame; SendMessage would run the modal loop re-entrantly
-        // under the frame. It reaches DefWindowProc through the WM_NCLBUTTONDOWN case below — the documented caption
-        // press, not the undocumented SC_MOVE|HTCAPTION (0xF012) syscommand. lParam = MAKELPARAM(screen x, screen y).
-        // Nothing below runs before the next pump, so the order of the post and the bookkeeping cannot race.
-        nint lp = (nint)(((uint)(ushort)(short)pt.y << 16) | (ushort)(short)pt.x);
-        if (PostMessageW(_hwnd, WM_NCLBUTTONDOWN, (WPARAM)(nuint)HTCAPTION, (LPARAM)lp) == 0) return false;
-        // Release the ENGINE contact deterministically instead of trusting WM_POINTERCAPTURECHANGED to arrive once the loop
-        // captures: a press the dispatcher never sees end keeps its capture targets set, which suppresses every routed
-        // hover move for the rest of the session — the player's auto-show would die after the first drag. A second cancel
-        // from the real capture change is a no-op on an idle slot.
-        _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
-            Pointer: PointerKindOf(_primaryDownId), TimestampMs: Now(), PointerId: _primaryDownId));
-        _primaryDown = false;
-        _engineMovePending = true;
-        _engineMoveLoop = true;
-        ReleaseCapture();   // mpv's pair (w32_common.c begin_dragging); a no-op under mouse-in-pointer, kept for parity
-        Diag.Line($"[window.move] begin at=({pt.x},{pt.y})");   // always-on, one line per gesture (never per frame)
-        return true;
-    }
-
     // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
 
     public void SetTopmost(bool topmost)
@@ -1040,9 +997,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
+    // MathF.Round, not a truncating (int) cast: a sub-pixel outer rect (a persisted DIP→px placement scaled back up,
+    // or a monitor-relative fit-to-content size) used to lose up to ~1px toward zero on every axis — invisible on a
+    // single call, but a restore-then-persist round-trip (read OuterBoundsPx back, save it, restore it next launch)
+    // drifted the window a pixel per cycle. W/H are also floored at 1 (not just MathF.Max'd pre-cast): Max(1f, x) is
+    // exact for x ≥ 1, but for 0 < x < 1 the OLD (int) cast still produced 0 after truncation — MoveToPx below never
+    // touches size at all, so this fix is scoped to the one call site that can request a degenerate size.
     public void SetBoundsPx(RectF outerBoundsPx)
-        => SetWindowPos(_hwnd, HWND.NULL, (int)outerBoundsPx.X, (int)outerBoundsPx.Y,
-            (int)MathF.Max(1f, outerBoundsPx.W), (int)MathF.Max(1f, outerBoundsPx.H), SWP_NOZORDER | SWP_NOACTIVATE);
+        => SetWindowPos(_hwnd, HWND.NULL, (int)MathF.Round(outerBoundsPx.X), (int)MathF.Round(outerBoundsPx.Y),
+            (int)MathF.Max(1f, MathF.Round(outerBoundsPx.W)), (int)MathF.Max(1f, MathF.Round(outerBoundsPx.H)),
+            SWP_NOZORDER | SWP_NOACTIVATE);
+
+    /// <summary>Pure move (outer origin only, physical virtual-screen px) — <see cref="SetBoundsPx"/>'s sibling that
+    /// never touches size: <c>SWP_NOSIZE</c> so a caller restoring a remembered POSITION (the detached mini-player
+    /// re-docking to where the user last dragged it, independent of whatever size it happens to be at right now)
+    /// cannot race a concurrent resize by having to read the current size back first.</summary>
+    public void MoveToPx(Point2 outerOriginPx)
+        => SetWindowPos(_hwnd, HWND.NULL, (int)MathF.Round(outerOriginPx.X), (int)MathF.Round(outerOriginPx.Y),
+            0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
     /// <summary>The window's current OUTER rect (physical virtual-screen px) — the read side of
     /// <see cref="SetBoundsPx"/>, so the host can ask where the user actually left a secondary window (client origin +
@@ -1126,7 +1098,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         HTMINBUTTON => TitleBarHit.MinButton,
         HTMAXBUTTON => TitleBarHit.MaxButton,
         HTCLOSE => TitleBarHit.CloseButton,
-        _ => TitleBarHit.Client,   // sentinel: not one of the engine-drawn buttons
+        HTCAPTION => TitleBarHit.Caption,
+        _ => TitleBarHit.Client,   // sentinel: an island or no region at all
     };
 
     /// <summary>Resolve the engine caption-button hit for an NC pointer/mouse message from its SCREEN position
@@ -1139,8 +1112,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         POINT pt = new() { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) };
         ScreenToClient(hWnd, &pt);
         if (IsZoomed(hWnd) && pt.y < 0) pt.y = 0;   // maximized: the caption row sits at negative client y — fold to row 0
-        return NcHitFromCode(HitTestRegions(pt.x, pt.y, buttonsOnly: true));
+        return NcHitFromCode(HitTestRegions(pt.x, pt.y, buttonsOnly: false));
     }
+
+    /// <summary>An NC message's SCREEN position (lParam) as client DIP — the real point a caption-region hover is
+    /// synthesized at.</summary>
+    private Point2 ScreenLpToDip(long lp)
+        => ScreenPtToDip(new POINT { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) });
 
     /// <summary>Center of the reported region for <paramref name="hit"/>, in DIP — the synthetic-pointer target that
     /// drives the engine button's hover/press exactly like a real pointer.</summary>
@@ -1158,15 +1136,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // ── shared NC → engine synthesis (WM_NCPOINTER* and the legacy WM_NCMOUSE*/WM_NCLBUTTON* fallback feed identical
     //    events). Synthesized client events carry NcSyntheticPointerId so they never collide/coalesce with real contacts.
 
-    /// <summary>NC hover over <paramref name="ncHit"/> → engine PointerMove at the button center (or offscreen off the
-    /// buttons). Returns true (consumed, no classic NC UI) while over an engine button, false to fall through otherwise.</summary>
-    private bool NcHover(HWND hWnd, TitleBarHit ncHit, out LRESULT result)
+    /// <summary>NC hover over <paramref name="ncHit"/> → engine PointerMove: at the button center over an engine button,
+    /// at the pointer's REAL position (<paramref name="lp"/>, screen px) over a <see cref="TitleBarHit.Caption"/> region —
+    /// every update, so the content under a drag band hovers, reveals and holds exactly as it would over client area
+    /// (the pop-out's title band) while the OS keeps the press — or offscreen elsewhere. Returns true (consumed, no
+    /// classic NC UI) only over an engine button; false to fall through otherwise.</summary>
+    private bool NcHover(HWND hWnd, TitleBarHit ncHit, long lp, out LRESULT result)
     {
         result = default;
         if (s_ncDiag) System.Console.Error.WriteLine($"[NC] hover-msg hit={ncHit} ncPointerSeen={_ncPointerSeen} inside={_ncInside}");
         bool changed = !_ncInside;   // client → NC crossing: pull engine hover off whatever was hovered
         _ncInside = true;
         if (ncHit != _ncHover) { _ncHover = ncHit; changed = true; }
+        if (ncHit == TitleBarHit.Caption)
+        {
+            _queue.Enqueue(new InputEvent(InputKind.PointerMove, ScreenLpToDip(lp), 0, 0,
+                Mods: Mods(), TimestampMs: Now(), PointerId: NcSyntheticPointerId));
+            PaintRequested?.Invoke();
+            return false;   // DefWindowProc keeps its own caption tracking (the press → the move loop, double-click)
+        }
         if (changed)
         {
             _queue.Enqueue(new InputEvent(InputKind.PointerMove,
@@ -1178,13 +1166,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         return false;
     }
 
-    /// <summary>NC press on <paramref name="ncHit"/> → engine PointerDown at the button center. HTCAPTION/resize falls
-    /// through to DefWindowProc (OS drag-move/size loop, double-click maximize).</summary>
+    /// <summary>NC press on <paramref name="ncHit"/> → engine PointerDown at the button center. A caption region, an
+    /// island and the resize frame fall through to DefWindowProc (the OS move/size loop — the ONLY way content moves a
+    /// window under mouse-in-pointer — and double-click maximize).</summary>
     private bool NcPress(TitleBarHit ncHit, out LRESULT result)
     {
         result = default;
         if (s_ncDiag) System.Console.Error.WriteLine($"[NC] press-msg hit={ncHit}");
-        if (ncHit == TitleBarHit.Client) return false;
+        if (ncHit is TitleBarHit.Client or TitleBarHit.Caption) return false;
         _ncPress = ncHit;
         _queue.Enqueue(new InputEvent(InputKind.PointerDown, NcCenterDip(ncHit), 0, 0,
             Mods: Mods(), TimestampMs: Now(), PointerId: NcSyntheticPointerId));
@@ -1258,7 +1247,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // an Enabled-but-idle producer needs its own periodic beat here — every wake, not every produced frame.
         if (_dm is { Enabled: true } dm && !dm.Live && Environment.TickCount64 - dm.LastUpdateMs >= 250)
             dm.UpdateIdle();
-        TryEmitFallbackLift();   // hi-res silence lift (also fires off the LiftTimer when the loop is idle — see below)
+        TryEmitFallbackLift();   // touchpad-fallback silence lift (also fires off the LiftTimer when the loop is idle — see below)
         return _queue.MoveTo(ring);
     }
 
@@ -1266,10 +1255,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// The ONE per-produced-frame DirectManipulation <c>Update</c> (<c>IPlatformWindow.PumpScroll</c>,
     /// scroll-v3-plan-2026-08-17.md §5.2): called from <c>AppHost.Paint</c> AFTER the display-phase gate, at a lattice-
     /// snapped instant — never before it, so a frame-aligned producer never issues an <c>Update</c> against a frame the
-    /// gate turns out to decline. Every content delta from that one <c>Update</c> lands stamped with
-    /// <paramref name="clock"/>'s <c>FrameQpc</c> (<c>Win32DirectManipulation.UpdateFrame</c>), so the ring sums them
-    /// into exactly one <see cref="InputKind.ScrollDelta"/> per produced frame per contact.
-    /// <para>Also drives the hi-res wheel-fallback's silence-lift check (<see cref="TryEmitFallbackLift"/>) at this
+    /// gate turns out to decline. Every contact event that one <c>Update</c> produces (at most one
+    /// <see cref="InputKind.Scroll"/> Sample per produced frame per contact, plus a Begin/End on a status edge) is stamped
+    /// <see cref="FluentGpu.Scroll.Runtime.ContactStamp.ForFrame"/> of <paramref name="clock"/> — the NEXT tick's present
+    /// (<c>PresentQpc + RefreshQpc</c>), the first render turn guaranteed to see it, so the render read of this same tick
+    /// shows the previous sample whichever side of the UI's write it lands on (<c>Win32DirectManipulation.UpdateFrame</c>).
+    /// <para>Also drives the touchpad wheel-fallback's silence-lift check (<see cref="TryEmitFallbackLift"/>) at this
     /// same frame-aligned instant — <see cref="PumpInto"/> already checks it on every wake and the
     /// <see cref="LiftTimerId"/> WM_TIMER checks it when the loop is fully idle, but a live scroll-producing session
     /// wants the lift decision tied to the frame clock, not message-pump jitter.</para>
@@ -1284,7 +1275,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         return _queue.MoveTo(ring);
     }
 
-    /// <summary>True while DirectManipulation has a contact engaged/pending or RUNNING, or a hi-res wheel-fallback
+    /// <summary>True while DirectManipulation has a contact engaged/pending or RUNNING, or a touchpad wheel-fallback
     /// gesture is live — either way the host must produce one frame per refresh so <see cref="PumpScroll"/> is pumped
     /// every vblank (scroll-v3-plan-2026-08-17.md §5.2).</summary>
     public bool ScrollProducerLive => (_dm?.Live ?? false) || _fbActive;
@@ -1312,20 +1303,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private long WheelStampQpc(uint wheelPid)
     {
         POINTER_INFO pi;
-        if (GetPointerInfo(wheelPid, &pi) && pi.PerformanceCount != 0)
-        {
-            FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Hardware;
-            return unchecked((long)pi.PerformanceCount);
-        }
-        // No device stamp available: fall back to the moment WE received the message, and say so. This is `receive`
-        // quality, not `hardware` — the difference is the unmeasured device-to-host leg.
-        FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Receive;
-        return System.Diagnostics.Stopwatch.GetTimestamp();
+        if (GetPointerInfo(wheelPid, &pi) && pi.PerformanceCount != 0) return unchecked((long)pi.PerformanceCount);
+        return System.Diagnostics.Stopwatch.GetTimestamp();   // no device stamp: the moment WE received the message
     }
 
-    /// <summary>Fallback-gesture lift (scroll-feel-rework-v2 §5/§6): the hi-res wheel packets have gone silent for the
-    /// cadence-adaptive <see cref="_hiResLiftMs"/> window ⇒ the contact (or its OS momentum tail) ended, so synthesize the
-    /// ScrollEnd. Idempotent (guarded by <see cref="_fbActive"/> + the monotonic elapsed check), so it is safe to call from
+    /// <summary>Fallback-gesture lift (scroll-feel-rework-v2 §5/§6): the touchpad wheel packets have gone silent for the
+    /// cadence-adaptive <see cref="_fbLiftMs"/> window ⇒ the contact (or its OS momentum tail) ended, so synthesize the
+    /// ScrollEnd (flagged <c>LiftDetectedLate</c>, so the dispatcher authors the release from what is shown now). Idempotent (guarded by <see cref="_fbActive"/> + the monotonic elapsed check), so it is safe to call from
     /// BOTH the per-frame <see cref="PumpInto"/> AND the <see cref="LiftTimerId"/> WM_TIMER — the timer guarantees the check
     /// runs even when the frame loop is fully idle (no PumpInto). Silence is measured on the MONOTONIC clock
     /// (Environment.TickCount64), never GetMessageTime (which freezes between messages). The ScrollEnd is STAMPED with the
@@ -1333,15 +1317,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// lift or it always reads "stopped" and kills every fallback fling.</summary>
     private void TryEmitFallbackLift()
     {
-        if (!_fbActive || Environment.TickCount64 - _fbLastTick < _hiResLiftMs) return;
+        if (!_fbActive || Environment.TickCount64 - _fbLastTick < _fbLiftMs) return;
+        EndFallbackContact();
+    }
+
+    /// <summary>Closes the live touchpad wheel-fallback contact now (idempotent): the End is stamped at the LAST packet and
+    /// flagged <c>LiftDetectedLate</c>.</summary>
+    private void EndFallbackContact()
+    {
+        if (!_fbActive) return;
         _fbActive = false;
         KillTimer(_hwnd, LiftTimerId);
-        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-            FluentGpu.Foundation.ScrollTrace.FbLift(Environment.TickCount64 - _fbLastTick, _fbLastQpc);
-        if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"FB END   silence>{_hiResLiftMs}ms (lift={_fbLastMs})");
-        _queue.Enqueue(new InputEvent(InputKind.ScrollEnd, _fbLastPos, 0, 0, 0f, Mods(),
-            Pointer: _fbPointer, TimestampMs: _fbLastMs, QpcTicks: _fbLastQpc,
-            DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
+        DeliverScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(FluentGpu.Scroll.Runtime.ScrollSource.Touchpad,
+            FluentGpu.Scroll.Runtime.ScrollGesture.End, _fbLastQpc, _fbLastPos, 0f, 0f, _fbPointerId, Mods()) { LiftDetectedLate = true },
+            PointerKind.Touchpad, _fbLastMs);
     }
 
     /// <summary>Deposit one observed inter-packet gap (ms) into the fixed median ring (§6 lift adaptivity).</summary>
@@ -1356,7 +1345,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// any cadence is observed it stays at the 80 ms default. Zero-alloc: a stackalloc copy + insertion sort of ≤8 gaps.</summary>
     private uint AdaptiveLiftMs()
     {
-        if (_gapCount == 0) return HiResLiftDefaultMs;
+        if (_gapCount == 0) return FallbackLiftDefaultMs;
         Span<uint> tmp = stackalloc uint[GapRingSize];
         for (int i = 0; i < _gapCount; i++) tmp[i] = _gapRing[i];
         for (int i = 1; i < _gapCount; i++)   // insertion sort (tiny n)
@@ -1367,23 +1356,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         }
         uint median = tmp[_gapCount / 2];
         float lift = 1.4f * median;
-        if (lift < HiResLiftMinMs) lift = HiResLiftMinMs;
-        if (lift > HiResLiftMaxMs) lift = HiResLiftMaxMs;
+        if (lift < FallbackLiftMinMs) lift = FallbackLiftMinMs;
+        if (lift > FallbackLiftMaxMs) lift = FallbackLiftMaxMs;
         return (uint)lift;
     }
 
-    /// <summary>Detented signed per-axis carryover (scroll-feel-rework-v2 §3.2, the SumatraPDF #3032 fix): accumulate the
-    /// raw ±120 wheel units, emit the whole notches crossed (signed), keep the signed remainder in <paramref name="accum"/>,
-    /// and drop a stale opposite-sign residual on a direction change. A physical detented notch (exact ±120) yields ±1 with
-    /// a 0 remainder; a sub-120 free-spin stream accumulates until 120 is crossed.</summary>
-    private static int Carryover(ref int accum, short rawDelta)
-    {
-        if (rawDelta != 0 && accum != 0 && Math.Sign((int)rawDelta) != Math.Sign(accum)) accum = 0;   // direction change
-        accum += rawDelta;
-        int whole = accum / 120;    // truncates toward zero (signed)
-        accum -= whole * 120;       // keep the signed remainder
-        return whole;
-    }
 
     /// <summary>The wheel classifier (scroll-v3-plan-2026-08-17.md §5.3): three rules, latched per gesture (a
     /// <see cref="WheelGestureGapMs"/> idle gap re-evaluates), in priority order: (1) authoritative device evidence
@@ -1403,140 +1380,94 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// producing spurious exact-±120 bursts) cannot occur now that DM never enters OS INERTIA (§5.2).</para>
     ///
     /// <para>Shared by the owner window's own WM_POINTERWHEEL/HWHEEL case and <see cref="ForwardPopupPointerWheel"/>
-    /// (<paramref name="fromPopup"/> = true): the hi-res gesture state (<see cref="_wheelHiRes"/>,
+    /// (<paramref name="fromPopup"/> = true): the wheel gesture state (the classifier latch,
     /// <see cref="_fbActive"/>, the inter-packet gap ring, <see cref="_fbLastQpc"/>) is owner-window state shared
     /// with popups — one gesture at a time. DirectManipulation is never live over a popup HWND (DM_POINTERHITTEST
     /// only ever fires for the window under the pointer), so a precision-touchpad pan over a flyout falls straight
-    /// through rules 1/2 into the hi-res contact stream below, and the popup subtree gets the same engine-owned
+    /// through rule 1 into the touchpad contact stream below, and the popup subtree gets the same engine-owned
     /// fling a main-window pan gets (<c>WheelPt(lp)</c> already maps screen → OWNER dip, so the emitted event hits
     /// the popup subtree).</para></summary>
     internal void HandlePointerWheel(uint pid, long lp, short notch, bool horizontal, bool fromPopup)
     {
+        _ = fromPopup;
         uint nowMs = Now();
         uint wheelGapMs = nowMs - _lastWheelMs;   // packet spacing (huge on the first-ever packet — fine)
-        bool streamIdle = wheelGapMs > WheelGestureGapMs;
+        bool streamIdle = wheelGapMs > (uint)FluentGpu.Scroll.Runtime.WheelClassifier.GestureGapMs;
         _lastWheelMs = nowMs;
-        if (streamIdle) { _wheelHiRes = false; _wheelAccumX = 0; _wheelAccumY = 0; _wheelMouseSeen = false; _wheelTouchpadSeen = false; }
+        if (streamIdle) { _wheelAccumX = 0; _wheelAccumY = 0; }
 
         DmWheelSourceEvidence sourceEvidence = WheelSourceEvidenceOf(pid);
-        bool ptTouchpad = sourceEvidence == DmWheelSourceEvidence.Touchpad
-                          || PointerKindOf(pid) == PointerKind.Touchpad;   // rule 1
-        if (ptTouchpad) sourceEvidence = DmWheelSourceEvidence.Touchpad;
-        if (ptTouchpad) _wheelTouchpadSeen = true;
-        else if (sourceEvidence == DmWheelSourceEvidence.PhysicalMouse) _wheelMouseSeen = true;
+        if (sourceEvidence != DmWheelSourceEvidence.Touchpad && PointerKindOf(pid) == PointerKind.Touchpad)
+            sourceEvidence = DmWheelSourceEvidence.Touchpad;
+        var evidence = sourceEvidence switch
+        {
+            DmWheelSourceEvidence.Touchpad => FluentGpu.Scroll.Runtime.WheelDeviceEvidence.PrecisionTouchpad,
+            DmWheelSourceEvidence.PhysicalMouse => FluentGpu.Scroll.Runtime.WheelDeviceEvidence.Mouse,
+            _ => FluentGpu.Scroll.Runtime.WheelDeviceEvidence.Unknown,
+        };
 
-        bool subNotch = notch != 0 && (notch % 120) != 0;   // rule 2 (also the trace's "thisHiRes")
-        bool dmRunning = _dm is { Enabled: true, Live: true };
-        DmWheelRoute dmRoute = DmWheelArbitration.Decide(dmRunning, sourceEvidence);
-        if (dmRoute == DmWheelRoute.StopDmAndPass)
+        // DM owns the touchpad while it is live: its packets never reach the wheel path (swallowed). Only a positively
+        // identified physical mouse pre-empts a live manipulation.
+        if (_dm is { Enabled: true, Live: true } dm)
         {
-            // A positively identified physical mouse takes over immediately — over both contact and inertia.
-            if (_dm!.TryStopForPhysicalWheel()) { _wheelHiRes = false; _wheelAccumX = 0; _wheelAccumY = 0; }
+            if (evidence == FluentGpu.Scroll.Runtime.WheelDeviceEvidence.Mouse) { dm.TryStopForPhysicalWheel(); _wheelClassifier.Reset(); }
+            else return;
         }
-        else if (dmRunning)   // DmOwned (touchpad evidence) or an unresolved source while a manipulation is live
+
+        var source = _wheelClassifier.Classify(notch, evidence, streamIdle ? double.PositiveInfinity : wheelGapMs);
+        var mods = Mods();
+        long qpc = WheelStampQpc(pid);
+        var pt = WheelPt(lp);
+
+        if (source == FluentGpu.Scroll.Runtime.ScrollSource.MouseWheelHiRes)
         {
-            TraceWheelSwallow(notch, WheelSwallowDmLive, horizontal, subNotch, streamIdle, ptTouchpad, wheelGapMs);
+            // A hi-res (free-spin) MOUSE wheel: every packet is a fractional notch on the accumulating wheel cubic — no
+            // contact, no silence lift, no coast. A gesture the classifier first latched touchpad and now resolves to a
+            // physical mouse closes its contact first.
+            if (FluentGpu.Scroll.Runtime.WheelClassifier.IsPinchSynthesis(source, mods)) return;   // Ctrl + hi-res = the OS's legacy pinch synthesis
+            EndFallbackContact();
+            DeliverScroll(FluentGpu.Scroll.Runtime.WheelClassifier.HiResNotch(notch, horizontal, qpc, pt, pid, mods), PointerKind.Mouse, nowMs);
             return;
         }
-        if (ptTouchpad || subNotch) _wheelHiRes = true;
 
-        // Sub-notch / precision-touchpad packets (hi-res) — the wheel-FALLBACK phase producer (design §5): raw packets
-        // become ScrollBegin/Update phase events carrying NOTCH UNITS (raw/120; no DIP scale here — the router applies
-        // the one per-viewport notch scale, so a free-spin mouse, a touchpad and a detented wheel all share it). Lift
-        // is detected by packet silence (TryEmitFallbackLift, driven from PumpInto every wake, PumpScroll every produced
-        // frame, and the LiftTimerId WM_TIMER when the loop is fully idle).
-        if (_wheelHiRes)
+        if (source == FluentGpu.Scroll.Runtime.ScrollSource.Touchpad)
         {
-            // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
-            if ((Mods() & KeyModifiers.Ctrl) != 0)
-            {
-                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                    FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-                        WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: true, phasePath: true, fbActiveBefore: _fbActive),
-                        _fbSeq, 0f, wheelGapMs, 0);
-                return;
-            }
-
-            // Notch UNITS, not DIP: units = raw/120 (scroll fix S3 — one scale for every wheel device). The router
-            // multiplies by ScrollFeel.PerNotchDip(viewport, lineDip) for the latched viewport; DPI/zoom is already
-            // folded into that DIP distance, so no _scale product here. Sign convention unchanged from the DIP days:
-            // vertical −delta = scroll toward the content end (offset increases); horizontal +delta = right.
-            float units = notch / WheelDeltaPerNotch;
-            float unitsY = horizontal ? 0f : -units;
-            float unitsX = horizontal ? units : 0f;
-            long qpc = WheelStampQpc(pid);   // device stamp when the OS has one; records its provenance either way
-            var pt = WheelPt(lp);
-            // Lift adaptivity (§5.3): feed this packet's inter-packet gap into the median ring and recompute the
-            // silence threshold = clamp(1.4×median, 50, 120) ms. A fresh gesture (streamIdle) starts the cadence over.
+            // Touchpad-evidenced packets outside DirectManipulation: a contact STREAM in DIP (one notch's raw 120 = the
+            // feel's notch distance) — Begin on the first packet, Sample per packet, End on packet silence.
+            if (FluentGpu.Scroll.Runtime.WheelClassifier.IsPinchSynthesis(source, mods)) return;   // Ctrl + touchpad = the OS's legacy pinch synthesis
             if (!streamIdle && wheelGapMs > 0 && wheelGapMs < 500) PushGap(wheelGapMs);
             else if (streamIdle) { _gapCount = 0; _gapHead = 0; }
-            _hiResLiftMs = AdaptiveLiftMs();
+            _fbLiftMs = AdaptiveLiftMs();
             bool streamBegins = !_fbActive;
-            InputKind kind = streamBegins ? InputKind.ScrollBegin : InputKind.ScrollDelta;
-            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                // RawWheel's f0 ("emitted DIP") carries the emitted NOTCH UNITS on this path since S3 (the DIP is only
-                // known at the router); flag bit 64 (tookPhasePath) tells a reader which unit the column is in.
-                FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-                    WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: false, phasePath: true, fbActiveBefore: _fbActive),
-                    unchecked((byte)(_fbSeq + 1)), horizontal ? unitsX : unitsY, wheelGapMs, qpc);
+            if (streamBegins)
+            {
+                _fbPointerId = pid;
+                DeliverScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(FluentGpu.Scroll.Runtime.ScrollSource.Touchpad,
+                    FluentGpu.Scroll.Runtime.ScrollGesture.Begin, qpc, pt, 0f, 0f, pid, mods), PointerKind.Touchpad, nowMs);
+            }
             _fbActive = true;
-            _fbPointer = _wheelMouseSeen && !_wheelTouchpadSeen ? PointerKind.Mouse : PointerKind.Touchpad;
             _fbLastMs = nowMs; _fbLastQpc = qpc; _fbLastPos = pt;
             long nowTick = Environment.TickCount64;
-            _fbLastTick = nowTick;   // the monotonic silence-check base (see field remarks)
-            // Arm the lift timer so the silence check fires even when the frame loop is idle (no PumpInto) — but at
-            // most once per half lift window (S2): a SetTimer syscall per 4 ms packet is wasted work on the paced
-            // frame. The timer is periodic, so a late arm still trips TryEmitFallbackLift ≤ 1.5×_hiResLiftMs after the
-            // last packet when the loop is idle; a live loop catches the lift on the next frame pump regardless.
-            if (streamBegins || nowTick - _fbLastArmTick >= _hiResLiftMs / 2)
+            _fbLastTick = nowTick;
+            if (streamBegins || nowTick - _fbLastArmTick >= _fbLiftMs / 2)
             {
-                SetTimer(_hwnd, LiftTimerId, _hiResLiftMs, null);
+                SetTimer(_hwnd, LiftTimerId, _fbLiftMs, null);
                 _fbLastArmTick = nowTick;
             }
-            unchecked { _fbSeq++; }
-            if (FluentGpu.Foundation.ScrollLog.On)
-                FluentGpu.Foundation.ScrollLog.Line($"FB {(kind == InputKind.ScrollBegin ? "BEGIN " : "UPDATE")} {(horizontal ? "H" : "V")} notch={notch} units={(horizontal ? unitsX : unitsY):0.000} seq={_fbSeq}{(fromPopup ? " popup" : "")}");
-            // Field contract (Pal.cs InputEvent remarks): ScrollDelta/ScrollDeltaX carry the notch units — the ring's
-            // per-frame ScrollDelta coalescing SUMS those two fields, so a frame's packets add up correctly — and
-            // WheelNotch/WheelNotchX carry the same units as the "this gesture is in notch units" tag the router keys
-            // on (a headless/DM producer scripting DIP leaves them 0). After coalescing WheelNotch holds only the first
-            // packet's value; the router reads the SUM from ScrollDelta and uses WheelNotch solely as the unit tag.
-            _queue.Enqueue(new InputEvent(kind, pt, 0, 0, unitsY, Mods(),
-                Pointer: _fbPointer, TimestampMs: nowMs, PointerId: pid,
-                ScrollDeltaX: unitsX, WheelNotch: unitsY, WheelNotchX: unitsX,
-                QpcTicks: qpc, ScrollPhaseSeq: _fbSeq,
-                DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
+            DeliverScroll(FluentGpu.Scroll.Runtime.WheelClassifier.TouchpadWheelSample(notch, horizontal,
+                FluentGpu.Scroll.Diag.ScrollTunables.Current.TouchpadWheelDip, qpc, pt, _fbPointerId, mods), PointerKind.Touchpad, nowMs);
             return;
         }
 
-        // Detented mouse (§3.2): signed per-axis carryover — accumulate raw ×120 units, emit whole notches per 120
-        // crossed, keep the signed remainder, reset on direction change. A physical notch (exact ±120) trivially
-        // yields ±1 with a 0 remainder; the accumulator only does real work for residual/multi-notch packets.
-        int wholeV = horizontal ? 0 : Carryover(ref _wheelAccumY, notch);
-        int wholeH = horizontal ? Carryover(ref _wheelAccumX, notch) : 0;
-        // Wheel-lines: viewport distance scales by lines/3 (chars/3 horizontally); page mode uses a fixed
-        // page-equivalent multiplier (the producer can't see the viewport, so the true 0.875·vp needs the engine's
-        // WheelLinesMultiplier plumbing — §3.2 honest limit). The line scale rides WheelNotch (the viewport-relative
-        // path only); ScrollDelta stays the raw-notch DIP so element-level handlers (NumberBox) step once per notch.
+        // Detented mouse: signed per-axis carryover — whole notches per 120 crossed, the remainder kept. Wheel-lines
+        // scale the notch count by lines/3 (chars/3 horizontally); page mode uses the fixed page-equivalent multiplier.
+        int wholeV = horizontal ? 0 : FluentGpu.Scroll.Runtime.WheelClassifier.Carryover(ref _wheelAccumY, notch);
+        int wholeH = horizontal ? FluentGpu.Scroll.Runtime.WheelClassifier.Carryover(ref _wheelAccumX, notch) : 0;
+        if (wholeV == 0 && wholeH == 0) return;
         float axisMul = SystemParams.WheelScrollPage ? PageScrollLinesEquivalent
                       : ((horizontal ? SystemParams.WheelScrollChars : SystemParams.WheelScrollLines) / 3f);
-        // Vertical: +notch = scroll up, flipped to "positive = toward content end". Horizontal: +notch = right (no flip).
-        float notchY = -wholeV * axisMul;
-        float notchX =  wholeH * axisMul;
-        float dipY = -wholeV * WheelDipPerNotch;
-        float dipX =  wholeH * WheelDipPerNotch;
-        PointerKind wheelKind = _wheelHiRes ? PointerKind.Touchpad : PointerKind.Mouse;
-        long notchQpc = WheelStampQpc(pid);
-        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-            FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-                WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: false, phasePath: false, fbActiveBefore: _fbActive),
-                0, horizontal ? dipX : dipY, wheelGapMs, notchQpc);
-        if (FluentGpu.Foundation.ScrollLog.On)
-            FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} hiRes={_wheelHiRes} kind={wheelKind}{(fromPopup ? " popup" : "")}");
-        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
-            Pointer: wheelKind, TimestampMs: nowMs,
-            PointerId: pid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
-            QpcTicks: notchQpc));
+        // +notch = away (vertical: flipped to "positive = toward the content end") / right (horizontal: no flip).
+        DeliverScroll(FluentGpu.Scroll.Runtime.WheelClassifier.DetentNotch(wholeV, wholeH, axisMul, qpc, pt, pid, mods), PointerKind.Mouse, nowMs);
     }
 
     public void WaitForWork(int timeoutMs)
@@ -1746,7 +1677,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         get
         {
             var c = _compositorClock;
-            return c is { IsAvailable: true } ? new DisplayClockSample(true, c.TickSeq, c.TickQpc) : default;
+            return c is { IsAvailable: true }
+                ? new DisplayClockSample(true, c.TickSeq, c.TickQpc, c.MeasuredRefreshPeriodQpc, c.IgnoredReturns, c.SlotDrops, c.Decimating)
+                : default;
         }
     }
 
@@ -1965,6 +1898,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // scroll settle) even when the user holds the window still mid-drag — WM_MOVE alone fires only on motion.
                 _inMoveSizeLoop = true;
                 _sizedInMoveSizeLoop = false;
+                // EVERY loop's start reaches the engine (edge resizes included — consumers filter): the pop-out holds its
+                // chrome from here to WindowMoveSizeEnded. Content can only start a loop through a TitleBarHit.Caption
+                // region (WM_NCHITTEST → HTCAPTION): a press that begins as CLIENT pointer input cannot be handed to
+                // DefWindowProc's loop under mouse-in-pointer (measured 2026-09-22: a posted WM_NCLBUTTONDOWN/HTCAPTION
+                // entered the loop ~500 ms AFTER the release, never moved the window during the drag, and the loop did not
+                // end until the next click — no WM_POINTERUP reached the window at all, consumed or not).
+                _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeBegan, default, 0, 0, TimestampMs: Now()));
+                Diag.Line("[window.loop] begin");   // always-on, one line per gesture (never per frame)
                 _lastModalPaintMs = 0;
                 _moveLoopStartMs = Environment.TickCount64;
                 _moveLoopTicks = 0;
@@ -1974,16 +1915,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             case WM_EXITSIZEMOVE:
                 KillTimer(hWnd, MoveLoopTimerId);
                 _inMoveSizeLoop = false;
+                bool sized = _sizedInMoveSizeLoop;
                 _sizedInMoveSizeLoop = false;
-                // EVERY loop's end reaches the engine (edge resizes included — consumers filter): a video drag started by
-                // BeginSystemMove holds its chrome for the loop's duration and releases it here.
+                // EVERY loop's end reaches the engine (edge resizes included — consumers filter): the chrome hold taken at
+                // WindowMoveSizeBegan releases here.
                 _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
                 {
                     long loopMs = Environment.TickCount64 - _moveLoopStartMs;
                     string cost = $"ms={loopMs} ticks={_moveLoopTicks} paints={_moveLoopPaints} " +
                         $"fps={(loopMs > 0 ? _moveLoopPaints * 1000.0 / loopMs : 0):0.#} video={(_hasLiveVideo ? 1 : 0)}";
-                    if (_engineMoveLoop) { _engineMoveLoop = false; Diag.Line($"[window.move] end {cost}"); }
-                    else Diag.Line($"[window.size] end {cost}");
+                    // `paints` counts keep-alive frames (chrome fades), never motion: a composited window's pixels follow the
+                    // move inside DWM without a repaint. `size` is any loop that resized (a snap preview latches it too).
+                    Diag.Line(sized ? $"[window.size] end {cost}" : $"[window.move] end {cost}");
                 }
                 // A pure titlebar drag between two monitors fires no WM_DISPLAYCHANGE (the desktop topology didn't
                 // change) and no WM_DPICHANGED either when the two monitors share a DPI but differ in refresh rate —
@@ -1998,18 +1941,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // keep-alives so ambient animation can advance without flooding the modal loop.
                     if (_inMoveSizeLoop) _moveLoopTicks++;
                     if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo) return true;
-                    // A move WE started is never throttled. Measured: an 8 s content-initiated drag delivered 490
-                    // keep-alive ticks and painted 167 of them — 21 fps — because a snap preview / DPI event latches
-                    // _sizedInMoveSizeLoop true and turns the 33 ms edge-resize throttle on for the rest of the loop.
-                    // An edge resize is expensive per frame and deserves the cap; sliding a window is not.
-                    if (_inMoveSizeLoop && !_engineMoveLoop && ThrottleModalTickPaint()) return true;
+                    if (_inMoveSizeLoop && ThrottleModalTickPaint()) return true;
                     if (_inMoveSizeLoop) _moveLoopPaints++;
                     PaintRequested?.Invoke();
                     return true;
                 }
                 if ((nuint)wParam == LiftTimerId)
                 {
-                    // Hi-res fallback silence-lift check driven by a short monotonic timer so it fires even when the frame
+                    // Touchpad wheel-fallback silence-lift check driven by a short monotonic timer so it fires even when the frame
                     // loop is fully idle (scroll-feel-rework-v2 §5/§6). The WM_TIMER also wakes a blocked WaitForWork, so
                     // the enqueued ScrollEnd is drained by the very next PumpInto. Idempotent (elapsed-guarded) with the
                     // per-frame check; whichever runs first disarms and KillTimers.
@@ -2044,7 +1983,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     _queue.Enqueue(new InputEvent(InputKind.PointerUp, OffscreenDip, 0, 0,
                         TimestampMs: Now(), PointerId: NcSyntheticPointerId));
                 }
-                _ncInside = false; _ncHover = TitleBarHit.Client;
+                if (_ncInside)
+                {
+                    // NC → client crossing: park the synthetic NC pointer, or whatever it last hovered (a caption band at
+                    // its real position, a caption button at its center) would keep its hover — and its hold — forever.
+                    _ncInside = false; _ncHover = TitleBarHit.Client;
+                    _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+                        TimestampMs: Now(), PointerId: NcSyntheticPointerId));
+                }
                 PointerUpdate(GET_POINTERID_WPARAM(wParam));
                 return true;
             case WM_POINTERDOWN:
@@ -2057,7 +2003,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             {
                 // The hovering pointer left the window (the WM_POINTER analogue of WM_MOUSELEAVE): clear engine hover so
                 // it never sticks. Mouse parks the cursor offscreen; a touch/pen contact that lifted already sent its up.
+                // ORDER MATTERS for the held primary contact: cancel it FIRST, before the offscreen park move below is
+                // even queued — so a latched OnDrag/drag-reorder node's capture is already torn down by the time the
+                // (-10000,-10000) sample would otherwise reach it. This is the exact defect the capture hardening
+                // exists to close: unfixed, that sample reads as a real drag delta and the picture/thumb flings to the
+                // park point (the pop-out-fling bug).
                 uint leaveId = GET_POINTERID_WPARAM(wParam);
+                if (leaveId == _primaryDownId && _primaryDown) CancelPrimaryContact("pointer-leave");
                 _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
                     Pointer: PointerKindOf(leaveId), TimestampMs: Now(), PointerId: leaveId));
                 return true;
@@ -2065,9 +2017,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             case WM_POINTERCAPTURECHANGED:
             {
                 // Per-pointer capture loss (gesture stolen, contact aborted): cancel just THAT contact's interaction —
-                // the dispatcher releases that PointerId's capture/press without firing a click.
+                // the dispatcher releases that PointerId's capture/press without firing a click. The HELD primary
+                // contact funnels through CancelPrimaryContact (releases the real SetCapture too, and emits the one
+                // diag line); any OTHER live contact (a second touch/pen point) keeps the original bare per-id cancel.
                 uint capId = GET_POINTERID_WPARAM(wParam);
-                if (capId == _primaryDownId) _primaryDown = false;   // the held button is no longer ours to hand to a move loop
+                if (capId == _primaryDownId && _primaryDown) { CancelPrimaryContact("pointer-capture-changed"); return true; }
                 _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
                     Pointer: PointerKindOf(capId), TimestampMs: Now(), PointerId: capId));
                 return true;
@@ -2078,7 +2032,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // shape. Non-touchpad / DM-disabled falls through to DefWindowProc exactly as before (no behavior change).
                 if (_dm is { Enabled: true } dmhit)
                 {
-                    dmhit.NoteHitTest();        // the silent-owner detector's own TickCount64 stamp + unserved-attempt count
                     uint hitPid = GET_POINTERID_WPARAM(wParam);
                     PointerKind hitKind = PointerKindOf(hitPid);
                     if (hitKind == PointerKind.Touchpad)
@@ -2088,11 +2041,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                         if (dmhit.SetContact(hitPid, hitDip)) { result = 0; return true; }
                         // SetContact failure already logged inside; fall through so the OS keeps its default handling.
                     }
-                    // A rejected hit-test means DM will NOT own this gesture — the OS then promotes it to ±120
-                    // WM_POINTERWHEEL synthesis and the wheel classifier's device-evidence rule (HandlePointerWheel)
-                    // must catch it. Log the rejection reason: this is the diagnosis point for "DM missed the contact".
-                    else if (FluentGpu.Foundation.ScrollLog.On)
-                        FluentGpu.Foundation.ScrollLog.Line($"DM HITTEST rejected pid={hitPid} kind={hitKind} — gesture stays on the fallback");
+                    // A rejected hit-test means DM will NOT own this gesture — the OS then promotes it to WM_POINTERWHEEL
+                    // synthesis and the wheel classifier's device-evidence rule (HandlePointerWheel) catches it.
                 }
                 return false;
             case WM_POINTERWHEEL:
@@ -2162,15 +2112,39 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 return true;
             }
             case WM_SETCURSOR:
-                // Re-assert the engine-chosen cursor while over the client area; let DefWindowProc style the chrome.
-                if (((long)(nint)lParam & 0xFFFF) == HTCLIENT) { ApplyCursor(); result = (LRESULT)1; return true; }
+            {
+                // Re-assert the engine-chosen cursor while over the client area — and over a CAPTION REGION, whose hover
+                // the NC synthesis delivers to the engine at its real position (NcHover): the content under the band
+                // (the pop-out's title band, Cursor = SizeAll) resolves its cursor like any client node, and without this
+                // arm DefWindowProc would answer every WM_SETCURSOR over HTCAPTION with the arrow, flickering against
+                // the engine's own SetCursor. Everything else (resize frame, engine buttons) stays DefWindowProc's.
+                long ht = (long)(nint)lParam & 0xFFFF;
+                if (ht == HTCLIENT || (ht == HTCAPTION && _ncInside && _ncHover == TitleBarHit.Caption))
+                {
+                    ApplyCursor(); result = (LRESULT)1; return true;
+                }
                 return false;
+            }
             case WM_CAPTURECHANGED:
-                // Whole-window legacy capture loss. With mouse-in-pointer the engine never calls SetCapture (contacts are
-                // implicitly captured per-pointer and their loss surfaces as WM_POINTERCAPTURECHANGED above, which already
-                // emits a per-PointerId cancel). Letting this fire a second broad cancel would double-count the release, so
-                // it is consumed without re-cancelling — the per-pointer path is the single source of cancellation.
+                // Whole-window legacy capture loss. Mouse-in-pointer's implicit PER-POINTER capture is unaffected by
+                // this message (its loss surfaces as WM_POINTERCAPTURECHANGED above, already handled) — but the REAL
+                // SetCapture taken on the primary mouse press (input-capture hardening, PointerDownUp) IS a legacy
+                // capture, and this is its only OS loss signal. lParam is the HWND GAINING capture (0 = none). Our OWN
+                // release (ReleaseHeldCapture) clears _captureHeld BEFORE calling ReleaseCapture(), so the synchronous
+                // WM_CAPTURECHANGED that call sends here observes _captureHeld already false and is correctly a no-op;
+                // anything ELSE stealing capture while we still believe we hold it (_captureHeld true, a DIFFERENT
+                // window in lParam — a system dialog, a native control, a modal loop we did not start) is exactly the
+                // external-loss case this handler cancels.
+                if (_captureHeld && (nint)lParam != (nint)_hwnd) CancelPrimaryContact("capture-changed");
                 return true;
+            case WM_CANCELMODE:
+                // The OS is about to run something that must own input exclusively (a system modal dialog, a
+                // menu/scrollbar tracking loop it starts itself, OLE drag-drop) — the one loss signal that fires
+                // whether or not capture actually changes hands first, so it is checked independently of
+                // _captureHeld/_primaryDown state (CancelPrimaryContact no-ops when nothing is held). Return false:
+                // DefWindowProc's own WM_CANCELMODE handling (releasing menu/scrollbar tracking, etc.) still must run.
+                CancelPrimaryContact("cancel-mode");
+                return false;
 
             // ── custom frame (WindowDesc.CustomFrame): strip the caption, keep the resize frame (Terminal recipe) ────
             case WM_NCCALCSIZE when _customFrame && !_fullscreen && (nuint)wParam != 0:
@@ -2228,9 +2202,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 return false;
             }
 
-            // NC pointer → synthesized engine input: HTMIN/HTMAX/HTCLOSE pixels are non-client, so client WM_POINTER*
-            // never arrives there. Translating the NC stream into pointer events at the button's center drives the
-            // engine-drawn buttons' InteractionAnimator ramps (hover/press/click) exactly like a real pointer. Under
+            // NC pointer → synthesized engine input: HTMIN/HTMAX/HTCLOSE and HTCAPTION pixels are non-client, so client
+            // WM_POINTER* never arrives there. Translating the NC stream into pointer events — at the button's center for
+            // the buttons, at the REAL position over a caption region — drives the engine-drawn buttons' InteractionAnimator
+            // ramps and the content under a drag band (hover, reveal, hold) exactly like a real pointer. Under
             // mouse-in-pointer the caption mouse arrives here (WM_NCPOINTER*); the legacy WM_NCMOUSE*/WM_NCLBUTTON* cases
             // below stay as a fallback for flows that still emit them, suppressed once a pointer message has been seen.
             // wParam: LOW word = pointer id (unused — caption synthesis uses one reserved id), HIGH word = the
@@ -2246,7 +2221,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     _ncTracking = true;
                 }
                 if (s_ncDiag) System.Console.Error.WriteLine($"[NC] NCPOINTERUPDATE wParam=0x{(ulong)(nuint)wParam:X} hi-decode={NcHitFromCode((long)((nuint)wParam >> 16))} derived={NcHitAtScreen(hWnd, lp)}");
-                return NcHover(hWnd, NcHitAtScreen(hWnd, lp), out result);
+                return NcHover(hWnd, NcHitAtScreen(hWnd, lp), lp, out result);
 
             case WM_NCPOINTERDOWN when _customFrame:
                 _ncPointerSeen = true;
@@ -2265,7 +2240,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     TrackMouseEvent(&tme);
                     _ncTracking = true;
                 }
-                return NcHover(hWnd, NcHitAtScreen(hWnd, lp), out result);
+                return NcHover(hWnd, NcHitAtScreen(hWnd, lp), lp, out result);
             }
 
             case WM_NCMOUSELEAVE when _customFrame:
@@ -2275,11 +2250,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     _ncInside = false; _ncHover = TitleBarHit.Client;
                     if (_ncPress != TitleBarHit.Client)
                     {
-                        // NC presses have no capture: leaving the NC area cancels the press (offscreen up, no click).
+                        // NC presses have no capture: leaving the NC area cancels the press (offscreen up, no click) — on
+                        // the reserved id, the only slot NC synthesis ever writes.
                         _ncPress = TitleBarHit.Client;
-                        _queue.Enqueue(new InputEvent(InputKind.PointerUp, OffscreenDip, 0, 0, TimestampMs: Now()));
+                        _queue.Enqueue(new InputEvent(InputKind.PointerUp, OffscreenDip, 0, 0,
+                            TimestampMs: Now(), PointerId: NcSyntheticPointerId));
                     }
-                    _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0, TimestampMs: Now()));
+                    _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+                        TimestampMs: Now(), PointerId: NcSyntheticPointerId));
                     PaintRequested?.Invoke();
                 }
                 return false;   // let DefWindowProc finish its own tracking teardown
@@ -2288,42 +2266,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             // client messages) — unhandled it reaches DefWindowProc with HTMAX/HTMIN/HTCLOSE and posts a SECOND
             // SYSCOMMAND on top of the engine click. Treated as a press, a double-click decomposes into two clean
             // engine clicks; HTCAPTION still falls through so double-click-to-maximize on the drag band keeps working.
-            //
-            // FIRST, the caption press BeginSystemMove posted (any frame kind — no engine caption button can sit under a
-            // press that started on the client). DefWindowProc runs the modal move loop INSIDE this call ("the operation is
-            // complete when DefWindowProc returns"), bracketed by WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE, whose exit enqueues the
-            // gesture's end. If the button was released between the post and now, DefWindowProc returns WITHOUT a loop and
-            // no WM_EXITSIZEMOVE comes — so that end is enqueued here instead: an accepted request ends exactly once, or the
-            // player would hold its chrome up (the WindowMove hold) until some unrelated resize.
-            case WM_NCLBUTTONDOWN when _engineMovePending:
-                _engineMovePending = false;
-                // THE POST IS ASYNCHRONOUS BY DESIGN (see BeginSystemMove), so the button may have come up in the gap
-                // between the request and this dispatch. Handing DefWindowProc a caption press with nothing held
-                // starts a move loop that has no release to wait for: Windows then trails the window after the cursor
-                // until the next click — "I am not holding anything and it is still moving". The PHYSICAL button is
-                // the only truth available here; the engine contact was already cancelled by BeginSystemMove, and no
-                // WM_LBUTTONUP is coming for a press the loop never took. SM_SWAPBUTTON because the primary button is
-                // the RIGHT one for a left-handed pointer, and VK_LBUTTON is physical, not logical.
-                const int VkLButton = 0x01, VkRButton = 0x02, SmSwapButton = 23;   // winuser.h; not in the static-import set
-                if ((GetAsyncKeyState(GetSystemMetrics(SmSwapButton) != 0 ? VkRButton : VkLButton) & 0x8000) == 0)
-                {
-                    if (_engineMoveLoop)
-                    {
-                        _engineMoveLoop = false;
-                        _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
-                        Diag.Line("[window.move] end released-before-loop");
-                    }
-                    result = 0;
-                    return true;
-                }
-                result = DefWindowProcW(hWnd, msg, wParam, lParam);
-                if (_engineMoveLoop)
-                {
-                    _engineMoveLoop = false;
-                    _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
-                    Diag.Line("[window.move] end no-loop");
-                }
-                return true;
             case WM_NCLBUTTONDOWN when _customFrame:
             case WM_NCLBUTTONDBLCLK when _customFrame:
                 if (_ncPointerSeen) { result = 0; return false; }
@@ -2400,12 +2342,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (GetPointerInfo(pointerId, &pi)) EmitPointerMove(in pi);
     }
 
+    // POINTER_FLAG_FIRSTBUTTON / POINTER_FLAG_INCONTACT (winuser.h) — the "still down" bits EmitPointerMove checks
+    // against the held primary contact. FIRSTBUTTON is the mouse's own left-button-down flag (mouse-in-pointer reports
+    // every physical button as one of the FIRST..FIFTHBUTTON bits); INCONTACT is the generic "still touching/pressed"
+    // bit every OTHER pointer type (pen, touch) carries instead — a pen's primary action has no button bit at all.
+    private const uint POINTER_FLAG_INCONTACT = 0x00000004, POINTER_FLAG_FIRSTBUTTON = 0x00000010;
+
     private void EmitPointerMove(in POINTER_INFO pi)
     {
         Decode(in pi, out PointerKind kind, out float pressure, out uint time, out long qpc);
+        // A move for the held primary contact whose "still down" bit has already cleared means the physical release
+        // happened without our WM_POINTERUP ever reaching PointerDownUp (dropped/coalesced in the OS's own history,
+        // or a message-order race draining GetPointerInfoHistory) — cancel the stale hold BEFORE this move is
+        // enqueued, so a latched OnDrag node never takes one more sample past the real release.
+        if (_primaryDown && pi.pointerId == _primaryDownId)
+        {
+            bool stillDown = kind == PointerKind.Mouse
+                ? (pi.pointerFlags & POINTER_FLAG_FIRSTBUTTON) != 0
+                : (pi.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
+            if (!stillDown) CancelPrimaryContact("move-without-button");
+        }
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
-        if (FluentGpu.Foundation.ScrollLog.On && kind != PointerKind.Mouse)
-            FluentGpu.Foundation.ScrollLog.Line($"MOVE {kind} id={pi.pointerId} pos=({dipPos.X:0},{dipPos.Y:0})");
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, dipPos, 0, 0,
             Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pi.pointerId, Pressure: pressure, QpcTicks: qpc));
     }
@@ -2420,17 +2377,60 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         Decode(in pi, out PointerKind kind, out float pressure, out uint time, out long qpc);
         int button = kind == PointerKind.Mouse ? ButtonForChange(pi.ButtonChangeType) : 0;
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
-        if (FluentGpu.Foundation.ScrollLog.On && kind != PointerKind.Mouse)
-            FluentGpu.Foundation.ScrollLog.Line($"{(down ? "DOWN" : "UP  ")} {kind} id={pointerId} pos=({dipPos.X:0},{dipPos.Y:0})");
-        // The primary mouse/pen contact a BeginSystemMove would hand to the OS move loop — mpv begins a window drag only
-        // with the button held. A finger has no system move loop to hand to, so touch never qualifies.
+        // The primary mouse/pen contact (input-capture hardening): the one contact every OS-visible loss path cancels
+        // through CancelPrimaryContact. Touch never qualifies — a finger's implicit capture is the whole story.
         if (kind is PointerKind.Mouse or PointerKind.Pen && button == 0)
         {
-            if (down) { _primaryDownId = pointerId; _primaryDown = true; }
-            else if (pointerId == _primaryDownId) _primaryDown = false;
+            if (down)
+            {
+                _primaryDownId = pointerId; _primaryDown = true;
+                // A REAL Win32 capture layered on top of mouse-in-pointer's implicit per-contact one (input-capture
+                // hardening, field comment above). MOUSE ONLY — button 0 covers Pen too, but SetCapture has no
+                // pen-specific meaning here and pen's implicit capture already tracks reliably; widening this to
+                // Pen/Touch would fire WM_CAPTURECHANGED on every stylus hover-to-contact transition for nothing.
+                if (kind == PointerKind.Mouse) { SetCapture(_hwnd); _captureHeld = true; }
+            }
+            else if (pointerId == _primaryDownId)
+            {
+                _primaryDown = false;
+                ReleaseHeldCapture();   // clears _captureHeld BEFORE the call — see ReleaseHeldCapture's own doc
+            }
         }
         _queue.Enqueue(new InputEvent(down ? InputKind.PointerDown : InputKind.PointerUp, dipPos,
             button, 0, Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pointerId, Pressure: pressure, QpcTicks: qpc));
+    }
+
+    /// <summary>Tear down the primary held contact — the ONE place every loss path funnels through (a stolen capture,
+    /// <c>WM_CANCELMODE</c>, a <c>WM_POINTERLEAVE</c> that arrives while still held, a move packet whose button bit
+    /// already cleared): clear the engine's "primary
+    /// down" bookkeeping, release the real capture (see <see cref="ReleaseHeldCapture"/> for the ordering), and enqueue
+    /// a <see cref="InputKind.PointerCancel"/> for it — the same shape <c>WM_POINTERCAPTURECHANGED</c> already emits,
+    /// so a latched <c>OnDrag</c>/drag-reorder node tears down through its ordinary cancel path. A no-op if nothing is
+    /// held (every loss path can call this unconditionally). ONE always-on line per cancel — never per move, the
+    /// budgets.md "always-on plain counter" posture, not a per-frame flood.</summary>
+    private void CancelPrimaryContact(string why)
+    {
+        if (!_primaryDown) return;
+        uint id = _primaryDownId;
+        PointerKind kind = PointerKindOf(id);
+        _primaryDown = false;
+        ReleaseHeldCapture();
+        _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
+            Pointer: kind, TimestampMs: Now(), PointerId: id));
+        Diag.Line($"[pointer] cancel id={id} why={why}");
+    }
+
+    /// <summary>Release the real Win32 capture taken on the primary mouse press (<see cref="PointerDownUp"/>).
+    /// <c>_captureHeld</c> is cleared BEFORE calling <c>ReleaseCapture()</c>: that API sends <c>WM_CAPTURECHANGED</c>
+    /// SYNCHRONOUSLY — before it returns — to this same window, and the <c>WM_CAPTURECHANGED</c> handler reads
+    /// <c>_captureHeld</c> to decide whether the loss is OURS (already tearing down, ignore) or EXTERNAL (something
+    /// else stole capture — cancel). Clearing it first makes our own release read as "already handled" instead of a
+    /// second, redundant cancel racing the one already in flight.</summary>
+    private void ReleaseHeldCapture()
+    {
+        if (!_captureHeld) return;
+        _captureHeld = false;
+        ReleaseCapture();
     }
 
     // ── windowed-popup pointer forwarding (Win32PopupWindow → owner) ─────────────────────────────────────────────────
@@ -2443,8 +2443,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     // WM_POINTERWHEEL/HWHEEL over the popup: HIWORD(wParam) = signed notch (×120), lParam = SCREEN px — same sign/DIP
     // semantics as the owner's own wheel path. Runs through the SAME classifier as the owner window's own wheel case
-    // (scroll-v3-plan-2026-08-17.md §5.3, "the popup hole"): a precision-touchpad pan over a flyout now takes rules
-    // 1/2 into the hi-res engine-owned-fling contact stream instead of being hard-coded to detented travel, which
+    // (scroll-v3-plan-2026-08-17.md §5.3, "the popup hole"): a precision-touchpad pan over a flyout now takes rule 1
+    // into the touchpad engine-owned-fling contact stream (a hi-res mouse, rule 2, into fractional notches) instead of
+    // being hard-coded to detented travel, which
     // used to send 3.6-6× the intended distance over a popup list. DM is never live over a popup HWND, so the
     // arbitration inside HandlePointerWheel is a no-op here in practice.
     internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch, bool horizontal)
@@ -2465,9 +2466,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // Stamp provenance for the diagnostics latency row: this is the OS device stamp, the best grade available, but
         // only genuinely calibrated when the digitizer itself reports scan timestamps — which is why the bundle's error
         // budget still carries the unmeasured 0-8ms device-to-host leg at a 125 Hz report rate.
-        FluentGpu.Foundation.ScrollTrace.ContactStampQuality = qpc != 0
-            ? FluentGpu.Foundation.GenStampQuality.Hardware
-            : FluentGpu.Foundation.GenStampQuality.Tick;
         if (IsTouchpadDevice(in pi))
         {
             kind = PointerKind.Touchpad;

@@ -32,13 +32,19 @@ public readonly record struct DrawSpan(
     bool ClipComplete);
 
 /// <summary>Per-node prior-frame DrawList span metadata. The DrawList owns the byte/sort arenas; this table owns only
-/// offsets and validation keys, so a clean subtree can memcpy its previous commands without re-walking descendants.</summary>
+/// offsets and validation keys, so a clean subtree can memcpy its previous commands without re-walking descendants.
+/// <para>Validity is per ARENA BUFFER, not per frame (retained tiles P1): every span records the <c>bufGen</c> of the
+/// arena buffer it was written into (a process-unique number the slice recorder assigns on every arena swap) and the
+/// slice slot that arena belongs to. A copy is legal only from the buffer that is the arena's PRIOR one now — so a
+/// slice the recorder KEPT untouched for twenty frames still copies its clean rows on the frame it next re-records,
+/// and a span can never be replayed out of another slice's arena.</para></summary>
 public sealed class SpanTable
 {
     private uint[] _gen;
     private uint[] _frame;
     private ulong[] _inputSig;
-    private ulong[] _moveSig;
+    private ulong[] _bufGen;
+    private int[] _sliceSlot;
     private Affine2D[] _world;
     private int[] _byteStart;
     private int[] _byteLength;
@@ -47,20 +53,13 @@ public sealed class SpanTable
     private int[] _commandCount;
     private DrawListOpcodeStats[] _opcodeStats;
     private RectF[] _subtreeBounds;
+    private RectF[] _selfBounds;
     private bool[] _clipComplete;
     private bool[] _culled;
     // Spatial span-reuse scoping (scene-memory.md): per-node BLOCK stamp. stamp == the current record frame ⇒ this node's
     // stored span could go stale (a special-cased visual lives inside its subtree) ⇒ deny reuse AND skip the store. Stale
     // stamps from prior frames read as unblocked, so no per-frame clear is needed (the _frame/_frameId pattern).
     private uint[] _blockStamp;
-    // Repaint damage (gpu-renderer.md §13.1, I3): the frame at which this node's span was re-based by a TRANSLATED copy.
-    // A translated copy stores the ANCESTOR's shifted span only — its descendants are never walked, so their stored
-    // _subtreeBounds keep PRE-translation coordinates and their _frame stops advancing. A descendant that later moves on
-    // its own would then union its new extent with a prior extent that is wrong by the ancestor's accumulated
-    // translation (unbounded: a scroll is hundreds of DIP), ghosting at a position it never occupied. This stamp is what
-    // lets the recorder tell that case apart from the benign one — an EXACT-copy chain, where the stale extent is still
-    // exactly where the pixels are — instead of padding every stale extent by a constant that bounds nothing.
-    private uint[] _translatedFrame;
     private uint _frameId;
 
     public SpanTable(int capacity = 64)
@@ -69,7 +68,8 @@ public sealed class SpanTable
         _gen = new uint[capacity];
         _frame = new uint[capacity];
         _inputSig = new ulong[capacity];
-        _moveSig = new ulong[capacity];
+        _bufGen = new ulong[capacity];
+        _sliceSlot = new int[capacity];
         _world = new Affine2D[capacity];
         _byteStart = new int[capacity];
         _byteLength = new int[capacity];
@@ -78,10 +78,10 @@ public sealed class SpanTable
         _commandCount = new int[capacity];
         _opcodeStats = new DrawListOpcodeStats[capacity];
         _subtreeBounds = new RectF[capacity];
+        _selfBounds = new RectF[capacity];
         _clipComplete = new bool[capacity];
         _culled = new bool[capacity];
         _blockStamp = new uint[capacity];
-        _translatedFrame = new uint[capacity];
     }
 
     public bool HasPrior => _frameId > 1;
@@ -94,21 +94,18 @@ public sealed class SpanTable
         {
             Array.Clear(_frame);
             Array.Clear(_blockStamp);   // wrap: a stale stamp must never falsely equal the reset frame id (1)
-            Array.Clear(_translatedFrame);
             _frameId = 1;
         }
         return _frameId;
     }
 
-    public bool TryGet(int nodeIndex, uint gen, uint frameId, ulong inputSig, out DrawSpan span)
+    /// <summary>The span of <paramref name="nodeIndex"/> when it may be copied out of the buffer generation
+    /// <paramref name="bufGen"/> (the arena's PRIOR buffer for a re-record, its CURRENT one for a slice kept whole) under
+    /// input signature <paramref name="inputSig"/>. A culled entry has no bytes and never answers.</summary>
+    public bool TryGet(int nodeIndex, uint gen, ulong bufGen, ulong inputSig, out DrawSpan span)
     {
-        if ((uint)nodeIndex >= (uint)_gen.Length || frameId <= 1)
-        {
-            span = default;
-            return false;
-        }
-
-        if (_culled[nodeIndex] || _gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1 || _inputSig[nodeIndex] != inputSig)
+        if ((uint)nodeIndex >= (uint)_gen.Length || bufGen == 0
+            || _culled[nodeIndex] || _gen[nodeIndex] != gen || _bufGen[nodeIndex] != bufGen || _inputSig[nodeIndex] != inputSig)
         {
             span = default;
             return false;
@@ -127,31 +124,17 @@ public sealed class SpanTable
         return true;
     }
 
-    public bool TryGetTranslated(int nodeIndex, uint gen, uint frameId, ulong moveSig, out DrawSpan span)
+    /// <summary>Why <see cref="TryGet"/> would miss for (<paramref name="nodeIndex"/>, <paramref name="gen"/>) under
+    /// <paramref name="bufGen"/> / <paramref name="inputSig"/> — a READ-ONLY probe for the walk ledger
+    /// (docs/plans/evidence-diagnostics-implementation.md §A.4), never a reuse decision: 0 = it would HIT; 1 = no span
+    /// stored for this node in that buffer (none at all, another generation, culled, or stored into another buffer);
+    /// 2 = a span IS stored for this node in that buffer but under a different input signature (the subtree is clean and
+    /// its bytes are there — an input such as its inherited opacity changed).</summary>
+    public byte ClassifyMiss(int nodeIndex, uint gen, ulong bufGen, ulong inputSig)
     {
-        if ((uint)nodeIndex >= (uint)_gen.Length || frameId <= 1)
-        {
-            span = default;
-            return false;
-        }
-
-        if (_culled[nodeIndex] || _gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1 || _moveSig[nodeIndex] != moveSig)
-        {
-            span = default;
-            return false;
-        }
-
-        span = new DrawSpan(
-            _byteStart[nodeIndex],
-            _byteLength[nodeIndex],
-            _sortStart[nodeIndex],
-            _sortCount[nodeIndex],
-            _commandCount[nodeIndex],
-            _opcodeStats[nodeIndex],
-            _world[nodeIndex],
-            _subtreeBounds[nodeIndex],
-            _clipComplete[nodeIndex]);
-        return true;
+        if ((uint)nodeIndex >= (uint)_gen.Length || bufGen == 0 || _culled[nodeIndex] || _gen[nodeIndex] != gen
+            || _bufGen[nodeIndex] != bufGen) return 1;
+        return _inputSig[nodeIndex] != inputSig ? (byte)2 : (byte)0;
     }
 
     public bool TryGetSubtree(int nodeIndex, uint gen, uint frameId, out Affine2D world, out RectF subtreeBounds)
@@ -170,20 +153,19 @@ public sealed class SpanTable
     }
 
     /// <summary>Repaint damage (gpu-renderer.md §13.1): the extent this node was LAST RECORDED at — its stored
-    /// <see cref="DrawSpan.SubtreeBounds"/>, i.e. device-space with every shadow/self-blur halo and focus ring already
-    /// folded in. Paired with the node's CURRENT bounds this gives the old∪new repaint band.
+    /// <see cref="DrawSpan.SubtreeBounds"/>, in the space of the slice it was recorded into (<see cref="SliceSlotOf"/>),
+    /// with every shadow/self-blur halo and focus ring already folded in. Paired with the node's CURRENT bounds this gives
+    /// the old∪new repaint band.
     /// <para>Deliberately NOT gated on frame recency, unlike <see cref="TryGet"/>/<see cref="TryGetSubtree"/>. Those ask
-    /// "may I replay these bytes?", which only a span refreshed LAST frame can answer. This asks "where are this node's
-    /// pixels on screen right now?", and a node whose ancestor exact-copied its span for the last twenty frames has not
-    /// been re-recorded since — so its last stored extent IS what is presented. Requiring recency here made every
-    /// descendant of a reused subtree report a lost extent the moment it changed (a hover fade under an idle page),
-    /// which forced a full repaint on exactly the frames partial repaint exists for.</para>
+    /// "may I replay these bytes?"; this asks "where are this node's pixels right now?". Since the translated-copy branch
+    /// was deleted (retained tiles P1) nothing moves a node's recorded pixels inside its slice without re-recording it —
+    /// an ancestor's exact copy lands them where they were, and a slice's own motion is a composite parameter the caller
+    /// maps separately — so a carried-over extent is EXACT, however many frames old.</para>
     /// <para>The slot is overwritten by THIS frame's <see cref="Store"/>, so the recorder must read it BEFORE it
     /// re-records the node.</para>
-    /// <paramref name="fresh"/> is true when the extent WAS refreshed on the previous frame (exact); false means it is a
-    /// carried-over extent, which an ancestor's translated-span copy could have shifted without re-recording this node —
-    /// callers pad such a band conservatively. A <c>false</c> RETURN means the node has never stored a span under this
-    /// generation: brand new, nothing was presented behind it, its current bounds are the whole truth.</summary>
+    /// <paramref name="fresh"/> is true when the extent was refreshed on the previous frame (diagnostic only). A
+    /// <c>false</c> RETURN means the node has never stored a span under this generation: brand new, nothing was presented
+    /// behind it, its current bounds are the whole truth.</summary>
     public bool TryGetPriorExtent(int nodeIndex, uint gen, uint frameId, out RectF prior, out bool fresh)
     {
         if ((uint)nodeIndex >= (uint)_gen.Length || _gen[nodeIndex] != gen || _frame[nodeIndex] == 0)
@@ -197,32 +179,43 @@ public sealed class SpanTable
         return true;
     }
 
-    /// <summary>The record frame this node's span was last stored at (0 = never, under this generation). Paired with
-    /// <see cref="TranslatedFrameOf"/> to decide whether a carried-over prior extent is still where the pixels are.</summary>
-    public uint StoredFrameOf(int nodeIndex, uint gen)
-        => (uint)nodeIndex < (uint)_gen.Length && _gen[nodeIndex] == gen ? _frame[nodeIndex] : 0u;
-
-    /// <summary>The frame at which this node's span was re-based by a TRANSLATED copy (0 = never). See
-    /// <c>_translatedFrame</c>.</summary>
-    public uint TranslatedFrameOf(int nodeIndex, uint gen)
-        => (uint)nodeIndex < (uint)_gen.Length && _gen[nodeIndex] == gen ? _translatedFrame[nodeIndex] : 0u;
-
-    /// <summary>Record that this node's span was stored by a TRANSLATED copy at <paramref name="frameId"/> — i.e. its
-    /// whole subtree was shifted without re-recording a single descendant. Call it right after the matching
-    /// <see cref="Store"/>.</summary>
-    public void NoteTranslatedCopy(int nodeIndex, uint gen, uint frameId)
+    /// <summary>Record the node's OWN visual extent (its box + self-blur halo, in its slice's space) alongside the span a
+    /// re-record just stored — the geometry-damage baseline (<see cref="TryGetPriorGeometry"/>).</summary>
+    public void StoreSelf(int nodeIndex, in RectF selfBounds)
     {
-        if ((uint)nodeIndex >= (uint)_gen.Length || _gen[nodeIndex] != gen) return;
-        _translatedFrame[nodeIndex] = frameId;
+        if ((uint)nodeIndex < (uint)_selfBounds.Length) _selfBounds[nodeIndex] = selfBounds;
     }
 
-    public void Store(int nodeIndex, uint gen, uint frameId, ulong inputSig, ulong moveSig, in DrawSpan span)
+    /// <summary>Where <paramref name="nodeIndex"/> last presented, in the space of <paramref name="sliceSlot"/>: its world
+    /// transform, its own visual extent and its subtree's. The recorder compares them with this frame's to damage exactly
+    /// what a layout pass moved or resized (retained tiles — a re-window must not damage rows that stayed put).</summary>
+    public bool TryGetPriorGeometry(int nodeIndex, uint gen, out Affine2D world, out RectF self, out RectF subtree, out int sliceSlot)
+    {
+        if ((uint)nodeIndex >= (uint)_gen.Length || _gen[nodeIndex] != gen || _frame[nodeIndex] == 0)
+        {
+            world = default; self = default; subtree = default; sliceSlot = -1;
+            return false;
+        }
+        world = _world[nodeIndex];
+        self = _selfBounds[nodeIndex];
+        subtree = _subtreeBounds[nodeIndex];
+        sliceSlot = _sliceSlot[nodeIndex];
+        return true;
+    }
+
+    /// <summary>The slice slot whose arena this node's span was last stored in (−1 = never, under this generation) —
+    /// the space its <see cref="TryGetPriorExtent"/> rect is expressed in.</summary>
+    public int SliceSlotOf(int nodeIndex, uint gen)
+        => (uint)nodeIndex < (uint)_gen.Length && _gen[nodeIndex] == gen && _frame[nodeIndex] != 0 ? _sliceSlot[nodeIndex] : -1;
+
+    public void Store(int nodeIndex, uint gen, uint frameId, ulong inputSig, in DrawSpan span, ulong bufGen, int sliceSlot)
     {
         EnsureCapacity(nodeIndex + 1);
         _gen[nodeIndex] = gen;
         _frame[nodeIndex] = frameId;
         _inputSig[nodeIndex] = inputSig;
-        _moveSig[nodeIndex] = moveSig;
+        _bufGen[nodeIndex] = bufGen;
+        _sliceSlot[nodeIndex] = sliceSlot;
         _world[nodeIndex] = span.World;
         _byteStart[nodeIndex] = span.ByteStart;
         _byteLength[nodeIndex] = span.ByteLength;
@@ -235,11 +228,17 @@ public sealed class SpanTable
         _culled[nodeIndex] = false;
     }
 
-    public void StoreCulled(int nodeIndex, uint gen, uint frameId, in Affine2D world, in RectF subtreeBounds)
+    public void StoreCulled(int nodeIndex, uint gen, uint frameId, in Affine2D world, in RectF subtreeBounds, int sliceSlot)
     {
         EnsureCapacity(nodeIndex + 1);
+        // the node's own extent rides the same translation as its subtree
+        RectF self = _selfBounds[nodeIndex];
+        if (_gen[nodeIndex] == gen && !self.IsEmpty)
+            _selfBounds[nodeIndex] = new RectF(self.X + world.Dx - _world[nodeIndex].Dx, self.Y + world.Dy - _world[nodeIndex].Dy, self.W, self.H);
         _gen[nodeIndex] = gen;
         _frame[nodeIndex] = frameId;
+        _bufGen[nodeIndex] = 0;
+        _sliceSlot[nodeIndex] = sliceSlot;
         _world[nodeIndex] = world;
         _subtreeBounds[nodeIndex] = subtreeBounds;
         _culled[nodeIndex] = true;
@@ -278,7 +277,8 @@ public sealed class SpanTable
         Array.Resize(ref _gen, n);
         Array.Resize(ref _frame, n);
         Array.Resize(ref _inputSig, n);
-        Array.Resize(ref _moveSig, n);
+        Array.Resize(ref _bufGen, n);
+        Array.Resize(ref _sliceSlot, n);
         Array.Resize(ref _world, n);
         Array.Resize(ref _byteStart, n);
         Array.Resize(ref _byteLength, n);
@@ -287,9 +287,9 @@ public sealed class SpanTable
         Array.Resize(ref _commandCount, n);
         Array.Resize(ref _opcodeStats, n);
         Array.Resize(ref _subtreeBounds, n);
+        Array.Resize(ref _selfBounds, n);
         Array.Resize(ref _clipComplete, n);
         Array.Resize(ref _culled, n);
         Array.Resize(ref _blockStamp, n);
-        Array.Resize(ref _translatedFrame, n);
     }
 }

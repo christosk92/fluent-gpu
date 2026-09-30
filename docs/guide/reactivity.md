@@ -45,19 +45,25 @@ new BoxEl {
 | (`TextEl`) `Text : Prop<string>` | text content | **scoped relayout** (metrics may change) |
 | (`TextEl`) `Color : Prop<ColorF>` | text color | compositor-only |
 
-Every bindable channel is ONE `Prop<T>` property with **three accepted forms**: a static value (`Opacity = 0.5f` — written at reconcile, granular re-render tier), a derived thunk (`Opacity = Prop.Of(() => f(sig.Value))`, or assign a typed `Func<T>` local — inline lambdas need `Prop.Of` because C# cannot chain a lambda conversion into a user conversion), or a **concrete signal** (`Opacity = sig` — signal-direct, no closure; `Signal<T>`/`FloatSignal`/`Memo<T>`; through an `IReadSignal<T>` parameter use the thunk form). A BOUND channel ignores its static sibling and is wired **once at mount** — a fresh thunk on re-render is ignored (change the signal's value, not the bind). `UseState` values feed the static form (setState → re-render); the hot-scalar upgrade is `UseState` → `UseSignal` and the assignment flips from value to signal with no property-name change. Never use `default(Prop<T>)` to mean "unset", and in a `cond ? value : signal` ternary put the `(Prop<T>)` cast on the value arm. `Prop<T>` is a property type, not a parameter type — factories take `T`/`Func<T>`/`Signal<T>` params. Because a bind wires **once at mount**, keep a channel's bound-vs-static shape **stable across renders** — flipping `Fill = staticColor` ↔ `Fill = signal` on a reused node silently loses (the new form never takes). A DEBUG-only tripwire (`BindContract`; folds out of Release; env kill-switch `FG_BIND_CONTRACT=0`) reports such a flip; a fresh thunk on re-render (bound→bound) is fine and is not flagged.
+Every bindable channel is ONE `Prop<T>` property with **three accepted forms**: a static value (`Opacity = 0.5f` — written at reconcile, granular re-render tier), a derived thunk (`Opacity = Prop.Of(() => f(sig.Value))`, or assign a typed `Func<T>` local — inline lambdas need `Prop.Of` because C# cannot chain a lambda conversion into a user conversion), or a **concrete signal** (`Opacity = sig` — signal-direct, no closure; `Signal<T>`/`FloatSignal`/`Memo<T>`; through an `IReadSignal<T>` parameter use the thunk form). A BOUND channel ignores its static sibling and is wired into one effect **at mount**; when a re-render binds it again with a **different** thunk or signal (a fresh lambda capturing new render-time values, another signal instance), the reconciler **re-wires** that effect to the new source (bound→bound — an unchanged thunk/signal re-runs nothing). Changing the signal's value is still the cheap path: it is one bind fire, a re-wire costs the owner's re-render. `UseState` values feed the static form (setState → re-render); the hot-scalar upgrade is `UseState` → `UseSignal` and the assignment flips from value to signal with no property-name change. Never use `default(Prop<T>)` to mean "unset", and in a `cond ? value : signal` ternary put the `(Prop<T>)` cast on the value arm. `Prop<T>` is a property type, not a parameter type — factories take `T`/`Func<T>`/`Signal<T>` params. Because a bind is only ever CREATED at mount (a re-render re-wires bound→bound, never binds a static channel or unbinds a bound one), keep a channel's bound-vs-static shape **stable across renders** — flipping `Fill = staticColor` ↔ `Fill = signal` on a reused node silently loses (the new form never takes). A DEBUG-only tripwire (`BindContract`; folds out of Release; `--fg no-guards` turns it off for a measurement) reports such a flip; a fresh thunk on re-render (bound→bound) is fine and is not flagged.
 
 > **Rule:** a bind thunk must read `.Value` (subscribes), not `.Peek()`. And prefer a transform/opacity/fill bind over
 > a width/height/text bind when you can express the change as a transform — it skips layout entirely.
 
-Because the thunk is mount-owned, do not close over a value computed by a component render and expect a later render
-to replace it. Move the reactive read inside the thunk:
+Do not close over a value read from a signal during render. The re-wire refreshes such a snapshot only when the
+enclosing render re-runs — so it freezes in a run-once scope (an `ItemsView.CreateBound` row template, a render that
+reads no signal), and where the render does re-run every change costs a component re-render instead of one bind
+fire. Move the reactive read inside the thunk:
 
 ```csharp
 int snapshot = selected.Value;
-new TextEl(Prop.Of(() => $"selected {snapshot}"));       // wrong: snapshot freezes at mount (FGRP002)
-new TextEl(Prop.Of(() => $"selected {selected.Value}")); // correct: the mounted bind subscribes directly
+new TextEl(Prop.Of(() => $"selected {snapshot}"));       // wrong: refreshes only via a re-render (FGRP002)
+new TextEl(Prop.Of(() => $"selected {selected.Value}")); // correct: the bind subscribes directly
 ```
+
+Capturing a render-time value that is NOT a signal (a measured width, a layout constant a `Responsive.Of` fallback
+later replaces) is fine: the re-render that produces the new value hands the node a new thunk and the reconciler
+re-wires it (`ProgressBar.Create(value, width)` binds its indicator to `value × width` this way).
 
 Bound virtual rows have the same rule for both halves of their identity: the slot index **and the collection source**
 must be reactive. Prefer `BoundItems.From(...)` / `BoundItems.Project(...)` with the typed
@@ -233,8 +239,8 @@ one and drops the old — never a stale one-shot capture). An effect that reads 
 executes in the passive-effect drain (after paint), never inline during `Flush`.
 
 > **DEBUG tripwire — backwards write.** An effect (or bind thunk) that **writes a signal it also reads** in the same run
-> re-marks itself stale → a convergence risk. A DEBUG-only tripwire (`BackwardsWriteGuard`; folds out of Release; env
-> kill-switch `FG_BACKWARDS_WRITE=0`) reports it once. Derive the value, or split the read and the write across effects.
+> re-marks itself stale → a convergence risk. A DEBUG-only tripwire (`BackwardsWriteGuard`; folds out of Release;
+> `--fg no-guards` turns it off for a measurement) reports it once. Derive the value, or split the read and the write across effects.
 
 **`DepKey` deps are the explicit opt-in.** `UseEffect(fn, deps)` disables tracking and re-runs only when the `DepKey`
 changes — the over-scoping escape ("run only when THIS changes"). `deps` is a 16-byte value key, not an array:

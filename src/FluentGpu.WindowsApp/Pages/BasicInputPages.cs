@@ -23,7 +23,8 @@ sealed partial class ButtonControlPage : Component
         ExampleCard.Show(InteractiveSample),
         ExampleCard.Show(AppearanceAxisSample),
         ExampleCard.Show(SizeAxisSample),
-        ExampleCard.Show(IconSlotSample));
+        ExampleCard.Show(IconSlotSample),
+        ExampleCard.Show(PlayAccentPaletteSample));
 
     [Sample("An interactive button", Description = "Appearance, size, and enabled state are live knobs — Button is an element factory, so a knob change re-bakes the tree with no remount.")]
     static Element Interactive(Knobs k)
@@ -51,6 +52,20 @@ sealed partial class ButtonControlPage : Component
     static Element IconSlot() => HStack(8,
         Button.Create("Add item", () => { }, ButtonAppearance.Accent, glyph: Icons.Add),
         Button.Create("Copy", () => { }, ButtonAppearance.Standard, glyph: Icons.Copy));
+
+    // E1 (docs/plans/wavee/home-redesign-implementation.md Workstream E, C:\wavee\waveemusic): the "Play" primary
+    // button tinted by a PAGE accent — Button.ButtonPalette.ForAccent(pageAccent) instead of the live Tok accent, so
+    // three unrelated Play buttons on three different album pages can each carry their own cover-extracted color at
+    // once, keeping the stock 32/r4 AccentButtonStyle geometry. Three swatches sweep the luminance range (light,
+    // mid-tone, near-white) so the ink-contrast picker's dark↔white flip is visible in one row.
+    [Sample("Play — page-accent palette (E1)", Description = "Button.ButtonPalette.ForAccent(pageAccent) swaps only the color axis; geometry/border stay the stock Accent shape. Sweeps a light, a mid-tone, and a near-white base so the luminance-picked ink flips dark↔white across the row.")]
+    static Element PlayAccentPalette() => HStack(8,
+        Button.Create("Play", () => { }, ButtonAppearance.Accent, glyph: Icons.Play,
+            palette: Button.ButtonPalette.ForAccent(ColorF.FromRgba(0x2E, 0x5B, 0xFF))),   // light-mid saturated blue
+        Button.Create("Play", () => { }, ButtonAppearance.Accent, glyph: Icons.Play,
+            palette: Button.ButtonPalette.ForAccent(ColorF.FromRgba(0x8B, 0x2E, 0x5B))),   // mid-tone plum
+        Button.Create("Play", () => { }, ButtonAppearance.Accent, glyph: Icons.Play,
+            palette: Button.ButtonPalette.ForAccent(ColorF.FromRgba(0xEE, 0xE8, 0xD8))));  // near-white cream
 }
 
 [GalleryPage("DropDownButton", "DropDownButton", "Basic input", Icon = Icons.More)]
@@ -127,10 +142,17 @@ sealed partial class RepeatButtonControlPage : Component
 sealed partial class ToggleButtonControlPage : Component
 {
     static readonly Signal<CheckState> _tri = new(CheckState.Unchecked);
+    // E2 (docs/plans/wavee/home-redesign-implementation.md Workstream E, C:\wavee\waveemusic) samples: Controlled
+    // owns none of this state itself — these are the CALLER-held signals the value-controlled contract requires.
+    static readonly Signal<bool> _following = new(false);
+    static readonly Signal<bool> _followingSubtleWide = new(true);
+    static readonly Signal<bool> _followingSubtleCompact = new(false);
 
     public override Element Render() => GalleryPage.Shell("ToggleButton", "A button that can be switched between two states (or a third, indeterminate, state).",
         ExampleCard.Show(TwoStateSample),
-        ExampleCard.Show(ThreeStateSample));
+        ExampleCard.Show(ThreeStateSample),
+        ExampleCard.Show(FollowPopSample),
+        ExampleCard.Show(SubtleFollowingSample));
 
     [Sample("Two-state", Description = "The 'On' knob and the button share one signal — flip either and both follow.")]
     static Element TwoState(Knobs k)
@@ -143,6 +165,59 @@ sealed partial class ToggleButtonControlPage : Component
     static Element ThreeState() => VStack(6,
         ToggleButton.Create($"{_tri.Value}", _tri),
         GalleryPage.LiveText(() => $"{_tri.Value}"));
+
+    // E2: Controlled + glyph + checkedLabel + pop. The style's accent tint comes from E1's AccentSet.From(pageAccent)
+    // — the same "one shade function" a page-accent Play button (Button.ButtonPalette.ForAccent) reads. Clicking the
+    // toggle pops the heart (peak 1.18, 250ms) exactly once per false→true click; "Set on programmatically" writes
+    // the SAME signal from a plain button's click handler (not the toggle) to demonstrate the pop is click-only.
+    [Sample("Follow — glyph + checked-label + pop (E2)", Description = "Controlled(label, isChecked, onToggle, glyph:, checkedGlyph:, checkedLabel:) — a value-controlled toggle (no internal state). A click pops the heart once (peak 1.18, 250ms); 'Set on programmatically' writes the SAME signal from an event handler (not a click on the toggle itself) to show the pop never fires on a data-driven change.")]
+    static Element FollowPop() => HStack(8,
+        ToggleButton.Controlled("Follow", _following.Value, v => _following.Value = v,
+            glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, checkedLabel: "Following", style: FollowStyle()),
+        Button.Create("Set on programmatically", () => _following.Value = true, ButtonAppearance.Outline),
+        Button.Create("Reset", () => _following.Value = false, ButtonAppearance.Outline));
+
+    // The accent tint comes from E1's AccentSet.From(pageAccent) — the same "one shade function" a page-accent Play
+    // button (Button.ButtonPalette.ForAccent) reads.
+    static ToggleButton.Style FollowStyle()
+    {
+        var set = AccentSet.From(ColorF.FromRgba(0x2E, 0x5B, 0xFF));   // an arbitrary page accent
+        return ToggleButton.DefaultStyle with
+        {
+            OnBackground = set.Subtle, OnHover = set.Subtle with { A = set.Subtle.A + 0.04f }, OnPressed = set.Subtle with { A = MathF.Max(0f, set.Subtle.A - 0.04f) },
+            OnDisabledBackground = Tok.FillControlDisabled,
+            OnForeground = set.Text, OnPressedForeground = set.Text, OnDisabledForeground = Tok.TextDisabled,
+            OnGlyphForeground = set.Fill,
+            OnBorder = GradientSpec.Solid(set.Fill with { A = 0.5f }), OnHoverBorder = GradientSpec.Solid(set.Fill with { A = 0.5f }),
+            OnPressedBorder = GradientSpec.Solid(set.Fill with { A = 0.35f }), OnDisabledBorder = GradientSpec.Solid(Tok.StrokeControlDefault),
+            CheckedPopScale = 1.18f, CheckedPopMs = 250f,
+        };
+    }
+
+    // E2: the transparent-off / FillSubtleSecondary-on "Following" shape (the Home facet-row toggle), at the two
+    // sizes the plan calls out (32 default / 28 compact — MinHeight/Padding tightened for the compact instance since
+    // an explicit Style bypasses the ControlSize axis).
+    [Sample("Subtle 'Following' — 32 & 28px (E2)")]
+    static Element SubtleFollowing()
+    {
+        var set = AccentSet.From(ColorF.FromRgba(0x2E, 0x5B, 0xFF));
+        var subtleStyle = ToggleButton.DefaultStyle with
+        {
+            OffBackground = ColorF.Transparent, OffHover = Tok.FillSubtleSecondary, OffPressed = Tok.FillSubtleTertiary,
+            OffBorder = null, OffHoverBorder = null, OffPressedBorder = null, OffDisabledBorder = null,
+            OnBackground = Tok.FillSubtleSecondary, OnHover = Tok.FillSubtleTertiary, OnPressed = Tok.FillSubtleSecondary,
+            OnDisabledBackground = Tok.FillSubtleTransparent,
+            OnBorder = null, OnHoverBorder = null, OnPressedBorder = null, OnDisabledBorder = null,
+            OnGlyphForeground = set.Fill, OffGlyphForeground = Tok.TextSecondary,
+            OnForeground = Tok.TextPrimary,
+        };
+        var compactStyle = subtleStyle with { MinHeight = 28f, FontSize = 12f, GlyphSize = 14f, Padding = new Edges4(9, 4, 9, 4) };
+        return HStack(12,
+            ToggleButton.Controlled("Follow", _followingSubtleWide.Value, v => _followingSubtleWide.Value = v,
+                glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, checkedLabel: "Following", style: subtleStyle),
+            ToggleButton.Controlled("Follow", _followingSubtleCompact.Value, v => _followingSubtleCompact.Value = v,
+                glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, checkedLabel: "Following", style: compactStyle));
+    }
 }
 
 [GalleryPage("SplitButton", "SplitButton", "Basic input", Icon = Icons.More)]
@@ -378,4 +453,87 @@ sealed partial class ToggleSwitchControlPage : Component
             ToggleSwitch.Create(b, header: "Wi-Fi", onContent: "Connected", offContent: "Disconnected"),
             GalleryPage.LiveText(() => b.Value ? "Connected" : "Disconnected"));
     }
+}
+
+[GalleryPage("Segmented", "Segmented", "Basic input", Icon = Icons.ViewList,
+    Keywords = ["pivot", "tablist", "facet", "compact band"])]
+sealed partial class SegmentedControlPage : Component
+{
+    static readonly SegmentedItem[] Facets =
+    [
+        new SegmentedItem("All"),
+        new SegmentedItem("Music"),
+        new SegmentedItem("Podcasts"),
+        new SegmentedItem("Audiobooks"),
+    ];
+
+    // E3 (Wavee Home redesign, docs/plans/wavee/home-redesign-implementation.md Workstream E): the page-title pivot
+    // and the compact scroll-triggered band show the SAME facet — one shared signal, so switching in either sample
+    // moves both, the way Home's FacetRow and its CompactBand track one facet state.
+    static readonly Signal<int> _facet = new(0);
+
+    static TemplateParts BuildPivotParts()
+    {
+        var parts = new TemplateParts();
+        // PartLabel: the pivot's page-title type (20/28 in Home) replaces the default 14px control label.
+        parts.Set<TextEl>(Segmented.PartLabel, t => t with { Size = 28f, Weight = 600 });
+        // PartSelectionPillSlot: the pivot carries selection through the label's weight/color, not the 3px pill —
+        // this part collapses the whole indicator row (distinct from PartSelectionPill, which is only the pill).
+        parts[Segmented.PartSelectionPillSlot] = b => b with { Visible = false };
+        return parts;
+    }
+    static readonly TemplateParts _pivotParts = BuildPivotParts();
+    static readonly Segmented.Style _bandStyle = Segmented.DefaultStyle with { Height = 28f, FontSize = 12f, ItemMinWidth = 40f };
+
+    // E13 (Wavee Home redesign, F24): FacetRow used to install per-item OnHoverMove/OnPointerExit/OnFocusChanged via
+    // a Segmented.PartItem closure counter to recover the item index — an undocumented control internal. These two
+    // page-static signals are the same pattern Home's FacetRow now uses: SegmentedOptions.OnItemHoverChanged/
+    // OnItemFocusChanged hand back the index (or -1) directly, no closure counter, no Parts reach-in.
+    static readonly Signal<int> _hoveredItem = new(-1);
+    static readonly Signal<int> _focusedItem = new(-1);
+    static readonly Segmented.Style _itemGapStyle = Segmented.DefaultStyle with { ItemGap = 24f };
+
+    public override Element Render() => GalleryPage.Shell("Segmented", "A compact CommunityToolkit-style selector for two to five mutually-exclusive choices.",
+        ExampleCard.Show(BasicSample),
+        ExampleCard.Show(PageTitlePivotSample),
+        ExampleCard.Show(CompactBandSample),
+        ExampleCard.Show(ItemEdgeCallbacksSample));
+
+    [Sample("A basic Segmented control", Description = "The default preset — RadioButton items, the pill indicator row, arrows move focus only (Enter/Space select).")]
+    static Element Basic(Knobs k)
+    {
+        var sel = k.Choice("Selection", ["All", "Hide", "Only"], 0);
+        return Segmented.Create(
+            [new SegmentedItem("All"), new SegmentedItem("Hide"), new SegmentedItem("Only")],
+            sel);
+    }
+
+    [Sample("Page-title pivot preset (E3)", Description = "PartLabel sets 28px/600 page-title type; PartSelectionPillSlot hides the pill row; ItemRole=Tab + WrapFocus=true for a facet tablist. Shares the SAME facet signal as the compact-band sample below — switch either, both move.")]
+    static Element PageTitlePivot() => Segmented.Create(
+        Facets,
+        _facet,
+        options: new Segmented.SegmentedOptions
+        {
+            ItemRole = AutomationRole.Tab,
+            WrapFocus = true,
+            Parts = _pivotParts,
+        });
+
+    [Sample("Compact band preset (E3)", Description = "A smaller Style (28px band height, 12px labels) for a scroll-triggered compact facet band; keeps the pill indicator and the default RadioButton role. Shares the SAME facet signal as the pivot sample above.")]
+    static Element CompactBand() => Segmented.Create(
+        Facets,
+        _facet,
+        options: new Segmented.SegmentedOptions { Style = _bandStyle });
+
+    [Sample("Item hover/focus callbacks + ItemGap (E13)", Description = "OnItemHoverChanged/OnItemFocusChanged fire the item index (or -1) on hover/focus EDGES only — no per-item closures, no Parts reach-in. Style.ItemGap (24 DIP here) spaces the item row.")]
+    static Element ItemEdgeCallbacks() => VStack(8,
+        Segmented.Create(
+            Facets,
+            options: new Segmented.SegmentedOptions
+            {
+                Style = _itemGapStyle,
+                OnItemHoverChanged = i => _hoveredItem.Value = i,
+                OnItemFocusChanged = i => _focusedItem.Value = i,
+            }),
+        GalleryPage.LiveText(() => $"hovered={_hoveredItem.Value}  focused={_focusedItem.Value}"));
 }

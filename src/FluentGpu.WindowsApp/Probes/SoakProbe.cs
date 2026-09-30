@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using FluentGpu.Foundation;
@@ -18,33 +18,68 @@ namespace FluentGpu;
 /// memory (leak trend). At the end it linear-fits the second-half memory samples and EXTRAPOLATES the slope to an
 /// hour/day human session, so "what happens over 1–2 hrs / days" is answered from a few minutes of compressed load
 /// without waiting. Modes (one per env flag, evaluated by FluentApp):
-///   FG_SOAK=1            mixed longevity soak (nav + resize)         — FG_SOAK_ACTIONS, FG_SOAK_FPA, FG_SOAK_REPORT
-///   FG_STRESS_RESIZE=1   resize-only stress                          — FG_STRESS_ITERS
-///   FG_STRESS_NAV=1      navigation-only churn                       — FG_STRESS_CYCLES
-/// All write a "[soak]"/"[stress]" trace to stderr; pair with FG_D3D_MEM=1 for the per-resource create/release trace.
+///   --soak            mixed longevity soak (nav + resize)         — --soak-actions, --soak-fpa, --soak-report
+///   --stress-resize   resize-only stress                          — --stress-iters
+///   --stress-nav      navigation-only churn                       — --stress-cycles
+/// All write a "[soak]"/"[stress]" trace to stderr; pair with --fg d3d-mem for the per-resource create/release trace.
 /// </summary>
 internal static class SoakProbe
 {
     /// <summary>
-    /// Adapter for <see cref="FluentGpu.FluentApp.DiagnosticRun"/>: dispatch to the env-selected soak / stress mode and
-    /// report whether it took over the run (the interactive frame loop is then skipped). Wired in <c>Program.Main</c>.
-    /// Lives in the gallery (not the engine) because the modes drive <c>GalleryShell</c>'s nav hook.
+    /// Adapter for <see cref="FluentGpu.FluentApp.DiagnosticRun"/>: dispatch to the command-line-selected soak / stress
+    /// mode and report whether it took over the run (the interactive frame loop is then skipped). Wired in
+    /// <c>Program.Main</c>. Lives in the gallery (not the engine) because the modes drive <c>GalleryShell</c>'s nav hook.
     /// </summary>
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
         if (window is not Win32Window w || device is not D3D12Device gpu) return false;
-        if (Diag.EnvFlag("FG_SOAK"))          { RunSoak(host, w, gpu);      return true; }
-        if (Diag.EnvFlag("FG_STRESS_RESIZE")) { RunResize(host, w, gpu);    return true; }
-        if (Diag.EnvFlag("FG_STRESS_NAV"))    { RunNav(host, w, gpu);       return true; }
-        if (Diag.EnvFlag("FG_WAKE_AUDIT"))    { RunWakeAudit(host, w, gpu); return true; }
-        return false;
+        switch (Selected)
+        {
+            case Mode.Soak: RunSoak(host, w, gpu); return true;
+            case Mode.StressResize: RunResize(host, w, gpu); return true;
+            case Mode.StressNav: RunNav(host, w, gpu); return true;
+            case Mode.WakeAudit: RunWakeAudit(host, w, gpu); return true;
+            default: return false;
+        }
+    }
+
+    public enum Mode { None, Soak, StressResize, StressNav, WakeAudit }
+
+    /// <summary>The selected mode (<c>--soak</c> / <c>--stress-resize</c> / <c>--stress-nav</c> / <c>--wake-audit</c>).</summary>
+    public static Mode Selected;
+    // Tunables (`--soak-actions N`, `--soak-fpa N`, `--soak-report N`, `--stress-iters N`, `--stress-cycles N`).
+    public static int SoakActions = 4000, SoakFramesPerAction = 4, SoakReportEvery = 200, StressIters = 240, StressCycles = 12;
+
+    /// <summary>Parse this probe's command-line arms; true when a mode was selected.</summary>
+    public static bool Parse(string[] args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--soak": Selected = Mode.Soak; break;
+                case "--stress-resize": Selected = Mode.StressResize; break;
+                case "--stress-nav": Selected = Mode.StressNav; break;
+                case "--wake-audit": Selected = Mode.WakeAudit; break;
+            }
+            if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int v) || v <= 0) continue;
+            switch (args[i])
+            {
+                case "--soak-actions": SoakActions = v; break;
+                case "--soak-fpa": SoakFramesPerAction = v; break;
+                case "--soak-report": SoakReportEvery = v; break;
+                case "--stress-iters": StressIters = v; break;
+                case "--stress-cycles": StressCycles = v; break;
+            }
+        }
+        return Selected != Mode.None;
     }
     // ── mixed longevity soak ────────────────────────────────────────────────────────────────────────────────────────
     public static void RunSoak(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        int actions = EnvInt("FG_SOAK_ACTIONS", 4000);
-        int fpa = EnvInt("FG_SOAK_FPA", 4);          // frames rendered per simulated user action
-        int report = EnvInt("FG_SOAK_REPORT", 200);  // emit a sample row every N actions
+        int actions = SoakActions;
+        int fpa = SoakFramesPerAction;               // frames rendered per simulated user action
+        int report = SoakReportEvery;                // emit a sample row every N actions
         var proc = Process.GetCurrentProcess();
 
         for (int i = 0; i < 30 && !window.IsClosed; i++) host.RunFrame();   // warm up + let the gallery mount (sets the nav hook)
@@ -125,7 +160,7 @@ internal static class SoakProbe
     // ── resize-only stress ──────────────────────────────────────────────────────────────────────────────────────────
     public static void RunResize(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        int iters = EnvInt("FG_STRESS_ITERS", 240);
+        int iters = StressIters;
         var proc = Process.GetCurrentProcess();
         Console.Error.WriteLine($"[stress] resize: {iters} iterations (two client sizes, 2 frames each)");
         Mem(proc, "baseline"); gpu.DiagDumpLive("baseline");
@@ -149,7 +184,7 @@ internal static class SoakProbe
     // ── navigation-only churn ───────────────────────────────────────────────────────────────────────────────────────
     public static void RunNav(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        int cycles = EnvInt("FG_STRESS_CYCLES", 12);
+        int cycles = StressCycles;
         var proc = Process.GetCurrentProcess();
         for (int i = 0; i < 30 && !window.IsClosed; i++) host.RunFrame();
         var nav = GalleryShell.StressNavigate; var keys = GalleryShell.StressNavKeys;
@@ -173,7 +208,7 @@ internal static class SoakProbe
     }
 
     // ── idle-CPU / wake audit ───────────────────────────────────────────────────────────────────────────────────────
-    /// <summary>FG_WAKE_AUDIT=1: navigate to every page, let it settle, and read AppHost.CurrentWakeReasons. A page that
+    /// <summary>--wake-audit: navigate to every page, let it settle, and read AppHost.CurrentWakeReasons. A page that
     /// never settles to None keeps the frame loop spinning at display rate (RecommendedWaitMs==0) => idle CPU burn. The
     /// reason names which subsystem; the table separates legitimately-animating pages from stuck-bit bugs.</summary>
     public static void RunWakeAudit(AppHost host, Win32Window window, D3D12Device gpu)
@@ -251,7 +286,4 @@ internal static class SoakProbe
         double denom = n * sxx - sx * sx;
         return Math.Abs(denom) < 1e-9 ? 0 : (n * sxy - sx * sy) / denom;
     }
-
-    private static int EnvInt(string name, int dflt)
-        => int.TryParse(Environment.GetEnvironmentVariable(name), out var v) && v > 0 ? v : dflt;
 }

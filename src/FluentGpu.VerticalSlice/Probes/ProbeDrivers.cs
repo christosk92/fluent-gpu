@@ -215,15 +215,15 @@ public static int ScrollFlickerProbe()
     var vp = host.Scene.Root;
     host.Scene.TryGetScroll(vp, out var sc0);
     var content = sc0.ContentNode;
-    Console.WriteLine($"mount: viewportH={sc0.ViewportH:0} contentH={sc0.ContentH:0} overscan={sc0.Overscan} " +
-                      $"guardRows={Math.Max(1, sc0.Overscan / 2)} realized=[{sc0.FirstRealized},{sc0.LastRealized})");
+    Console.WriteLine($"mount: viewportH={sc0.ViewportH:0} contentH={sc0.ContentH:0} " +
+                      $"cover=[{sc0.CoverStart:0},{sc0.CoverEnd:0}) realized=[{sc0.FirstRealized},{sc0.LastRealized})");
 
     var ptr = new Point2(150, 200);
     int uncovered = 0, frames = 0;
     float worstGap = 0f;
 
-    // One big wheel notch to set a far target, then let the ease run frame-by-frame (this is the fast-fling travel).
-    window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 4000f));
+    // A burst of wheel notches to set a far target, then let the glide run frame-by-frame (this is the fast travel).
+    window.SendWheelNotch(ptr, 40f);
     for (int f = 0; f < 120; f++)
     {
         host.RunFrame();
@@ -245,17 +245,17 @@ public static int ScrollFlickerProbe()
             if (gap > worstGap) worstGap = gap;
             if (uncovered <= 12)
             {
-                host.ScrollKernel.TryGetBody((int)vp.Raw.Index, out var bodyDiag);
+                double target = host.TryGetScrollHandle(vp)?.Plan.Dest ?? double.NaN;
                 Console.WriteLine($"  frame {f}: UNCOVERED drawnOffset={drawnOffset:0.#} " +
-                    $"target={bodyDiag.Target:0.#} drawnView=[{viewTop:0.#},{viewBot:0.#}) " +
+                    $"target={target:0.#} drawnView=[{viewTop:0.#},{viewBot:0.#}) " +
                     $"realized=[{realizedTop:0.#},{realizedBot:0.#}) leadGap={leadGap:0.#} trailGap={trailGap:0.#}");
             }
         }
         frames++;
-        if (sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle && sc.OffsetY > 0f) break;   // Driven wheel chase settled
+        if (!sc.Motion.IsMoving && sc.OffsetY > 0f) break;   // the wheel glide settled
     }
 
-    Console.WriteLine($"\nSMOOTH ease over one 4000px notch: {uncovered}/{frames} frames had the drawn viewport NOT " +
+    Console.WriteLine($"\nSMOOTH ease over one 40-notch burst: {uncovered}/{frames} frames had the drawn viewport NOT " +
                       $"fully covered by realized rows; worst leading/trailing gap = {worstGap:0.#}px");
 
     // Now the harsher case: a sustained fast wheel STORM (many big notches back-to-back) — the per-frame travel is
@@ -263,7 +263,7 @@ public static int ScrollFlickerProbe()
     int uncovered2 = 0, frames2 = 0; float worstGap2 = 0f; float maxStep = 0f; float prevOff = -1f;
     for (int s = 0; s < 80; s++)
     {
-        window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 6000f));
+        window.SendWheelNotch(ptr, 60f);
         host.RunFrame();
         host.Scene.TryGetScroll(vp, out var sc);
         float drawnOffset = -host.Scene.Paint(content).LocalTransform.Dy;
@@ -279,7 +279,7 @@ public static int ScrollFlickerProbe()
         }
         frames2++;
     }
-    Console.WriteLine($"FAST WHEEL STORM (80 × 6000px notches): {uncovered2}/{frames2} frames uncovered; " +
+    Console.WriteLine($"FAST WHEEL STORM (80 × 60-notch bursts): {uncovered2}/{frames2} frames uncovered; " +
                       $"worst gap = {worstGap2:0.#}px; max single-frame drawn-offset step = {maxStep:0.#}px");
 
     bool reproduced = uncovered > 0 || uncovered2 > 0;

@@ -42,7 +42,7 @@ public static class FrameClock
 
     /// <summary>This frame's lattice-snapped "now" in QPC ticks (<see cref="System.Diagnostics.Stopwatch.Frequency"/>
     /// units — the <c>Stopwatch.GetTimestamp()</c> domain): the host's <see cref="FluentGpu.Pal.FrameClock.FrameQpc"/>,
-    /// the same target time the scroll kernel and DirectManipulation consume. Monotone frame to frame within one host
+    /// the same target time the scroll frame step and DirectManipulation consume. Monotone frame to frame within one host
     /// (never rewinds; see the multi-window note below for the cross-host caveat).
     /// <para>Set by the host at the very top of <c>AppHost.RunFrame</c> — before the input pump, cross-thread posts,
     /// timers, the <see cref="Tick"/> publish and the reactive flush — so every handler, effect, render and bind thunk
@@ -123,6 +123,12 @@ public interface IDetachedVideoWindow
     void SetTopmost(bool topmost);
     /// <summary>Move/resize the window (outer rect, physical virtual-screen px).</summary>
     void SetBounds(FluentGpu.Foundation.RectF outerBoundsPx);
+    /// <summary>Move the window's outer origin WITHOUT touching its size (<see cref="Pal.IPlatformWindow.MoveToPx"/>) —
+    /// restore a remembered position independent of whatever size the window happens to be at right now. Default:
+    /// <see cref="SetBounds"/> with the CURRENT size (<see cref="BoundsPx"/>), for a backend whose window has no
+    /// standalone move primitive; a backend with one (Win32) overrides to call it directly and skip the read-back.</summary>
+    void MoveTo(FluentGpu.Foundation.Point2 outerOriginPx)
+        => SetBounds(new FluentGpu.Foundation.RectF(outerOriginPx.X, outerOriginPx.Y, BoundsPx.W, BoundsPx.H));
     /// <summary>Close the window (the pop-out docks back to inline).</summary>
     void Close();
     /// <summary>Fired exactly once, on the UI thread, when the window has closed (OS chrome/Alt+F4 OR programmatic
@@ -159,6 +165,17 @@ public interface IDetachedVideoWindow
     /// <see cref="SetFullscreen"/>. False for a closed window and for any implementation that cannot do it (the default),
     /// so a caller that asks never has to special-case "unsupported" separately from "not fullscreen".</summary>
     bool IsFullscreen => false;
+
+    /// <summary>True once this window's own render frame has thrown a non-device-loss exception (INCIDENT 2026-09: a
+    /// child's Close/submit fault used to kill the whole process — <c>AppHost.SubmitPresentOnRenderThread</c>'s catch
+    /// now latches this instead of rethrowing). A one-way latch: once true, this window is no longer presenting
+    /// anything and never will again. Default false so a backend without the concept (or a handle backed by a host
+    /// that predates this member) reads as healthy forever, matching prior behavior.</summary>
+    bool RenderFailed => false;
+    /// <summary>Fired once, on the render thread, the instant <see cref="RenderFailed"/> latches. The owner should
+    /// treat this like <see cref="OnClosed"/>'s sibling — typically marshal to the UI thread and close the pop-out
+    /// (it can no longer present) rather than leave a frozen/blank window around. Default no-op.</summary>
+    Action? OnRenderFailed { get; set; }
 }
 
 public sealed class InputHooks
@@ -169,8 +186,8 @@ public sealed class InputHooks
 
     /// <summary>App-zoom wheel hook (browser Ctrl+wheel): invoked by the dispatcher for a Ctrl+wheel AFTER element-level
     /// <c>OnPointerWheel</c> handlers declined it and BEFORE the viewport scrolls. The argument is the signed device
-    /// notch count (&gt;0 = wheel rotated away from the user = zoom in). Return true to consume — the viewport never
-    /// scrolls that notch. Null (the default) leaves Ctrl+wheel scrolling exactly as before. Note: the Win32 backend
+    /// notch count (&gt;0 = wheel rotated away from the user = zoom in; <c>WheelClassifier.ZoomNotches</c>); only a
+    /// vertical wheel zooms. Return true to consume — the viewport never scrolls that notch. Null (the default) leaves Ctrl+wheel scrolling exactly as before. Note: the Win32 backend
     /// synthesizes pinch-zoom from Ctrl + hi-res/touchpad wheel BEFORE events reach the dispatcher, so this hook only
     /// ever sees detented mouse wheels.</summary>
     public Func<float, bool>? ZoomWheel;
@@ -246,13 +263,11 @@ public sealed class InputHooks
     /// <summary>Borderless monitor-fullscreen state + command. Media surfaces use this instead of maximizing.</summary>
     public Func<bool>? IsWindowFullscreen;
     public Action<bool>? WindowSetFullscreen;
-    /// <summary>Start the OS move loop for THIS window (host-wired to <c>IPlatformWindow.BeginSystemMove</c>). A control
-    /// calls it from a press that travelled past the drag box on its draggable surface — the pop-out video, whose
-    /// chromeless window has no caption to grab. True = the loop was requested and exactly one
-    /// <see cref="WindowMoveSizeEndedObserved"/> follows; false (or a null hook) = nothing started (fullscreen, no held
-    /// primary mouse/pen button, headless-less trees, a backend without a move loop) and the press stays an ordinary
-    /// press.</summary>
-    public Func<bool>? WindowBeginMove;
+    /// <summary>Raised when any OS move/size loop of THIS window BEGINS (<see cref="FluentGpu.Pal.InputKind.WindowMoveSizeBegan"/>)
+    /// — a caption-region drag or an edge resize. A consumer that holds chrome for a window move starts the hold here and
+    /// releases it on <see cref="WindowMoveSizeEndedObserved"/>. Subscribe with a cached delegate; unsubscribe on unmount.</summary>
+    public event Action? WindowMoveSizeBeganObserved;
+    public void NotifyWindowMoveSizeBegan() => WindowMoveSizeBeganObserved?.Invoke();
     /// <summary>Raised when any OS move/size loop of THIS window ends (<see cref="FluentGpu.Pal.InputKind.WindowMoveSizeEnded"/>)
     /// — edge resizes included, so a subscriber that did not start one ignores it. Subscribe with a cached delegate;
     /// unsubscribe on unmount.</summary>

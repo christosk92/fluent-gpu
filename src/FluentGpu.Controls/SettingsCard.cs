@@ -68,6 +68,9 @@ public static partial class SettingsCard
         public float HeaderFontSize { get; init; } = 14f;
         public float DescriptionFontSize { get; init; } = 12f;
         public float BrushTransitionMs { get; init; } = 83f;
+        /// <summary>Side of the <see cref="PartHeaderIcon"/> slot (square). Replaces the old
+        /// <c>HeaderIconMaxSize</c> literal; the constant still exists as the default.</summary>
+        public float HeaderIconSize { get; init; } = HeaderIconMaxSize;
     }
 
     public sealed record Options
@@ -75,6 +78,11 @@ public static partial class SettingsCard
         public string? Header { get; init; }
         public string? Description { get; init; }
         public string? HeaderIcon { get; init; }
+        /// <summary>Renders in the <see cref="PartHeaderIcon"/> slot INSTEAD OF the <see cref="HeaderIcon"/> glyph when
+        /// set — a CommunityToolkit <c>SettingsCard.HeaderIcon</c> may be an <c>ImageIconSource</c>, not a glyph, and
+        /// this is the parity surface for that: any element (an <c>Artwork</c>, a custom icon) sized to
+        /// <see cref="Style.HeaderIconSize"/>, replacing the glyph text run one-for-one.</summary>
+        public Element? HeaderIconElement { get; init; }
         /// <summary>The card's one content slot. Under the default <see cref="ContentAlignment.Right"/> this lands in
         /// an <c>Auto</c> grid track beside the header's <c>Star</c> track (see <c>BuildRightRow</c>), so
         /// content wider than the card starves the header text toward zero width — and a zero-width run neither wraps
@@ -111,7 +119,17 @@ public static partial class SettingsCard
     };
 
     public static Element Create(Options options)
-        => Embed.Comp(options, () => new SettingsCardCore());
+        => Embed.Comp(options, () => new SettingsCardCore())
+           // SkeletonProxy: the deriver can't see into SettingsCardCore's component boundary, so without this it falls
+           // back to one default 160-DIP bar (SkeletonDeriver's opaque-boundary case) — a card with a header icon and
+           // two lines of text shimmers as a single unrelated stripe. Hand it the REAL card built at the measured width
+           // (the same ResponsiveBox + DeriveRenderedOutput idiom PagedShelf.Create's ShelfProxy uses for its cards),
+           // so the deriver recurses into the actual icon/header/description subtree instead.
+           with
+           {
+               SkeletonProxy = () => Embed.Comp(new ResponsiveBox.Props(w => Build(options, w), 0f, 0f),
+                       static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
+           };
 
     public static ToggleSwitch.Style CompactToggleStyle() => ToggleSwitch.DefaultStyle with
     {
@@ -198,27 +216,30 @@ public static partial class SettingsCard
     static Element BuildHeader(Options o, Style s, bool hideIcon, bool fillMain)
     {
         var kids = new List<Element>(2);
-        if (!hideIcon && o.HeaderIcon is { Length: > 0 } glyph)
+        bool hasIconElement = o.HeaderIconElement is not null;
+        if (!hideIcon && (hasIconElement || o.HeaderIcon is { Length: > 0 }))
+        {
+            Element iconChild = hasIconElement
+                ? o.HeaderIconElement!
+                : new TextEl(o.HeaderIcon!)
+                {
+                    Size = s.HeaderIconSize,
+                    FontFamily = Theme.IconFont,
+                    Color = o.IsEnabled ? s.Foreground : s.ForegroundDisabled,
+                    HoverColor = s.ForegroundPointerOver,
+                    PressedColor = s.ForegroundPressed,
+                    DisabledColor = s.ForegroundDisabled,
+                };
             kids.Add(o.Parts.Apply(PartHeaderIcon, new BoxEl
             {
-                Width = HeaderIconMaxSize,
-                Height = HeaderIconMaxSize,
+                Width = s.HeaderIconSize,
+                Height = s.HeaderIconSize,
                 Margin = new Edges4(2f, 0f, s.HeaderIconMarginRight, 0f),
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Children =
-                [
-                    new TextEl(glyph)
-                    {
-                        Size = HeaderIconMaxSize,
-                        FontFamily = Theme.IconFont,
-                        Color = o.IsEnabled ? s.Foreground : s.ForegroundDisabled,
-                        HoverColor = s.ForegroundPointerOver,
-                        PressedColor = s.ForegroundPressed,
-                        DisabledColor = s.ForegroundDisabled,
-                    },
-                ],
+                Children = [iconChild],
             }));
+        }
 
         var textKids = new List<Element>(2);
         if (o.Header is { Length: > 0 } h)

@@ -18,7 +18,7 @@ namespace FluentGpu;
 /// <summary>
 /// <c>--dialog-scroll-probe [outDir]</c> — the REAL-PATH repro for "ContentDialog labels vanish after the body is
 /// scrolled": a <see cref="ContentDialog"/> with a tall <c>Content</c> (its own <c>ScrollEl { ContentSized }</c>) over
-/// a text-heavy page, driven through the scroll kernel's command port exactly as a wheel would, and captured from the
+/// a text-heavy page, driven through the dialog scroller's ScrollHandle exactly as a wheel would, and captured from the
 /// presented back buffer at scroll-top, mid-scroll and end. Headless gates prove the DrawList carries every glyph run
 /// on every frame (<c>gate.dialog.scrolled-body-text</c>); what they cannot see is the D3D12 backend's per-frame glyph
 /// instance bank, its per-segment glyph batching and the partial-repaint replay — this probe renders through all of
@@ -71,7 +71,7 @@ internal static class DialogScrollProbe
         Report(host, gpu, outDir, "top");
         foreach (var (name, offset) in new[] { ("scrolled", 240f), ("end", MathF.Max(0f, sc.ContentH - sc.ViewportH)), ("back-to-top", 0f) })
         {
-            host.Scene.ScrollPort?.Post(ScrollInput.ScrollTo(node, offset, immediate: true));
+            host.TryGetScrollHandle(vp)?.ScrollTo(offset, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             Settle(host, w, 12);
             fails += Report(host, gpu, outDir, name);
         }
@@ -84,7 +84,7 @@ internal static class DialogScrollProbe
         string path = Path.Combine(outDir, $"dialog-{name}.png");
         if (px.Length > 0) PngWriter.WriteBgra(path, px, cw, ch);
         string diag = Diag.Enabled ? Diag.Snapshot() : "(diag not compiled in)";
-        Console.Error.WriteLine($"[dialog-scroll-probe] {name}: route={gpu.LastRepaintRoute} full={gpu.LastRepaintFullReason} rects={gpu.LastReplayRectCount} " +
+        Console.Error.WriteLine($"[dialog-scroll-probe] {name}: tilesRastered={gpu.LastTilesRastered} renderPasses={gpu.LastRenderPasses} " +
                                 $"dropped={gpu.LastDroppedInstanceCount} glyphInsts={gpu.LastGlyphInstanceCount} segments={gpu.LastSegmentCount} → {path}");
         Console.Error.WriteLine($"[dialog-scroll-probe] {name} diag: {diag}");
         return gpu.LastDroppedInstanceCount == 0 ? 0 : 1;

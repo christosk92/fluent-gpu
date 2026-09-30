@@ -26,6 +26,11 @@
   <ItemGroup>
     <AdditionalFiles Include="d3d12.comabi.json" />
   </ItemGroup>
+  <!-- The retained-tile slice compositor's HLSL (D3D12/SliceCompositor.cs prepends EdgeFeatherMask.Hlsl and compiles it
+       at bring-up; a manifest resource is NativeAOT-safe). -->
+  <ItemGroup>
+    <EmbeddedResource Include="D3D12\composite.hlsl" LogicalName="FluentGpu.Windows.D3D12.composite.hlsl" />
+  </ItemGroup>
   <!-- The gallery smoke harness (the windowsapi-smoke switch) calls Win32DropTarget.SelfTest to exercise the
        hand-vtable IDropTarget's by-value POINTL ABI in-process (the crash-fix regression guard). -->
   <ItemGroup>

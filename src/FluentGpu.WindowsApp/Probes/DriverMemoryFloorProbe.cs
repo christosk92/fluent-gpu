@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -198,7 +198,7 @@ internal static partial class DriverMemoryFloorProbe
                     throw new InvalidOperationException("Window pixels/DPI changed; discard this comparison run.");
                 // Production latency semaphore + vsync Present pace every frame. No suppressed waits/unbounded submit.
                 var info = new FrameInfo(_size, _scale, ColorF.FromRgba(18, 18, 22),
-                    FrameEpoch: _submits + 1, RepaintDamage: damage, PublishSequence: _submits + 1);
+                    RepaintDamage: damage, PublishSequence: _submits + 1);
                 _device!.SubmitDrawList(draw.Bytes, draw.SortKeys, info);
                 _submits++;
                 if (stage == "clear" && frame == 0) Sample("first-clear-submitted-before-present");

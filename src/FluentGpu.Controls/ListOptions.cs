@@ -1,5 +1,5 @@
-using System.Collections.Generic;
 using FluentGpu.Animation;
+using System.Collections.Generic;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
@@ -130,34 +130,28 @@ public readonly record struct ItemCollectionTransition(
 /// </summary>
 public sealed record ScrollOptions
 {
-    /// <summary>Identity-stable two-way vertical scroll controller. The viewport pushes exact range values and serves
-    /// controller-originated absolute/relative requests through the engine's programmatic scroll seam.</summary>
-    public IScrollController? VerticalScrollController { get; init; }
-    /// <summary>The ONE authoring handle (scroll-v3-plan §7.2) over this viewport's live scroll — attached on
-    /// realize, detached on unmount/re-bake, the <c>ItemsView</c> parity of <c>ScrollEl.Controller</c>. Distinct
-    /// from <see cref="VerticalScrollController"/> (the annotated-rail seam, which stays).</summary>
-    public FluentGpu.Scroll.ScrollController? Controller { get; init; }
+    /// <summary>The ONE app-facing handle over this viewport's live scroll (scroll rework §9): bound by the host when
+    /// the viewport realizes, unbound on unmount — the <c>ItemsView</c> parity of <c>ScrollEl.Handle</c>. Share it with
+    /// an <see cref="AnnotatedScrollBarController"/>, a header's <c>Element.WheelTarget</c>, or drive it directly
+    /// (<c>ScrollTo</c>/<c>ScrollBy</c>/<c>Offset</c>/<c>Motion</c>). Null ⇒ the host mints an internal handle.</summary>
+    public FluentGpu.Scroll.Runtime.ScrollHandle? Handle { get; init; }
     /// <summary>Scroll-position restoration key (see <c>VirtualListEl.ScrollKey</c>): a stable per-content identity so a
     /// revisit lands at the saved row on the first realized window. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
     /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its pager).</summary>
     public bool SuppressScrollBar { get; init; }
-    /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — the surface-colour fade at an
-    /// overflowing edge. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to the app default;
-    /// <see cref="ScrollEdgeCues.None"/> opts out. Forwarded onto the built viewport exactly like the
-    /// <see cref="AutoEdgeFade"/> pair beside it — <c>ItemsView</c> already exposed this knob on its own builder
-    /// surface, and this is the <c>CreateBound</c>/<c>Create</c> path's spelling of the same one.
-    /// <para>A surface whose opaque ground is a ZStack SIBLING rather than an ANCESTOR must opt out: the cue resolves
-    /// its colour by walking ancestors (<c>SceneRecorder.TryResolveCueSurface</c>), so it would sail past that ground,
-    /// fade toward the wrong plate, and paint an opaque band the surface never asked for.</para></summary>
+    /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — the analytic edge feather at an
+    /// overflowing edge (the content dissolves into whatever lies behind the viewport; no painted band, no guessed
+    /// colour). <see cref="ScrollEdgeCues.Auto"/> (default) resolves to the app default; <see cref="ScrollEdgeCues.None"/>
+    /// opts out. Forwarded onto the built viewport exactly like the <see cref="AutoEdgeFade"/> pair beside it —
+    /// <c>ItemsView</c> already exposed this knob on its own builder surface, and this is the <c>CreateBound</c>/<c>Create</c>
+    /// path's spelling of the same one.</summary>
     public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
     /// <summary>Premium alpha-mask edge fade: feather the content's own alpha at the overflowing edges (one offscreen RT).</summary>
     public bool AutoEdgeFade { get; init; }
     /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>; 0 (default) = the engine's standard band. Forwarded
     /// onto the built viewport — see <c>ScrollEl.AutoEdgeFadeBand</c>.</summary>
     public float AutoEdgeFadeBand { get; init; }
-    /// <summary>Scroll-geometry observer (project a scalar, get the change) forwarded onto the viewport.</summary>
-    public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
     /// <summary>Declarative scroll-snap points for the virtualized viewport (see <c>ScrollEl.Snap</c>): flings land exactly
     /// on a snap value; wheel/keyboard/programmatic stay hard-clamped. Null (default) ⇒ the reconciler never touches the
     /// snap fields, so a post-mount scene write survives.
@@ -281,8 +275,6 @@ public sealed record InsertionOptions
 /// </summary>
 public sealed record EntranceOptions
 {
-    /// <summary>Opt-in cold-mount stagger: a heavy list realizes its initial window a few rows/frame (kills the mount spike).</summary>
-    public bool StaggerColdRealize { get; init; }
     /// <summary>Optional FLIP start override for the displacement seed (glide surviving rows old→new in the same bump).</summary>
     public Func<int, (float dx, float dy)?>? ItemFlipFrom { get; init; }
     /// <summary>Optional per-row opacity seed (from→1 after a stagger delay) — an added-row ease-in without a slot remount.</summary>
@@ -339,8 +331,6 @@ public record ListOptions
     public Func<int, bool>? IsItemEnabled { get; init; }
     /// <summary>Imperative handle (CurrentItemIndex / StartBringItemIntoView / ScrollBy / Selection).</summary>
     public ItemsViewController? Controller { get; init; }
-    /// <summary>Row overscan (rows realized beyond the viewport, per edge). Overridden by <see cref="CacheExtentPx"/> when set.</summary>
-    public int Overscan { get; init; } = 4;
     /// <summary>Flex participation of the view: 1 (default) = fill the parent (hard viewport); 0 = natural (measures to ContentExtent).</summary>
     public float Grow { get; init; } = 1f;
     /// <summary>Built-in selector-visual preset (AccentPill / Check / FullRow / Border / None). RenderItem path only.</summary>
@@ -376,13 +366,13 @@ public record ListOptions
     /// their own content-type pool — a cross-type reuse forces a full element rebuild instead of a cheap rebind. Null ⇒
     /// one homogeneous pool (today's behavior). BOUND path (<c>CreateBound</c>) only.</summary>
     public Func<int, int>? ContentType { get; init; }
-    /// <summary>Pre-realize margin BEYOND the viewport, in PIXELS. Overscan is row-based (a row count); this is a pixel
-    /// band the engine converts to rows against the average row extent. <see cref="float.NaN"/> (default) ⇒ row-based
-    /// <see cref="Overscan"/> stays authoritative; a finite value overrides it.</summary>
-    public float CacheExtentPx { get; init; } = float.NaN;
     /// <summary>BOUND path only: keep the first N logical items mounted as normal leading content children while all
     /// later items continue to recycle. Use this for native sticky/scroll-linked prefix composition; default 0.</summary>
     public int PersistentPrefixCount { get; init; }
+    /// <summary>Realize and measure EVERY item (<see cref="FluentGpu.Reconciler.VirtualListEl.MeasureAll"/>): offsets
+    /// computed from the layout use real heights for rows far off screen. Virtualization is bounded by the count — for
+    /// short documents only (a few hundred rows). Off by default.</summary>
+    public bool MeasureAll { get; init; }
     /// <summary>Per-item paint isolation: wrap each realized item container as a layout/paint boundary
     /// (<c>IsolateLayout</c> + <c>ClipToBounds</c>) so an item's internal invalidation can't escape to relayout the list.
     /// Off by default.</summary>
@@ -395,10 +385,6 @@ public record ListOptions
     /// slot is excluded from the recycle pool until the item re-enters the window or the bucket evicts it (LRU). BOUND
     /// path (<c>CreateBound</c>) only. Null ⇒ no bucket (recycled slots lose live state, today's behavior).</summary>
     public Func<int, bool>? KeepAlive { get; init; }
-    /// <summary>Bounded keep-alive bucket cap (documented default 8): the most parked keep-alive slots retained at once.
-    /// When the bucket exceeds this, the least-recently-used parked slot is evicted (its subtree unmounted). Prevents a
-    /// long scroll over many keep-alive rows from leaking retained subtrees.</summary>
-    public int KeepAliveCap { get; init; } = 8;
 
     // ── viewport-driven hydration (opt-in; null ⇒ byte-identical to the pre-hook path) ──
     /// <summary>Prefetch / hydration hook forwarded onto the built <c>VirtualListEl.OnVisibleRange</c>: the realized
@@ -409,7 +395,7 @@ public record ListOptions
     /// <para>Two semantics that otherwise bite the caller. (1) It fires ONLY when the realized window actually CHANGED —
     /// a steady transform-only scroll frame never reaches it — so treat it as a change EDGE, never a per-frame tick, and
     /// never rely on it to re-run for a window that did not move. (2) The pair is the REALIZED window INCLUDING the
-    /// overscan / cache halo (<see cref="Overscan"/>, <see cref="CacheExtentPx"/>), NOT the strictly-visible rows: it
+    /// overscan halo (velocity-sized, scroll rework §6), NOT the strictly-visible rows: it
     /// deliberately runs ahead of the viewport so a prefetch lands before the row is on screen. A caller that needs the
     /// exactly-visible band must narrow the range itself.</para>
     /// <para>Called from the reconciler's realize path (cold edge, never paint or input), so keep the body allocation-free

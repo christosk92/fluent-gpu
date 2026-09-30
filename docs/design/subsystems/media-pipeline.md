@@ -437,7 +437,7 @@ never O(images).
 
 The same device-reported query (`D3D12MemoryDiagnostics.AllocationBytes`, called BEFORE `CreateCommittedResource` on
 the exact desc that creation uses) is the ONE shared helper every RT/DSV/texture owner tracks through, not just
-images: the opacity-layer, acrylic and baked-blur pooled canvases, the glyph atlas texture, and the stencil-clip DSV
+images: the retained-tile surface pool (tiles + scratch), the baked-blur pyramids, the glyph atlas texture, and the stencil-clip DSV
 all query it at creation and fall back to their old `w*h*bpp` formula — labelled `.AllocationUnknown` the same way —
 only when the driver returns 0. `Release` needs no parallel bookkeeping: `D3D12MemoryDiagnostics` keys its live table
 on the COM pointer, so releasing a tracked resource always subtracts the exact bytes it was created with, whichever
@@ -571,7 +571,7 @@ single-thread-first build (§11), "RENDER thread" phases run on the UI thread, q
 | **PUBLISH 13a** | UI | snapshot copies the realization-referencing `DrawImageCmd` spans + captured `ContentEpoch` array (the §4.6 "captured-epoch arrays" of the SceneFrame). |
 | **8 record** | RENDER | resolve `ImageHandle→ImageRealization`; `Resident` ⇒ `DrawImageCmd`, else placeholder quad; `ResidencyManager.Touch`. **PIN AUTHORITY LIVES HERE** — the node *recorded this frame* is the one that `Pin`s its image (resolves the phase-4-request-vs-phase-8-pin ambiguity: pin follows what actually paints, not what was requested). |
 | **9 batch** | RENDER | atlas-packed image instances merge by page (`TextureBindId` in SortKey); a shelf row coalesces to 1–2 draws. |
-| **11 present** | RENDER | `IVideoPresenter.Place` + the canvas-RT hole committed in the SAME DComp `Commit` (§8). |
+| **11 present** | RENDER | `IVideoPresenter.Place` + the swapchain's hole (re-punched by the composite every presented frame — `gpu-renderer.md` §7.3) on the same frame turn (§8). |
 | **12 effects** | UI | mount: pins are already established at record; **unmount: `scheduler.Cancel(ticket)` + `residency.Unpin`** (synchronous in reconcile remove per `reconciler-hooks` §4.4 — a late callback must not fire into a freed slot, but the request-epoch is the deeper backstop). Submit decode requests for newly-visible nodes that missed cache. |
 | **13 / drain** | RENDER | **`UploadDrain`**: time-sliced `CopyBufferToTexture` into pooled bucket textures, **byte-budgeted in two lanes** (small thumbs vs large art/bakes); `ResidencyManager.Admit` (pin-before-trim, request-epoch validate, stale-drop); deferred-free evicted textures behind both fences. |
 
@@ -820,12 +820,14 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
   atomic unit the way the unbuilt design promised — a caller wanting a hand-off calls `Place`/`SetVisible` on each
   token itself, so a multi-slot hand-off's atomicity is only as good as the caller's own ordering, not a guarantee
   the registry enforces.
-- **PiP drag** moves the DComp child off-loop via `Place`, **with the canvas-RT hole committed in lockstep in
-  the same phase-11 DComp Commit** — otherwise the two clocks (UI hole vs DComp visual position) tear at the
-  PiP edge. This is the folded "two-clock tear" fix.
-- **Partial present interaction (`gpu-renderer` §13):** re-punch the hole whenever ANY node overlapping the
-  video rect is in the damage set — i.e. inflate the video node's damage to its own full `Dst` rect, so the
-  transparent clear is re-emitted and the canvas-RT region stays a hole under partial repaint.
+- **PiP drag** moves the DComp child off-loop via `Place`, **with the swapchain's hole presented on the same
+  phase-11 frame turn** — otherwise the two clocks (UI hole vs DComp visual position) tear at the PiP edge. This is
+  the folded "two-clock tear" fix.
+- **Retained-tile interaction (`gpu-renderer` §13.1):** the composite redraws the whole back buffer every presented
+  frame and re-punches every hole with an `EraseVideoHole` item placed before the segment that punched it (so chrome
+  recorded after the hole in that segment — transport, captions — stays on top; `gpu-renderer.md` §7.3 Composite
+  order), so no damage inflation is needed (the partial-canvas rule that inflated a video node's damage to its whole
+  `Dst` is deleted).
 - **Persistence across nav:** the PiP `VideoSurfaceId` is a retained registry entry; tab switch / page nav does
   not `Destroy` it, so the mini player survives navigation (the Wavee requirement).
 - **Per-player double-bind is a DEBUG tripwire, not a runtime guarantee.** The registry enforces single-writer

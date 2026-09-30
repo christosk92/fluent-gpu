@@ -42,6 +42,7 @@ static class TextSuite
         BoundSpansChecks(strings);
         GlyphAtlasUploadChecks();
         ColorGlyphBakeChecks();
+        SpanEllipsisChecks();
     }
 
     // Colour emoji (COLR/CPAL) bake decisions — the Windows GlyphRenderer is DirectWrite-bound, so the two rules it
@@ -72,6 +73,59 @@ static class TextSuite
         bool retains = ColorGlyphBake.RetainColors(onePalette) && ColorGlyphBake.RetainColors(oneSpan);
         Check("T-color-2 an all-inherit run retains no Colors array", keepsNull && retains,
             $"allInherit={ColorGlyphBake.RetainColors(allInherit)} empty={ColorGlyphBake.RetainColors(ReadOnlySpan<ColorF>.Empty)} onePalette={ColorGlyphBake.RetainColors(onePalette)} oneSpan={ColorGlyphBake.RetainColors(oneSpan)}");
+    }
+
+    // E29: a trimmed SPANNED paragraph ends in the "…" of the span the cut lands in (a 20-px title span + a 12-px
+    // subtitle span cut inside the subtitle → a 12-px "…"), and the cut reserves THAT ellipsis's advance. The
+    // DirectWrite TextLayoutEngine (TerraFX-bound, so not headless-testable) drives its spanned-line trim through the
+    // engine-free LineBreaker.FitEllipsisBySpan and emits the "…" glyph from the returned span's face/size/colour, so the
+    // decision is pinned here on synthetic advances (title glyphs 11 DIP, subtitle glyphs 6 DIP; "…" = 18 DIP in the
+    // title style, 11 in the subtitle style, 15 in the paragraph base style).
+    static void SpanEllipsisChecks()
+    {
+        const int titleN = 10, subN = 10;
+        var advs = new float[titleN + subN];
+        var spanOf = new short[titleN + subN];
+        for (int i = 0; i < titleN; i++) { advs[i] = 11f; spanOf[i] = 0; }
+        for (int i = titleN; i < titleN + subN; i++) { advs[i] = 6f; spanOf[i] = 1; }
+        const float baseEll = 15f;
+        ReadOnlySpan<float> spanEll = [18f, 11f];
+
+        // Cut inside the subtitle (140 of 170 DIP): 10 title glyphs (110) + 3 subtitle glyphs (128) + the SUBTITLE "…"
+        // (11) = 139 ≤ 140. Reserving the base "…" (15) instead would have cut one glyph earlier (the measure/draw
+        // disagreement this fixes).
+        int keepSub = LineBreaker.FitEllipsisBySpan(advs, spanOf, 140f, baseEll, spanEll, out int ellSub);
+        float subW = 0f; for (int k = 0; k < keepSub; k++) subW += advs[k];
+        float subLine = subW + LineBreaker.EllipsisAdvanceFor(ellSub, baseEll, spanEll);
+        int keepIfBase = LineBreaker.FitEllipsisBySpan(advs, spanOf, 140f, baseEll, ReadOnlySpan<float>.Empty, out _);
+
+        // Cut inside the title (60 DIP): 3 title glyphs (33) + the TITLE "…" (18) = 51; a 4th (44 + 18) would overflow.
+        int keepTitle = LineBreaker.FitEllipsisBySpan(advs, spanOf, 60f, baseEll, spanEll, out int ellTitle);
+
+        // A base-style gap glyph (span −1) as the last visible glyph takes the paragraph base "…".
+        var gapAdvs = new float[] { 10f, 10f, 10f, 10f };
+        var gapSpans = new short[] { 0, -1, 1, 1 };
+        int keepGap = LineBreaker.FitEllipsisBySpan(gapAdvs, gapSpans, 36f, baseEll, spanEll, out int ellGap);   // 10+10 + 15 = 35 ≤ 36; 30 + 11 = 41 > 36
+
+        // Single-style identity: with no span table every glyph reserves the base "…" — the verbatim single-style fit
+        // (budget = max(0, maxWidth − ell); keep while acc + a ≤ budget; the first glyph always stays).
+        var plainSpans = new short[titleN + subN];
+        for (int i = 0; i < plainSpans.Length; i++) plainSpans[i] = -1;
+        bool plainIdentical = true;
+        foreach (float w in new[] { 0f, 0.5f, 14f, 60f, 100f, 140f, 169.9f })
+        {
+            float budget = MathF.Max(0f, w - baseEll); float acc = 0f; int reference = 0;
+            for (int k = 0; k < advs.Length; k++) { float a = advs[k]; if (acc + a > budget && reference > 0) break; acc += a; reference++; }
+            int got = LineBreaker.FitEllipsisBySpan(advs, plainSpans, w, baseEll, ReadOnlySpan<float>.Empty, out int plainEll);
+            if (got != reference || plainEll != -1) plainIdentical = false;
+        }
+
+        Check("gate.text.span-ellipsis-style a trimmed spanned line's \"…\" takes the style (span) of the run the cut lands in and the cut reserves THAT ellipsis's advance; base-style glyphs and single-style text keep the base \"…\" and the unchanged fit",
+            keepSub == titleN + 3 && ellSub == 1 && subLine <= 140f && keepIfBase == titleN + 2
+            && keepTitle == 3 && ellTitle == 0
+            && keepGap == 2 && ellGap == -1
+            && plainIdentical,
+            $"sub: keep={keepSub} span={ellSub} line={subLine:0.#} (baseEll keep={keepIfBase}); title: keep={keepTitle} span={ellTitle}; gap: keep={keepGap} span={ellGap}; plainIdentical={plainIdentical}");
     }
 
     static void WaveCTextPipelineChecks(StringTable strings)
@@ -348,7 +402,7 @@ static class TextSuite
             var vp = ViewportWithItemCount(host.Scene, host.Scene.Root, probe.Count);
             int buildsAtMount = probe.Builds;
 
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 20000f, immediate: true));
+            host.TryGetScrollHandle(vp)?.ScrollTo(20000f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             var reboundFrame = host.RunFrame();   // the frame that actually rebinds the recycled slots
             host.Scene.TryGetScroll(vp, out var sc);
             int reboundRows = sc.LastRealized - sc.FirstRealized;
@@ -718,7 +772,7 @@ static class TextSuite
                     Size = 12f,
                     OnSpanClick = spanIndex => LastClick = (idx.Peek(), spanIndex),
                 };
-            }, RepeatLayout.Stack(40f), new ListOptions { Overscan = 3, Grow = 1f });
+            }, RepeatLayout.Stack(40f), new ListOptions { Grow = 1f });
             return new BoxEl { Width = 360f, Height = 240f, Children = [list] };
         }
     }

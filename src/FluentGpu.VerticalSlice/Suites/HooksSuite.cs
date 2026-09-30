@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -66,9 +66,12 @@ static class HooksSuite
         ResourceChecks(strings);
         PropNetClobberChecks(strings);
         PropUnionChecks(strings);
+        BindRewireChecks.Run(strings);
         G4dMigrationChecks(strings);
         MemoCutoffChecks();
-        ReactiveDeadlineChecks.Run();
+        ReactiveQuiescenceChecks.Run();
+        ReactiveQuiescenceChecks.RunHosted(strings);
+        ScrollThresholdChecks.Run(strings);
     }
 
     // ── Memo push-pull equality cut-off (Check/Dirty) ────────────────────────────────────────────────────────────────
@@ -571,6 +574,7 @@ static class HooksSuite
 
         // gate.unify.scope-keepalive-parks — parking does NOT dispose the scope: the page instance + hook state survive,
         // a parked page defers renders (no re-render even when a signal it read changes), and reactivation replays once.
+        // ONE frame per step: the hosted flush runs to quiescence, so each write's whole outcome is in place after it.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("unify-park", new Size2(200, 200), 1f));
@@ -710,7 +714,7 @@ static class HooksSuite
     {
         bool prevEnabled = ReuseGuard.Enabled;
         bool prevThrow = ReuseGuard.ThrowOnViolation;
-        ReuseGuard.Enabled = true;             // gate turns the tripwire on regardless of the FG_REUSE_GUARD env
+        ReuseGuard.Enabled = true;             // gate turns the tripwire on regardless of how the run was launched
         ReuseGuard.ThrowOnViolation = false;   // count, don't throw (until the strict-mode sub-check)
         try
         {
@@ -1620,7 +1624,7 @@ static class HooksSuite
     // gate.hooks.layout-dirty-identical-tree — a re-render whose reconcile mutates only paint must reach the scoped
     // relayout with an EMPTY LayoutDirty worklist; anything that changes shape must still dirty it. Four arms:
     // RunComponent paint-only / RunComponent Width flip / Skel Ready→Ready force re-run / Skel branch swap, plus the
-    // RunRoot remount arm. ScopedRelayoutMarks (always-on) is the oracle — Measure/ArrangeCount need FG_LAYOUT_DIAG,
+    // RunRoot remount arm. ScopedRelayoutMarks (always-on) is the oracle — Measure/ArrangeCount need --fg layout,
     // so on their own they read 0 unconditionally and prove nothing.
     static void LayoutDirtyGateChecks(StringTable strings)
     {
@@ -2051,22 +2055,28 @@ static class HooksSuite
 
         // gate.resource.epoch-ordering — start A (slow), re-key to B (fast); B lands; A completing LATER is dropped by
         // the epoch guard (the loader ignores cancellation, so only the epoch stamp — not the token — can drop A).
+        // Both completions are awaited as DELIVERED (probe.SettlesRun: the cell's Settle ran on the UI thread), so the
+        // drop assertion is made after A's Settle provably executed — not after a frame count that a SetResult racing
+        // the loader's await (resume on a pool thread, post whenever it is scheduled) can outlast.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("res-epoch", new Size2(200, 120), 1f)); window.Show();
             var probe = new ResourceProbe { ObserveCancellation = false };
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);   // load A started (deps=0)
+            var loadA = probe.Load(0);                                                  // load A started (deps=0)
             probe.Key.Value = 1; host.RunFrame();                                       // re-key → load B (deps=1)
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
-            probe.Gates[1].SetResult("B");
-            bool bLanded = PumpUntil(host, () => probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "B");
-            probe.Gates[0].SetResult("A");                                              // the superseded (older-epoch) load completes late
-            for (int i = 0; i < 24; i++) host.RunFrame();
-            bool aDropped = probe.Res.Loadable.Value.Peek() == "B";
+            var loadB = probe.Load(1);
+            loadB.SetResult("B");
+            bool bSettled = probe.PumpUntilSettled(host, 1);
+            bool bLanded = bSettled && probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "B";
+            loadA.SetResult("A");                                                       // the superseded (older-epoch) load completes late
+            bool aSettled = probe.PumpUntilSettled(host, 2);                            // A's Settle RAN (and was dropped)
+            host.RunFrame();
+            bool aDropped = aSettled && probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "B";
             Check("gate.resource.epoch-ordering out-of-order completion never regresses: B lands, older A is dropped",
-                bLanded && aDropped, $"bLanded={bLanded} aDropped={aDropped} value='{probe.Res.Loadable.Value.Peek()}'");
+                bLanded && aDropped,
+                $"bSettled={bSettled} bLanded={bLanded} aSettled={aSettled} aDropped={aDropped} settles={probe.SettlesRun} value='{probe.Res.Loadable.Value.Peek()}'");
         }
 
         // gate.resource.refresh-swr — Refresh() keeps Ready(old) visible while fetching (IsFetching true), lands
@@ -2077,18 +2087,17 @@ static class HooksSuite
             var probe = new ResourceProbe();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
-            probe.Gates[0].SetResult("v0");
-            bool ready0 = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Load(0).SetResult("v0");
+            bool ready0 = probe.PumpUntilSettled(host, 1) && probe.Res.Loadable.Value.Peek() == "v0";
             bool staleAfterReady = probe.Res.IsStale.Peek();                            // staleTime=0 ⇒ stale as soon as Ready
             bool notFetching0 = !probe.Res.IsFetching.Peek();
 
             probe.Res.Refresh();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            var load1 = probe.Load(1);
             bool duringSwr = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0"
                              && probe.Res.IsFetching.Peek() && !probe.Res.IsStale.Peek();
-            probe.Gates[1].SetResult("v1");
-            bool ready1 = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v1" && !probe.Res.IsFetching.Peek());
+            load1.SetResult("v1");
+            bool ready1 = probe.PumpUntilSettled(host, 2) && probe.Res.Loadable.Value.Peek() == "v1" && !probe.Res.IsFetching.Peek();
             Check("gate.resource.refresh-swr Refresh keeps Ready(old) while fetching, lands Ready(new); IsFetching/IsStale toggle",
                 ready0 && staleAfterReady && notFetching0 && duringSwr && ready1,
                 $"ready0={ready0} staleAfterReady={staleAfterReady} notFetching0={notFetching0} duringSwr={duringSwr} ready1={ready1}");
@@ -2101,18 +2110,16 @@ static class HooksSuite
             var probe = new ResourceProbe();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
-            probe.Gates[0].SetResult("v0");
-            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Load(0).SetResult("v0");
+            bool ready0 = probe.PumpUntilSettled(host, 1) && probe.Res.Loadable.Value.Peek() == "v0";
             probe.Res.Refresh();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
-            probe.Gates[1].SetException(new InvalidOperationException("boom"));
-            bool settled = PumpUntil(host, () => !probe.Res.IsFetching.Peek() && probe.Res.LastError is not null);
+            probe.Load(1).SetException(new InvalidOperationException("boom"));
+            bool settled = probe.PumpUntilSettled(host, 2) && !probe.Res.IsFetching.Peek();
             bool keptData = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0";
             bool errored = probe.Res.LastError is not null;
             Check("gate.resource.refresh-failure-keeps-data a failed refresh keeps Ready(old) + sets LastError",
-                settled && keptData && errored,
-                $"settled={settled} keptData={keptData} err={(errored ? probe.Res.LastError!.Message : "null")}");
+                ready0 && settled && keptData && errored,
+                $"ready0={ready0} settled={settled} keptData={keptData} err={(errored ? probe.Res.LastError!.Message : "null")}");
         }
 
         // gate.resource.mutate-optimistic — Mutate writes Ready(optimistic) immediately; the revalidation replaces it.
@@ -2122,16 +2129,14 @@ static class HooksSuite
             var probe = new ResourceProbe();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
-            probe.Gates[0].SetResult("v0");
-            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Load(0).SetResult("v0");
+            bool ready0 = probe.PumpUntilSettled(host, 1) && probe.Res.Loadable.Value.Peek() == "v0";
             probe.Res.Mutate("optimistic");
             bool optimisticNow = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "optimistic" && probe.Res.IsFetching.Peek();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
-            probe.Gates[1].SetResult("revalidated");
-            bool revalidated = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "revalidated");
+            probe.Load(1).SetResult("revalidated");
+            bool revalidated = probe.PumpUntilSettled(host, 2) && probe.Res.Loadable.Value.Peek() == "revalidated";
             Check("gate.resource.mutate-optimistic Mutate shows the optimistic value immediately; revalidation replaces it",
-                optimisticNow && revalidated, $"optimisticNow={optimisticNow} revalidated={revalidated}");
+                ready0 && optimisticNow && revalidated, $"ready0={ready0} optimisticNow={optimisticNow} revalidated={revalidated}");
         }
 
         // gate.resource.keep-previous-data — a deps change with KeepPreviousData keeps the old value + IsFetching visible.
@@ -2141,16 +2146,15 @@ static class HooksSuite
             var probe = new ResourceProbe { Options = new ResourceOptions { KeepPreviousData = true } };
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
-            probe.Gates[0].SetResult("v0");
-            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Load(0).SetResult("v0");
+            bool ready0 = probe.PumpUntilSettled(host, 1) && probe.Res.Loadable.Value.Peek() == "v0";
             probe.Key.Value = 1; host.RunFrame();                                       // deps change — keep-previous
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            var load1 = probe.Load(1);
             bool keptPrev = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0" && probe.Res.IsFetching.Peek();
-            probe.Gates[1].SetResult("v1");
-            bool landedNew = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v1");
+            load1.SetResult("v1");
+            bool landedNew = probe.PumpUntilSettled(host, 2) && probe.Res.Loadable.Value.Peek() == "v1";
             Check("gate.resource.keep-previous-data deps change shows the previous value + IsFetching until the new lands",
-                keptPrev && landedNew, $"keptPrev={keptPrev} landedNew={landedNew}");
+                ready0 && keptPrev && landedNew, $"ready0={ready0} keptPrev={keptPrev} landedNew={landedNew}");
         }
 
         // gate.resource.deps-rekey-pending — default (no KeepPreviousData): a deps change resets to Pending(seed).
@@ -2160,14 +2164,13 @@ static class HooksSuite
             var probe = new ResourceProbe();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
-            probe.Gates[0].SetResult("v0");
-            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Load(0).SetResult("v0");
+            bool ready0 = probe.PumpUntilSettled(host, 1) && probe.Res.Loadable.Value.Peek() == "v0";
             probe.Key.Value = 1; host.RunFrame();                                       // deps change — reset to Pending(seed)
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Load(1);
             bool pendingSeed = probe.Res.Loadable.IsLoading && probe.Res.Loadable.Value.Peek() == "" && probe.Res.IsFetching.Peek();
             Check("gate.resource.deps-rekey-pending a deps change (default) resets the resource to Pending(seed)",
-                pendingSeed, $"isLoading={probe.Res.Loadable.IsLoading} value='{probe.Res.Loadable.Value.Peek()}' fetching={probe.Res.IsFetching.Peek()}");
+                ready0 && pendingSeed, $"ready0={ready0} isLoading={probe.Res.Loadable.IsLoading} value='{probe.Res.Loadable.Value.Peek()}' fetching={probe.Res.IsFetching.Peek()}");
         }
 
         // gate.resource.stale-timer — staleTime>0: IsStale stays false after Ready, then flips true once the
@@ -2178,14 +2181,13 @@ static class HooksSuite
             var probe = new ResourceProbe { Options = new ResourceOptions { StaleTimeMs = 200f } };
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             host.RunFrame();
-            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
-            probe.Gates[0].SetResult("v0");
-            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Load(0).SetResult("v0");
+            bool ready0 = probe.PumpUntilSettled(host, 1) && probe.Res.Loadable.Value.Peek() == "v0";
             bool freshAfterReady = !probe.Res.IsStale.Peek();                           // still fresh right after Ready
             for (int i = 0; i < 20; i++) host.Paint(0);                                 // advance ~320 ms past the 200 ms stale timer
             bool staleAfterTimeout = probe.Res.IsStale.Peek();
             Check("gate.resource.stale-timer staleTime>0 keeps data fresh until the HostTimerQueue one-shot fires",
-                freshAfterReady && staleAfterTimeout, $"freshAfterReady={freshAfterReady} staleAfterTimeout={staleAfterTimeout}");
+                ready0 && freshAfterReady && staleAfterTimeout, $"ready0={ready0} freshAfterReady={freshAfterReady} staleAfterTimeout={staleAfterTimeout}");
         }
     }
 
@@ -2329,39 +2331,14 @@ static class HooksSuite
             Check("prop.signal-direct paint-channel signal writes stay compositor-only (Rendered=false)",
                 paintOnly, $"rendered={st.Rendered}");
         }
-
-        // Mount-only wiring contract (locked, deliberate): a NEW thunk supplied on a re-render is IGNORED — the
-        // mount-captured bind is immortal until unmount. Change the signal's VALUE, not the bind.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("bind-mount-only", new Size2(200, 200), 1f)); window.Show();
-            var device = new HeadlessGpuDevice();
-            var fonts = new HeadlessFontSystem(strings);
-            var rr = new Signal<int>(0);
-            NodeHandle box = default;
-            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
-            {
-                Build = () =>
-                {
-                    int r = rr.Value;                            // each render captures a FRESH r in a FRESH thunk
-                    // FGRP002: this probe DELIBERATELY captures a signal-value snapshot to prove the reconciler ignores
-                    // replacement thunks (the exact anti-pattern the rule flags). Suppressed on purpose.
-#pragma warning disable FGRP002
-                    return new BoxEl { Width = 40, Height = 10, Opacity = Prop.Of(() => 0.1f + 0.2f * r), OnRealized = h => box = h };
-#pragma warning restore FGRP002
-                },
-            });
-            host.RunFrame();
-            rr.Value = 1;                                        // re-render: new thunk (r=1) — must be IGNORED
-            host.RunFrame();
-            Check("bind.mount-only.stale a fresh thunk on re-render is ignored (mount-captured bind is immortal)",
-                Near(host.Scene.Paint(box).Opacity, 0.1f, 0.001f), $"op={host.Scene.Paint(box).Opacity} (0.3 would mean re-wiring happened)");
-        }
+        // The former `bind.mount-only.stale` probe (a fresh thunk on re-render IGNORED) locked the defect the bind
+        // re-wire fixes; its inverse — the node follows the NEW thunk/signal — is gate.bind.rewire-* (BindRewireChecks).
     }
 
     static void G4dMigrationChecks(StringTable strings)
     {
         // ── gate.props.migration-sweep ────────────────────────────────────────────────────────────────────────────
+        // Each prop write's outcome is read after ONE frame: the hosted flush runs to quiescence.
         {
             // (1) ToggleSwitch: flipping isOn re-pushes to the reused core → the track cross-fades to the accent ON
             //     fill on the SAME track node (a single realize = no remount).
@@ -2380,6 +2357,7 @@ static class HooksSuite
                 bool mount = tracks.Count == 1;
                 var track0 = tracks.Count > 0 ? tracks[0] : NodeHandle.Null;
                 on.Value = true;
+                host.RunFrame();
                 for (int i = 0; i < 24; i++) host.RunFrame();
                 bool noRemount = tracks.Count == 1 && !track0.IsNull;
                 bool toAccent = !track0.IsNull && ColorClose(host.Scene.Paint(track0).Fill, Tok.AccentDefault, 0.03f);

@@ -215,7 +215,8 @@ form of one reappears in the live tree. Do not silently change these in a subsys
   (clean-span rule).
 - **`Prop<T>` reactive prop surface** — exactly **one** `Prop<T>` per bindable channel (e.g. `BoxEl.Transform/Opacity/
   Fill`, `TextEl.Text/Color`, `ImageEl.Source/Placeholder`), accepting a static `T`, a `Func<T>` thunk (`Prop.Of(...)`
-  for inline lambdas), or a concrete signal; bind wiring is **mount-only**. (The dual static + `*Bind` surface is
+  for inline lambdas), or a concrete signal; a bind is wired **at mount** and **re-wired** when a re-render binds a
+  different thunk/signal (bound→bound; a static↔bound flip still loses). (The dual static + `*Bind` surface is
   superseded — a `*Bind` spelling reappearing live is a gate violation.) *Owner:* `reconciler-hooks.md` §0bis +
   `dsl-aot.md`.
 

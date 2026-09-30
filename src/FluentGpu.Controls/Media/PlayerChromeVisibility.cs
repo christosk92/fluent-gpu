@@ -167,8 +167,8 @@ public sealed class PlayerChromeVisibility
         else SetHold(ref _pressed, false, nowMs);
     }
 
-    /// <summary>A press on the picture became an OS window move. The loop owns the button now — no release will come —
-    /// so the press hold becomes the move hold until <see cref="WindowMoveEnded"/>.</summary>
+    /// <summary>The host window entered an OS move loop (a caption-region drag). The loop owns the button now — no
+    /// release will come — so the press hold becomes the move hold until <see cref="WindowMoveEnded"/>.</summary>
     public void WindowMoveStarted(double nowMs)
     {
         _pressed = false;

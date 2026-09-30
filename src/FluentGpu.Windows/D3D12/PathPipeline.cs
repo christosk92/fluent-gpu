@@ -389,16 +389,16 @@ float4 PSStencilMask(VSOut i) : SV_Target
         _drawCursor++;
         *(PathInstance*)dst = item.Inst;
         cmd->SetGraphicsRootShaderResourceView(1, gva);
-        cmd->DrawIndexedInstanced((uint)item.IdxCount, 1, (uint)idxBase, vtxBase, 0);
+        cmd->DrawIndexedInstanced((uint)item.IdxCount, 1, (uint)idxBase, vtxBase, 0); GpuDrawCount.Frame++;
         return true;
     }
 
     /// <summary>Reset every per-frame cursor, INCLUDING the dedupe map (cleared in place — no reallocation, no
     /// growth), and adopt any vertex/index block growth a previous frame's overflow asked for. The arena banks
     /// themselves are begun (and grown) by the device once per frame, under the frame fence.</summary>
-    public void BeginFrame(int frameIndex)
+    public void BeginFrame(int slot)
     {
-        _ = frameIndex;
+        _ = slot;
         _geomVerts = _wantVerts; _geomIdx = _wantIdx;   // growth lands between frames, never mid-frame
         _geomReady = false; _geomTried = false;
         _vtxBase = null; _idxBase = null;
@@ -497,7 +497,7 @@ float4 PSStencilMask(VSOut i) : SV_Target
         // BaseVertexLocation (vtxBase) is added by the GPU to every index it fetches from the IB — the tessellator's
         // index values are LOCAL/0-based into their own vertex range (see PathSweep/PathStroker), so the SAME index
         // bytes copied verbatim from PathRealizationCache.Shared.Indices resolve correctly once offset by vtxBase.
-        cmd->DrawIndexedInstanced((uint)item.IdxCount, 1, (uint)idxBase, vtxBase, 0);
+        cmd->DrawIndexedInstanced((uint)item.IdxCount, 1, (uint)idxBase, vtxBase, 0); GpuDrawCount.Frame++;
         return true;
     }
 

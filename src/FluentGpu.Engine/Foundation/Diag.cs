@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 
@@ -13,7 +13,8 @@ namespace FluentGpu.Foundation;
 /// build (with neither symbol defined) the compiler removes the call site AND the argument evaluation entirely — a
 /// `Diag.Set("text.atlas","nonZero", ExpensiveScan())` costs literally nothing in production. Define
 /// <c>FLUENTGPU_DIAG</c> to keep diagnostics in a Release build; toggle at runtime with the AppContext switch
-/// <c>"FluentGpu.Diagnostics"</c> or by setting <see cref="Enabled"/>. Route output by setting <see cref="Sink"/>.
+/// <c>"FluentGpu.Diagnostics"</c>, the <c>--fg diag</c> command-line switch (<c>EngineSwitches</c>), or by setting
+/// <see cref="Enabled"/>. Route output by setting <see cref="Sink"/>.
 /// </summary>
 public static class Diag
 {
@@ -24,13 +25,14 @@ public static class Diag
 #endif
 
     /// <summary>The flavor THIS engine assembly was compiled as — "diag" when the DEBUG / FLUENTGPU_DIAG probes are in
-    /// (the per-frame incremental-capture parity audit, ScrollTrace's ring, RenderBudget), "release" otherwise. A
+    /// (the per-frame incremental-capture parity audit, RenderBudget), "release" otherwise. A
     /// property, not a const, so an app logs the engine it actually loaded: a Release app output once carried a Debug
     /// engine and spent two thirds of every frame in the parity audit (2026-09-17).</summary>
     public static string BuildFlavor => CompiledIn ? "diag" : "release";
 
-    /// <summary>Runtime gate (only consulted when compiled in). Defaults off unless FG_DIAG is set; AppContext switch overrides.</summary>
-    public static bool Enabled = CompiledIn && EnvFlag("FG_DIAG");
+    /// <summary>Runtime gate (only consulted when compiled in). Defaults off; the AppContext switch, <c>--fg diag</c> or
+    /// code turns it on.</summary>
+    public static bool Enabled;
 
     /// <summary>Where <see cref="Event"/>/<see cref="Dump"/> output goes (e.g. Console.WriteLine, the devtools panel, a log).</summary>
     public static Action<string>? Sink;
@@ -53,29 +55,6 @@ public static class Diag
     static Diag()
     {
         if (CompiledIn && AppContext.TryGetSwitch("FluentGpu.Diagnostics", out bool on)) Enabled = on;
-    }
-
-    public static bool EnvFlag(string name)
-    {
-        string? value = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        return !value.Equals("0", StringComparison.OrdinalIgnoreCase)
-            && !value.Equals("false", StringComparison.OrdinalIgnoreCase)
-            && !value.Equals("off", StringComparison.OrdinalIgnoreCase)
-            && !value.Equals("no", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>True ONLY when <paramref name="name"/> is EXPLICITLY set to a falsy value (0/false/off/no) — the
-    /// kill-switch form for facilities that default ON when compiled in (BindContract, BackwardsWriteGuard). Unset ⇒
-    /// false (stays enabled).</summary>
-    public static bool EnvFlagDisabled(string name)
-    {
-        string? value = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        return value.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("off", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("no", StringComparison.OrdinalIgnoreCase);
     }
 
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]

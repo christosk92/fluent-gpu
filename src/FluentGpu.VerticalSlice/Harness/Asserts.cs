@@ -194,6 +194,7 @@ public static class Asserts
         DrawOp.DrawGradientRect => Unsafe.SizeOf<DrawGradientRectCmd>(),
         DrawOp.PushLayer => Unsafe.SizeOf<PushLayerCmd>(),
         DrawOp.PopLayer => Unsafe.SizeOf<PopLayerCmd>(),
+        DrawOp.CompositeSlice => Unsafe.SizeOf<CompositeSliceCmd>(),
         DrawOp.DrawGradientStroke => Unsafe.SizeOf<DrawGradientStrokeCmd>(),
         DrawOp.DrawArc => Unsafe.SizeOf<DrawArcCmd>(),
         DrawOp.DrawPolylineStroke => Unsafe.SizeOf<DrawPolylineStrokeCmd>(),
@@ -236,7 +237,59 @@ public static class Asserts
         s_touchClockMs = t + 1000;
     }
     public static InputEvent Touch(InputKind kind, Point2 p, uint timestampMs, uint pointerId)
-        => new(kind, p, 0, 0, 0f, KeyModifiers.None, PointerKind.Touch, false, timestampMs, pointerId, 1f);
+        => new(kind, p, 0, 0, KeyModifiers.None, PointerKind.Touch, false, timestampMs, pointerId, 1f);
+
+    /// <summary>Legacy producer tag slot — the scroll rework has ONE scroll input kind and no device-class byte; kept so
+    /// the old packet-shaped call sites read unchanged.</summary>
+    public const byte DeviceClassIgnored = 0;
+
+    /// <summary>A detented wheel notch shaped like the OLD <c>WheelEvent(pt, 0, 0, delta)</c> call:
+    /// <paramref name="ScrollDelta"/> is a DIP distance toward the content end (the old event's DIP delta), converted to
+    /// notches at the feel's WheelNotchDip; <paramref name="WheelNotch"/> (device notches) wins when given. Queue it on the
+    /// headless window; the dispatcher routes it like a real notch — a WheelDurationS glide, so a gate that wants the landed
+    /// offset runs frames until the motion rests (<see cref="WheelDip"/>).</summary>
+    public static InputEvent WheelEvent(Point2 pt, int button = 0, int keyCode = 0, float ScrollDelta = 0f,
+        KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse, bool IsRepeat = false,
+        uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f, float ScrollDeltaX = 0f, float WheelNotch = 0f,
+        float WheelNotchX = 0f, long QpcTicks = 0, byte ScrollPhaseSeq = 0, byte DeviceClassRaw = 0)
+    {
+        _ = button; _ = keyCode; _ = IsRepeat; _ = Pressure; _ = ScrollPhaseSeq; _ = DeviceClassRaw;
+        float notchDip = (float)FluentGpu.Scroll.Diag.ScrollTunables.Current.WheelNotchDip;
+        float ny = WheelNotch != 0f ? WheelNotch : ScrollDelta / notchDip;
+        float nx = WheelNotchX != 0f ? WheelNotchX : ScrollDeltaX / notchDip;
+        var e = new FluentGpu.Scroll.Runtime.ScrollInputEvent(FluentGpu.Scroll.Runtime.ScrollSource.MouseWheel,
+            FluentGpu.Scroll.Runtime.ScrollGesture.Notch, QpcTicks, pt, nx, ny, PointerId, Mods);
+        return InputEvent.ForScroll(in e, Pointer, TimestampMs);
+    }
+
+    /// <summary>Wheel <paramref name="dip"/> DIP at <paramref name="pt"/> (negative = toward the start;
+    /// <paramref name="horizontal"/> for the X axis) and run frames until every scroll plan rests (bounded), returning
+    /// the last frame's stats — the old "one wheel event, one frame, landed offset" gate shape over the WinUI glide.</summary>
+    public static FrameStats WheelDip(AppHost host, HeadlessWindow window, Point2 pt, float dip, bool horizontal = false, int maxFrames = 60)
+    {
+        window.QueueInput(horizontal ? WheelEvent(pt, 0, 0, ScrollDeltaX: dip) : WheelEvent(pt, 0, 0, dip));
+        var stats = host.RunFrame();
+        for (int i = 1; i < maxFrames; i++)
+        {
+            if (!host.AnyUserScrollMoving && !host.HasActiveWork) break;
+            stats = host.RunFrame();
+        }
+        return stats;
+    }
+
+    /// <summary>A touchpad contact packet shaped like the OLD phase-tagged <c>FluentGpu.Scroll.Runtime.ScrollGesture.Begin/Delta/End</c> events:
+    /// <paramref name="ScrollDelta"/>/<paramref name="ScrollDeltaX"/> are DIP (positive = toward the content end).</summary>
+    public static InputEvent ScrollPhaseEvent(FluentGpu.Scroll.Runtime.ScrollGesture phase, Point2 pt, int button = 0, int keyCode = 0,
+        float ScrollDelta = 0f, KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Touchpad, bool IsRepeat = false,
+        uint TimestampMs = 0, uint PointerId = 1, float Pressure = 1f, float ScrollDeltaX = 0f, float WheelNotch = 0f,
+        float WheelNotchX = 0f, long QpcTicks = 0, byte ScrollPhaseSeq = 0, byte DeviceClassRaw = 0)
+    {
+        _ = button; _ = keyCode; _ = IsRepeat; _ = Pressure; _ = WheelNotch; _ = WheelNotchX; _ = ScrollPhaseSeq; _ = DeviceClassRaw;
+        var src = Pointer == PointerKind.Touch ? FluentGpu.Scroll.Runtime.ScrollSource.Touch : FluentGpu.Scroll.Runtime.ScrollSource.Touchpad;
+        if (Pointer == PointerKind.Mouse) Pointer = PointerKind.Touchpad;
+        var e = new FluentGpu.Scroll.Runtime.ScrollInputEvent(src, phase, QpcTicks, pt, ScrollDeltaX, ScrollDelta, PointerId, Mods);
+        return InputEvent.ForScroll(in e, Pointer, TimestampMs);
+    }
     public static Point2 Lerp(Point2 a, Point2 b, float t) => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
     public static long TouchGesture(HeadlessWindow window, AppHost host, Point2 from, Point2 to, int steps, uint pointerId, float msPerStep)
     {

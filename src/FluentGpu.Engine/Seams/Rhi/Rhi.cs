@@ -1,26 +1,14 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Rhi;
 
 /// <summary>Per-frame context handed to the device at submit. POD.</summary>
-// Damage = the union (device/DIP px) of nodes whose transform moved this frame — the region-aware invalidation set for
-// the in-app acrylic backdrop cache (default empty ⇒ nothing moved ⇒ reuse every cached blur). See AcrylicBackdropMath.
-// FrameEpoch = a nonzero monotonic frame counter (0 = none) matched against PushLayerCmd.DamageEpoch: a cached acrylic
-// layer whose baked epoch equals FrameEpoch uses its own EXTERNAL damage rect (own-subtree carve-out, §2.3/E9); a stale
-// (span-copied) or unpatched (popup/uncached) layer mismatches and falls back to the whole-frame Damage union.
-// ScrollHold = this PUBLISHED frame fell inside AppHost's user-scroll hold window (any user scroll this frame + the
-// ~0.12s SelfBlurHold tail — the same latch that drives the self-blur groups' holdBlur). Frame-global by nature, and
-// decided on the UI thread as the frame is published, so the render thread reads a flag that describes THIS frame's
-// content rather than the UI thread's current instant. The acrylic retained-backdrop cache uses it to rate-limit the
-// re-blur of a layer that already HAS a snapshot (§2.3/E10, AcrylicScrollHold.ShouldRefresh); a layer with no retained
-// snapshot always blurs immediately, so the flag can never surface a fallback/garbage backdrop.
-// RepaintDamage = the REPAINT set (gpu-renderer.md §13.1): every region whose PIXELS may differ from the last presented
+// ImageClockMs = the image cache's crossfade clock for this frame (replay-time image reveals sample it).
+// RepaintDamage = the REPAINT set (gpu-renderer.md §13): every region whose PIXELS may differ from the last presented
 // frame — old∪new for moved nodes, prior∪current for paint/layout re-records, vacated extents for removals, the viewport
 // for a scrolled content node — each padded by the AA floor + its effect halo. Empty + RepaintFullReason.None means
-// NOTHING changed; a forced-full region names the cause. It is DELIBERATELY not the same set as Damage above (which is
-// the acrylic blur-cache union: transform-moved nodes only, scroll content and paint-only changes excluded) — the two
-// answer different questions and must never be substituted for one another.
+// NOTHING changed; a forced-full region names the cause (and invalidates every retained tile).
 // PublishSequence = the monotonic seq SceneFramePublisher.Publish stamped on this frame (0 = never published, e.g. a
 // direct SubmitDrawList). A consumer that sees a jump of more than one since the frame it last consumed missed logical
 // frames; the publisher already unions the skipped frames' RepaintDamage forward, and this is the backstop that lets the
@@ -28,24 +16,15 @@ namespace FluentGpu.Rhi;
 // CarriedFromSeq = the OLDEST publish seq whose RepaintDamage is folded into this frame's region (== PublishSequence when
 // nothing was dropped). It is what makes a publish-gap answerable: the question a consumer must ask is not "was the gap
 // zero?" (DropOldest makes gaps normal under load, and the publisher's carry already covers them) but "was the gap's
-// damage carried?", i.e. CarriedFromSeq <= lastConsumedSeq + 1. Treating a gap itself as a correctness event turns every
-// dropped frame into a full repaint exactly when partial repaint matters most.
-// DrawListHash = a content fingerprint of the command stream + sort keys this frame publishes (0 = not stamped). The
-// backend's retained canvas remembers the hash it was last painted from, so a frame that claims "nothing changed" can be
-// CHECKED rather than trusted: a mismatch means a damage source is missing, and one named full frame beats a permanent
-// ghost. Reuses the host's existing skip-submit hash — never a second walk of the stream.
-public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0, bool ScrollHold = false,
-    RepaintDamageRegion RepaintDamage = default, ulong PublishSequence = 0, ulong CarriedFromSeq = 0, ulong DrawListHash = 0);
+// damage carried?", i.e. CarriedFromSeq <= lastConsumedSeq + 1.
+public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, float ImageClockMs = 0f,
+    RepaintDamageRegion RepaintDamage = default, ulong PublishSequence = 0, ulong CarriedFromSeq = 0);
 
 /// <summary>A coherent whole-command-list GPU execution measurement owned by one swapchain. <paramref name="Sequence"/>
 /// is monotonic within that target; <paramref name="SubmitAge"/> is how many submissions to the SAME target have happened
 /// since the measured submit (the double-buffered D3D path normally publishes at age 2); <paramref name="PublishedQpc"/>
 /// is the CPU QPC instant at which fence retirement made the timestamp pair readable.</summary>
 public readonly record struct GpuRenderSample(double ExecutionMs, ulong Sequence, ulong SubmitAge, long PublishedQpc);
-
-/// <summary>Coherent optional FG_GPU_TIMING whole/scene/category timeline owned by one swapchain target.</summary>
-public readonly record struct GpuProfileSample(ulong Sequence, double WholeMs, double SceneMs,
-    double FillMs, double ShadowMs, double ImageMs, double GlyphMs, double CompositeMs);
 
 [Flags]
 public enum RectSubmittedAreaFlags : byte
@@ -80,7 +59,7 @@ public readonly record struct SwapchainDesc(NativeHandle PresentTarget, Size2 Si
 /// <see cref="SubmitDrawList"/> is the PRIMARY hot path: the leaf walks the POD opcode stream with concrete devirtualized
 /// types. D3D12 is the reference backend; <c>Rhi.Headless</c> is the test backend; Metal slots in later behind this seam.
 /// </summary>
-public interface IGpuDevice : IDisposable
+public partial interface IGpuDevice : IDisposable
 {
     string BackendName { get; }
     /// <summary>True when <see cref="CreateSwapchain"/> may be called for secondary popup targets and
@@ -92,18 +71,37 @@ public interface IGpuDevice : IDisposable
     /// <summary>How many completed presents the swapchain may queue before frame production blocks (DXGI
     /// SetMaximumFrameLatency). Pacing predicts the presented vblank as FrameQpc + (1 + MaxFrameLatency)·refresh
     /// (RefreshLattice.Build). Default 1 — the classic latency-1 contract; HeadlessGpuDevice keeps it so the
-    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 also reports 1: its present-queue depth is a
-    /// LATENCY decision (D3D12Device.MAX_FRAME_LATENCY), deliberately decoupled from its 3 CPU-side frame banks.</summary>
+    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 starts at 1: its present-queue depth is a
+    /// LATENCY decision chosen at runtime from measured GPU margin (<see cref="SetPresentQueueDepth"/>, 1..2), deliberately
+    /// decoupled from its 3 CPU-side frame banks.</summary>
     int MaxFrameLatency => 1;
 
-    /// <summary>Block until the primary swapchain's present queue has room for one more frame, and RESERVE that room.
-    /// Called by the render loop BEFORE it picks which published frame to present, so the frame that reaches the glass is
-    /// the freshest one that existed when the slot opened; a backend that waits inside submit instead ages the frame it
-    /// already chose by the whole wait. The reservation is a credit exactly one Present spends, so a backend that
-    /// implements this MUST skip its internal pacing wait while a credit is held (see D3D12Device.WaitForPresentSlot).
-    /// Default no-op: the headless seam has no present queue, and a backend without a latency waitable keeps waiting
-    /// inside submit. Render-thread only (the submit/present owner).</summary>
-    void WaitForPresentSlot() { }
+    /// <summary>Render thread: set the present-queue depth (DXGI maximum frame latency) for the primary swapchain —
+    /// chosen by the host from measured GPU margin (<c>PresentQueueDepthPolicy</c>). Returns the depth now in force
+    /// (a backend without a queue, or one that refuses, returns its unchanged <see cref="MaxFrameLatency"/>).</summary>
+    int SetPresentQueueDepth(int depth) => MaxFrameLatency;
+
+    /// <summary>Runtime toggle for the PASS-granular GPU timeline (<see cref="ISwapchain.CopyGpuPassTimeline"/>): timestamps
+    /// only at pass boundaries, read back one submission later. Off by default; settable at any time from any thread (the
+    /// render thread observes it at the next submit). A backend without timestamp queries ignores it.</summary>
+    bool GpuPassTimingEnabled { get => false; set { } }
+
+    /// <summary>Measurement knockouts (<see cref="GpuKnockouts"/>) — runtime-settable from a probe or the Diagnostics page,
+    /// never an environment variable. Default None; a backend that cannot honour one ignores it.</summary>
+    GpuKnockouts Knockouts { get => GpuKnockouts.None; set { } }
+
+    /// <summary>Take the primary swapchain's present-slot credit (one Present spends it), waiting at most
+    /// <paramref name="timeoutMs"/> (−1 = the backend's liveness bound). True when the credit is held (or the backend has no
+    /// present queue); false when the slot did not open in time — no credit was taken, nothing to undo. Render-thread only.
+    /// A backend that implements this MUST skip its internal pacing wait while a credit is held.
+    /// <para>Called by the render loop BEFORE it picks which published frame to present, so the frame that reaches the
+    /// glass is the freshest one that existed when the slot opened; a backend that waits inside submit instead ages the
+    /// frame it already chose by the whole wait. A clock-paced turn passes a short grace (<c>SlotCatchUp.GraceMs</c>): a
+    /// slot still busy after it means the previous present missed its vblank, and the loop skips that tick instead of
+    /// queueing a frame that could only land late (see D3D12Device.TryTakePresentSlot) — so the bound must hold at
+    /// millisecond precision (a plain OS wait timeout is only as fine as the timer resolution). Default true: the headless
+    /// seam has no present queue, and a backend without a latency waitable keeps waiting inside submit.</para></summary>
+    bool TryTakePresentSlot(int timeoutMs) => true;
 
     /// <summary>Best-effort local (device-dedicated) VRAM usage vs the OS-reported budget for this adapter, in bytes.
     /// Returns <see langword="false"/> when the backend cannot report it (the headless seam, and any real backend before
@@ -179,7 +177,7 @@ public interface IGpuDevice : IDisposable
     void DumpDeviceLostDiagnostics(Action<string> write) { }
 
     /// <summary>Force a controlled device removal without TDR-ing the whole desktop. Used by the
-    /// FG_FORCE_DEVICE_LOST test hook to exercise the async recovery rendezvous, and by a runtime adapter switch
+    /// --fg device-lost=N test hook to exercise the async recovery rendezvous, and by a runtime adapter switch
     /// (set the backend's preferred adapter, then call this — recovery re-creates the device, honoring the
     /// preference). No-op default (headless / no injection support).</summary>
     void InjectDeviceLost() { }
@@ -191,12 +189,6 @@ public interface IGpuDevice : IDisposable
     /// other backend keeps the false default (no live-switch support).</summary>
     bool ConsumeAdapterSwitchRequest() => false;
 
-    /// <summary>Diagnostic: wall-time (ms) spent blocked on the frame-retirement fence plus the present-latency waitable
-    /// inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>. This is
-    /// queue/back-buffer retirement and compositor pacing, not GPU execution time. The host folds it into
-    /// <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that do not block there.</summary>
-    double LastFenceWaitMs => 0;
-
     /// <summary>Always-on P0 counter (cumulative, render-thread writes / UI-thread reads as a rough gauge): image-upload
     /// drain turns (<see cref="DrainImageJobs"/>) that hit the backend's per-turn pixel-byte budget and carried a job to
     /// the next turn. The host mirrors it onto <c>FrameStats.DeferredImageUploads</c>; a consumer differences frames. A
@@ -207,51 +199,6 @@ public interface IGpuDevice : IDisposable
 
     /// <summary>Cumulative pixel bytes of the jobs <see cref="DeferredImageUploads"/> counted. Default 0.</summary>
     long DeferredImageUploadBytes => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): whole-command-list elapsed timestamp span paired with the detailed scene
-    /// and category values below. This remains distinct from the target-local always-on
-    /// <see cref="ISwapchain.TryGetGpuRenderSample"/> sample. 0 when off/unsupported.</summary>
-    double LastGpuProfileMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): the SCENE-EXECUTION portion (clear + draw-list
-    /// playback + layer composites), excluding image uploads and baked-blur. When this ≈ the whole and ≳ the refresh budget,
-    /// the maximize lock is content fill/overdraw (not uploads/blur). 0 when off. Host folds into <c>FrameStats.GpuSceneMs</c>.</summary>
-    double LastGpuSceneMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the rect/solid-FILL portion (opaque/blended
-    /// rects, arcs, polylines, gradients — shadows split out into <see cref="LastGpuShadowMs"/>). Isolates overdraw fill
-    /// cost from image/text/composite. 0 when off/unsupported. Host folds into <c>FrameStats.GpuFillMs</c>.</summary>
-    double LastGpuFillMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the drop-SHADOW portion. Split out of
-    /// <see cref="LastGpuFillMs"/> because a shadow is a large always-blended SDF quad whose cost tracks shadow COUNT and
-    /// AREA, not the plate fills it batches beside. 0 when off. Folds into <c>FrameStats.GpuShadowMs</c>.</summary>
-    double LastGpuShadowMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the IMAGE-draw portion. 0 when off. Folds into <c>FrameStats.GpuImageMs</c>.</summary>
-    double LastGpuImageMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the GLYPH/text portion. 0 when off. Folds into <c>FrameStats.GpuGlyphMs</c>.</summary>
-    double LastGpuGlyphMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the layer/acrylic COMPOSITE portion. 0 when off. Folds into <c>FrameStats.GpuCompositeMs</c>.</summary>
-    double LastGpuCompositeMs => 0;
-
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): true when the detailed scene/category timestamp block was resolved on the
-    /// most recent submit. This is deliberately separate from the always-on whole-frame sample above.</summary>
-    bool GpuTimingSampleFresh => false;
-
-    /// <summary>True when the most recent <see cref="ISwapchain.Present"/> stood down (cloaked / OCCLUDED probe still
-    /// occluded) without a real present. The host treats this like skip-submit for the sync-path pacing floor.</summary>
-    bool LastPresentStoodDown => false;
-
-    /// <summary>Diagnostic: the OS-attested present/compositor statistics sampled at the last present, or
-    /// <c>default</c> on a backend that has none (headless — the struct's <c>Valid</c> bit reads false, which every
-    /// consumer must treat as NOT MEASURED rather than as zeroes). ALWAYS-ON: two OS calls per present and one per
-    /// second respectively, no queries, no allocation — this is the only vblank-attested cadence truth available, and
-    /// the in-app cadence metrics are computed against its refresh period rather than a nominal
-    /// <c>GetDeviceCaps(VREFRESH)</c> value. See <see cref="PresentStats"/>.</summary>
-    PresentStats LastPresentStats => default;
 
     /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture. The host
     /// must NOT elide that submit, or the texture stays empty and the image renders white. Default false (a
@@ -265,13 +212,6 @@ public interface IGpuDevice : IDisposable
     /// otherwise be skipped/elided, so a backlog of evicted textures doesn't sit resident forever on a quiet UI.
     /// Default no-op (headless / backends with no deferred-retire resource pool).</summary>
     void ReclaimCompletedUploads() { }
-
-    /// <summary>True when the last submitted frame rendered text unfaithfully — a glyph-atlas overflow deferred its
-    /// cache flush to the next frame, so some glyphs drew BLANK this frame. The host must NOT skip-submit and must
-    /// NOT treat this frame as a valid partial-repaint base while it is true: it owes exactly one more full frame so
-    /// the backend can re-record with the fresh atlas generation. Default false (headless/synchronous backends never
-    /// defer a reset).</summary>
-    bool TextRepaintPending => false;
 
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
     /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
@@ -298,23 +238,6 @@ public interface IGpuDevice : IDisposable
     /// frame fence so an in-flight frame can't read freed memory). No-op if not resident.</summary>
     void EvictImage(int imageId) { }
 
-    /// <summary>Suppress the frame-latency throttle wait at the start of the NEXT <see cref="SubmitDrawList"/> (self-
-    /// resetting). The host calls this for a KEEP-ALIVE repaint fired synchronously from inside an OS modal move/size
-    /// loop, where the WndProc thread would otherwise block up to a vblank on the latency waitable — injecting the
-    /// drag-start/live-resize hitch. Default no-op: only a backend with a present-latency throttle (D3D12) honors it.</summary>
-    void SuppressLatencyWaitOnce() { }
-
-    /// <summary>Present the NEXT frame at SyncInterval 0 instead of the steady-state vsync interval (self-resetting). The
-    /// host calls this for a KEEP-ALIVE repaint fired synchronously from inside an OS modal move/size loop: on a composited
-    /// flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at vblank) so the WndProc thread isn't
-    /// blocked up to a vblank in Present — the live-resize/move hitch the latency-wait skip alone doesn't remove. Default
-    /// no-op: only a backend that presents to a real swapchain (D3D12) honors it.</summary>
-    void SuppressVsyncOnce() { }
-
-    /// <summary>Hint the backend to sync DWM composition once after the next present (self-resetting). The host calls
-    /// this on a modal-loop SETTLE frame (<c>resized &amp;&amp; keepAlive</c>) so Mica/backdrop snaps with the final
-    /// client size. Default no-op.</summary>
-    void HintSettlePresent() { }
 }
 
 /// <summary>Geometry + motion parameters for a desktop-acrylic windowed popup's composition chrome. All px, relative to
@@ -330,10 +253,6 @@ public interface ISwapchain : IDisposable
     Size2 SizePx { get; }
     void Resize(Size2 px);
     void Present();
-    /// <summary>True when a SyncInterval-0 present is still tear-free because the swapchain is handed to a desktop
-    /// compositor (for example DirectComposition). The host uses this to scope interactive present experiments; opaque
-    /// HWND swapchains and backends that do not opt in stay on their ordinary vsync path.</summary>
-    bool SupportsCompositedIntervalZero => false;
 
     /// <summary>Read the most recently retired whole-frame GPU execution sample for THIS target. Returns false when the
     /// backend cannot measure it or no sample for this swapchain has retired yet. Target ownership is load-bearing: a
@@ -344,17 +263,26 @@ public interface ISwapchain : IDisposable
         return false;
     }
 
-    /// <summary>Read the most recently retired optional FG_GPU_TIMING timeline for THIS target. Sequence is target-local
-    /// and monotonic, allowing asynchronous log consumers to reject repeated observations.</summary>
-    bool TryGetGpuProfileSample(out GpuProfileSample sample)
+    /// <summary>Copy the most recently RETIRED frame's pass-granular GPU timeline for THIS target (coherent; only while
+    /// <see cref="IGpuDevice.GpuPassTimingEnabled"/> is on). Returns the number of passes copied into
+    /// <paramref name="dst"/> (0 when disabled / none retired yet / unsupported).</summary>
+    int CopyGpuPassTimeline(Span<GpuPassTiming> dst, out GpuPassFrameSummary summary)
     {
-        sample = default;
+        summary = default;
+        return 0;
+    }
+
+    /// <summary>The always-on device counters of this target's most recent successful submit (coherent). False when
+    /// unsupported or before the first submit.</summary>
+    bool TryGetFrameCounters(out GpuFrameCounters counters)
+    {
+        counters = default;
         return false;
     }
 
     /// <summary>Copy one coherent target-local submitted-rect snapshot: opaque/blended instance counts are always
     /// available on supporting backends; <see cref="RectSubmittedAreaSample.HasArea"/> gates the optional
-    /// <c>FG_RENDER_DIAG</c> areas and fixed top-N descriptors. Returns false when unsupported or before the target's
+    /// <c>--fg render</c> areas and fixed top-N descriptors. Returns false when unsupported or before the target's
     /// first submit. Implementations must not expose mutable render-thread counters through this seam.</summary>
     bool TryCopyRectSubmittedAreaSample(Span<RectSubmittedAreaItem> blendedTop, out RectSubmittedAreaSample sample)
     {
@@ -388,4 +316,69 @@ public interface ISwapchain : IDisposable
     /// so the frame loop keeps presenting the popup until the composition animation commits + settles (and, for close,
     /// defers disposal until it clears).</summary>
     bool PopupAnimating => false;
+
+    // ── Per-target diagnostics + present pacing (detached-window-render-isolation-implementation.md §3.3) ──
+    // Moved off IGpuDevice: each was a device-wide LAST-WRITER field that a secondary target's submit/present could
+    // silently overwrite on behalf of the primary (INCIDENT 2026-09 §1.6 item 4). Target-scoped by construction here.
+
+    /// <summary>True when the last submitted frame rendered text unfaithfully — a glyph-atlas overflow deferred its
+    /// cache flush to the next frame, so some glyphs drew BLANK this frame for THIS target. The host must NOT
+    /// skip-submit and must NOT treat this frame as a valid partial-repaint base while it is true: it owes exactly one
+    /// more full frame so the backend can re-record with the fresh atlas generation. Default false
+    /// (headless/synchronous backends never defer a reset).</summary>
+    bool TextRepaintPending => false;
+
+    /// <summary>True when the most recent <see cref="Present"/> of THIS target stood down (cloaked / OCCLUDED probe
+    /// still occluded) without a real present. The host treats this like skip-submit for the sync-path pacing floor.</summary>
+    bool LastPresentStoodDown => false;
+
+    /// <summary>Diagnostic: the OS-attested present/compositor statistics sampled at THIS target's last present, or
+    /// <c>default</c> on a backend that has none (headless — the struct's <c>Valid</c> bit reads false, which every
+    /// consumer must treat as NOT MEASURED rather than as zeroes). ALWAYS-ON: two OS calls per present and one per
+    /// second respectively, no queries, no allocation — this is the only vblank-attested cadence truth available, and
+    /// the in-app cadence metrics are computed against its refresh period rather than a nominal
+    /// <c>GetDeviceCaps(VREFRESH)</c> value. See <see cref="PresentStats"/>.</summary>
+    PresentStats LastPresentStats => default;
+
+    /// <summary>Diagnostic: wall-time (ms) spent blocked on THIS target's frame-retirement fence inside the most recent
+    /// <see cref="IGpuDevice.SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo, ISwapchain)"/>. Queue/
+    /// back-buffer retirement, not GPU execution time. The host folds it into <c>FrameStats.FenceWaitMs</c>. Default 0
+    /// for backends that do not block there.</summary>
+    double LastFenceWaitMs => 0;
+
+    /// <summary>Diagnostic: wall-time (ms) spent blocked on THIS target's present-latency waitable inside the most
+    /// recent submit — compositor pacing, split out from <see cref="LastFenceWaitMs"/> so a child's latency wait can
+    /// no longer masquerade as the primary's (INCIDENT 2026-09 §1.6 item 4). Default 0.</summary>
+    double LastLatencyWaitMs => 0;
+
+    /// <summary>OS-attested present statistics for THIS target, CUMULATIVE (a reader diffs two samples), from the
+    /// engine's <c>PresentStatisticsLedger</c> over the backend's PAIRED frame-statistics counters: presents that reached
+    /// a vblank, presents superseded before display (ΔPresentCount beyond ΔPresentRefreshCount — the silent drop a submit
+    /// stamp cannot see), and vblanks that showed a stale frame although its successor had been submitted in time (idle
+    /// vblanks and producer-skipped ticks are not repeats — the render thread's missed-tick counter owns the latter).
+    /// Render-written, UI-read gauges; 0 for backends without frame statistics.</summary>
+    long PresentsDisplayed => 0;
+    /// <inheritdoc cref="PresentsDisplayed"/>
+    long PresentsDropped => 0;
+    /// <inheritdoc cref="PresentsDisplayed"/>
+    long VblanksRepeated => 0;
+
+    /// <summary>Suppress THIS target's frame-latency throttle wait at the start of the NEXT submit (self-resetting).
+    /// The host calls this for a KEEP-ALIVE repaint fired synchronously from inside an OS modal move/size loop, where
+    /// the WndProc thread would otherwise block up to a vblank on the latency waitable — injecting the drag-start/
+    /// live-resize hitch. Default no-op: only a backend with a present-latency throttle (D3D12) honors it.</summary>
+    void SuppressLatencyWaitOnce() { }
+
+    /// <summary>Present THIS target's NEXT frame at SyncInterval 0 instead of the steady-state vsync interval (self-
+    /// resetting). The host calls this for a KEEP-ALIVE repaint fired synchronously from inside an OS modal move/size
+    /// loop: on a composited flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at
+    /// vblank) so the WndProc thread isn't blocked up to a vblank in Present — the live-resize/move hitch the
+    /// latency-wait skip alone doesn't remove. Default no-op: only a backend that presents to a real swapchain
+    /// (D3D12) honors it.</summary>
+    void SuppressVsyncOnce() { }
+
+    /// <summary>Hint the backend to sync DWM composition once after THIS target's next present (self-resetting). The
+    /// host calls this on a modal-loop SETTLE frame (<c>resized &amp;&amp; keepAlive</c>) so Mica/backdrop snaps with
+    /// the final client size. Default no-op.</summary>
+    void HintSettlePresent() { }
 }

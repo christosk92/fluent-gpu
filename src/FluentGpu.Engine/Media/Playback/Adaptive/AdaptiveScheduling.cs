@@ -76,11 +76,13 @@ public static class AdaptiveSegmentScheduler
 
 /// <summary>Allocation-free exponentially-weighted throughput estimator. Samples use payload bits / transfer time; the
 /// fast EWMA reacts to drops while the slow EWMA prevents a single burst from driving an unsafe upgrade.
-/// <para>Two rules keep the estimate honest. (1) A sample smaller than <see cref="MinSampleBytes"/> or shorter than
-/// <see cref="MinSampleMs"/> is round-trip/scheduler noise, not throughput, and is DISCARDED — a 12 KB range request
-/// that completes in 40 ms "measures" whatever the RTT happened to be, not the link. (2) The estimator starts at
-/// <see cref="DefaultSeedKbps"/> (2 Mbps) and NEVER at the bottom rung: seeding low is self-reinforcing, because a
-/// 240p rung transfers so little per segment that its own samples can never justify climbing off it.</para></summary>
+/// <para>Two rules keep the estimate honest. (1) A sample smaller than <see cref="MinSampleBytes"/> or, below
+/// <see cref="LargeSampleBytes"/>, shorter than <see cref="MinSampleMs"/> is round-trip/scheduler noise, not
+/// throughput, and is DISCARDED — a 12 KB range request that completes in 40 ms "measures" whatever the RTT happened
+/// to be, not the link. Above <see cref="LargeSampleBytes"/> the duration floor no longer applies: a multi-megabyte
+/// aggregate is a measurement whatever its duration. (2) The estimator starts at <see cref="DefaultSeedKbps"/>
+/// (2 Mbps) and NEVER at the bottom rung: seeding low is self-reinforcing, because a 240p rung transfers so little
+/// per segment that its own samples can never justify climbing off it.</para></summary>
 public sealed class ThroughputEstimator
 {
     /// <summary>The startup prior: 2 Mbps. REPLACED outright (not blended) by the first accepted sample, so a fast
@@ -88,8 +90,13 @@ public sealed class ThroughputEstimator
     public const double DefaultSeedKbps = 2_000.0;
     /// <summary>Payload floor for an accepted sample (64 KB). Below it the measurement is RTT, not bandwidth.</summary>
     public const long MinSampleBytes = 64 * 1024;
-    /// <summary>Transfer-time floor for an accepted sample (200 ms).</summary>
+    /// <summary>Transfer-time floor for an accepted sample (200 ms) — for payloads under <see cref="LargeSampleBytes"/>.</summary>
     public const double MinSampleMs = 200.0;
+    /// <summary>Above this payload the duration floor no longer applies: a 5 MB aggregate that a CDN answered in 130 ms IS
+    /// 300 Mbps — on a multi-megabyte transfer the RTT share of 130 ms is the noise, not the signal. Without this a fast
+    /// link fills the whole forward buffer before any sample clears 200 ms, the estimate never leaves the seed, and Auto
+    /// sits on the opening rung until the forced probe (2026-09-22: n=0 at 62 s buffered, every session).</summary>
+    public const long LargeSampleBytes = 2L * 1024 * 1024;
 
     private double _fastKbps = DefaultSeedKbps;
     private double _slowKbps = DefaultSeedKbps;
@@ -111,13 +118,24 @@ public sealed class ThroughputEstimator
     /// <summary>Fold one transfer sample in. Returns false when the sample was discarded as noise.</summary>
     public bool Add(long payloadBytes, TimeSpan elapsed)
     {
-        if (payloadBytes < MinSampleBytes || elapsed.TotalMilliseconds < MinSampleMs) return false;
-        double kbps = payloadBytes * 8.0 / elapsed.TotalSeconds / 1000.0;
+        if (payloadBytes < MinSampleBytes) return false;
+        if (elapsed.TotalMilliseconds < MinSampleMs && payloadBytes < LargeSampleBytes) return false;
+        double seconds = Math.Max(elapsed.TotalMilliseconds, 1.0) / 1000.0;
+        double kbps = payloadBytes * 8.0 / seconds / 1000.0;
         if (!double.IsFinite(kbps) || kbps <= 0) return false;
         if (_accepted == 0) { _fastKbps = kbps; _slowKbps = kbps; }   // the seed is a prior, not a measurement
         else { _fastKbps += 0.35 * (kbps - _fastKbps); _slowKbps += 0.08 * (kbps - _slowKbps); }
         _accepted++;
         return true;
+    }
+
+    /// <summary>Replace the 2 Mbps startup prior with a remembered estimate (the app's last measurement on this machine).
+    /// Still a PRIOR: <see cref="AcceptedSamples"/> stays 0 and the first accepted sample replaces it outright. Ignored once
+    /// anything has been measured.</summary>
+    public void Seed(double kbps)
+    {
+        if (!double.IsFinite(kbps) || kbps <= 0 || _accepted > 0) return;
+        _fastKbps = kbps; _slowKbps = kbps;
     }
 }
 
@@ -141,7 +159,8 @@ public enum AbrDecisionReason : byte
 
 /// <summary>Production ABR controller: conservative throughput budget, immediate downshift, buffer-gated upgrade, an
 /// asymmetric climb/sustain hysteresis band, a forced probe that breaks the low-rendition feedback loop, plus a manual
-/// pin and bitrate/resolution caps.</summary>
+/// pin and bitrate/resolution caps. It acts only on measurements; a prior holds. The forced probe is the only move off
+/// a prior — see <see cref="EstimateIsPrior"/> and the 4-param <c>Choose</c> overload.</summary>
 public sealed class AdaptiveBitrateController : IAbrPolicy
 {
     private readonly ThroughputEstimator _throughput = new();
@@ -189,6 +208,11 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     /// <summary>Fold one transfer sample in. Returns false when it was discarded as RTT noise.</summary>
     public bool RecordDownload(long payloadBytes, TimeSpan elapsed) => _throughput.Add(payloadBytes, elapsed);
 
+    /// <summary>See <see cref="ThroughputEstimator.Seed"/>.</summary>
+    public void SeedEstimate(double kbps) => _throughput.Seed(kbps);
+    /// <summary>True until the first real sample: the estimate is a prior and must never move the ladder by itself.</summary>
+    public bool EstimateIsPrior => _throughput.AcceptedSamples == 0;
+
     /// <summary>Full reset for a NEW source: ladder position, vote/probe state AND throughput history.</summary>
     public void Reset()
     {
@@ -209,8 +233,14 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     /// <summary>Seed the representation already opened by the backend (for example a conservative 480p startup rung).</summary>
     public void SeedCurrent(int index) { _current = Math.Max(0, index); ResetLadderState(); }
 
-    /// <inheritdoc/>
+    /// <inheritdoc/> — the IAbrPolicy seam: a caller that HANDS a measured kbps is by contract measured; the prior rule
+    /// applies only to the controller's OWN estimate (the variant overload).
     public int Choose(ReadOnlySpan<int> variantBitrates, TimeSpan forwardBuffered, double measuredKbps)
+        => Choose(variantBitrates, forwardBuffered, measuredKbps, estimateIsPrior: false);
+
+    /// <summary>As the 3-param overload, but <paramref name="estimateIsPrior"/> says whether <paramref name="measuredKbps"/>
+    /// is still the seed or a remembered value rather than a real measurement: rules 1 and 3 are skipped; 2 and 4 still apply.</summary>
+    public int Choose(ReadOnlySpan<int> variantBitrates, TimeSpan forwardBuffered, double measuredKbps, bool estimateIsPrior)
     {
         if (variantBitrates.IsEmpty) { _reason = AbrDecisionReason.Hold; return 0; }
         if (!Selection.IsAuto && Selection.VariantId is { } id && int.TryParse(id, out int pinned))
@@ -236,8 +266,11 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
         _current = Math.Clamp(_current, 0, variantBitrates.Length - 1);
         int currentBitrate = variantBitrates[_current];
 
-        // 1. Downswitch is immediate and unconditional — a stall is worse than any resolution.
-        if (variantBitrates[sustain] < currentBitrate)
+        // 1. Downswitch is immediate and unconditional — ON A MEASUREMENT. A prior (the 2 Mbps seed, or a remembered
+        //    estimate) must never move the ladder off the rung the backend deliberately opened: the seed cannot "afford"
+        //    the ≤480p opening rung, and acting on it put every cold start through 480p → 320p → 480p before the first
+        //    frame (two swap chains; 2026-09-22). The opening rung is the app's decision; the first real sample corrects it.
+        if (!estimateIsPrior && variantBitrates[sustain] < currentBitrate)
         {
             // A probe the very next decision reverts is an OSCILLATION, and every reversal costs a real
             // representation switch (which is what visibly freezes the frame). Back the probe cadence off
@@ -263,10 +296,11 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
         // next probe may come at the base cadence again.
         if (_probeInFlight) { _probeInFlight = false; _probeFailures = 0; }
 
-        // 3. Throughput-justified climb. The FIRST climb after startup needs ONE vote, not two: the two-votes-at-1s
-        //    gate exists to damp steady-state oscillation, and applying it at startup is what left Auto parked on the
-        //    opening rung for seconds after the estimate had already justified moving off it.
-        if (variantBitrates[climb] > currentBitrate)
+        // 3. Throughput-justified climb — on a measurement only (a prior-driven climb is the same blindness, upward).
+        //    The FIRST climb after startup needs ONE vote, not two: the two-votes-at-1s gate exists to damp
+        //    steady-state oscillation, and applying it at startup is what left Auto parked on the opening rung for
+        //    seconds after the estimate had already justified moving off it.
+        if (!estimateIsPrior && variantBitrates[climb] > currentBitrate)
         {
             if (_upgradeCandidate != climb) { _upgradeCandidate = climb; _upgradeVotes = 1; }
             else if (_upgradeVotes < byte.MaxValue) _upgradeVotes++;
@@ -352,7 +386,7 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
         for (int i = 0; i < allowed; i++)
             if (indices[i] == _current) { localCurrent = i; break; }
         _current = localCurrent;
-        int selected = Choose(bitrates[..allowed], forwardBuffered, EstimatedKbps);
+        int selected = Choose(bitrates[..allowed], forwardBuffered, EstimatedKbps, EstimateIsPrior);
         return _current = indices[Math.Clamp(selected, 0, allowed - 1)];
     }
 }

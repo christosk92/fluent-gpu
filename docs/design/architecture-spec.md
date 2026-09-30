@@ -661,7 +661,10 @@ boundary; nested clips via `INCR_SAT`/`DECR_SAT` with a documented max depth.
 **Layers** are the only offscreen RTs (group opacity over overlaps, non-SrcOver blend, effects), pooled by
 size bucket from D3D12MA via the deferred-release queue.
 
-**Partial present (folds the MAJOR):** v1 = **engine-owned persistent canvas RT** — damaged regions
+**Partial present (folds the MAJOR) — ⊳ SUPERSEDED 2026-09:** the persistent canvas below shipped and was replaced
+by the **retained tiled composite** (`subsystems/gpu-renderer.md` §13.1 — retained 1024×512 tiles composited
+in-engine into the swapchain, whole-frame `FLIP_DISCARD` presents); the damage rules in this paragraph survive as the
+repaint set. Original design: v1 = **engine-owned persistent canvas RT** — damaged regions
 scissor-repainted into it with `LoadOp.Load` (valid because WE own the RT, unlike a `FLIP_DISCARD` back
 buffer), then DComp-composited / copied to the back buffer. `Present1` dirty-rects are a pure DWM hint
 layered on top, **not** the correctness mechanism. **Damage** (folds MAJOR): dirty rects select which region

@@ -299,11 +299,8 @@ public sealed class ContentDialog : Component
         // WinUI ContentControl.Content replaces the Message TextEl; long bodies scroll inside the fixed card
         // (the WinUI ContentScrollViewer) instead of overflowing MaxHeight.
         //
-        // Alpha-mask edge fade, NOT the surface-colour EdgeCues. The content region below paints Tok.FillLayerAlt
-        // (ContentDialogTopOverlay), which in dark themes is a ~5% white OVERLAY, never an opaque fill. The colour cue
-        // resolves its band by walking ancestors for the first opaque fill, sails past that overlay to the plate's
-        // FillSolidBase, and paints a one-rung-DARKER solid strip over the scrolled body right under the title (the
-        // failure mode DetailTracks/ArtistPage already document). Feathering the body's own alpha is colour-independent.
+        // No edge cue on the dialog body: WinUI's ContentScrollViewer draws none. (The cue is the analytic edge feather
+        // now — colour-independent — so this is a fidelity choice, not the old painted band's wrong-plate hazard.)
         Element contentBody = Content is not null
             ? new ScrollEl { Content = Content, ContentSized = true, MaxHeight = MaxH - 200f, EdgeCues = ScrollEdgeCues.None }
             : new TextEl(Message) { Size = ContentSize, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap };

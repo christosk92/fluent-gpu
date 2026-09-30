@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentGpu.Foundation;
@@ -10,7 +10,12 @@ static class Program
 {
     static int Main(string[] args)
     {
-        var probe = Environment.GetEnvironmentVariable("FG_PROBE");
+        string? probe = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--probe" && i + 1 < args.Length) { probe = args[i + 1]; break; }
+            if (args[i].StartsWith("--probe=", StringComparison.Ordinal)) { probe = args[i]["--probe=".Length..]; break; }
+        }
         if (probe == "ranged-tooltip") return ProbeDrivers.RangedTooltipFreezeProbe();
         if (probe == "titlebar-resize") return ProbeDrivers.TitleBarResizeProbe();
         if (probe == "scroll-flicker") return ProbeDrivers.ScrollFlickerProbe();
@@ -22,7 +27,6 @@ static class Program
             if (args[i].StartsWith("--suite=", StringComparison.Ordinal))
             { suiteSpec = args[i]["--suite=".Length..]; break; }
         }
-        suiteSpec ??= Environment.GetEnvironmentVariable("FG_SUITE");
 
         bool fullRun = string.IsNullOrWhiteSpace(suiteSpec)
             || suiteSpec.Equals("all", StringComparison.OrdinalIgnoreCase);
@@ -62,21 +66,30 @@ static class Program
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
         var strings = new StringTable();
 
+        // gate.tiles.stale-zero: the permanent stale-tile sweep brackets every suite (evidence-diagnostics §A.1).
         if (runCore)
+        {
+            StaleSweep.Begin();
             CoreSuite.Run(strings);
+            StaleSweep.End("core");
+        }
         foreach (var s in suites)
+        {
+            StaleSweep.Begin();
             s.Run(strings);
+            StaleSweep.End(s.Id);
+        }
 
         Console.WriteLine();
         if (Failures == 0)
         {
             if (!fullRun)
-                Console.WriteLine($"ALL CHECKS PASSED (suite={suiteSpec}, {Total} checks)");
+                Console.WriteLine($"ALL CHECKS PASSED (suite={suiteSpec}, {Total} checks){EvidenceGate.SummarySuffix()}");
             else
-                Console.WriteLine($"ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end.{ArenaSummarySuffix()}");
+                Console.WriteLine($"ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end.{ArenaSummarySuffix()}{EvidenceGate.SummarySuffix()}");
             return 0;
         }
-        Console.WriteLine($"{Failures} CHECK(S) FAILED.");
+        Console.WriteLine($"{Failures} CHECK(S) FAILED.{EvidenceGate.SummarySuffix()}");
         return 1;
     }
 }

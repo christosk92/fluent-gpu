@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Pal.Windows;
@@ -13,7 +13,7 @@ internal static partial class DriverMemoryFloorProbe
     private sealed partial class RunState
     {
         private bool _factorial;
-        private string _workload = "classic", _routeRequest = "direct";
+        private string _workload = "classic";
         private int _physicalWidth, _physicalHeight;
         private const int SyntheticImageCount = 130, SyntheticImageBase = 10_000;
         private bool _imagesStaged;
@@ -21,16 +21,11 @@ internal static partial class DriverMemoryFloorProbe
         private void ConfigureFactorial(string[] args)
         {
             _workload = Option(args, "--driver-memory-floor-workload", "classic");
-            _routeRequest = Option(args, "--driver-memory-floor-route", "direct");
             if (_workload is not ("classic" or "mixed" or "images" or "opacity" or "blur" or "edgefade" or "stencil"))
                 throw new ArgumentException("Workload must be classic, mixed, images, opacity, blur, edgefade or stencil.");
-            if (_routeRequest is not ("direct" or "retained"))
-                throw new ArgumentException("Route must be direct or retained.");
             _factorial = _workload != "classic";
-            if (!_factorial && _routeRequest != "direct")
-                throw new ArgumentException("Classic controls retain their original FullDirect sequence.");
             if (_factorial && _arm != "baseline")
-                throw new ArgumentException("Factorial runs isolate one workload/route; allocator controls use workload=classic.");
+                throw new ArgumentException("Factorial runs isolate one workload; allocator controls use workload=classic.");
             if (_factorial)
             {
                 _physicalWidth = Dimension(args, "--driver-memory-floor-physical-width", 1770);
@@ -46,7 +41,7 @@ internal static partial class DriverMemoryFloorProbe
             Pump();
             if (window.ClientSizePx != new Size2(_physicalWidth, _physicalHeight))
                 throw new InvalidOperationException($"Requested physical target was not obtained: {window.ClientSizePx}.");
-            Console.Error.WriteLine($"[driver-floor] FACTORIAL workload={_workload} route_requested={_routeRequest} " +
+            Console.Error.WriteLine($"[driver-floor] FACTORIAL workload={_workload} " +
                 $"physical={_physicalWidth}x{_physicalHeight} scale={window.Scale} cards=72 " +
                 "images_if_enabled=130 sizes=64:77,128:30,256:20,512:3; no network/account content");
         }
@@ -55,22 +50,19 @@ internal static partial class DriverMemoryFloorProbe
         {
             Frames("factorial-clear", clear, 3);
             var common = MakeFactorialWorkload(strings, "mixed");
-            // The same mixed workload and FullDirect baseline precede every route/family arm.
-            FactorialFrames("common-mixed", common, retained: false, count: 16);
+            // The same mixed workload baseline precedes every family arm.
+            FactorialFrames("common-mixed", common, count: 16);
             Idle("common-mixed-retired-idle");
             try
             {
                 if (_workload == "images") StageSyntheticImages();
                 var selected = _workload == "mixed" ? common : MakeFactorialWorkload(strings, _workload);
-                bool retained = _routeRequest == "retained";
-                if (retained && !RepaintStreamSafety.Scan(selected.Bytes))
-                    throw new InvalidOperationException("Production stream admission rejects this retained workload.");
-                FactorialFrames("selected-" + _workload, selected, retained, 240);
+                FactorialFrames("selected-" + _workload, selected, 240);
                 Console.Error.WriteLine("[driver-floor] selected_resources " + _device!.DiagGpuDetail);
                 Frames("factorial-return-minimal", clear, 1);
                 Idle("factorial-return-minimal-retired-idle");
                 // Repeating an identical cohort distinguishes retained high-water from ongoing growth.
-                FactorialFrames("same-family-rewarm", selected, retained, 240);
+                FactorialFrames("same-family-rewarm", selected, 240);
                 Frames("factorial-return-minimal-again", clear, 1);
                 Idle("factorial-rewarm-retired-idle");
             }
@@ -128,23 +120,22 @@ internal static partial class DriverMemoryFloorProbe
             if (family == "opacity")
             {
                 // Two nested full-window groups reproduce the first Wavee sample's two full-target pool resources.
-                draw.PushOpacityLayer(whole, default, .92f, layerId: 1);
-                draw.PushOpacityLayer(whole, default, .92f, layerId: 2);
+                draw.PushOpacityLayer(whole, default, .92f);
+                draw.PushOpacityLayer(whole, default, .92f);
             }
             else if (family == "blur")
-                draw.PushBlurLayer(whole, default, 8, 1, layerId: 3, compositeClip: whole);
+                draw.PushBlurLayer(whole, default, 8, 1, compositeClip: whole);
             else if (family == "edgefade")
-                draw.PushEdgeFadeLayer(whole, whole, default, 1, 15, 24, 24, 24, 24, 0, 1, layerId: 4);
+                draw.PushEdgeFadeLayer(whole, whole, default, 1, 15, 24, 24, 24, 24, 0, 1);
 
             // "stencil" wraps the WHOLE card grid in ONE tier-3 stencil-path clip (a real tessellated rounded-rect
             // mask, not the plain rectangular scissor PushClip gives every other family) — the structural analogue of
             // how opacity/blur/edgefade wrap the same 72 cards in one full-window layer above. A per-card stencil
             // scope (72 pushes/pops of tiny masks) would mostly measure PathRealizationCache slab growth instead of
             // isolating the driver-side stencil DSV/target resource the other families' single full-window RT
-            // isolates; one full-window scope keeps the resource footprint comparable across families. It must NOT
-            // nest inside a layer (RepaintPolicy.RepaintStreamSafety.Scan rejects PushStencilClip while layerDepth
-            // != 0 and PushLayer while stencilDepth != 0), so this family owns the "no layer" slot the other three
-            // occupy with their own single full-window wrapper.
+            // isolates; one full-window scope keeps the resource footprint comparable across families. It does not
+            // nest inside a layer, so this family owns the "no layer" slot the other three occupy with their own
+            // single full-window wrapper.
             PathRef stencilClipRef = default;
             if (family == "stencil")
             {
@@ -212,39 +203,30 @@ internal static partial class DriverMemoryFloorProbe
             return b.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
         }
 
-        private void FactorialFrames(string stage, DrawList draw, bool retained, int count)
+        private void FactorialFrames(string stage, DrawList draw, int count)
         {
             _portableOps = draw.CommandCount;
             _stageFrames = 0;
-            Console.Error.WriteLine($"[driver-floor] COHORT stage={stage} requested={(retained ? "retained" : "direct")} " +
+            Console.Error.WriteLine($"[driver-floor] COHORT stage={stage} route=direct " +
                 $"bytes={draw.Bytes.Length} sort_keys={draw.SortKeys.Length} portable_ops={draw.CommandCount} opcodes=[{draw.OpcodeStats}]");
             Sample(stage + "-before");
-            ulong hash = Fingerprint(draw);
             for (int frame = 0; frame < count; frame++)
             {
                 Pump();
                 if (_window!.ClientSizePx != _size || _window.Scale != _scale)
                     throw new InvalidOperationException("Factorial target changed; discard this run.");
                 RepaintDamageRegion damage = default;
-                if (!retained || frame == 0) damage.ForceFull(RepaintFullReason.TargetInvalidated);
-                else
-                {
-                    float w = _size.Width / _scale, h = _size.Height / _scale;
-                    damage.Add(new RectF(w * .1f, h * .1f, w * .3f, h * .14f));
-                    damage.Add(new RectF(w * .6f, h * .65f, w * .3f, h * .14f));
-                }
+                damage.ForceFull(RepaintFullReason.TargetInvalidated);
                 ulong seq = _submits + 1;
-                var info = new FrameInfo(_size, _scale, ColorF.FromRgba(18, 18, 22), FrameEpoch: seq,
-                    RepaintDamage: damage, PublishSequence: seq, CarriedFromSeq: seq, DrawListHash: hash);
+                var info = new FrameInfo(_size, _scale, ColorF.FromRgba(18, 18, 22),
+                    RepaintDamage: damage, PublishSequence: seq, CarriedFromSeq: seq);
                 _device!.SubmitDrawList(draw.Bytes, draw.SortKeys, info);
                 _submits++;
                 _stageFrames++;
                 if (frame == 0) Sample(stage + "-first-submitted-before-present");
                 var observed = _device.MemoryProbeWorkload;
-                RepaintRoute expected = !retained || frame == 0 ? RepaintRoute.FullDirect
-                    : frame == 1 ? RepaintRoute.FullIntoCanvas : RepaintRoute.Partial;
-                if (observed.Route != expected || observed.DroppedInstances != 0 || observed.ImagesSkipped != 0)
-                    throw new InvalidOperationException($"Factorial coverage mismatch: expected={expected} actual={observed}.");
+                if (observed.DroppedInstances != 0 || observed.ImagesSkipped != 0)
+                    throw new InvalidOperationException($"Factorial coverage mismatch: actual={observed}.");
                 _swapchain!.Present();
                 if (_device.LastPresentStoodDown) throw new InvalidOperationException("Factorial present stood down; discard run.");
                 _presents++;
@@ -256,15 +238,6 @@ internal static partial class DriverMemoryFloorProbe
 
         private string FactorialSampleSuffix()
             => !_factorial || _device is null || _submits == 0 ? ""
-                : $" family={_workload} route_requested={_routeRequest} last_submit=[{_device.MemoryProbeWorkload}]";
-
-        private static ulong Fingerprint(DrawList draw)
-        {
-            const ulong prime = 1099511628211;
-            ulong hash = 14695981039346656037;
-            foreach (byte b in draw.Bytes) hash = unchecked((hash ^ b) * prime);
-            foreach (ulong key in draw.SortKeys) hash = unchecked((hash ^ key) * prime);
-            return hash;
-        }
+                : $" family={_workload} last_submit=[{_device.MemoryProbeWorkload}]";
     }
 }

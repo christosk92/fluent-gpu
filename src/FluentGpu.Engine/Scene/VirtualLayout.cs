@@ -59,6 +59,19 @@ public interface IMeasuredVirtualLayout : IVirtualLayout
 /// keeps its measured extent and the disclosure's travel distance is computed from real geometry.
 /// Built-ins: <see cref="MeasuredStackVirtualLayout"/>, <see cref="GroupedListVirtualLayout"/>.
 /// </summary>
+/// <summary>A measured layout whose extents can be REWRITTEN out of band — a wholesale reseed back to its seeds — between
+/// two layout passes. Such a rewrite moves every row below the first rewritten one with no plan frame shift, which on its
+/// own is an unanchored jump (and the re-measure that follows shifts the plan by the correction, so the net is a jump of
+/// the whole rewrite). The layout engine takes the rewrite's effect on the scroll anchor in the next pass and shifts the
+/// plan frame by it, in the same call as that pass's measured corrections (<c>FlexLayout.ArrangeVirtual</c>): a reseed
+/// keeps the anchor row where the user sees it, exactly like a measured correction above the viewport.</summary>
+public interface IAnchoredReseedLayout : IMeasuredVirtualLayout
+{
+    /// <summary>Consumes the pending out-of-band rewrite (if any): <paramref name="delta"/> = how far it moved item
+    /// <paramref name="anchorIndex"/>'s offset (new − old). False when nothing was rewritten since the last call.</summary>
+    bool TakeReseedShift(int anchorIndex, out double delta);
+}
+
 public interface ISplicingVirtualLayout : IMeasuredVirtualLayout
 {
     /// <summary>Items the layout currently holds extents for; −1 before its first geometry call.</summary>
@@ -83,75 +96,6 @@ public interface IViewportVirtualLayout : IVirtualLayout
     /// <summary>Feed the live viewport before geometry: <paramref name="mainExtent"/> is the scroll-axis viewport
     /// extent (width for a horizontal viewport), <paramref name="crossSize"/> the cross axis. O(1), allocation-free.</summary>
     void SetViewport(float mainExtent, float crossSize);
-}
-
-/// <summary>Decides whether a scroll offset needs a virtual-window refresh, using the realized overscan as a guard band.</summary>
-public static class VirtualWindowing
-{
-    /// <summary>Scroll speed (DIP/s along the scroll axis) below which the directional overscan collapses to the
-    /// historical symmetric guard — so an at-rest / slow-wheel realize computes exactly the pre-E5 window (existing
-    /// gates unchanged); the velocity skew engages under any live kernel motion (scroll-v3-plan §4 — no longer
-    /// fling-only: <c>sc.Velocity</c> is populated by drag/ballistic/driven/wheel-chase alike).</summary>
-    public const float FlingGuardThreshold = 1f;
-    /// <summary>E5: ahead-guard grows by <c>ceil(|Velocity|·<see cref="VelocityOverscanFactor"/> / avgExtent)</c> rows —
-    /// ~100ms of travel pre-buffered on the scroll-direction edge (scroll-v3-plan §2.1 <c>ScrollFeel.Shipping.RealizeAheadSec</c>
-    /// = 0.10; kept as a local const here rather than a cross-package reference to the kernel's feel record).</summary>
-    public const float VelocityOverscanFactor = 0.10f;
-
-    /// <summary>E5 velocity-proportional DIRECTIONAL overscan — a FIXED-SUM skew. The two overscan halves always sum to
-    /// <c>2·Overscan</c> (the pre-E5 total), so the realized WINDOW WIDTH is velocity-independent — critical for the
-    /// zero-alloc bound-list path, whose persistent slots would otherwise grow/shrink (allocate) as velocity varied. Under
-    /// live motion the fixed budget is redistributed toward the scroll direction: ahead = <c>clamp(Overscan + k, 1,
-    /// 2·Overscan−1)</c>, behind = <c>2·Overscan − ahead</c> (k ∝ speed, so ahead never collapses the budget to less
-    /// than 1 row on either side). At rest / below <see cref="FlingGuardThreshold"/> both are <paramref name="overscan"/>
-    /// (symmetric — identical to the pre-E5 window). Pure integer arithmetic, allocation-free.
-    /// <paramref name="velocityMain"/> is <c>ScrollState.Velocity</c> — signed in offset space (≥0 ⇒ scrolling toward
-    /// higher indices ⇒ the high-index edge is ahead).</summary>
-    public static void DirectionalOverscan(int overscan, float velocityMain, float avgExtent, out int lowOverscan, out int highOverscan)
-    {
-        bool moving = MathF.Abs(velocityMain) > FlingGuardThreshold;
-        int aheadOv = overscan, behindOv = overscan;
-        if (moving && overscan > 0)
-        {
-            float avg = avgExtent > 0f ? avgExtent : 1f;
-            int k = Math.Clamp((int)MathF.Ceiling(MathF.Abs(velocityMain) * VelocityOverscanFactor / avg), 0, overscan - 1);
-            aheadOv = overscan + k;   // sum stays 2·overscan ⇒ constant window width ⇒ no bound-slot churn
-            behindOv = overscan - k;
-        }
-        bool forward = velocityMain >= 0f;                  // offset increasing ⇒ high-index edge is ahead
-        lowOverscan = forward ? behindOv : aheadOv;
-        highOverscan = forward ? aheadOv : behindOv;
-    }
-
-    public static bool NeedsRealize(in ScrollState sc, int visibleFirst, int visibleLast)
-    {
-        if (sc.ItemCount <= 0) return false;
-        visibleFirst = Math.Clamp(visibleFirst, 0, sc.ItemCount);
-        visibleLast = Math.Clamp(visibleLast, visibleFirst, sc.ItemCount);
-
-        // Persistent leading items are attached independently of the recyclable interval. Coverage and guard-band
-        // decisions therefore operate on the still-needed normal tail only.
-        int prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
-        visibleFirst = Math.Max(visibleFirst, prefix);
-        visibleLast = Math.Max(visibleLast, prefix);
-        if (visibleLast <= prefix) return false;
-
-        if (sc.LastRealized <= sc.FirstRealized) return true;
-        if (visibleFirst < sc.FirstRealized || visibleLast > sc.LastRealized) return true;   // hard coverage net (never removed)
-
-        // E5 directional guard band: the per-side guard is HALF the (skewed) overscan on that side, so under a fling the
-        // ahead edge is guarded MORE (re-realize fires earlier as the fixed budget shifts ahead) and the receding edge
-        // less. At rest DirectionalOverscan is symmetric ⇒ both guards are max(1, Overscan/2) — byte-identical to pre-E5.
-        float contentExt = sc.Orientation == 1 ? sc.ContentW : sc.ContentH;
-        float avg = sc.ItemCount > 0 && contentExt > 0f ? contentExt / sc.ItemCount : 1f;
-        DirectionalOverscan(sc.Overscan, sc.Velocity, avg, out int lowOv, out int highOv);
-        int guardLow = Math.Max(1, lowOv / 2);
-        int guardHigh = Math.Max(1, highOv / 2);
-
-        if (sc.FirstRealized > prefix && visibleFirst < sc.FirstRealized + guardLow) return true;
-        if (sc.LastRealized < sc.ItemCount && visibleLast > sc.LastRealized - guardHigh) return true;
-        return false;
-    }
 }
 
 /// <summary>Uniform 1-D stack (the WaveeMusic track-list shape) — O(1) windowing. <paramref name="horizontal"/> scrolls X.</summary>
@@ -439,14 +383,22 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     // gutters (cards stay sized to the SHELF width), item i's main position shifts by LeadInset, and ContentExtent
     // carries both. Default 0 ⇒ no gutter (byte-identical to the pre-inset geometry). Allocation-free arithmetic.
     public readonly float LeadInset, TrailInset;
+    // E22 — per-shelf lead minimum: the column count a page must reach before a lead span is honoured. 0 (the
+    // default) keeps E11's half-row rule (2*span+1 — byte-identical to a layout built before this field existed);
+    // a positive value replaces it with max(span+1, LeadMinColumns) — see MinColsFor, the ONE place the rule lives.
+    public readonly int LeadMinColumns;
 
     private float _main, _cross;           // last viewport fed by the engine (main = scroll-axis width)
     private int _perPage = 1;
     private float _cardW;
+    // E7 — lead-item span (a wide "hero" first card, PagedShelf's CoverShelf/MixedCovers lead). Plain field, LIVE: a
+    // caller flips it via SetLeadSpan on any render with no remount — the next geometry query (ContentExtent/Window/
+    // ItemRect) simply sees the new value, since this layout is already stateful-and-reused (create once, hoisted).
+    private int _leadSpan = 1;
 
     public FillRowVirtualLayout(float minCardW = 150f, float maxCardW = 200f, float gap = 0f, int rows = 1,
                                 int perPageOverride = 0, float fixedCardW = 0f, int maxColumns = 0,
-                                float leadInset = 0f, float trailInset = 0f)
+                                float leadInset = 0f, float trailInset = 0f, int leadMinColumns = 0)
     {
         MinCardW = minCardW <= 0 ? 1f : minCardW;
         MaxCardW = maxCardW < MinCardW ? MinCardW : maxCardW;
@@ -457,13 +409,79 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         MaxColumns = Math.Max(0, maxColumns);
         LeadInset = leadInset < 0f ? 0f : leadInset;
         TrailInset = trailInset < 0f ? 0f : trailInset;
+        LeadMinColumns = Math.Max(0, leadMinColumns);
         _cardW = MinCardW;
     }
+
+    /// <summary>The MINIMUM columns per page at which a lead span of <paramref name="leadSpan"/> cells is honoured
+    /// (E22) — the ONE place this rule lives, shared by <see cref="EffectiveLeadSpan"/> (the geometry) and a host's
+    /// page-count math (<c>PagedShelfCore.PageCountFor</c>) so the two can never drift. <paramref name="leadMinColumns"/>
+    /// <c>== 0</c> ⇒ E11's half-row rule, <c>2*span + 1</c> (at least <c>span + 1</c> ordinary cells beside the
+    /// lead — the pre-E22 <c>PerPage &gt; 2*span</c> test, byte for byte); <c>&gt; 0</c> ⇒
+    /// <c>max(span + 1, leadMinColumns)</c>: the caller's own threshold, floored so at least ONE ordinary cell still
+    /// sits beside the lead (a lead that IS the whole row is never a lead). Pure, allocation-free.</summary>
+    public static int MinColsFor(int leadSpan, int leadMinColumns)
+        => leadMinColumns > 0 ? Math.Max(leadSpan + 1, leadMinColumns) : 2 * leadSpan + 1;
 
     /// <summary>Columns shown per page at the current viewport (≥1) — valid after the engine's first <see cref="SetViewport"/>.</summary>
     public int PerPage => _perPage;
     /// <summary>The fitted card width at the current viewport.</summary>
     public float CardW => _cardW;
+
+    /// <summary>The RAW lead span last set via <see cref="SetLeadSpan"/> (unclamped; 1 = no lead item — byte-identical
+    /// to a plain fill-row layout). Use <see cref="EffectiveLeadSpan"/> for the value geometry actually applies.</summary>
+    public int LeadSpan => _leadSpan;
+
+    /// <summary>Set the lead item's (item 0's) span in columns — the number of cells it occupies, wide-hero style
+    /// (E7). LIVE: takes effect on the very next geometry call, no remount, no re-<c>SetViewport</c> required.
+    /// Clamped to ≥ 1 here; the value geometry actually uses is <see cref="EffectiveLeadSpan"/>, which additionally
+    /// clamps to the current page width and zeroes out on a multi-row grid. Allocation-free (a field write).</summary>
+    public void SetLeadSpan(int span) => _leadSpan = Math.Max(1, span);
+
+    /// <summary>The span geometry actually uses (E11 — the "half-row" rule): <c>Rows == 1 &amp;&amp; LeadSpan &gt; 1
+    /// &amp;&amp; PerPage &gt; 2*LeadSpan ? LeadSpan : 1</c>. A multi-row grid never spans its lead item (a wide hero
+    /// has no meaning stacked across rows — see <see cref="ItemRect"/>'s row-major packing). On a single-row shelf, a
+    /// lead that would take HALF the visible row or more reads as a broken shelf, not a lead — so the raw
+    /// <see cref="LeadSpan"/> is honoured only while at least <c>LeadSpan + 1</c> ordinary cells remain beside it
+    /// (<c>PerPage &gt; 2*LeadSpan</c>, i.e. <c>PerPage - LeadSpan &gt;= LeadSpan + 1</c>); once the viewport narrows
+    /// past that point the span collapses to 1 (an ordinary, unspanned lead item) rather than clamping down to
+    /// whatever column count remains, which the earlier <c>Math.Clamp(LeadSpan, 1, PerPage)</c> rule allowed all the
+    /// way down to a lead that WAS the entire (single-column) row. <c>LeadSpan == 1</c> is already the identity, so
+    /// this collapse is invisible to the byte-identical <c>leadSpan: 1</c> fallback either way.
+    /// <para>E22 — the threshold itself is <see cref="MinColsFor"/><c>(LeadSpan, LeadMinColumns)</c>: with the default
+    /// <see cref="LeadMinColumns"/> of 0 that IS the half-row rule above (<c>PerPage &gt;= 2*LeadSpan + 1</c>); a
+    /// per-shelf minimum replaces it with <c>max(LeadSpan + 1, LeadMinColumns)</c>.</para></summary>
+    public int EffectiveLeadSpan
+        => Rows == 1 && _leadSpan > 1 && _perPage >= MinColsFor(_leadSpan, LeadMinColumns) ? _leadSpan : 1;
+
+    /// <summary>Cells occupied by the first <paramref name="n"/> items at the CURRENT <see cref="EffectiveLeadSpan"/>
+    /// <c>s</c>: item 0 occupies <c>s</c> cells, every later item occupies exactly one — so <c>n</c> items occupy
+    /// <c>n + s - 1</c> cells (<c>n &lt;= 0</c> ⇒ 0). <c>s == 1</c> makes this identity (<c>CellsOf(n) == n</c>), the
+    /// byte-identical fallback. Allocation-free; O(1).</summary>
+    public int CellsOf(int n) => n <= 0 ? 0 : n + EffectiveLeadSpan - 1;
+
+    /// <summary>The item index a CELL column belongs to, at the current <see cref="EffectiveLeadSpan"/> <c>s</c>:
+    /// cells <c>[0, s)</c> all belong to item 0 (the lead's span), cell <c>c &gt;= s</c> belongs to item
+    /// <c>c - s + 1</c>. Inverse of the cell a non-lead item <paramref name="i"/> sits at (<c>i + s - 1</c>).</summary>
+    private int ItemAtCell(int cell)
+    {
+        int s = EffectiveLeadSpan;
+        if (s <= 1) return Math.Max(0, cell);
+        return cell < s ? 0 : cell - s + 1;
+    }
+
+    /// <summary>The first item index realized on page <paramref name="page"/> at the CURRENT <see cref="PerPage"/>
+    /// column count and <see cref="EffectiveLeadSpan"/> <c>s</c>: page 0 always starts at item 0 (the lead item, cells
+    /// <c>[0, s)</c>); every later page starts <c>s - 1</c> items EARLIER than a plain <c>page * PerPage</c> would,
+    /// because the lead item ate <c>s - 1</c> extra cells out of page 0 that a non-spanning grid would have given to
+    /// page-0 items — so the page BOUNDARY (in pixels, <c>page * PerPage * (cardW + gap)</c>, the page stride) still
+    /// lands on a card edge, but the ITEM it lands on shifts back by that same <c>s - 1</c>. <c>s == 1</c> makes this
+    /// identity (<c>FirstItemOfPage(p) == p * PerPage</c>), the byte-identical fallback. Allocation-free; O(1).</summary>
+    public int FirstItemOfPage(int page)
+    {
+        if (page <= 0) return 0;
+        return Math.Max(0, page * _perPage - (EffectiveLeadSpan - 1));
+    }
 
     public void SetViewport(float mainExtent, float crossSize)
     {
@@ -506,7 +524,10 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
 
     public float ContentExtent(int n, float cross)
     {
-        int cols = ColCount(n);
+        // Rows == 1 ⇒ one column per cell, so CellsOf(n) IS the column count (identity n+s-1, s==1 ⇒ n == ColCount(n)
+        // — the byte-identical fallback). Rows > 1 forces EffectiveLeadSpan back to 1 anyway, but ColCount's row-major
+        // grouping (cols = ceil(n/Rows)) is a DIFFERENT shape than CellsOf and must stay the untouched multi-row path.
+        int cols = Rows == 1 ? CellsOf(n) : ColCount(n);
         float inner = cols <= 0 ? 0f : cols * _cardW + (cols - 1) * Gap;
         return inner + LeadInset + TrailInset;   // both gutters live in the scroll extent (the widened viewport holds them)
     }
@@ -515,17 +536,39 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     {
         float stride = ColStride;
         float o = offset - LeadInset;   // items live in INNER content space (item 0 starts at LeadInset); shift the query
-        int firstCol = Math.Max(0, (int)MathF.Floor(o / stride) - overscan);
-        int lastCol = (int)MathF.Ceiling((o + viewport) / stride) + overscan;
-        first = Math.Min(n, firstCol * Rows);
-        last = Math.Min(n, lastCol * Rows);
+        int firstCell = Math.Max(0, (int)MathF.Floor(o / stride) - overscan);
+        int lastCellExcl = (int)MathF.Ceiling((o + viewport) / stride) + overscan;
+        if (Rows == 1)
+        {
+            // Cell range → item range through the span-aware inverse (ItemAtCell; identity when s == 1).
+            first = Math.Min(n, ItemAtCell(firstCell));
+            last = Math.Min(n, lastCellExcl <= 0 ? 0 : ItemAtCell(lastCellExcl - 1) + 1);
+        }
+        else
+        {
+            first = Math.Min(n, firstCell * Rows);
+            last = Math.Min(n, lastCellExcl * Rows);
+        }
         if (last < first) last = first;
     }
 
     public RectF ItemRect(int i, float cross)
     {
-        int col = i / Rows, row = i % Rows;
         float rh = RowHeight(cross);
+        if (Rows == 1)
+        {
+            int s = EffectiveLeadSpan;
+            if (s > 1)
+            {
+                // Item 0 spans s cells from the lead inset; every later item i sits at cell (i + s - 1) — see
+                // CellsOf/FirstItemOfPage. s == 1 never reaches this branch (falls through to the identical formula
+                // below), so a plain shelf's geometry is byte-for-byte unchanged.
+                if (i <= 0) return new RectF(LeadInset, 0f, s * _cardW + (s - 1) * Gap, rh);
+                return new RectF(LeadInset + (i + s - 1) * ColStride, 0f, _cardW, rh);
+            }
+            return new RectF(LeadInset + i * ColStride, 0f, _cardW, rh);
+        }
+        int col = i / Rows, row = i % Rows;
         return new RectF(LeadInset + col * ColStride, row * (rh + Gap), _cardW, rh);
     }
 }
@@ -538,7 +581,7 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
 /// contract. STATEFUL (owns an <see cref="ExtentTable"/>) — create ONCE and reuse across renders (hoist in a
 /// <c>UseMemo</c>); the table self-rebuilds only on item-count change.
 /// </summary>
-public sealed class MeasuredStackVirtualLayout : IMeasuredVirtualLayout, ISplicingVirtualLayout
+public sealed class MeasuredStackVirtualLayout : IMeasuredVirtualLayout, ISplicingVirtualLayout, IAnchoredReseedLayout
 {
     public readonly float Estimate;
     public readonly bool Horizontal;
@@ -595,12 +638,39 @@ public sealed class MeasuredStackVirtualLayout : IMeasuredVirtualLayout, ISplici
     }
 
     /// <summary>Re-seed EVERY extent from the analytic provider (or the flat estimate when there is none) for a
-    /// wholesale model change — a new document, a new query — where index-preserving carry-over would be stale.</summary>
+    /// wholesale model change — a new document, a new query — where index-preserving carry-over would be stale. ANCHORED:
+    /// the extents it replaces are kept until the next layout pass takes the rewrite's effect on the scroll anchor
+    /// (<see cref="TakeReseedShift"/>) and shifts the plan frame by it, so a reseed never moves the rows on screen (a
+    /// seed that disagrees with a row's real size is then corrected by the ordinary anchored re-measure). Allocates the
+    /// snapshot — a wholesale model change, never per frame.</summary>
     public void Reseed(int n)
     {
         var t = Ensure(n);
+        if (_reseedFrom is null)
+        {
+            var from = new float[t.Count];
+            for (int i = 0; i < from.Length; i++) from[i] = t.ExtentAt(i);
+            _reseedFrom = from;   // a second reseed before the next pass keeps the OLDEST extents: one shift covers both
+        }
         if (_extentOf is null) t.Reset(n, Estimate);
         else SeedRange(t, 0, n);
+    }
+
+    private float[]? _reseedFrom;   // the extents the last Reseed replaced, until a layout pass anchors it
+
+    /// <inheritdoc/>
+    public bool TakeReseedShift(int anchorIndex, out double delta)
+    {
+        delta = 0.0;
+        var from = _reseedFrom;
+        var t = _table;
+        if (from is null || t is null) return false;
+        _reseedFrom = null;
+        int end = System.Math.Min(System.Math.Max(0, anchorIndex), System.Math.Min(from.Length, t.Count));
+        double before = 0.0, after = 0.0;
+        for (int i = 0; i < end; i++) { before += from[i]; after += t.ExtentAt(i); }
+        delta = after - before;
+        return true;
     }
 
     public float ContentExtent(int n, float cross) => (float)Ensure(n).Total;

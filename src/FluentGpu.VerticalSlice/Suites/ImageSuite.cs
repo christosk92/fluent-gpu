@@ -341,7 +341,7 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         {
             var list = new VirtualListEl
             {
-                ItemCount = 200, EstimatedExtent = 40f, Overscan = 4, Width = 200f, Height = 200f,
+                ItemCount = 200, EstimatedExtent = 40f, Width = 200f, Height = 200f,
                 RenderItem = static i => Row("static/" + i),
                 RowBind = Bound ? (Func<IReadSignal<int>, Element>)(sig => Row(Prop.Of(() => "bound/" + sig.Value))) : null,
             };
@@ -372,6 +372,57 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) => _inner.Pump(onComplete, onPixels);
     }
 
+    // T10 gate fixture: models the two DecodeScheduler behaviours a pinned canceled leftover comes from — Cancel of a
+    // queued/in-flight decode completing as Canceled on the next pump, and Begin REFUSING off-screen lanes (never
+    // Visible) while the queue is full — plus a permanent 404 for one source. Counts Begin calls per source so the gate
+    // can prove the leftover sweep issued a NEW decode with no Request/Pin from the node, and that a real failure didn't.
+    sealed class BackpressureCancelDecoder : IImageDecoder
+    {
+        readonly Queue<(int id, int w, int h, bool notFound)> _pending = new();
+        readonly HashSet<int> _canceled = new();
+        readonly Dictionary<string, int> _begins = new();
+        byte[] _scratch = Array.Empty<byte>();
+        public bool OffscreenFull;          // DecodeScheduler's QueueCapacity backpressure: non-Visible Begins refused
+        public string? NotFoundSource;      // completes as a permanent NotFound
+        public ImagePriority LastAccepted;
+
+        public int BeginsOf(string source) => _begins.TryGetValue(source, out int n) ? n : 0;
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _begins[source] = BeginsOf(source) + 1;
+            _canceled.Remove(id);
+            if (OffscreenFull && priority != ImagePriority.Visible) return false;
+            LastAccepted = priority;
+            _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH, source == NotFoundSource));
+            return true;
+        }
+
+        public void Cancel(int id) => _canceled.Add(id);
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            // Only work queued BEFORE this pump completes in it (the +1-frame contract), even if a completion restarts.
+            for (int left = _pending.Count; left > 0; left--)
+            {
+                var (id, w, h, notFound) = _pending.Dequeue();
+                if (_canceled.Remove(id)) { onComplete(id, false, 0, 0, ImageFailureKind.Canceled, 1); continue; }
+                if (notFound) { onComplete(id, false, 0, 0, ImageFailureKind.NotFound, 1); continue; }
+                int bytes = w * h * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), w, h);
+                onComplete(id, true, w, h, ImageFailureKind.None, 1);
+            }
+        }
+    }
+
+    // T10 idle-wake gate root: an image-free page, so the only image work in the host is the leftover the gate plants.
+    sealed class LeftoverWakeRoot : Component
+    {
+        public override Element Render() => new BoxEl { Width = 200f, Height = 120f };
+    }
+
 static class ImageSuite
 {
     public static void Run(StringTable strings)
@@ -390,6 +441,8 @@ static class ImageSuite
         ImageEvictChecks();
         VramShedGraceAndFloorChecks();
         ExhaustedPinnedRetryChecks();
+        PinnedCanceledLeftoverChecks();
+        PinnedCanceledLeftoverIdleWakeChecks(strings);
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         HoldLastGoodChecks(strings);
@@ -1065,139 +1118,109 @@ static class ImageSuite
         }
 
         // A row can recycle after its worker published pixels but before Pump uploads them. Keep the second result queued
-        // behind the scroll cap, cancel it, then prove cleanup reports Canceled with zero upload/apply charge.
-        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
-                   new DecodeOptions { MaxConcurrency = 1 }))
+        // behind a 512 KiB upload budget (two 1 MiB covers: the head lands alone), cancel it, then prove cleanup reports
+        // Canceled with zero upload/apply charge.
+        FluentGpu.Rhi.UploadBudget.BytesPerTurn = 512 * 1024;
+        try
         {
-            sched.Begin(101, "late-cancel/1", 8, 8);
-            sched.Begin(102, "late-cancel/2", 8, 8);
-            bool published = WaitPublished(sched);
-            sched.ScrollThrottled = true;
-            int firstPixels = 0;
-            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => firstPixels++);
-            bool firstBounded = sched.LastPumpAppliedCount == 1 && firstPixels == 1 && sched.HasReadyCompletions;
-            sched.Cancel(102);
-            int latePixels = 0, lateCanceled = 0;
-            sched.Pump(
-                (id, ok, w, h, failure, attempts) =>
-                {
-                    if (id == 102 && !ok && failure == ImageFailureKind.Canceled) lateCanceled++;
-                },
-                (id, px, w, h) => latePixels++);
-            Check("46d3. DecodeScheduler: completed-but-unapplied cancellation suppresses pixels and costs zero upload budget",
-                published && firstBounded && lateCanceled == 1 && latePixels == 0
-                && sched.LastPumpAppliedCount == 0 && sched.LastPumpAppliedBytes == 0 && !sched.HasReadyCompletions,
-                $"published={published} first={firstBounded} canceled={lateCanceled} latePixels={latePixels} apply={sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B pending={sched.HasReadyCompletions}");
-        }
+            using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                       new DecodeOptions { MaxConcurrency = 1 }))
+            {
+                sched.Begin(101, "late-cancel/1", 512, 512);
+                sched.Begin(102, "late-cancel/2", 512, 512);
+                bool published = WaitPublished(sched);
+                int firstPixels = 0;
+                sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => firstPixels++);
+                bool firstBounded = sched.LastPumpAppliedCount == 1 && firstPixels == 1 && sched.HasReadyCompletions;
+                sched.Cancel(102);
+                int latePixels = 0, lateCanceled = 0;
+                sched.Pump(
+                    (id, ok, w, h, failure, attempts) =>
+                    {
+                        if (id == 102 && !ok && failure == ImageFailureKind.Canceled) lateCanceled++;
+                    },
+                    (id, px, w, h) => latePixels++);
+                Check("46d3. DecodeScheduler: completed-but-unapplied cancellation suppresses pixels and costs zero upload budget",
+                    published && firstBounded && lateCanceled == 1 && latePixels == 0
+                    && sched.LastPumpAppliedCount == 0 && sched.LastPumpAppliedBytes == 0 && !sched.HasReadyCompletions,
+                    $"published={published} first={firstBounded} canceled={lateCanceled} latePixels={latePixels} apply={sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B pending={sched.HasReadyCompletions}");
+            }
 
-        // Default rest budget is three applies; active scrolling tightens that to one. The byte budget is deliberately
-        // irrelevant here (tiny textures), so this pins the count throttles that protect the 8.33ms frame slot.
-        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
-                   new DecodeOptions { MaxConcurrency = 1 }))
-        {
-            for (int i = 201; i <= 206; i++) sched.Begin(i, "budget/" + i, 8, 8);
-            bool published = WaitPublished(sched);
-            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-            int restApplies = sched.LastPumpAppliedCount;
-            sched.ScrollThrottled = true;
-            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-            int scrollApplies = sched.LastPumpAppliedCount;
-            sched.ScrollThrottled = false;
-            while (sched.HasReadyCompletions)
+            // A normal 512x512 BGRA cover is 1 MiB, twice this budget — and it must STILL land: one completion per turn,
+            // oldest first, whatever it weighs (the head of a turn is always admitted; the budget bounds only the applies
+            // BEHIND it). ONE worker ⇒ 301 completes before 302, so this also pins that the two size lanes preserve
+            // completion order rather than reordering by size.
+            using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                       new DecodeOptions { MaxConcurrency = 1 }))
+            {
+                sched.Begin(301, "oversized-scroll/cover", 512, 512, ImagePriority.Visible);
+                sched.Begin(302, "oversized-scroll/follower", 8, 8, ImagePriority.Visible);
+                bool published = WaitPublished(sched);
+
+                int firstId = 0, secondId = 0;
+                sched.Pump(
+                    (id, ok, w, h, failure, attempts) => { if (ok) firstId = id; },
+                    (id, px, w, h) => { });
+                int firstCount = sched.LastPumpAppliedCount;
+                int firstBytes = sched.LastPumpAppliedBytes;
+                bool followerPending = sched.HasReadyCompletions;
+
+                sched.Pump(
+                    (id, ok, w, h, failure, attempts) => { if (ok) secondId = id; },
+                    (id, px, w, h) => { });
+
+                Check("46d5. DecodeScheduler: an oversized cover lands DURING scroll — one completion per turn, in completion order across both size lanes",
+                    published && firstId == 301 && firstCount == 1 && firstBytes == 512 * 512 * 4
+                    && followerPending
+                    && secondId == 302 && sched.LastPumpAppliedCount == 1 && sched.LastPumpAppliedBytes == 8 * 8 * 4
+                    && !sched.HasReadyCompletions,
+                    $"published={published} first={firstId}/{firstCount}/{firstBytes}B pending={followerPending} " +
+                    $"second={secondId}/{sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B left={sched.HasReadyCompletions}");
+            }
+
+            // 46d6: the budget meters BYTES, not items: under 512 KiB, two 256 KiB covers land per turn, and six tiny thumbs
+            // all land in one — there is no per-turn item count.
+            using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
+            {
+                for (int i = 401; i <= 404; i++) sched.Begin(i, "budget-bytes/" + i, 256, 256);
+                for (int i = 405; i <= 410; i++) sched.Begin(i, "budget-thumbs/" + i, 8, 8);
+                bool published = WaitPublished(sched);
                 sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-            Check("46d4. DecodeScheduler: rest applies cap at 3 and active scroll applies cap at 1",
-                published && restApplies == 3 && scrollApplies == 1,
-                $"published={published} rest={restApplies} scroll={scrollApplies}");
-        }
-
-        // A normal 512x512 BGRA cover is 1 MiB, twice the scrolling byte cap — and it must STILL land during the gesture:
-        // one completion per frame, oldest first, whatever it weighs (W2.75-A). Deferring every oversized completion to
-        // rest meant zero real covers landed for the whole scroll — a BlurHash smear that popped in afterwards. The byte
-        // cap bounds only the applies BEHIND the frame's head. ONE worker ⇒ 301 completes before 302, so this also pins
-        // that the two size lanes preserve completion order rather than reordering by size.
-        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
-                   new DecodeOptions { MaxConcurrency = 1 }))
-        {
-            sched.Begin(301, "oversized-scroll/cover", 512, 512, ImagePriority.Visible);
-            sched.Begin(302, "oversized-scroll/follower", 8, 8, ImagePriority.Visible);
-            bool published = WaitPublished(sched);
-            sched.ScrollThrottled = true;
-
-            int firstId = 0, secondId = 0;
-            sched.Pump(
-                (id, ok, w, h, failure, attempts) => { if (ok) firstId = id; },
-                (id, px, w, h) => { });
-            int firstCount = sched.LastPumpAppliedCount;
-            int firstBytes = sched.LastPumpAppliedBytes;
-            bool followerPending = sched.HasReadyCompletions;
-
-            sched.Pump(
-                (id, ok, w, h, failure, attempts) => { if (ok) secondId = id; },
-                (id, px, w, h) => { });
-
-            Check("46d5. DecodeScheduler: an oversized cover lands DURING scroll — one completion per frame, in completion order across both size lanes",
-                published && firstId == 301 && firstCount == 1 && firstBytes == 512 * 512 * 4
-                && followerPending
-                && secondId == 302 && sched.LastPumpAppliedCount == 1 && sched.LastPumpAppliedBytes == 8 * 8 * 4
-                && !sched.HasReadyCompletions,
-                $"published={published} first={firstId}/{firstCount}/{firstBytes}B pending={followerPending} " +
-                $"second={secondId}/{sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B left={sched.HasReadyCompletions}");
-        }
-
-        // 46d6: WeakTier changes only the AT-REST apply COUNT (rises from the naive 1 to 3, same as discrete) — the
-        // byte budget stays the tight 512 KiB scroll figure in every state (E2, adreno-hang-fixes.md M0). WeakTier is
-        // a plain settable property here (never GpuProfile), so this is exercisable headlessly.
-        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
-        {
-            sched.WeakTier = true;
-            for (int i = 401; i <= 406; i++) sched.Begin(i, "weak-rest/" + i, 8, 8);
-            bool published = WaitPublished(sched);
-            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-            int weakRestApplied = sched.LastPumpAppliedCount;
-            int weakRestBytes = sched.LastPumpAppliedBytes;
-            while (sched.HasReadyCompletions)
+                int first = sched.LastPumpAppliedCount, firstBytes = sched.LastPumpAppliedBytes;
                 sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-
-            sched.Begin(407, "weak-scroll/1", 8, 8);
-            sched.Begin(408, "weak-scroll/2", 8, 8);
-            WaitPublished(sched);
-            sched.ScrollThrottled = true;
-            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-            int weakScrollApplied = sched.LastPumpAppliedCount;
-            while (sched.HasReadyCompletions)
+                int second = sched.LastPumpAppliedCount;
                 sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
-            sched.ScrollThrottled = false;
+                int third = sched.LastPumpAppliedCount;
+                Check("46d6. DecodeScheduler: the one upload budget meters bytes — two 256 KiB covers per 512 KiB turn, then all six thumbs in one turn (no item cap)",
+                    published && first == 2 && firstBytes == 2 * 256 * 256 * 4 && second == 2 && third == 6 && !sched.HasReadyCompletions,
+                    $"published={published} first={first}/{firstBytes}B second={second} third={third}");
+            }
 
-            Check("46d6. DecodeScheduler weak rest cadence: at-rest applies rise to 3 (same as discrete) while the byte budget stays the tight scroll cap; ScrollThrottled still forces 1",
-                published && weakRestApplied == 3 && weakRestBytes <= 512 * 1024 && weakScrollApplied == 1,
-                $"published={published} restApplied={weakRestApplied} restBytes={weakRestBytes} scrollApplied={weakScrollApplied}");
+            // 46d6b: the head exemption under a small budget — an oversized cover lands ALONE, then the two small thumbs
+            // clear on the next pump.
+            using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
+            {
+                sched.Begin(501, "budget-oversized/cover", 512, 512, ImagePriority.Visible);
+                sched.Begin(502, "budget-oversized/thumb1", 8, 8, ImagePriority.Visible);
+                sched.Begin(503, "budget-oversized/thumb2", 8, 8, ImagePriority.Visible);
+                bool published2 = WaitPublished(sched);
+
+                int firstId = 0;
+                sched.Pump((id, ok, w, h, failure, attempts) => { if (ok) firstId = id; }, (id, px, w, h) => { });
+                int firstCount = sched.LastPumpAppliedCount;
+                int firstBytes = sched.LastPumpAppliedBytes;
+                bool moreLeft = sched.HasReadyCompletions;
+
+                int secondApplied = 0;
+                sched.Pump((id, ok, w, h, failure, attempts) => { if (ok) secondApplied++; }, (id, px, w, h) => { });
+
+                Check("46d6b. DecodeScheduler: an oversized cover lands alone via the head exemption; the two thumbs clear on the next pump",
+                    published2 && firstId == 501 && firstCount == 1 && firstBytes == 512 * 512 * 4
+                    && moreLeft && secondApplied == 2 && !sched.HasReadyCompletions,
+                    $"published={published2} first={firstId}/{firstCount}/{firstBytes}B moreLeft={moreLeft} second={secondApplied}");
+            }
         }
-
-        // 46d6b: the head exemption survives the weak-tier cadence change — an oversized cover still lands ALONE
-        // (the byte cap is unaffected by the count relaxing to 3), then the two small thumbs clear on the next pump
-        // under the same rest budget.
-        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
-        {
-            sched.WeakTier = true;
-            sched.Begin(501, "weak-oversized/cover", 512, 512, ImagePriority.Visible);
-            sched.Begin(502, "weak-oversized/thumb1", 8, 8, ImagePriority.Visible);
-            sched.Begin(503, "weak-oversized/thumb2", 8, 8, ImagePriority.Visible);
-            bool published2 = WaitPublished(sched);
-
-            int firstId = 0;
-            sched.Pump((id, ok, w, h, failure, attempts) => { if (ok) firstId = id; }, (id, px, w, h) => { });
-            int firstCount = sched.LastPumpAppliedCount;
-            int firstBytes = sched.LastPumpAppliedBytes;
-            bool moreLeft = sched.HasReadyCompletions;
-
-            int secondApplied = 0;
-            sched.Pump((id, ok, w, h, failure, attempts) => { if (ok) secondApplied++; }, (id, px, w, h) => { });
-
-            Check("46d6b. DecodeScheduler weak rest: an oversized cover still lands alone via the head exemption; the two thumbs clear on the next pump",
-                published2 && firstId == 501 && firstCount == 1 && firstBytes == 512 * 512 * 4
-                && moreLeft && secondApplied == 2 && !sched.HasReadyCompletions,
-                $"published={published2} first={firstId}/{firstCount}/{firstBytes}B moreLeft={moreLeft} second={secondApplied}");
-        }
+        finally { FluentGpu.Rhi.UploadBudget.ResetToDefault(); }
     }
 
     static void PixelBufferPoolChecks()
@@ -1448,6 +1471,129 @@ static class ImageSuite
         Check("gate.img.exhausted-pinned-retries-after-backoff a PINNED GpuResourceExhausted entry retries on its own once RestartBackoffMs elapses, not only on the next re-pin",
             rejected && noRetryUnderBackoff && retried && pendingAfterRetry && ready,
             $"begin1={beginAfterFirst} beginLater={decoder.BeginCount} state={cache.StateOf(h)} fail={cache.FailureOf(h)}");
+    }
+
+    // T10: a canceled leftover (None/Canceled — a dropped or canceled decode, not a URL failure) that a STILL-MOUNTED
+    // node holds used to stay a placeholder forever: a static node never calls Request/Pin again, and Promote only runs
+    // for virtualized rows turning visible. Pump's RestartPinnedLeftovers re-begins it at Visible once
+    // CanceledLeftoverRetryMs has passed since its last restart; a genuine failure (NotFound) and an UNPINNED leftover
+    // are left alone.
+    static void PinnedCanceledLeftoverChecks()
+    {
+        var dec = new BackpressureCancelDecoder { NotFoundSource = "leftover-404" };
+        var cache = new ImageCache(dec);
+
+        // (a) canceled mid-decode by an unmount (UnpinImageNode → Cancel), remounted into a FULL Overscan lane.
+        var a = cache.Request("leftover-cancel", 32, 32);
+        cache.Pin(a);
+        cache.Unpin(a);
+        cache.Cancel(a);
+        cache.Pump();                                                // completes Canceled with Refs==0 → Failed/Canceled
+        dec.OffscreenFull = true;
+        var a2 = cache.Request("leftover-cancel", 32, 32, ImagePriority.Overscan);   // restart refused (backpressure)
+        cache.Pin(a2, ImagePriority.Overscan);                                       // re-Begin refused again, now pinned
+        // (b) dropped at Request time (Overscan, queue full) and pinned — the other Begin-refusal entry point.
+        var b = cache.Request("leftover-dropped", 32, 32, ImagePriority.Overscan);
+        cache.Pin(b, ImagePriority.Overscan);
+        // (c) a genuine permanent failure, pinned the whole time. (d) a leftover nobody pins.
+        var c = cache.Request("leftover-404", 32, 32);
+        cache.Pin(c);
+        var d = cache.Request("leftover-unpinned", 32, 32, ImagePriority.Overscan);
+        cache.Pump();                                                // (c) completes NotFound
+
+        bool sameHandle = a2 == a;
+        bool stuck = cache.StateOf(a) == ImageState.None && cache.FailureOf(a) == ImageFailureKind.Canceled && cache.RefsOf(a) == 1
+            && cache.StateOf(b) == ImageState.None && cache.FailureOf(b) == ImageFailureKind.Canceled && cache.RefsOf(b) == 1
+            && cache.StateOf(c) == ImageState.Failed && cache.FailureOf(c) == ImageFailureKind.NotFound
+            && cache.StateOf(d) == ImageState.None && cache.RefsOf(d) == 0;
+        int aBegins = dec.BeginsOf("leftover-cancel"), bBegins = dec.BeginsOf("leftover-dropped");
+        int cBegins = dec.BeginsOf("leftover-404"), dBegins = dec.BeginsOf("leftover-unpinned");
+
+        cache.Tick(ImageCache.CanceledLeftoverRetryMs * 0.2f);
+        cache.Pump();                                                // inside the retry window — no new Begin yet
+        bool noEarlyRetry = dec.BeginsOf("leftover-cancel") == aBegins && dec.BeginsOf("leftover-dropped") == bBegins
+            && cache.StateOf(a) == ImageState.None;
+
+        cache.Tick(ImageCache.CanceledLeftoverRetryMs);              // past the window; still no Request/Pin from the node
+        cache.Pump();                                                // the sweep re-begins both pinned leftovers at Visible
+        bool restarted = dec.BeginsOf("leftover-cancel") == aBegins + 1 && dec.BeginsOf("leftover-dropped") == bBegins + 1
+            && cache.StateOf(a) == ImageState.Pending && cache.StateOf(b) == ImageState.Pending
+            && dec.LastAccepted == ImagePriority.Visible;            // Visible: accepted although the Overscan lane is full
+        cache.Pump();                                                // +1 frame: the re-decodes land
+        bool ready = cache.StateOf(a) == ImageState.Ready && cache.StateOf(b) == ImageState.Ready;
+
+        cache.Tick(ImageCache.CanceledLeftoverRetryMs * 10f);
+        cache.Pump();
+        cache.Pump();
+        bool noThrash = dec.BeginsOf("leftover-cancel") == aBegins + 1 && dec.BeginsOf("leftover-dropped") == bBegins + 1;
+        bool realFailureStays = dec.BeginsOf("leftover-404") == cBegins
+            && cache.StateOf(c) == ImageState.Failed && cache.FailureOf(c) == ImageFailureKind.NotFound;
+        bool unpinnedLeftAlone = dec.BeginsOf("leftover-unpinned") == dBegins && cache.StateOf(d) == ImageState.None;
+
+        Check("gate.img.pinned-canceled-leftover-restarts a PINNED None/Canceled leftover (canceled mid-decode, or refused by Begin) re-begins at Visible after CanceledLeftoverRetryMs with no Request/Pin and reaches Ready; a pinned NotFound and an unpinned leftover are not restarted",
+            sameHandle && stuck && noEarlyRetry && restarted && ready && noThrash && realFailureStays && unpinnedLeftAlone,
+            $"same={sameHandle} stuck={stuck} noEarly={noEarlyRetry} restarted={restarted} ready={ready} noThrash={noThrash} " +
+            $"404stays={realFailureStays} unpinned={unpinnedLeftAlone} a={cache.StateOf(a)}/{cache.FailureOf(a)} " +
+            $"b={cache.StateOf(b)}/{cache.FailureOf(b)} c={cache.StateOf(c)}/{cache.FailureOf(c)} " +
+            $"begins a={dec.BeginsOf("leftover-cancel")} b={dec.BeginsOf("leftover-dropped")} c={dec.BeginsOf("leftover-404")} d={dec.BeginsOf("leftover-unpinned")}");
+    }
+
+    // T10 host half: the owner's symptom was an IDLE page with a stuck grey photo — the sweep only runs inside Pump, so
+    // the host must wake for it. A pending leftover shapes the idle wait to its due time (no wake bit, no polling), a due
+    // one sets WakeReasons.ImageLeftoverDue and the woken frame's Pump restarts it with no input; nothing listed = no
+    // effect. Headless fixed time only advances the image clock on a painted frame, so the gate stands in for the wall
+    // time the blocked wait covers with ImageCache.Tick(wait) — in production ImageLeftoverDueInMs extrapolates the
+    // image clock by the wall time since its last sample, which is exactly what makes the blocked wait end on time.
+    static void PinnedCanceledLeftoverIdleWakeChecks(StringTable strings)
+    {
+        var dec = new BackpressureCancelDecoder();
+        var cache = new ImageCache(dec);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("leftover-idle-wake", new Size2(200, 120), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+            new LeftoverWakeRoot(), cache);
+        for (int i = 0; i < 8 || (i < 400 && host.HasActiveWork); i++) host.RunFrame();   // settle the mount
+        bool settledIdle = !host.HasActiveWork && float.IsPositiveInfinity(cache.LeftoverRetryDueMs);
+        int baselineWait = host.RecommendedWaitMs();
+
+        // A pinned canceled leftover: dropped at the Overscan lane, and its pin's re-Begin dropped again.
+        dec.OffscreenFull = true;
+        var h = cache.Request("idle-leftover", 32, 32, ImagePriority.Overscan);
+        cache.Pin(h, ImagePriority.Overscan);
+        bool stuck = cache.StateOf(h) == ImageState.None && cache.FailureOf(h) == ImageFailureKind.Canceled && cache.RefsOf(h) == 1;
+
+        int pendingWait = host.RecommendedWaitMs();
+        bool pendingNoBit = (host.CurrentWakeReasons & WakeReasons.ImageLeftoverDue) == 0 && !host.HasActiveWork;
+        float remainingMs = cache.LeftoverRetryDueMs - cache.ClockMs;   // headless: the image clock only moves on Paint
+        // The wait reaches the due time (float due arithmetic may round the ceiling up one ms). If some other deadline
+        // (cold maintenance) already woke the loop sooner, that is fine too — it then blocks again for the remainder.
+        bool waitReachesDue = remainingMs > 0f && pendingWait >= 1 && pendingWait <= (int)MathF.Ceiling(remainingMs) + 1
+            && ((baselineWait >= 1 && baselineWait <= remainingMs) || pendingWait >= (int)remainingMs);
+
+        for (int i = 0; i < 32; i++) { _ = host.CurrentWakeReasons; _ = host.RecommendedWaitMs(); }
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 128; i++) { _ = host.CurrentWakeReasons; _ = host.RecommendedWaitMs(); }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        cache.Tick(remainingMs + 1f);                                // the blocked idle wait elapses (see the remark above)
+        bool dueBit = (host.CurrentWakeReasons & WakeReasons.ImageLeftoverDue) != 0 && host.HasActiveWork;
+        int dueWait = host.RecommendedWaitMs();                      // due-now: a producing wait, never the -1 block
+        int beginsBefore = dec.BeginsOf("idle-leftover");
+        host.RunFrame();                                             // no input: the woken frame's Pump runs the sweep
+        bool restarted = dec.BeginsOf("idle-leftover") == beginsBefore + 1 && cache.StateOf(h) != ImageState.None
+            && dec.LastAccepted == ImagePriority.Visible;
+        for (int i = 0; i < 4; i++) host.RunFrame();
+        bool ready = cache.StateOf(h) == ImageState.Ready;
+        bool quietAfter = float.IsPositiveInfinity(cache.LeftoverRetryDueMs)
+            && (host.CurrentWakeReasons & WakeReasons.ImageLeftoverDue) == 0;
+
+        Check("gate.img.pinned-canceled-leftover-idle-wake an idle host with a pinned canceled leftover shapes its wait to the retry due time (no wake bit, no alloc), wakes with WakeReasons.ImageLeftoverDue once due, and restarts it to Ready with no input; nothing listed leaves the wait alone",
+            settledIdle && stuck && pendingNoBit && waitReachesDue && allocated == 0 && dueBit && dueWait >= 0
+                && restarted && ready && quietAfter,
+            $"settled={settledIdle} baselineWait={baselineWait} stuck={stuck} pendingWait={pendingWait} remaining={remainingMs:0.#}ms " +
+            $"pendingNoBit={pendingNoBit} alloc={allocated} dueBit={dueBit} dueWait={dueWait} restarted={restarted} " +
+            $"state={cache.StateOf(h)}/{cache.FailureOf(h)} begins={dec.BeginsOf("idle-leftover")} quiet={quietAfter} wake={host.CurrentWakeReasons}");
     }
 
     static void ImageLifecycleChecks(StringTable strings)
@@ -1948,7 +2094,7 @@ static class ImageSuite
             // Scroll 6 rows (offset 240): rows 7..9 were realized in the halo (Overscan lane) and now sit inside the
             // visible band [6,12) — the realize pass that follows must move their still-Pending decodes to the Visible
             // lane; rows entering the NEW halo beyond the +1 guard (13..) must request Overscan.
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 40f * 6f, immediate: true));
+            host.TryGetScrollHandle(vp)?.ScrollTo(40f * 6f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             for (int i = 0; i < 6; i++) host.RunFrame();
             host.Scene.TryGetScroll(vp, out var sc1);
             bool promoted = true;

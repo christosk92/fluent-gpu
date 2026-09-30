@@ -233,29 +233,47 @@ the golden corpus and the perceptual metric.
 Runs against both `FluentGpu.Engine` (Headless/Rhi/) (WARP, deterministic, the CI default) and, nightly, real D3D12 hardware to
 characterize the WARP-vs-hardware delta.
 
-### 2.3a `repaint-identity` — partial repaint is indistinguishable from full repaint
+### 2.3a `repaint-identity` — composited retained tiles are indistinguishable from direct raster
 
-**The unknown it retires** ([gpu-renderer.md §13.1](./gpu-renderer.md)): damage-scissored partial repaint is
-the one renderer feature whose *entire* claim is a negative — that nothing is lost. The headless
-`gate.repaint.*` / `gate.damage.*` set is pure policy arithmetic (route selection, coalescing, the pixel-grid
-fold, cull halos, stream safety); by contract it cannot touch a device, a clear/scissor/cull agreement, or a
-pixel. The `--screenshot` golden only ever exercises the first frame, which is always a full one.
+**The unknown it retires** ([gpu-renderer.md §13.1](./gpu-renderer.md)): the retained tiled composite's *entire*
+claim is a negative — that a frame composited from retained tiles loses nothing against rastering the same frame
+directly. The headless `gate.tiles.*` / `gate.slices.*` set (§3.6b/§3.6c) proves the bookkeeping (needed sets,
+invalidation reasons, budgets, the op log of the composite model); by contract it cannot touch a device, a
+pixel-quad derivative, a blur phase or a pixel. The `--screenshot` golden only ever exercises the first frame.
 
-- **Host:** `FluentGpu.WindowsApp --repaint-identity` — a command-line arm, **not** a behaviour switch (the
-  default path is unchanged, per the standing no-`FG_*`-for-new-behaviour ruling). GPU required, so it cannot
-  live in the headless `FluentGpu.VerticalSlice`.
-- **Method:** reach ONE scene state twice — once by a full replay into the canvas, once through partial
-  replays (every scripted mutation is an **involution**, so applying it twice restores the scene exactly) —
-  and require the two captures to be **byte-identical**. A scenario that fails to actually take the partial
-  route is reported INCONCLUSIVE and counts as a **failure**, not a pass.
-- **Second gate — route parity:** the same loop passes through the state a `FullDirect` frame was captured
-  at, so the two ROUTES are compared at identical scene state and required to agree at **0 px**.
-- **Evidence on failure:** partial/full/amplified-diff PNGs plus the differing region's bounding box, which is
-  what identifies the *class* — a one-pixel column ⇒ the pixel-grid fold, a missing glyph fragment ⇒ a cull
-  halo, a rectangular block at a stale position ⇒ a missed vacated band, a sparse ±1 LSB scatter at
-  high-contrast edges ⇒ a resample in the canvas→back-buffer blit.
-- **Free riders:** peak replay-rect count and per-frame dropped-instance count are asserted in the same arm,
-  so instance-bank pressure under a multi-rect replay is bounded by *measurement* rather than by argument.
+- **Host:** `FluentGpu.WindowsApp --repaint-identity` (`Probes/RepaintIdentityProbe.cs`) — a command-line arm,
+  **not** a behaviour switch: the degrade knockout and the forced full re-raster it drives are the explicit forms of
+  paths the engine already has. GPU required, so it cannot live in the headless `FluentGpu.VerticalSlice`. Every
+  scenario runs at device scales **1.0 / 1.25 / 1.5 / 1.75 / 2.0** (app zoom over the monitor scale).
+- **`tile-static-identity`** — each sub-scene of `RepaintIdentityScene` (twin animators, a glyph run straddling an
+  edge, a stale prior extent, an opacity group, a video hole, three animators, edge fades, a blur group, a stencil
+  sibling blur, a nested stencil, off-screen content): the composited retained tiles vs the same frame with every
+  segment DEGRADED to direct raster (the `GpuKnockouts.ForceFullDirect` knockout — the route a slice takes when its
+  tiles do not fit the budget). **0 px.** A seam, a sub-pixel shift or a lost primitive shows as a difference.
+- **`tile-scroll-identity`** — a list scrolled through the retained tiles (kept tiles re-placed at the new offset,
+  newly exposed ones rastered) vs a forced full re-raster at the same offset. **0 px** at every scale.
+- **`tile-feather-identity`** — an opaque panel with an analytic top/bottom edge feather: every captured pixel vs the
+  prediction of `EdgeFeatherMask.Evaluate` (the C# port of the composite shader's feather). **≤ 1/255** per channel.
+  `tile-feather-identity/product`: a panel with its own horizontal feather inside a box with a vertical one (the outer
+  fade distributed onto the panel's item — two feathers, `Feather`·`Feather2`) vs the product of two evaluations.
+- **`tile-acrylic-budget-identity`** (2026-09-24) — an in-window frosted plate over saturated bars with 0 vs 20
+  opacity-group effect slices painted before it (past `EffectSliceCap`): **0 px** on the plate, and the plate differs
+  from the crisp page (a folded acrylic used to be a transparent hole).
+- **`fade-distribute-identity`** (2026-09-24) — an AutoEdgeFade page over card rows and an AutoEdgeFade shelf beside
+  it, both scrolled mid-way: the distributed analytic feathers vs every fade as a group surface (`GpuKnockouts.GroupFades`,
+  probe-only), and both routes must really run (0 group surfaces distributed, ≥ 2 under the knockout). **≤ 1/255** (one
+  group surface's 8-bit quantization per pixel). Nested fades are deliberately not composed here: the knockout would put
+  a pixel through TWO quantized group surfaces (measured 2/255 at the page×shelf corners — the reference's own error);
+  the exact product of two distributed feathers is held to the analytic evaluator by `tile-feather-identity/product`.
+- **`group-cache-identity`** (2026-09-24) — a filled AutoEdgeFade shelf (a group) re-drawn from its retained surface
+  after a page scroll vs re-rendered after a forced full re-raster at the same offset: **0 px**, and the op must really
+  have hit then missed.
+- **Evidence on failure:** A/B/diff PNGs plus the differing region's bounding box, which identifies the *class* — a
+  one-pixel column or row ⇒ a target origin off `TileGrid.OriginGrid` (pixel-quad / blur-phase drift), a missing
+  glyph fragment ⇒ a cull halo, a rectangular block at a stale position ⇒ a missed invalidation, a sparse ±1 LSB
+  scatter at high-contrast edges ⇒ a filtered sample where an exact texel fetch belongs.
+- **Status:** 65 checks (11 sub-scenes × 5 scales + scroll × 5 + feather × 5); the retained-tiles plan's P2 status
+  note records 65/65.
 
 ### 2.4 `seam.race` — concurrency soak with SWEPT params (gates `Seam.Quarantine`, `Seam.RetireFence`)
 
@@ -503,23 +521,53 @@ replaces the old whole-tree reuse kill for popup/overlay/orphan/fly with a per-c
 | `span.blockedNodeNeverStores` | while blocked, the chain nodes STORE no span this frame (`SpanTable.StoredAtFrame` false for A + root, true for the unblocked sibling) — the not-store-while-blocked property |
 | `span.detachedFlyScoped` | a live connected-anim fly anchor (via `CollectReuseBlockRoots` → the recorder's `reuseBlockRoots` seam) ⇒ an unrelated subtree still reuses; the anchor's chain blocks + stores nothing (`Detached` in reasons) |
 
-`FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global (whole-canvas), verified by the existing `P6.clean-span`
+`FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global (whole-scene), verified by the existing `P6.clean-span`
 family + `RZ-SETTLE`.
 
-### 3.6b Translated (rebased) span gates (`FluentGpu.VerticalSlice` — `SpanTranslateRebaseChecks`)
+### 3.6b Slice-partition gates (`FluentGpu.VerticalSlice` — `SliceSuite`, `AnimSuite`)
 
-A moved span is copied and patched per payload rather than re-recorded, now including glyph runs, clips and
-non-acrylic layers ([scene-memory.md §4.3b](./scene-memory.md)). The D3D12 raster does not re-intersect a pushed
-clip with the enclosing stack — it trusts the recorder's record-time intersection — so the correctness of an
-OFFSET clip rests entirely on the `ClipComplete`-at-both-ends eligibility test, which is what these gates pin
-alongside the acrylic veto and the motion/settle flag contract:
+The retained-tile recorder partition ([scene-memory.md §4.3b](./scene-memory.md)) replaced translated (rebased) span
+copies; these gates pin it through the real headless host (which takes `IGpuDevice.SubmitComposite`):
 
 | Gate | Assert |
 |---|---|
-| `span.textRowScrollRebase` | text rows (`Box` → interior `ClipsToBounds` child → `Text` leaf) plus a self-blur row inside a scrolling viewport all REBASE on one content translation, and the copied bytes decode to the shifted geometry: glyph `Transform.Dy` offset by the delta with `InMotion == 1`, `ClipCmd.DeviceRect` offset, blur `PushLayerCmd.DeviceRect` offset with `InMotion == 1` |
-| `span.rebaseSettleResnap` | the motion-only `InMotion` does not outlive the motion — the first at-rest frame that walks a rebased row re-records it with `InMotion == 0` (and stores it), and the frame after exact-copies (`SpansRebased == 0`) |
-| `span.acrylicNeverTranslates` | an acrylic row under the same translation is REFUSED by the per-payload walk (`SpansRebaseRejected ≥ 1`, the partial copy rolled back) and re-emitted freshly at the new position, while its plain siblings still rebase in the same frame |
-| `span.stationaryReusesDuringScroll` | a pinned sibling outside the moving content EXACT-copies (branch A) mid-gesture — only the viewport and the direct moving scroll content re-record, the moving row rebases |
+| `gate.slices.paint-order` | the slice list over static + scroll + sticky + nested scroller + group-opacity effect is the painter order |
+| `gate.slices.composite-items` | the `CompositeFrame` rows/items are painter-ordered segments of that list, and the device took the composite seam |
+| `gate.slices.scroll-tick-zero-bytes` | a pure scroll tick records 0 bytes — every slice kept, a composite-only turn — while the composited frame moves by exactly the scroll |
+| `gate.slices.hover-one-tile` | a hover in a list row invalidates exactly one retained tile, reason `Content`, on every composited frame of the change |
+| `gate.slices.realize-primcount` | rows realized into / parked out of a scroll slice invalidate with reason `PrimCount` (the op count of the tiles they enter / leave changed) |
+| `gate.slices.inherited-opacity-rerasters` (EvidenceSuite) | issue #1: a `.Reveal` band cut as a translation Effect slice, its Fade alpha recorded into its bytes, over a nested tab scroller: every page-scroll step that moves the alpha re-rasters the tab slice's tiles (content-derived validity, no damage rect reaches that slot), no other step does, 0 stale turns |
+| `gate.slices.theme-whole-slice` | a theme change invalidates every retained tile with reason `BackgroundOrTheme` |
+| `gate.slices.fade-leaf` | an AutoEdgeFade page over AutoEdgeFade shelves with no own paint composites every fade as an analytic per-item feather (no group); a filled shelf stays the one group carrying the page feather; a visible shelf's content carries both feathers; distributable fades spend no effect budget |
+| `gate.slices.fade-follows-page` | a page scroll tick is composite-only (0 bytes) and moves the distributed shelf feather with the page while the page's own feather stays viewport-fixed |
+| `gate.slices.group-not-rerendered` | a group moved rigidly by a page scroll is re-drawn from its retained surface (`PrepareGroup` hit); its own scroll and a paint change inside it re-render it |
+| `gate.slices.fold-keeps-fade` | with 20 non-distributable fades (4 folded inline) no slice marker sits inside an inline group layer and every shelf's cards composite inside an edge fade |
+| `gate.slices.acrylic-never-folds` (OverlaySuite) | with the effect budget spent, an in-window frosted flyout still cuts its own acrylic slice: a `Backdrop` item covers the surface every frame; every acrylic layer paired with a backdrop; no acrylic hole |
+| `gate.slices.blur-rows-follow-scroll` | the lyrics-blur repro: across composite-only scroll turns every visible self-blurred row keeps a blur source covering its visible rect and resident tiles covering that source |
+| `gate.slices.keep-whole` / `pose-only-records-nothing` / `scroll-flatten` / `textRowScrollFlatten` / `scrollSettle` / `acrylicFlattensAtPose` | the keep/flatten contract at the recorder level (AnimSuite) |
+
+### 3.6c Retained-tile gates (`FluentGpu.VerticalSlice` — `TileSuite`)
+
+The tile bookkeeping and the composite seam ([gpu-renderer.md §13.1](./gpu-renderer.md)), gated headlessly over the
+pure types and the `HeadlessGpuDevice` composite op log (`LastCompositeRecords`); the pixel half is §2.3a. They replace
+the retired canvas-route `gate.repaint.*` policy/stream-safety gates, `gate.edgefade.*` and the canvas/pin
+`gate.layerpool.*` gates, whose subjects are deleted.
+
+| Gate | Assert |
+|---|---|
+| `gate.tiles.needed-order` | `TileGrid.Needed` emits visible tiles first (row-major), then the `\|v\|·LookaheadS` ahead band nearest row first, then one retained-behind row (both sides at rest); horizontal scrollers run the main axis along X; a short destination truncates in priority order |
+| `gate.tiles.coverage-clamp` | only tile rows overlapping the realized coverage are requested (half-open; empty coverage or an out-of-coverage viewport requests nothing) |
+| `gate.tiles.exposed-only` | the first turn rasters every needed tile once (`NoTexture`); a still tick rasters 0; a scroll rasters ONLY the tiles entering the needed set; scrolling back over resident rows rasters nothing |
+| `gate.tiles.invalidation-one` | a rect invalidation inside one tile (the image cross-fade path) invalidates exactly that tile (`Content`) and the next turn re-rasters only it; a corner-crossing rect hits its 4 tiles; a scale change invalidates the whole slice (`ScaleChanged`); a one-node paint change through the real host re-rasters one tile (its content want) |
+| `gate.tiles.stale-zero` (EvidenceSuite, every suite) | the permanent sweep: no composite turn of any suite ends with a VALID tile rastered for different content than the stream now wants (`TileCensus.StaleTiles` = 0) |
+| `gate.tiles.budget-never-drops-visible` | distance-weighted LRU eviction; visible tiles first, the ahead band takes only what is left; over budget a second slice DEGRADES and no visible tile of the first is dropped, then recovers; the `TileBudget` default derivation |
+| `gate.tiles.memory-ceiling` | surfaces are cut at the painted bounds (static far column/row, a virtual list's cross axis); resident bytes never exceed the budget, and resident + retained never exceed budget × (1 + `RetainedShare`), through an 8000 DIP/s scroll |
+| `gate.tiles.segment-extent` | a thin (40-DIP) non-virtual scroll segment charges surfaces cut on the main axis too (≤ Dim(h + 64) rows), not a 512-row cell per column |
+| `gate.tiles.feather` | `EdgeFeatherMask`: no-feather is exactly 1; band ramp, smoothstep + intensity, the corner arc, `Pack` layout = evaluator, `FromSpec` DIP→px |
+| `gate.tiles.composite-record` | the headless device supports the seam; each raster is one CLEAR→STORE pass on its own surface in raster-list order; the back buffer is ONE CLEAR→STORE pass drawing the items in painter order; the `PresentParams` are staged last |
+| `gate.tiles.scroll-no-copy` | a pure scroll inside the retained rows rasters nothing, recomposes the back buffer in one pass per frame, and never reads or copies a render target |
+| `gate.tiles.no-blank-8000` | an 8000 DIP/s scroll over a 100k-row list: 0 exposed-missing tiles, 0 coverage clamps, never degrading |
+| `gate.tiles.alloc-zero` / `gate.tiles.render-alloc-zero` | 1000 turns of the table flow + headless `SubmitComposite`, and 300 warm frames of a 3000 DIP/s scroll through record → partition → schedule → composite → submit, allocate 0 managed bytes |
 
 ### 3.7 Data-race gate
 

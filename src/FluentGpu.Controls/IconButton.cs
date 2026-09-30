@@ -1,5 +1,7 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -122,5 +124,37 @@ public static partial class IconButton
         };
         // Parts: restyle anything (fills, corners, size…); the click mechanics and the icon mount always win.
         return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
+    }
+
+    /// <summary>E12b (home-redesign-remediation.md §2 E12/§3.2): a BOUND-enabled overload — <paramref name="isEnabled"/>
+    /// is a caller <see cref="IReadSignal{T}"/> (a <see cref="Signal{T}"/> or <see cref="Memo{T}"/>) instead of a
+    /// plain <c>bool</c>, so a chevron pair wired to <c>ShelfController.CanPrev</c>/<c>CanNext</c> re-skins itself
+    /// the moment the shelf pages, with NO re-render of the caller that mounted it (<c>ChapterHeader</c> is a plain
+    /// element function with no hooks — it cannot re-render on its own). Delivered the same way every other
+    /// signal-consuming control is: <c>Embed.Comp(props, factory)</c> wraps a tiny stateful core
+    /// (<see cref="IconButtonBoundEnabledCore"/>) that reads <c>isEnabled.Value</c> DIRECTLY inside its own
+    /// <c>Render()</c>, so only that one node subscribes and re-renders when the signal changes — the same
+    /// "read live inside the mounted core" shape as <c>ToggleButtonCore</c> reading its checked signal. The
+    /// PLAIN <c>bool isEnabled</c> overload above is untouched (default path byte-identical): this is a separate,
+    /// additive overload, not a widening of <see cref="Style"/> or the base <see cref="Element.IsEnabled"/> channel.</summary>
+    public static Element Create(string glyph, Action onClick, IReadSignal<bool> isEnabled, Style? style = null,
+        TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new BoundEnabledProps(glyph, onClick, isEnabled, style, parts, size), () => new IconButtonBoundEnabledCore());
+
+    /// <summary>Controlled props RE-PUSHED to <see cref="IconButtonBoundEnabledCore"/> — see the bound-enabled
+    /// <c>Create(glyph, onClick, isEnabled: IReadSignal)</c> overload.</summary>
+    internal sealed record BoundEnabledProps(string Glyph, Action OnClick, IReadSignal<bool> IsEnabled, Style? Style,
+                                              TemplateParts? Parts, ControlSize Size);
+}
+
+/// <summary>The stateful core behind the bound-enabled <c>IconButton.Create(glyph, onClick, IReadSignal<c>IconButton.Create(glyph, onClick, isEnabled: IReadSignal)</c>lt;bool<c>IconButton.Create(glyph, onClick, isEnabled: IReadSignal)</c>gt; isEnabled, …)</c>
+/// overload (E12b). Reading <c>p.IsEnabled.Value</c> in <see cref="Render"/> subscribes THIS component's own
+/// render-effect to the signal — a flip re-renders only this small node, never the caller that mounted it.</summary>
+internal sealed class IconButtonBoundEnabledCore : Component
+{
+    public override Element Render()
+    {
+        var p = UseProps<IconButton.BoundEnabledProps>();
+        return IconButton.Create(p.Glyph, p.OnClick, p.Style, p.IsEnabled.Value, p.Parts, p.Size);
     }
 }

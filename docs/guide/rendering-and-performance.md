@@ -43,7 +43,7 @@ loop near 80 fps.
 timer **plus** the message queue. Input still wakes the loop immediately. Infinite idle waits and long background
 waits keep the ordinary message-only path, so a quiescent window remains parked at 0% CPU; this is not a
 process-wide `timeBeginPeriod` change. Timer creation/set/wait failure permanently falls back to the ordinary path.
-`FG_PRECISE_WAIT=0` is the same-binary diagnostic kill switch.
+`--fg no-precise-wait` is the same-binary diagnostic kill switch.
 
 This pacing seam is independent of the window material: Windows Mica/MicaAlt remains the exact
 `DWMWA_SYSTEMBACKDROP_TYPE` surface drawn by DWM behind the premultiplied swapchain.
@@ -109,7 +109,7 @@ its current bounds); a window resize still triggers a full layout, so resize sta
 `FrameStats.RootRelayoutEscapes` (always on, even in Release) counts the dirty nodes each frame whose scoped-relayout
 search walked a deep node (tree-depth > 1) **all the way to the scene root** — i.e. found no boundary and fell back to
 a full-subtree relayout. A steady nonzero value while interacting means a hot subtree is missing a boundary. Run with
-`FG_DIAG=1` (DEBUG builds) to get a throttled per-node message naming the offender:
+`--fg diag` (DEBUG builds) to get a throttled per-node message naming the offender:
 
 ```
 [layout] relayout escaped to root from node #4218 (type 1, key detail-page) — add a fixed-size ClipToBounds boundary or .Boundary()
@@ -166,8 +166,8 @@ Read `FrameStats` from `RunFrame()`:
 - `Rendered == false` on a steady or compositor-only frame → good (no wasted render/layout).
 - `ComponentsRendered` should be small (ideally 1) after a localized interaction.
 - `HotPhaseAllocBytes == 0` on steady frames → the zero-alloc contract holds.
-- `MeasureCount`/`ArrangeCount`/`TextShapeMisses` (FlexLayout diag) are **always-on** (no `FG_LAYOUT_DIAG` needed —
-  that env var only gates the harness's own `Console.Error.WriteLine` printout, not these counters):
+- `MeasureCount`/`ArrangeCount`/`TextShapeMisses` (FlexLayout diag) are **always-on** (no `--fg layout` needed —
+  that switch only gates the per-run `Console.Error.WriteLine` printout, not these counters):
   `MeasureCount` counts real measures (memo hits excluded); should be ~0 on a steady frame with an unchanged tree.
 - `TextShapes` — real `IFontSystem` glyph-shape calls this frame (always-on). 0 on a frame with no text change; a
   nonzero value on an otherwise-quiet frame usually means a measure-cache miss (font/size/text/wrap-width changed).
@@ -176,8 +176,9 @@ Read `FrameStats` from `RunFrame()`:
   column (an equal republish fires without writing). `BindingWrites / BindingFires` is the equality-gating hit rate.
 - `RebindFlushAllocBytes` — GC-delta across the frame's rebind-only flush, isolated from layout/record/submit (valid
   only under the same process allocation-tracking probe as `HotPhaseAllocBytes`).
-- Set `FG_DUMP=1` to dump the post-layout scene tree to stderr; `FG_DIAG=1` enables engine diagnostics;
-  `FG_SCROLLLOG=1` traces the scrollbar.
+- Engine diagnostics are command-line switches, never environment variables: `--fg dump` dumps the post-layout
+  scene tree to stderr, `--fg diag` enables engine diagnostics (the full list: `FluentGpu.Hosting.EngineSwitches`).
+  The old `FG_SCROLLLOG` scrollbar trace no longer exists.
 
 **The UI loop is phase-locked to the display.** Under the async seam the host never produces a frame while a
 published one is still unpresented (`threading-render-seam.md` §11.1) — so `Fps` sits at the panel rate rather

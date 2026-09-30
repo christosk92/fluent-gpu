@@ -1,5 +1,9 @@
 # Scroll Feel v2.1 — edge / momentum layer addendum
 
+> **SUPERSEDED (2026-09-23) by [`scroll-rework-implementation.md`](scroll-rework-implementation.md)** — the edge-bounce
+> spring math here is ported forward as `PlanAuthor.Fling`'s pre-computed Spring-return segment; the integrator it
+> amends is deleted.
+
 Status: **DECIDED — amends `scroll-feel-rework-v2-design.md` §4.4/§4.5/§7 and supersedes the 2026-07-02 on-device hotfixes where it differs.** Grounds every edge/momentum choice in the reverse-engineered iOS/WebKit/Chromium/Android/Flutter overscroll literature and the DirectManipulation-in-browsers survey (citations inline). The v2 body (single writer, per-frame resample, closed-form fling, the state enum) is unchanged; this addendum only pins the *edge bounce*, the *OS-momentum tail*, the *DM producer geometry*, and the *re-grab* math that the hotfixes left as feel numbers.
 
 On-device (2026-07-02, PTP + DManip): F1 sign, F2 band-freeze on OS tail, F3 wheel-hijack at runway exhaustion, F4 pinch-drift leak, F5 band-zeroed on lift-at-stretch, F6 band-teleport from position seeding, F7 inverse divergence near the asymptote, F8 relatch catch-up burst. The research verdict is blunt: **no shipping system position-seeds a bounce, none stops its producer at the edge, none clamps a per-frame catch-up, and the two browsers never call `SetContentRect` — so F3 and F4 are self-inflicted by our 200k runway, not DM defects.** The decisions below act on that.

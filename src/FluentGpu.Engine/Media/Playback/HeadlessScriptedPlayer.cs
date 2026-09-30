@@ -235,6 +235,10 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
         _core.SetError(null);
         _core.SetPosition(TimeSpan.Zero);
         _core.SetSuppression(SuppressionReason.None);
+        // A fresh open resets the composited-surface readiness for the CURRENT cycle (IMediaPlayer.VideoSurface's own
+        // contract: "IsNone until the first video frame") — mirrors a real backend dropping its DComp handle on a
+        // source switch (MediaPlayerElement PART B: the poster/hole gate on this, not on PlaybackState alone).
+        _core.SetVideoSurface(default);
         _core.Tracks.Text.Clear();
         _core.Tracks.Audio.Clear();
         _core.Tracks.Video.Clear();
@@ -375,6 +379,12 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
         _core.SetVideoGeometry(size.IsEmpty
             ? global::FluentGpu.Media.VideoGeometry.Empty
             : new VideoGeometry(size, new PixelRect(0, 0, size.Width, size.Height), PixelAspectRatio.Square, 0, size));
+        // This scripted double has no real decode pipeline (no per-frame latency is modeled at all), so its composited
+        // surface is reasonably "ready" the moment its metadata is — publish VideoSurface here, alongside geometry,
+        // rather than leaving it forever None. A test that needs to model the REAL race PART B fixes (state reaching
+        // Playing before any frame has ever composited) overrides this back to `default` via `Core.SetVideoSurface`
+        // after driving to Playing — see gate.media.el.poster-until-first-frame.
+        _core.SetVideoSurface(size.IsEmpty ? default : new VideoSurfaceId(1));
         _core.SetTimeline(new TimelineInfo(false, TimeSpan.Zero, _duration, _duration, TimeSpan.Zero, false,
             Array.Empty<MediaChapter>()));
         _core.SetCommands(size.IsEmpty

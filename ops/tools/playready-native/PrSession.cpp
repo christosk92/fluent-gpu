@@ -18,6 +18,7 @@
 //   * a seek whose target is not in the store becomes the feeder's next target, and the reposition runs from that
 //     fetch's own completion, so FgPrSessionSeek never blocks and a seek issued right after Attach is never dropped.
 #include "PrInternal.h"
+#include "FeedPlan.h"
 
 using fgpr::Raise;
 using fgpr::Runtime;
@@ -128,20 +129,54 @@ static winrt::com_ptr<CencMediaStream> AudioStreamLocked(Session& s)
 struct FeederState
 {
     uint64_t ticks[2] = { 0, 0 };          // the demuxer's running decode ticks, per track
-    int32_t lastIdx[2] = { -1, -1 };       // the progress guard (see PlanTrack)
-    int64_t lastCovEnd[2] = { -1, -1 };
-    int32_t floorIdx[2] = { -1, -1 };
+    fgpr::plan::Guard guard[2];            // the progress guard (see PlanTrack / FeedPlan.h)
+    // STRUCTURAL reset identity, per track. `streamId` catches a re-attach rebuilding the source (a new
+    // CencMediaStream object under the same track slot); `cutGen` mirrors CencMediaStream::CutGen(), which the
+    // stream bumps on every code path that can SHRINK its buffered coverage (a truncating splice, TakeSamples, a
+    // trim that reaches the delivery cursor). Those paths all live inside CencMediaSource.h and cannot reach feeder-
+    // thread state directly — the feeder observes the generation instead of trying to enumerate the paths itself.
+    const void* streamId[2] = { nullptr, nullptr };
+    uint32_t cutGen[2] = { 0, 0 };
     uint64_t floorSeekSeq = 0;
+    // The largest segment that has landed per track: the byte reserve the next fetch needs (TrimBehindByTime's
+    // reserveBytes), so history behind the playhead is evicted to make room BEFORE the cap is weighed.
+    uint64_t maxSegBytes[2] = { 0, 0 };
+    bool capHeld = false;                  // the byte cap is currently refusing look-ahead fetches (logged on each edge)
     int32_t failIdx[2] = { -1, -1 };       // transient-failure back-off, per track
     int32_t failCount[2] = { 0, 0 };
     int64_t lastBytesQpc = 0;
     uint64_t lastBytesRaised = 0;
     int64_t lastAhead = -1, lastBehind = -1;
+    // A representation-switch boundary that went STALE (the playhead passed it while the segment GET was in
+    // flight): the next attempt for the SAME request must not retry the same boundary, or it goes stale again on
+    // every tick. `switchBoundaryReqIndex` is which req.index the bound applies to — a different request (or a
+    // completed/rejected one) resets it.
+    int32_t switchMinBoundary = 0;
+    int32_t switchBoundaryReqIndex = -1;
 };
 
 enum class JobResult { Idle, Progress, Backoff };
 
 static constexpr int kVideo = 0, kAudio = 1;
+
+/// The STRUCTURAL reset for one track: a seek, a re-attach (the stream object changed), or the stream's own
+/// CutGen() moving — anything that can make the feeder's remembered coverage stale in a way `PlanTrack` cannot infer
+/// from the numbers alone. Clears the progress guard AND the transient-failure back-off (a fresh generation deserves
+/// a fresh try, not a retry count left over from the coverage that just got cut).
+static void ResetTrackState(FeederState& st, int t)
+{
+    fgpr::plan::Reset(st.guard[t]);
+    st.failIdx[t] = -1;
+    st.failCount[t] = 0;
+}
+
+/// Forces the next RaiseBuffered to announce even if the numbers happen to match what was last raised — a reset that
+/// followed a coverage cut must not have its FgPrEvent_Buffered suppressed by stale lastAhead/lastBehind bookkeeping.
+static void ResetAnnounce(FeederState& st)
+{
+    st.lastAhead = -1;
+    st.lastBehind = -1;
+}
 
 /// The reference position the fetch plan is built around: a pending seek's target, else — once the session is
 /// attached — the playhead (the carried start position until the first frame lands), else the prefetch window.
@@ -177,45 +212,34 @@ static bool ReferenceLocked(Session& s, int64_t& refMs, int64_t& wantEndMs, bool
 
 struct TrackPlan
 {
-    int32_t idx = -1;     // the segment to fetch, -1 for none
-    bool atEnd = false;   // coverage from the reference runs to the end of the track
+    int32_t idx = -1;                // the segment to fetch, -1 for none
+    bool atEnd = false;              // coverage from the reference runs to the end of the track
+    fgpr::plan::Guard next;          // the guard PlanTrack.cpp's caller commits IFF this plan survives the byte cap
+    bool guardStepped = false;       // fgpr::plan::Out::guardStepped, surfaced for the one-line log
+    int32_t steppedPast = -1;
+    int64_t covStartMs = -1, covEndMs = -1;   // for the guard-stepped log line only
 };
 
 /// Which segment this track needs next: the one containing the reference when it is not covered, else the one just
-/// past the covered range — until that range reaches `wantEndMs` or the end of the track.
-///
-/// The progress guard: a segment whose samples do not actually extend the covered range (a real hole in the content,
-/// a segment that demuxed short) would be planned again forever. When the same index comes back with no growth, the
-/// plan steps past it and remembers a floor until the next seek.
+/// past the covered range — until that range reaches `wantEndMs` or the end of the track. The arithmetic itself
+/// (the progress guard, its floor, the coverage-shrink reset) lives in FeedPlan.h so it can be unit-tested without
+/// any of this file's WinRT/CencMediaStream machinery; this function is just the adapter that reads the stream's
+/// coverage and reports the candidate `next` guard state for the caller to commit or discard.
 static TrackPlan PlanTrack(Session& s, FeederState& st, int track, CencMediaStream* stream, int64_t refMs,
                            int64_t wantEndMs, int32_t endIndex)
 {
     TrackPlan p;
+    p.next = st.guard[track];
     if (!stream) return p;
     const Coverage cov = CoverageAt(stream, refMs);
-    const int64_t len = s.SegLenMs();
-    int32_t idx;
-    if (cov.startMs < 0)
-    {
-        idx = SegmentOfUnclamped(s, refMs);
-        // Already fetched, and it STILL does not cover the reference (a grid that does not match the content): asking
-        // again cannot help. Nothing to do until the reference moves or a seek resets the guard.
-        if (st.lastIdx[track] == idx && st.lastCovEnd[track] < 0) return p;
-    }
-    else
-    {
-        if (cov.endMs >= wantEndMs) return p;                        // satisfied
-        idx = SegmentOfUnclamped(s, cov.endMs + len / 2);
-        if (st.lastIdx[track] == idx && cov.endMs <= st.lastCovEnd[track]) st.floorIdx[track] = idx + 1;
-        if (st.floorIdx[track] > idx) idx = st.floorIdx[track];
-    }
-    if (idx >= endIndex)
-    {
-        p.atEnd = true;
-        return p;
-    }
-    if (cov.startMs >= 0 && SegmentStartMs(s, idx) >= wantEndMs) return p;
-    p.idx = idx;
+    p.covStartMs = cov.startMs;
+    p.covEndMs = cov.endMs;
+    const fgpr::plan::Out out = fgpr::plan::Next(st.guard[track], p.next, fgpr::plan::Cov{ cov.startMs, cov.endMs },
+                                                 refMs, wantEndMs, s.SegLenMs(), endIndex);
+    p.idx = out.idx;
+    p.atEnd = out.atEnd;
+    p.guardStepped = out.guardStepped;
+    p.steppedPast = out.steppedPast;
     return p;
 }
 
@@ -246,14 +270,20 @@ static void RaiseBytes(Session& s, FeederState& st, bool flush)
 
 // The always-on per-segment ABR ledger: every input the throughput estimate is built from, in one line, so a bad
 // estimate can be read straight out of the log instead of inferred from a stalled picture. bytes*8/ms is exactly
-// kbit/s. `rep` is -1 before a representation has been selected.
-static void LogAbrSegment(Session& s, const char* track, int rep, int seg, const fgpr::HttpFetchTiming& t, int64_t aheadMs)
+// kbit/s. `rep` is -1 before a representation has been selected. `contigMs` (ContiguousAheadMs) sits next to the
+// coverage-window `aheadMs` so a HOLE is visible straight in the ledger: aheadMs can read healthy from a coverage
+// pair that starts past a gap, while contigMs — forward-buffered from the delivery cursor — reads the truth. `cached`
+// is HttpFetchTiming::fromStore: a replayed segment must be visibly excluded from the throughput math, not just
+// silently skipped (see the incident this file's guard fix addresses).
+static void LogAbrSegment(Session& s, const char* track, int rep, int seg, const fgpr::HttpFetchTiming& t,
+                          int64_t aheadMs, int64_t contigMs)
 {
     const uint64_t ms = t.transferMs ? t.transferMs : 1;
     fgpr::RaiseLog(s.handle, std::string("[cenc-abr] ") + track + " rep=" + std::to_string(rep) + " seg=" + std::to_string(seg) +
             " bytes=" + std::to_string(t.bytes) + " transferMs=" + std::to_string(t.transferMs) +
             " headerMs=" + std::to_string(t.headerMs) + " kbps=" + std::to_string((t.bytes * 8ULL) / ms) +
-            " aheadMs=" + std::to_string((long long)aheadMs));
+            " aheadMs=" + std::to_string((long long)aheadMs) + " contigMs=" + std::to_string((long long)contigMs) +
+            " cached=" + (t.fromStore ? "1" : "0"));
 }
 
 static void PostToRuntime(Session& s, std::function<void(Runtime&)> fn)
@@ -414,13 +444,21 @@ static JobResult FetchInits(const std::shared_ptr<Session>& sp)
 
 // ── a representation switch (ABR) ─────────────────────────────────────────────────────────────────────────────────
 static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, FeederState& st,
-                                         const Session::RepresentationRequest& req)
+                                         const Session::RepresentationRequest& req, int& backoffMs)
 {
     Session& s = *sp;
     auto clearIfCurrent = [&]() {
         std::lock_guard<std::mutex> g(s.feedMx);
         if (s.rep.pending && s.rep.index == req.index && s.rep.initUrl == req.initUrl) s.rep.pending = false;
     };
+
+    // The stale-boundary lower bound only applies to the request it was computed for; a different request (or the
+    // previous one completing/being rejected, both of which reset it below) starts over at boundary 0.
+    if (st.switchBoundaryReqIndex != req.index)
+    {
+        st.switchMinBoundary = 0;
+        st.switchBoundaryReqIndex = req.index;
+    }
 
     auto initFetch = fgpr::HttpFetch::Begin(req.initUrl, s.headers, s.store);
     {
@@ -482,6 +520,18 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         ? cursor   // the buffer is drained — the feeder cursor IS the playhead
         : (int32_t)(((uint64_t)std::max<int64_t>(nextTimeMs, 0) + (uint64_t)len - 1) / (uint64_t)len);
     boundary = std::clamp(boundary, 0, cursor);
+    // A previous attempt at this SAME request went stale (the playhead passed the boundary it fetched while the GET
+    // was in flight): retry no earlier than one past it, or the next attempt goes stale again on every tick. If that
+    // lower bound is now past the buffered cursor, there is nowhere valid to land yet — wait for more buffer instead
+    // of splicing past the buffered end (which would open the exact hole this file's other fix closes).
+    boundary = std::max(boundary, st.switchMinBoundary);
+    if (boundary > cursor)
+    {
+        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch boundary " + std::to_string(boundary) +
+                                 " exceeds buffered cursor " + std::to_string(cursor) + " - waiting for more buffer");
+        backoffMs = 250;
+        return JobResult::Backoff;
+    }
 
     const std::wstring url = SegmentUrl(req.base, req.prefix, req.suffix, s, boundary);
     auto segFetch = fgpr::HttpFetch::Begin(url, s.headers, s.store);
@@ -511,8 +561,11 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
     uint64_t ticks = st.ticks[kVideo];
     cenc::ParseSegment(segFetch->body, nextInfo, more, ticks, &keyframes);
     segFetch->ReleaseBody();
-    s.bytesDownloaded.fetch_add(segFetch->timing.bytes, std::memory_order_acq_rel);
-    s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, segFetch->timing.transferMs), std::memory_order_acq_rel);
+    if (!segFetch->timing.fromStore)   // the WinRT HTTP cache answered this GET itself: not real throughput
+    {
+        s.bytesDownloaded.fetch_add(segFetch->timing.bytes, std::memory_order_acq_rel);
+        s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, segFetch->timing.transferMs), std::memory_order_acq_rel);
+    }
 
     if (more.empty() || !more[0].keyframe)
     {
@@ -521,19 +574,58 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         return JobResult::Progress;
     }
     st.ticks[kVideo] = ticks;
+    SwitchResult switchResult = SwitchResult::Rejected;
     {
         std::lock_guard<std::mutex> g(s.feedMx);
         if (!(s.rep.pending && s.rep.index == req.index && s.rep.initUrl == req.initUrl))
             return JobResult::Progress;   // superseded by a newer request while this one was on the wire
-        s.initUrl = req.initUrl;
-        s.segBase = req.base;
-        s.segPrefix = req.prefix;
-        s.segSuffix = req.suffix;
-        s.videoInfo = nextInfo;
-        s.rep.pending = false;
         auto current = VideoStreamLocked(s);
-        if (current) current->SwitchVideoRepresentation(nextInfo, std::move(more));
+        if (!current) return JobResult::Progress;   // the source went away mid-fetch (detach/destroy raced in)
+        // Session fields are committed ONLY once the splice actually happens — see SwitchResult below. Before this
+        // fix they were written here unconditionally, ahead of a splice call that could still reject or go stale, so
+        // a rejected/stale switch left s.initUrl/segBase/videoInfo pointing at a representation nothing had spliced.
+        switchResult = current->SwitchVideoRepresentation(nextInfo, std::move(more));
+        if (switchResult == SwitchResult::Spliced)
+        {
+            s.initUrl = req.initUrl;
+            s.segBase = req.base;
+            s.segPrefix = req.prefix;
+            s.segSuffix = req.suffix;
+            s.videoInfo = nextInfo;
+            s.rep.pending = false;
+            // A new representation is a new URL space: a 4xx latch from the OLD one must not end the new one before
+            // it has even been tried. INT_MAX is Session's own unlatched default (see its declaration).
+            s.videoEndIndex = INT_MAX;
+        }
+        else if (switchResult == SwitchResult::Rejected)
+        {
+            s.rep.pending = false;   // one-shot: shut down / wrong kind / empty — nothing to retry
+        }
+        // StaleBoundary: s.rep.pending stays true; the retry (with a higher switchMinBoundary) happens below.
     }
+
+    if (switchResult == SwitchResult::StaleBoundary)
+    {
+        // The remembered lower bound stays alive; RunOneJob calls this again next tick (rep.pending is still set)
+        // and the boundary computed above will be clamped up to at least boundary+1.
+        st.switchMinBoundary = boundary + 1;
+        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch boundary " + std::to_string(boundary) +
+                                 " went stale during the fetch (playhead passed it) - retrying at " +
+                                 std::to_string(boundary + 1));
+        return JobResult::Progress;
+    }
+    if (switchResult == SwitchResult::Rejected)
+    {
+        st.switchMinBoundary = 0;
+        st.switchBoundaryReqIndex = -1;
+        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch rejected by the stream (shutdown, wrong kind, or an "
+                                 "empty replacement) at segment index " + std::to_string(boundary));
+        return JobResult::Progress;
+    }
+
+    // Spliced.
+    st.switchMinBoundary = 0;
+    st.switchBoundaryReqIndex = -1;
     for (int64_t kf : keyframes) s.store->keyframes.Append(kf);
     s.activeRepresentation.store(req.index, std::memory_order_release);
     fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch at segment index " + std::to_string(boundary) +
@@ -541,7 +633,11 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
                              std::to_string((long long)len) + "ms, cursor was " + std::to_string(cursor) +
                              ") -> representation " + std::to_string(req.index));
     Raise(s.handle, FgPrEvent_Representation, req.index);
-    LogAbrSegment(s, "video", req.index, boundary, segFetch->timing, video->AheadDurationMs());
+    LogAbrSegment(s, "video", req.index, boundary, segFetch->timing, video->AheadDurationMs(), video->ContiguousAheadMs());
+    // The splice can SHRINK coverage (a truncating splice past the playhead, or a boundary behind what was buffered):
+    // that shrink is never announced by the normal landed-fetch path (this function returns before RunOneJob's own
+    // RaiseBuffered call), so it is raised explicitly here, forced, so a shrink a viewer would notice is never silent.
+    RaiseBuffered(s, st, video.get(), refMs, true);
     return JobResult::Progress;
 }
 
@@ -564,7 +660,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         std::lock_guard<std::mutex> g(s.feedMx);
         if (s.rep.pending && s.streaming && !s.seekNeedsFetch) rep = s.rep;
     }
-    if (rep.pending) return RunRepresentationSwitch(sp, st, rep);
+    if (rep.pending) return RunRepresentationSwitch(sp, st, rep, backoffMs);
 
     // ── plan ──
     int64_t refMs = 0, wantEndMs = 0;
@@ -581,30 +677,93 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         audio = s.haveAudio ? AudioStreamLocked(s) : nullptr;
         if (!video) return JobResult::Idle;
         const uint64_t seq = s.seekSeq.load(std::memory_order_acquire);
-        if (seq != st.floorSeekSeq)
+        // The STRUCTURAL reset (replaces the old seek-only reset). Every code path that can SHRINK a stream's
+        // buffered coverage lives inside CencMediaSource.h/SegmentStore.h and has no way to reach this feeder-thread
+        // state directly — so instead of trying to catch each one here, the feeder just compares against the
+        // stream's own generation counter. A seek (seq), a re-attach (the stream OBJECT changed under the same
+        // track slot — MF shuts a replaced source down and CompleteAttach rebuilds a fresh one), or a CutGen() bump
+        // (a truncating splice / TakeSamples / a coverage-cutting trim) all reset the same way.
+        CencMediaStream* trackStream[2] = { video.get(), audio.get() };
+        for (int t = 0; t < 2; t++)
         {
-            for (int t = 0; t < 2; t++) { st.floorIdx[t] = -1; st.lastIdx[t] = -1; st.lastCovEnd[t] = -1; }
-            st.floorSeekSeq = seq;
+            CencMediaStream* stream = trackStream[t];
+            const void* sid = stream;
+            const uint32_t gen = stream ? stream->CutGen() : st.cutGen[t];
+            if (seq != st.floorSeekSeq || sid != st.streamId[t] || gen != st.cutGen[t])
+            {
+                ResetTrackState(st, t);
+                ResetAnnounce(st);
+            }
+            st.streamId[t] = sid;
+            st.cutGen[t] = gen;
         }
+        st.floorSeekSeq = seq;
         const int32_t count = EffectiveSegmentCount(s);
         const int64_t durMs = EffectiveDurationMs(s);
         if (durMs > 0 && wantEndMs > durMs) wantEndMs = durMs;
         vp = PlanTrack(s, st, kVideo, video.get(), refMs, wantEndMs, std::min(count, s.videoEndIndex));
         if (audio) ap = PlanTrack(s, st, kAudio, audio.get(), refMs, wantEndMs, std::min(count, s.audioEndIndex));
         // The byte cap: past the budget, fetch only what the reference position itself needs — never starve playback,
-        // never keep buffering ahead into memory the session was not given. History is trimmed FIRST: the playhead
-        // has moved since the last append, and what fell out of the time window no longer counts.
-        video->TrimNow();
-        if (audio) audio->TrimNow();
-        if (!seekPlan && s.store->Bytes() >= s.store->budgetBytes)
+        // never keep buffering ahead into memory the session was not given. History is trimmed FIRST, with a RESERVE
+        // for the segment about to be fetched (1.5× the largest one landed on that track, floored so the first fetch
+        // has room, capped at a quarter of the budget): the playhead has moved since the last append, and history
+        // behind it yields to forward demand even inside the retention window. Without the reserve a 1080p store
+        // filled to exactly the budget with 30 s of history, the cap refused every fetch, and playback starved
+        // forever at the end of the buffer (2026-09-22).
+        const uint64_t reserveCap = s.store->budgetBytes / 4;
+        auto reserveFor = [&](int track, uint64_t floorBytes) {
+            const uint64_t want = st.maxSegBytes[track] + st.maxSegBytes[track] / 2;
+            return std::min<uint64_t>(std::max<uint64_t>(want, floorBytes), reserveCap);
+        };
+        video->TrimNow(reserveFor(kVideo, 1ull << 20));
+        if (audio) audio->TrimNow(reserveFor(kAudio, 256ull << 10));
+        bool vpCancelled = false, apCancelled = false;
+        const bool capHolds = !seekPlan && s.store->Bytes() >= s.store->budgetBytes;
+        if (capHolds)
         {
-            if (vp.idx >= 0 && vp.idx != SegmentOfUnclamped(s, refMs)) vp.idx = -1;
-            if (ap.idx >= 0 && ap.idx != SegmentOfUnclamped(s, refMs)) ap.idx = -1;
+            if (vp.idx >= 0 && vp.idx != SegmentOfUnclamped(s, refMs)) { vp.idx = -1; vpCancelled = true; }
+            if (ap.idx >= 0 && ap.idx != SegmentOfUnclamped(s, refMs)) { ap.idx = -1; apCancelled = true; }
         }
+        // Always-on, one line per EDGE (never per plan): a held cap is the one state in which "no fetch" is a
+        // decision rather than a bug, and a log with neither line cannot tell the two apart.
+        if (capHolds != st.capHeld)
+        {
+            st.capHeld = capHolds;
+            fgpr::RaiseLog(s.handle, std::string("[cenc-feed] byte cap ") + (capHolds ? "holds" : "released") +
+                                     ": bytes=" + std::to_string(s.store->Bytes()) + " budget=" + std::to_string(s.store->budgetBytes) +
+                                     " videoAheadMs=" + std::to_string(video ? video->ContiguousAheadMs() : 0) +
+                                     " maxSeg=" + std::to_string(st.maxSegBytes[kVideo]) + "/" + std::to_string(st.maxSegBytes[kAudio]));
+        }
+        // Commit the candidate guard ONLY for a plan that survives the byte cap: a plan the byte cap discards must
+        // not have moved the floor (the incident this replaces committed the floor and then sometimes threw the
+        // fetch away — a second, independent way the guard used to drift from what was actually fetched).
+        if (!vpCancelled) st.guard[kVideo] = vp.next;
+        if (audio && !apCancelled) st.guard[kAudio] = ap.next;
+        if (vp.guardStepped)
+            fgpr::RaiseLog(s.handle, "[cenc-feed] progress guard stepped video past seg#" + std::to_string(vp.steppedPast) +
+                                     " ref=" + std::to_string((long long)refMs) + "ms cov=[" +
+                                     std::to_string((long long)vp.covStartMs) + "," + std::to_string((long long)vp.covEndMs) +
+                                     ") lastCovEnd=" + std::to_string((long long)vp.next.lastCovEnd) +
+                                     " floor=" + std::to_string(vp.next.floorIdx));
+        if (audio && ap.guardStepped)
+            fgpr::RaiseLog(s.handle, "[cenc-feed] progress guard stepped audio past seg#" + std::to_string(ap.steppedPast) +
+                                     " ref=" + std::to_string((long long)refMs) + "ms cov=[" +
+                                     std::to_string((long long)ap.covStartMs) + "," + std::to_string((long long)ap.covEndMs) +
+                                     ") lastCovEnd=" + std::to_string((long long)ap.next.lastCovEnd) +
+                                     " floor=" + std::to_string(ap.next.floorIdx));
         vBase = s.segBase; vPrefix = s.segPrefix; vSuffix = s.segSuffix;
         videoInfo = s.videoInfo;
         if (audio) audioInfo = s.audioInfo;
         seekSeq = seq;
+    }
+    // A track whose buffer already reaches the duration is at its end even when the planner only said "satisfied"
+    // (wantEndMs is clamped to the duration, so satisfied-at-the-duration IS the end — plan::ReachesEnd).
+    {
+        const int64_t durMs = EffectiveDurationMs(s);
+        if (!vp.atEnd && durMs > 0 && fgpr::plan::ReachesEnd(CoverageAt(video.get(), refMs).endMs, durMs, fgpr::kContiguityToleranceMs))
+            vp.atEnd = true;
+        if (audio && !ap.atEnd && durMs > 0 && fgpr::plan::ReachesEnd(CoverageAt(audio.get(), refMs).endMs, durMs, fgpr::kContiguityToleranceMs))
+            ap.atEnd = true;
     }
     if (vp.atEnd && !video->IsComplete()) video->MarkComplete();
     if (audio && ap.atEnd && !audio->IsComplete()) audio->MarkComplete();
@@ -666,6 +825,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
     if (s.feedStop.load(std::memory_order_acquire)) return JobResult::Idle;
 
     bool landed = false;
+    bool grew = false;   // any track whose coverage actually extended — the SPIN BRAKE below reads this
     int nextBackoff = 0;
     auto handleTrack = [&](int t, const std::shared_ptr<fgpr::HttpFetch>& f, int32_t idx, const cenc::InitInfo& info,
                            const winrt::com_ptr<CencMediaStream>& stream) {
@@ -708,8 +868,12 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         uint64_t ticks = st.ticks[t];
         const int produced = cenc::ParseSegment(f->body, info, more, ticks, t == kVideo ? &keyframes : nullptr);
         f->ReleaseBody();
-        s.bytesDownloaded.fetch_add(f->timing.bytes, std::memory_order_acq_rel);
-        s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, f->timing.transferMs), std::memory_order_acq_rel);
+        if (f->timing.bytes > st.maxSegBytes[t]) st.maxSegBytes[t] = f->timing.bytes;   // the next fetch's reserve
+        if (!f->timing.fromStore)   // the WinRT HTTP cache answered this GET itself: not real throughput
+        {
+            s.bytesDownloaded.fetch_add(f->timing.bytes, std::memory_order_acq_rel);
+            s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, f->timing.transferMs), std::memory_order_acq_rel);
+        }
         if (produced <= 0 || more.empty())
         {
             fgpr::RaiseLog(s.handle, std::string("[cenc-feed] ") + (t == kVideo ? "video" : "audio") + " seg#" +
@@ -733,6 +897,10 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
             }
         }
         st.ticks[t] = ticks;
+        // Coverage before/after: what the SPIN BRAKE (below) and the progress guard (FeedPlan.h's Landed) actually
+        // learn from this append — not what was merely fetched, which is what the old unconditional `landed=true`
+        // conflated (a segment that demuxed and appended but did not extend anything is not "progress").
+        const int64_t covBefore = CoverageAt(stream.get(), refMs).endMs;
         {
             std::lock_guard<std::mutex> g(s.feedMx);
             // Always the CURRENT source's stream: a re-attach may have rebuilt the source while this GET was in flight.
@@ -746,10 +914,12 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         }
         LogAbrSegment(s, t == kVideo ? "video" : "audio",
                       t == kVideo ? s.activeRepresentation.load(std::memory_order_acquire) : -1, idx, f->timing,
-                      stream ? stream->AheadDurationMs() : 0);
+                      stream ? stream->AheadDurationMs() : 0, stream ? stream->ContiguousAheadMs() : 0);
         landed = true;
-        st.lastIdx[t] = idx;
-        st.lastCovEnd[t] = CoverageAt(stream.get(), refMs).endMs;
+        const int64_t covAfter = CoverageAt(stream.get(), refMs).endMs;
+        const bool wasUncovered = covBefore < 0;
+        if ((wasUncovered && covAfter >= 0) || (!wasUncovered && covAfter > covBefore)) grew = true;
+        fgpr::plan::Landed(st.guard[t], idx, covAfter);
     };
     handleTrack(kVideo, vf, vp.idx, videoInfo, video);
     handleTrack(kAudio, af, ap.idx, audioInfo, audio);
@@ -778,7 +948,30 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         backoffMs = nextBackoff;
         return JobResult::Backoff;
     }
-    return JobResult::Progress;
+
+    // THE SPIN BRAKE. This function used to return Progress here unconditionally, which is what turned any planner
+    // fault into a livelock: FeederMain's outer loop (`while (r == Progress) r = RunOneJob(...)`) re-enters at once
+    // with no wait of any kind, so a fetch that lands but extends nothing — the production incident, a cancelled
+    // fetch, a demux that produced zero samples, a 4xx that only just latched the end index — was retried as fast as
+    // the store lock and a WinRT round trip allow (~700/s in the log this fixes, each re-splicing under the lock the
+    // decoder needs).
+    //
+    // A seek that arrived WHILE this job's fetches were in flight is the one exception: it cancelled whatever was on
+    // the wire, so `grew` is correctly false, but the seek's own target still needs a plan built for it right away —
+    // waiting out a 250 ms back-off before replanning would show up as the seek not landing promptly.
+    const bool seekChangedDuringJob = s.seekSeq.load(std::memory_order_acquire) != seekSeq;
+    if (grew || seekChangedDuringJob) return JobResult::Progress;
+
+    // No growth and no seek to chase: back off instead of spinning. With the structural (CutGen) reset above and the
+    // floor fix in FeedPlan.h, a plan that replans the exact same segment now steps its floor and progresses on the
+    // very next attempt, so this back-off is at most a single 250 ms beat before real progress resumes. Any future
+    // planner fault that still manages to loop now degrades to 4 fetches/s instead of livelocking the stream lock.
+    const int64_t ahead = CoverageAt(video.get(), refMs).aheadMs;
+    const int64_t below = std::max<int64_t>(1, ahead - s.SegLenMs());
+    video->SetDemandBelowMs(below);
+    if (audio) audio->SetDemandBelowMs(below);
+    backoffMs = 250;
+    return JobResult::Backoff;
 }
 
 static void FeederMain(std::shared_ptr<Session> sp)

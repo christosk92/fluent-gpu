@@ -36,6 +36,41 @@ public readonly record struct AccentRamp(
 }
 
 /// <summary>
+/// A self-contained accent palette derived from ANY color (page/cover/album-extracted accent) — the same shade rule
+/// <see cref="Tok"/> applies to the live system/override accent, baked once for a caller-held base instead of being
+/// pushed through <see cref="Tok.SetAccent(ColorF?)"/>. <see cref="Fill"/>/<see cref="FillSecondary"/>/
+/// <see cref="FillTertiary"/> are <see cref="Tok.AccentDefault"/>'s exact tier (opaque shade @ 1.0 / .90 / .80 alpha);
+/// <see cref="Subtle"/> is the @.16 nav-selection tier; <see cref="Text"/> is the <see cref="Tok.AccentTextPrimary"/>
+/// shade (Dark2 in light / Light3 in dark); <see cref="Ink"/>/<see cref="InkSecondary"/> are the legible on-<see
+/// cref="Fill"/> ink (<see cref="ColorContrast.PickContrast(in ColorF)"/>, near-black or white) and its secondary
+/// tier (dark ink @ .5, light ink @ .7 — the WCAG-safe muted pass on either ink). THEME-AWARE like every <see
+/// cref="Tok"/> accent read (re-derive on <see cref="Tok.Epoch"/> change, same as any other token consumer); pure,
+/// no allocation. Shares <see cref="Tok.AccentFillShade"/> with <c>Tok.Accent*</c> — one tier-math implementation.
+/// </summary>
+public readonly record struct AccentSet(
+    ColorF Fill, ColorF FillSecondary, ColorF FillTertiary, ColorF Subtle, ColorF Text, ColorF Ink, ColorF InkSecondary)
+{
+    /// <summary>Derive a full accent palette from a single base color (page/cover accent), theme-aware via <see
+    /// cref="Tok.Theme"/> at call time.</summary>
+    public static AccentSet From(ColorF @base)
+    {
+        var ramp = AccentRamp.Derive(@base);
+        var fill = Tok.AccentFillShade(ramp);
+        var text = Tok.Theme == ThemeKind.Light ? ramp.Dark2 : ramp.Light3;
+        var ink = ColorContrast.PickContrast(fill);
+        var inkSecondary = ink == ColorContrast.NearBlackInk ? ink with { A = 0.5f } : ink with { A = 0.7f };
+        return new AccentSet(
+            Fill: fill,
+            FillSecondary: fill with { A = 0.90f },
+            FillTertiary: fill with { A = 0.80f },
+            Subtle: fill with { A = 0.16f },
+            Text: text,
+            Ink: ink,
+            InkSecondary: inkSecondary);
+    }
+}
+
+/// <summary>
 /// An immutable, baked palette of every semantic Fluent brush for one theme (mirrors WinUI's *_themeresources). Built
 /// once per theme; never mutated. Read through <see cref="Tok"/>, which swaps the active set with a single pointer write.
 /// </summary>
@@ -434,7 +469,8 @@ public static partial class Tok
     // Accent (override-aware, THEME-AWARE). WinUI AccentFillColorDefault = SystemAccentColorDark1 (LIGHT theme) /
     // SystemAccentColorLight2 (DARK theme), opaque — the shade that fixes the light-theme accent bug (one flat color was
     // returned raw in both themes). Secondary/Tertiary/Subtle are the SAME shade at 0.90/0.80/0.16 alpha.
-    private static ColorF AccentFillShade(in AccentRamp r) => Theme == ThemeKind.Light ? r.Dark1 : r.Light2;
+    // internal (not private): AccentSet.From shares this exact tier math — no second copy of the shade rule.
+    internal static ColorF AccentFillShade(in AccentRamp r) => Theme == ThemeKind.Light ? r.Dark1 : r.Light2;
     public static ColorF AccentDefault => _accentRamp is { } r ? AccentFillShade(r) : T.AccentDefault;
     public static ColorF AccentSecondary => _accentRamp is { } r ? AccentFillShade(r) with { A = 0.90f } : T.AccentSecondary;
     public static ColorF AccentTertiary => _accentRamp is { } r ? AccentFillShade(r) with { A = 0.80f } : T.AccentTertiary;

@@ -85,16 +85,17 @@ static class PublicationGapChecks
         var popups = Array.Empty<PopupWindowSlot>();
         var commands = new DrawList();
         var spans = new SpanTable();
+        var slices = new SliceRecorder();
 
         void Publish(in RectF repaintRect, in RectF structuralRect)
         {
             var region = default(RepaintDamageRegion);
             region.Add(in repaintRect);
-            var submit = new FrameInfo(new Size2(TW, TH), 1f, default, default, 0f, 0, false, region);
+            var submit = new FrameInfo(new Size2(TW, TH), 1f, default, RepaintDamage: region);
             Span<RectF> structural = stackalloc RectF[1];
             structural[0] = structuralRect;
             publisher.PublishScene(scene, images, strings, default, default, default, structural, detached, popups,
-                animation, in submit, suppressVsync: false, interactivePresent: false);
+                animation, in submit, suppressVsync: false);
         }
 
         // Frame 1: the baseline the renderer actually consumed. It primes the span table and, exactly as the host does
@@ -102,7 +103,7 @@ static class PublicationGapChecks
         var seed = new RectF(0f, 0f, TW, TH);
         Publish(in seed, in seed);
         bool seeded = publisher.TryAcquire(out var baseFrame) && baseFrame.HasScene;
-        var baseStats = seeded ? publisher.Scene(baseFrame).Record(commands, spans, publicationGap: false) : default;
+        var baseStats = seeded ? publisher.Scene(baseFrame).Record(commands, spans, slices, publicationGap: false) : default;
         scene.ClearRecordDirty();
         scene.ClearPendingRemovals();
 
@@ -128,7 +129,7 @@ static class PublicationGapChecks
 
         // Recording the adopted frame: the gap must not disable span reuse, and the structural-cancel rects of the two
         // SKIPPED publications must still reach the recorder (their own slots were recycled — the publisher carries them).
-        var gapStats = adopted ? publisher.Scene(gapFrame).Record(commands, spans, publicationGap: true) : default;
+        var gapStats = adopted ? publisher.Scene(gapFrame).Record(commands, spans, slices, publicationGap: true) : default;
         Check("gate.repaint.publication-gap-keeps-span-reuse a gap is NOT a reuse killer: the adopted snapshot carries the UNION of the record-dirty bits since the last CONSUMED publication and the span table ages by RECORD frames, so reuse stays valid and SpanReuseDisabledReason.SceneChanged is never raised for a skipped publication",
             adopted && (gapStats.SpanReuseDisabledReasons & SpanReuseDisabledReason.SceneChanged) == 0
             && gapStats.SpansReused > 0 && baseStats.NodesVisited > 0,
@@ -142,7 +143,7 @@ static class PublicationGapChecks
 
         // The flag is a DIAGNOSTIC, not an input: re-recording the same frame with it cleared must reach the same reuse
         // verdict. If it ever influences recording again, these two disagree.
-        var again = adopted ? publisher.Scene(gapFrame).Record(commands, spans, publicationGap: false) : default;
+        var again = adopted ? publisher.Scene(gapFrame).Record(commands, spans, slices, publicationGap: false) : default;
         Check("gate.repaint.publication-gap-flag-is-inert the publicationGap argument only records a diagnostic on the frame — recording the same snapshot with it set and with it cleared produces the same reuse verdict and the same disable-reason set",
             adopted && again.SpanReuseDisabledReasons == gapStats.SpanReuseDisabledReasons
             && again.SpansReused == gapStats.SpansReused && !publisher.Scene(gapFrame).PublicationGap,

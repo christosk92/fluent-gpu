@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -164,8 +164,8 @@ static class DiagnosticsSuite
 
     // P0 (Operation ultra-fast GPU engine) leftover: the FlexLayout diag counters (MeasureCount/ArrangeCount/
     // TextShapeMisses/DiagMeasureMemoHits) and IFontSystem.ShapeCount → FrameStats.TextShapes are ALWAYS-ON now
-    // (FG_LAYOUT_DIAG gates only FlexLayout.Run's Console.Error.WriteLine printout, nothing that feeds FrameStats).
-    // Proven WITHOUT setting FG_LAYOUT_DIAG — the whole point of "always-on" is that a plain run sees real numbers.
+    // (--fg layout gates only FlexLayout.Run's Console.Error.WriteLine printout, nothing that feeds FrameStats).
+    // Proven WITHOUT setting --fg layout — the whole point of "always-on" is that a plain run sees real numbers.
     static void CountersAlwaysOnChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -185,13 +185,13 @@ static class DiagnosticsSuite
                     ],
                 },
             });
-        var f1 = host.RunFrame();   // first frame: a full layout solve + real text shaping, no FG_LAYOUT_DIAG set
+        var f1 = host.RunFrame();   // first frame: a full layout solve + real text shaping, no --fg layout set
         var f2 = host.RunFrame();   // identical second frame: nothing changed, nothing to (re)measure or (re)shape
 
         Check("gate.diag.counters-always-on: FlexLayout's diag counters are live with NO env flag — first frame MeasureCount > 0 and TextShapes equals the real IFontSystem.ShapeCount delta (> 0, a real shape happened)",
             f1.MeasureCount > 0 && f1.TextShapes > 0,
             $"measure={f1.MeasureCount} arrange={f1.ArrangeCount} textShapes={f1.TextShapes} textMisses={f1.TextShapeMisses}");
-        Check("gate.diag.counters-always-on: an identical second frame shapes NOTHING (TextShapes == 0 — the measure-cache hit, not a miss FG_LAYOUT_DIAG would have hidden anyway)",
+        Check("gate.diag.counters-always-on: an identical second frame shapes NOTHING (TextShapes == 0 — the measure-cache hit, not a miss --fg layout would have hidden anyway)",
             f2.TextShapes == 0,
             $"textShapes={f2.TextShapes} measure={f2.MeasureCount}");
     }
@@ -510,111 +510,26 @@ static class DiagnosticsSuite
                 worstAlloc == 0 && appliedEvery, $"worstHotAlloc={worstAlloc}B @frame{idx} appliedEvery={appliedEvery}");
         }
 
-        // ── latency.kind-names-parity — the cheapest gate in the suite and the one that prevents a whole session's data
-        // from evaporating silently. ScrollTrace.FlushLocked indexes s_kindNames[(int)r.K] UNGUARDED, inside a
-        // swallow-all catch that then zeroes the pending count. Add a ScrollTraceKind without adding its name and the
-        // first row of the new kind throws IndexOutOfRange, the catch eats it, and every buffered row of the capture is
-        // discarded with no error printed anywhere — the operator sees a short CSV and concludes "not much happened". ──
+        // ── latency.probe-alloc-zero — the diagnostics zero-alloc gate. Diagnostics
+        // sensors run INSIDE the frame (phases 6-13), so they are bound by the same zero-managed-allocation contract as
+        // everything else there; an instrument that allocates changes the cadence it is measuring, and a GC pause induced
+        // by the probe would be indistinguishable from the hitch it is meant to catch. Exercised directly at
+        // ProbeLevel.Summary — the shipping default level, not Off (which would be vacuous) nor Trace (a live capture
+        // session, not steady-state) — against the render-thread's own Pose record, the hottest of the two rings. ──
         {
-            int kinds = System.Enum.GetValues<FluentGpu.Foundation.ScrollTraceKind>().Length;
-            int names = FluentGpu.Foundation.ScrollTrace.KindNameCount;
-            Check("gate.latency.kind-names-parity ScrollTrace has exactly one CSV name per record kind (a missing name silently discards the whole capture at flush)",
-                kinds == names, $"kinds={kinds} names={names}");
-        }
-
-        // ── latency.producer-encoding — pin the LIVE producer helpers, not a parser-side reconstruction. Bit 24 must
-        // stay outside quality + the nine stage bits, and the context-valid bits must make an exact (0,0) pointer a
-        // measured coordinate rather than an absent CSV value. Note 105 uses f2/f3; wheel drops use f3/f4 because their
-        // f0..f2 payload was already assigned before targeting context was added.
-        {
-            const int allStageBits = 0x1FF;
-            int packedTracking = ScrollTrace.EncodeLatencyI1(GenStampQuality.Hardware, allStageBits, trackingSampleValid: true);
-            int packedNoTracking = ScrollTrace.EncodeLatencyI1(GenStampQuality.Hardware, allStageBits, trackingSampleValid: false);
-            int expectedStageField = allStageBits << 8;
-            bool latencyBits = (ScrollTrace.LatencyTrackingSampleValidBit & expectedStageField) == 0
-                && packedTracking == ((int)GenStampQuality.Hardware | expectedStageField | ScrollTrace.LatencyTrackingSampleValidBit)
-                && packedNoTracking == ((int)GenStampQuality.Hardware | expectedStageField);
-
-            var latch = ScrollTrace.EncodeLatchRefusal(12.5f, -4.25f, refusal: 2, horizontal: true,
-                fallbackHandled: false, hitNode: -1, pointerXDip: 0f, pointerYDip: 0f);
-            bool latchColumns = latch.I0 == 105
-                && latch.I1 == (2 | (1 << 4) | ScrollTrace.LatchRefusalHitContextBit)
-                && latch.I2 == -1 && latch.F0 == 12.5f && latch.F1 == -4.25f
-                && latch.F2 == 0f && latch.F3 == 0f;
-
-            const int wheelBase = 0x10 | (1 << 5) | 0x100 | 0x200; // marker + no-scroller + horizontal + notch
-            var phaseWheel = ScrollTrace.EncodeWheelDrop(42, wheelBase, -1.25f, 0f, 0f, phaseFallback: true);
-            var physicalWheel = ScrollTrace.EncodeWheelDrop(42, wheelBase, -1.25f, 0f, 0f);
-            bool wheelColumns = phaseWheel.I0 == 42
-                && phaseWheel.I1 == (wheelBase | ScrollTrace.WheelDropHitContextBit | ScrollTrace.WheelDropPhaseFallbackBit)
-                && phaseWheel.I2 == 0 && phaseWheel.F0 == -1.25f
-                && phaseWheel.F1 == 0f && phaseWheel.F2 == 0f && phaseWheel.F3 == 0f && phaseWheel.F4 == 0f
-                && physicalWheel.I1 == (wheelBase | ScrollTrace.WheelDropHitContextBit);
-
-            Check("gate.latency.producer-encoding bit24 is disjoint from quality/stage bits; note 105 and wheel-drop producers place hit node + exact-zero DIP context in the documented columns, and only live phase fallback sets bit11",
-                latencyBits && latchColumns && wheelColumns,
-                $"latency=0x{packedTracking:X8}/0x{packedNoTracking:X8} latch={latch} phaseWheel={phaseWheel} physicalFlags=0x{physicalWheel.I1:X}");
-        }
-
-        // ── latency.state-pack — the ambient state slots are packed into ONE int so the POD ring record does not grow a
-        // cache line. Each slot must round-trip independently: a wrong shift/mask silently cross-contaminates (a phase
-        // change appearing to alter the gesture state), which is undetectable in the CSV after the fact. Also asserts
-        // out-of-range values clamp rather than bleed into the neighbouring slot. ──
-        {
-            var slots = new[]
-            {
-                (FluentGpu.Foundation.ScrollTraceState.Phase, 7, 7),
-                (FluentGpu.Foundation.ScrollTraceState.Gesture, 2, 2),
-                (FluentGpu.Foundation.ScrollTraceState.ColdPass, 1, 1),
-                (FluentGpu.Foundation.ScrollTraceState.Repetition, 3, 3),
-                (FluentGpu.Foundation.ScrollTraceState.AbVariant, 9, 3),   // over-wide ⇒ clamps to the slot, never bleeds
-            };
-            // Off in a plain Release/headless slice run (On is const false), so SetState is a no-op there and the
-            // round-trip is vacuously true; the gate still proves the packing arithmetic under FLUENTGPU_DIAG.
-            bool packOk = true;
-            string detail = "trace-off";
-            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-            {
-                foreach (var (slot, write, expect) in slots) FluentGpu.Foundation.ScrollTrace.SetState(slot, write);
-                int word = FluentGpu.Foundation.ScrollTrace.StateWord;
-                int[] shift = { 0, 4, 6, 7, 11 };
-                int[] mask = { 0xF, 0x3, 0x1, 0xF, 0x3 };
-                for (int i = 0; i < slots.Length; i++)
-                    if (((word >> shift[i]) & mask[i]) != slots[i].Item3) packOk = false;
-                detail = $"word=0x{word:X}";
-                foreach (var (slot, _, _) in slots) FluentGpu.Foundation.ScrollTrace.SetState(slot, 0);
-            }
-            Check("gate.latency.state-pack every ScrollTrace ambient state slot round-trips through the packed word without bleeding into its neighbours (over-wide values clamp)",
-                packOk, detail);
-        }
-
-        // ── latency.alloc-zero — the diagnostics sensors run INSIDE the frame (phases 6-13), so they are bound by the
-        // same zero-managed-allocation contract as everything else there; an instrument that allocates changes the
-        // cadence it is measuring, and a GC pause induced by the probe would be indistinguishable from the hitch it is
-        // meant to catch. Exercised directly rather than through RunFrame so it holds whether or not the ring is armed
-        // (vacuous when off — the record path is compiled out or early-returns — and real when a diag session arms it).
-        // The loop stays well under the 131072-record ring so no flush (which legitimately allocates a StreamWriter at
-        // idle) is triggered inside the measured window. ──
-        {
-            // Warm: first-touch JIT of the emit path must not land inside the measurement.
+            var prevLevel = FluentGpu.Scroll.Diag.ScrollProbe.Level;
+            FluentGpu.Scroll.Diag.ScrollProbe.Level = FluentGpu.Scroll.Diag.ProbeLevel.Summary;
+            // Warm: first-touch JIT of the record path must not land inside the measurement.
             for (int i = 0; i < 32; i++)
-            {
-                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, i & 3);
-                FluentGpu.Foundation.ScrollTrace.Latency(1, FluentGpu.Foundation.GenStampQuality.Hardware, 0, 0, 0f, 0f, 0f, 0f, 0f, 0f, 0);
-                FluentGpu.Foundation.ScrollTrace.Note(210, 0f, i, 0, 0f);
-            }
+                FluentGpu.Scroll.Diag.ScrollProbe.Pose(1, i, 0.5 * i, 1.5, i % 7 == 0, 0f);
+
             long before = System.GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 256; i++)
-            {
-                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, i & 3);
-                FluentGpu.Foundation.ScrollTrace.Latency((ulong)i, FluentGpu.Foundation.GenStampQuality.Hardware,
-                    1 << (i & 8), i & 3, 0.5f, 1.5f, -2.5f, 0.25f, 8.3f, 1.25f, 12345);
-                FluentGpu.Foundation.ScrollTrace.Note(210, 0f, i, 0, 0f);
-            }
+                FluentGpu.Scroll.Diag.ScrollProbe.Pose(1, 1000 + i, 0.5 * i, 1.5, i % 7 == 0, (float)i);
             long delta = System.GC.GetAllocatedBytesForCurrentThread() - before;
-            FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, 0);
-            Check("gate.latency.alloc-zero 256 latency/state/note emissions allocate 0 managed bytes (an instrument that allocates perturbs the cadence it measures)",
-                delta == 0, $"delta={delta}B armed={FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled}");
+            FluentGpu.Scroll.Diag.ScrollProbe.Level = prevLevel;
+            Check("gate.latency.probe-alloc-zero 256 ScrollProbe.Pose records at the shipping (Summary) level allocate 0 managed bytes (an instrument that allocates perturbs the cadence it measures)",
+                delta == 0, $"delta={delta}B level=Summary");
         }
 
         // ── latency.join-forward — the join contract, asserted against the real publisher rather than restated in prose.

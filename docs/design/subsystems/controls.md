@@ -127,9 +127,9 @@ NavigationView item corner radius = `OverlayCornerRadius` (8).
   ancestor** (a slider/scrollbar thumb grows on control hover). **Composited only** — never changes layout or
   hit-test (HitTest reads `Bounds`, never `LocalTransform`).
 
-**Honest constraint (acrylic vs. system Mica).** The engine's in-app acrylic (`AcrylicSpec`) renders the whole
-frame through an **opaque** canvas RT, which overrides window transparency and **kills the DWM Mica window
-backdrop**. So the NavigationView **EXPANDED (always-visible) pane uses a TRANSPARENT fill** (matching the
+**Honest constraint (acrylic vs. system Mica).** The engine's in-app acrylic (`AcrylicSpec`) frosts only the
+engine's own pixels — a mini-composite of the retained tiles beneath it (`gpu-renderer.md` §13.1e) — never the DWM
+Mica window backdrop, which DWM composes below the swapchain, outside anything the engine can sample. So the NavigationView **EXPANDED (always-visible) pane uses a TRANSPARENT fill** (matching the
 shipped WinUI `NavigationViewExpandedPaneBackground = SolidBackgroundFillColorTransparent`) so Mica shows
 through; engine acrylic is used only for the **transient OVERLAY/flyout pane** (matching
 `NavigationViewDefaultPaneBackground = AcrylicInAppFillColorDefaultBrush`). Real per-node acrylic does not
@@ -383,7 +383,8 @@ rule that every stateful control obeys:
    - **Auto-materialize:** passing no signal is not "uncontrolled" — the control makes its **own** internal
      `UseSignal<T>` and uses it, so there is ONE code path (React-Hook-Form-default ergonomics). Exemplar pattern:
      `var owned = UseSignal(false); var isOpen = IsOpenSignal ?? owned;` (PopupCore).
-   - The **signal instance freezes at mount** (bind wiring is mount-only) — swapping the signal requires a re-key;
+   - The **signal instance is a mount-time contract** — swapping the signal requires a re-key (a control's core may
+     hold it in hooks/effects wired at mount; the reconciler re-wires only element binds, bound→bound);
      the `BindContract` DEBUG tripwire (reconciler-hooks §0bis) catches a bound↔static flip. A VerticalSlice gate
      pins the decoupling contract: **a signal write bypasses render/reconcile** (the whole safety argument for
      controlled-everything, turned into a regression gate — research adjustment #8).
@@ -391,6 +392,20 @@ rule that every stateful control obeys:
      (actions), `onCommit`/`onCancel` (editors), `onOpenChanged` (open state). Gate-enforced; the NumberBox
      old→new parity delta is documented. `RadioButton` *leaf* is the one documented exception (bool `isSelected` —
      the group owns the value).
+   - **`.Controlled` — the value-controlled sibling (no signal at all).** `ToggleButton.Controlled` and
+     `PipsPager.Controlled` (E12, `docs/plans/wavee/home-redesign-remediation.md` §2 E12) take the value as a plain
+     **caller value**, not a `Signal<T>`, and write **no** internal selection state — a click only calls the
+     single callback (`onToggle`/`onSelect`); a re-click on the value the caller already passed still fires it (the
+     re-signal `onChange`/`onReselect` split above does not apply — there is one channel). The interaction/animation
+     state a control still owns internally (`ToggleButtonControlledCore`'s pop bookkeeping,
+     `PipsPagerControlledCore`'s scroll-to-center strip + roving focus, both shared with the signal-controlled core
+     via one `*CoreBase`) rides the *mounted component's* stable node identity (`Embed.Comp(props, factory)` reuse),
+     not a bound signal — so a caller that needs the value to update with **no parent re-render** wraps the
+     `.Controlled` call in its own small `Component` reading the source signal in `Render()` (the `ChapterHeader`/
+     `ShelfPips` precedent, home-redesign-remediation.md §3.2) instead of this control taking a signal itself.
+     `IconButton.Create` gained a parallel `IReadSignal<bool> isEnabled` overload for the SAME no-parent-re-render
+     need on a plain (non-controlled-value) control: the caller passes a signal directly, and a tiny internal core
+     (`IconButtonBoundEnabledCore`) reads it live inside its own `Render()`, so only that node re-skins on a flip.
 
 Non-value props ride the re-pushed-props / `[Props]` channel (reconciler-hooks §8bis), not a hand-rolled context.
 Long tails collapse into an **options record** per control (`SliderOptions`/`TextBoxOptions`/`NumberBoxOptions`/…).
@@ -1016,6 +1031,14 @@ the slot math read the SAMPLED prefix sums when `ExtentOf` is set, instead of as
 - **Name/role:** orientation in the `Name` ("Vertical scroll bar"); thumb position via `RangeValue`.
 - **Motion/cursor/RTL:** auto-hide/expand motion-token; horizontal scrollbar mirrors origin RTL (§10A); cursor `Arrow`
   over track/thumb. Thumb fling uses the inertia integrator (input-a11y §7B), transform-only.
+- **Edge cues (as built 2026-09-24).** `ScrollEdgeCues` (`ScrollEl` / `ItemsView` / `ListOptions.EdgeCues`; default
+  `Fade`) says how an edge with more content past it is cued. `Fade` IS the viewport's analytic edge feather: when the
+  element sets no fade of its own, `ScrollEdgeCueResolver.Resolve` turns it into `AutoEdgeFade` with the standard 40-DIP
+  band (ramped in over the last 24 DIP of overflow), so the content dissolves into whatever lies behind it — a
+  translucent card, a backdrop, an image. Nothing is painted for it (the old surface-colour gradient guessed an ancestor's
+  colour and drew a dark slab over translucent surfaces; deleted). `FadeAndChevron` adds a chevron per cued edge; `None`
+  cues nothing. The scrollbar and the chevrons are drawn OVER the feather (`gpu-renderer.md` §13.1e "Scroll chrome over
+  the feather"). A scroller's own `Fill` makes its fade a group surface — author the background on the parent.
 
 ### 8.4 As built (2026-08) — `MediaPlayerElement`'s UI-frame contract: corners, fullscreen delegation, one live menu
 

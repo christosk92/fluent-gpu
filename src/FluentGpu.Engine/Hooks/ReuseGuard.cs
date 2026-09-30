@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
@@ -53,9 +53,9 @@ public static class ReuseGuard
     public static bool Enabled = CompiledIn;
 
     /// <summary>When set, a detected violation THROWS <see cref="FrozenPropException"/> instead of only reporting —
-    /// <c>FG_REUSE_GUARD_THROW=1</c>, or a gate scoping the strict path. Default report-only so surfacing a
+    /// <c>--fg guards-throw</c>, or a gate scoping the strict path. Default report-only so surfacing a
     /// pre-existing violation cannot brick a debug run mid-migration.</summary>
-    public static bool ThrowOnViolation = CompiledIn && Diag.EnvFlag("FG_REUSE_GUARD_THROW");
+    public static bool ThrowOnViolation;
 
     /// <summary>Count of violations since the last <see cref="Reset"/> (gate accessor).</summary>
     public static int Violations { get; private set; }
@@ -163,6 +163,6 @@ public static class ReuseGuard
         Violation(owner, field, "route this control's caller data through a props provider (the SelectorBar idiom) or remount it with a changed Key");
 }
 
-/// <summary>Thrown by <see cref="ReuseGuard"/> in strict mode (<c>FG_REUSE_GUARD_THROW</c>) when a reused component's
+/// <summary>Thrown by <see cref="ReuseGuard"/> in strict mode (<c>--fg guards-throw</c>) when a reused component's
 /// frozen field carried changed caller data. Never thrown in release (the guard is compiled out).</summary>
 public sealed class FrozenPropException(string message) : System.InvalidOperationException(message);

@@ -52,6 +52,13 @@ public sealed class SceneFramePublisher
     private RectF[] _carriedSceneDamage = [];
     private int _carriedSceneDamageCount;
 
+    // Item E: the node capacity the FIRST capture into each of the three ring slots' SceneRenderFrame pre-sizes to
+    // (0 = SceneRenderFrame/SceneStore's own small default; grows normally from there). Host-settable (AppHost sets it
+    // once, before the first frame) rather than a ctor parameter, because this publisher is itself a plain field
+    // initializer on AppHost — see AppHost's ctor. Applied per slot exactly once (the slot's SceneRenderFrame is
+    // created lazily, on ITS first publish), never re-applied to an already-captured slot.
+    public int InitialSceneCapacity { get; set; }
+
     public SceneFramePublisher(int cmdCap = 1 << 16, int sortCap = 1 << 12, bool reverse = false)
     {
         _reverse = reverse;
@@ -89,7 +96,7 @@ public sealed class SceneFramePublisher
 
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
-                         bool suppressVsync = false, bool interactivePresent = false)
+                         bool suppressVsync = false)
     {
         if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -121,7 +128,6 @@ public sealed class SceneFramePublisher
             SortLen = sort.Length,
             Submit = submit with { RepaintDamage = region, PublishSequence = seq, CarriedFromSeq = carriedFrom },
             SuppressVsync = suppressVsync,
-            InteractivePresent = interactivePresent,
         };
         Volatile.Write(ref _slotStates[free], ((long)seq << 2) | Published);
         Volatile.Write(ref _publishedToken, ((long)seq << 2) | (uint)free);
@@ -163,12 +169,17 @@ public sealed class SceneFramePublisher
     internal ulong PublishScene(SceneStore scene, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
-        bool suppressVsync, bool interactivePresent)
+        bool suppressVsync)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
         int slot = ClaimWriteSlot(seq);
+        bool freshSlot = _scenes[slot] is null;
         var frame = _scenes[slot] ??= new SceneRenderFrame();
+        // Item E: size this slot's snapshot up front on its FIRST capture, same rationale as the SceneStore ctor —
+        // avoid paying the doubling-Grow GC churn on the render seam's own copy when the host already knows its first
+        // real scene is large. Only on the fresh slot: a slot that has already captured has its own steady-state size.
+        if (freshSlot && InitialSceneCapacity > 0) frame.Scene.ReserveNodeCapacity(InitialSceneCapacity);
         // A publication the consumer never adopted was NOT a delta it saw. The host answers that by holding the scene's
         // record-dirty bits and removal ledger until LastConsumedSeq catches up, so the snapshot below carries the UNION
         // of everything that changed since the last CONSUMED publication — which is exactly what span reuse validates
@@ -184,6 +195,8 @@ public sealed class SceneFramePublisher
         _capacityPolicy[slot].Observe(frame.Scene.Capacity, frame.Scene.RequiredNodeCapacity, Environment.TickCount64);
         LastCapturedNodeCount = frame.Scene.CopiedNodeCount;
         LastCaptureWasIncremental = frame.Scene.LastCaptureWasIncremental;
+        LastCaptureFullReason = frame.Scene.LastCaptureWasIncremental ? CaptureFullReason.None : frame.Scene.LastCaptureFullReason;
+        LastCaptureSplit = (frame.DiagSceneMs, frame.DiagConfigMs, frame.DiagImagesMs, frame.DiagAnimMs);
         var repaint = submit.RepaintDamage;
         ulong carriedFrom = seq;
         if (previousSkipped)
@@ -207,7 +220,7 @@ public sealed class SceneFramePublisher
             HasScene = true, PublishSeq = seq, ArenaIndex = slot,
             TargetEpoch = Volatile.Read(ref _targetEpoch),
             Submit = submit with { PublishSequence = seq, CarriedFromSeq = carriedFrom, RepaintDamage = repaint },
-            SuppressVsync = suppressVsync, InteractivePresent = interactivePresent,
+            SuppressVsync = suppressVsync,
         };
         _publishSeq = seq;
         Volatile.Write(ref _slotStates[slot], ((long)seq << 2) | Published);
@@ -222,6 +235,12 @@ public sealed class SceneFramePublisher
 
     /// <summary>Whether the most recent <see cref="PublishScene"/> took the P8 incremental path (diagnostics).</summary>
     internal bool LastCaptureWasIncremental { get; private set; }
+
+    /// <summary>Why the most recent capture was full (<see cref="CaptureFullReason.None"/> when incremental).</summary>
+    internal CaptureFullReason LastCaptureFullReason { get; private set; }
+
+    /// <summary>The most recent capture's step split (scene, config, images, animations), ms — diagnostics.</summary>
+    internal (double Scene, double Config, double Images, double Anim) LastCaptureSplit { get; private set; }
 
     internal int CapacityReclaims { get; private set; }
     // Cumulative released indexed-array payload, not GC committed/working-set reduction. Other replaced frame

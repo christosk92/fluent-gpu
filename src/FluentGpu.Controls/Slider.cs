@@ -290,7 +290,7 @@ public static partial class Slider
     /// The unified slider. <paramref name="value"/> is the caller's <see cref="FloatSignal"/> in range units (null ⇒ the
     /// control materializes its own internal signal — "uncontrolled" is just "the control made its own signal", one code
     /// path); a gesture WRITES the signal first, then fires <paramref name="onChange"/> once (a programmatic write
-    /// re-skins the slider with NO onChange echo). The signal INSTANCE freezes at mount (bind wiring is mount-only) —
+    /// re-skins the slider with NO onChange echo). The signal INSTANCE is a mount-time contract —
     /// swap it by re-keying. The value-fill and thumb transforms are bound straight to the signal on the compositor fast
     /// path, so a scrub is <b>zero render / reconcile / relayout</b> at ANY range. <paramref name="options"/> null ⇒
     /// 0..1 with the tooltip enabled; non-null carries range / step / ticks / orientation / header / tooltip config

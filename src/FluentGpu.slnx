@@ -16,6 +16,8 @@
   <Folder Name="/Apps/">
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />
     <Project Path="FluentGpu.WindowsApp/FluentGpu.WindowsApp.csproj" />
+    <Project Path="FluentGpu.ScrollLab/FluentGpu.ScrollLab.csproj" />
+    <Project Path="FluentGpu.ScrollLab.Surfaces/FluentGpu.ScrollLab.Surfaces.csproj" />
   </Folder>
   <Folder Name="/Packaging/">
     <Project Path="FluentGpu.Package/FluentGpu.Package.csproj" />

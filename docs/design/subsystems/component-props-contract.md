@@ -51,14 +51,18 @@ controls hand-rolled as `Props.Channel` providers before G4d.
 
 A high-frequency value (slider scrub, scroll offset, progress, a bound transform/opacity/fill) is a **bound
 `Prop<T>`** or a signal the child reads. A bound `Transform`/`Opacity`/`Fill` updates the node **compositor-only** — no
-render/reconcile/layout (the "slider tank" win); a bound `Width`/`Height`/`Text` triggers scoped relayout. Bind wiring
-is **mount-only** — change the signal's *value*, never swap the signal (swap ⇒ re-key). Exemplar: `Slider.Create(
+render/reconcile/layout (the "slider tank" win); a bound `Width`/`Height`/`Text` triggers scoped relayout. A bind is
+wired **at mount**; when the owner re-renders and binds the same channel again with a **different thunk or signal**
+(a fresh lambda capturing new render-time values, another signal instance) the reconciler **re-wires** the node to the
+new source (bound→bound — reconciler-hooks §0bis; an unchanged payload re-runs nothing). The hot path is still
+*change the signal's value* — a re-wire costs a render, a value write costs one bind fire. What does NOT re-wire is a
+static↔bound **flip** of one channel on a reused node (keep the shape stable, or re-key). Exemplar: `Slider.Create(
 FloatSignal value)` (the one slider API), any `Signal<int> SelectedIndex`, `ItemsView` displacement.
 
 **`Visible : Prop<bool>` — the presence channel (P1, layout.md §4.7).** Bound the same way (`Prop.Of(() =>
 sig.Value)` or a signal-direct bind), but it does not write a paint/layout SCALAR — it flips the node between
 mounted-and-flowing and collapsed (out of layout, paint and hit-test; CSS `display:none`, not `visibility:hidden`).
-The bind is still mount-only and still equality-gated on the RESOLVED value, so it composes with the rest of this
+The bind is wired at mount (re-wired bound→bound like every channel) and equality-gated on the RESOLVED value, so it composes with the rest of this
 list unchanged: re-pushed props (1) can still change WHAT a component renders while its own `Visible` bind (2)
 independently governs WHETHER the resulting subtree is in flow. One consequence worth calling out here because it is
 a props-contract concern, not just a layout one: collapsing a component's ancestor does **not** stop the component's
@@ -67,6 +71,29 @@ into the same `UseIsActive()` signal `Flow.KeepAlive` parking already writes). A
 work while hidden should still gate on `UseIsActive()`/`UseActivation()` itself, exactly as it would for a
 backgrounded KeepAlive tab — presence and KeepAlive parking are two edges into the ONE activation signal, not two
 things to special-case separately.
+
+### Base props on the embed — the `ComponentEl` anchor itself is a node too (E14, 2026-09-26)
+
+`Embed.Comp(...)` returns a `ComponentEl`, which — like every `Element` — inherits the base-`Element` fields
+(`ScrollEffects`/`.Sticky`, `ScrollScope`, `Visible`, `Transition`, `WhileHover`/`WhilePressed`/`WhileFocus`, `Enter`,
+`Exit`, `Stagger`, `Layout`, `WheelTarget`, `RelativeTo`, `MorphId`). Setting one of these directly on the embed —
+`Embed.Comp(() => new ZoneRow()).Sticky(44, scope: zone.Key)` — targets the component's own **anchor** node (the
+layout-transparent node the reconciler mounts for the embed, distinct from whatever `ZoneRow.Render()` returns). Before
+E14 that anchor never ran `Reconciler.WriteColumns` (`Mount` returns at `MountComponent` before reaching it; the
+`Update` reuse branch — a live component is autonomous, so a parent re-render never touches it — returned early too),
+so every one of these props was **silently dropped**: a `.Sticky` on an embed pinned nothing, a bound `Visible` never
+collapsed it, a declared `Exit` never fired an orphan-fade. `Reconciler.WriteAnchorColumns` now applies exactly this
+subset to the anchor from both paths — the SAME props, resolved the SAME way (a bound `Visible` is still wired at
+mount via `BindNode` and re-wired on reuse when the embed binds a new thunk/signal, equality-gated, no extra
+re-render), just finally reaching the node they were declared on.
+
+**What this is NOT for:** layout-SHAPE props — `Fill`/`Margin`/`Padding`/`Shrink`/`Grow`/`Basis`/`Animate`/`OnClick`/…
+— live only on `BoxEl` (and the other concrete leaf types), never on the base `Element`, so they have no meaning on a
+`ComponentEl` anchor and setting them on the embed is a compile error, not a silent drop. A control that needs its
+CALLER to shape its root layout exposes the sanctioned door instead: `Parts[Control.PartRoot] = b => b with { Shrink =
+0f, Animate = … }` (control-fidelity.md §6). Put base-`Element` props on the embed; put layout-shape props through
+`Parts[PartRoot]`; never invent a host `BoxEl` wrapper just to carry `Key`/`Margin`/`ScrollEffects` around a component
+(that wrapper-for-props pattern is exactly what E14 makes unnecessary for the base-`Element` half of it).
 
 ### 3. Context (`Ctx.Provide` + `UseContext`/`UseRequiredContext`) — ambient / coordination
 
@@ -104,10 +131,13 @@ instance the would-be replacement via `Component.DebugCheckReuse(next)`; the con
 call `ReuseGuard.Violation(...)`.
 
 - Gated by `ReuseGuard.CompiledIn` (`DEBUG || FLUENTGPU_DIAG`) → dead-code-eliminated in the shipping AOT binary, zero
-  cost ("production safety == CI coverage", `validation.md` §0). Off at runtime by default; `FG_REUSE_GUARD=1` to arm,
-  `FG_REUSE_GUARD_THROW=1` to hard-fail. Enforced by `gate.reuse.*` in the VerticalSlice (`FrozenPropProbe`).
-- The **`FGRP001`** analyzer (frozen Element-as-field into `Embed.Comp`) + **`FGRP002`** (mount-snapshot `Prop.Of`
-  capture) are the compile-time counterparts; they now recommend the re-pushed-props / `[Props]` fix.
+  cost ("production safety == CI coverage", `validation.md` §0). ON whenever compiled in (report-only; the old `FG_REUSE_GUARD`
+  opt-in is gone — the engine reads no environment variables); `--fg guards-throw` (or `ReuseGuard.ThrowOnViolation`
+  in code) makes it hard-fail. Enforced by `gate.reuse.*` in the VerticalSlice (`FrozenPropProbe`).
+- The **`FGRP001`** analyzer (frozen Element-as-field into `Embed.Comp`) + **`FGRP002`** (render-snapshot `Prop.Of`
+  capture — since the bind re-wire it refreshes on a re-render, but freezes in a run-once template and costs a
+  re-render per change elsewhere) are the compile-time counterparts; they now recommend the re-pushed-props /
+  `[Props]` fix.
 - One report on this type is the exception to the DEBUG-only posture above: the content root of `Skel.Region`, `Show`,
   a provider, or a component is a **single-child slot** whose `Key` is structurally inert (`ReconcileSingleChild`
   pairs old↔new by `ElementTypeId` only) — put a remount key on a **child** of that slot instead — and
@@ -166,7 +196,7 @@ members three ways:
 |---|---|---|
 | the item snapshot (`Items`) | reference first, else the **clamped prefix** (`min(Count, MaxItems)`) element-by-element through `EqualityComparer<T>.Default` | immutable domain **records** therefore compare by VALUE — a parent that re-projects its array on every publication still gates, with no memoization at the call site. A non-record `T` degrades to per-element reference equality: safe (never falsely equal), just less effective |
 | scalars that change what is rendered (`MaxItems`, `Fallback`, `Grow`, `Title`) | by value | — |
-| delegates (`CardAt`, `KeyOf`, `CustomPager`, `OnVisibleRange`, `Build`) | **IGNORED** | see the contract below |
+| delegates (`CardAt`, `KeyOf`, `CustomPager`, `OnVisibleRange`, `OnInvoke`, `Build`) | **IGNORED** | see the contract below |
 
 **The delegate contract.** A component captures its delegates as *behaviour*, not data: **what a card renders must be a
 function of its item**, plus stable behaviour the closure captures (a navigate/play callback). State the card PAINTS —
@@ -184,6 +214,47 @@ the shelf's own header row and **not one card**. A shelf whose caller passes `ti
 gates end to end. This is the honest split: an Element cannot be value-compared, but it also must not be allowed to drag
 the card set with it.
 
+**The card template must not be focusable; `onInvoke` is the keyboard/pointer invoke (E9, 2026-09).** `PagedShelf`'s
+`BindCard` — the retained `ItemsView.CreateBound` row template — **is** the slot root: it consumes the bound row's
+`RowScope` (`Focusable = false`, `OnPointerReleased`/`OnKeyDown`/`OnFocusChanged` wired onto `scope.Row`, the same
+seam `ItemContainer.Build`/`SelectorVisualsBound.None` use for any other bound row — see `virtualization.md` §3.4
+"Bound rows own the scope"), so `ItemsView`'s roving tab stop, arrow-key `current` tracking and bring-into-view all
+work for a shelf's cards exactly as they do for any other `ItemsView`. A card built by `cardAt` must declare **neither**
+`Focusable` **nor** `OnClick`/`OnPointerReleased`/`OnKeyDown` of its own — those would fight the one slot root that
+already owns focus and invoke, which is the F21 bug this closes (shelf cards had no keyboard nav at all until E9).
+`PagedShelf.Create<T>(…, onInvoke: Action<T, int>? = null)` rides the SAME re-pushed, equality-ignored delegate channel
+as `CardAt`/`KeyOf`/`OnVisibleRange` above (see the table) — wired onto `ListOptions<T>.OnInvokedTyped`/
+`IsItemInvokedEnabled`, decided once at the strip's mount render from whatever `onInvoke` the caller had pushed by
+then, exactly like every other frozen `ListOptions<T>` field. It fires on `Tap`/`EnterKey`/`SpaceKey` (the shelf's
+`SelectionMode` is always `None`, so none of those triggers are ever blocked). `null` (the default) is byte-identical
+to a shelf built before this parameter existed. Gates: `gate.shelf.keyboard.*` (`arrows`, `invoke`, `tab-stop`,
+`page-follow`, `alloc`), in `ControlsSuite.PagedShelf.cs`.
+
+**An external pager is a bound instance, not a prop.** `PagedShelf.Create<T>(…, controller: ShelfController? = null)`
+(E4, 2026-09) is for when the pager (chevrons/`PipsPager`) lives OUTSIDE the shelf — e.g. the app's own sticky chapter
+header — instead of the shelf's own header row. `controller` is a **plain propless factory capture**: it freezes at
+mount exactly like every other constructor argument in the table above, so its identity must be a stable instance the
+caller holds (a field on the ancestor component that owns both the header and the shelf), never a fresh
+`new ShelfController()` per render — a rebuilt instance each render would rebind on every render and the header would
+never see a live page. Live delivery does not run through the props/data gate at all: the bound `PagedShelfCore`
+`Publish`es its four just-computed values (`Page`, `PageCount`, `CanPrev`, `CanNext`) onto the controller's own
+`Signal<T>`s on every render it takes (`Signal.SetIfChanged` — an unchanged frame notifies nobody), and the header
+reads them as `IReadSignal<T>` — a signal-direct bind (rule 2 above), not a re-pushed prop. `GoTo`/`Prev`/`Next`
+forward to the shelf's own cached `_pagerGoTo`/`_pagerPrev`/`_pagerNext` (the same reference-stable actions
+`ShelfPagerContext` hands a custom pager), so calling them allocates nothing. With no `controller` passed, none of
+this wiring exists — the shelf's tree and behavior are byte-identical to a shelf built before `ShelfController`
+existed. Gates: `gate.shelf.controller.*` (`goto`, `settle-sync`, `pagecount-refit`, `stable-actions`), in
+`ControlsSuite.ShelfController.cs`.
+
+**A rebind restores the retained page (E18, 2026-09).** A `PagedShelf` recycled OUT of an outer `ItemsView`'s
+realized window and back — a real remount: a fresh `PagedShelfCore<T>` behind the SAME caller-held `ShelfController`
+instance — resumes on the page it left rather than snapping back to page 0. The controller's own `Page` signal
+already retained the value (`Publish` never resets on `Bind`); the fresh core's ctor seeds its own `_page` from
+`controller.Page.Peek()` immediately after `Bind`, and the bring-into-view effect's very first realize is forced
+non-animated (`ScrollMove.Immediate`, never the animated `GoToPage` glide) so the restored page **lands**, it does
+not visibly glide back into view from offset 0. Gate: `gate.shelf.controller.rebind-restores-page`, in
+`ZoneListSpikeChecks.cs`.
+
 **`Responsive.Of` has two overloads, and only one can gate.** `Of(build, …)` is **ungated by design** — its closure IS
 its data channel (freezing it at mount is the stale-content bug class the box used to have), so it rebuilds whenever its
 parent does. `Of(state, (state, width) => …, …)` gates on `state` by value and ignores the builder; hand it every value
@@ -194,7 +265,13 @@ Gates: `gate.shelf.props.*` (a new list instance of equal items rebuilds no card
 cards; a changed item and a changed `MaxItems` both pass the gate; the gate is hot-phase-allocation-free) and
 `gate.responsive.props.*` (state-gated skip, ungated rebuild, state change rebuilds), in `ShelfBindingChecks`.
 
-Sizing/layout/snap options that the factory still passes to the core constructor remain mount configuration. The
+Sizing/layout/snap options that the factory still passes to the core constructor remain mount configuration — `lift:
+ShelfLift` (E10, 2026-09) is the latest of these: `Elevate` (default, byte-identical to a shelf built before the
+enum existed) reserves hover-lift/shadow clearance in the slot root's own padding and paints the hover-elevate halo;
+`None` reserves nothing, so a headerless shelf's `PartRoot` sits flush under an app-owned external header with no
+`Margin.Top = -12` cancellation hack. It is frozen configuration, not a `Parts` style, because it changes the slot
+root's `Padding` — a layout-shape prop no `TemplateParts` door can touch (control-fidelity §6) — and the clip chain's
+reserved headroom, not paint alone. Gates: `gate.shelf.lift.none-flush`, `gate.shelf.lift.elevate-unchanged`. The
 live data contract does not make every constructor argument dynamic. See the concrete `PagedShelf.Create` signature
 and `ShelfProps<T>` for the live set, and `virtualization.md` for source revision and recycling semantics.
 

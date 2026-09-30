@@ -39,6 +39,11 @@ public static class ProgressBar
     const float TrackRadius = 0.5f;       // ProgressBarTrackCornerRadius
     const float DefaultWidth = 240f;
 
+    /// <summary>The measured-width quantum for a stretched (<c>width: float.NaN</c>) indeterminate bar — see
+    /// <see cref="Indeterminate"/>. Sub-quantum layout wobble (e.g. a settling flex pass) is absorbed at the
+    /// measured-width signal, so it never re-renders the bar or re-arms the sweep.</summary>
+    const float StretchWidthQuantum = 4f;
+
     // Indeterminate indicator widths (ProgressBar.cpp SetProgressBarIndicatorWidth): 40% / 60% of the track width.
     const float Indicator1Frac = 0.40f;
     const float Indicator2Frac = 0.60f;
@@ -70,7 +75,12 @@ public static class ProgressBar
     public static Element Create(FloatSignal? value = null, float width = DefaultWidth,
                                  ProgressBarState state = ProgressBarState.Normal, TemplateParts? parts = null)
         => value is null
-            ? Embed.Comp(new Props(width, state, parts), () => new IndeterminateBar())
+            ? (float.IsNaN(width)
+                // width: float.NaN ⇒ stretch to the parent-offered width (see StretchIndeterminateBar) — a
+                // separate component so the fixed-width path below stays byte-identical (no measured-width hook,
+                // no extra wrapper node) for every caller that doesn't ask for stretch.
+                ? Embed.Comp(new Props(width, state, parts), () => new StretchIndeterminateBar())
+                : Embed.Comp(new Props(width, state, parts), () => new IndeterminateBar()))
             // Determinate tracking the signal: the indicator width is a bound Func (compositor/relayout, no re-render).
             : DeterminateView((Prop<float>)(Func<float>)(() =>
               {
@@ -127,8 +137,13 @@ public static class ProgressBar
     /// <summary>Indeterminate progress: the two clipped accent indicators sweeping across the track on the WinUI
     /// ProgressBarTemplateSettings translate keyframes. In Paused/Error, the track hides and only indicator2 shows,
     /// recolored to caution/critical (matching WinUI's IndeterminatePaused / IndeterminateError visual states).
+    /// <paramref name="width"/> = <c>float.NaN</c> STRETCHES the bar to the parent-offered width instead of a fixed
+    /// DIP value (the standard "facet-switch busy bar" pattern: full-content-width, pinned under a dimmed page) —
+    /// the resolved width is read back via <c>UseMeasuredWidth</c> (quantum 4) and the sweep re-arms at the new
+    /// extent whenever the parent resizes. A finite width is unaffected: no measurement, no extra wrapper node.
     /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartTrack"/>/<see cref="PartFill"/> (the
-    /// PartFill modifier runs on BOTH sweeping indicators).</summary>
+    /// PartFill modifier runs on BOTH sweeping indicators; PartTrack is opacity-0 by default in every indeterminate
+    /// state — override it, e.g. <c>b => b with { Opacity = 1f }</c>, for a visible 1px track under the sweep).</summary>
     public static Element Indeterminate(float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal,
                                         TemplateParts? parts = null)
         => Create(null, width, state, parts);
@@ -285,6 +300,148 @@ public static class ProgressBar
                 ClipToBounds = true,                 // Border Clip="...ClipRect" — the sweep is clipped to the track bounds
                 Role = AutomationRole.ProgressBar,
                 Children = [track, ind1, ind2],
+            };
+        }
+    }
+
+    /// <summary>The <c>width: float.NaN</c> path of <see cref="Indeterminate"/>: same visual/motion contract as
+    /// <see cref="IndeterminateBar"/>, but the bar's own width is read back from layout instead of taken as a
+    /// fixed DIP value. A SEPARATE component (not a branch inside <see cref="IndeterminateBar"/>) so the fixed-width
+    /// path stays byte-identical — no measured-width hook installed, no extra wrapper node — for every caller that
+    /// doesn't opt into stretch.
+    ///
+    /// Shape: an outer wrapper (<c>Grow=1, Basis=0, AlignSelf=Stretch</c> — the DensityPlot "stretch to the offered
+    /// width" idiom, <c>DensityPlot.cs</c>) is this component's HostNode, so <c>UseMeasuredWidth</c> reports what the
+    /// PARENT actually offered; the real ZStack bar (track + two sweeping indicators, <see cref="AutomationRole.ProgressBar"/>)
+    /// is its single child, drawn at that resolved width. The first frame has no measured width yet (0, sweep parked);
+    /// the layout effect seeds it next frame and the bar (re-render → scoped relayout, NOT a per-frame cost) settles at
+    /// the real extent. A later parent resize repeats exactly that: the quantized width signal changes, the component
+    /// re-renders, and the same <c>UseEffect</c> below (keyed on Width+State, like <see cref="IndeterminateBar"/>)
+    /// re-plans the translate keyframes for the new extent — the "re-arm on resize" contract.</summary>
+    private sealed class StretchIndeterminateBar : Component
+    {
+        public override Element Render()
+        {
+            var props = UseProps<Props>();
+            var State = props.State;
+            var Parts = props.Parts;
+
+            // The arranged width of THIS component's rendered root (the stretch wrapper below) — quantum 4 absorbs
+            // sub-pixel layout jitter so a settling flex pass doesn't re-render this component every frame.
+            float Width = MathF.Max(0f, UseMeasuredWidth(StretchWidthQuantum).Value);
+
+            var ts = ProgressBarTemplateSettings.For(Width);
+            bool nonNormal = State != ProgressBarState.Normal;
+            ColorF fg = ForegroundFor(State);
+
+            var ind1Ref = UseRef<NodeHandle>(default);
+            var ind2Ref = UseRef<NodeHandle>(default);
+
+            // Same storyboard as IndeterminateBar's effect (see its comments for the WinUI KeyTime breakdown) — the
+            // only difference is Width comes from measurement instead of a prop, so a resize re-runs this exactly
+            // like a width-prop change would. Width == 0 (not yet measured, or a collapsed parent) skips arming: no
+            // point sweeping a zero-extent track, and it avoids seeding a degenerate 0-length translate keyframe.
+            UseEffect(() =>
+            {
+                var anim = Context.Anim;
+                var scene = Context.Scene;
+                if (anim is null || scene is null || Width <= 0f) return;
+
+                if (!ind1Ref.Value.IsNull && scene.IsLive(ind1Ref.Value))
+                {
+                    if (nonNormal)
+                        anim.Cancel(ind1Ref.Value, AnimChannel.TranslateX);
+                    else
+                        anim.Keyframes(ind1Ref.Value, AnimChannel.TranslateX, new Keyframe[]
+                        {
+                            new(0.00f, ts.ContainerAnimationStartPosition, Easing.Linear),
+                            new(0.75f, ts.ContainerAnimationEndPosition, IndetEase),
+                            new(1.00f, ts.ContainerAnimationEndPosition, Easing.Linear),
+                        }, LoopMs, loop: true, cadence: Cadence.Display);
+                }
+
+                if (!ind2Ref.Value.IsNull && scene.IsLive(ind2Ref.Value))
+                {
+                    if (nonNormal)
+                    {
+                        anim.Cancel(ind2Ref.Value, AnimChannel.TranslateX);
+                        anim.Keyframes(ind2Ref.Value, AnimChannel.TranslateX, new Keyframe[]
+                        {
+                            new(0.00f, ContainerAnimationMidPosition, Easing.Linear),
+                            new(1.00f, ContainerAnimationMidPosition, Easing.Linear),
+                        }, LoopMs, loop: true);
+                    }
+                    else
+                    {
+                        anim.Keyframes(ind2Ref.Value, AnimChannel.TranslateX, new Keyframe[]
+                        {
+                            new(0.000f, ts.Container2AnimationStartPosition, Easing.Linear),
+                            new(0.375f, ts.Container2AnimationStartPosition, Easing.Linear),
+                            new(1.000f, ts.Container2AnimationEndPosition, IndetEase),
+                        }, LoopMs, loop: true, cadence: Cadence.Display);
+                    }
+                }
+            }, DepKey.From(HashCode.Combine(Width, State)));
+
+            float ind2Width = nonNormal ? Width : ts.Indicator2Width;
+
+            Action<NodeHandle> ind1Capture = h => ind1Ref.Value = h;
+            Action<NodeHandle> ind2Capture = h => ind2Ref.Value = h;
+
+            var track = Parts.Apply(PartTrack, new BoxEl
+            {
+                Width = Width,
+                Height = TrackHeight,
+                OffsetY = (MinHeight - TrackHeight) / 2f,
+                Corners = CornerRadius4.All(TrackRadius),
+                Fill = Tok.StrokeControlStrongDefault,
+                Opacity = 0f,
+            });
+
+            var ind1 = new BoxEl
+            {
+                Width = ts.Indicator1Width,
+                Height = MinHeight,
+                Corners = CornerRadius4.All(IndicatorRadius),
+                Fill = fg,
+                Opacity = nonNormal ? 0f : 1f,
+                OnRealized = ind1Capture,
+            };
+            var ind2 = new BoxEl
+            {
+                Width = ind2Width,
+                Height = MinHeight,
+                Corners = CornerRadius4.All(IndicatorRadius),
+                Fill = fg,
+                OnRealized = ind2Capture,
+            };
+            if (Parts is { } p)
+            {
+                var m1 = p.Apply(PartFill, ind1);
+                ind1 = m1 with { OnRealized = TemplateParts.Chain(ind1Capture, m1.OnRealized) };
+                var m2 = p.Apply(PartFill, ind2);
+                ind2 = m2 with { OnRealized = TemplateParts.Chain(ind2Capture, m2.OnRealized) };
+            }
+
+            var bar = new BoxEl
+            {
+                ZStack = true,
+                Width = Width,
+                Height = MinHeight,
+                ClipToBounds = true,
+                Role = AutomationRole.ProgressBar,
+                Children = [track, ind1, ind2],
+            };
+
+            // Stretch wrapper (this component's HostNode — what UseMeasuredWidth reports): Grow=1/Basis=0 claims the
+            // full main-axis span if the parent is a row, AlignSelf=Stretch claims the full cross-axis span if the
+            // parent is a column — the same two-axis idiom DensityPlot uses for "stretch to the width the parent
+            // offers" regardless of which kind of parent it's dropped into.
+            return new BoxEl
+            {
+                Direction = 1, MinWidth = 0f, Grow = 1f, Basis = 0f, AlignSelf = FlexAlign.Stretch,
+                Role = AutomationRole.None,
+                Children = [bar],
             };
         }
     }

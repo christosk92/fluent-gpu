@@ -79,7 +79,7 @@ static class TouchSuite
                 var f = host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var sc);
                 if (sc.OffsetY > prevOff + 0.01f) { monotonicRun++; if (monotonicRun > maxRun) maxRun = monotonicRun; if (f.Rendered) decayRendered = true; }
-                else if (sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle) { settledAt = i; firstRealizedSettled = sc.FirstRealized; }
+                else if (sc.Motion.IsMoving == false) { settledAt = i; firstRealizedSettled = sc.FirstRealized; }
                 else monotonicRun = 0;   // a non-advancing frame mid-fling (should not happen) breaks the run
                 prevOff = sc.OffsetY;
             }
@@ -95,20 +95,10 @@ static class TouchSuite
                 $"maxRun={maxRun} settledAt={settledAt} offset={afterUp.OffsetY:0}->{settled.OffsetY:0} (clamp={maxOff:0}) reRealized={reRealized}");
         }
 
-        // gate.scroll.impulse-velocity DELETED (ScrollIntegrator wholesale removal) — the impulse/work-energy release
-        // estimator now lives in the portable kernel; successor: gate.kernel.fling-seed-from-framedeltas (ScrollKernelSuite).
-
-        // gate.scroll.mouse-wheel-eases-discrete DELETED (ScrollIntegrator wholesale removal) — successor:
-        // gate.kernel.wheel-accumulate-hardstop (ScrollKernelSuite).
-
-        // gate.scroll.flick-into-edge-bounce DELETED (ScrollIntegrator wholesale removal) — successor:
-        // gate.kernel.chain-ballistic-edge (ScrollKernelSuite, edge-bounce/SeedFromEdgeMomentum coverage).
-
-        // gate.scroll.slow-fling-into-edge-elastic DELETED (ScrollIntegrator wholesale removal) — successor:
-        // gate.kernel.chain-ballistic-edge (ScrollKernelSuite, band-physics coverage).
-
-        // gate.scroll.touch-overpan-bounce DELETED (ScrollIntegrator wholesale removal) — successor:
-        // gate.kernel.band-roundtrip (ScrollKernelSuite).
+        // Release velocity, wheel easing and edge behaviour of a fling are closed-form plan authoring (PlanAuthor):
+        // ScrollMotionTests (Engine.Tests) — FollowEnd_* (impulse / assume-stopped / overpan release), WheelNotch_*
+        // (the eased, accumulating wheel), Eval_IsContinuousAcrossSegmentBoundaries (a fling's edge crossing solved at
+        // authoring) — plus gate.touch4.overscroll-springback below.
 
         // gate.touch.fling-alloc-steady-zero: a 30-frame fling allocates 0 managed bytes on the hot half. A large list
         // keeps the fling in steady decay across the whole window (never clamps), so all 30 frames run the integrator +
@@ -158,9 +148,9 @@ static class TouchSuite
             long wheelCrossAlloc = 0;
             {
                 var wptr = new Point2(150, 200);
-                for (int i = 0; i < 6; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, wptr, 0, 0, 400f)); host.RunFrame(); }   // warm
-                for (int i = 0; i < 20; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, wptr, 0, 0, 400f)); var wf = host.RunFrame(); if (wf.HotPhaseAllocBytes > wheelCrossAlloc) wheelCrossAlloc = wf.HotPhaseAllocBytes; }
-                window.QueueInput(new InputEvent(InputKind.Wheel, wptr, 0, 0, -10_000_000f)); host.RunFrame();   // back to top
+                for (int i = 0; i < 6; i++) { window.QueueInput(WheelEvent(wptr, 0, 0, 400f)); host.RunFrame(); }   // warm
+                for (int i = 0; i < 20; i++) { window.QueueInput(WheelEvent(wptr, 0, 0, 400f)); var wf = host.RunFrame(); if (wf.HotPhaseAllocBytes > wheelCrossAlloc) wheelCrossAlloc = wf.HotPhaseAllocBytes; }
+                window.QueueInput(WheelEvent(wptr, 0, 0, -10_000_000f)); host.RunFrame();   // back to top
                 for (int i = 0; i < 6; i++) host.RunFrame();
             }
 
@@ -237,7 +227,7 @@ static class TouchSuite
                 window.QueueInput(Touch(InputKind.PointerUp, new Point2(150, 200), tw + 48, 5)); host.RunFrame();
                 s_touchClockMs = tw + 1000;
             }
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, -1_000_000f)); host.RunFrame();   // pin to the top
+            window.QueueInput(WheelEvent(new Point2(150, 200), 0, 0, -1_000_000f)); host.RunFrame();   // pin to the top
             for (int i = 0; i < 6; i++) host.RunFrame();
             host.Scene.TryGetScroll(vp, out var beforeFlood);
             float floodBaseOff = beforeFlood.OffsetY;
@@ -292,15 +282,31 @@ static class TouchSuite
 
             // TAP-TO-STOP: a contact landing while the viewport is coasting belongs to the viewport. It arrests the
             // inertia but must not enter the row's press/click pipeline when lifted without moving. Seeded via a real
-            // ScrollInput.SetVelocity post (the hand-seeded ScrollState.Phase/FlingVelocity writer is gone — the
-            // kernel's result columns are ApplyMotion-only) so the body reaches a live Ballistic state through the
-            // same command port a real edge-autoscroll/fling-seed caller would use.
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.SetVelocity((int)vp.Raw.Index, 900f));
-            host.RunFrame();   // let the kernel tick the seeded velocity into a live Ballistic body
-            window.QueueInput(Touch(InputKind.PointerDown, rowCenter, t + 160, 2)); host.RunFrame();
-            window.QueueInput(Touch(InputKind.PointerUp, rowCenter, t + 176, 2)); host.RunFrame();
-            bool stopTapSwallowed = probe.Row0Clicked == clicksAfterTap && probe.Row0Pressed == pressedAfterTap
-                                    && host.Scene.ScrollRef(vp).Activity != FluentGpu.Scroll.ScrollActivity.Ballistic;
+            // (tiny, fast) touch flick — 12px of travel in ~15ms, well above FlingMinVelocity (20 dip/s) but small
+            // enough that row 0 (60px tall) stays under rowCenter — through the same input path a real flick uses,
+            // rather than reaching into the kernel to hand-seed a velocity (there is no such port any more: motion is
+            // a closed-form ScrollPlan authored from real contact samples).
+            TouchGesture(window, host, new Point2(rowCenter.X, rowCenter.Y + 6f), new Point2(rowCenter.X, rowCenter.Y - 6f), 3, pointerId: 9, msPerStep: 5f);
+            host.Scene.TryGetScroll(vp, out var flingCheck);
+            bool seededFling = flingCheck.Motion.Kind == FluentGpu.Scroll.Motion.MotionKind.Fling && flingCheck.Motion.IsMoving;
+            // Baselines AFTER the seeding flick: its own down landed on row 0 and delivered a press (the pan claim then
+            // cancelled it — no click); only the stop tap below is under test.
+            int clicksBeforeStop = probe.Row0Clicked, pressedBeforeStop = probe.Row0Pressed;
+            float offsetAtStop = flingCheck.OffsetY;
+            uint tStop = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, rowCenter, tStop, 2)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, rowCenter, tStop + 16, 2)); host.RunFrame();
+            s_touchClockMs = tStop + 1000;
+            host.Scene.TryGetScroll(vp, out var stoppedSc);
+            // The stop holds where the content was SHOWN (never a step back against the fling's direction).
+            bool stopNoBackStep = stoppedSc.OffsetY >= offsetAtStop - 0.01f;
+            bool stopTapSwallowed = seededFling && probe.Row0Clicked == clicksBeforeStop && probe.Row0Pressed == pressedBeforeStop
+                                    && stoppedSc.Motion.Kind != FluentGpu.Scroll.Motion.MotionKind.Fling && stopNoBackStep;
+
+            // Back to the top so row 0 is under rowCenter again for the pan halves (the seeding flick scrolled it away).
+            host.TryGetScrollHandle(vp)!.ScrollTo(0.0, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
+            host.RunFrame();
+            int clicksBeforePan = probe.Row0Clicked, pressedBeforePan = probe.Row0Pressed;
 
             window.QueueInput(Touch(InputKind.PointerDown, rowCenter, t + 240, 3)); host.RunFrame();
             window.QueueInput(Touch(InputKind.PointerMove, new Point2(rowCenter.X, rowCenter.Y - 20f), t + 256, 3)); host.RunFrame();
@@ -315,17 +321,17 @@ static class TouchSuite
             bool panScrolled = afterPan.OffsetY > 100f;
 
             bool tapOk = clicksAfterTap == 1 && tapDidNotScroll;
-            bool panOk = clicksAfterPan == clicksAfterTap && panScrolled;   // NO additional click from the pan
+            bool panOk = clicksAfterPan == clicksBeforePan && panScrolled;   // NO additional click from the pan
             Check("gate.touch.tap-vs-pan a below-slop touch tap fires OnClick; a touch pan over the same row scrolls and never clicks",
                 tapOk && listPressInitiallyDelayed && listPressAppearedAfterDelay && panBeforeDelayNeverPressed && stopTapSwallowed && panOk,
-                $"tapClicks={clicksAfterTap} delayed={listPressInitiallyDelayed}->{listPressAppearedAfterDelay} panNoFlash={panBeforeDelayNeverPressed} stopSwallowed={stopTapSwallowed} panClicks={clicksAfterPan} (scroll={afterPan.OffsetY:0}) pressedDelivered={pressedAfterPan}");
+                $"tapClicks={clicksAfterTap} delayed={listPressInitiallyDelayed}->{listPressAppearedAfterDelay} panNoFlash={panBeforeDelayNeverPressed} stopSwallowed={stopTapSwallowed} (seeded={seededFling} after={stoppedSc.Motion.Kind} off {offsetAtStop:0.##}->{stoppedSc.OffsetY:0.##}) panClicks={clicksAfterPan} (scroll={afterPan.OffsetY:0}) pressedDelivered={pressedAfterPan}");
 
             // gate.touch.pan-cancels-press: the down chain SAW the press (OnPointerPressed fired on down) but the pan claim
             // delivered the cancel — so no click ever fired through the pan. (Pressed delivered ≥ 1, click count unchanged
             // by the pan: the press was Canceled, not Released.)
-            bool pressDeliveredThenCancelled = pressedAfterPan >= 1 && clicksAfterPan == clicksAfterTap;
+            bool pressDeliveredThenCancelled = pressedAfterPan > pressedBeforePan && clicksAfterPan == clicksBeforePan;
             Check("gate.touch.pan-cancels-press a claimed pan cancels the press it delivered to the down chain (press seen, no Released/click)",
-                pressDeliveredThenCancelled, $"row0Pressed={pressedAfterPan} row0Clicked={clicksAfterPan} (tap baseline {clicksAfterTap})");
+                pressDeliveredThenCancelled, $"row0Pressed={pressedBeforePan}->{pressedAfterPan} row0Clicked={clicksBeforePan}->{clicksAfterPan}");
 
             // gate.touch.no-stuck-hover: after the tap AND the pan sequences, no node retains NodeFlags.Hovered (touch has
             // no resting hover — up/cancel clears the transient touch hover).
@@ -420,10 +426,10 @@ static class TouchSuite
             // A capture-loss is not a flick: the cancelled list must NOT be flinging.
             host.RunFrame();
             host.Scene.TryGetScroll(left, out var lAfter);
-            bool leftNoFling = Near(lAfter.OffsetY, lEnd.OffsetY, 0.6f) && lAfter.Activity == FluentGpu.Scroll.ScrollActivity.Idle;
+            bool leftNoFling = Near(lAfter.OffsetY, lEnd.OffsetY, 0.6f) && lAfter.Motion.IsMoving == false;
             Check("gate.touch.per-id-cancel a per-id PointerCancel ends only that contact (its pan freezes, no fling) while the other id keeps panning",
                 leftFrozen && rightContinued && leftNoFling,
-                $"leftFrozenAt={leftFrozenAt:0} leftEnd={lEnd.OffsetY:0} rightEnd={rEnd.OffsetY:0} leftMode={lAfter.Activity}");
+                $"leftFrozenAt={leftFrozenAt:0} leftEnd={lEnd.OffsetY:0} rightEnd={rEnd.OffsetY:0} leftMode={lAfter.Motion.Kind}");
         }
 
         // gate.touch.pressed-no-hover: a touch PointerDown drives the Pressed visual exactly like a mouse press (the node
@@ -474,9 +480,9 @@ static class TouchSuite
             // the fling gates warm the tick-write path via pre-fling contact tracking. The measured drag asserts steady state.
             // NB: does NOT advance the shared s_touchClockMs (only the per-host frame clock) — a later gate's absolute
             // timestamps must stay put (gate.touch.flick-seed-gap-invariant sits knife-edge on AssumeStoppedMs=40).
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(130, 100), 0, 0, ScrollDelta: 48f, TimestampMs: s_touchClockMs));
+            window.QueueInput(WheelEvent(new Point2(130, 100), 0, 0, ScrollDelta: 48f, TimestampMs: s_touchClockMs));
             host.RunFrame();
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(130, 100), 0, 0, ScrollDelta: -1_000_000f, TimestampMs: s_touchClockMs + 16));
+            window.QueueInput(WheelEvent(new Point2(130, 100), 0, 0, ScrollDelta: -1_000_000f, TimestampMs: s_touchClockMs + 16));
             host.RunFrame();
             host.Scene.TryGetScroll(vp, out var sc0);
             float maxOff = MathF.Max(0f, sc0.ContentH - sc0.ViewportH);   // 800 − 200 = 600
@@ -892,27 +898,26 @@ static class TouchSuite
             var vp = host.Scene.Root;
             host.Scene.ScrollRef(vp).SnapInterval = SnapFlingProbe.RowH;   // survives reconcile: the snap patch is DECLARATION-GATED
                                                                            // (it writes only when the element declares Snap; this probe does not)
-            // A raw ScrollState column write is invisible to the kernel until a real layout pass reposts SetFrame
-            // (scroll-v3-plan §2: "the snap grid isn't reaching the kernel") — this probe never re-layouts, so without
-            // this repost the kernel's cached Frame.SnapInterval stays 0 for the whole flick (PagedShelf's ShelfSnap
-            // hits the identical gap; FlexLayout.RepostFrame is the shared fix).
-            FluentGpu.Layout.FlexLayout.RepostFrame(host.Scene, vp);
+            // A raw ScrollState column write used to be invisible to the kernel until a real layout pass reposted the
+            // frame; the rework has no frame reposting at all — the viewport's extent/viewport publish to its
+            // ScrollHandle every frame (AppHost.RunScrollFrame), so a plain frame pump is enough to reach the plan.
+            host.RunFrame();
 
             // A modest flick (the 0.95/s decay is near-frictionless, so even a slow flick coasts many rows). Settle to the
             // snap with a generous frame budget (the free-fling gate uses 600; a snap target can be ~tens of rows away).
             TouchGesture(window, host, new Point2(150, 300), new Point2(150, 240), 10, pointerId: 51, msPerStep: 16f);
             int settledAt = -1;
-            for (int i = 0; i < 4000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Activity == FluentGpu.Scroll.ScrollActivity.Idle) { settledAt = i; break; } }
+            for (int i = 0; i < 4000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Motion.IsMoving == false) { settledAt = i; break; } }
             host.Scene.TryGetScroll(vp, out var settled);
             float rem = settled.OffsetY % SnapFlingProbe.RowH;
             float distToSnap = MathF.Min(rem, SnapFlingProbe.RowH - rem);   // distance to the nearest RowH multiple
             float maxOff = MathF.Max(0f, settled.ContentH - settled.ViewportH);
             bool onSnap = distToSnap < 0.5f;
             bool interior = settled.OffsetY > SnapFlingProbe.RowH && settled.OffsetY < maxOff - SnapFlingProbe.RowH;   // a real snap, not the clamp
-            bool settledMode = settled.Activity == FluentGpu.Scroll.ScrollActivity.Idle && settled.Velocity == 0f;
+            bool settledMode = settled.Motion.IsMoving == false && settled.Velocity == 0f;
             Check("gate.touch4.fling-snap-lands-on-snap a touch flick over a snap-configured virtual list (SnapInterval=RowH) retargets its friction decay to settle EXACTLY on a RowH multiple, interior to the content (not the clamp)",
                 onSnap && interior && settledMode && settledAt >= 0,
-                $"offset={settled.OffsetY:0.###} distToSnap={distToSnap:0.###} interval={SnapFlingProbe.RowH} interior={interior} mode={settled.Activity} settledAtFrame={settledAt}");
+                $"offset={settled.OffsetY:0.###} distToSnap={distToSnap:0.###} interval={SnapFlingProbe.RowH} interior={interior} mode={settled.Motion.Kind} settledAtFrame={settledAt}");
         }
 
         // gate.touch4.snap-fling-dt-invariant: the integrator-determinism sweep, extended to a SNAP fling. The same event
@@ -936,10 +941,11 @@ static class TouchSuite
         }
 
         // gate.touch4.overscroll-springback: a touch pan dragging PAST the top clamp (at offset 0, finger pulls DOWN)
-        // produces a transient damped displacement band (OverscrollPx != 0) WHILE OffsetY stays pinned at 0 — the band is a
-        // separate visual term, the clamp contract is never relaxed. On release the band springs back to EXACTLY 0 (phase-7
-        // StepSpring). Asserted via ScrollState (recorder/state, not pixels): the offset NEVER leaves [0, max] across the
-        // whole drag+release, the band peaks while dragging, and it settles at 0.
+        // rubber-bands the SHOWN OFFSET ITSELF negative (ScrollPlan.RubberBand — there is no separate band column any
+        // more; an overpanned drag simply shows Offset outside [0, MaxOffset]) while the contact is held past the
+        // edge. On release it springs back to EXACTLY the edge once the plan settles. Asserted via ScrollState
+        // (recorder/state, not pixels): overpan (offset − clamp(offset, 0, max)) peaks negative while dragging
+        // (within the WinUI-like 10%-viewport cap) and is exactly 0 once settled (!Motion.IsMoving) after release.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("touch4-overscroll", new Size2(360, 460), 1f)); window.Show();
@@ -948,52 +954,49 @@ static class TouchSuite
             var vp = host.Scene.Root;
             host.Scene.TryGetScroll(vp, out var sc0);
             float maxOff = MathF.Max(0f, sc0.ContentH - sc0.ViewportH);
+            static float Overpan(in FluentGpu.Scene.ScrollState s, float max) => s.OffsetY - Math.Clamp(s.OffsetY, 0f, max);
 
             // Drive a pan past the TOP: down at y=120, then pull the finger DOWN (y increases) to y=300 — content wants to
-            // go above offset 0 ⇒ clamps at 0, the excess becomes a negative band. Manual moves so we can read the band
-            // mid-drag and confirm the offset never goes negative.
+            // go above offset 0 ⇒ the shown offset itself rubber-bands negative. Manual moves so we can read the overpan
+            // mid-drag.
             uint t = s_touchClockMs;
             var ev = new InputEvent[1];
             ev[0] = Touch(InputKind.PointerDown, new Point2(150, 120), t, 61); host.Input.Dispatch(ev); host.RunFrame();
-            float worstNegOffset = 0f, peakBand = 0f, worstOverMax = 0f;
+            float peakOverpan = 0f;
             for (int i = 1; i <= 12; i++)
             {
                 t += 16;
                 ev[0] = Touch(InputKind.PointerMove, new Point2(150, 120 + i * 15), t, 61); host.Input.Dispatch(ev); host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var s);
-                if (s.OffsetY < worstNegOffset) worstNegOffset = s.OffsetY;
-                if (s.OffsetY - maxOff > worstOverMax) worstOverMax = s.OffsetY - maxOff;
-                if (MathF.Abs(s.BandY) > MathF.Abs(peakBand)) peakBand = s.BandY;
+                float ov = Overpan(in s, maxOff);
+                if (MathF.Abs(ov) > MathF.Abs(peakOverpan)) peakOverpan = ov;
             }
             host.Scene.TryGetScroll(vp, out var dragging);
-            bool bandWhileDragging = MathF.Abs(dragging.BandY) > 1f;     // a real displacement past the edge
-            bool offsetPinned = dragging.OffsetY == 0f;                          // the clamp held — offset never went negative
-            float capLimit = TouchFlingSettleProbe_ViewportH(host, vp) * 0.1f;   // WinUI 10% overpan cap
-            bool bandCapped = MathF.Abs(peakBand) <= capLimit + 0.5f;            // damping asymptotes to the cap
+            bool overpanWhileDragging = MathF.Abs(Overpan(in dragging, maxOff)) > 1f;   // a real displacement past the edge
+            float capLimit = TouchFlingSettleProbe_ViewportH(host, vp) * 0.1f;          // WinUI 10% overpan cap
+            bool overpanCapped = MathF.Abs(peakOverpan) <= capLimit + 0.5f;             // damping asymptotes to the cap
 
-            // Release: the band springs back to exactly 0 (and the offset still never leaves [0, max]).
+            // Release: the offset springs back to EXACTLY the edge once settled.
             t += 16;
             ev[0] = Touch(InputKind.PointerUp, new Point2(150, 300), t, 61); host.Input.Dispatch(ev); host.RunFrame();
             s_touchClockMs = t + 1000;
-            bool offsetOk = true;
-            float bandAfter = 1f;
+            float overpanAfter = 1f;
+            bool settledAtEdge = false;
             for (int i = 0; i < 200; i++)
             {
                 host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var s);
-                if (s.OffsetY < -0.001f || s.OffsetY > maxOff + 0.001f) offsetOk = false;
-                bandAfter = s.BandY;
-                if (s.BandY == 0f && s.Activity == FluentGpu.Scroll.ScrollActivity.Idle) break;
+                overpanAfter = Overpan(in s, maxOff);
+                if (overpanAfter == 0f && s.Motion.IsMoving == false) { settledAtEdge = true; break; }
             }
-            bool sprungToZero = bandAfter == 0f;
-            Check("gate.touch4.overscroll-springback a touch pan past the top clamp shows a damped displacement band (peaks ≤ 10%-viewport cap) WHILE OffsetY stays pinned at 0 (offset never negative, never > max across the whole drag), then springs back to EXACTLY 0 on release",
-                bandWhileDragging && offsetPinned && bandCapped && worstNegOffset == 0f && worstOverMax <= 0f && sprungToZero && offsetOk,
-                $"peakBand={peakBand:0.##} cap={capLimit:0.##} offsetPinned={offsetPinned} worstNeg={worstNegOffset:0.##} sprungTo={bandAfter:0.###} offsetOk={offsetOk}");
+            Check("gate.touch4.overscroll-springback a touch pan past the top clamp rubber-bands the shown offset itself negative (peaks within the 10%-viewport cap) while the contact is held, then springs back to EXACTLY the edge (overpan 0) once settled after release",
+                overpanWhileDragging && overpanCapped && settledAtEdge,
+                $"peakOverpan={peakOverpan:0.##} cap={capLimit:0.##} overpanAfter={overpanAfter:0.###} settled={settledAtEdge}");
         }
 
         // gate.touch4.wheel-hard-clamps-no-band: a WHEEL past the top edge (negative delta at offset 0) stays HARD-clamped
-        // — OffsetY pinned at 0, and NO overscroll band is produced (the band is touch-pan-only; wheel/keyboard/programmatic
-        // are never rubber-banded, the SetScrollOffset clamp contract). The existing fling-stops-at-clamp gate stays green.
+        // — OffsetY pinned at 0, never rubber-banded (overpan is touch-pan-only; wheel/keyboard/programmatic never leave
+        // [0, MaxOffset] — the SetScrollOffset clamp contract). The existing fling-stops-at-clamp gate stays green.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("touch4-wheel-clamp", new Size2(360, 460), 1f)); window.Show();
@@ -1001,18 +1004,18 @@ static class TouchSuite
             host.RunFrame();
             var vp = host.Scene.Root;
             var ptr = new Point2(150, 200);
-            // Already at offset 0 (top). A big negative wheel delta tries to go above the top: must stay 0 with no band.
-            for (int i = 0; i < 5; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, -50_000f)); host.RunFrame(); }
+            // Already at offset 0 (top). A big negative wheel delta tries to go above the top: must stay 0, never banded.
+            for (int i = 0; i < 5; i++) WheelDip(host, window, ptr, -50_000f);
             host.Scene.TryGetScroll(vp, out var top);
-            bool topClamped = top.OffsetY == 0f && top.BandY == 0f;
-            // And past the BOTTOM: scroll way down, then keep wheeling past max — pinned at max, still no band.
-            for (int i = 0; i < 30; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 50_000f)); host.RunFrame(); }
+            bool topClamped = top.OffsetY == 0f;
+            // And past the BOTTOM: scroll way down, then keep wheeling past max — pinned at max, still never banded.
+            for (int i = 0; i < 30; i++) WheelDip(host, window, ptr, 50_000f);
             host.Scene.TryGetScroll(vp, out var bot);
             float maxOff = MathF.Max(0f, bot.ContentH - bot.ViewportH);
-            bool botClamped = Near(bot.OffsetY, maxOff, 0.5f) && bot.BandY == 0f;
-            Check("gate.touch4.wheel-hard-clamps-no-band a wheel past the top AND past the bottom stays hard-clamped (OffsetY pinned at the boundary) with NO overscroll band — the rubber band is touch-pan-only, the clamp contract is never relaxed for wheel/keyboard/programmatic",
+            bool botClamped = Near(bot.OffsetY, maxOff, 0.5f);
+            Check("gate.touch4.wheel-hard-clamps-no-band a wheel past the top AND past the bottom stays hard-clamped (OffsetY pinned at the boundary, never rubber-banded) — the overpan is touch-pan-only, the clamp contract is never relaxed for wheel/keyboard/programmatic",
                 topClamped && botClamped,
-                $"top=(off {top.OffsetY:0},band {top.BandY:0.##}) bottom=(off {bot.OffsetY:0}->max {maxOff:0},band {bot.BandY:0.##})");
+                $"top={top.OffsetY:0} bottom={bot.OffsetY:0}->max {maxOff:0}");
         }
 
         // gate.touch4.alloc-zero: the overscroll drag + spring-back + a snap fling sequence allocates 0 managed bytes on
@@ -1051,7 +1054,7 @@ static class TouchSuite
         uint t = s_touchClockMs;
         // First flick up to an interior position (seeds a snap fling), let it settle.
         worst = Math.Max(worst, TouchGesture(window, host, new Point2(150, 360), new Point2(150, 140), 12, pointerId: 71, msPerStep: 16f));
-        for (int i = 0; i < 120; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.Activity == FluentGpu.Scroll.ScrollActivity.Idle) break; }
+        for (int i = 0; i < 120; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.Motion.IsMoving == false) break; }
         // Now drag past the bottom: pull the finger UP hard from a low anchor so the content runs past max → band.
         t = s_touchClockMs;
         ev[0] = Touch(InputKind.PointerDown, new Point2(150, 360), t, 72); host.Input.Dispatch(ev); { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
@@ -1064,7 +1067,14 @@ static class TouchSuite
         t += 16;
         ev[0] = Touch(InputKind.PointerUp, new Point2(150, 180), t, 72); host.Input.Dispatch(ev); { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
         s_touchClockMs = t + 1000;
-        for (int i = 0; i < 60; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.BandY == 0f && s.Activity == FluentGpu.Scroll.ScrollActivity.Idle) break; }
+        for (int i = 0; i < 60; i++)
+        {
+            var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
+            host.Scene.TryGetScroll(vp, out var s);
+            float maxOff = MathF.Max(0f, s.ContentH - s.ViewportH);
+            float overpan = s.OffsetY - Math.Clamp(s.OffsetY, 0f, maxOff);
+            if (overpan == 0f && s.Motion.IsMoving == false) break;
+        }
         return worst;
     }
 
@@ -1077,14 +1087,13 @@ static class TouchSuite
         using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new SnapFlingProbe(), frameTime: new FixedFrameTimeSource(dtMs));
         host.RunFrame();
         host.Scene.ScrollRef(host.Scene.Root).SnapInterval = SnapFlingProbe.RowH;
-        FluentGpu.Layout.FlexLayout.RepostFrame(host.Scene, host.Scene.Root);   // see the sibling gate above — raw column
-                                                                                 // writes never reach the kernel on their own
+        host.RunFrame();   // see the sibling gate above — the extent/viewport publish to the handle every frame now
         host.Input.Arena.Recorder = rec;
         var vp = host.Scene.Root;
         // A modest, fixed flick (event clock identical across the dt sweep ⇒ identical sampled velocity ⇒ identical snap
         // target). Generous settle budget so even the finest dt (8.33ms ⇒ ~4× the frames of 33.3ms) fully lands.
         TouchGesture(window, host, new Point2(150, 300), new Point2(150, 240), 10, pointerId: 93, msPerStep: 16f);
-        for (int i = 0; i < 8000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var sc); if (sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle) break; }
+        for (int i = 0; i < 8000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var sc); if (sc.Motion.IsMoving == false) break; }
         host.Scene.TryGetScroll(vp, out var settled);
         settledOff = settled.OffsetY;
         return rec.ResolutionSignature();
@@ -2362,14 +2371,14 @@ static class TouchSuite
             var scrollerM = FindScrollable(sceneM, sceneM.Root);
             sceneM.TryGetScroll(scrollerM, out var scM);
             var rcM = CenterOf(sceneM, Child(sceneM, scM.ContentNode, 0));
-            windowM.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(rcM.X + 120f, rcM.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000));
+            windowM.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(rcM.X + 120f, rcM.Y), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 5_000));
             hostM.RunFrame();
             for (int i = 1; i <= 12; i++)
             {
-                windowM.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rcM.X + 120f - i * 12f, rcM.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000 + (uint)i * 16));
+                windowM.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rcM.X + 120f - i * 12f, rcM.Y), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 5_000 + (uint)i * 16));
                 hostM.RunFrame();
             }
-            windowM.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(rcM.X - 30f, rcM.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000 + 13 * 16));
+            windowM.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(rcM.X - 30f, rcM.Y), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 5_000 + 13 * 16));
             hostM.RunFrame();
             float mouseTrackX = MaxAbsTrackX(hostM, scrollerM);
             bool mouseNoSwipe = mouseTrackX < 1f;
@@ -2801,7 +2810,7 @@ static class TouchSuite
         }
 
         // (6) PAN+FLING: a vertical flick over a bound virtual list → the Pan member eager-wins (sweeping nothing else
-        // on a bare list, but the Pan WIN is recorded); the fling decays downstream of the arena (on the ScrollKernel).
+        // on a bare list, but the Pan WIN is recorded); the fling decays downstream of the arena (a Decay plan on the viewport's handle).
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("det-fling", new Size2(360, 460), 1f)); window.Show();
@@ -2834,7 +2843,7 @@ static class TouchSuite
         {
             host.RunFrame();
             host.Scene.TryGetScroll(vp, out var sc);
-            if (sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle) break;   // settled (fling ended)
+            if (sc.Motion.IsMoving == false) break;   // settled (fling ended)
         }
         host.Scene.TryGetScroll(vp, out var settled);
         settledOff = settled.OffsetY;

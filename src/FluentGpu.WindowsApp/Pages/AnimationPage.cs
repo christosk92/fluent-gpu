@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
+using FluentGpu.Scroll.Effects;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
@@ -32,8 +33,7 @@ sealed class AnimationPage : Component
         var hooksOpen = UseSignal(true);
         Signal<bool>[] all = [tracksOpen, revealsOpen, layoutOpen, interactionOpen, hooksOpen];
 
-        // Section anchors for the quick-nav: captured at realize, scrolled to with the ScrollIntoView seam (posts an
-        // immediate ScrollTo through the scroll kernel — clamp/transform/virtualization are the kernel's job now).
+        // Section anchors for the quick-nav: captured at realize, scrolled to through the viewport's ScrollHandle.
         var anchors = UseRef(new NodeHandle[5]);
         void ScrollToSection(int i)
         {
@@ -46,7 +46,7 @@ sealed class AnimationPage : Component
             ref ScrollState sc = ref scene.ScrollRef(vp);
             if (sc.ContentNode.IsNull || !scene.IsLive(sc.ContentNode)) return;
             float y = scene.AbsoluteRect(target).Y - scene.AbsoluteRect(sc.ContentNode).Y;   // content-space position
-            ScrollIntoView.ScrollTo(Context, vp, y - 8f, animate: false);
+            scene.ScrollHandleFor(vp)?.ScrollTo(y - 8f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         }
 
         return GalleryPage.Shell("Animation",
@@ -173,7 +173,6 @@ sealed class AnimationPage : Component
     // SizeMode.Reflow primitive, so collapsing a group reflows the whole page map. ──
     static Element SectionCard(Action<NodeHandle> capture, Signal<bool> open, string title, string blurb, Element[] items)
     {
-        var stuck = new Signal<bool>(false);   // the :stuck observable for THIS card's header (same lifetime as `open`)
         return new BoxEl
         {
             Direction = 1,
@@ -186,11 +185,10 @@ sealed class AnimationPage : Component
                     IsExpanded = open,
                     Parts = new()
                     {
-                        [Expander.PartHeader] = b => b with
+                        [Expander.PartHeader] = b => b.Sticky(8f) with   // sticky scroll effect (engages early, keeps a gap)
                         {
-                            ScrollBinds = [ new() { PinTop = 8f, OnFlag = p => stuck.Value = p } ],   // generic sticky bind (engages early, keeps a gap)
-                            Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // opaque while stuck (reading subscribes)
-                            BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades
+                            Fill = Tok.FillSolidBase,                          // opaque plate under the pinned header
+                            BrushTransitionMs = Motion.ControlFast,
                         },
                         [Expander.PartContent] = p => p with { Padding = Edges4.All(14) },
                     },

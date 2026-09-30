@@ -347,6 +347,14 @@ struct HttpFetchTiming
     uint64_t headerMs = 0;    // connect + TLS + TTFB (diagnostic only; never folded into the throughput estimate)
     uint64_t transferMs = 0;  // response-body transfer
     uint64_t bytes = 0;
+    // THROUGHPUT HYGIENE. Set from HttpResponseMessage::Source() the moment the response headers arrive (HttpFetch::
+    // OnHeaders): true means the WinRT HTTP cache answered this request itself — no bytes crossed the network, and
+    // `transferMs`/`headerMs` measure a cache lookup, not a transfer. Never inferred from `transferMs == 0`: a fast
+    // CDN edge can legitimately answer in under a millisecond, and THAT is real throughput. This is what the
+    // production incident actually was — the guard bug's repeated identical GETs for the same segment URL were being
+    // answered out of that cache at ~0 ms, which is what poisoned the ABR estimate at ~1.3 Gbps. Every place that
+    // folds `bytes`/`transferMs` into Session::bytesDownloaded / downloadElapsedMs must check this first.
+    bool fromStore = false;
 };
 
 /// Apply app-supplied request headers ("Name: Value\n" lines) — e.g. auth for a real CDN (M6). Moved verbatim.
@@ -458,6 +466,9 @@ class HttpFetch : public std::enable_shared_from_this<HttpFetch>
         {
             WWH::HttpResponseMessage resp = done.GetResults();
             timing.headerMs = GetTickCount64() - m_headerStartMs;
+            // THROUGHPUT HYGIENE (see HttpFetchTiming::fromStore): the WinRT HTTP cache, not this class, is the
+            // cache — Source() says whether IT answered from its own cache instead of the network.
+            timing.fromStore = resp.Source() == WWH::HttpResponseMessageSource::Cache;
             status = (int)resp.StatusCode();
             m_bodyStartMs = GetTickCount64();
             ReadOp readOp = resp.Content().ReadAsBufferAsync();

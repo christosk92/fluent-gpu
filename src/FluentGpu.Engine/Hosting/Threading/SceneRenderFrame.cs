@@ -9,8 +9,8 @@ using FluentGpu.Scene;
 namespace FluentGpu.Hosting.Threading;
 
 internal readonly record struct SceneRecordOptions(FocusVisualStyle Focus, TextEditStyle TextEdit,
-    ColorF ScrollThumb, ColorF ScrollTrack, bool HoldSelfBlur, SpanReuseDisabledReason SpanDisable,
-    ulong DamageEpoch, bool CollectSpanMisses);
+    ColorF ScrollThumb, ColorF ScrollTrack, SpanReuseDisabledReason SpanDisable,
+    bool CollectSpanMisses, int ThemeEpoch = 0);
 
 /// <summary>All recording inputs for one publication. The publisher slot owns every mutable buffer.</summary>
 internal sealed class SceneRenderFrame
@@ -39,19 +39,30 @@ internal sealed class SceneRenderFrame
         // incremental path returns false rather than guessing, so the fallback is not an error path - it is the normal
         // answer on any frame that reconciled or laid out.
         var popupRoots = _popupRoots.AsSpan(0, _popupCount);
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!Scene.CaptureIncremental(source, popupRoots, lastCapturedSeq)) Scene.Capture(source, popupRoots);
+        long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         Scene.Recording.CopyConfigurationFrom(source.Recording);
         Scene.Recording.RetainConfigurationStrings(Scene, strings);
+        long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         // Only images the recorder can draw: the captured nodes' references plus the detached slab's (folded in below).
         Images.Capture(images, Scene.ReferencedImageIds);
+        long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
         animation.CaptureCompositorAnimations(Animations,
             System.Diagnostics.Stopwatch.GetTimestamp() * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+        long t4 = System.Diagnostics.Stopwatch.GetTimestamp();
+        double tick = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        DiagSceneMs = (t1 - t0) * tick; DiagConfigMs = (t2 - t1) * tick; DiagImagesMs = (t3 - t2) * tick; DiagAnimMs = (t4 - t3) * tick;
         // The compositor overlay is a bounded ROW POOL, not a per-node column, and it is sized HERE - on the publisher
         // side, while this slot is exclusively owned, and only once the animation descriptions exist. The renderer
         // adopts this slot's Animations against this slot's Scene, so the distinct nodes named above are exactly the
         // rows a tick can ask for: the render thread never grows the pool and never allocates.
         // See SceneRecordingSnapshot.Animation.cs for the fallback if a caller ever drives a tick past the reserve.
         Scene.ReserveCompositorRows(Animations.DistinctNodeCount);
+        // Scroll coverage (scroll rework §5): one row per viewport the UI realized content for + its effect rows, copied
+        // from the host's UI-side table so the render poser adopts exactly what this publication's rows cover.
+        Scene.ScrollCoverage.Clear();
+        source.CaptureScrollCoverage?.Invoke(Scene.ScrollCoverage);
         Options = options;
         Copy(skip, ref _skip, out _skipCount);
         Copy(reuseBlock, ref _reuseBlock, out _reuseBlockCount);
@@ -84,23 +95,34 @@ internal sealed class SceneRenderFrame
     /// Deliberately NOT an input to recording. Reuse validity is decided by the snapshot's own record-dirty bits, its
     /// removal ledger and the recorder's gates; the host holds all three open until the renderer has consumed a
     /// publication, so a snapshot published across a gap carries their UNION and is exactly as trustworthy as one
-    /// published after a consume. The span table is likewise safe: its freshness test (<c>_frame[i] == frameId - 1</c>)
-    /// counts RECORD frames — advanced once per <see cref="Record"/>, on this thread — and a publication that was never
-    /// recorded never advanced it. Treating a gap as a reuse killer meant a full re-record plus whole-root damage on
+    /// published after a consume. The span table is likewise safe: a span is copyable only out of the arena buffer
+    /// generation it was written into (<c>SpanTable.TryGet</c>) — advanced by the render thread's own record passes — and
+    /// a publication that was never recorded never advanced it. Treating a gap as a reuse killer meant a full re-record plus whole-root damage on
     /// exactly the frames where the renderer was already behind, which is the steady state under scroll.</summary>
     internal bool PublicationGap { get; private set; }
 
-    internal SceneRecordStats Record(DrawList commands, SpanTable spans, bool publicationGap)
+    /// <summary>Always-on split of the last <see cref="Capture"/> (UI thread, ms): the scene snapshot, the recording
+    /// configuration + retained strings, the image-cache snapshot, the compositor-animation capture. Surfaced through
+    /// <c>FrameStats</c> so a slow `capture` names its own step.</summary>
+    internal double DiagSceneMs, DiagConfigMs, DiagImagesMs, DiagAnimMs;
+
+    /// <summary>Record this publication into the render thread's slice arenas and lay out its composite plan (the scene
+    /// turn of the three-way render turn). <paramref name="commands"/> is left empty — the slices ARE the frame.</summary>
+    internal SceneRecordStats Record(DrawList commands, SpanTable spans, SliceRecorder slices, bool publicationGap)
     {
         PublicationGap = publicationGap;
         var options = Options;
-        var stats = Scene.Recording.Record(Scene, commands, Images, options.Focus, options.ScrollThumb, options.ScrollTrack,
-            options.TextEdit, _skip.AsSpan(0, _skipCount), options.HoldSelfBlur, spans, options.SpanDisable,
-            _damage.AsSpan(0, _damageCount), options.DamageEpoch,
-            _reuseBlock.AsSpan(0, _reuseBlockCount), options.CollectSpanMisses);
-        Scene.Recording.RecordDetachedNodes(commands, Images, _detached.AsSpan(0, _detachedCount), Scene.OverlayClip);
-        return stats;
+        return Scene.Recording.Record(Scene, commands, Images, options.Focus, options.ScrollThumb, options.ScrollTrack,
+            options.TextEdit, _skip.AsSpan(0, _skipCount), spans, options.SpanDisable,
+            _damage.AsSpan(0, _damageCount),
+            _reuseBlock.AsSpan(0, _reuseBlockCount), options.CollectSpanMisses,
+            slices, _detached.AsSpan(0, _detachedCount));
     }
+
+    /// <summary>The composite-only turn of the three-way render turn: only slice poses moved, so the retained slices are
+    /// re-placed at this snapshot's current poses without recording a byte.</summary>
+    internal RepaintDamageRegion Compose(SliceRecorder slices)
+        => Scene.Recording.Compose(Scene, slices);
 
     internal void RecordPopups(IGpuDevice device, float scale, float imageClockMs)
     {

@@ -77,7 +77,7 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
         // CHANGED ⇒ the deferred, equality-gated push. Subscribers were already flagged CHECK (and therefore already
         // queued/cascaded) by OnStale at write time, so MarkDirty here is an in-place upgrade for them — it does not
         // re-schedule, and a subscriber currently polling us sees the upgrade on its next loop-condition check.
-        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty();
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty(this);
     }
 
     // A memo becoming stale cascades a MAYBE (Check) downstream — eagerly, so every transitive subscriber is flagged and
@@ -85,7 +85,7 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
     // recompute turns the MAYBE into a real re-run is decided later, by value (see Recompute).
     private protected override void OnStale()
     {
-        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkCheck();
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkCheck(this);
     }
 
     internal override void RunStale() { /* memos are pull-based: no scheduled run */ }
@@ -98,6 +98,11 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
     }
 
     void ISignalSource.Unsubscribe(Computation c) => _subs.Remove(c);
+
+    /// <summary>DIAGNOSTIC name for report lines (the render census's <c>by=</c>). Never read on a hot path.</summary>
+    public string? DebugName { get; init; }
+
+    string ISignalSource.DiagKind => DiagOwner is { } owner ? "Memo(" + owner.GetType().Name + ")" : "Memo";
 
     // The pull entry point for a downstream computation resolving its Check (see Computation.ResolveCheck).
     void ISignalSource.EnsureFresh() => UpdateIfNecessary();

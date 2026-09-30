@@ -18,7 +18,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// resident), so those bytes are working set, not "GPU memory somewhere else".</para>
 ///
 /// <para><b>Fence discipline (the invariant to preserve):</b> the device calls <see cref="BeginFrame"/> only after
-/// <c>WaitForFrame(frameIndex)</c> proved the submit that last used that bank has retired, so replacing the bank's
+/// the ring slot's fence value proved the submit that last used that bank has retired, so replacing the bank's
 /// buffer there cannot race an in-flight GPU read. Growth happens ONLY there — never mid-frame — because a GPU virtual
 /// address handed out by <see cref="TryReserve"/> must stay valid until the frame's LAST flush executes, and this
 /// backend flushes several times per submit (one per layer/segment boundary). A frame that outgrows its bank refuses,
@@ -56,11 +56,11 @@ internal sealed unsafe class UploadArena : IDisposable
         for (int b = 0; b < D3D12Device.FrameBankDepth; b++) Allocate(b, _policy.InitialBytes);
     }
 
-    /// <summary>Select this frame's bank (by back-buffer index) and reset the bump cursor, growing the bank first if a
-    /// previous frame asked for more. The bank is fenced at this point — see the type doc.</summary>
-    public void BeginFrame(int frameIndex)
+    /// <summary>Select this frame's bank (by <see cref="SubmissionRing"/> slot) and reset the bump cursor, growing the
+    /// bank first if a previous frame asked for more. The bank is fenced at this point — see the type doc.</summary>
+    public void BeginFrame(int slot)
     {
-        if (_policy.BeginFrame(frameIndex, out int bank, out uint growTo)) Allocate(bank, growTo);
+        if (_policy.BeginFrame(slot, out int bank, out uint growTo)) Allocate(bank, growTo);
         _bank = bank;
     }
 

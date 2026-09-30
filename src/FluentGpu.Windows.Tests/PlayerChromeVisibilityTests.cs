@@ -273,4 +273,59 @@ public sealed class PlayerChromeVisibilityTests
         m.Tick(3199); Assert.True(m.ChromeVisible);
         m.Tick(3200); Assert.False(m.ChromeVisible);
     }
+
+    // ── PlayerChromeFeed (a HOST's own on-media chrome) drives this SAME machine through the identical methods a
+    //    host-less transport would — these pin the machine-level behaviour PlayerChromeFeed's four writers rely on.
+    //    The feed itself is a thin forwarder (Controls/Media/PlayerChromeFeed.cs); nothing here exercises the feed
+    //    object, only the machine calls it makes.
+
+    [Fact]
+    public void HostPressedHoldOutlivesTheDwellUntilReleased()   // PlayerChromeFeed.SetPressed
+    {
+        var m = Resting();
+        m.SetPressed(true, 1000);          // a press on the HOST's own on-media chrome
+        m.Tick(50_000); Assert.True(m.ChromeVisible);
+        m.SetPressed(false, 50_000);
+        m.Tick(52_999); Assert.True(m.ChromeVisible);
+        m.Tick(53_000); Assert.False(m.ChromeVisible);
+    }
+
+    [Fact]
+    public void HostWindowMoveStartedReplacesPressedWithWindowMove()   // PlayerChromeFeed.WindowMoveStarted
+    {
+        var m = Resting();
+        m.SetPressed(true, 100);           // the host handed this press to its own OS move loop
+        m.WindowMoveStarted(150);
+        Assert.Equal(ChromeHold.WindowMove, m.Holds);   // Pressed is gone — WindowMove is the hold now
+        m.Tick(60_000); Assert.True(m.ChromeVisible);
+        m.WindowMoveEnded(60_000);
+        m.Tick(62_999); Assert.True(m.ChromeVisible);
+        m.Tick(63_000); Assert.False(m.ChromeVisible);
+    }
+
+    [Fact]
+    public void HostPointerCoveredDropsHostHoldsAndReassertRestoresThem()   // PlayerChromeFeed.SetPointerOverControls
+    {
+        var m = Resting();
+        m.SetPointerOverControls(true, 100);         // resting on the HOST's own control panel
+        m.PointerCovered(200);                       // hover taken by something else (a scrim, a capture cancel)
+        Assert.Equal(ChromeHold.None, m.Holds);
+        m.SetPointerOverControls(true, 300);         // the host re-asserts once it has hover again
+        Assert.Equal(ChromeHold.OverControls, m.Holds);
+        m.Tick(100_000); Assert.True(m.ChromeVisible);   // held again — the dwell never fires
+    }
+
+    [Fact]
+    public void AHostScrubHoldsLikeTheOwnRail()   // PlayerChromeFeed.SetScrubbing
+    {
+        var m = Resting(); m.Tick(3000);
+        m.SetScrubbing(true, 3100);      // a scrub on the HOST's own seek UI reveals (a hold never reveals — but the
+        Assert.False(m.ChromeVisible);   // element's own rail never reveals on scrub-start either; only activity does)
+        m.PointerMoved(120, 100, 3200);  // REAL activity (past the creep deadzone — a 1-DIP nudge is rest, see
+        Assert.True(m.ChromeVisible);    // ASlowCreepRevealsOnceItLeavesTheRestPoint) reveals and holds through the scrub
+        m.Tick(1_000_000); Assert.True(m.ChromeVisible);   // held for as long as the host reports scrubbing
+        m.SetScrubbing(false, 1_000_000);
+        m.Tick(1_002_999); Assert.True(m.ChromeVisible);
+        m.Tick(1_003_000); Assert.False(m.ChromeVisible);
+    }
 }

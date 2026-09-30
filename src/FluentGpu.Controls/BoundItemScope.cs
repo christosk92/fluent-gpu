@@ -92,6 +92,22 @@ public static class BoundItemScopeExtensions
         });
     }
 
+    /// <summary>Bound row cells for a <see cref="ListRowEl"/> (a flat list row as ONE scene node): <paramref name="fill"/>
+    /// refills ONE <see cref="RowCellBuffer"/> — owned by THIS slot, allocated once at template time, reused on every
+    /// rebind — with the current item's ≤8 cells. The reconciler copies the cells into scene-owned storage on write, so
+    /// overwriting the buffer on the next recycle is always safe. <c>new ListRowEl(scope.Cells((t, b) =&gt; { b.Add(...); }))</c>.</summary>
+    public static Prop<RowCells> Cells<T>(this in BoundItemScope<T> scope, Action<T, RowCellBuffer> fill)
+    {
+        var item = scope.Item;
+        var buffer = new RowCellBuffer();
+        return Prop.Of(() =>
+        {
+            buffer.Clear();
+            fill(item.Value, buffer);
+            return buffer.Current;
+        });
+    }
+
     /// <summary>Bound small-integer text via the dense, never-cleared <see cref="FormatCache.Int"/> cache (row
     /// numbers, track/play counts).</summary>
     public static Prop<string> Number<T>(this in BoundItemScope<T> scope, Func<T, int> sel)

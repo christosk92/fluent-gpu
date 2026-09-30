@@ -98,6 +98,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private int _lineRecCount;
     private int _textLen;
     private ushort _ellGid; private float _ellAdv; private nint _ellFace; private float _ellSize;
+    // Per-span trim ellipsis (spanned paragraphs only; grow-only, parallel, indexed by span): the "…" glyph in each
+    // span's own face at its own size, so a line cut inside a span ends in THAT span's ellipsis (EmitLine) — never the
+    // paragraph base size/weight. _spanEllCount == 0 for plain text (the single-style trim path, unchanged).
+    private ushort[] _spanEllGid = new ushort[4]; private nint[] _spanEllFace = new nint[4];
+    private float[] _spanEllAdv = new float[4]; private float[] _spanEllSize = new float[4];
+    private int _spanEllCount;
 
     public float Width { get; private set; }
     public float Height { get; private set; }
@@ -274,7 +280,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1)
     {
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
-        _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0;
+        _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0; _spanEllCount = 0;
 
         // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Plain text only
         // (spanned inline runs re-shape — never the resize hot path). On a hit, restore the shaped state and re-wrap.
@@ -359,6 +365,10 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             DWRITE_GLYPH_METRICS egm; face->GetDesignGlyphMetrics(&eg, 1, &egm, BOOL.FALSE);
             _ellGid = eg; _ellAdv = (float)egm.advanceWidth * scale;
         }
+        // …and one per span, in the span's resolved face (family + weight) at its size — the same resolution the shaping
+        // loop below uses for the span's text. A face without a "…" glyph falls back to the base ellipsis (still tinted
+        // by the span). Spanned text never enters the shape cache, so nothing here needs caching.
+        if (!spans.IsEmpty) ResolveSpanEllipses(spans, family, weight, size, names);
 
         _itemizer.Itemize(text, _runs, _breaks);
 
@@ -657,14 +667,28 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
 
         float baselineY = Baseline + lineIndex * lineHeight;
-        int useLen = len; bool ellipsize = false;
+        int useLen = len; bool ellipsize = false; int ellSpan = -1;
         if (doTrim)
         {
             float total = 0f; for (int k = 0; k < len; k++) total += _glyphs[order[k]].Advance;
             if (total > maxWidth)
             {
-                float budget = MathF.Max(0f, maxWidth - _ellAdv); float acc = 0f; useLen = 0;
-                for (int k = 0; k < len; k++) { float a = _glyphs[order[k]].Advance; if (acc + a > budget && useLen > 0) break; acc += a; useLen++; }
+                if (_spanEllCount == 0)
+                {
+                    // Single-style paragraph: the base "…" (unchanged path).
+                    float budget = MathF.Max(0f, maxWidth - _ellAdv); float acc = 0f; useLen = 0;
+                    for (int k = 0; k < len; k++) { float a = _glyphs[order[k]].Advance; if (acc + a > budget && useLen > 0) break; acc += a; useLen++; }
+                }
+                else
+                {
+                    // Spanned paragraph: the "…" takes the style of the span the cut lands in (the last visible glyph's),
+                    // and each candidate cut reserves THAT ellipsis's advance — the pure fit is LineBreaker's.
+                    Span<float> advs = len <= 256 ? stackalloc float[len] : new float[len];
+                    Span<short> spanOf = len <= 256 ? stackalloc short[len] : new short[len];
+                    for (int k = 0; k < len; k++) { ref readonly var g = ref _glyphs[order[k]]; advs[k] = g.Advance; spanOf[k] = g.Span; }
+                    useLen = FluentGpu.Text.LineBreaker.FitEllipsisBySpan(advs, spanOf, maxWidth, _ellAdv,
+                        _spanEllAdv.AsSpan(0, _spanEllCount), out ellSpan);
+                }
                 ellipsize = true;
             }
         }
@@ -679,7 +703,17 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
-        if (ellipsize && _ellFace != 0)
+        if (ellipsize && (uint)ellSpan < (uint)_spanEllCount)
+        {
+            // Span-styled "…": its face (weight/family), size and span index (→ the renderer tints it with the span
+            // colour) — the advance added here is the one FitEllipsisBySpan reserved for this cut.
+            if (_spanEllFace[ellSpan] != 0)
+            {
+                _laid[_laidCount++] = new LaidGlyph(_spanEllGid[ellSpan], _spanEllFace[ellSpan], x, baselineY, _spanEllSize[ellSpan], (short)ellSpan);
+                x += _spanEllAdv[ellSpan];
+            }
+        }
+        else if (ellipsize && _ellFace != 0)
         {
             _laid[_laidCount++] = new LaidGlyph(_ellGid, _ellFace, x, baselineY, _ellSize, -1);
             x += _ellAdv;
@@ -841,6 +875,42 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             if (s > pos && s < segEnd) segEnd = s;
         }
         return segEnd;
+    }
+
+    /// <summary>Fill the per-span ellipsis table (<c>_spanEll*</c>, indexed by span) for a spanned paragraph: each span's
+    /// "…" glyph id + advance in its own resolved face at its own size. Call after the base ellipsis is known (a span
+    /// whose face is missing or lacks the glyph takes the base one). Grow-only buffers — 0 alloc in steady state.</summary>
+    private void ResolveSpanEllipses(ReadOnlySpan<SpanStyle> spans, string family, int weight, float size, StringTable? names)
+    {
+        int count = spans.Length;
+        if (_spanEllGid.Length < count)
+        {
+            int cap = Math.Max(count, _spanEllGid.Length * 2);
+            Array.Resize(ref _spanEllGid, cap); Array.Resize(ref _spanEllFace, cap);
+            Array.Resize(ref _spanEllAdv, cap); Array.Resize(ref _spanEllSize, cap);
+        }
+        for (int si = 0; si < count; si++)
+        {
+            ref readonly var sp = ref spans[si];
+            string fam = family;
+            if (!sp.FontFamily.IsEmpty && names is not null) { var f2 = names.Resolve(sp.FontFamily); if (f2.Length > 0) fam = f2; }
+            int w = sp.Weight != 0 ? sp.Weight : weight;
+            float sz = sp.SizeDip > 0f ? sp.SizeDip : size;
+            var f = ResolveFace(fam, w, out FaceMetrics fm);
+            ushort eg = 0;
+            if (f != null) { uint ec = '…'; f->GetGlyphIndices(&ec, 1, &eg); }
+            if (eg != 0)
+            {
+                DWRITE_GLYPH_METRICS egm; f->GetDesignGlyphMetrics(&eg, 1, &egm, BOOL.FALSE);
+                float sc = fm.Em > 0 ? sz / fm.Em : sz / 2048f;
+                _spanEllGid[si] = eg; _spanEllFace[si] = (nint)f; _spanEllAdv[si] = (float)egm.advanceWidth * sc; _spanEllSize[si] = sz;
+            }
+            else
+            {
+                _spanEllGid[si] = _ellGid; _spanEllFace[si] = _ellFace; _spanEllAdv[si] = _ellAdv; _spanEllSize[si] = _ellSize;
+            }
+        }
+        _spanEllCount = count;
     }
 
     private void EnsureGlyphs(int n) { if (_glyphs.Length < n) Array.Resize(ref _glyphs, Math.Max(n, _glyphs.Length * 2)); }

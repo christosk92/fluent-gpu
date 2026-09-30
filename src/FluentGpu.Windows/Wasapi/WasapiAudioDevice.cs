@@ -403,6 +403,10 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
     private void Open(MixFormat requested)
     {
+        // Always-on, one line per device open (the matching "open deviceRate=…" line below is the success edge): a
+        // WASAPI open that never returns — the 2026-09-22 hand-back from a closed video window opened its byte source,
+        // filled its ring and then produced nothing at all — must at least show that it was ENTERED.
+        FormatSink?.Invoke($"open.begin requested={requested.SampleRate}Hz/{requested.Channels}ch");
         // COM must be initialized on this thread; MTA is fine for WASAPI. Ignore "already initialized" results.
         _ = CoInitializeEx(null, (uint)(COINIT.COINIT_MULTITHREADED | COINIT.COINIT_DISABLE_OLE1DDE));
         int hr;

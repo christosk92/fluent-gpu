@@ -50,13 +50,18 @@ public readonly record struct PresentStats
     /// <c>qpcCompose</c> — its measured jitter is roughly a third.</summary>
     public long VBlankQpc { get; init; }
 
-    /// <summary>DWM <c>cFramesDropped</c> delta since the previous sample: frames the compositor had to drop because
-    /// they arrived late. "We were late."</summary>
+    /// <summary>DWM <c>cFramesDropped</c> delta between the 1 Hz sample <see cref="DwmSampleSeq"/> and the one before it:
+    /// frames the compositor had to drop because they arrived late. "We were late." Presents between two samples
+    /// re-publish the latest sample's deltas under the same <see cref="DwmSampleSeq"/> — a reader that sums per present
+    /// or per frame must count each sequence once.</summary>
     public uint DwmFramesDroppedDelta { get; init; }
     /// <summary>DWM <c>cFramesMissed</c> delta: composition cycles that found no new frame at all. "We starved it."</summary>
     public uint DwmFramesMissedDelta { get; init; }
     /// <summary>DWM <c>cFramesLate</c> delta: the compositor's own lateness — a confound, not our fault.</summary>
     public uint DwmFramesLateDelta { get; init; }
+    /// <summary>Identity of the DWM sample the three <c>Dwm*Delta</c> values belong to: +1 per fresh (baselined) 1 Hz
+    /// sample, 0 before the first one. The deltas are fresh exactly when this differs from the previous reading.</summary>
+    public uint DwmSampleSeq { get; init; }
 
     /// <summary>Wall time (ms) the last present spent BLOCKED on the frame-latency waitable. The swapchain is created
     /// waitable with a maximum frame latency of 1, so a sustained non-trivial wait here is compositor backpressure —

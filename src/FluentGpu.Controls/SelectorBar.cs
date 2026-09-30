@@ -33,17 +33,46 @@ public static class SelectorBar
     internal const float IconTextSpacing = 8f;  // SelectorBarItemSpacing (themeresources:99)
 
     /// <summary><paramref name="icons"/> = optional per-item glyphs (WinUI SelectorBarItem.Icon, SelectorBar.idl):
-    /// rendered before the text at 0.8 scale with the −2,0 icon margin, recolored by the same foreground states.</summary>
+    /// rendered before the text at 0.8 scale with the −2,0 icon margin, recolored by the same foreground states.
+    /// <paramref name="style"/> = an optional non-WinUI look (e.g. a page-title pivot: large semibold labels, no pill,
+    /// a subtle hover plate); null keeps the stock WinUI template byte-identical. Behaviour (roving keys, the single
+    /// tab stop, OnChange, parts) is the same in every style.</summary>
     public static Element Create(IReadOnlyList<string> items, Signal<int>? selectedIndex = null, Action<int>? onChange = null,
-                                 TemplateParts? parts = null, IReadOnlyList<string?>? icons = null)
-        => Embed.Comp(new Props(items, icons, selectedIndex, onChange, parts), () => new SelectorBarCore());
+                                 TemplateParts? parts = null, IReadOnlyList<string?>? icons = null, SelectorBarStyle? style = null)
+        => Embed.Comp(new Props(items, icons, selectedIndex, onChange, parts, style), () => new SelectorBarCore());
 
     /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
     /// ComponentEl never re-runs its factory, so the items stay LIVE across parent re-renders via the props channel.
     /// The selected index is a caller <see cref="Signal{T}"/> read directly in the core (null ⇒ auto-materialize); a
     /// select/roving move WRITES the signal then fires OnChange. The core reads props with <c>UseProps</c>.</summary>
     internal sealed record Props(IReadOnlyList<string> Items, IReadOnlyList<string?>? Icons, Signal<int>? Selected,
-                                 Action<int>? OnChange, TemplateParts? Parts);
+                                 Action<int>? OnChange, TemplateParts? Parts, SelectorBarStyle? Style = null);
+}
+
+/// <summary>Optional look for SelectorBar. null = the stock WinUI look, byte-identical.</summary>
+/// <remarks>Every field defaults to the stock value, so <c>new SelectorBarStyle()</c> differs from null only in what the
+/// stock template leaves implicit (an explicit 400 label weight, transparent state fills). The label weight follows
+/// selection (<see cref="RestWeight"/> / <see cref="SelectedWeight"/>); the hover/press fills ride the item box's
+/// engine-serviced HoverFill/PressedFill ramp (the 83 ms ControlFaster fade) on the item's ControlCornerRadius (4).</remarks>
+public sealed record SelectorBarStyle
+{
+    public float LabelSize { get; init; } = 14f;
+    public float LineHeight { get; init; } = float.NaN;      // NaN = font-natural (today's)
+    public string? FontFamily { get; init; }                  // null = default UI face
+    public float CharSpacing { get; init; }                   // 1/1000 em, 0 = none
+    public int RestWeight { get; init; } = 400;
+    public int SelectedWeight { get; init; } = 400;
+    public ColorF? RestColor { get; init; }                   // null = stock (TextPrimary)
+    public ColorF? SelectedColor { get; init; }               // null = stock (TextPrimary)
+    public ColorF? HoverColor { get; init; }                  // null = stock (TextSecondary) — applies to both legs
+    public ColorF? PressedColor { get; init; }                // null = stock rule (selected ? TextSecondary : TextTertiary)
+    public ColorF? HoverFill { get; init; }                   // null = transparent (stock)
+    public ColorF? PressedFill { get; init; }                 // null = transparent (stock)
+    public bool ShowPill { get; init; } = true;               // false = no pill and NO reserved pill slot
+    public Edges4? ItemPadding { get; init; }                 // null = stock (12,10,12,7)
+    public float ItemHeight { get; init; } = float.NaN;       // NaN = content height (stock)
+    public float ItemGap { get; init; }                       // gap between items, 0 = stock
+    public float LeadingInset { get; init; }                  // e.g. -8: pulls the first item left so its TEXT aligns with the page edge
 }
 
 /// <summary>The stateful core: captures item node handles (for the roving focus moves) and routes the arrow keys —
@@ -105,6 +134,9 @@ internal sealed class SelectorBarCore : Component
             if (target != i) MoveTo(target);
         }
 
+        var st = p.Style;                        // null = the stock WinUI look (every branch below keeps it byte-identical)
+        bool showPill = st?.ShowPill ?? true;
+
         var tabs = new Element[count];
         for (int i = 0; i < count; i++)
         {
@@ -119,14 +151,32 @@ internal sealed class SelectorBarCore : Component
             // brush/Secondary (SelectorBar.xaml:135-136). Backgrounds transparent in every state (:21-25): no
             // hover/press fill plate.
             ColorF pressedFg = isSelected ? Tok.TextSecondary : Tok.TextTertiary;
+            // SelectorBarStyle (null = stock): only the fields a style names diverge; each unset one resolves to the
+            // stock value above, so the stock tree below is untouched when no style is passed.
+            ColorF restFg = Tok.TextPrimary, hoverFg = Tok.TextSecondary;
+            if (st is not null)
+            {
+                restFg = (isSelected ? st.SelectedColor : st.RestColor) ?? Tok.TextPrimary;
+                hoverFg = st.HoverColor ?? Tok.TextSecondary;
+                pressedFg = st.PressedColor ?? pressedFg;
+            }
 
             var label = new TextEl(p.Items![index])
             {
                 Size = 14f,                          // ControlContentThemeFontSize, FontWeight Normal (SelectorBar.xaml:58-59)
-                Color = Tok.TextPrimary,
-                HoverColor = Tok.TextSecondary,
+                Color = restFg,
+                HoverColor = hoverFg,
                 PressedColor = pressedFg,
             };
+            if (st is not null)
+                label = label with
+                {
+                    Size = st.LabelSize,
+                    LineHeight = st.LineHeight,
+                    FontFamily = st.FontFamily,
+                    CharSpacing = st.CharSpacing,
+                    Weight = (ushort)Math.Clamp(isSelected ? st.SelectedWeight : st.RestWeight, 1, 999),   // weight follows selection
+                };
 
             string? glyph = p.Icons is { } ic && index < ic.Count ? ic[index] : null;
             Element[] rowKids = glyph is { Length: > 0 }
@@ -134,8 +184,8 @@ internal sealed class SelectorBarCore : Component
                    {
                        FontFamily = Theme.IconFont,
                        Size = 16f * SelectorBar.IconScale,       // 16px IconElement × SelectorBarItemIconScale 0.8 (SelectorBar.xaml:186-188)
-                       Color = Tok.TextPrimary,                  // PART_IconVisual recolors with the same states (SelectorBar.xaml:78-79, :92-93)
-                       HoverColor = Tok.TextSecondary,
+                       Color = restFg,                           // PART_IconVisual recolors with the same states (SelectorBar.xaml:78-79, :92-93)
+                       HoverColor = hoverFg,
                        PressedColor = pressedFg,
                        Margin = new Edges4(-2, 0, -2, 0),        // SelectorBarItemIconVisualMargin −2,0 (themeresources:30)
                        AlignSelf = FlexAlign.Center,
@@ -150,7 +200,7 @@ internal sealed class SelectorBarCore : Component
                 Direction = 0,
                 Gap = SelectorBar.IconTextSpacing,   // StackPanel Spacing = SelectorBarItemSpacing 8 (SelectorBar.xaml:178, themeresources:99)
                 AlignItems = FlexAlign.Center,
-                Padding = new Edges4(12, 10, 12, 7), // SelectorBarItemPadding (themeresources:32)
+                Padding = st?.ItemPadding ?? new Edges4(12, 10, 12, 7), // SelectorBarItemPadding (themeresources:32)
                 Children = rowKids,
             };
 
@@ -171,7 +221,7 @@ internal sealed class SelectorBarCore : Component
             {
                 Width = SelectorBar.PillWidth * SelectorBar.PillScaleX,
                 Height = SelectorBar.PillHeight,
-                Children = isSelected ? [p.Parts.Apply(SelectorBar.PartPill, pill)] : [],
+                Children = isSelected && showPill ? [p.Parts.Apply(SelectorBar.PartPill, pill)] : [],
             };
 
             var item = new BoxEl
@@ -190,6 +240,21 @@ internal sealed class SelectorBarCore : Component
                 OnRealized = onRealized,
                 Children = [content, pillSlot],
             };
+            if (st is not null)
+                item = item with
+                {
+                    // ShowPill false: no pill AND no reserved pill row — the item is just its label box.
+                    Children = showPill ? [content, pillSlot] : [content],
+                    // Optional hover/press plate on the item's ControlCornerRadius: the engine's HoverFill/PressedFill
+                    // ramp (HoverFade/PressFade, the 83 ms ControlFaster default). Transparent = the stock no-plate.
+                    HoverFill = st.HoverFill ?? ColorF.Transparent,
+                    PressedFill = st.PressedFill ?? ColorF.Transparent,
+                    // A fixed item height centres the label box vertically (NaN = content height, stock).
+                    Height = st.ItemHeight,
+                    Justify = float.IsNaN(st.ItemHeight) ? FlexJustify.Start : FlexJustify.Center,
+                    // LeadingInset pulls the FIRST item outward so its text (not its padding) sits on the page edge.
+                    Margin = index == 0 && st.LeadingInset != 0f ? new Edges4(st.LeadingInset, 0, 0, 0) : default,
+                };
             // Parts: restyle anything; the select/roving mechanics always win.
             var styled = p.Parts.Apply(SelectorBar.PartItem, item);
             tabs[index] = styled with
@@ -206,7 +271,7 @@ internal sealed class SelectorBarCore : Component
         return new BoxEl
         {
             Direction = 0,
-            Gap = 0f,                            // horizontal StackLayout, no Spacing (SelectorBar.xaml:35-37)
+            Gap = st?.ItemGap ?? 0f,             // horizontal StackLayout, no Spacing (SelectorBar.xaml:35-37)
             Padding = new Edges4(0, 4, 0, 4),    // SelectorBarPadding 0,4 (themeresources:26)
             AlignItems = FlexAlign.Center,       // SelectorBarItem VerticalAlignment=Center (SelectorBar.xaml:55)
             // No container Role: only the items expose tab-like peers (SelectorBarItemAutomationPeer.cpp).

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
@@ -103,10 +103,10 @@ public sealed class ConnectedAnimation
         public bool AnimateClip;
     }
     private readonly List<Flight> _flights = new();
-    // Flag-gated rebuild (FG_DETACHED_FLY): the fly renders as a DetachedAnimSlab snapshot (SceneRecorder.RecordDetached)
+    // The detached rebuild (DetachedFly): the fly renders as a DetachedAnimSlab snapshot (SceneRecorder.RecordDetached)
     // instead of a live overlay node. Default off → the proven live-overlay path is unchanged (every existing gate holds).
     private readonly DetachedAnimSlab _detached = new();
-    private readonly bool _detachedFly = System.Environment.GetEnvironmentVariable("FG_DETACHED_FLY") == "1";
+    private bool _detachedFly => DetachedFly;
     private const int MaxFlightFrames = 240;   // defensive: force-retire a wedged fly (~4s) so an overlay can never get stuck
 
     // Reused scratch (alloc-free steady state): keys/nodes touched this frame.
@@ -128,7 +128,11 @@ public sealed class ConnectedAnimation
     /// <summary>OS / theme reduced-motion gate: when true, capture + fly are skipped (instant swap), per §5.9.</summary>
     public bool ReducedMotion { get; set; }
 
-    private static readonly bool MorphLog = System.Environment.GetEnvironmentVariable("FG_MORPH_LOG") == "1";
+    /// <summary>Render the fly as a <see cref="DetachedAnimSlab"/> snapshot instead of a live overlay node (a runtime
+    /// property, set in code; default off keeps the proven live-overlay path).</summary>
+    public bool DetachedFly { get; set; }
+
+    private static bool MorphLog => FluentGpu.Hosting.EngineSwitches.MorphLog;   // `--fg morph`
 
     public ConnectedAnimation(SceneStore scene, AnimEngine anim, ImageCache images)
     {

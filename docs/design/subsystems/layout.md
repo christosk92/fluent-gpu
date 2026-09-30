@@ -496,8 +496,9 @@ surface (no-ops, marks nothing, when the state is already correct) — the one e
   green).
 - **Bound `Visible`**: `BindNode` calls `BindPresence` (`Reconciler.Presence.cs`) UNCONDITIONALLY for every element
   kind — unlike the `BoxEl`-only channels beside it (`Transform`/`Opacity`/`Fill`/…), `Visible` lives on the base
-  `Element`, so this is the one bind wired regardless of concrete type. One mount-time `Effect`
-  (`AddBinding(..., runNow: true)`), equality-gated on the RESOLVED collapse state (not merely re-firing), counted by
+  `Element`, so this is the one bind wired regardless of concrete type. One effect created and run at mount (a
+  `BindEffect`, re-wired in place when a re-render binds a new thunk/signal — reconciler-hooks §0bis), equality-gated
+  on the RESOLVED collapse state (not merely re-firing), counted by
   the P0 `NodeBindingFireCount`/`NodeBindingWriteCount`. The **false→true edge seeds the node's declared `Enter`
   like a fresh mount** (`SynthesizeDeclarative` + `AnimEngine.SeedEnter`, mirroring the ordinary mount-Enter path);
   the true→false edge just snaps (nothing left to animate once the node is already out of layout/paint).
@@ -636,7 +637,7 @@ descending when clean, so the existing `layout.SetMeasured(index, measured.Heigh
 change — reading through `Measure`'s cache is equivalent to reading `_arranged[rc].H` directly and keeps one fewer
 code path. (2) `gate.layout.parity-from-scratch` is a VerticalSlice harness gate (20 random scoped edits vs. an
 independent from-scratch build of the same final state, compared node-by-node) as well as, not instead of, the live
-`FG_LAYOUT_VERIFY` oracle described in §4.9 — the harness gate is better isolated (the oracle cannot perturb the
+`--fg layout-verify` oracle described in §4.9 — the harness gate is better isolated (the oracle cannot perturb the
 thing it checks), the oracle is more general (any live scene, any frame).
 
 ### 4.8.1 The text measure cache is a 2-entry ring too
@@ -659,14 +660,15 @@ frame that laid out at all, for content that had not changed.
   measure misses (proving the two widths are real), the second pass records `TextShapeMisses == 0` and
   `TextShapes == 0`.
 
-### 4.9 `FG_LAYOUT_VERIFY` — the DEBUG parity oracle and the unmarked-write tripwire
+### 4.9 `--fg layout-verify` — the DEBUG parity oracle and the unmarked-write tripwire
 
-Both live in `Layout/FlexLayout.Verify.cs` and are compiled out of Release entirely. **Diagnostics only**: this is
-the one deliberate exception to "no environment variable ever changes behaviour", and it earns it by changing
-none — the oracle restores every rect it touched and every counter it moved, so a run with the variable set
-produces byte-identical frames to one without it, only slower.
+Both live in `Layout/FlexLayout.Verify.cs` and are compiled out of Release entirely. **Diagnostics only**: the switch
+is the `layout-verify` engine switch (`--fg layout-verify` on the host's command line — `EngineSwitches.LayoutVerify`;
+the engine reads no environment variables), and it changes no behaviour — the oracle restores every rect it touched
+and every counter it moved, so a run with the switch on produces byte-identical frames to one without it, only
+slower.
 
-- **The oracle** (`FG_LAYOUT_VERIFY=1`): after a real solve, re-solve the same root from scratch with every
+- **The oracle** (`--fg layout-verify`): after a real solve, re-solve the same root from scratch with every
   incremental short-circuit off (the cross-pass Measure ring, the Arrange early-out, `TryResolveSizeStable`),
   compare every node's `Bounds`, report divergences to stderr, then RESTORE the original rects. It runs under a
   `Verifying` latch that suppresses everything a second solve would otherwise repeat: `OnBoundsChanged` delivery,
@@ -674,8 +676,8 @@ produces byte-identical frames to one without it, only slower.
   scroll-bind baking and the realize/paint marks. The text measure cache is deliberately left LIVE across the
   re-solve (a pure function of its key, so it cannot manufacture a divergence, and re-shaping every run twice per
   frame would make the oracle unusable on a real page). `VerifyLayoutParityNow(root, window)` forces one check
-  regardless of the variable — that is `gate.layout.parity-oracle`, which also proves the restore.
-- **The tripwire** (always counted in DEBUG, logged per-node only under `FG_LAYOUT_VERIFY=1`): every node the
+  regardless of the switch — that is `gate.layout.parity-oracle`, which also proves the restore.
+- **The tripwire** (always counted in DEBUG, logged per-node only under `--fg layout-verify`): every node the
   Arrange early-out SKIPS is re-hashed, whole subtree, against the signature recorded at its last real arrange
   (`LayoutSig` plus the text inputs `LayoutSig` omits). A mismatch means a `LayoutInput` writer skipped
   `Mark(LayoutDirty)` — the bug class where the screen keeps last frame's geometry and nothing throws. Surfaced as

@@ -146,7 +146,7 @@ sealed partial class AnnotatedScrollBarPage : Component
         "A scrollbar enhanced with labels/annotations alongside the rail.",
         ExampleCard.Show(BesideContentSample));
 
-    [Sample("An AnnotatedScrollBar controlling a 9,000-row virtual list", Description = "The list publishes live scroll geometry through IScrollController. Drag or click the rail, hover for the detail flag, click ticks, or use the buttons and keyboard.")]
+    [Sample("An AnnotatedScrollBar controlling a 9,000-row virtual list", Description = "The rail and the list share one ScrollHandle. Drag or click the rail, hover for the detail flag, click ticks, or use the buttons and keyboard.")]
     static Element BesideContent() => VStack(Spacing.M,
         new BoxEl
         {
@@ -173,7 +173,7 @@ sealed partial class AnnotatedScrollBarPage : Component
                             ItemText = static i => "Library item " + (i + 1),
                             Scroll = new ScrollOptions
                             {
-                                VerticalScrollController = _scroll,
+                                Handle = _scroll.Handle,
                                 SuppressScrollBar = true,
                             },
                         }),

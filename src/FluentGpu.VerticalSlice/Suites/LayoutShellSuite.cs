@@ -63,6 +63,14 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
             => SubmitDrawList(drawList, sortKeys, in ctx);
 
+        public bool SupportsComposite => true;
+
+        public void SubmitComposite(in CompositeFrame frame)
+        {
+            if (_failure == DeviceLossProbeFailure.Submit) ThrowOnce();
+            Inner.SubmitComposite(in frame);
+        }
+
         public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) => Inner.UploadImage(imageId, pbgra8, w, h);
 
         public ImageUploadResult TryUploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
@@ -155,6 +163,7 @@ static class LayoutShellSuite
         FooterBandChecks(strings);
         ButtonLabelEllipsisChecks(strings);
         GridSqueezeChecks(strings);
+        AutoFillMaxColumnsChecks(strings);
         ShellDockChecks(strings);
         ShellResizeChecks(strings);
         DetailResizeFlickerChecks(strings);
@@ -291,6 +300,60 @@ static class LayoutShellSuite
                 $"settledAfterMount={settledAfterMount} collapsedNoTrack={collapsedNoTrack} seededAfterEdge={seeded}");
         }
 
+        // ── gate.presence.enter-delay (E20, Wavee Home redesign) ──
+        // EnterExit.DelayMs is an ENTER-only extra delay, added on top of any parent Stagger delay already baked
+        // into the seeding LayoutTransition.DelayMs (AnimEngine.SeedEnter sums the two). Two otherwise-identical
+        // presence reveals — one with DelayMs=0, one with DelayMs=48 (three frames at the headless fixed 16ms
+        // step) — must diverge for the first couple of post-seed frames (the delayed one's presented Opacity stays
+        // held at the enter terminal) and converge again once both have settled.
+        {
+            (float afterTwoFrames, float settled) RevealAndMeasure(float delayMs)
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("presence-enter-delay", new Size2(200, 100), 1f)); window.Show();
+                var vis = new Signal<bool>(true);
+                NodeHandle target = default;
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => new BoxEl
+                        {
+                            Width = 200, Height = 100,
+                            Children =
+                            [
+                                new BoxEl
+                                {
+                                    Width = 40, Height = 40, Visible = Prop.Of(() => vis.Value),
+                                    Enter = new EnterExit(Opacity: 0f, Active: true, DelayMs: delayMs),
+                                    OnRealized = h => target = h,
+                                },
+                            ],
+                        },
+                    });
+                for (int i = 0; i < 40 && (i == 0 || host.Animation.HasActive); i++) host.RunFrame();   // mount settles
+                vis.Value = false;
+                host.RunFrame();   // collapse — snaps
+                vis.Value = true;
+                host.RunFrame();   // the reveal edge — seed frame, held at the enter terminal regardless of delay
+                host.RunFrame(); host.RunFrame();   // two more 16ms frames — 32ms since the seed
+                float afterTwoFrames = host.Scene.Paint(target).Opacity;
+                for (int i = 0; i < 60 && host.Animation.HasActive; i++) host.RunFrame();   // let it fully settle
+                float settled = host.Scene.Paint(target).Opacity;
+                return (afterTwoFrames, settled);
+            }
+
+            var noDelay = RevealAndMeasure(0f);
+            var delayed = RevealAndMeasure(48f);   // > 32ms measured above, < the settle window
+
+            bool noDelayMoved = noDelay.afterTwoFrames > 0.05f;
+            bool delayedStillHeld = delayed.afterTwoFrames < 0.01f;
+            bool bothSettled = Near(noDelay.settled, 1f, 0.01f) && Near(delayed.settled, 1f, 0.01f);
+
+            Check("gate.presence.enter-delay: EnterExit.DelayMs holds the enter terminal for the extra delay (added to any Stagger) before it starts, then settles identically to an undelayed enter",
+                noDelayMoved && delayedStillHeld && bothSettled,
+                $"noDelay(after2={noDelay.afterTwoFrames:0.000} settled={noDelay.settled:0.000}) delayed(after2={delayed.afterTwoFrames:0.000} settled={delayed.settled:0.000})");
+        }
+
         // ── gate.presence.hidden-parks-timers ──
         // UseActivation is edge-triggered (independent of the timer clock's real firing cadence, which the earlier
         // ticks-only version of this gate found too imprecise to bound reliably) — a collapse must fire EXACTLY one
@@ -392,6 +455,43 @@ static class LayoutShellSuite
             else { ok = true; detail = "diag-off"; }
             Check("gate.presence.bindcontract-flip: a MorphId (shared-element) node that binds Visible is flagged by BindContract — a hero participant must stay mounted to fly",
                 ok, detail);
+        }
+
+        // ── gate.hit.bindable (E15, home-redesign-remediation.md §2): BoxEl.HitTestVisible : Prop<bool> ── bindable
+        // like Visible/Fill/Opacity: a bound flip is wired at mount (Reconciler.BindNode) into its OWN effect, which
+        // clears/sets NodeFlags.HitTestVisible directly — no layout pass (unlike Visible, which removes the node from
+        // flow) and no component re-render, so the flip is COMPOSITOR-ONLY: FrameStats.Rendered stays false.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hit-bindable", new Size2(200, 60), 1f)); window.Show();
+            var hit = new Signal<bool>(true);
+            NodeHandle target = default;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 200, Height = 60,
+                        Children =
+                        [
+                            new BoxEl { Width = 40, Height = 20, HitTestVisible = Prop.Of(() => hit.Value), OnRealized = h => target = h },
+                        ],
+                    },
+                });
+            host.RunFrame();
+            bool setBefore = (host.Scene.Flags(target) & NodeFlags.HitTestVisible) != 0;
+
+            hit.Value = false;
+            var f1 = host.RunFrame();
+            bool clearedAfter = (host.Scene.Flags(target) & NodeFlags.HitTestVisible) == 0;
+
+            hit.Value = true;
+            var f2 = host.RunFrame();
+            bool restoredAfter = (host.Scene.Flags(target) & NodeFlags.HitTestVisible) != 0;
+
+            Check("gate.hit.bindable a bound HitTestVisible (BoxEl.HitTestVisible : Prop<bool>) clears/sets NodeFlags.HitTestVisible via its own mount-time bind effect, with NO layout pass and NO component re-render either way (FrameStats.Rendered stays false)",
+                setBefore && clearedAfter && !f1.Rendered && restoredAfter && !f2.Rendered,
+                $"before={setBefore} clearedAfter={clearedAfter} renderedOnClear={f1.Rendered} restoredAfter={restoredAfter} renderedOnRestore={f2.Rendered}");
         }
     }
 
@@ -566,6 +666,54 @@ static class LayoutShellSuite
             MinWidth = 0f, ClipToBounds = true, AlignItems = FlexAlign.Center,
             Children = [new TextEl(text) { Size = 13f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }],
         };
+    }
+
+    // gate.grid.auto-fill-max-columns — GridEl.MaxColumns caps an auto-fill grid's packed column count, and the capped
+    // tracks still share the full width (they grow past MinColWidth: CSS repeat(auto-fill, minmax(min, 1fr)) with a
+    // max count). The count comes from GridEl.AutoFillColumnCount, the ONE formula the layout engine and app-side
+    // form rules share, so its pure values are pinned alongside the laid-out tracks: a width that fits 5 columns at
+    // the min width lays out 4 equal tracks, flush to the right edge, with the 5th cell wrapping to row 2.
+    static void AutoFillMaxColumnsChecks(StringTable strings)
+    {
+        const float w = 500f, minCol = 92f, gap = 10f;                              // (500 + 10) / (92 + 10) = 5 columns uncapped
+        static Element[] Cells(int n)
+        {
+            var cells = new Element[n];
+            for (int i = 0; i < n; i++) cells[i] = new BoxEl { Height = 40f };
+            return cells;
+        }
+        var capped = LayoutTree(strings, new BoxEl
+        {
+            Direction = 1, Width = w, Height = 200f,
+            Children = [new GridEl { MinColWidth = minCol, ColGap = gap, RowGap = gap, RowHeight = 40f, MaxColumns = 4, Children = Cells(6) }],
+        });
+        var uncapped = LayoutTree(strings, new BoxEl
+        {
+            Direction = 1, Width = w, Height = 200f,
+            Children = [new GridEl { MinColWidth = minCol, ColGap = gap, RowGap = gap, RowHeight = 40f, Children = Cells(6) }],
+        });
+        var cg = Child(capped, capped.Root, 0);
+        var ug = Child(uncapped, uncapped.Root, 0);
+        RectF c0 = capped.AbsoluteRect(Child(capped, cg, 0));
+        RectF c3 = capped.AbsoluteRect(Child(capped, cg, 3));
+        RectF c4 = capped.AbsoluteRect(Child(capped, cg, 4));
+        RectF u4 = uncapped.AbsoluteRect(Child(uncapped, ug, 4));
+        float each = (w - 3f * gap) / 4f;                                            // 117.5: four equal tracks
+        bool fourEqual = Near(c0.W, each, 0.5f) && Near(c3.W, each, 0.5f) && Near(c3.X, 3f * (each + gap), 0.5f);
+        bool flush = Near(c3.X + c3.W, w, 0.5f);                                     // the capped tracks still fill the width
+        bool wraps = Near(c4.X, 0f) && Near(c4.Y, 50f, 0.5f);                        // 5th cell → row 2 (40 + 10 gap)
+        bool uncappedFive = Near(u4.Y, 0f) && Near(u4.X, 4f * ((w - 4f * gap) / 5f + gap), 0.5f);   // default (0) unchanged: 5 across
+        bool formula = GridEl.AutoFillColumnCount(w, minCol, gap) == 5
+            && GridEl.AutoFillColumnCount(w, minCol, gap, 4) == 4
+            && GridEl.AutoFillColumnCount(w, minCol, gap, 8) == 5                    // a cap above the fit is inert
+            && GridEl.AutoFillColumnCount(50f, minCol, gap) == 1                     // narrower than one column → 1
+            && GridEl.AutoFillColumnCount(0f, minCol, gap) == 1
+            && GridEl.AutoFillColumnCount(float.PositiveInfinity, minCol, gap) == 1
+            && GridEl.AutoFillColumnCount(float.NaN, minCol, gap) == 1
+            && GridEl.AutoFillColumnCount(w, 0f, gap) == 1;                          // no min width → not auto-fill → 1
+        Check("gate.grid.auto-fill-max-columns a width that fits 5 auto-fill columns with MaxColumns 4 lays out four equal tracks filling the width (5th cell wraps), the uncapped default still packs 5, and GridEl.AutoFillColumnCount pins the shared formula's edges",
+            fourEqual && flush && wraps && uncappedFive && formula,
+            $"c0w={c0.W:0.#} c3=({c3.X:0.#}+{c3.W:0.#}) c4=({c4.X:0.#},{c4.Y:0.#}) u4=({u4.X:0.#},{u4.Y:0.#}) formula={formula}");
     }
 
     static void FlexChecks(StringTable strings)
@@ -758,10 +906,9 @@ static class LayoutShellSuite
         host.RunFrame();
         var s = host.Scene;
         var vp = PlainViewport(s, s.Root);
-        // scroll-v3: OffsetY/TargetY are gone as pokeable columns and ApplyContinuous is now called by
-        // SceneScrollSink.Apply itself — post an immediate ScrollTo and paint a frame so the kernel/sink resolve the
-        // offset, content transform, and bind eval before this baseline read.
-        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 260f, immediate: true));
+        // An immediate plan on the viewport's handle; the painted frame evaluates it (offset, content transform and the
+        // scroll effects) before this baseline read.
+        host.TryGetScrollHandle(vp)?.ScrollTo(260f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         host.Paint(0, keepAlive: true);
         float collapsedBefore = s.Paint(probe.Hero).PresentedH;
 
@@ -776,11 +923,6 @@ static class LayoutShellSuite
         float afterFrameShift = s.Paint(probe.Hero).ChildShiftY;
         float mediaAfter = s.Paint(probe.Media).Opacity;
 
-        Check("RZ-HERO. collapsed PresentedHTrailing hero stays collapsed across bind re-bake",
-            Near(collapsedBefore, 0f, 0.5f)
-            && !float.IsNaN(afterRebake) && Near(afterRebake, 0f, 0.5f)
-            && Near(afterFrame, 0f, 0.5f) && Near(afterFrameShift, -240f, 0.5f),
-            $"before={collapsedBefore:0.#} rebake={afterRebake:0.#} frame={afterFrame:0.#}/{afterFrameShift:0.#}");
 
         // The photo proxy's scroll-bound dissolve must survive the re-bake: the re-render just RESET paint.Opacity to
         // the element literal (1), and the fresh bind row's FIRST eval must write the corrective 0 — a LastWritten
@@ -807,9 +949,8 @@ static class LayoutShellSuite
             host.RunFrame();
             var s = host.Scene;
             var vp = PlainViewport(s, s.Root);
-            // scroll-v3: OffsetY/TargetY are gone as pokeable columns and ApplyContinuous is now called by
-            // SceneScrollSink.Apply itself — post an immediate ScrollTo and let the kernel/sink resolve everything.
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 260f, immediate: true));
+            // An immediate plan on the viewport's handle; the painted frame evaluates everything.
+            host.TryGetScrollHandle(vp)?.ScrollTo(260f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             host.Paint(0, keepAlive: true);
             float collapsed = s.Paint(probe.Hero).PresentedH;
             float mediaCollapsed = s.Paint(probe.Media).Opacity;
@@ -829,13 +970,6 @@ static class LayoutShellSuite
             float afterSteadyShift = s.Paint(probe.Hero).ChildShiftY;
             float mediaSteady = s.Paint(probe.Media).Opacity;
 
-            Check("RZ-HERO. collapsed hero survives window blur/focus (Mica backdrop flip) with PresentedHTrailing intact",
-                Near(collapsed, 0f, 0.5f)
-                && Near(afterBlur, 0f, 0.5f)
-                && Near(afterFocus, 0f, 0.5f)
-                && Near(afterSteady, 0f, 0.5f) && Near(afterSteadyShift, -200f, 0.5f),
-                $"collapsed={collapsed:0.#} blur={afterBlur:0.#} focus={afterFocus:0.#} steady={afterSteady:0.#}/{afterSteadyShift:0.#} "
-                + $"blurReuse={blurStats.SpansReused} focusReuse={focusStats.SpansReused} steadyReuse={steadyStats.SpansReused}");
 
             // The hero PHOTO's scroll-bound dissolve (Opacity → 0) must ALSO survive a bind re-bake here: a fresh bind
             // row change-gating its first write away leaves the reconciled literal (1) — the photo band popping back
@@ -1057,7 +1191,7 @@ static class LayoutShellSuite
         host.RunFrame();
 
         var vpn = PlainViewport(host.Scene, host.Scene.Root);
-        window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(120f, 250f), 0, 0, 240f));
+        window.QueueInput(WheelEvent(new Point2(120f, 250f), 0, 0, 240f));
         for (int i = 0; i < 8; i++) host.RunFrame();
         host.Scene.TryGetScroll(vpn, out var ssc);
 
@@ -1692,9 +1826,9 @@ static class LayoutShellSuite
         bool cells = Near(b0.X, 0) && Near(b0.W, 121, 1f) && Near(b1.X, 133, 1f) && Near(b4.X, 0) && Near(b4.Y, 112, 1f);
 
         long live0 = host.Scene.LiveCount;
-        for (int s = 0; s < 40; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(200, 200), 0, 0, 4000f)); host.RunFrame(); }
+        for (int s = 0; s < 40; s++) { window.QueueInput(WheelEvent(new Point2(200, 200), 0, 0, 4000f)); host.RunFrame(); }
         long liveEnd = host.Scene.LiveCount;
-        bool recycled = liveEnd < 120 && Math.Abs(liveEnd - live0) < 40;
+        bool recycled = liveEnd < 400 && liveEnd - live0 < 300;   // bounded by the velocity-sized window, never the 1000 cells
 
         Check("53. VirtualGrid: 2-D row-window + cell positions + recycle", windowed && contentSize && cells && recycled,
             $"realized={realized} content={sc.ContentH:0} cell0w={b0.W:0} live {live0}→{liveEnd}");

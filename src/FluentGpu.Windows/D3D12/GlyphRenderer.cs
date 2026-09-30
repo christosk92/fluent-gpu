@@ -680,11 +680,11 @@ float4 PSMain(VSOutG i) : SV_Target
 
     /// <summary>Pack with overflow recovery. A full atlas DEFERS the generational flush to the next <see cref="BeginFrame"/>
     /// (text.md §5.3: eviction only at frame START) — resetting mid-record would re-assign cells underneath UVs already
-    /// baked/emitted this frame, so quads (and cached runs, and the retained canvas) would sample the WRONG glyph. Instead
+    /// baked/emitted this frame, so quads (and cached runs, and retained tiles) would sample the WRONG glyph. Instead
     /// the failed glyph renders as NOTHING for this one frame (no quad); the boundary reset in BeginFrame clears
     /// _cache/_iconCache/_runCache so everything re-rasterizes into the fresh generation next frame, and
     /// <see cref="AtlasResetPending"/> tells the device to force that next frame to actually happen (not be skip-submitted
-    /// or baked as a faithful partial repaint).</summary>
+    /// or kept as a faithful retained tile).</summary>
     private void PackOrReset(ref GlyphEntry e, ReadOnlySpan<byte> src, int w, int h)
     {
         if (_preparing && !_growthFailed && ATLAS < MaximumAtlasEdge && !_atlas.CanPack(w, h)
@@ -709,8 +709,7 @@ float4 PSMain(VSOutG i) : SV_Target
     }
 
     /// <summary>The frame currently being recorded does NOT faithfully render its text, for one of two reasons, and
-    /// either way the device must not skip-submit it and must not treat it as a valid partial-repaint base for the
-    /// retained canvas:
+    /// either way the device must not skip-submit it and must not treat its tiles as faithful retained content:
     /// <list type="bullet">
     /// <item>the atlas OVERFLOWED while this frame was shaped — some newly-requested glyphs were emitted blank and the
     /// generational flush runs at the next <see cref="BeginFrame"/> (the original meaning of the name); or</item>
@@ -1628,8 +1627,21 @@ float4 PSMain(VSOutG i) : SV_Target
     //   • A band longer than the staging bank is CLAMPED: the tail stays dirty, drains next frame, grows the bank at
     //     the next BeginFrame, and arms AtlasResetPending so the device repaints instead of keeping the unfaithful
     //     frame as a partial-repaint base. Never silent (Diag "text.atlas"/"stagingShort").
+    /// <summary>Glyph-atlas band bytes copied by the most recent <see cref="UploadIfDirty"/> (R8 rows × atlas width).
+    /// Always-on plain counter (render thread) — the device folds it into its per-submit <c>GpuFrameCounters</c>.</summary>
+    internal long LastUploadBytes { get; private set; }
+
+    /// <summary>The atlas texture has had its first upload (or its first-frame barrier): it is samplable. Until then a
+    /// skipped upload would leave it in COPY_DEST under a draw that samples it.</summary>
+    internal bool TextureInitialized => _texInitialized;
+
+    /// <summary>True when <see cref="UploadIfDirty"/> would record a copy or a barrier (a dirty band, or the atlas's
+    /// first transition) — the caller must not be inside a render pass then.</summary>
+    public bool NeedsUpload => _atlas.IsDirty || !_texInitialized;
+
     public void UploadIfDirty(ID3D12GraphicsCommandList* cmd)
     {
+        LastUploadBytes = 0;
         if (!_atlas.IsDirty && _texInitialized) return;
         // Successful uploads clear IsDirty before the next BeginFrame. Reset here as well, or a scrolling
         // stream of new glyphs looks "clean" at every frame boundary and shrinks/regrows every idle window.
@@ -1673,6 +1685,7 @@ float4 PSMain(VSOutG i) : SV_Target
             srcLoc.Anonymous.PlacedFootprint.Footprint.Depth = 1;
             srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = (uint)ATLAS;   // R8; both supported edges are 256-aligned
             cmd->CopyTextureRegion(&dst, 0, (uint)flush.CopyRowStart, 0, &srcLoc, null);
+            LastUploadBytes += (long)flush.CopyRowCount * ATLAS;
 
             Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Diag.Count("text.atlas", "uploadRows", flush.CopyRowCount);
@@ -1814,9 +1827,9 @@ float4 PSMain(VSOutG i) : SV_Target
         }
     }
 
-    public void BeginFrame(int frameIndex)
+    public void BeginFrame(int slot)
     {
-        _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
+        _active = ((slot % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
         if (_capacity[_active] < _wantCapacity) GrowBank(_active);          // fenced here ⇒ the only safe moment to swap it
         // The atlas has been clean for a long stretch ⇒ hand the grown reserve back. Counted in SUBMITTED frames and
         // deliberately generous: a shrink immediately followed by a big reset costs one stagingShort frame, which the
@@ -1885,7 +1898,7 @@ float4 PSMain(VSOutG i) : SV_Target
             fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         }
         cmd->SetGraphicsRootShaderResourceView(2, _activeGva + (ulong)(start * sizeof(GlyphInstance)));
-        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        cmd->DrawInstanced(4, (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
     }
 
@@ -1918,7 +1931,7 @@ float4 PSMain(VSOutG i) : SV_Target
             fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         }
         cmd->SetGraphicsRootShaderResourceView(2, _activeGradGva + (ulong)(start * sizeof(GradGlyphInstance)));
-        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        cmd->DrawInstanced(4, (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
     }
 

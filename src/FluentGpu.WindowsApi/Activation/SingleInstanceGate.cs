@@ -62,8 +62,11 @@ public sealed unsafe partial class SingleInstanceGate : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CloseHandle(nint hObject);
 
-    [LibraryImport("user32.dll", EntryPoint = "FindWindowW", StringMarshalling = StringMarshalling.Utf16)]
-    private static partial nint FindWindowW(string? lpClassName, string? lpWindowName);
+    [LibraryImport("user32.dll", EntryPoint = "FindWindowExW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint FindWindowExW(nint hWndParent, nint hWndChildAfter, string? lpszClass, string? lpszWindow);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetPropW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint GetPropW(nint hWnd, string lpString);
 
     [LibraryImport("user32.dll", EntryPoint = "SetForegroundWindow")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -103,7 +106,8 @@ public sealed unsafe partial class SingleInstanceGate : IDisposable
     /// </param>
     /// <param name="windowClass">
     /// The Win32 window class of the running instance's main window — <c>"FluentGpuWindow"</c> for a FluentApp host
-    /// (<c>Win32Platform.cs</c> registers this class). Used as the <c>FindWindowW</c> class filter.
+    /// (<c>Win32Platform.cs</c> registers this class). The candidates are that class's windows; the one tagged with
+    /// <paramref name="instanceId"/> (<c>FluentGpu.Pal.InstanceIdentity</c>) is chosen.
     /// </param>
     /// <param name="activationPayload">
     /// The string handed to the running instance (typically the activation URI, e.g. <c>"wavee://callback?..."</c>). It
@@ -121,23 +125,58 @@ public sealed unsafe partial class SingleInstanceGate : IDisposable
         if (_mutex != 0 && err != ERROR_ALREADY_EXISTS)
         {
             _owns = true;
+            // The window the PAL creates next is tagged with this id (FluentGpu.Pal.InstanceIdentity): a secondary of THIS
+            // instance finds it among every window of the class — an instance with another id (a --profile run) never does.
+            FluentGpu.Pal.InstanceIdentity.Current = instanceId;
             return true;   // we are the primary — keep the mutex alive for this process lifetime
         }
 
         // Secondary: forward the activation to the primary window, then signal the caller to exit.
         if (_mutex != 0) { CloseHandle(_mutex); _mutex = 0; }   // we don't own it; release our handle
         _owns = false;
-        Redirect(windowClass, activationPayload);
+        Redirect(instanceId, windowClass, activationPayload);
         return false;
     }
 
-    /// <summary>Send <paramref name="payload"/> as a <c>WM_COPYDATA</c> to the first window of class
-    /// <paramref name="windowClass"/>, after granting it foreground rights. Best-effort: if no window is found yet (the
+    /// <summary>At most this many windows of the class are examined for the instance tag.</summary>
+    private const int MaxRedirectCandidates = 32;
+
+    /// <summary>The window of class <paramref name="windowClass"/> (children of <paramref name="parent"/>: 0 = the
+    /// top-level windows, <c>HWND_MESSAGE</c> = message-only ones) that a secondary of <paramref name="instanceId"/> hands
+    /// its activation to — <see cref="ChooseRedirectTarget"/> over their instance tags. 0 when none qualifies.</summary>
+    internal static nint FindRedirectTarget(string windowClass, string instanceId, nint parent = 0)
+    {
+        Span<nint> windows = stackalloc nint[MaxRedirectCandidates];
+        Span<uint> tags = stackalloc uint[MaxRedirectCandidates];
+        int n = 0;
+        for (nint h = FindWindowExW(parent, 0, windowClass, null); h != 0 && n < MaxRedirectCandidates;
+             h = FindWindowExW(parent, h, windowClass, null))
+        {
+            windows[n] = h;
+            tags[n] = (uint)(nuint)GetPropW(h, FluentGpu.Pal.InstanceIdentity.WindowPropertyName);
+            n++;
+        }
+        int pick = ChooseRedirectTarget(tags[..n], FluentGpu.Pal.InstanceIdentity.TagOf(instanceId));
+        return pick < 0 ? 0 : windows[pick];
+    }
+
+    /// <summary>The redirect target among candidate windows by their instance tags (0 = untagged): the first window
+    /// tagged with <paramref name="mine"/>; else the first UNTAGGED window (a primary built before instance tags — today's
+    /// behaviour); never a window tagged with ANOTHER instance's id. −1 when none qualifies. Pure.</summary>
+    internal static int ChooseRedirectTarget(ReadOnlySpan<uint> tags, uint mine)
+    {
+        for (int i = 0; i < tags.Length; i++) if (tags[i] == mine) return i;
+        for (int i = 0; i < tags.Length; i++) if (tags[i] == 0) return i;
+        return -1;
+    }
+
+    /// <summary>Send <paramref name="payload"/> as a <c>WM_COPYDATA</c> to the window of THIS instance
+    /// (<see cref="FindRedirectTarget"/>), after granting it foreground rights. Best-effort: if no window is found yet (the
     /// primary is mid-startup) the redirect is silently dropped — the caller still exits, matching WASDK's "redirect or
     /// give up" posture for a racing launch.</summary>
-    private void Redirect(string windowClass, string payload)
+    private void Redirect(string instanceId, string windowClass, string payload)
     {
-        nint target = FindWindowW(windowClass, null);
+        nint target = FindRedirectTarget(windowClass, instanceId);
         if (target == 0) return;   // primary not up yet — nothing to forward to
 
         AllowSetForegroundWindow(ASFW_ANY);   // let the primary's SetForegroundWindow win (mirror AppInstance.cpp:256)

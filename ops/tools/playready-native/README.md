@@ -22,6 +22,40 @@ in an IDE's design-time build), and `FluentGpu.Windows.Tests` copies it beside t
 Both pick the architecture from `PlayReadyNative.props`: the explicit `RuntimeIdentifier`, else the running SDK's RID —
 the architecture the managed process actually runs as, not `PROCESSOR_ARCHITECTURE`.
 
+## FeedTests.exe
+
+`build.cmd` also compiles `tests\FeedTests.cpp` — a small, dependency-free console exe over the feeder's PURE
+arithmetic and buffer algorithms — and runs it right after the DLL link succeeds; a non-zero exit from either the
+compile or the run fails the build. It never constructs a `CencMediaStream`/`CencMediaSource` and never touches
+Media Foundation, COM or the CDM at runtime (the Windows/D3D/MF/WinRT headers it pulls in are only there because
+`CencMediaSource.h` is not standalone — see the file's own header comment for why and for an include-order finding
+worth knowing before touching either header).
+
+It covers:
+- `fgpr::plan::Next` / `Landed` (`FeedPlan.h`) — the segment-index arithmetic, including the warm-start incident the
+  header documents (a truncating coverage shrink misread as "no growth"), genuine stagnation and the floor it
+  steps, the plan-then-cancel (byte-cap veto) discipline, `atEnd`/satisfied/uncovered-reference edge cases, and
+  that a `segLenMs <= 0` grid never divides by zero.
+- `fgpr::SpliceSamples` / `IsAscending` (`SegmentStore.h`) — pure append, the non-truncating straddle (including
+  the exact re-delivery shape that motivated it), a truncating representation switch ahead of the cursor, the
+  truncating re-delivery incident (refused as stale, buffer byte-for-byte unchanged), truncating on a drained
+  buffer, a wholly-behind replace, a short replacement that cuts coverage, and every one of those again with
+  B-frame (decode order != presentation order) samples.
+- `ComputeBufferedPairs`, `ContiguousAheadMs`, `TrimBehindByTime` (`SegmentStore.h`) — hole detection in the
+  buffered-range report, the contiguous-ahead window correctly stopping at a hole instead of spanning it, and the
+  time-window vs. byte-cap trim rules (including which one is responsible for a given drop).
+
+Run it alone (after a `build.cmd` has produced the DLL for the same `%OUT%` at least once, so the tools/vcvars
+environment is known-good):
+
+```cmd
+build.cmd x64
+out\x64\FeedTests.exe
+```
+
+It prints one `FAIL <file>:<line>: CHECK(...)` line per failing assertion (plus which test it was in) and a final
+`N test(s), M failure(s)` line; the process exit code is the failure count (0 = every check passed).
+
 ## Managed code
 
 The C# integration lives in `src/FluentGpu.WindowsApi/Media/PlayReady/`. See [`docs/guide/playready-native.md`](../../../docs/guide/playready-native.md) for the end-to-end guide.
@@ -37,5 +71,6 @@ The C# integration lives in `src/FluentGpu.WindowsApi/Media/PlayReady/`. See [`d
 | `PrSession.cpp` | `FgPrSession*` + `FgPrProbeFile`: sessions, attach/detach, transport + seek as posted work items, the demand-driven parallel feeder, representation switches, snapshots, keyframes, buffered ranges |
 | `SegmentStore.h` | The per-session store: time-window retention against a byte budget, the pooled 64 KiB-granular segment buffers, the keyframe table, buffered ranges, `CanSeekTo` |
 | `CencMediaSource.h` | The fMP4/CENC demuxer and the custom `IMFMediaSource` emitting encrypted CENC samples |
-| `build.cmd` | MSVC build of the three translation units into one DLL, per architecture |
+| `build.cmd` | MSVC build of the three translation units into one DLL, per architecture; then compiles and runs `tests\FeedTests.cpp` |
+| `tests\FeedTests.cpp` | Dependency-free console tests for `FeedPlan.h`'s `plan::Next` and `SegmentStore.h`'s sample-list algorithms — see "FeedTests.exe" above |
 | `PlayReadyNative.props` | The one architecture rule the projects that build or load the DLL import |

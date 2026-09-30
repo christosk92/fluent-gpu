@@ -7,7 +7,7 @@ namespace FluentGpu.Animation;
 //
 //  The most systemic band-aid (dossier Rank 1): AnimEngine, the interaction/brush ticker, the scroll integrator, and
 //  connected-anim ALL write the same NodePaint fields, colliding only by accident of disjoint node-sets + phase-7 call
-//  order. This generalizes the ScrollBind R3 rule ("a node is EITHER AnimEngine-driven OR scroll-bound on a channel,
+//  order. This generalizes the one-writer rule ("a node is EITHER AnimEngine-driven OR scroll-linked on a channel,
 //  asserted at reconcile") engine-wide: each writer Claims its (node, channel-group) at reconcile, and a DEBUG-only
 //  assert turns a silent last-writer-wins clobber into a stack trace at the offending element. This is the safe,
 //  additive Phase-1 floor; the Phase-7 single fold-and-write-once compose pass (FG_COMPOSE_PASS) consumes the same
@@ -52,6 +52,6 @@ public sealed class AnimOwnerTable
         if (cur != AnimOwner.None && cur != writer)
             throw new System.InvalidOperationException(
                 $"Anim owner conflict on node {nodeIndex} {g}: owned by {cur}, written by {writer}. " +
-                "Partition at reconcile — exactly one writer per node×channel-group (ScrollBind R3, generalized).");
+                "Partition at reconcile — exactly one writer per node×channel-group.");
     }
 }

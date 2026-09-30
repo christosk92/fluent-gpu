@@ -1,6 +1,8 @@
-using FluentGpu.Animation;
+﻿using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
+using FluentGpu.Scroll.Extent;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Text;
 
 namespace FluentGpu.Layout;
@@ -16,19 +18,19 @@ public sealed partial class FlexLayout
     private readonly SceneStore _scene;
     private readonly IFontSystem _fonts;
 
-    // FG_LAYOUT_DIAG=1: per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
+    // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
-    private static readonly bool s_layoutDiag = Diag.EnvFlag("FG_LAYOUT_DIAG");
+    private static bool s_layoutDiag => FluentGpu.Hosting.EngineSwitches.LayoutDiag;
 
-    // FG_LAYOUT_OVERFLOW=1: report any node ARRANGED WIDER than its parent's content box. That is the silent failure
+    // `--fg layout-overflow`: report any node ARRANGED WIDER than its parent's content box. That is the silent failure
     // mode this engine has no other signal for — a measure OVERESTIMATE (a ZStack reporting a bounded layer's explicit
     // width as its own size, MeasureZStack) meeting the Yoga-style FlexShrink=0 default (Columns.cs), which together
     // turn one over-wide layer into a permanent arrange-time overflow that a ClipToBounds ancestor then hides. Nothing
     // throws, nothing logs, and the only symptom is content silently off-screen.
     // A scroll VIEWPORT's content is supposed to overflow, so those are skipped. ClipToBounds parents are deliberately
     // NOT skipped: an intentional clip is exactly what conceals this class of bug.
-    private static readonly bool s_layoutOverflow = Diag.EnvFlag("FG_LAYOUT_OVERFLOW");
+    private static bool s_layoutOverflow => FluentGpu.Hosting.EngineSwitches.LayoutOverflow;
     // These are per-FRAME accumulators now (not per-Run): the standalone Run() print below snapshots deltas so its
     // per-call semantics are unchanged, while the host resets them once per frame (ResetFrameDiagCounters) and reads
     // them into FrameStats — so a probe sees the whole frame's measure/arrange/text-reshape cost across the full layout
@@ -36,7 +38,7 @@ public sealed partial class FlexLayout
     // s_layoutDiag gates only the per-Run() Console.Error.WriteLine printout below.
     private int _dMeasure, _dTextHit, _dTextMiss, _dArrange, _dMeasureMemoHit;
 
-    /// <summary>Per-frame layout-cost counters (valid only when FG_LAYOUT_DIAG=1; else 0). Surfaced into FrameStats.</summary>
+    /// <summary>Per-frame layout-cost counters (valid only when --fg layout; else 0). Surfaced into FrameStats.</summary>
     public int DiagMeasure => _dMeasure;
     public int DiagArrange => _dArrange;
     public int DiagTextHit => _dTextHit;
@@ -98,11 +100,17 @@ public sealed partial class FlexLayout
 
     private void BeginMeasurePass()
     {
-        // P8 (Operation ultra-fast GPU engine): a layout pass rewrites Bounds across whole subtrees off a single dirty
-        // ancestor - none of those descendant writes carry a per-node mark, and Bounds is a captured column. So a
-        // layout solve declares itself a bulk mutation and the next capture of every publisher slot is a FULL copy.
-        // Scrolling is deliberately layout-free (layout.md 6), which is exactly why a coast frame stays incremental.
-        if (!Verifying) _scene.NoteBulkMutation();
+        // P8 (Operation ultra-fast GPU engine, scroll-root-cause-2026-09-23 §5): a layout pass used to declare itself
+        // a bulk mutation here, unconditionally, because Bounds writes fan out across whole subtrees off a single
+        // dirty ancestor with no per-node mark. They still do — but every one of them funnels through exactly three
+        // choke points, each of which now ledgers precisely instead: SetArrangedBounds (the real per-node Bounds
+        // commit, on every Arrange that isn't early-outed), the three ArrangeVirtual*'s direct content-Bounds writes,
+        // and ArrangeViewport's own node (ScrollState ContentW/H/ViewportW/H + the anchor/realize bookkeeping its
+        // ArrangeVirtual* callees write back onto the SAME node). WriteMeasuredBounds's hypothetical scribble and
+        // RestoreArrangedDescendants' restore-to-the-last-real-rect are deliberately NOT marked: both are transient
+        // or a no-op relative to what is already published (the whole point of the clean-subtree early-out is that
+        // nothing under it changed). Scrolling is deliberately layout-free (layout.md §6), which is exactly why a
+        // coast frame never calls this at all and stays incremental.
         _measureGen++;
         int cap = _scene.Capacity;
         // Resize (copy), never re-allocate blank: growth must not drop the persistent per-node measure records that
@@ -120,7 +128,7 @@ public sealed partial class FlexLayout
     private bool TryRingHit(NodeHandle node, float availW, out Size2 size)
     {
         size = default;
-        if (Verifying) return false;   // FG_LAYOUT_VERIFY: the oracle's re-solve descends for real, it never rides the ring
+        if (Verifying) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Two complementary validators, both required (P4 fix, 2026-09-19):
@@ -272,7 +280,7 @@ public sealed partial class FlexLayout
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
         Arrange(root, 0f, 0f, w, h);
         VerifyParity(root, window.Width, 0f, 0f, w, h, "Run(window)");
-        if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure - m0} memoHit={_dMeasureMemoHit - mh0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
+        if (s_layoutDiag) Console.Error.WriteLine($"[--fg layout] measure={_dMeasure - m0} memoHit={_dMeasureMemoHit - mh0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
     }
 
     /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
@@ -355,7 +363,7 @@ public sealed partial class FlexLayout
     }
 
     /// <summary>Per-frame count of nodes arranged wider than their parent's content box (valid only when
-    /// FG_LAYOUT_OVERFLOW=1; else 0). Surfaced into FrameStats so a probe/test can assert ZERO rather than eyeball a log.</summary>
+    /// --fg layout-overflow; else 0). Surfaced into FrameStats so a probe/test can assert ZERO rather than eyeball a log.</summary>
     public int DiagLayoutOverflows => _dOverflow;
     private int _dOverflow;
 
@@ -390,10 +398,14 @@ public sealed partial class FlexLayout
     {
         ref RectF b = ref _scene.Bounds(node);
         b = next;
-        // FG_LAYOUT_VERIFY's from-scratch re-solve writes Bounds (that IS what it compares) but must leave every other
+        // --fg layout-verify's from-scratch re-solve writes Bounds (that IS what it compares) but must leave every other
         // trace of a layout pass alone: the arranged-rect column, the ArrangedValid bit, the overflow report and the
         // OnBoundsChanged edge are all real per-frame effects that a second solve would duplicate.
         if (Verifying) return;
+        // P8: this IS the per-node Bounds commit (every non-early-outed Arrange call lands here exactly once) — the
+        // ledger mark that replaces BeginMeasurePass's old blanket NoteBulkMutation. Unconditional: Arrange placed
+        // this node whether or not the rect numerically moved, and re-copying an unchanged row costs one memcpy.
+        _scene.NoteCaptureChanged((int)node.Raw.Index);
         if (s_layoutOverflow) ReportOverflow(node, in next);
         uint ai = node.Raw.Index;
         if (ai < (uint)_arranged.Length) _arranged[ai] = next;
@@ -734,7 +746,7 @@ public sealed partial class FlexLayout
         // (found via gate.semantic-zoom.reduced-motion: a KeepAlive overview's ItemsView viewport, several levels
         // below an unchanging full-bleed wrapper, stopped receiving Arrange calls entirely once the wrapper settled).
         uint ei = node.Raw.Index;
-        // FG_LAYOUT_VERIFY: the oracle's re-solve is a FROM-SCRATCH solve by definition — every incremental
+        // --fg layout-verify: the oracle's re-solve is a FROM-SCRATCH solve by definition — every incremental
         // short-circuit is off inside it, or it would just reproduce the incremental answer it exists to check.
         if (!Verifying
             && ei < (uint)_arranged.Length && _scene.IsArrangedValid(node) && !_scene.HasScrollInSubtree(node) && _scene.IsLayoutClean(node))
@@ -927,7 +939,7 @@ public sealed partial class FlexLayout
                         && !content.IsNull && _scene.IsLive(content))
                         RefreshNaturalMeasuredStack(in sc, measured, content, cross, horizontal);
                     float main = sc.Layout is not null ? sc.Layout.ContentExtent(sc.ItemCount, cross)
-                               : _scene.TryGetExtents(node, out var extents) && extents is not null ? (float)extents.Total
+                               : sc.Extent is { } extents ? (float)extents.Total
                                : 0f;
                     if (horizontal) w = main + li.Padding.Horizontal;
                     else h = main + li.Padding.Vertical;
@@ -1008,6 +1020,11 @@ public sealed partial class FlexLayout
 
     private void ArrangeViewport(NodeHandle node, float finalW, float finalH, in LayoutInput li)
     {
+        // P8: ScrollState is a captured sparse column, and this call (directly below, and via the ArrangeVirtual*
+        // callees it dispatches to — all keyed on this SAME node) is the only place a viewport's ContentW/H,
+        // ViewportW/H, WindowOrigin/Cover* and the realize-worklist NodeFlags bit get written. One mark up front covers
+        // every one of those writes for this node (NoteCaptureChanged is idempotent per publication).
+        if (!Verifying) _scene.NoteCaptureChanged((int)node.Raw.Index);
         // Snapshot by value: arranging content may add nested-viewport rows to the scroll table and relocate refs.
         _scene.TryGetScroll(node, out var sc0);
         var content = sc0.ContentNode;
@@ -1016,12 +1033,9 @@ public sealed partial class FlexLayout
         float innerH = finalH - li.Padding.Vertical;
         float padL = li.Padding.Left, padT = li.Padding.Top;
 
-        (float contentW, float contentH) =
-              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml && UsesMeasuredExtent(sc0.Layout)
-                ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
-            : sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
-            : sc0.ItemCount > 0                           ? ArrangeVirtualVariable(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
-            :                                               ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
+        (float contentW, float contentH) = sc0.ItemCount > 0
+            ? ArrangeVirtual(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
+            : ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
 
         // Publish ContentSize + viewport extent (Layout-owned fields) via a fresh ref (post-recursion).
         ref ScrollState sc = ref _scene.ScrollRef(node);
@@ -1029,93 +1043,48 @@ public sealed partial class FlexLayout
             || sc.ViewportW != innerW || sc.ViewportH != innerH;
         sc.ContentW = contentW; sc.ContentH = contentH;
         sc.ViewportW = innerW; sc.ViewportH = innerH;
+        if (sc.ItemCount == 0)
+        {
+            // A plain scroller's coverage is its whole content, arranged at origin 0.
+            sc.WindowOrigin = 0.0;
+            sc.CoverStart = 0.0;
+            sc.CoverEnd = horizontal ? contentW : contentH;
+        }
         // Scrollbar geometry and auto edge masks are emitted by the viewport span itself. A scoped layout can update
         // these ScrollState fields after normal reconciliation, so explicitly invalidate the viewport/ancestor span
         // instead of relying on an unrelated child dirty bit to defeat retained-subtree reuse.
         if (viewportPaintChanged && !Verifying) _scene.Mark(node, NodeFlags.PaintDirty);
 
-        // scroll-v3 §3.2: layout no longer writes Offset/Target, no longer owns the restore latch, and no longer
-        // writes the content -offset transform — those are the kernel's single write, applied through
-        // SceneScrollSink.ApplyMotion. Layout's job is just to tell the kernel this viewport's frame geometry;
-        // AppHost's Reclamp() (after this layout solve — scroll-v3 §3.3 item 3) re-clamps against it, resolves any
-        // EdgeHitPending, and re-applies through the sink — including the transform — for every viewport that
-        // received SetFrame this frame (a mount-time Restore/Bind/AnchorShift lands the same way).
-        if (!Verifying)
-            _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index, BuildFrameSpec(in sc, contentW, contentH, innerW, innerH)));
-        // (Re)bake geometry-dependent ranges (Content*/Bounds now known), then apply the generic scroll-driven bindings
-        // in the SAME ArrangeViewport invocation — a resize frame must not paint a one-frame-stale bound transform.
+        // The content translate for THIS frame's shown offset (scroll rework §2/§6): UI-side for hit-testing and the
+        // published frame; the render poser re-poses it at present time. A shown offset past the new clamp lands on
+        // the clamp (the plan is re-clamped by the host's SetExtent in the same frame).
         if (!content.IsNull && _scene.IsLive(content) && !Verifying)
         {
-            ScrollBindEval.BakeGeometry(_scene, node, in sc);
-            ScrollBindEval.ApplyContinuous(_scene, node, ref sc);
+            double max = Math.Max(0.0, (double)(horizontal ? contentW : contentH) * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f) - (horizontal ? innerW : innerH));
+            if (sc.Offset > max) sc.Offset = max;
+            if (sc.Offset < 0.0) sc.Offset = 0.0;
+            float trans = ScrollContentPose.Translate(sc.WindowOrigin, sc.Offset, _scene.DeviceScale);
+            ref NodePaint cp = ref _scene.Paint(content);
+            Affine2D before = cp.LocalTransform;
+            ScrollContentPose.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, trans, sc.ZoomFactor);
+            // The pose is a TRANSFORM of the content, never a content change: the retained tiles hold the content in its
+            // own space and the composite re-poses them, so a re-window must not dirty the content's paint (that
+            // re-rastered every visible tile of the list each frame). Unchanged ⇒ no mark at all.
+            if (!before.Equals(cp.LocalTransform)) _scene.Mark(content, NodeFlags.TransformDirty);
         }
 
         // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport
         // size (a mount realizes against the Height hint; a relayout can also grow the host). If the realized window
-        // no longer covers the now-known viewport, flag the node — the host (AppHost.Paint) re-realizes + re-runs
-        // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows. Same
-        // windowing idiom as the scroll paths (ScrollKernel.Tick / ScrollInputRouter).
-        if (sc.ItemCount > 0 && !Verifying)
+        // no longer covers the present-time window, flag the node — the host (AppHost.Paint) re-realizes + re-runs
+        // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows.
+        if (sc.ItemCount > 0 && !Verifying && sc.Extent is { } ext)
         {
             float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;
-            float off = horizontal ? sc.OffsetX : sc.OffsetY;
-            int visibleFirst, visibleLast;
-            if (sc.Layout is not null)
-            {
-                // Cross MUST match what the arrange paths pass (the padding-subtracted inner cross, published as the
-                // content cross) — alternating viewport-vs-inner cross made a width-keyed measured layout (the home
-                // feed's estimator) reseed its extent table every frame, flapping the anchor re-pin (the felt jitter).
-                float cross = horizontal ? (sc.ContentH > 0f ? sc.ContentH : sc.ViewportH)
-                                         : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW);
-                sc.Layout.Window(sc.ItemCount, cross, vpExtent, off, 0, out visibleFirst, out visibleLast);
-            }
-            else if (_scene.TryGetExtents(node, out var extents) && extents is not null)
-            {
-                visibleFirst = extents.IndexAt(off);
-                visibleLast = Math.Min(sc.ItemCount, extents.IndexAt(off + vpExtent) + 1);
-            }
-            else visibleFirst = visibleLast = 0;
-            if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast))
+            var feel = FluentGpu.Scroll.Diag.ScrollTunables.Current;
+            var rw = Virtualizer.Plan(ext, sc.Offset, sc.Velocity, vpExtent, in feel, sc.AnchorIndex);
+            if (ScrollContentPose.NeedsRealize(in sc, in rw))
                 _scene.Mark(node, NodeFlags.VirtualRangeDirty);
         }
-    }
-
-    /// <summary>scroll-v3 §3.2/§3.3: the kernel's own copy of a viewport's frame geometry (the <c>ScrollBody.Frame</c>
-    /// slab field) — posted via <c>ScrollInput.SetFrame</c> whenever layout (re)computes it. Independent of the
-    /// <see cref="ScrollState"/> config columns layout ALSO still writes directly (ContentW/H, ViewportW/H): the
-    /// kernel has zero references to <see cref="SceneStore"/>/<see cref="ScrollState"/>, so its clamp/physics must be
-    /// fed this snapshot rather than reading the scene.</summary>
-    /// <summary>Re-post a viewport's current geometry+snap grid to the kernel WITHOUT running a layout pass — for a
-    /// control that mutates <see cref="ScrollState"/>'s snap columns (SnapInterval/Start/End/Points) directly, after
-    /// mount, from outside the reconciler's declaration path (<see cref="SnapSpec.ApplyTo"/>'s own doc: "ApplyTo has
-    /// no scene/node handle to post that command itself... the SetFrame call site is the one that actually arms
-    /// snapping"). A snap-only change is not itself layout-affecting, so nothing else would re-post <c>SetFrame</c>
-    /// and the kernel's cached <see cref="FluentGpu.Scroll.ScrollBody.Frame"/> would keep the STALE grid forever
-    /// (scroll-v3-plan §2 "the snap grid isn't reaching the kernel"). Idempotent — multiple <c>SetFrame</c> posts for
-    /// the same node in one frame are expected (plan §3.3 note ii). No-op if the node has no live scroll body yet.</summary>
-    public static void RepostFrame(SceneStore scene, NodeHandle node)
-    {
-        if (node.IsNull || !scene.IsLive(node) || !scene.HasScroll(node)) return;
-        ref ScrollState sc = ref scene.ScrollRef(node);
-        scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index,
-            BuildFrameSpec(in sc, sc.ContentW, sc.ContentH, sc.ViewportW, sc.ViewportH)));
-    }
-
-    private static FluentGpu.Scroll.ScrollFrameSpec BuildFrameSpec(in ScrollState sc, float contentW, float contentH, float viewportW, float viewportH)
-    {
-        bool horizontal = sc.Orientation == 1;
-        return new FluentGpu.Scroll.ScrollFrameSpec(
-            Orientation: sc.Orientation,
-            ExtentMain: horizontal ? contentW : contentH,
-            ExtentCross: horizontal ? contentH : contentW,
-            ViewportMain: horizontal ? viewportW : viewportH,
-            ViewportCross: horizontal ? viewportH : viewportW,
-            Zoom: sc.ZoomFactor,
-            ContentSized: sc.ContentSized,
-            SnapInterval: sc.SnapInterval,
-            SnapStart: sc.SnapStart,
-            SnapEnd: sc.SnapEnd,
-            SnapPoints: sc.SnapPoints);
     }
 
     private (float w, float h) ArrangePlainScroll(NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
@@ -1127,256 +1096,130 @@ public sealed partial class FlexLayout
         var cs = Measure(content, horizontal ? float.PositiveInfinity : innerW);   // vertical scroll: wrap text to the viewport width
         float contentW = horizontal ? cs.Width : innerW;
         float contentH = horizontal ? innerH : cs.Height;
-        Arrange(content, padL, padT, contentW, contentH);   // content-box origin; Input adds -ScrollOffset
+        Arrange(content, padL, padT, contentW, contentH);   // content-box origin; the content translate adds WindowOrigin − Offset
         return (contentW, contentH);
     }
 
-    // Pluggable fixed-geometry virtualization: the IVirtualLayout publishes ContentSize and places each realized item
-    // by ItemRect (stack / grid / custom — all the same code path). Allocation-free (struct rects). virtualization.md §8.7.
-    private (float w, float h) ArrangeVirtualLayout(in ScrollState sc, NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
+    /// <summary>
+    /// Virtual arrangement (scroll rework §6): every realized row is measured, its measured extent is committed to the
+    /// viewport's <see cref="IExtentSource"/> through <see cref="Virtualizer.ApplyMeasured"/> — a correction ABOVE the
+    /// anchor shifts the plan's coordinate frame in the same call, so the anchor row's screen position is unchanged
+    /// before this frame ever presents — and the rows are arranged RELATIVE to <see cref="ScrollState.WindowOrigin"/>
+    /// (<c>OffsetOf(WindowOriginIndex)</c>) as small floats. Fixed-geometry layouts (grids, shelves) place cells by
+    /// <see cref="IVirtualLayout.ItemRect"/> on the cross axis and by the extent source on the scroll axis.
+    /// </summary>
+    private (float w, float h) ArrangeVirtual(NodeHandle node, in ScrollState sc, NodeHandle content,
+                                              float innerW, float innerH, float padL, float padT, bool horizontal)
     {
+        if (content.IsNull || sc.Extent is not { } ext) return (0f, 0f);
         var layout = sc.Layout;
-        if (content.IsNull || layout is null) return (0f, 0f);
-        int first = sc.FirstRealized;
         float cross = horizontal ? innerH : innerW;
-        // Viewport-aware layouts (fill-the-width shelves) need the scroll-axis viewport before any geometry call.
         if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
-        float mainContent = layout.ContentExtent(sc.ItemCount, cross);
-        float contentW = horizontal ? mainContent : innerW;
-        float contentH = horizontal ? innerH : mainContent;
-        _scene.Bounds(content) = new RectF(padL, padT, contentW, contentH);
-
-        int ord = 0;
-        for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
-        {
-            int index = VirtualIndex(in sc, ord);
-            var rect = layout.ItemRect(index, cross);   // retained prefix first, then recyclable window in index order
-            // Inset the item by its Margin within the slot, so a list item honors Margin like any stack child (the WinUI
-            // ListViewItem backplate inset {4,2,4,2}). Without this the item filled the full slot — a margined row (an
-            // inset highlight pill / backplate) then started its content at padding-only, drifting out of alignment with
-            // a fixed header outside the list. The slot stride (ItemRect/extent) is unchanged; only the item insets.
-            ref LayoutInput rli = ref _scene.Layout(rc);
-            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
-            // Measure at the slot's content WIDTH (its column), not unbounded — so a grid cell's text truncates/wraps to its
-            // own column instead of measuring at its full natural width and bleeding into neighbours. A stack slot's
-            // rect.W == the full cross width, so list rows are unaffected (they already filled it).
-            Measure(rc, MathF.Max(0f, rect.W - mL - mR));
-            Arrange(rc, rect.X + mL, rect.Y + mT, MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
-        }
-        return (contentW, contentH);
-    }
-
-    // Variable virtualization: rows positioned by the Fenwick extent table (OffsetOf), measured-then-corrected,
-    // with scroll-anchoring so an above-viewport extent correction doesn't jump the visible top (virtualization.md §6.2).
-    private (float w, float h) ArrangeVirtualVariable(NodeHandle node, in ScrollState sc, NodeHandle content,
-                                                      float innerW, float innerH, float padL, float padT, bool horizontal)
-    {
-        if (content.IsNull || !_scene.TryGetExtents(node, out var table) || table is null) return (0f, 0f);
-        int first = sc.FirstRealized;
-
-        // Anchor: the topmost-visible item + its sub-item offset, captured BEFORE this frame's corrections.
-        float offset = horizontal ? sc.OffsetX : sc.OffsetY;
-        int anchorIndex = table.IndexAt(offset);
-        float anchorWithin = offset - table.OffsetOf(anchorIndex);
-
-        int prevFirst = sc.PrevArrangedFirst, prevLast = sc.PrevArrangedLast;
-        bool deferred = false;
-        int ord = 0;
-        for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
-        {
-            int index = VirtualIndex(in sc, ord);
-            var cs = Measure(rc);                                  // the row's natural main extent
-            float pos = table.OffsetOf(index);                    // content-space position (corrections so far applied)
-            float main = horizontal ? cs.Width : cs.Height;
-            if (horizontal) Arrange(rc, pos, 0f, main, innerH);
-            else            Arrange(rc, 0f, pos, innerW, main);
-            // Fresh row above the anchor: defer the extent correction one arrange — its first measure can be
-            // transiently short (deferred inner content), and pushing that into the table re-pins the offset down then
-            // back up (the felt jitter). See ArrangeVirtualMeasured for the full rationale.
-            bool persistent = ord < sc.PersistentPrefixCount;
-            if (!persistent && (index < prevFirst || index > prevLast) && index < anchorIndex) { deferred = true; continue; }
-            table.SetExtent(index, main);                         // correct this row's extent (O(log n))
-        }
-
-        float mainContent = (float)table.Total;
-        float contentW = horizontal ? mainContent : innerW;
-        float contentH = horizontal ? innerH : mainContent;
-        _scene.Bounds(content) = new RectF(padL, padT, contentW, contentH);
-
-        // Re-pin the anchor so corrections to rows above the visible top do not shift the viewport.
-        float pinned = table.OffsetOf(anchorIndex) + anchorWithin;
-        float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
-        pinned = Math.Clamp(pinned, 0f, maxOff);
-        ref ScrollState scw = ref _scene.ScrollRef(node);
-        scw.AnchorIndex = anchorIndex;
-        PostAnchorShiftAndFrame(node, in scw, pinned - offset, contentW, contentH, innerW, innerH, anchorIndex, offset);
-        scw.PrevArrangedFirst = first;
-        scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
-        if (deferred && !Verifying) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
-        return (contentW, contentH);
-    }
-
-    // The virtualization anchor re-pin (above) shifts the offset to keep the topmost item fixed across
-    // estimate-then-correct extent changes. Post that shift as a coordinate delta BEFORE the fresh frame — the kernel
-    // (ScrollKernel.Reclamp, drained after this layout solve) rebases every live intent (resampler anchor, chase
-    // targets, drag anchor) by the delta first, so they move WITH the re-pin instead of being overwritten/fought a
-    // tick later (the mid-gesture jitter — scroll-v3 §2.1 "AnchorShift... the blessed exception, made explicit"),
-    // THEN re-clamps to the new frame. Both are structural commands the kernel drains together in one Reclamp() —
-    // multiple SetFrame posts for the same node in one frame are expected and idempotent (scroll-v3 §3.3 note ii).
-    private void PostAnchorShiftAndFrame(NodeHandle node, in ScrollState scw, float delta, float contentW, float contentH,
-        float viewportW, float viewportH, int anchorIndex, float offset)
-    {
-        int idx = (int)node.Raw.Index;
-        // Sub-pixel extent noise is invisible in the row geometry but visible as a tiny reverse/forward scroll
-        // correction. Keep meaningful anchor re-pins exact while dropping the measurement noise that makes a steady
-        // flick feel like it is stepping.
-        if (MathF.Abs(delta) > 0.5f)
-        {
-            if (!Verifying) _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.AnchorShift(idx, delta));
-            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, idx, anchorIndex, offset);
-        }
-        if (!Verifying)
-            _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame(idx, BuildFrameSpec(in scw, contentW, contentH, viewportW, viewportH)));
-    }
-
-    /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
-    private static bool UsesMeasuredExtent(IVirtualLayout layout)
-        => layout is not GridVirtualLayout gv || gv.IsMeasured;
-
-    // Measured-seam virtualization (E11-L0): the same estimate-then-correct + scroll-anchoring contract as the
-    // built-in Fenwick path (ArrangeVirtualVariable), but the extents/prefix sums live behind the user-implementable
-    // IMeasuredVirtualLayout — custom layouts can be variable/sliver-like. virtualization.md §6.2 semantics.
-    private (float w, float h) ArrangeVirtualMeasured(NodeHandle node, IMeasuredVirtualLayout layout, in ScrollState sc,
-                                                      NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
-    {
-        if (content.IsNull) return (0f, 0f);
-        int first = sc.FirstRealized;
-        float cross = horizontal ? innerH : innerW;
-
-        // Viewport-aware measured layouts (focal-band lists, fill-width measured shelves) need the live scroll-axis
-        // viewport before ANY geometry read, exactly like ArrangeVirtualLayout. Besides keeping ItemRect/ContentExtent
-        // coherent during resize, this makes IViewportVirtualLayout's documented ordering true for the measured seam.
-        if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
-
-        // Anchor: the topmost-visible item + its sub-item offset, captured BEFORE this frame's corrections.
-        float offset = horizontal ? sc.OffsetX : sc.OffsetY;
-        int anchorIndex = layout.IndexAt(offset, cross);
-        float anchorWithin = offset - layout.OffsetOf(anchorIndex, cross);
+        if (ext is VirtualLayoutExtent vle && cross > 0f) vle.Cross = cross;
+        if (ext.Count != sc.ItemCount) ext.Resize(sc.ItemCount);
+        _ = ext.Total;   // a lazily-tabled measured layout must own its table BEFORE the first SetMeasured below
 
         GridVirtualLayout? measuredGrid = layout is GridVirtualLayout { IsMeasured: true } grid ? grid : null;
-        if (measuredGrid is not null) measuredGrid.ResetMeasurePass(sc.ItemCount, cross);
+        measuredGrid?.ResetMeasurePass(sc.ItemCount, cross);
+        bool measured = ext is MeasuredExtent || layout is IMeasuredVirtualLayout;
+        int anchorIndex = Math.Clamp(sc.AnchorIndex, 0, Math.Max(0, sc.ItemCount - 1));
+        var vpId = new ScrollViewportId((int)node.Raw.Index, node.Raw.Gen);
+        var slots = _scene.PlanSlots;
 
-        int prevFirst = sc.PrevArrangedFirst, prevLast = sc.PrevArrangedLast;
-        bool deferred = false;
+        // Pass 0 — an out-of-band extent rewrite since the last pass (a wholesale reseed, IAnchoredReseedLayout) moved the
+        // rows above the anchor with no plan shift: anchor it here, in the same call as this pass's measured corrections, so
+        // the reseed and the re-measure that corrects it net to the anchor row staying where the user sees it.
+        double shift = 0.0;
+        if (!Verifying && layout is IAnchoredReseedLayout reseeded
+            && reseeded.TakeReseedShift(anchorIndex, out double reseedDelta) && reseedDelta != 0.0)
+        {
+            bool anchored = slots is not null && slots.Shift(vpId, reseedDelta);
+            shift += reseedDelta;
+            if (FluentGpu.Scroll.Diag.ScrollProbe.Level != FluentGpu.Scroll.Diag.ProbeLevel.Off)
+                FluentGpu.Scroll.Diag.ScrollProbe.Extent((int)node.Raw.Index, 0, anchorIndex, reseedDelta, anchored,
+                    FluentGpu.Scroll.Diag.ProbeExtentCause.Structural);
+        }
 
-        // Pass 1 — measure every realized cell and feed extents (measured grids need the full row before heights lock).
+        // Pass 1 — measure every realized row and commit its extent (the ONE extent write path; corrections above the
+        // anchor shift the plan's frame in the same call, and this frame's displayed offset shifts with it).
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
             int index = VirtualIndex(in sc, ord);
-            var rect = layout.ItemRect(index, cross);
+            if ((uint)index >= (uint)sc.ItemCount) continue;
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
-            float measureW = horizontal ? MathF.Max(0f, rect.H - mT - mB) : MathF.Max(0f, rect.W - mL - mR);
+            float slotCross;
+            if (layout is not null)
+            {
+                var rect = layout.ItemRect(index, cross);
+                slotCross = horizontal ? rect.H : rect.W;
+            }
+            else slotCross = cross;
+            float measureW = horizontal ? float.PositiveInfinity : MathF.Max(0f, slotCross - mL - mR);
             var cs = Measure(rc, measureW);
-            float main = horizontal ? cs.Width : cs.Height;
-            float oldMain = horizontal ? rect.W : rect.H;
-            // A row OUTSIDE the previous arrange window is FRESH: its first measure can be transiently SHORT (deferred
-            // inner content lands next frame). Above the anchor that transient would re-pin the offset down then back up
-            // — the felt jitter — so defer the correction one arrange (the slot keeps its table extent; next arrange
-            // measures the settled value and usually matches, so no pin fires at all).
-            //
-            // ONLY the short case. INVARIANT: the extent table and the arranged child box never disagree for a realized
-            // row. A fresh row that measured TALLER than its slot is not a transient to ride out — pass 2 arranges it at
-            // that tall measure (it must: the alternative is a wrapped row scissored into its one-line estimate), so
-            // skipping the write would position every following row from a table that is provably too short and paint
-            // them over it until some later pass happens to re-measure the row inside the window. That is how an
-            // already-expanded drawer row loses its height the moment an overlay forces a full root layout: the row is
-            // "fresh" (outside the previous arrange window) and above the anchor, and its extra height lives ONLY here.
-            // A correction in place costs nothing extra: the write moves OffsetOf(anchorIndex) by the same amount, and
-            // the anchor re-pin below turns that into the AnchorShift the kernel rebases every live intent by — the
-            // same compensation every non-deferred above-anchor correction already gets, so the visible top does not
-            // move. (0.5px: only a REAL shortfall defers. A measure that came back at its slot ±noise has nothing to
-            // commit, so deferring it would buy a follow-up arrange for no correction at all.)
-            bool fresh = ord >= sc.PersistentPrefixCount && (index < prevFirst || index > prevLast);
-            bool transientlyShort = main < oldMain - 0.5f;
-            if (fresh && transientlyShort && index < anchorIndex) { deferred = true; continue; }
-            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && MathF.Abs(main - oldMain) > 0.5f)
-                FluentGpu.Foundation.ScrollTrace.Note(111, main - oldMain, (int)node.Raw.Index, index, main);   // extent correction: which row, by how much
-            layout.SetMeasured(index, main, cross);
+            if (!measured) continue;
+            float main = horizontal ? cs.Width + mL + mR : cs.Height + mT + mB;
+            if (!Verifying)
+            {
+                double delta = slots is not null
+                    ? Virtualizer.ApplyMeasured(ext, index, main, anchorIndex, slots, vpId)
+                    : ext.SetMeasured(index, main, anchorIndex);
+                shift += delta;
+            }
         }
 
-        // Pass 2 — arrange at the corrected slots (row-synced for grids). A fresh-above-anchor item that measured SHORT
-        // deliberately did NOT update the extent table in pass 1, but its Measure result is already retained in Bounds.
-        // Use that measured main size for this frame's child box while keeping the old table POSITION; only the
-        // extent-table write remains deferred. Without this distinction a row is arranged into a stale estimate for one
-        // frame, and a self-blur layer dutifully scissors its glyphs into that strip. A fresh row that GREW (or matched
-        // its slot) is no longer deferred at all — pass 1 wrote it — so the branch below re-reads the same number the
-        // table now holds: a value-identical no-op that keeps table and child box in agreement instead of straddling
-        // two truths.
-        int gridCols = measuredGrid?.EffectiveColumns(cross) ?? 1;
-        int deferredGridRow = -1;
-        float deferredGridMain = 0f;
+        // Pass 2 — arrange relative to the window's arrange origin (Virtualizer.ArrangeOriginIndex, chosen at realize) at
+        // the corrected slots (row-synced for grids). A retained row's box is unchanged by a window shift.
+        double origin = ext.OffsetOf(Math.Clamp(sc.WindowOriginIndex, 0, sc.ItemCount));
         ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
             int index = VirtualIndex(in sc, ord);
-            var rect = layout.ItemRect(index, cross);
+            if ((uint)index >= (uint)sc.ItemCount) continue;
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
-
-            bool fresh = ord >= sc.PersistentPrefixCount && (index < prevFirst || index > prevLast);
-            if (fresh && index < anchorIndex)
+            float mainPos = (float)(ext.OffsetOf(index) - origin);
+            float mainExtent, crossPos, crossExtent;
+            if (layout is not null)
             {
-                float measuredMain;
-                if (measuredGrid is null)
-                {
-                    ref RectF measured = ref _scene.Bounds(rc);
-                    measuredMain = horizontal ? measured.W : measured.H;
-                }
-                else
-                {
-                    // Grid rows must remain row-synchronised even on the deferred frame: use the maximum measured cell
-                    // height as a TEMPORARY slot for every realised cell in this fresh row, without touching the row table.
-                    int row = index / gridCols;
-                    if (row != deferredGridRow)
-                    {
-                        deferredGridRow = row;
-                        deferredGridMain = 0f;
-                        int scanOrd = ord;
-                        int scanIndex = index;
-                        for (var scan = rc; !scan.IsNull && scanIndex / gridCols == row;
-                             scan = _scene.NextSibling(scan), scanIndex = VirtualIndex(in sc, ++scanOrd))
-                        {
-                            ref RectF measured = ref _scene.Bounds(scan);
-                            deferredGridMain = MathF.Max(deferredGridMain, horizontal ? measured.W : measured.H);
-                        }
-                    }
-                    measuredMain = deferredGridMain;
-                }
-
-                if (horizontal) rect = new RectF(rect.X, rect.Y, measuredMain, rect.H);
-                else            rect = new RectF(rect.X, rect.Y, rect.W, measuredMain);
+                var rect = layout.ItemRect(index, cross);
+                mainExtent = horizontal ? rect.W : rect.H;
+                crossPos = horizontal ? rect.Y : rect.X;
+                crossExtent = horizontal ? rect.H : rect.W;
             }
-            Arrange(rc, rect.X + mL, rect.Y + mT,
-                MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
+            else
+            {
+                mainExtent = (float)ext.ExtentOf(index);
+                crossPos = 0f;
+                crossExtent = cross;
+            }
+            float x = horizontal ? mainPos + mL : crossPos + mL;
+            float y = horizontal ? crossPos + mT : mainPos + mT;
+            float w = horizontal ? mainExtent - mL - mR : crossExtent - mL - mR;
+            float h = horizontal ? crossExtent - mT - mB : mainExtent - mT - mB;
+            Arrange(rc, x, y, MathF.Max(0f, w), MathF.Max(0f, h));
         }
 
-        float mainContent = layout.ContentExtent(sc.ItemCount, cross);
+        float mainContent = (float)ext.Total;
         float contentW = horizontal ? mainContent : innerW;
         float contentH = horizontal ? innerH : mainContent;
         _scene.Bounds(content) = new RectF(padL, padT, contentW, contentH);
+        // P8: bypasses SetArrangedBounds (this is the virtualization content node's synthetic box, not an
+        // authored child) — mark it directly so its captured Bounds row isn't left stale.
+        if (!Verifying) _scene.NoteCaptureChanged((int)content.Raw.Index);
 
-        // Re-pin the anchor so corrections to rows above the visible top do not shift the viewport.
-        float pinned = layout.OffsetOf(anchorIndex, cross) + anchorWithin;
-        float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
-        pinned = Math.Clamp(pinned, 0f, maxOff);
         ref ScrollState scw = ref _scene.ScrollRef(node);
-        scw.AnchorIndex = anchorIndex;
-        PostAnchorShiftAndFrame(node, in scw, pinned - offset, contentW, contentH, innerW, innerH, anchorIndex, offset);
-        scw.PrevArrangedFirst = first;
-        scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
-        if (deferred && !Verifying) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
+        scw.WindowOrigin = origin;
+        ScrollContentPose.CoverageOf(ext, sc.PersistentPrefixCount, sc.FirstRealized, sc.LastRealized, out scw.CoverStart, out scw.CoverEnd);
+        if (shift != 0.0)
+        {
+            scw.Offset += shift;   // this frame's displayed offset rides the same frame shift the plan just took
+            _scene.ScrollHandleFor(node)?.NoteFrameShift(shift);   // the live contact origin / last shown move with the frame
+            if (FluentGpu.Scroll.Diag.ScrollProbe.Level != FluentGpu.Scroll.Diag.ProbeLevel.Off)
+                FluentGpu.Scroll.Diag.ScrollProbe.Extent((int)node.Raw.Index, 0, anchorIndex, shift, true,
+                    FluentGpu.Scroll.Diag.ProbeExtentCause.FrameShift);
+        }
         return (contentW, contentH);
     }
 
@@ -1582,13 +1425,13 @@ public sealed partial class FlexLayout
 
     // Effective column count. Fixed grids use their declared track list; an auto-fill grid (MinColWidth > 0) packs as
     // many equal 1fr columns as fit at >= MinColWidth, so the tracks always fill the width and the count reflows with it
-    // (CSS repeat(auto-fill, minmax(MinColWidth, 1fr))). Width unknown (0 / ∞) ⇒ assume a single column.
+    // (CSS repeat(auto-fill, minmax(MinColWidth, 1fr))), capped at MaxColumns when > 0. Width unknown (0 / ∞) ⇒ assume
+    // a single column. The formula is GridEl.AutoFillColumnCount — ONE definition shared with app-side form rules, so
+    // a caller predicting the count (cells = 2·cols − 1) can never disagree with the tracks actually laid out.
     private static int GridColCount(in GridSpec g, float innerW)
     {
         if (g.MinColWidth > 0f)
-            return innerW > 0f && !float.IsInfinity(innerW)
-                ? Math.Max(1, (int)((innerW + g.ColGap) / (g.MinColWidth + g.ColGap)))
-                : 1;
+            return Dsl.GridEl.AutoFillColumnCount(innerW, g.MinColWidth, g.ColGap, g.MaxColumns);
         return g.Columns?.Length ?? 0;
     }
 

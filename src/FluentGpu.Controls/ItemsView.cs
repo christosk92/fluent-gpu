@@ -4,7 +4,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Reconciler;
 using FluentGpu.Scene;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -14,7 +14,7 @@ namespace FluentGpu.Controls;
 /// ItemsView.idl:46-58 — CurrentItemIndex, StartBringItemIntoView, and the selection API via <see cref="Selection"/>).
 /// Pass one to <c>ItemsView.Create</c>; the component wires it at mount.
 /// </summary>
-public sealed class ItemsViewController : IWheelTarget
+public sealed class ItemsViewController
 {
     /// <summary>The ItemsView that wired this controller last. A controller outlives a keyed list swap: the INCOMING
     /// list wires it at its first render while the OUTGOING one is still fading out, and the outgoing list's unmount
@@ -84,8 +84,8 @@ public sealed class ItemsViewController : IWheelTarget
     /// <summary>WinUI <c>StartBringItemIntoView(index, BringIntoViewOptions)</c> (idl:52): realizes the target by
     /// scrolling the virtualized viewport. <paramref name="alignmentRatio"/> NaN = minimal scroll (the default
     /// BringIntoViewOptions); 0 = align item start to viewport start, 1 = end to end (the Home/End ratios,
-    /// ItemsViewInteractions.cpp:1013-1016). <paramref name="animate"/> true = SMOOTH-scroll to the target (the
-    /// scroll kernel's Driven chase eases the offset, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>);
+    /// ItemsViewInteractions.cpp:1013-1016). <paramref name="animate"/> true = SMOOTH-scroll to the target (a
+    /// velocity-continuous <c>ScrollMove.Glide</c>, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>);
     /// false (default) = snap immediately. Animated paging (e.g. a PagedShelf's chevrons) passes true.</summary>
     public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN, bool animate = false)
         => BringIntoViewImpl?.Invoke(index, alignmentRatio, animate);
@@ -101,8 +101,8 @@ public sealed class ItemsViewController : IWheelTarget
     }
 
     /// <summary>Shift the virtualized viewport's offset by <paramref name="delta"/> DIP along its scroll axis — an
-    /// INSTANT coordinate-frame rebase (the kernel's <c>AnchorShift</c>: it moves with every other live intent, never
-    /// starts a chase/coast). Unconditional; an ANCHOR correction after a structural change above the first visible
+    /// INSTANT coordinate-frame rebase (<c>ScrollHandle.ShiftFrame</c>: it moves with the live plan, never starts a
+    /// glide/coast). Unconditional; an ANCHOR correction after a structural change above the first visible
     /// row (a live reorder/insert shifting an index) goes through <see cref="PreserveAnchor"/>, which applies the
     /// scroll-anchoring suppression rules on top of this. No-op for non-virtual hosts. For the
     /// drag-reorder EDGE AUTO-SCROLL seam (a held nudge for as long as the pointer sits near the viewport edge), use
@@ -111,30 +111,32 @@ public sealed class ItemsViewController : IWheelTarget
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
 
     /// <summary>Wheel notches routed from ANOTHER element (<c>Element.WheelTarget</c> — a header laid out above this
-    /// list): the viewport posts the kernel's <c>WheelNotch</c> with <c>PerNotchDip(viewport, LineDip)</c> per notch,
-    /// so the list glides exactly as a device notch over its rows would (<see cref="IWheelTarget.WheelNotch"/>). Never
-    /// immediate (unlike <see cref="ScrollBy"/>); a no-op before mount and for a non-virtual host.</summary>
+    /// list): the viewport's handle authors a wheel notch (<c>ScrollHandle.WheelNow</c>) with the feel's
+    /// <c>WheelNotchDip</c> per notch, so the list glides exactly as a device notch over its rows would.
+    /// Never immediate (unlike <see cref="ScrollBy"/>); a no-op before mount and for a non-virtual host.</summary>
     public void WheelNotch(float notches) => WheelNotchImpl?.Invoke(notches);
 
     /// <summary>Scroll ANCHORING (CSS <c>overflow-anchor</c>): after a structural change ABOVE the first visible row —
     /// rows inserted or removed ahead of it — shift the offset by <paramref name="delta"/> so that row keeps its screen
     /// position. The same instant coordinate-frame rebase as <see cref="ScrollBy"/>, but SUPPRESSED while the viewport
-    /// rests at its start edge (<see cref="FluentGpu.Scroll.ScrollAnchoring"/>): at offset 0 the user is looking at the
+    /// rests at its start edge: at offset 0 the user is looking at the
     /// top — a header, the first rows — and growth above the first row must push the rows down under it, never scroll
     /// the list to chase a row (Gecko skips anchor adjustments at a zero scroll position and while a restoration is
     /// still pending, i.e. the initial load). Returns true when the shift was applied. Use this — not
     /// <see cref="ScrollBy"/>, which stays a plain programmatic nudge — for every anchor correction.</summary>
     public bool PreserveAnchor(float delta)
     {
-        if (ScrollByImpl is null || !FluentGpu.Scroll.ScrollAnchoring.ShouldAdjust(ScrollOffset, delta)) return false;
+        // Gecko's rule: no anchor adjustment while resting at the start edge (offset 0) — growth above the first row
+        // pushes the rows down under the user instead of scrolling the list to chase one.
+        if (ScrollByImpl is null || delta == 0f || ScrollOffset <= 0.5f) return false;
         ScrollByImpl(delta);
         return true;
     }
 
     /// <summary>The drag-reorder EDGE AUTO-SCROLL seam: set (or replace) a continuous scroll velocity (DIP/s, signed
-    /// along the view's scroll axis) for as long as the pointer holds near a viewport edge; 0 stops it. Posts the
-    /// kernel's <c>SetVelocity</c> — an Autoscroll <c>ScrollActivity</c>, coasting smoothly rather than the per-event
-    /// instant jump <see cref="ScrollBy"/> gives. No-op for non-virtual hosts.</summary>
+    /// along the view's scroll axis) for as long as the pointer holds near a viewport edge; 0 stops it. Authors a
+    /// constant-velocity plan (<c>ScrollHandle.AutoScroll</c>) that moves smoothly and stops at the edge, rather than the
+    /// per-event instant jump <see cref="ScrollBy"/> gives. No-op for non-virtual hosts.</summary>
     public void SetAutoScrollVelocity(float dipPerS) => SetAutoScrollVelocityImpl?.Invoke(dipPerS);
 
     /// <summary>Correct a cached measured extent, preserving the current visible anchor and every active scroll intent.
@@ -445,9 +447,6 @@ public sealed class ItemsView : Component
     /// <summary>True ⇒ the bound realize path (<see cref="RowTemplate"/> + <see cref="VirtualListEl.RowBind"/>): rows are
     /// persistent slots; selection/current/now-playing re-skin in place via per-row binds, never a list re-render.</summary>
     public bool BoundMode;
-    /// <summary>Opt-in cold-mount stagger for the bound realize path (see <see cref="VirtualListEl.StaggerColdRealize"/>):
-    /// a heavy list realizes its initial window a few rows/frame instead of all at once, killing the mount spike.</summary>
-    public bool StaggerColdRealize;
     /// <summary>Typeahead text per item (defaults to <see cref="Items"/> when it backs the view).</summary>
     public Func<int, string>? ItemText;
     /// <summary>Per-item enabled gate (disabled items dim to 0.3 and don't interact).</summary>
@@ -479,12 +478,9 @@ public sealed class ItemsView : Component
     public Action<int>? ItemInvoked;
     public Action? SelectionChanged;
     public ItemsViewController? Controller;
-    /// <summary>Identity-stable two-way controller for this view's vertical viewport.</summary>
-    public IScrollController? VerticalScrollController;
-    /// <summary>The ONE authoring handle over this view's live scroll viewport (scroll-v3-plan §7.2) — forwarded
-    /// straight onto the built <see cref="VirtualListEl.Controller"/>; the reconciler attaches/detaches it. Distinct
-    /// from <see cref="VerticalScrollController"/> (the annotated-rail seam).</summary>
-    public FluentGpu.Scroll.ScrollController? ScrollHandle;
+    /// <summary>The ONE app-facing handle over this view's live scroll viewport (scroll rework §9) — forwarded straight
+    /// onto the built <see cref="VirtualListEl.Handle"/>; the host binds/unbinds it with the viewport node.</summary>
+    public ScrollHandle? Handle;
     /// <summary>WinUI <c>ItemTransitionProvider</c> (ItemsView.idl:45, template-bound onto the inner repeater,
     /// ItemsView.xaml:30): the collection transition stamped onto each realized container root — Adds/Removes
     /// fade, Moves FLIP, 167ms decelerate (<see cref="ItemCollectionTransition"/>).</summary>
@@ -528,21 +524,19 @@ public sealed class ItemsView : Component
     /// line + terminal dot, the in-gap preview, the source-row hide and the commit/teardown lifecycle.</summary>
     public InsertionOptions? Insertion;
 
-    public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
     /// hard-viewport path every big list wants (a Grow viewport never measures its content extent, so 10k rows stay
     /// windowed). 0 = NATURAL size: an unconstrained ItemsView measures to its layout's ContentExtent — WinUI's
     /// unconstrained ScrollView-over-ItemsRepeater shape (ItemsView.xaml template) — the gallery card shape.</summary>
     public float Grow = 1f;
 
-    /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — a surface-colour fade at an
+    /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — the analytic edge feather at an
     /// overflowing edge so a long list reads as scrollable. <see cref="ScrollEdgeCues.Auto"/> (default) → the app
     /// default (ON, fade-only); <see cref="ScrollEdgeCues.None"/> opts out. Forwarded onto the built VirtualListEl.</summary>
     public ScrollEdgeCues EdgeCues = ScrollEdgeCues.Auto;
-    /// <summary>Premium alpha-mask edge fade: feather the content's OWN alpha at the overflowing edges. Unlike the
-    /// surface-colour <see cref="EdgeCues"/> fade (which needs an opaque plate to dissolve into and self-skips over a
-    /// gradient wash), this works over ANY background. One offscreen RT for the viewport. Forwarded onto the built
-    /// VirtualListEl. Default false.</summary>
+    /// <summary>Feather the overflowing edges even where <see cref="EdgeCues"/> is <see cref="ScrollEdgeCues.None"/> (or
+    /// the app default is off): the same analytic edge feather a Fade edge cue resolves to (gpu-renderer.md §13.1e).
+    /// Forwarded onto the built VirtualListEl. Default false.</summary>
     public bool AutoEdgeFade;
     /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>; 0 (default) = the engine's standard band. Forwarded
     /// onto the built VirtualListEl — see <c>ScrollEl.AutoEdgeFadeBand</c>.</summary>
@@ -558,7 +552,6 @@ public sealed class ItemsView : Component
     public float ItemClipTopInset = float.NaN;
     /// <summary>Top alpha-feather for the recyclable item band. Zero disables it.</summary>
     public float ItemClipTopFadeBand;
-    public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
     /// <summary>Viewport-hydration hook forwarded onto the built VirtualListEl (see <c>VirtualListEl.OnVisibleRange</c>):
     /// the realized window moved → (first, last) exclusive. Fires only on a window CHANGE (never on a steady
     /// transform-only scroll frame) and reports the realized window INCLUDING the overscan halo, not the strictly-visible
@@ -572,17 +565,15 @@ public sealed class ItemsView : Component
     // ── research adjustment #16 — virtualization knobs (forwarded to the built VirtualListEl / applied per-container) ──
     /// <summary>Recycle-pool discriminator (bound path): heterogeneous rows only rebind within their content-type pool.</summary>
     public Func<int, int>? ContentType;
-    /// <summary>Pre-realize cache extent in PIXELS beyond the viewport (overrides row-based <see cref="OverscanItems"/> when set).</summary>
-    public float CacheExtentPx = float.NaN;
     /// <summary>Bound-path leading items kept mounted for native sticky/scroll-linked composition.</summary>
     public int PersistentPrefixCount;
+    /// <summary>Realize and measure every item (forwarded to <see cref="VirtualListEl.MeasureAll"/>).</summary>
+    public bool MeasureAll;
     /// <summary>Per-item paint isolation: wrap each realized item container as a layout/paint boundary (IsolateLayout + clip).</summary>
     public bool RepaintBoundary;
     // ── research adjustment #5 — keep-alive-but-hidden slot (bound path) ──
     /// <summary>Keep-alive predicate (bound path): an item whose slot must park hidden instead of index-rebinding off-window.</summary>
     public Func<int, bool>? KeepAlive;
-    /// <summary>Bounded keep-alive bucket cap (default 8; LRU-evicted beyond it).</summary>
-    public int KeepAliveCap = 8;
 
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
     /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
@@ -612,9 +603,7 @@ public sealed class ItemsView : Component
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
             Controller = o.Controller,
-            VerticalScrollController = o.Scroll?.VerticalScrollController,
-            ScrollHandle = o.Scroll?.Controller,
-            OverscanItems = o.Overscan,
+            Handle = o.Scroll?.Handle,
             ContainerFactory = o.ContainerFactory,
             KeyOf = o.KeyOf,
             Grow = o.Grow,
@@ -625,7 +614,6 @@ public sealed class ItemsView : Component
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
-            OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
             OnVisibleRange = o.OnVisibleRange,
             Snap = o.Scroll?.Snap,
             Transition = o.Transition,
@@ -635,8 +623,8 @@ public sealed class ItemsView : Component
             DraggedSlot = o.Reorder?.DraggedSlot,
             PartDelta = o.PartDelta,
             ContentType = o.ContentType,
-            CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
+            MeasureAll = o.MeasureAll,
             RepaintBoundary = o.RepaintBoundary,
             ItemCountSignal = o.CountSignal,
             Removal = o.Removal,
@@ -663,7 +651,6 @@ public sealed class ItemsView : Component
             ItemCountSignal = o.CountSignal,
             RowTemplate = rowTemplate,
             BoundMode = true,
-            StaggerColdRealize = o.Entrance?.StaggerColdRealize ?? false,
             Layout = layout,
             HasExplicitLayout = true,
             SelectionMode = o.SelectionMode,
@@ -674,9 +661,7 @@ public sealed class ItemsView : Component
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
             Controller = o.Controller,
-            VerticalScrollController = o.Scroll?.VerticalScrollController,
-            ScrollHandle = o.Scroll?.Controller,
-            OverscanItems = o.Overscan,
+            Handle = o.Scroll?.Handle,
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
@@ -685,7 +670,6 @@ public sealed class ItemsView : Component
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
-            OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
             OnVisibleRange = o.OnVisibleRange,
             Snap = o.Scroll?.Snap,
             ItemDisplacement = o.Reorder?.ItemDisplacement,
@@ -697,11 +681,10 @@ public sealed class ItemsView : Component
             Disclosure = o.Disclosure,
             Insertion = o.Insertion,
             ContentType = o.ContentType,
-            CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
+            MeasureAll = o.MeasureAll,
             RepaintBoundary = o.RepaintBoundary,
             KeepAlive = o.KeepAlive,
-            KeepAliveCap = o.KeepAliveCap,
         });
     }
 
@@ -744,7 +727,6 @@ public sealed class ItemsView : Component
             ItemText = text,
             IsItemEnabled = enabled,
             Controller = o.Controller,
-            Overscan = o.Overscan,
             Grow = o.Grow,
             Selector = o.Selector,
             ContainerFactory = o.ContainerFactory,
@@ -759,11 +741,10 @@ public sealed class ItemsView : Component
             Removal = o.Removal,
             Disclosure = o.Disclosure,
             ContentType = o.ContentType,
-            CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
+            MeasureAll = o.MeasureAll,
             RepaintBoundary = o.RepaintBoundary,
             KeepAlive = o.KeepAlive,
-            KeepAliveCap = o.KeepAliveCap,
             OnVisibleRange = o.OnVisibleRange,
         };
 
@@ -849,11 +830,18 @@ public sealed class ItemsView : Component
         var ownModel = UseMemo(static () => new SelectionModel(), DepKey.Empty);
         var current = UseSignal(-1);                       // CurrentItemIndex (idl:46-47, default −1)
         var viewportNode = UseRef(NodeHandle.Null);        // the VirtualListEl scene node (OnRealized capture)
+        var ownHandle = UseMemo(static () => new ScrollHandle(), DepKey.Empty);   // the viewport's handle when the app supplies none
         var subscribed = UseRef<SelectionModel?>(null);
         var typeBuffer = UseRef(new System.Text.StringBuilder());
         var typeLastMs = UseRef(0L);
         var pendingFocus = UseRef(-1);
         var lastTabStop = UseRef(-1);                      // bound mode: the index currently holding the roving tab stop
+        // Bound mode: bumped only when a `current` move could not be serviced IN PLACE (its slot is not realized yet) —
+        // the one wake that re-renders a bound list for a current move (see the `cur` read below + FollowTabStop).
+        var focusTick = UseSignal(0);
+        // Bound mode: the latest render's FollowTabStop, read by the current-tracking signal effect (whose body freezes
+        // at mount) so the move always sees this render's scene/viewport/count helpers.
+        var tabStopFollow = UseRef<Action<int>?>(null);
         var insertionRef = UseRef<ItemsViewInsertion?>(null);
         var lastEntranceVer = UseRef(int.MinValue);        // last DisplacementVersion the entrance seeds were applied for
         var post = UsePost();                              // consumes no hook cell (safe to call unconditionally)
@@ -874,7 +862,14 @@ public sealed class ItemsView : Component
         // model directly (RowScope.IsSelected), so a programmatic selection change re-skins those rows with no ItemsView
         // re-render at all (0-alloc) — subscribing here would force a wasteful whole-window re-render per selection.
         if (!BoundMode) _ = model.Version.Value;           // subscribe — a selection change re-skins just this window
-        int cur = current.Value;                           // subscribe — current moves re-render (focus visuals)
+        // RenderItem mode SUBSCRIBES — a current move re-renders the window (the container template bakes IsCurrent +
+        // the roving isTabStop at build time). BOUND mode PEEKS, for the same reason it skips Version above: each
+        // persistent row re-skins through its own `isCurrent` bind, the roving tab stop is moved in place by the
+        // current-tracking signal effect (FollowTabStop), and focus lands synchronously in MoveCurrent — so an arrow
+        // between two realized rows is a pure focus move + flag toggle with NO ItemsView re-render (0-alloc). The one
+        // bound move that still needs a render (the target slot not realized yet) wakes it through `focusTick`.
+        int cur = BoundMode ? current.Peek() : current.Value;
+        int focusTickVer = BoundMode ? focusTick.Value : 0;   // subscribe (bound) — the deferred-focus wake
         int dispVer = DisplacementVersion?.Value ?? 0;     // subscribe — reorder drag-delta/dwell re-seeds displacement
         int disclosureVer = Controller?.DisclosureVersion.Value ?? 0;
         int disclosureSourceVer = Disclosure?.Version?.Value ?? 0;
@@ -925,18 +920,6 @@ public sealed class ItemsView : Component
         }
 
         var sceneRef = Context.Scene;
-        ScrollGeometryObserverMux? geometryMux = UseMemo(
-            () => VerticalScrollController is null || horizontal
-                ? null
-                : new ScrollGeometryObserverMux(VerticalScrollController, OnScrollGeometryChanged),
-            DepKey.Combine(DepKey.FromRef(VerticalScrollController),
-                OnScrollGeometryChanged is { } observer
-                    ? DepKey.FromRef(observer.Project, observer.Action)
-                    : DepKey.Empty));
-        var geometryObserver = geometryMux is null
-            ? OnScrollGeometryChanged
-            : ((Func<ScrollGeometry, long>)geometryMux.Project,
-               (Action<ScrollGeometry>)geometryMux.OnGeometryChanged);
 
         if (insertion is { } ins)
         {
@@ -991,7 +974,7 @@ public sealed class ItemsView : Component
         }
 
         // Targeting is OURS (an index resolves through the virtual layout MODEL, so this works for an item that is not
-        // realized yet and therefore has no node); the offset WRITE is the shared ScrollIntoView.ScrollTo seam.
+        // realized yet and therefore has no node); the move itself is the viewport's ScrollHandle.ScrollTo.
         void BringIntoView(int index, float alignmentRatio, bool animate)
         {
             if (sceneRef is null || layout is null || (uint)index >= (uint)count) return;
@@ -1031,9 +1014,8 @@ public sealed class ItemsView : Component
                     target -= frl.LeadInset;
             }
 
-            // Animated (WinUI AnimationDesired) posts a Driven chase to the scroll kernel; snap (default) posts an
-            // immediate ScrollTo. Clamping to [0, content − viewport] happens inside the seam.
-            ScrollIntoView.ScrollTo(Context, vp, target, animate);
+            // Animated (WinUI AnimationDesired) glides; snap (default) jumps. The plan clamps to [0, content − viewport].
+            (sceneRef.ScrollHandleFor(vp) ?? Handle ?? ownHandle).ScrollTo(target, animate ? ScrollMove.Glide : ScrollMove.Immediate);
         }
 
         bool TryGetItemAtViewport(float horizontalRatio, float verticalRatio, out int index)
@@ -1120,32 +1102,48 @@ public sealed class ItemsView : Component
             if (on) sceneRef.Mark(n, NodeFlags.Focusable); else sceneRef.Unmark(n, NodeFlags.Focusable);
         }
 
+        // Bound mode: move the roving tab stop to a NEW current index in place — the body of the current-tracking signal
+        // effect below, so EVERY current write (arrow nav, a pointer interaction, focus arriving on a slot) moves the stop
+        // with no ItemsView re-render. A target whose slot is not realized yet cannot be toggled now: wake ONE render
+        // through `focusTick` (unless MoveCurrent already did — it left `pendingFocus` on this very index), and the
+        // (cur, focusTick)-keyed layout effect below moves the stop post-layout, once the slot exists. Allocation-free:
+        // scene flag writes + one equality-gated int signal write on the rare deferred path.
+        void FollowTabStop(int stop)
+        {
+            int old = lastTabStop.Value;
+            if (old == stop) return;
+            if (SlotRootForIndex(stop).IsNull)
+            {
+                if (pendingFocus.Value != stop) focusTick.Value = focusTick.Peek() + 1;
+                return;
+            }
+            if (old >= 0) SetSlotTabStop(old, false);
+            SetSlotTabStop(stop, true);
+            lastTabStop.Value = stop;
+        }
+
         // Instant coordinate-frame rebase (drag-reorder anchor correction, e.g. DetailTracks.Choreograph — must land
-        // THIS frame, exactly, never eased): post the kernel's AnchorShift, which "rebases every intent" (plan §2.1) —
-        // the same single POD write path Reclamp uses for a layout-time re-pin, just posted from outside the frame loop.
+        // THIS frame, exactly, never eased): shift the plan's frame (ScrollPlan.Shifted), which moves WITH every live
+        // arc instead of interrupting one. WAKE, don't re-render — the host's frame step re-windows on the shifted plan.
         void ScrollByDelta(float delta)
         {
             if (sceneRef is null || delta == 0f) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
-            sceneRef.ScrollPort!.Post(ScrollInput.AnchorShift((int)vp.Raw.Index, delta));
-            // WAKE, don't re-render — the kernel's Reclamp resolves the shift (offset + content transform +
-            // VirtualRangeDirty) on its own; re-rendering the whole ItemsView here was the entire measured UI-thread
-            // allocation of a programmatic scroll (Reconciler.ReRealizeVirtuals already drains the virtual window
-            // granularly per frame with no component re-render needed).
+            sceneRef.ScrollHandleFor(vp)?.ShiftFrame(delta);
             (Context.RequestFrame ?? Context.RequestRerender)();
         }
 
         // Edge auto-scroll seam (drag reorder near the viewport edge, E5-L3, ItemsViewPresets.OnDragDelta): a HELD
-        // continuous scroll for as long as the pointer sits in the edge band — the kernel's SetVelocity/Autoscroll,
-        // not a one-shot AnchorShift (a per-pointer-move instant jump reads as micro-stutter at drag speed; a velocity
-        // coasts smoothly and stops cleanly with one SetVelocity(0) on leave/drop).
+        // continuous scroll for as long as the pointer sits in the edge band — a constant-velocity plan
+        // (ScrollHandle.AutoScroll), not a one-shot ShiftFrame (a per-pointer-move instant jump reads as micro-stutter at
+        // drag speed; a velocity moves smoothly and stops cleanly with one AutoScroll(0) on leave/drop).
         void SetAutoScrollVelocity(float dipPerS)
         {
             if (sceneRef is null) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
-            sceneRef.ScrollPort!.Post(ScrollInput.SetVelocity((int)vp.Raw.Index, dipPerS));
+            sceneRef.ScrollHandleFor(vp)?.AutoScroll(dipPerS);
         }
 
         // An off-screen variable row cannot feed its collapsed size through ArrangeVirtualMeasured. Apply that one
@@ -1176,78 +1174,32 @@ public sealed class ItemsView : Component
 
             float oldOffset = horizontal ? sc.OffsetX : sc.OffsetY;
             int anchorIndex = Math.Clamp(expectedLayout.IndexAt(oldOffset, cross), 0, sc.ItemCount - 1);
-            float anchorWithin = oldOffset - expectedLayout.OffsetOf(anchorIndex, cross);
             float oldMain = horizontal ? expectedLayout.ItemRect(index, cross).W : expectedLayout.ItemRect(index, cross).H;
             if (oldMain == mainExtent) return true;
 
+            float anchorBefore = expectedLayout.OffsetOf(anchorIndex, cross);
             expectedLayout.SetMeasured(index, mainExtent, cross);   // the layout-table mutation — kept verbatim
             float mainContent = expectedLayout.ContentExtent(sc.ItemCount, cross);
-            // Unclamped on purpose: the kernel's Reclamp owns the zoom-scaled [0, content − viewport] clamp for every
-            // frame recipient of SetFrame (plan §3.3) — posting the raw pinned target here and letting Reclamp settle
-            // it is the same "never finalize a clamp ahead of the kernel" contract CorrectMeasuredExtent's old TargetX/Y
-            // pre-clamp existed to approximate by hand.
-            float pinned = expectedLayout.OffsetOf(anchorIndex, cross) + anchorWithin;
-            float delta = pinned - oldOffset;
+            // A correction ABOVE the anchor moved the anchor's own offset: shift the plan's frame by the same delta in this
+            // call (the ONE extent write path, scroll rework §6) so the anchor row's screen position is unchanged.
+            float delta = index < anchorIndex ? expectedLayout.OffsetOf(anchorIndex, cross) - anchorBefore : 0f;
 
             if (horizontal) sc.ContentW = mainContent; else sc.ContentH = mainContent;
             sc.AnchorIndex = anchorIndex;
-
-            var spec = new ScrollFrameSpec(
-                Orientation: sc.Orientation,
-                ExtentMain: mainContent,
-                ExtentCross: cross,
-                ViewportMain: viewport,
-                ViewportCross: horizontal ? sc.ViewportH : sc.ViewportW,
-                Zoom: sc.ZoomFactor,
-                ContentSized: sc.ContentSized,
-                SnapInterval: sc.SnapInterval,
-                SnapStart: sc.SnapStart,
-                SnapEnd: sc.SnapEnd,
-                SnapPoints: sc.SnapPoints);
-
-            var port = sceneRef.ScrollPort!;
-            port.Post(ScrollInput.AnchorShift((int)vp.Raw.Index, delta));
-            port.Post(ScrollInput.SetFrame((int)vp.Raw.Index, in spec));
+            if (delta != 0f) sceneRef.ScrollHandleFor(vp)?.ShiftFrame(delta);
             sceneRef.Mark(vp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
             (Context.RequestFrame ?? Context.RequestRerender)();
             return true;
         }
 
-        void ControllerScrollTo(ScrollToRequest request)
-        {
-            if (horizontal || sceneRef is null) return;
-            var vp = viewportNode.Value;
-            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
-            ScrollIntoView.ScrollTo(Context, vp, request.Offset, request.Animate);
-        }
-
-        void ControllerScrollBy(ScrollByRequest request)
-        {
-            if (horizontal || sceneRef is null) return;
-            var vp = viewportNode.Value;
-            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
-            // The kernel's ScrollBy accumulates on the live Driven-chase target when one is already armed (the same
-            // "second notch bases off the pending target, not the mid-chase offset" contract the old wheel idiom read
-            // ScrollState.Phase/PendingTargetY back here for — now owned end-to-end by the kernel).
-            sceneRef.ScrollPort!.Post(ScrollInput.ScrollBy((int)vp.Raw.Index, request.Delta,
-                immediate: !request.Animate, halflifeMs: 0));
-            Context.RequestRerender();
-        }
-
-        // Element.WheelTarget seam, both controller flavours (ItemsViewController.WheelNotch and
-        // IScrollController.WheelNotchRequested): the same post ScrollInputRouter.WheelAxis makes for a device notch
-        // over the rows — WheelNotch(PerNotchDip(viewport, LineDip) × notches), the kernel's Driven|Wheel chase, never
-        // an immediate displacement. Orientation follows the viewport (a horizontal shelf's header works too).
+        // Element.WheelTarget seam (ItemsViewController.WheelNotch): the same WinUI glide a device notch over the rows
+        // gets. Orientation follows the viewport (a horizontal shelf's header works too).
         void PostWheelNotch(float notches)
         {
             if (sceneRef is null || notches == 0f) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
-            ref ScrollState sc = ref sceneRef.ScrollRef(vp);
-            float viewport = sc.Orientation == 1 ? sc.ViewportW : sc.ViewportH;
-            float dip = ScrollFeel.Shipping.PerNotchDip(viewport, sc.LineDip) * notches;
-            sceneRef.ScrollPort!.Post(ScrollInput.WheelNotch((int)vp.Raw.Index,
-                FluentGpu.Scroll.ScrollController.WheelSampleSec(), dip));
+            sceneRef.ScrollHandleFor(vp)?.WheelNow(notches);
             (Context.RequestFrame ?? Context.RequestRerender)();
         }
 
@@ -1258,8 +1210,24 @@ public sealed class ItemsView : Component
             model.OnFocusedAction(next, ctrl, shift);      // selection follows keyboard per mode (SelectorBase trio)
             if (current.Peek() != next)
             {
-                pendingFocus.Value = next;                 // focus the (re-realized) container post-render/layout
-                current.Value = next;
+                if (BoundMode && !SlotRootForIndex(next).IsNull)
+                {
+                    // Bound + already realized: NO re-render follows a bound current move (Render peeks `current`), so
+                    // focus the slot now — synchronously, like WinUI's SetFocusElementIndex. `current` is written FIRST so
+                    // the slot's own focus-gained callback (RowScope.OnFocusChanged) sees it already current and writes
+                    // nothing; the roving stop follows through the current-tracking signal effect (FollowTabStop).
+                    pendingFocus.Value = -1;
+                    current.Value = next;
+                    FocusIndex(next, visual: true);
+                }
+                else
+                {
+                    pendingFocus.Value = next;             // focus the (re-realized) container post-render/layout
+                    current.Value = next;
+                    // Bound mode renders only on this wake (Render peeks `current`): the (cur, focusTick)-keyed layout
+                    // effects below then land focus + the roving stop once the slot is realized.
+                    if (BoundMode) focusTick.Value = focusTick.Peek() + 1;
+                }
             }
             else
             {
@@ -1526,21 +1494,6 @@ public sealed class ItemsView : Component
             ctl.ObserveInsertionMembershipImpl = insertion is null ? null : insertion.ObserveMembership;
         }
 
-        UseEffect(() =>
-        {
-            var controller = VerticalScrollController;
-            if (controller is null || horizontal) return null;
-            controller.ScrollToRequested += ControllerScrollTo;
-            controller.ScrollByRequested += ControllerScrollBy;
-            controller.WheelNotchRequested += PostWheelNotch;
-            return () =>
-            {
-                controller.ScrollToRequested -= ControllerScrollTo;
-                controller.ScrollByRequested -= ControllerScrollBy;
-                controller.WheelNotchRequested -= PostWheelNotch;
-                controller.SetIsScrollable(false);
-            };
-        }, DepKey.FromRef(VerticalScrollController));
 
         UseEffect(() =>
         {
@@ -1609,16 +1562,32 @@ public sealed class ItemsView : Component
             }
         }, DepKey.From(HashCode.Combine(disclosureVer, disclosureSourceVer, count)));
 
-        // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it.
+        // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it. Keyed on
+        // (cur, focusTick): RenderItem mode re-renders on every current move (cur changes); bound mode renders only on
+        // a focusTick wake (MoveCurrent/FollowTabStop's deferred path), and `cur` alone could repeat an old key there.
         UseLayoutEffect(() =>
         {
             int target = pendingFocus.Value;
             if (target >= 0) { pendingFocus.Value = -1; FocusIndex(target, visual: true); }
-        }, cur);
+        }, DepKey.From(cur, focusTickVer));
+
+        // Bound mode: the IN-PLACE roving tab stop for every current move. A SIGNAL effect (eager, re-runs inside the
+        // flush on each `current` write) because Render no longer subscribes `current` in bound mode — a post-layout
+        // effect keyed on a render's `cur` would never re-run for a move that renders nothing. Its body freezes at
+        // mount, so it calls through `tabStopFollow` (refreshed below every render) to reach the latest helpers. The
+        // run is allocation-free: Effect re-runs its cached body delegate, and FollowTabStop only toggles scene flags.
+        tabStopFollow.Value = BoundMode ? FollowTabStop : null;
+        UseSignalEffect(() =>
+        {
+            int c = current.Value;                         // subscribe — every current write re-runs this
+            if (c >= 0) tabStopFollow.Value?.Invoke(c);
+        });
 
         // Bound mode: move the single roving tab stop to the keyboard-current slot IN PLACE (no re-render). RenderItem
         // mode bakes the tab stop into each container via isTabStop at build time; bound slots are built once, so the
-        // stop is moved imperatively by toggling the old/new current slot's focusability flags post-layout.
+        // stop is moved imperatively by toggling the old/new current slot's focusability flags post-layout. This
+        // render-keyed pass covers the mount fallback (no current yet) and the deferred wake (a current move whose
+        // slot was not realized when the signal effect above ran); the steady per-move path is that signal effect.
         UseLayoutEffect(() =>
         {
             if (!BoundMode) return;
@@ -1633,7 +1602,7 @@ public sealed class ItemsView : Component
             if (old >= 0) SetSlotTabStop(old, false);
             if (stop >= 0) SetSlotTabStop(stop, true);
             lastTabStop.Value = stop;
-        }, cur);
+        }, DepKey.From(cur, focusTickVer));
 
         // ── reorder displacement seed (the WinUI "siblings part to make room" over the positional recycler) ──────────
         // Edge-triggered on DisplacementVersion (NOT per frame): the owner bumps it on each drag-delta/dwell-commit — the
@@ -1873,24 +1842,20 @@ public sealed class ItemsView : Component
                 ItemCount = count,
                 ItemLayout = layout,
                 RowBind = rowBind,
-                StaggerColdRealize = StaggerColdRealize,
-                Overscan = OverscanItems,
-                CacheExtentPx = CacheExtentPx,
                 PersistentPrefixCount = PersistentPrefixCount,
+                MeasureAll = MeasureAll,
                 ContentType = ContentType,       // #16 recycle-pool discriminator (bound path)
                 KeepAlive = KeepAlive,           // #5 keep-alive-but-hidden bucket (bound path)
-                KeepAliveCap = KeepAliveCap,
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
                 AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
-                Controller = ScrollHandle,
+                Handle = Handle ?? ownHandle,
                 ScrollLineDip = lineDip,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
-                OnScrollGeometryChanged = geometryObserver,
                 OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window change)
                 Snap = Snap,
                 Grow = Grow,
@@ -1903,19 +1868,17 @@ public sealed class ItemsView : Component
                 ItemLayout = layout,
                 RenderItem = realizeTemplate,
                 KeyOf = KeyOf,
-                Overscan = OverscanItems,
-                CacheExtentPx = CacheExtentPx,   // #16 pixel cache extent (both paths)
+                MeasureAll = MeasureAll,
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
                 AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
-                Controller = ScrollHandle,
+                Handle = Handle ?? ownHandle,
                 ScrollLineDip = lineDip,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
-                OnScrollGeometryChanged = geometryObserver,
                 OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window change)
                 Snap = Snap,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
@@ -2402,13 +2365,14 @@ internal sealed class ItemsViewInsertion
 /// <summary>The in-gap preview host: the framework owns the gap's SIZE and POSITION; the app's
 /// <see cref="InsertionOptions.GapPreview"/> owns the cards drawn in it. The idle branch keeps the SAME key as the
 /// active one — an unkeyed idle box against a keyed active one remounts the subtree on every open and close (A13).
-/// <para>BOTH branches declare the SAME BOUND <c>Transform</c>, and that is load-bearing, not tidiness: bind wiring is
-/// MOUNT-ONLY (<c>Reconciler.BindNode</c>), and the shared key makes this node's reuse permanent — so an idle branch
-/// that omitted the binding left it never wired, <c>LocalTransform</c> stuck at identity, and the gap-sized card
-/// arranged at the ZStack's top-left (viewport y = 0) while the line and the gap sat at the real slot (B1; the
-/// engine's own DEBUG <c>[bindcontract]</c> tripwire names this defect class). For the same reason the thunk is a
-/// MOUNT-SURVIVING method group that reads <c>Horizontal</c> and the slot LIVE: a render-time local captured in a
-/// lambda would freeze at first mount once the binding actually persists.</para></summary>
+/// <para>BOTH branches declare the SAME BOUND <c>Transform</c>, and that is load-bearing, not tidiness: a binding is
+/// created only at MOUNT (<c>Reconciler.BindNode</c>; a re-render re-wires it only bound→bound), and the shared key
+/// makes this node's reuse permanent — so an idle branch that omitted the binding (a static↔bound flip) left it never
+/// wired, <c>LocalTransform</c> stuck at identity, and the gap-sized card arranged at the ZStack's top-left
+/// (viewport y = 0) while the line and the gap sat at the real slot (B1; the engine's own DEBUG <c>[bindcontract]</c>
+/// tripwire names this defect class). The thunk is a method group that reads <c>Horizontal</c> and the slot LIVE, so
+/// the binding tracks them between this component's renders (a render-time local captured in a lambda would only
+/// refresh when this component re-renders).</para></summary>
 internal sealed class ItemsViewInsertionPreview : Component
 {
     private readonly ItemsViewInsertion _owner;

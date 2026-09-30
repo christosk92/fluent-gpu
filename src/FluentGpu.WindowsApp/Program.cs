@@ -1,4 +1,4 @@
-using FluentGpu;
+﻿using FluentGpu;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -190,9 +190,21 @@ static class Program
         }
 
         // Wire the gallery's soak / stress diagnostic harness into the engine's batteries-included entry point. The hook
-        // only fires when an FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT env flag is set; normal runs ignore it. SoakProbe lives
-        // here (in the gallery) because it drives GalleryShell's nav hook, so it cannot move into the engine library.
+        // only fires when a --soak / --stress-resize / --stress-nav / --wake-audit argument selected a mode; normal runs
+        // ignore it. SoakProbe lives here (in the gallery) because it drives GalleryShell's nav hook, so it cannot move
+        // into the engine library.
+        SoakProbe.Parse(args);
         FluentApp.DiagnosticRun = SoakProbe.TryRun;
+        // Gallery-only CLI arms (never environment variables): the diagnostics HUD, a forced localization culture, the
+        // real-video source, and the D3D12 debug layer / DRED host options handed to FluentApp through AppOptions.
+        GalleryShell.ShowDiagnosticsHud = Array.IndexOf(args, "--hud") >= 0;
+        bool d3d12Debug = Array.IndexOf(args, "--d3d12-debug") >= 0;
+        bool d3d12Dred = Array.IndexOf(args, "--d3d12-dred") >= 0;
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--loc-culture") LocalizationPage.ForcedCulture = args[i + 1];
+            if (args[i] == "--video-url") VideoReal.Url = args[i + 1];
+        }
 
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
@@ -208,9 +220,50 @@ static class Program
             if (i < args.Length - 1 && args[i] == "--shot") shot = args[i + 1];
             if (i < args.Length - 1 && args[i] == "--page") page = args[i + 1];
             if (args[i] == "--mica") micaShot = true;
-            // Interactive-shell diagnostic: starts the protected-video page without requiring UI automation. This is
-            // the command-line equivalent of FG_DRM_AUTOPLAY=1 and is intentionally inert for every normal launch.
-            if (args[i] == "--drm-autoplay") Environment.SetEnvironmentVariable("FG_DRM_AUTOPLAY", "1");
+        }
+
+        // Scroll performance probes (engine track 1): `--scroll-bench [page] --dipPerSec N --seconds S` and
+        // `--scroll-soak [page] [--scale x]`, plus the knockout switches (--edge-fades-off / --freeze-uploads /
+        // --force-full-direct / --clear-only) and `--out dir`. CLI arms (never env switches); see ScrollPerfProbes.
+        if (ScrollPerfProbes.Parse(args))
+        {
+            FluentApp.DiagnosticRun = ScrollPerfProbes.TryRun;
+            FluentAppHarness.Run(() => new GalleryShell { InitialPage = ScrollPerfProbes.Page },
+                new AppOptions { Title = "FluentGpu — Scroll probe", Width = 1240, Height = 820, CustomFrame = true,
+                                 D3D12DebugLayer = d3d12Debug, D3D12Dred = d3d12Dred },
+                new HarnessOptions { Frames = frames });
+            Environment.Exit(ScrollPerfProbes.ExitCode);
+            return;
+        }
+
+        // Detached-window render-isolation live stress probe (docs/plans/detached-window-render-isolation-
+        // implementation.md §7.3): drives the REAL gallery — main window scrolling a long list at full rate while a
+        // detached child window (the same AppHost.OpenDetachedWindow path Wavee's video pop-out rides) opens/closes
+        // at randomized intervals, alternating monitors. `--detached-stress [outDir] [--cycles N] [--seed N]`.
+        // The D3D12 debug layer is armed for the whole run (AppOptions.D3D12DebugLayer) so its validation output is
+        // captured; DetachedStressProbe tees stderr to <outDir>/detached-stress.log itself. GPU + a live composited
+        // desktop required; not a headless/CI gate.
+        int dstress = Array.IndexOf(args, "--detached-stress");
+        if (dstress >= 0)
+        {
+            string dstressOut = dstress + 1 < args.Length && !args[dstress + 1].StartsWith("--")
+                ? args[dstress + 1] : ".tmp/detached-stress";
+            int cycles = 300, seed = 1;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--cycles" && int.TryParse(args[i + 1], out int c)) cycles = c;
+                if (args[i] == "--seed" && int.TryParse(args[i + 1], out int s)) seed = s;
+            }
+            DetachedStressProbe.Args = new DetachedStressProbe.Config(dstressOut, cycles, seed);
+            FluentApp.DiagnosticRun = (h, w, d) => DetachedStressProbe.TryRun(h, w, d) || SoakProbe.TryRun(h, w, d);
+            // Runs through the SAME default gallery composition the interactive launch uses (the probe navigates it
+            // itself via GalleryShell.StressNavigate) — DiagnosticRun intercepts before the interactive loop starts.
+            FluentAppHarness.Run(() => new GalleryShell { InitialPage = page },
+                new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true,
+                                 D3D12DebugLayer = true, D3D12Dred = d3d12Dred },
+                new HarnessOptions { Frames = frames });
+            Environment.Exit(DetachedStressProbe.ExitCode);
+            return;
         }
 
         // M0 of the DRM-free video compositing spine: restructured DComp present tree + IVideoPresenter + an
@@ -249,7 +302,7 @@ static class Program
         int vprobe = Array.IndexOf(args, "--video-probe");
         if (vprobe >= 0)
         {
-            string purl = Environment.GetEnvironmentVariable("FG_VIDEO_URL")
+            string purl = VideoReal.Url
                 ?? (vprobe + 1 < args.Length && !args[vprobe + 1].StartsWith("--") ? args[vprobe + 1] : "https://media.w3.org/2010/05/sintel/trailer.mp4");
             using var eng = new FluentGpu.Media.Windows.VideoMediaEngine();
             eng.Start();
@@ -287,13 +340,11 @@ static class Program
             return;
         }
 
-        // Repaint-identity mode: the PIXEL check for §13.1 damage-scissored partial repaint. Renders each of six
-        // scenarios twice from the SAME scene state — once through the partial route, once through a forced full
-        // repaint — and requires the two back buffers to be byte-identical. Nonzero exit on any mismatch (or on a
-        // scenario that never reached the partial route, which has stopped testing what it claims). GPU required.
-        // `--repaint-identity [outDir]`; mismatches write partial/full/diff PNGs there.
+        // Repaint-identity mode: the PIXEL gates of the retained tiled composite (gpu-renderer.md §13; see
+        // RepaintIdentityProbe). Nonzero exit on any mismatch. GPU required. `--repaint-identity [outDir]`; mismatches
+        // write A/B/diff PNGs there.
         // Dialog-scroll probe: the real-path repro for "ContentDialog labels vanish after the body scrolls" — drives the
-        // dialog's own scroller through the scroll kernel and captures the presented back buffer at top/mid/end with the
+        // dialog's own scroller through its ScrollHandle and captures the presented back buffer at top/mid/end with the
         // D3D12 route/dropped/glyph-instance/segment counters. `--dialog-scroll-probe [outDir]`. GPU required.
         int dsp = Array.IndexOf(args, "--dialog-scroll-probe");
         if (dsp >= 0)
@@ -334,7 +385,9 @@ static class Program
         if (ident >= 0)
         {
             string? identOut = ident + 1 < args.Length && !args[ident + 1].StartsWith("--") ? args[ident + 1] : null;
-            Environment.Exit(RepaintIdentityProbe.Run(identOut));
+            int onlyAt = Array.IndexOf(args, "--only");
+            string? only = onlyAt >= 0 && onlyAt + 1 < args.Length ? args[onlyAt + 1] : null;
+            Environment.Exit(RepaintIdentityProbe.Run(identOut, only));
             return;
         }
 
@@ -373,7 +426,8 @@ static class Program
             // WS7: the registry-driven GalleryShell (the sole shell — the legacy GalleryApp was deleted in G8b).
             // The gallery draws the WinUI TitleBar (engine caption buttons).
             FluentAppHarness.Run(() => new GalleryShell { InitialPage = page },
-                new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true },
+                new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true,
+                                 D3D12DebugLayer = d3d12Debug, D3D12Dred = d3d12Dred },
                 new HarnessOptions { Frames = frames });
     }
 }

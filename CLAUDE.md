@@ -2,22 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Out-of-scope paths — do NOT read, search, edit, or summarize
+## Scope
 
 Scope is the **FluentGpu engine** (`src/`, `docs/design/`, `docs/`) and the gallery. The Wavee app itself lives in
 the sibling repo `christosk92/WaveeMusic` (`C:\wavee\WaveeMusic`, references this repo by relative path — see
-`docs/plans/wavee/wavee-repo-split-plan.md` there); the paths below are out of scope and belong to a separate
-workspace. Unless the user names a specific file below **and** confirms
-it for this session, do not read, grep, edit, or summarize:
-
-- `src/apps/.native/**`, `src/apps/Wavee.PlayPlay/**`, `private-runtimes/**`
-- `src/apps/tmp_*`, `ops/scripts/pyghidra*`, `ops/tools/pyghidra*`, `ops/tools/playplay_*`, `ops/tools/x64_*`
-- `docs/plans/wavee/wavee-playplay*.md`, `docs/plans/wavee/playplay-*.md`, `docs/plans/wavee/spotiload-offline-path.md`
-- `**/playplay-runtime.json`
-
-These live in the separate `wavee-playplay-private` repo (see `docs/guide/playplay-private-split.md`),
-are gitignored + agent-fenced here, and a pre-commit guard (`.githooks/pre-commit`) blocks them from
-re-entering the public tree. If a request would require them, ask the user to work in that repo.
+`docs/plans/wavee/wavee-repo-split-plan.md` there). PlayPlay (Spotify DRM) material lives in the private repo
+`christosk92/wavee-playplay-private`; agents may work on it there, but it never enters this public repo —
+`.gitignore` and the pre-commit guard (`.githooks/pre-commit`) block it. Never `git add -f` it or `--no-verify`.
 
 ## What this repository is
 
@@ -39,6 +30,8 @@ re-entering the public tree. If a request would require them, ask the user to wo
 dotnet build src/FluentGpu.slnx                              # the canonical build (all 8 projects); must be clean
 dotnet build src/FluentGpu.slnx -c Release                  # AND Release — a Debug-only build cannot see the diag-gate arm (see below)
 dotnet run --project src/FluentGpu.VerticalSlice            # the validation suite; expect "ALL CHECKS PASSED" (incl. zero-alloc gates)
+dotnet test src/FluentGpu.Engine.Tests                       # engine unit tests (Debug)
+dotnet test src/FluentGpu.Engine.Tests -c Release            # AND Release: JIT-sensitive facts (SlotZeroingTests) only bite under the optimising JIT
 dotnet run --project src/FluentGpu.WindowsApp              # the gallery (composition root)
 dotnet run --project src/FluentGpu.WindowsApp -- --screenshot <path>   # render a deterministic scene to a PNG (visual-diff loop)
 powershell -File docs\design\check-canon.ps1              # design-time drift gate — run AFTER editing any docs/design/ doc (exit 0 = clean)
@@ -48,7 +41,9 @@ powershell -File docs\design\check-canon.ps1              # design-time drift ga
 (`ScrollTrace.CompiledIn`, `Diag.CompiledIn`, `RenderBudget.CompiledIn`, `ReuseGuard`, `BindContract`,
 `BackwardsWriteGuard` — all `#if DEBUG || FLUENTGPU_DIAG`) fold to `true` in Debug and `false` in Release, so **each
 configuration compiles a different arm** and Release surfaces errors Debug structurally cannot. `TreatWarningsAsErrors`
-is on, so a Release-only warning is a Release-only *build break*. `.github/workflows/build.yml` enforces both.
+is on, so a Release-only warning is a Release-only *build break*. `.github/workflows/build.yml` enforces both. The
+same holds for **tests**: Debug code is not JIT-optimised, so a miscompile (the .NET 10.0.8 dropped slot zeroing behind
+`Foundation/FreshSlot.cs`, `docs/plans/dotnet-jit-zeroing-miscompile.md`) only fails `Engine.Tests` in `-c Release`.
 
 The VerticalSlice harness (`src/FluentGpu.VerticalSlice/` — `Program.cs` + `Harness/` + `Suites/` + `Probes/`) runs headless golden checks (no GPU/window) and enforces the alloc tripwire (`GC.GetAllocatedBytesForCurrentThread()` delta == 0 per hot phase) on the headless `Rhi.Headless`/`Pal.Headless` seams; local subset via `--suite` / `FG_SUITE` (CI must run the full suite). GPU pixels are the separate `--screenshot` check.
 

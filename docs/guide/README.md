@@ -187,6 +187,11 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     a persisted level via `AppOptions.Zoom`, live control via `FluentApp.SetZoom` + the discrete `ZoomLadder`, the
     invisible-`BoxEl` accelerator recipe with the recommended chord set, the `InputHooks.ZoomWheel` Ctrl+wheel hook,
     `Viewport.Zoom` for display, and the v1 limitations (primary window only; no touchpad pinch).
+17. **[scroll-lab.md](./scroll-lab.md)** — the **Scroll Lab**: measuring scroll feel instead of describing it — build /
+    run / publish, the Surface · Record · Analysis · Tuning screens, hotkeys (F8 felt-wrong, F10 record, Ctrl+T /
+    Ctrl+Shift+T tuning), the session folder format, the metrics catalogue with its verdict thresholds and the complaint
+    each answers, re-analysing a session, SendInput wheel driving, GPU pass timing, and the planned phases. The scroll
+    system itself is canon in [`../design/subsystems/scroll.md`](../design/subsystems/scroll.md).
 
 ---
 

@@ -57,6 +57,30 @@ internal interface ISignalSource
     /// current by construction (a write is the push) ⇒ no-op; a <see cref="Memo{T}"/> recomputes if its own upstream
     /// moved, and pushes <see cref="Computation.Dirty"/> to its subscribers only when the recomputed value differs.</summary>
     void EnsureFresh();
+
+    /// <summary>DIAGNOSTIC name (<c>DebugName</c> on <see cref="Signal{T}"/>/<see cref="FloatSignal"/>/<see cref="Memo{T}"/>);
+    /// null when the author gave none.</summary>
+    string? DebugName { get; }
+
+    /// <summary>DIAGNOSTIC kind label, e.g. <c>Signal&lt;Boolean&gt;</c>. Allocates — report time only.</summary>
+    string DiagKind { get; }
+}
+
+/// <summary>Names a <see cref="Computation.StaleCause"/> for a report line (the render census's <c>by=</c>). Report-time
+/// only: every call allocates the label it returns.</summary>
+internal static class SignalDiag
+{
+    /// <summary><c>Kind[:DebugName]</c>; a memo is <c>Memo(OwnerType)[:DebugName]</c> and, when <paramref name="hop"/>,
+    /// follows ONE hop to what made the memo stale (<c>Memo(ChartRow)&lt;-Signal&lt;UInt32&gt;:tracks.changed</c>);
+    /// null is <c>sched</c> (an imperative schedule or a forced run).</summary>
+    public static string Describe(ISignalSource? source, bool hop = true)
+    {
+        if (source is null) return "sched";
+        string label = source.DebugName is { } name ? source.DiagKind + ":" + name : source.DiagKind;
+        if (hop && source is Computation c && c.StaleCause is { } upstream && !ReferenceEquals(upstream, source))
+            label += "<-" + Describe(upstream, hop: false);
+        return label;
+    }
 }
 
 /// <summary>
@@ -112,6 +136,12 @@ public abstract class Computation : IDisposable
     /// per computation, written once at construction, and no string is materialised until a report names it.</para></summary>
     internal object? DiagOwner;
 
+    /// <summary>DIAGNOSTIC: the source whose change last took this computation out of CLEAN — the signal written (a direct
+    /// subscriber), the memo that went stale or recomputed differently (a downstream one), or null for an imperative
+    /// <see cref="Schedule"/>. One reference write on the CLEAN→stale edge, no allocation; read (and cleared) by the
+    /// reconciler's render census so a census line names WHAT scheduled each re-render (<see cref="SignalDiag"/>).</summary>
+    internal ISignalSource? StaleCause;
+
     protected Computation(ReactiveRuntime runtime, Computation? owner, bool structural = false)
     {
         Runtime = runtime;
@@ -136,7 +166,7 @@ public abstract class Computation : IDisposable
 
     /// <summary>Imperatively mark this computation dirty + schedule it for the next flush (an imperative re-render
     /// request). DIRTY, not CHECK: the caller is asserting the body must run, so it must not be cut off by a poll.</summary>
-    public void Schedule() => MarkDirty();
+    public void Schedule() => MarkDirty(null);
 
     /// <summary>
     /// Mark this computation DEFINITELY out of date and propagate: effects schedule, memos cascade downstream. Called by
@@ -145,12 +175,12 @@ public abstract class Computation : IDisposable
     /// CLEAN→DIRTY runs <see cref="OnStale"/> (schedule/cascade). CHECK→DIRTY is an UPGRADE ONLY: OnStale already ran
     /// when we were flagged CHECK, so we are already queued/cascaded — re-running it would double-schedule.
     /// </summary>
-    internal void MarkDirty()
+    internal void MarkDirty(ISignalSource? cause)
     {
         if (Disposed || State == Dirty) return;
         bool wasClean = State == Clean;
         State = Dirty;
-        if (wasClean) OnStale();
+        if (wasClean) { StaleCause = cause; OnStale(); }
     }
 
     /// <summary>
@@ -159,10 +189,11 @@ public abstract class Computation : IDisposable
     /// get flagged — the eager cascade that keeps the graph glitch-free — while the decision to actually run is deferred
     /// to the resolution poll (<see cref="ResolveCheck"/>). CHECK is never allowed to demote a DIRTY.
     /// </summary>
-    internal void MarkCheck()
+    internal void MarkCheck(ISignalSource? cause)
     {
         if (Disposed || State != Clean) return;
         State = Check;
+        StaleCause = cause;
         OnStale();
     }
 
@@ -269,13 +300,20 @@ public sealed class ReactiveScope : Computation
 }
 
 /// <summary>
-/// A completed scheduler slice. Unit timing includes synchronous memo pulls and any reconciliation in that callback.
+/// A completed flush (always run to quiescence). <paramref name="UnitsRun"/> computations ran; the slowest took
+/// <paramref name="LongestUnitTicks"/> Stopwatch ticks — synchronous memo pulls and any reconciliation in that callback
+/// included — and was <paramref name="LongestUnit"/> (its <c>DiagOwner</c> names the component; the host surfaces a unit
+/// longer than a frame in its always-on diagnostics, so a slow render is fixed where it is, never time-sliced away).
+/// <paramref name="HasPending"/> is true only when a unit threw (its siblings stay queued) or the runaway guard fired.
 /// </summary>
-public readonly record struct ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks);
+public readonly record struct ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks, Computation? LongestUnit = null);
 
 /// <summary>
 /// The UI-thread scheduler: owns pending-effect queues, batch depth, and the host frame-request callback.
-/// One per <c>AppHost</c>, with resumable queue cursors and a runaway guard scoped to ONE <see cref="Flush(long)"/> call.
+/// One per <c>AppHost</c>. Every <see cref="Flush"/> runs to QUIESCENCE: a committed write is applied whole in the flush
+/// that drains it — there is no wall-clock slice, so a write is never presented half-applied across frames and a flush
+/// always makes progress. The one bound is STRUCTURAL: <see cref="MaxFlushIterations"/> batches in one flush means a
+/// self-retriggering cycle, which is broken and reported (always-on) with the owners it ran.
 /// </summary>
 public sealed class ReactiveRuntime
 {
@@ -290,34 +328,27 @@ public sealed class ReactiveRuntime
     private int _normalCursor;
     private int _batchDepth;
     private bool _flushing;
-    // Runaway detector, scoped to ONE Flush call: batches swapped since THIS call started. It measures re-entrancy
-    // (an effect that re-schedules itself, forever) — never work spread across frames. A deadline yield ends the call,
-    // so a sustained scroll that never reaches quiescence re-enters with a fresh guard and keeps its queued work.
+    // Runaway detector, scoped to ONE Flush call: batches swapped since THIS call started. A flush runs to quiescence, so
+    // the only way to swap MaxFlushIterations batches is an effect cycle that re-schedules itself forever.
     private int _flushGuard;
-    // Diagnostic only (never drops work): consecutive Flush calls that returned with work still pending. A sustained
-    // value means the app out-produces its reactive slice; the queue is intact and the next slice continues it.
-    private int _nonQuiescentFlushes;
-    private bool _nonQuiescentReported;
     private readonly Func<long>? _timestamp;
 
-    private const int MaxFlushIterations = 1_000;
-    // Consecutive non-quiescent flushes before ONE diagnostic line. ~2s at 60Hz — long enough that a legitimate
-    // multi-frame burst (a page mount, a fling) stays silent, short enough to name a real live-lock.
-    private const int NonQuiescentFlushReport = 120;
+    /// <summary>The structural hang guard: this many queue batches in ONE flush is a self-retriggering cycle (a finite
+    /// cascade of dependent effects — each batch one level of it — never comes near it). Reported always-on, then broken.</summary>
+    public const int MaxFlushIterations = 1_000;
+
+    /// <summary>Runaway reports so far (always-on counter; each also wrote one <c>[signals.runaway]</c> line).</summary>
+    public int RunawayCount { get; private set; }
 
     public ReactiveRuntime() { }
 
-    // Deterministic deadline tests exercise the real scheduler without sleeps or wall-clock races.
+    // Deterministic unit-timing tests exercise the real scheduler without sleeps or wall-clock races.
     internal ReactiveRuntime(Func<long> timestamp) => _timestamp = timestamp;
 
     private long Timestamp() => _timestamp is null ? Stopwatch.GetTimestamp() : _timestamp();
 
     /// <summary>Set by the host: called (once-ish) when work becomes pending, so the host schedules a frame.</summary>
     public Action FrameRequested = static () => { };
-
-    /// <summary>Consecutive <see cref="Flush(long)"/> calls that yielded with work still queued. Zero once a flush
-    /// reaches quiescence. A DIAGNOSTIC: nothing is ever dropped because of it.</summary>
-    public int NonQuiescentFlushes => _nonQuiescentFlushes;
 
     /// <summary>True when effects are queued and waiting for the next <see cref="Flush"/>.</summary>
     public bool HasPending => _pending.Count > 0 || _pendingStructural.Count > 0
@@ -340,7 +371,9 @@ public sealed class ReactiveRuntime
     }
 
     /// <summary>
-    /// Drain all pending effects for deterministic harness operations. Hosted frames use <see cref="Flush(long)"/>.
+    /// Run every pending computation until the queues are EMPTY — including everything those runs schedule — and return
+    /// what ran (<see cref="ReactiveFlushResult"/>). Hosted frames, the post-realize rebind flush and deterministic harness
+    /// operations all use this one entry: a committed write is applied whole in the flush that drains it.
     ///
     /// ORDERING GUARANTEE (park-before-render): within every quiescence iteration, STRUCTURAL effects (the
     /// reconciler-owned tree boundaries — see <see cref="Computation.Structural"/>) drain to quiescence BEFORE any
@@ -349,34 +382,24 @@ public sealed class ReactiveRuntime
     /// components inside it PARKS those components before their render-effects are given the chance to run, so a page
     /// on its way out can never render once against the incoming route (deriving nonsense from another page class's
     /// route) before it is detached. Ordering among effects of the SAME priority is unchanged (schedule order).
+    /// <para>A throwing unit is consumed before it runs: the exception propagates, its unread siblings stay queued (and
+    /// keep their dedup flags and order) for the next flush, and the scheduler is released in <c>finally</c>. A re-entrant
+    /// call (from inside a running unit) runs nothing. ONE <see cref="Stopwatch"/> read per executed unit: the timestamp
+    /// taken after a unit is both that unit's end and the next unit's start (the longest-unit diagnostic).</para>
     /// </summary>
-    public void Flush() => Flush(long.MaxValue);
-
-    /// <summary>
-    /// Run complete computations until the absolute Stopwatch deadline. Unread queue entries retain their dedup flag
-    /// and order across calls. Structural work preempts normal work before the next unit, even after a yield or throw.
-    /// A unit includes synchronous memo pulls and reconciliation; arbitrary C# callbacks cannot be preempted.
-    /// Reflushes within one hosted turn must share a deadline, rather than replenish their budget.
-    /// <para>ONE <see cref="Stopwatch"/> read per executed unit: the timestamp taken after a unit is both that unit's
-    /// end and the next unit's start, so the longest-unit report (the indivisible-callback overrun diagnostic) and the
-    /// deadline check share it.</para>
-    /// </summary>
-    public ReactiveFlushResult Flush(long deadlineTicks)
+    public ReactiveFlushResult Flush()
     {
         if (_flushing) return new(HasPending, 0, 0);
         _flushing = true;
-        // Per-CALL, not per-frame. The guard exists to break a self-retriggering effect cycle inside one flush; a
-        // deadline yield is ordinary progress, and carrying the count across yields turned "sustained scrolling"
-        // into a BailOut that silently dropped every queued computation.
         _flushGuard = 0;
         int units = 0;
         long longest = 0;
+        Computation? longestUnit = null;
         long now = Timestamp();
         try
         {
             while (HasPending)
             {
-                if (now >= deadlineTicks) break;
                 bool structural = _structuralCursor < _drainingStructural.Count || _pendingStructural.Count > 0;
                 ref var draining = ref (structural ? ref _drainingStructural : ref _draining);
                 ref var pending = ref (structural ? ref _pendingStructural : ref _pending);
@@ -385,7 +408,7 @@ public sealed class ReactiveRuntime
                 {
                     draining.Clear();
                     cursor = 0;
-                    if (++_flushGuard > MaxFlushIterations) { BailOut(); break; }
+                    if (++_flushGuard > MaxFlushIterations) { BailOut(pending, 0); break; }   // pending = the batch the cycle queued next
                     (draining, pending) = (pending, draining);
                 }
 
@@ -399,7 +422,7 @@ public sealed class ReactiveRuntime
                     finally
                     {
                         long after = Timestamp();
-                        longest = Math.Max(longest, after - now);
+                        if (after - now > longest) { longest = after - now; longestUnit = computation; }
                         now = after;   // this unit's end is the next unit's start — one Stopwatch read per unit
                     }
                 }
@@ -408,30 +431,34 @@ public sealed class ReactiveRuntime
         finally
         {
             _flushing = false;
-            if (HasPending)
-            {
-                if (++_nonQuiescentFlushes == NonQuiescentFlushReport && !_nonQuiescentReported)
-                {
-                    _nonQuiescentReported = true;
-                    Diag.Event("signals", "Flush has not reached quiescence for 120 consecutive slices — the queue is intact and still draining.");
-                }
-                FrameRequested();
-            }
+            if (HasPending) FrameRequested();   // a unit threw: its siblings wait for the next flush
             else
             {
                 _draining.Clear();
                 _drainingStructural.Clear();
                 _normalCursor = _structuralCursor = 0;
-                _nonQuiescentFlushes = 0;
-                _nonQuiescentReported = false;
             }
         }
-        return new(HasPending, units, longest);
+        return new(HasPending, units, longest, longestUnit);
     }
 
-    private void BailOut()
+    /// <summary>The runaway guard fired: report the cycle ALWAYS-ON — the owners (component types) of the batch that
+    /// tripped it, which is the cycle itself — then break it. Rare by construction, so the one line may allocate.</summary>
+    private void BailOut(List<Computation> cycle, int from)
     {
-        Diag.Event("signals", "Flush exceeded 1000 iterations — likely a self-retriggering effect; bailing.");
+        RunawayCount++;
+        var names = new System.Text.StringBuilder(128);
+        int named = 0;
+        for (int i = from; i < cycle.Count && named < 6; i++)
+        {
+            object? owner = cycle[i].DiagOwner;
+            string n = owner is null ? cycle[i].GetType().Name : owner.GetType().Name;
+            if (names.ToString().Contains(n, StringComparison.Ordinal)) continue;
+            if (named++ > 0) names.Append(", ");
+            names.Append(n);
+        }
+        Diag.Line($"[signals.runaway] a flush swapped {MaxFlushIterations} batches: a self-retriggering effect cycle, broken " +
+            $"(its queued work dropped). The cycle's batch ran: {(named == 0 ? "?" : names.ToString())}.");
         // Break the cycle. Return stale entries to Clean so a subsequent independent signal write can schedule them.
         Drop(_pendingStructural);
         Drop(_pending);

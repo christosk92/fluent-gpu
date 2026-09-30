@@ -174,6 +174,74 @@ public sealed class AdaptiveMediaTests
     }
 
     [Fact]
+    public void ThroughputEstimatorAcceptsALargeAggregateBelowTheDurationFloor()
+    {
+        // Above LargeSampleBytes the duration floor no longer applies: a 5 MB aggregate a CDN answered in 130 ms IS
+        // 300 Mbps — the RTT share of 130 ms is the noise on a transfer this large, not the signal.
+        var estimator = new ThroughputEstimator();
+        Assert.True(estimator.Add(5_000_000, TimeSpan.FromMilliseconds(130)));
+        Assert.InRange(estimator.EstimateKbps, 307_600, 307_800);   // 5_000_000 * 8 / 0.130 / 1000 ≈ 307_692.3 kbps
+
+        // Below LargeSampleBytes the duration floor still applies, on top of the payload floor.
+        Assert.False(estimator.Add(12 * 1024, TimeSpan.FromMilliseconds(40)));    // small AND short
+        Assert.False(estimator.Add(100 * 1024, TimeSpan.FromMilliseconds(100)));  // small AND short
+        Assert.True(estimator.Add(100 * 1024, TimeSpan.FromMilliseconds(250)));   // clears both floors
+    }
+
+    [Fact]
+    public void AbrHoldsOnAPriorInsteadOfDownswitchingTheOpenedRung()
+    {
+        // A prior (the 2 Mbps seed, or a remembered estimate) must never move the ladder off the rung the backend
+        // deliberately opened: the seed cannot "afford" the app's ≤480p opening rung, and acting on it put every
+        // cold start through two representation switches (two swap chains) before the first frame (2026-09-22).
+        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.FromSeconds(60) };
+        int[] bitrates = [1_247_134, 2_687_348, 5_872_226];
+        abr.SeedCurrent(1);
+
+        Assert.Equal(1, abr.Choose(bitrates, TimeSpan.FromSeconds(60), 2_000, estimateIsPrior: true));
+        Assert.Equal(AbrDecisionReason.Hold, abr.LastDecisionReason);
+
+        // The first real measurement is free to move the ladder — the prior guard applies only while it is a prior.
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(60), 1_870, estimateIsPrior: false));
+        Assert.Equal(AbrDecisionReason.Throughput, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrForcedProbeStillClimbsOffAPrior()
+    {
+        // Rule 4 (forced probe) is the only move off a prior: it must survive even while estimateIsPrior is true, or
+        // a link with nothing but a seeded/remembered estimate could never climb off its opening rung.
+        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.Zero, ForcedProbeSegments = 3 };
+        int[] bitrates = [300_000, 1_000_000];
+        const double justBelowTheNextRung = 1_000.0;   // kbps: 1 Mbps, so 1_000_000 bps never clears the 0.85 climb budget
+
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung, estimateIsPrior: true));
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung, estimateIsPrior: true));
+        Assert.Equal(1, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung, estimateIsPrior: true));
+        Assert.Equal(AbrDecisionReason.ForcedProbe, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrSeededEstimateIsAPriorUntilTheFirstSample()
+    {
+        // SeedEstimate hands in a remembered estimate (the app's LinkMemory) without pretending it was measured:
+        // AcceptedSamples stays 0, EstimateIsPrior stays true, and the first real sample REPLACES it outright,
+        // exactly like the 2 Mbps startup prior.
+        var abr = new AdaptiveBitrateController();
+        abr.SeedEstimate(300_000);
+        Assert.Equal(300_000, abr.EstimatedKbps);
+        Assert.True(abr.EstimateIsPrior);
+
+        Assert.True(abr.RecordDownload(5 * 1024 * 1024, TimeSpan.FromMilliseconds(130)));
+        Assert.False(abr.EstimateIsPrior);
+        Assert.NotEqual(300_000, abr.EstimatedKbps);
+
+        // Once anything has been measured, a later seed is ignored.
+        abr.SeedEstimate(1);
+        Assert.NotEqual(1, abr.EstimatedKbps);
+    }
+
+    [Fact]
     public void AbrResolutionCapReturnsOriginalVariantIndexAfterFiltering()
     {
         var codec = new MediaContentType(Container.Dash, CodecId.H264, CodecId.None);

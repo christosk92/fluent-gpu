@@ -3,23 +3,26 @@
   Run ONE free-scroll Wavee capture and emit a self-describing session bundle.
 
 .DESCRIPTION
-  Launch Wavee with the feel-instrument environment, let the operator scroll however they want, then pack
-  console.txt + scroll.csv when they close the window. No gesture script, no ENTER-when-ready, no 1-5 ratings.
+  Launch Wavee with the feel-instrument engine switches, let the operator scroll however they want, then pack
+  console.txt when they close the window. No gesture script, no ENTER-when-ready, no 1-5 ratings.
 
   "Smooth scroll" is two independent properties, and they trade against each other:
 
     Pillar A - glued:  does the content sit where the finger is?     (input -> offset commit)
     Pillar B - steady: are submit-confirmed presents evenly paced?   (offset -> record -> publish -> present)
 
-  A pacing queue improves B and worsens A. The packager keeps them structurally separate. Do not invent a fused
+  A pacing queue improves B and worsens A. Keep them structurally separate. Do not invent a fused
   smoothness score, and do not ask a human to rate either pillar - the traces already contain both.
 
   What this script produces (ops/diag/sessions/<utcStamp>-<sha>/):
-    manifest.json   build + machine + display + power + the full env dump, each var tagged default/overridden/cleared
-    console.txt     stdout AND stderr, merged; MUST contain the [scrolltrace] anchor line
-    scroll.csv      the ScrollTrace POD ring (diag builds only)
+    manifest.json   build + machine + display + power + the engine switches (--fg ...) the session launched with
+    console.txt     stdout AND stderr, merged; MUST contain [fps] lines (the --fg fps switch armed)
+    (per-input scroll traces: the Wavee Diagnostics Scroll card's CSV export - ScrollProbe level Trace)
     phases.jsonl    one freeScroll slice covering the whole session (wall clock + QPC; scores are always null)
-    feel-summary.json / AGENT.md   written by pack-feel-summary.ps1 (run automatically at the end)
+  Scoring: the engine owns both pillars as ScrollMetrics over the ScrollProbe stream - Wavee logs the per-burst
+  `scroll.burst` verdict, the Diagnostics Scroll card exports the probe CSV, and the Scroll Lab
+  (ops/diag/scroll-lab-synthetic.ps1) scores synthetic A/B sessions. The ScrollTrace-era packer
+  (pack-feel-summary.ps1 + AGENT.md) is retired with ScrollTrace.
 
 .EXAMPLE
   ops\diag\wavee-scroll-session.cmd -Diag
@@ -42,28 +45,22 @@ param(
     $a = $env:PROCESSOR_ARCHITEW6432
     if (-not $a) { $a = $env:PROCESSOR_ARCHITECTURE }
     if ("$a" -match 'ARM64') { 'arm64' } else { 'x64' }),
-  # Build WITH FLUENTGPU_DIAG. Without it there is no scroll.csv, no [renderbudget], and no -Opaque A/B - the
-  # console streams still work, but pillar A has no data at all.
+  # Build WITH FLUENTGPU_DIAG. Without it there is no [renderbudget] roster - the
+  # console streams still work.
   [switch]$Diag,
-  # A/B arm: replace the DWM Mica composition path with an opaque HWND swapchain. Compile-fenced, so it REQUIRES -Diag.
+  # A/B arm: replace the DWM Mica composition path with an opaque HWND swapchain (`--fg opaque`).
   [switch]$Opaque,
-  # Tier 2. Costs up to 256 extra EndQuery per frame plus a fixed 259-slot resolve EVERY frame, and the boundary
-  # count PEAKS on exactly the dense fill/image/glyph list being flung. Off unless the GPU is already implicated.
+  # Start with the pass-granular GPU timeline on (`--fg gpu-timing`, the AppHost.GpuPassTimingEnabled runtime toggle).
+  # Its per-pass timestamps cost real GPU work on exactly the frames being measured, so it is off unless the GPU is
+  # already implicated.
   [switch]$GpuTiming,
+  # Present at sync-interval 0 (`--fg no-vsync`): separates the present cap from the frame cost.
   [switch]$PresentInterval0,
-  # BISECTION ARM. Suppresses the phase-7.5 image pump while scroll is active. This is the only thing that can
-  # settle the imageDecodeDuringScroll bucket: its predicate is a correlation, and its refuter is defined as
-  # "the identical phase with the pump disabled shows the same cadence". Run it as a SECOND session against a
-  # first one captured with identical switches - one bisection is worth more than five more metrics, because a
-  # bisection yields a causal claim and metrics yield correlations.
-  [switch]$NoImagePump,
   [switch]$SkipPublish,
   [string]$ExePath,
   [string]$OutRoot,
-  # Skip the packaging step (leave the raw bundle for manual inspection).
-  [switch]$NoPack,
   # UNATTENDED: launch, idle briefly, close. Stamped instrumentCheck / synthetic. Validates the toolchain
-  # (diag build armed, anchor landed, streams merged, packager ran). Nobody scrolled, so it cannot answer
+  # (diag build armed, anchor landed, streams merged). Nobody scrolled, so it cannot answer
   # a feel question. Never report a scroll conclusion from one.
   [switch]$Unattended,
   [int]$UnattendedSeconds = 4,
@@ -98,15 +95,7 @@ function WriteJsonNoBom($obj, $path) {
 
 # ── switch validation: refuse mislabelled runs rather than produce them ───────────────────────────────────────
 # A bundle that SAYS opaque but ran Mica is worse than no bundle: it looks like evidence and it is not.
-if ($Opaque -and -not $Diag) {
-  throw "-Opaque requires -Diag. FG_OPAQUE_WINDOW is compiled behind '#if DEBUG || FLUENTGPU_DIAG', so a plain Release run would silently stay on Mica while the manifest claimed otherwise."
-}
-if ($PresentInterval0 -and -not $GpuTiming) {
-  throw "-PresentInterval0 requires -GpuTiming. The interactive-present path is gated on gpuRenderMs > 0, which only FG_GPU_TIMING produces, so without it the switch is a no-op that would still be recorded as an arm."
-}
-if ($NoImagePump -and -not $Diag) {
-  throw "-NoImagePump requires -Diag. The arm is compiled behind '#if DEBUG || FLUENTGPU_DIAG', so a plain Release run would pump images normally while the manifest claimed the bisection had been performed - which would turn 'no change' into a false refutation."
-}
+# (Every arm is a runtime engine switch now - none is compile-fenced, so no arm depends on -Diag.)
 
 # ── build identity ───────────────────────────────────────────────────────────────────────────────────────────
 Step "Build identity"
@@ -230,7 +219,6 @@ New-Item -ItemType Directory -Force -Path $sess | Out-Null
 Step "Session $sessionId"
 Info $sess
 
-$scrollCsv = Join-Path $sess 'scroll.csv'
 $consoleTxt = Join-Path $sess 'console.txt'
 $outRaw = Join-Path $sess '.stdout.txt'
 $errRaw = Join-Path $sess '.stderr.txt'
@@ -241,107 +229,57 @@ if ($Opaque) { $abVariant = 1 }
 # Stamp the free-scroll slice BEFORE launch so the first host-loop poll already has a phase ordinal.
 WriteMarker $phaseMarker "1 1 $abVariant 0"
 
-# ── environment ──────────────────────────────────────────────────────────────────────────────────────────────
-# Every variable is set or CLEARED explicitly and recorded with its origin, so a bundle can never be read under
-# the wrong assumption about what was on.
-$envSet = [ordered]@{}
-function SetEnv($name, $value, $why) {
-  Set-Item -Path "Env:$name" -Value $value
-  $envSet[$name] = [ordered]@{ value = $value; origin = 'overridden'; reason = $why }
-}
-function ClearEnv($name, $why) {
-  if (Test-Path "Env:$name") { Remove-Item "Env:$name" }
-  $envSet[$name] = [ordered]@{ value = $null; origin = 'explicitlyCleared'; reason = $why }
-}
+# ── engine switches ──────────────────────────────────────────────────────────────────────────────────────────
+# The engine reads NO environment variables: its diagnostic switches are the `--fg name,...` list on the command line
+# (FluentGpu.Hosting.EngineSwitches, applied by FluentApp before the window exists). Every switch this session turns on
+# is recorded with its reason, so a bundle can never be read under the wrong assumption about what was on. The wake
+# census, the render census and the tile census are always on and need no switch.
+$fgSet = [ordered]@{}
+function FgOn($name, $why) { $fgSet[$name] = $why }
 
-SetEnv 'FG_FPS_LOG' '1' 'the [fps] line: loop/present cadence, per-phase ms, wait kind, seam deltas'
-SetEnv 'FG_SCROLL_PERF' '1' 'the [scrollperf] 1 Hz roll-up - the scrollBindThrash evidence'
-SetEnv 'FG_WAKE_DIAG' '1' 'the reconciled / layout-only / record-only split and the wake-reason roster'
-SetEnv 'FG_RENDER_CENSUS' '1' 'reconcile fan-out (suppressed unless flush >= 12ms or comps >= 25 - an empty census is NOT a refutation)'
-# EXACTLY "1": this flag is read with a string comparison, not the usual EnvFlag helper, so 'true'/'on' silently
-# disable it and the offsetDiscontinuity bucket comes back empty - which reads as "no discontinuities".
-SetEnv 'FG_OFFSET_JUMP' '1' 'large single-write offset jumps; read as == "1" exactly, so true/on would DISABLE it'
-SetEnv 'FG_LAYOUT_DIAG' '1' 'measure/arrange/text-shape counts; without it the FrameTiming i1 column is structurally 0'
-
+FgOn 'fps' 'the [fps] line: loop/present cadence, per-phase ms, wait kind, seam deltas'
+FgOn 'layout' 'measure/arrange/text-shape counts; without it the FrameTiming i1 column is structurally 0'
 if ($Diag) {
-  SetEnv 'FG_SCROLL_TRACE' $scrollCsv 'the POD ring, written straight into the bundle (any value != "1" is used as a path)'
-  SetEnv 'FG_SCROLL_PHASE_FILE' $phaseMarker 'one free-scroll slice marker, polled OUTSIDE the frame'
-  SetEnv 'FG_RENDER_DIAG' '1' 'the [renderbudget] every-frame re-render roster'
-  # These two are CompiledIn && !disabled - i.e. default ON once the symbol exists. Leaving them on would make the
-  # diag build measurably different from the Release build being complained about, which invalidates the session.
-  SetEnv 'FG_BIND_CONTRACT' '0' 'MANDATORY: default-ON once compiled in; would change the feel being measured'
-  SetEnv 'FG_BACKWARDS_WRITE' '0' 'MANDATORY: default-ON once compiled in; does a subscriber-list scan per signal write'
-  if ($Opaque) { SetEnv 'FG_OPAQUE_WINDOW' '1' 'A/B arm: opaque HWND swapchain instead of DWM Mica' } else { ClearEnv 'FG_OPAQUE_WINDOW' 'Mica arm' }
-  if ($NoImagePump) { SetEnv 'FG_BISECT_NO_IMAGE_PUMP' '1' 'BISECTION arm: phase-7.5 image pump suppressed while scroll is active' } else { ClearEnv 'FG_BISECT_NO_IMAGE_PUMP' 'control arm: image pump normal' }
+  FgOn 'render' 'the [renderbudget] every-frame re-render roster'
+  # The DEBUG guards are default-ON once compiled in. Leaving them on would make the diag build measurably different
+  # from the Release build being complained about, which invalidates the session.
+  FgOn 'no-guards' 'MANDATORY in a diag build: BindContract / BackwardsWriteGuard scans would change the feel being measured'
 }
-else {
-  ClearEnv 'FG_SCROLL_TRACE' 'plain Release: the ring is compiled out'
-  ClearEnv 'FG_SCROLL_PHASE_FILE' 'plain Release: no in-band state to stamp'
-  ClearEnv 'FG_RENDER_DIAG' 'plain Release: RenderBudget is a no-op'
-  ClearEnv 'FG_OPAQUE_WINDOW' 'plain Release: compile-fenced'
-  ClearEnv 'FG_BISECT_NO_IMAGE_PUMP' 'plain Release: compile-fenced'
-}
+if ($Opaque) { FgOn 'opaque' 'A/B arm: opaque HWND swapchain instead of DWM Mica' }
+if ($GpuTiming) { FgOn 'gpu-timing' 'per-pass GPU attribution, at real per-frame cost' }
+if ($PresentInterval0) { FgOn 'no-vsync' 'present at sync-interval 0' }
+# NOT on by default: `diag` (Diag.Count/Set concatenate a string and box a value under one process-global lock, ~20
+# times per frame on the render thread - inside the exact code being measured), `mem` / `alloc` / `alloc-types`
+# (separate runs).
+$fgArg = ($fgSet.Keys -join ',')
 
-if ($GpuTiming) { SetEnv 'FG_GPU_TIMING' '1' 'Tier 2 opt-in: per-pass GPU attribution, at real per-frame cost' }
-else { ClearEnv 'FG_GPU_TIMING' 'up to 256 extra EndQuery/frame, peaking during the very fling being measured' }
-if ($PresentInterval0) { SetEnv 'FG_SCROLL_PRESENT_INTERVAL0' '1' 'paired arm with -GpuTiming' }
-else { ClearEnv 'FG_SCROLL_PRESENT_INTERVAL0' 'not an independent switch' }
-
-# FG_DIAG/FG_DIAG_CONSOLE are deliberately NOT in the default set: Diag.Count/Set concatenate a string and box a
-# value under one process-global lock, ~20 times per frame inside the submit path, on the render thread - inside
-# the exact code being measured.
-ClearEnv 'FG_DIAG' 'allocates + locks ~20x/frame on the render thread, inside the path being measured'
-ClearEnv 'FG_DIAG_CONSOLE' 'identical to FG_DIAG - there is no events-only mode'
-ClearEnv 'FG_MEM_DIAG' 'interval dumps - separate run'
-ClearEnv 'FG_MEM_DIAG_SEC' 'interval dumps - separate run'
-ClearEnv 'FG_ALLOC_DIAG' 'per-segment alloc probes - separate run'
-ClearEnv 'FG_ALLOC_TYPES' 'process-global EventListener - separate run'
-ClearEnv 'FG_SCROLL_LOG' 'per-event Console.WriteLine with AutoFlush - its own class doc warns it perturbs pacing'
-ClearEnv 'FG_SCROLLLOG' 'recorder-side variant of the same'
-ClearEnv 'FG_NOVSYNC' 'would remove the present pacing being measured'
-# Resolve default-on pacing knobs instead of inheriting an invisible shell override. The manifest below records the
-# resulting values, not an obsolete description of what an older Wavee build happened to request.
-ClearEnv 'FG_ADAPTIVE_FPS' 'production default ON; capture must not inherit an unrecorded governor override'
-ClearEnv 'FG_PRECISE_WAIT' 'production default ON; capture must not inherit an unrecorded wait-path override'
-ClearEnv 'FG_ANIM_FPS' 'use Wavee runtime policy (30 focused+AC without energy saver; otherwise 24)'
-ClearEnv 'WAVEE_FPS' 'app-side overlay - extra per-frame text work'
-ClearEnv 'WAVEE_LOG_LEVEL' 'app logging noise'
-ClearEnv 'WAVEE_LOG_FILE_LEVEL' 'app logging noise'
-
-Step "Environment"
-foreach ($k in $envSet.Keys) {
-  $v = $envSet[$k]
-  if ($v.origin -eq 'overridden') { Info "$k=$($v.value)" }
-}
-Info "cleared: $((($envSet.Keys | Where-Object { $envSet[$_].origin -eq 'explicitlyCleared' }) -join ', '))"
+Step "Engine switches"
+foreach ($k in $fgSet.Keys) { Info "--fg $k  ($($fgSet[$k]))" }
 
 # ── launch ───────────────────────────────────────────────────────────────────────────────────────────────────
 # stdout and stderr are captured to SEPARATE files and merged afterwards rather than teed through a pipeline:
 # a pipeline blocks until the process exits, which would make waiting on the window-close below impossible.
-# Nothing is lost - crucially NOT stdout, where the [scrolltrace] banner goes, and which a bare '2>' redirect
-# drops (that is why the previously committed capture has 476 [fps] lines and zero scrolltrace lines). The
+# Nothing is lost - crucially NOT stdout, which a bare '2>' redirect
+# drops. The
 # cross-stream ORDER is recovered from the tMs= prefix every diagnostic line carries, not from file order.
 Step "Launching Wavee"
-$proc = Start-Process -FilePath $ExePath -PassThru -RedirectStandardOutput $outRaw -RedirectStandardError $errRaw -WorkingDirectory (Split-Path $ExePath)
+$proc = Start-Process -FilePath $ExePath -ArgumentList @('--fg', $fgArg) -PassThru -RedirectStandardOutput $outRaw -RedirectStandardError $errRaw -WorkingDirectory (Split-Path $ExePath)
 Info "pid $($proc.Id)"
 
 Start-Sleep -Seconds 3
 if ($proc.HasExited) { throw "Wavee exited immediately (code $($proc.ExitCode)). See $errRaw" }
 
-# Verify the build is what the switches claim, by OBSERVATION rather than assumption.
-$banner = $false
+# Verify the switches armed, by OBSERVATION rather than assumption: `--fg fps` prints an [fps] line within seconds.
+$fpsSeen = $false
 for ($i = 0; $i -lt 20; $i++) {
-  if (Test-Path $outRaw) {
-    $head = Get-Content $outRaw -TotalCount 200 -ErrorAction SilentlyContinue
-    if ($head -and ($head | Where-Object { $_ -match '^\[scrolltrace\] writing to ' })) { $banner = $true; break }
+  if (Test-Path $errRaw) {
+    $head = Get-Content $errRaw -TotalCount 400 -ErrorAction SilentlyContinue
+    if ($head -and ($head | Where-Object { $_ -match '\[fps' })) { $fpsSeen = $true; break }
   }
   Start-Sleep -Milliseconds 500
 }
-if ($Diag -and -not $banner) {
-  Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-  throw "No '[scrolltrace] writing to ...' banner: this exe is NOT a FLUENTGPU_DIAG build. Publish with -Diag (or drop -Diag and accept a console-only session)."
-}
-if ($Diag) { Info "diag build confirmed (scrolltrace banner seen)" }
+if (-not $fpsSeen) { Warn "No [fps] line yet - the --fg switches may not have reached this build (older exe?)." }
+else { Info "engine switches armed ([fps] line seen)" }
 
 # ── free-scroll: operator uses the app, then closes the window ───────────────────────────────────────────────
 # Gesture idle/drag/inertia still come from the engine's own state word.
@@ -366,7 +304,7 @@ while (-not $proc.HasExited -and $waited -lt $maxWaitSec) {
   $waited += 2
 }
 if (-not $proc.HasExited) {
-  Warn "Still running after 8 hours; forcing. The scroll.csv tail may be truncated."
+  Warn "Still running after 8 hours; forcing. The console tail may be truncated."
   Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
 }
@@ -459,23 +397,24 @@ $manifest = [ordered]@{
     batteryPct = $(if ($batt) { $batt.EstimatedChargeRemaining } else { $null })
     idleCpuPctPreCapture = $idleCpu
   }
-  env = $envSet
-  # Resolved capture-time policy. These three environment variables were explicitly cleared above, so the values
-  # below describe this process rather than whatever happened to be inherited by the PowerShell host. Wavee's
-  # ambient policy is dynamic; record both reachable values instead of pretending the whole session ran at one rate.
+  engineSwitches = $fgSet
+  engineSwitchArg = "--fg $fgArg"
+  # Resolved capture-time policy. The engine reads no environment variables, so nothing inherited by the PowerShell
+  # host can change these. Wavee's ambient policy is dynamic; record both reachable values instead of pretending the
+  # whole session ran at one rate.
   effectiveKnobs = [ordered]@{
     adaptiveFps = [ordered]@{
       enabled = $true
-      resolvedFrom = 'engine default; FG_ADAPTIVE_FPS explicitly cleared'
+      resolvedFrom = 'engine default (AppOptions.AdaptiveGpuPacing)'
     }
     preciseWait = [ordered]@{
       enabled = $true
-      resolvedFrom = 'engine default; FG_PRECISE_WAIT explicitly cleared'
+      resolvedFrom = 'engine default (no --fg no-precise-wait)'
     }
-    bindContract = $(if ($Diag) { 'explicitly disabled' } else { 'not compiled in' })
-    backwardsWrite = $(if ($Diag) { 'explicitly disabled' } else { 'not compiled in' })
+    bindContract = $(if ($Diag) { 'disabled (--fg no-guards)' } else { 'not compiled in' })
+    backwardsWrite = $(if ($Diag) { 'disabled (--fg no-guards)' } else { 'not compiled in' })
     ambientFps = [ordered]@{
-      mode = 'Wavee power/attention policy; FG_ANIM_FPS explicitly cleared'
+      mode = 'Wavee power/attention policy'
       focusedAcNoEnergySaver = 30
       backgroundBatteryOrEnergySaver = 24
       mayChangeDuringSession = $true
@@ -484,9 +423,6 @@ $manifest = [ordered]@{
     layoutDiag = $true
     opaqueWindow = [bool]$Opaque
     presentInterval0 = [bool]$PresentInterval0
-    # A bisection arm makes this bundle a TREATMENT, not an observation. It is not comparable to anything except a
-    # control captured with otherwise identical switches, and it must never be read as "how the app behaves".
-    bisectNoImagePump = [bool]$NoImagePump
   }
   # Probed, not assumed. "available: false" with no reason is indistinguishable from "we never looked", and the two
   # imply different follow-ups: install the tool, versus grant ETW rights, versus fall back to the in-app DXGI/DWM
@@ -505,7 +441,6 @@ $manifest = [ordered]@{
   switches = [ordered]@{
     diag = [bool]$Diag; opaque = [bool]$Opaque; gpuTiming = [bool]$GpuTiming
     presentInterval0 = [bool]$PresentInterval0; skipPublish = [bool]$SkipPublish
-    noImagePump = [bool]$NoImagePump
     unattended = [bool]$Unattended
   }
   subjectiveScores = @()
@@ -515,8 +450,3 @@ WriteJsonNoBom $manifest (Join-Path $sess 'manifest.json')
 Say ""
 Step "Bundle: $sess"
 Get-ChildItem $sess | ForEach-Object { Info ("{0,-20} {1,10} bytes" -f $_.Name, $_.Length) }
-
-if (-not $NoPack) {
-  Say ""
-  & (Join-Path $PSScriptRoot 'pack-feel-summary.ps1') -Session $sess
-}

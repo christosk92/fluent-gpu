@@ -17,7 +17,7 @@ FluentGpu is a near-zero-alloc, NativeAOT, D3D12-rendered .NET 10 UI engine. Rea
 > the full verification once after the whole batch. (Working solo, not as a dispatched subagent? Then the usual
 > build/VerticalSlice loop applies.)
 
-> **✅ Animation engine — REWORKED (landed + verified, 521 VerticalSlice gates green).** Motion is a **signals-first** model: one POD `AnimValue` slab keyed `(node, channel)` driven by the slab scheduler (the class is still named `AnimEngine`) + the analytical closed-form spring (sampled at absolute `t` — dt-deterministic, replaced the sub-stepped Euler) + the complete declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout`), with **brush/color as just another channel** (the `BrushFade` channel; `BrushTransitionMs` still triggers it) and **reduced-motion as a value, never a `Use*` early-return**. `InteractionAnimator` and the `AdvanceBrushAnims` ticker are **deleted** (subsumed as `HoverFade`/`PressFade`/`BrushFade` side-table channels); `ConnectedAnimation` → `DetachedAnimSlab`/`RecordDetached` rebuild rides `FG_DETACHED_FLY` (default-off = the proven live-overlay path). Implemented design: `docs/plans/animation-engine-rework-design.md`. **Prefer the declarative surface for new motion;** `BrushTransitionMs`/`MotionRecipes.*`/the `Use*` motion hooks still work (repointed at the new engine), so existing controls are unchanged.
+> **✅ Animation engine — REWORKED (landed + verified, 521 VerticalSlice gates green).** Motion is a **signals-first** model: one POD `AnimValue` slab keyed `(node, channel)` driven by the slab scheduler (the class is still named `AnimEngine`) + the analytical closed-form spring (sampled at absolute `t` — dt-deterministic, replaced the sub-stepped Euler) + the complete declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout`), with **brush/color as just another channel** (the `BrushFade` channel; `BrushTransitionMs` still triggers it) and **reduced-motion as a value, never a `Use*` early-return**. `InteractionAnimator` and the `AdvanceBrushAnims` ticker are **deleted** (subsumed as `HoverFade`/`PressFade`/`BrushFade` side-table channels); `ConnectedAnimation` → `DetachedAnimSlab`/`RecordDetached` rebuild rides the runtime property `ConnectedAnimation.DetachedFly` (set in code; default-off = the proven live-overlay path). Implemented design: `docs/plans/animation-engine-rework-design.md`. **Prefer the declarative surface for new motion;** `BrushTransitionMs`/`MotionRecipes.*`/the `Use*` motion hooks still work (repointed at the new engine), so existing controls are unchanged.
 
 ## The one mental model
 
@@ -41,6 +41,8 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
    never `Ui.Text(sig.Value)`. (#1 mistake.)
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
+   A bind is wired at mount; a re-render passing a NEW thunk/signal re-wires it (bound→bound — a thunk capturing a
+   render-time width is fine), but a static↔bound FLIP of one channel on a reused node silently loses (`BindContract`).
    Prefer a transform bind for hot values. `Visible : Prop<bool>` (on the base `Element`, every kind) is presence, not
    paint — `false` COLLAPSES the node (out of layout flow, paint, hit-test; CSS `display:none`), it does not merely
    fade it — for a visually-hidden-but-still-flowing box, bind `Opacity`/`HoverOpacity` instead.
@@ -151,15 +153,17 @@ Run an app: `FluentApp.Run(() => new App());` (`src/FluentGpu.WindowsApp/FluentA
 ```bash
 dotnet build src/FluentGpu.VerticalSlice          # must be clean
 dotnet run   --project src/FluentGpu.VerticalSlice # must print "ALL CHECKS PASSED"
-# Local subset while iterating (CI = full suite, no FG_SUITE):
-dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # or FG_SUITE=hooks
+# Local subset while iterating (CI = full suite, no --suite):
+dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # or --probe <name>; no env vars
 ```
 The harness (`src/FluentGpu.VerticalSlice/`) runs headless golden checks (no GPU/window): thin `Program.cs` +
 `Harness/` (`Gate.Check`, scene helpers, `SuiteRegistry`) + domain `Suites/*Suite.cs` + `Probes/`.
 Add a check with `Check("…", cond, detail)` in the owning suite and register it in that suite's `Run` +
 `SuiteRegistry` (new suite only). GPU pixels are a separate manual check.
 Useful: `FrameStats` from `RunFrame()` — `Rendered` (false ⇒ compositor-only), `ComponentsRendered`,
-`HotPhaseAllocBytes` (must be 0 steady). Diagnostics: `FG_DUMP=1` (scene dump), `FG_DIAG=1`.
+`HotPhaseAllocBytes` (must be 0 steady). Diagnostics are `--fg` command-line switches on any FluentApp host (the engine reads NO environment variables):
+`--fg dump` (scene dump), `--fg diag`, `--fg fps`, `--fg layout`, `--fg mem=N`, `--fg gpu-timing`, … — full list in
+`src/FluentGpu.Engine/Hosting/EngineSwitches.cs`.
 
 ## Where to change what
 
@@ -169,7 +173,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 |---|---|
 | Signals runtime | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
 | Hooks | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) |
-| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
+| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` (bindings: `BindNode`; the `BindEffect` type + the bound→bound re-wire: `Reconciler.Rewire.cs`) |
 | Element shapes / props / binds | `src/FluentGpu.Engine/Dsl/Element.cs`; `src/FluentGpu.Engine/Hooks/{ControlFlow,Context,ComponentEl}.cs` |
 | DSL helpers / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` |
 | Controls | `src/FluentGpu.Controls/*.cs` (composition only) — WinUI fidelity rules: `docs/guide/control-fidelity.md` |
@@ -180,8 +184,11 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
 | Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
 | Retained scene (SoA, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
-| Scroll-driven effects (sticky / overscroll-stretch / parallax / fade / collapse / shy header / pull-to-refresh / scrollbar flags / nested scroll) | author via `Element.ScrollBinds` (a `ScrollBindDsl[]`: `PinTop`/`StretchFromTop`/`{From,To,Range,OutStart,OutEnd}`, `OnFlag`, `OnScrollGeometryChanged`, `Chaining`); engine = the generic zero-alloc binding evaluator `src/FluentGpu.Engine/Animation/{ScrollBind,ScrollBindEval}.cs` + `ScrollState` predicate flags. Design: `docs/plans/generic-hookable-scroll-engine-design.md` |
-| Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
+| **Scrolling — motion / wheel / touchpad / fling / routing / `ScrollHandle` / virtualization / pacing / probe / Scroll Lab** | **Read the [`fluentgpu-scroll`](../fluentgpu-scroll/SKILL.md) skill first** (its `where-to-change-what.md` is the full file map). Engine = `src/FluentGpu.Engine/Scroll/{Motion,Runtime,Extent,Effects,Diag}/**` + `Hosting/AppHost.Scroll.cs` + `Input/InputDispatcher.Scroll.cs` + `FluentGpu.Windows/Pal/{Win32Platform,Win32DirectManipulation}.cs`; lab = `src/FluentGpu.ScrollLab*`. Canon: `docs/design/subsystems/scroll.md`; guide: `docs/guide/scroll-lab.md` |
+| Scroll-driven effects (sticky + `engaged:` edge signal / sticky clip / hero collapse / overscroll stretch / parallax / fade / scale) + scroll observation | author via `ScrollEffectDsl` on any element (`.Sticky(top, scope, engaged:)`, `.StickyClip(inset, engaged:)`, `.Collapse(over, minH, CollapseAnchor)`, `.StretchFromTop()`, `.Parallax`/`.ParallaxY`/`.Fade`/`.Reveal`, `.OnScroll(ScrollEffectSpec)`); observe with `UseScroll(handle?)` → `ScrollObservation` (nearest scroller via `ScrollCtx`) and `UseScrollProgress(in0, in1)`; `VirtualListEl.MeasureAll`/`ListOptions.MeasureAll` realizes+measures every row. Engine = `src/FluentGpu.Engine/Scroll/Effects/{ScrollEffect,ScrollEffectEval,EffectTransform,ScrollEffectSpec}.cs` evaluated identically by the UI poser and the render poser (`Scroll/Runtime/ScrollPoser.cs`, sinks in `Hosting/AppHost.Scroll.cs` + `SnapshotScrollPoseSink.cs`). Canon: `docs/design/subsystems/scroll.md` §7; recipes + pitfalls: the `fluentgpu-scroll` skill |
+| Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` (the walk) + `Render/SliceRecorder.cs` (retained-tile slice arenas: scroll/effect/thumb/item-band slices recorded pose-free, keep-whole, the composite plan `Place`/`BuildComposite` → `CompositeFrame` + the SliceTable turn); tiles/composite: `Render/Tiles/*` + `FluentGpu.Windows/D3D12/{TileRasterizer,SurfacePool,SliceCompositor,D3D12Device.Composite}.cs` + `composite.hlsl` — design: `scene-memory.md` §4.3b + `gpu-renderer.md` §13.1 |
+| Tile validity (content-derived: a tile re-rasters iff the ops it draws changed — no damage rects) | `Render/SliceRecorder.Content.cs` (per-op content table, `SegmentContent`) + `Render/Tiles/SliceTable.Content.cs` (`ITileContent`, the check in `Request<TContent>`) — design: `gpu-renderer.md` §13.1c |
+| Evidence ledgers / stale-tile invariant / pixel query / frame capture | `Render/Evidence/*`, `Render/SliceRecorder.Evidence.cs`, `Render/Tiles/SliceTable.Ledger.cs`, `Hosting/AppHost.Evidence.cs` — design: `gpu-renderer.md` §13.1j |
 | Theming tokens + LIVE theme switching (animated, in-place; gotchas) | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` — **read `theming.md` before any theme work** |
 | Tests | `src/FluentGpu.VerticalSlice/` (`Harness/`, `Suites/`, `Probes/`) |
 | Windows OS services | `src/FluentGpu.WindowsApi/*` (pillars, refs Engine only) — see below |
@@ -261,6 +268,11 @@ Design corpus (architecture authority, canon-gated) is `docs/design/`; as-built 
 (must exit 0). Usage docs go in `docs/guide/`, not `docs/design/`.
 
 ## Deeper docs (read for the relevant task)
+- **`fluentgpu-scroll` skill** (`.claude/skills/fluentgpu-scroll/`) — **scrolling end to end**: the plan/poser mental
+  model, the file map, recipes (effect channel, feel knob, wheel curve, input source, debugging a jump/jitter/blank with
+  the probe + Scroll Lab, adding a gate), the shipped pitfalls (present time, one snap, coverage clamp, double prediction,
+  paired-counter ledger, props freeze) and the gate map. Read before any scroll, wheel, touchpad, virtualization or
+  scroll-effect change.
 - **`dnd` skill** (`.claude/skills/dnd/`) — **drag & drop end to end**: the L1 gesture / L2 session architecture, the
   `Drag`/`Drop`/`DragChip`/`DragPreviewLayer`/`InsertionOptions`/`Reorderable` recipes, the shipped-and-fixed pitfalls
   (bind-shape flip, parked-tab reachability, `DropTargetsVersion` staleness, per-frame alloc in drag delegates, the

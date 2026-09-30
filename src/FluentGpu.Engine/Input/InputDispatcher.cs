@@ -3,7 +3,8 @@ using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Render;
 using FluentGpu.Scene;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Motion;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Text;
 
 namespace FluentGpu.Input;
@@ -20,7 +21,7 @@ public enum FocusDirection : byte { Left, Right, Up, Down }
 /// (Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
 /// "one declaration, three modalities" contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.
 /// </summary>
-public sealed class InputDispatcher
+public sealed partial class InputDispatcher
 {
     private readonly SceneStore _scene;
     private readonly List<NodeHandle> _focusables = new();
@@ -51,14 +52,11 @@ public sealed class InputDispatcher
     private bool _panClaimed;          // the candidate crossed slop → the pan owns the contact (the press was cancelled)
     private Point2 _panAnchorPx;       // window-space press point — pan delta measures from here (also the arena slop test)
     private bool _panAxisX;            // the scroll axis of _panTarget (Orientation == 1) — pan tracks this axis only
-    private InputEvent _panClaimDown;  // the DOWN event verbatim — ScrollInputRouter.PanClaimed's ContactBegin sample
-    // Scroll v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.4): the offset-space anchor (_panAnchorOffset) and the
-    // lift-time nested-scroll hand-off latch (_chainOuter/ChainFlingTarget) are GONE — ScrollKernel captures its own
-    // anchor at ContactBegin and owns drag-time + lift-time chaining internally (kernel Chain command, §2.2). _panVel
-    // (ImpulseVelocity) STAYS: it is dual-purpose — besides the (now kernel-owned) scroll fling seed it also feeds the
-    // SwipeControl/FlipView release-velocity snap and UseGesture(Pan) end-velocity (FireGesturePanEnd), neither of
-    // which is a ScrollKernel concern. Its .Sample()/.ComputeReleaseVelocity() calls for the PURE scroll-pan case are
-    // removed below (nothing reads them any more); the swipe/gesture-pan call sites are untouched.
+    private InputEvent _panClaimDown;  // the DOWN event verbatim — PanClaimed's ContactBegin sample
+    // The scroll pan itself is a contact on the viewport's ScrollHandle (InputDispatcher.Scroll.cs: PanClaimed/PanSample/
+    // PanEnd → ContactBegin/ContactDelta/ContactEnd; the contact ring owns the release velocity). _panVel serves the
+    // NON-scroll gesture systems only: the SwipeControl/FlipView release-velocity snap and UseGesture(Pan)'s
+    // end-velocity (FireGesturePanEnd).
     private ImpulseVelocity _panVel;   // per-contact IMPULSE (work-energy) velocity estimator (swipe/flip/gesture-pan)
     private bool _touchSuppressTap;    // contact landed during inertia: only arrest/re-grab the viewport, never click
     private bool _pendingTouchPress;   // scrollable item visual waits 100ms so ordinary pans never flash Pressed
@@ -81,10 +79,6 @@ public sealed class InputDispatcher
         }
     }
 
-    // Scroll v3 (plan §3.4): the phase-driven-gesture singleton (_sg*: latch/axis/momentum/wheel-fallback bookkeeping),
-    // the single-writer guard (_inPhaseTick/AssertInPhaseTick) and the single-writer trace tag (_scrollWriter) are GONE
-    // — that whole state machine now lives in FluentGpu.Scroll.ScrollInputRouter (the phase-gesture latch) and
-    // ScrollKernel (single-writer by construction: one Tick, one sink.Apply per moved body). See ScrollInputRouter.Phase.
     // §7A drag-reorder-over-touch: the contact enrolled a DragReorder member (a CanDrag chain under the press) whose
     // axis-locked vote competes with Pan in the arena. The reorder's item axis (the source row's parent-container main
     // axis); when the arena resolves DragReorder, _touchReorder latches and the contact DRIVES Input.DragController
@@ -172,10 +166,8 @@ public sealed class InputDispatcher
     /// shelf swipe still clears it). Beyond it the pick is unbiased again.</summary>
     public const uint StickyAxisMs = 400;
 
-    // Scroll v3 (plan §3.4/§1): the fling-seed gate, the touchpad-feel tuning block, and the rubber-band cap constant
-    // are ALL GONE from this file — ScrollFeel.Shipping (FluentGpu.Scroll) is the one POD feel profile the kernel
-    // reads (plan §2.1: FlingSeedGate, RubberC, BandAsymptote, …); OverscrollPhysics.cs/ScrollTuning.cs/
-    // ScrollIntegrator.cs are deleted outright (plan §1 "what is deleted").
+    // Scroll feel (fling threshold, rubber band, decay, wheel distance) is data in ONE place: MotionFeel, read live from
+    // ScrollTunables.Current by the handle when it authors a plan — nothing in this file tunes scroll.
 
     private const float ScrollbarSize = 12f;
     private const float ScrollbarMinExpandedThumb = 30f;
@@ -244,9 +236,9 @@ public sealed class InputDispatcher
         // lift keeps true hand speed, a mid-stream reversal yields opposite-sign v ⇒ no stale coast. The remaining
         // double-inertia guard is AssumeStoppedMs alone (newest sample older than 40ms at lift ⇒ v=0 — a completed tail
         // then silence). One window, one gate.
-        // Scroll v3: inlined (ScrollTuning.cs is deleted, plan §1) — this estimator now serves ONLY the non-scroll
-        // gesture systems (swipe/flip snap, UseGesture(Pan)); the scroll fling path reads its own copy inside
-        // ScrollFeel.Shipping/ScrollPhysics.ImpulseEstimator (FluentGpu.Scroll, kernel-owned). Same 40ms/40ms values.
+        // This estimator serves ONLY the non-scroll gesture systems (swipe/flip snap, UseGesture(Pan)); a scroll fling's
+        // release velocity comes from the handle's contact ring (MotionFeel.FlingImpulseWindowS, the same 40 ms window and
+        // the same assume-stopped rule — PlanAuthor.FollowEnd).
         private const float HorizonMs = 40f;          // the single IMPULSE window (= the trailing window)
         private const float AssumeStoppedMs = 40f;    // newest-sample→lift gap beyond this ⇒ release velocity 0
 
@@ -383,9 +375,8 @@ public sealed class InputDispatcher
     {
         _scene = scene;
         Drag = new DragController(scene, () => RequestRerender());
-        // Scroll v3 (plan §3.4): forward through a lambda, not a direct method-group bind — `Scroll` (the router) is
-        // wired in AFTER construction (AppHost's kernel→router→dispatcher order), so the ctor can't bind it directly.
-        DragDrop = new DragDropContext(scene, () => RequestRerender()) { AutoScroll = (vp, v) => Scroll?.AutoScroll(vp, v) };
+        // Edge auto-scroll during a drag drives the hovered viewport's handle (InputDispatcher.Scroll.cs AutoScroll).
+        DragDrop = new DragDropContext(scene, () => RequestRerender()) { AutoScroll = AutoScroll };
         // A drag whose node was freed by a reconcile has no live OnDragCanceled column to fire, so the L1 controller
         // reports the abort here: the L2 session ends (OnLeave on a live target) and its drop spotlight clears — Cancel
         // requests the re-render itself. Without this the session (and the global dim) outlive the gesture forever.
@@ -496,16 +487,15 @@ public sealed class InputDispatcher
     /// SIP reflow (input-a11y.md §10): scroll the focused editor's caret above the occluded region the touch keyboard
     /// reported (<see cref="Pal.IPlatformTextInput.OccludedRectChanged"/>). Walks from <see cref="Focused"/> to its
     /// nearest VERTICAL scrollable ancestor and, if the focused node's bottom edge sits below <paramref name="occludedTopDip"/>
-    /// (window DIP — the pane top), posts an absolute, immediate, no-spring offset bump through <see cref="ScrollInputRouter.ThumbSet"/>
-    /// (Scroll v3: the same "immediate clamped write, no animation" contract <c>WriteScrollOffset</c> used, now the
-    /// kernel's job — the router post is fire-and-forget, so this returns true once <paramref name="occludedTopDip"/>
-    /// implies a real overlap rather than after a synchronous clamp; the kernel still hard-clamps to content). The
-    /// WinUI EnsureFocusedElementInView the InputPaneHandler runs (InputPaneHandler.cpp → ScrollContentPresenter
-    /// bring-into-view). A non-positive/empty rect (the pane hid) is a no-op. 0-alloc (scalar walk + one command post).
+    /// (window DIP — the pane top), authors an immediate move on that viewport's ScrollHandle (a Hold at the bumped
+    /// offset, clamped to the content by the plan) and returns true once <paramref name="occludedTopDip"/> implies a real
+    /// overlap. The WinUI EnsureFocusedElementInView the InputPaneHandler runs (InputPaneHandler.cpp →
+    /// ScrollContentPresenter bring-into-view). A non-positive/empty rect (the pane hid) is a no-op. 0-alloc (scalar walk
+    /// + one plan write).
     /// </summary>
     public bool EnsureFocusedAboveOcclusion(float occludedTopDip)
     {
-        if (occludedTopDip <= 0f || _focused.IsNull || !_scene.IsLive(_focused) || Scroll is null) return false;
+        if (occludedTopDip <= 0f || _focused.IsNull || !_scene.IsLive(_focused) || ScrollHandleFor is null) return false;
 
         // Nearest VERTICAL scrollable ancestor of the focused field (the panel reflow is a vertical bring-into-view; a
         // horizontal-only scroller cannot lift the caret clear of a bottom-docked keyboard).
@@ -520,8 +510,7 @@ public sealed class InputDispatcher
         float overlap = (fieldAbs.Y + fieldAbs.H + Margin) - occludedTopDip;
         if (overlap <= 0f) return false;   // the field already clears the pane — nothing to scroll
 
-        ref ScrollState sc = ref _scene.ScrollRef(vp);
-        Scroll.ThumbSet(vp, sc.OffsetY + overlap);   // kernel clamps + re-realizes; bottom edge rides up by `overlap`
+        ScrollBy(vp, overlap, ScrollMove.Immediate);   // the plan clamps; bottom edge rides up by `overlap`
         return true;
     }
 
@@ -560,31 +549,6 @@ public sealed class InputDispatcher
     /// the engine edge auto-scroll arms when the pointer drags near an overflowing viewport's edge (host-ticked).</summary>
     public DragDropContext DragDrop { get; }
 
-    // ── Scroll v3 (plan §3.4): the kernel-backed router + chrome ticker, host-owned and handed in after construction
-    // (AppHost's wiring order: kernel → router → `_dispatcher.Scroll = router`, plan §3.3.5). Setting `Scroll` also
-    // wires the router's hit-test bridge (see ScrollInputRouter's class remarks: the router's pinned 2-arg ctor has no
-    // InputDispatcher reference, so the two delegate properties are wired here, once, the same way `OnScrollArmed`-
-    // style delegate seams were wired before this rewrite).
-    private ScrollInputRouter? _scroll;
-    public ScrollInputRouter? Scroll
-    {
-        get => _scroll;
-        set
-        {
-            _scroll = value;
-            if (_scroll is not null)
-            {
-                _scroll.ResolveAxisTarget = ResolveScrollTarget;
-                _scroll.ResolveAnyTarget = ScrollableUnder;
-                _scroll.DispatchElementWheel = (p, dy, dx) => DispatchWheel(new InputEvent(InputKind.Wheel, p, 0, 0, ScrollDelta: dy, ScrollDeltaX: dx));
-            }
-        }
-    }
-
-    /// <summary>The scrollbar conscious-fade FSM (plan §4 "ScrollBarChrome"), host-owned. Hover/reveal notifications
-    /// (<see cref="UpdateScrollHover"/>, the scrollbar hit-test/drag paths) forward to it; null = no chrome wired
-    /// (the bars simply never reveal — matches an unwired <c>OnScrollHover</c> before this rewrite).</summary>
-    public FluentGpu.Scroll.ScrollBarChrome? Chrome { get; set; }
 
     // ── External (OS) drop entry points ─────────────────────────────────────────────────────────────────────────────
     // The host's file-drop handler (the Windows backend's WM_DROPFILES case) calls these on the UI thread via the normal
@@ -701,17 +665,15 @@ public sealed class InputDispatcher
     private DropEffect CurrentExternalEffect()
         => DragDrop.IsActive && !DragDrop.OverTarget.IsNull ? DragDrop.Session.Effect : DropEffect.None;
 
-    // Scroll v3 (plan §3.4): AutoScrollBy/WriteScrollOffset/WriteOverscroll are GONE — DragDropContext's edge
-    // auto-scroll now posts a time-true velocity through ScrollInputRouter.AutoScroll (wired in the ctor below), and
-    // there is no more synchronous offset/band write seam at all: ScrollKernel is the sole writer (via SceneScrollSink,
-    // WP-B), reached only from Tick()/Reclamp(). Nothing in Input/ writes ScrollState.OffsetX/Y/BandX/BandY any more.
+    // Nothing in Input/ writes a scroll offset: every scroll input authors a plan on the viewport's ScrollHandle
+    // (InputDispatcher.Scroll.cs), and the host's frame step / the render poser evaluate it.
 
     /// <summary>The active contact's sampled flick velocity (px/s, window space; the ~50ms-EMA the touch fling uses). The
     /// working scalars are loaded for the contact whose event is being dispatched, so a control reading this from its
     /// <c>OnClick</c> commit edge (the release of a DragYieldsToPan swipe — SwipeControl/FlipView) gets THAT gesture's
     /// real release speed for the WinUI snap (100px open / 31px/s close; FlipView flick-navigate). Zero between gestures
-    /// and for a mouse/0-stamp stream (the vacuous-fling guard). Scroll v3: no longer scroll-purposed (the kernel owns
-    /// fling seeding); this stays for the non-scroll gesture systems that read it (swipe/flip snap, UseGesture(Pan)).</summary>
+    /// and for a mouse/0-stamp stream (the vacuous-fling guard). Not scroll-purposed (a scroll fling's velocity comes from
+    /// the handle's contact ring); the non-scroll gesture systems read it (swipe/flip snap, UseGesture(Pan)).</summary>
     public Point2 PointerVelocity => new(_panVel.Vx, _panVel.Vy);
 
     /// <summary>Set by the host: a virtual list crossing an item boundary on scroll requests the next render.</summary>
@@ -722,11 +684,6 @@ public sealed class InputDispatcher
     public Action<NodeHandle, bool>? OnHoverChanged;
     public Action<NodeHandle, bool>? OnPressChanged;
 
-    // Scroll v3 (plan §3.4): Tuning/SmoothScroll/OnScrollArmed/OnScrollHover/OnScrollLeave/OnFlingStarted/
-    // OnScrollTrackBegin/OnScrollTrackSample/OnScrollTrackEnd/OnCancelFling/OnScrollStartedObserved are ALL GONE — the
-    // whole "arm an external integrator" delegate-seam family this dispatcher used to drive is replaced by Scroll
-    // (ScrollInputRouter) posting commands straight to ScrollKernel, and by Chrome (ScrollBarChrome) for hover/reveal.
-    // PerNotchDip's caller moved into ScrollInputRouter.WheelAxis (ScrollFeel.Shipping.PerNotchDip).
     public Action<Point2>? OnPointerDownObserved;
 
     /// <summary>Set by the host: a RepeatButton was pressed (held) / released — drives the RepeatTicker auto-repeat.</summary>
@@ -745,7 +702,8 @@ public sealed class InputDispatcher
     /// <summary>Set by the host: the app-zoom wheel hook (browser Ctrl+wheel), run for a Ctrl-modified wheel AFTER
     /// element-level wheel handlers declined it and BEFORE the viewport scrolls (returns true = consumed — the notch
     /// never reaches the scroll router). The argument is the signed device notch count (&gt;0 = wheel rotated away
-    /// from the user = zoom in). Null = Ctrl+wheel scrolls exactly as before.</summary>
+    /// from the user = zoom in — <see cref="FluentGpu.Scroll.Runtime.WheelClassifier.ZoomNotches"/>, vertical wheels
+    /// only). Null = Ctrl+wheel scrolls exactly as before.</summary>
     public Func<float, bool>? OnZoomWheel;
 
     /// <summary>Raised when the window loses activation: pressed/hover/drag state has been cleared; the host closes
@@ -756,9 +714,13 @@ public sealed class InputDispatcher
     /// bumps the titlebar-chrome epoch signal here so a custom TitleBar re-renders (dimming / max↔restore glyph).</summary>
     public Action? OnWindowActivationChanged;
 
+    /// <summary>Raised when an OS move/size loop of this window began (<see cref="InputKind.WindowMoveSizeBegan"/>); the
+    /// host forwards it to <c>InputHooks.WindowMoveSizeBeganObserved</c>.</summary>
+    public Action? OnWindowMoveSizeBegan;
+
     /// <summary>Raised when an OS move/size modal loop of this window ended (<see cref="InputKind.WindowMoveSizeEnded"/>)
-    /// — the host forwards it to <c>InputHooks.WindowMoveSizeEndedObserved</c>, where the pop-out video's drag-the-picture
-    /// gesture learns its OS move loop is over.</summary>
+    /// — the host forwards it to <c>InputHooks.WindowMoveSizeEndedObserved</c>, where a chrome hold taken for the loop
+    /// is released.</summary>
     public Action? OnWindowMoveSizeEnded;
 
     /// <summary>Raised when the resolved hover cursor changes — the host wires this to <c>IPlatformWindow.SetCursor</c>.</summary>
@@ -957,9 +919,9 @@ public sealed class InputDispatcher
                     }
                     if (e.Button != 0) break;
 
-                    // Any mouse/pen PRESS over a Ballistic/Driven viewport zeros its motion first (plan §3.4: a click
-                    // must not drift under the pointer, and a scrollbar grab must not fight a live chase).
-                    Scroll?.CancelAt(e.PositionPx);
+                    // Any mouse/pen PRESS over a moving viewport (fling / glide) stops it where it is shown first: a click
+                    // must not drift under the pointer, and a scrollbar grab must not fight a live glide.
+                    ScrollStopAt(e.PositionPx);
 
                     if (TryScrollbarPointerDown(e.PositionPx))
                     {
@@ -1093,7 +1055,12 @@ public sealed class InputDispatcher
                         // select/play the row. The release channel is the one that mattered in practice: a list row
                         // raises its ItemContainer tap from OnPointerReleased (SelectorVisualsBound), not OnClick.
                         int linkSpan = ResolveLinkSpan(up, sameNode, e.PositionPx);
+                        // A row-cell click (ListRowEl.OnCellClick, scroll-rework Wave 0.E) owns the gesture the same
+                        // way a hyperlink span does — resolved next, still before the release dispatch, so clicking
+                        // a row's transport/heart cell doesn't ALSO select/play the row underneath it.
+                        int rowCell = linkSpan < 0 ? ResolveRowCell(up, sameNode, e.PositionPx) : -1;
                         if (linkSpan >= 0) FireLinkSpan(up, linkSpan);
+                        else if (rowCell >= 0) FireRowCell(up, rowCell);
                         else
                         {
                             DispatchPointerReleased(up, e.PositionPx);
@@ -1135,50 +1102,17 @@ public sealed class InputDispatcher
                     if (OnChar(e.KeyCode)) handled++;
                     break;
 
-                case InputKind.Wheel:
-                    // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport:
-                    // a Handled NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
-                    if (DispatchWheel(in e)) { handled++; break; }
-                    // App zoom (browser Ctrl+wheel): after element first-refusal (a lightbox's own Ctrl+wheel handler
-                    // still wins under the pointer), before the viewport — a registered hook consumes the notch so
-                    // Ctrl+wheel never scrolls; with no hook the case is byte-identical to before. WheelNotch is the
-                    // signed DEVICE notch (rawAmount/120, >0 = rotated away = zoom in), NOT ScrollDelta (re-oriented
-                    // so positive = toward content end — inverted for this purpose).
-                    if ((e.Mods & KeyModifiers.Ctrl) != 0 && OnZoomWheel is { } zoomWheel
-                        && zoomWheel(e.WheelNotch != 0f ? e.WheelNotch : e.WheelNotchX)) { handled++; break; }
-                    // Scroll v3 (plan §3.4): ScrollInputRouter.Wheel does the device-crossover cancel (a live
-                    // phase-driven gesture yields to a physical wheel), the same-axis resolution for both axes, and
-                    // posts WheelNotch — no more CancelGesture()/ScrollAt() here.
-                    // Header → list routing (Element.WheelTarget): the nearest hit-chain element naming a wheel target
-                    // takes the notch as a glide on THAT scroller, so the router's ancestor walk (which would find the
-                    // header's own page scroller, or nothing) never runs for it.
-                    if (RouteWheelTarget(in e)) { handled++; break; }
-                    if (Scroll is not null && Scroll.Wheel(in e)) handled++;
-                    break;
-
-                // ── the phase-tagged scroll contract (design §1/§6): the ONE consumer for every producer ──
-                case InputKind.ScrollBegin:
-                case InputKind.ScrollEnd:
-                    Scroll?.Phase(in e);
-                    handled++;
-                    break;
-
-                case InputKind.ScrollDelta:
-                    // bug-B/A3: thread this frame's pre-coalesce scroll-phase packets through to the router so its
-                    // release-velocity estimator sees every raw packet, not just the coalesced sum — a frame where
-                    // 2+ raw ScrollDelta packets fold into ONE InputEvent before Phase() ever sees them individually
-                    // (Pal.cs InputEventRing.Write / "scroll-v3-plan §5.4"). Scoped to ScrollDelta only (Begin never
-                    // coalesces; End carries no delta) — see ScrollInputRouter.Phase's velSamples doc.
-                    Scroll?.Phase(in e, _velSamples.AsSpan(0, _velSampleCount));
-                    handled++;
+                case InputKind.Scroll:
+                    // The ONE scroll input kind (scroll rework §4): the front end routes it (InputDispatcher.Scroll.cs)
+                    // and the viewport's ScrollHandle authors the plan. A real window also delivers wheel notches
+                    // synchronously through the urgent sink; this is the ring path (frame-aligned producers, headless).
+                    { var se = e.Scroll; if (DispatchScroll(in se)) handled++; }
                     break;
 
                 case InputKind.PointerCancel:
                     CancelPointerContact(in e);
-                    // Scroll v3 (plan §3.4): the router self-manages its phase-gesture latch off producer signals
-                    // (ScrollBegin/End) — an UNRELATED contact's capture loss no longer force-ends it (EndScrollGesture
-                    // is gone with the rest of the OnScrollPhase state machine). Accepted interim gap: a rogue latch
-                    // self-heals on the producer's next ScrollBegin.
+                    // A delta-stream contact (touchpad / hi-res wheel) is ended by its own producer's End; an UNRELATED
+                    // contact's capture loss does not end it (ScrollRouter re-latches on the next Begin regardless).
                     break;
 
                 case InputKind.WindowBlur:
@@ -1204,6 +1138,10 @@ public sealed class InputDispatcher
 
                 case InputKind.WindowStateChanged:
                     OnWindowActivationChanged?.Invoke();   // custom titlebar re-glyphs max↔restore
+                    break;
+
+                case InputKind.WindowMoveSizeBegan:
+                    OnWindowMoveSizeBegan?.Invoke();       // an OS move/size loop began (edge resizes too — consumers filter)
                     break;
 
                 case InputKind.WindowMoveSizeEnded:
@@ -1277,11 +1215,11 @@ public sealed class InputDispatcher
         _scrollDragNode = NodeHandle.Null;
         _contextDown = NodeHandle.Null;
         _middleDown = NodeHandle.Null;
-        // A claimed pan dies with the contact — no fling on capture loss (Scroll v3: the kernel's Cancel command is
-        // "end-with-zero-velocity", §2.2; it also owns springing any held band back). Cancel unconditionally (a no-op
-        // if this contact's kernel slot was never claimed) using this contact's OWN PointerId (_activeSlotId — the
-        // event that triggered the cancel may belong to a DIFFERENT contact, e.g. the whole-window WindowBlur path).
-        Scroll?.PanEnd(new InputEvent(InputKind.PointerCancel, default, 0, 0, PointerId: _activeSlotId), cancel: true);
+        // A claimed pan dies with the contact — no fling on capture loss (ScrollHandle.ContactCancel settles the plan in
+        // place, clamped to the content). Cancel unconditionally (a no-op if this contact never claimed a pan) using this
+        // contact's OWN PointerId (_activeSlotId — the event that triggered the cancel may belong to a DIFFERENT contact,
+        // e.g. the whole-window WindowBlur path).
+        PanCancel(_activeSlotId);
         _panTarget = NodeHandle.Null;
         _panClaimed = false;
         _reorderTarget = NodeHandle.Null;   // a claimed drag-reorder dies with the contact (Drag.Cancel above restored the visuals)
@@ -1495,18 +1433,19 @@ public sealed class InputDispatcher
         bool handled = false;
         _down = HitTest(e.PositionPx);
         _panAnchorPx = e.PositionPx;   // shared radial tap/hold anchor, even when there is no scroll candidate
-        // Scroll v3 (plan §3.4): the DOWN event, kept verbatim so a LATER claim (ClaimTouchPan, possibly several
-        // moves later — the finger must cross PanSlopPx first) can still hand ScrollInputRouter.PanClaimed the real
-        // down position/timestamp as the kernel's ContactBegin sample. Using the CLAIMING move's own stamp instead
+        // The DOWN event, kept verbatim so a LATER claim (ClaimTouchPan, possibly several moves later — the finger must
+        // cross PanSlopPx first) can still hand PanClaimed the real down position/timestamp as the contact's first
+        // sample. Using the CLAIMING move's own stamp instead
         // would collapse the down→claim interval to ~0 while the position still jumps by the slop distance — a
-        // spurious huge instantaneous velocity into the kernel's release-velocity estimator.
+        // spurious huge instantaneous velocity into the contact ring's release-velocity estimate.
         _panClaimDown = e;
+        _panClaimDownSec = SecOf(e.QpcTicks);   // the down's plan-clock time (a later claim begins the contact THERE)
         NodeHandle stoppingScrollable = ScrollableUnder(e.PositionPx);
         if (!stoppingScrollable.IsNull && _scene.HasScroll(stoppingScrollable))
         {
             ref ScrollState stopping = ref _scene.ScrollRef(stoppingScrollable);
-            // Scroll v3 (plan §3.1): Phase (Fling/WheelAnimating) is gone — read the kernel-owned result column instead.
-            _touchSuppressTap = stopping.Activity is ScrollActivity.Ballistic or ScrollActivity.Driven;
+            // A finger landing on a coasting/gliding viewport stops it and is not a tap (WinUI: a touch on a moving list).
+            _touchSuppressTap = stopping.Motion.IsMoving && stopping.Motion.Kind != MotionKind.Drag;
             if (_touchSuppressTap) _down = NodeHandle.Null;
         }
         // Click-count synthesis is pointer-kind-AGNOSTIC (the shared _lastDown* tracker): a touch double-tap inside the
@@ -1585,11 +1524,10 @@ public sealed class InputDispatcher
             if (!scrollable.IsNull)
             {
                 ref ScrollState sc = ref _scene.ScrollRef(scrollable);
-                // A finger touching an in-flight viewport takes authoritative control immediately (plan §3.4: any
-                // PointerDown zeroes a Ballistic/Driven viewport's motion first). Cancel the coast/chase before
-                // capturing the pan anchor, otherwise the kernel can move the content underneath the stationary finger
-                // between down and the first move — the kernel itself re-grabs any live band when the contact begins.
-                Scroll?.Cancel(scrollable);
+                // A finger touching an in-flight viewport takes authoritative control immediately: the coast/glide stops
+                // where the content is SHOWN (ScrollHandle.Stop) before the pan anchor is captured, so the content never
+                // moves under the stationary finger between down and the first move.
+                ScrollStop(scrollable);
                 _panTarget = scrollable;
                 _panClaimed = false;
                 _panAxisX = sc.Orientation == 1;
@@ -1677,13 +1615,12 @@ public sealed class InputDispatcher
         }
         // Cancel the FIRST contact's scalar pan (it lives in the partner slot — not the working set): a swept Pan must not
         // keep driving the content scroll, and its eventual up must fire no fling. The press was already released on its
-        // own down→claim path or stays as a tap candidate; null Down so its up taps nothing mid-pinch. Scroll v3: also
-        // release its kernel contact slot if it had one — PanEnd(cancel:true) is a no-op if it never claimed (FindContact
-        // misses); only PointerId matters for a cancel (position/time unused), so a minimal synthetic event is enough.
-        Scroll?.PanEnd(new InputEvent(InputKind.PointerCancel, default, 0, 0, PointerId: first.Id), cancel: true);
+        // own down→claim path or stays as a tap candidate; null Down so its up taps nothing mid-pinch. Also release its
+        // scroll contact if it had one — PanCancel is a no-op when it never claimed.
+        PanCancel(first.Id);
         first.PanTarget = NodeHandle.Null; first.PanClaimed = false; first.Down = NodeHandle.Null;
-        // Cancel THIS (second) contact's pan candidate too (working scalars + kernel slot): the pinch owns it.
-        Scroll?.PanEnd(in e, cancel: true);
+        // Cancel THIS (second) contact's pan candidate too (working scalars + scroll contact): the pinch owns it.
+        PanEnd(in e, cancel: true);
         if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
         SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
         _panTarget = NodeHandle.Null; _panClaimed = false; _down = NodeHandle.Null;
@@ -1706,9 +1643,8 @@ public sealed class InputDispatcher
         _pinchStartZoom = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
         // The content node's local origin in window space on the scroll axis, INDEPENDENT of the current scale/offset
         // (AbsoluteRect includes the LocalTransform translation, so subtract it back out). midLocal = midpointAxis − this.
-        // Scroll v3 (plan §3.4): pure geometry only — the kernel now owns the focal-preserving offset math itself
-        // (ScrollInputRouter.SetZoom → ScrollInput.SetZoom(node, zoom, focalOffset); the kernel already tracks its own
-        // (offset, zoom) per ScrollBody, so the dispatcher no longer needs _pinchAppliedOff/_pinchAppliedZoom bookkeeping).
+        // Pure geometry: the focal-preserving offset is solved in SetZoom (InputDispatcher.Scroll.cs) from the handle's
+        // shown offset and the committed zoom.
         bool horizontal = sc.Orientation == 1;
         _pinchOriginAxis = 0f;
         var content = sc.ContentNode;
@@ -1718,14 +1654,14 @@ public sealed class InputDispatcher
             ref NodePaint cp = ref _scene.Paint(content);
             _pinchOriginAxis = horizontal ? cabs.X - cp.LocalTransform.Dx : cabs.Y - cp.LocalTransform.Dy;
         }
-        UpdatePinch();   // post the initial (start-zoom) focal update so the kernel commits the current factor
+        UpdatePinch();   // the initial (start-zoom) focal update commits the current factor
     }
 
     /// <summary>Recompute the magnification from the two contacts' current separation (Phase-4):
     /// <c>scale = clamp(startZoom · curDist/startDist, MinZoom, MaxZoom)</c>, then post it with the gesture midpoint's
-    /// CONTENT-LOCAL coordinate through <see cref="ScrollInputRouter.SetZoom"/> — the kernel solves the offset that
-    /// keeps that content point fixed under the midpoint (the WinUI focal-point pinch) from its own tracked
-    /// (offset, zoom) state. Called on every contributing move and at session open. Zero alloc.</summary>
+    /// CONTENT-LOCAL coordinate through <see cref="SetZoom"/> — which solves the offset that keeps that content point
+    /// fixed under the midpoint (the WinUI focal-point pinch) and writes it as an immediate plan. Called on every
+    /// contributing move and at session open. Zero alloc.</summary>
     private void UpdatePinch()
     {
         if (_pinchSessionViewport.IsNull || !_scene.IsLive(_pinchSessionViewport) || !_scene.HasScroll(_pinchSessionViewport)) return;
@@ -1738,7 +1674,7 @@ public sealed class InputDispatcher
         float z = Math.Clamp(_pinchStartZoom * (curDist / _pinchStartDist), minZ, maxZ);
         float midAxis = horizontal ? (_pinchPosA.X + _pinchPosB.X) * 0.5f : (_pinchPosA.Y + _pinchPosB.Y) * 0.5f;
         float midLocal = midAxis - _pinchOriginAxis;   // the midpoint in the viewport's content coordinate frame
-        Scroll?.SetZoom(_pinchSessionViewport, z, midLocal);
+        SetZoom(_pinchSessionViewport, z, midLocal);
     }
 
     /// <summary>End the pinch session (Phase-4): the FIRST contact lifted/cancelled. The committed <see cref="ScrollState.ZoomFactor"/>
@@ -1779,9 +1715,9 @@ public sealed class InputDispatcher
         s.PanVel.Reset(survivorPos, timestampMs, qpcTicks);
         s.PinchViewport = NodeHandle.Null;         // the pinch is over for the survivor too (it's a pan now)
         s.PinchMember = -1;
-        // Scroll v3 (plan §3.4): begin the survivor's kernel contact directly — the anchor is the CURRENT (committed
-        // pinch-zoom) offset the kernel already holds for this body, so no PendingRawOffset seed is needed here.
-        Scroll?.PanClaimed(viewport, horizontal,
+        // Begin the survivor's scroll contact directly — its origin is the handle's CURRENT (committed pinch-zoom)
+        // offset, so no separate seed is needed.
+        PanClaimed(viewport, horizontal,
             new InputEvent(InputKind.PointerDown, survivorPos, 0, 0, TimestampMs: timestampMs, PointerId: survivorId, QpcTicks: qpcTicks));
     }
 
@@ -1851,15 +1787,14 @@ public sealed class InputDispatcher
 
         if (_panClaimed)   // a driven pan suppresses hover visuals — finger-down scrolling never hovers
         {
-            // The kernel owns its own contact history/release-velocity estimation (ScrollPhysics.ImpulseEstimator)
-            // from the ContactMove samples Scroll.PanSample posts below — that is the scroll-offset source of truth.
+            // The handle's contact ring owns the scroll's history/release velocity (PanSample below feeds it).
             // _panVel keeps sampling too (restored — a claimed pan must not freeze it): SwipeControl/FlipView's
             // release-velocity snap and UseGesture(Pan)'s end-velocity (FireGesturePanEnd) read PointerVelocity
             // regardless of whether this contact ended up driving a scroller, and a finger that moves fast then HOLDS
             // STILL before lift must decay it toward 0 — freezing it at the pre-claim reading keeps stale momentum.
             FeedPanVelocity(e.PointerId);
             _panVel.Sample(e.PositionPx, e.TimestampMs, e.QpcTicks);
-            Scroll?.PanSample(in e);
+            PanSample(in e);
             return true;
         }
 
@@ -1880,7 +1815,7 @@ public sealed class InputDispatcher
                 if (StepTouchArena(in e)) return true;   // arena claimed pan OR reorder (and already drove it / pinned the pan)
                 if (_panClaimed)   // a just-claimed pan: record the first content sample (StepTouchArena gates the claim, not the drive)
                 {
-                    Scroll?.PanSample(in e);
+                    PanSample(in e);
                     return true;
                 }
             }
@@ -1894,7 +1829,7 @@ public sealed class InputDispatcher
                 if (axisTravel >= PanSlopPx && !_panClaimed) ClaimTouchPan();
                 if (_panClaimed)
                 {
-                    Scroll?.PanSample(in e);
+                    PanSample(in e);
                     return true;
                 }
             }
@@ -1919,9 +1854,9 @@ public sealed class InputDispatcher
 
     /// <summary>Claim the pan for this contact: cancel the press candidate the same way capture-loss does (so a node
     /// that saw the down sees one consistent cancel, never a click), suppress its pressed visual, end any in-flight
-    /// (mouse/pen) text-selection drag, and — Scroll v3 (plan §3.4) — hand the claim to <see cref="Scroll"/>, which
-    /// begins a kernel contact on <see cref="_panTarget"/>/<see cref="_panAxisX"/>. After this the contact is a pure
-    /// scroll driver until its up/cancel.</summary>
+    /// (mouse/pen) text-selection drag, and hand the claim to <see cref="PanClaimed"/>, which begins a contact on
+    /// <see cref="_panTarget"/>'s ScrollHandle along <see cref="_panAxisX"/>. After this the contact is a pure scroll
+    /// driver until its up/cancel.</summary>
     private void ClaimTouchPan()
     {
         _pendingTouchPress = false; _pendingTouchPressMs = 0f;
@@ -1942,28 +1877,23 @@ public sealed class InputDispatcher
             _down = NodeHandle.Null;   // the eventual touch-up must NOT fire a click
         }
         _selDragging = false;
-        Scroll?.PanClaimed(_panTarget, _panAxisX, in _panClaimDown);
+        PanClaimed(_panTarget, _panAxisX, in _panClaimDown, _panClaimDownSec);
     }
-
-    // Scroll v3 (plan §3.4): BeginTouchPanTracking/RecordTouchPanSample are GONE — ScrollInputRouter.PanClaimed/
-    // PanSample post ContactBegin/ContactMove directly to the kernel, which owns the anchor + resample internally
-    // (§2.2).
 
     /// <summary>Complete an UN-CLAIMED pan candidate on touch-up when the RELEASE traveled past the scroll-axis slop —
     /// the under-sampled-flick path (no <see cref="TouchMove"/> ever crossed the slop, so <see cref="ClaimTouchPan"/>
-    /// never ran). Scroll v3 (plan §3.4/§2.2 "Begin+End, ≤2 samples... seeds Ballistic from the estimator — no click"):
-    /// the dedicated residual-offset-then-fling math is GONE (kernel-owned); this synthesizes a Begin+End contact pair
-    /// so the kernel still sees the gesture at all — <see cref="_panClaimDown"/> (the REAL down event) anchors it, so
-    /// the kernel's resample sees the true elapsed time/displacement, not a synthetic zero-dt jump. Returns true when
-    /// it acted (the caller then suppresses the spurious tap-click); false when the contact stayed within the
-    /// scroll-axis slop (a genuine tap) or has no live scroll target.</summary>
+    /// never ran): this synthesizes a Begin+End contact pair so the handle still sees the gesture at all —
+    /// <see cref="_panClaimDown"/> (the REAL down event) anchors it, so the contact ring sees the true elapsed
+    /// time/displacement, not a synthetic zero-dt jump. Returns true when it acted (the caller then suppresses the
+    /// spurious tap-click); false when the contact stayed within the scroll-axis slop (a genuine tap) or has no live
+    /// scroll target.</summary>
     private bool CompleteUnderSampledPan(in InputEvent e)
     {
-        if (_panTarget.IsNull || !_scene.IsLive(_panTarget) || !_scene.HasScroll(_panTarget) || Scroll is null) return false;
+        if (_panTarget.IsNull || !_scene.IsLive(_panTarget) || !_scene.HasScroll(_panTarget) || ScrollHandleFor is null) return false;
         float axisTravel = _panAxisX ? MathF.Abs(e.PositionPx.X - _panAnchorPx.X) : MathF.Abs(e.PositionPx.Y - _panAnchorPx.Y);
         if (axisTravel < PanSlopPx) return false;   // within the scroll-axis slop → a genuine tap, not an under-sampled flick
-        Scroll.PanClaimed(_panTarget, _panAxisX, in _panClaimDown);
-        Scroll.PanEnd(in e, cancel: false);
+        PanClaimed(_panTarget, _panAxisX, in _panClaimDown, _panClaimDownSec);
+        PanEnd(in e, cancel: false);
         return true;
     }
 
@@ -2458,8 +2388,8 @@ public sealed class InputDispatcher
     /// <summary>Touch up: a captured OnDrag gesture (slider scrub / editor drag-select) delivers its release to that node
     /// — its click handler is the commit edge (WinUI capture-to-release, even when the finger ends outside the node); a
     /// claimed scrollbar thumb-drag releases its per-PointerId <c>_scrollDragNode</c> and lets the bar fade (touch has no
-    /// resting hover, so the contact-duration reveal ends here); a claimed pan ends its kernel contact (<see cref="Scroll"/>
-    /// resolves fling-seed-vs-settle from its own contact history — Scroll v3, plan §3.4); otherwise a below-slop down→up
+    /// resting hover, so the contact-duration reveal ends here); a claimed pan ends its scroll contact (the handle authors
+    /// fling-vs-settle from its contact ring — PlanAuthor.FollowEnd); otherwise a below-slop down→up
     /// over the same node is a tap (the existing click + hyperlink-span path) and releases the pressed visual. Either way
     /// the contact's touch-set hover is cleared (no resting touch hover).</summary>
     private bool TouchUp(in InputEvent e)
@@ -2551,9 +2481,9 @@ public sealed class InputDispatcher
         }
         else if (_panClaimed)
         {
-            // Scroll v3 (plan §3.4): the kernel resolves the release itself (band spring-back vs fling-seed vs settle)
-            // from its own contact history — ScrollInputRouter.PanEnd posts ContactEnd, no release-velocity read here.
-            Scroll?.PanEnd(in e, cancel: false);
+            // The handle authors the release itself (rubber-band spring-back vs fling vs settle) from the contact ring
+            // (ScrollHandle.ContactEnd → PlanAuthor.FollowEnd) — no release-velocity read here.
+            PanEnd(in e, cancel: false);
             _panTarget = NodeHandle.Null;
             _panClaimed = false;
             handled = true;
@@ -2580,7 +2510,9 @@ public sealed class InputDispatcher
                 // raises its ItemContainer tap from OnPointerReleased, so suppressing only InvokeActivation still let a
                 // tap on an artist link select/play the row behind it.
                 int linkSpan = ResolveLinkSpan(up, sameNode: true, e.PositionPx);
+                int rowCell = linkSpan < 0 ? ResolveRowCell(up, sameNode: true, e.PositionPx) : -1;
                 if (linkSpan >= 0) FireLinkSpan(up, linkSpan);
+                else if (rowCell >= 0) FireRowCell(up, rowCell);
                 else
                 {
                     DispatchPointerReleased(up, e.PositionPx);
@@ -2815,79 +2747,7 @@ public sealed class InputDispatcher
         return false;
     }
 
-    // Scroll v3 (plan §3.4): HasWheelHandlerUnder is GONE — it had exactly one caller, the deleted phase-gesture
-    // wheel-fallback classifier (a no-scroller-under-the-contact gesture routing its packets to element wheel
-    // handlers instead of dying). That classifier is explicitly Phase-3/§5.3 territory (the plan's interim contract
-    // for this package accepts a dropped packet instead — see ScrollInputRouter.AccumulatePhaseDelta's remarks);
-    // keeping a zero-caller method around contradicts "no legacy paths, delete obsolete code". Re-add it (unchanged
-    // shape) if Phase 3 needs the probe back.
-
-    // Scroll v3 (plan §3.4): only the ELEMENT-HANDLED drop class survives here — the ancestor-climb drop classes
-    // (no-scroller / cross-axis-only / same-axis-exhausted) lived in the deleted ScrollAxis and are now
-    // ScrollInputRouter's problem (it does its own, simpler, at-edge refusal — no drop-marker diagnostics yet).
-    private const int WheelDropMarker = 0x10;
-    private const int WheelDropElementHandled = 4 << 5;
-    private const int WheelDropHorizontal = 0x100;
-
-    /// <summary>Element-level wheel routing (WinUI PointerWheelChanged bubbling): every enabled WheelBit handler up the
-    /// chain sees the event until one sets Handled, which also stops the enclosing viewport from scrolling.</summary>
-    private bool DispatchWheel(in InputEvent e)
-    {
-        WheelEventArgs? args = null;
-        for (var n = HitTestAny(e.PositionPx); !n.IsNull; n = _scene.Parent(n))
-        {
-            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
-            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.WheelBit) == 0) continue;
-            args ??= new WheelEventArgs { Delta = e.ScrollDelta, DeltaX = e.ScrollDeltaX, Mods = e.Mods };
-            args.Local = LocalPos(n, e.PositionPx);
-            _scene.GetPointerWheel(n)?.Invoke(args);
-            if (args.Handled)
-            {
-                // Drop class 4: the element ate the notch, so no viewport ever scrolls and no seed row is written — in a
-                // capture this looks exactly like a routing miss. Mark it.
-                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                {
-                    var row = FluentGpu.Foundation.ScrollTrace.EncodeWheelDrop((int)n.Raw.Index,
-                        WheelDropMarker | WheelDropElementHandled
-                            | (e.ScrollDelta == 0f && e.ScrollDeltaX != 0f ? WheelDropHorizontal : 0),
-                        e.ScrollDelta != 0f ? e.ScrollDelta : e.ScrollDeltaX,
-                        e.PositionPx.X, e.PositionPx.Y, false);
-                    FluentGpu.Foundation.ScrollTrace.WheelSeed(row.I0, row.I1, row.F0, row.F1, row.F2, row.F3, row.F4);
-                }
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /// <summary><c>Element.WheelTarget</c> routing: walk the hit chain leaf→root for the nearest node naming a wheel
-    /// target (SceneStore's sparse WheelTarget rows — the same node-keyed side-table pattern as HitTestPassThrough /
-    /// BlocksBackgroundScroll, written by the reconciler from the element), stopping at the first scrollable ancestor:
-    /// a notch over a list's OWN rows belongs to <see cref="ScrollInputRouter"/>'s same-axis / at-edge resolution, never
-    /// to a header target further up. The notch is the event's signed device notch (vertical first, then horizontal);
-    /// a Wheel event carrying only delta units (hi-res / synthetic) is taken as fractional notches. The target posts the
-    /// kernel's WheelNotch itself (<see cref="FluentGpu.Scroll.IWheelTarget.WheelNotch"/>). No allocation per event;
-    /// the common no-header scene exits on one int read.</summary>
-    private bool RouteWheelTarget(in InputEvent e)
-    {
-        if (_scene.WheelTargetCount == 0) return false;
-        // Notch-carrying events only: a DIP-only synthetic Wheel event ("scrolls that DIP directly", InputEvent doc)
-        // keeps its router contract and is never re-read as notches over a header.
-        float notches = e.WheelNotch != 0f ? e.WheelNotch : e.WheelNotchX;
-        if (notches == 0f) return false;
-        for (var n = HitTestAny(e.PositionPx); !n.IsNull; n = _scene.Parent(n))
-        {
-            var flags = _scene.Flags(n);
-            if ((flags & NodeFlags.Scrollable) != 0) return false;
-            if ((flags & NodeFlags.Disabled) != 0) continue;
-            if (!_scene.TryGetWheelTarget(n, out var target)) continue;
-            target.WheelNotch(notches);
-            return true;
-        }
-        return false;
-    }
-
-    // ── scrolling (layout-free: write the content's -ScrollOffset transform; never relayout) ──
+    // ── scroll targets (hit-test bridges for ScrollRouter; scroll itself is a plan, posed as a transform) ──
 
     /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover and for resolving
     /// the wheel/pan target).</summary>
@@ -2899,8 +2759,8 @@ public sealed class InputDispatcher
     }
 
     /// <summary>Nearest scrollable SELF-or-ancestor of <paramref name="node"/> (a pure scene walk, no hit-test) — the
-    /// keyboard-scroll target for <c>OnKey</c>'s arrow/PageUp/PageDown/Home/End routing to <see cref="ScrollInputRouter.Key"/>
-    /// (plan §4: "the nearest scrollable self-or-ancestor of the focused node").</summary>
+    /// keyboard-scroll target for <c>OnKey</c>'s arrow/PageUp/PageDown/Home/End routing to <see cref="ScrollKey"/>
+    /// (the nearest scrollable self-or-ancestor of the focused node).</summary>
     private NodeHandle NearestScrollableSelfOrAncestor(NodeHandle node)
     {
         for (var n = node; !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
@@ -2913,8 +2773,7 @@ public sealed class InputDispatcher
     /// cross-axis inner scroller (a horizontal shelf must not eat the vertical page's pan) and past a same-axis
     /// scroller already at full extent. Strictly same-axis — no opposite-axis fallback here (see
     /// <see cref="ResolveScrollTarget"/>, which adds it). Null ⇒ caller lets the pan fall through. Used by
-    /// <see cref="ResolveScrollTarget"/> — the hit-test bridge <see cref="ScrollInputRouter"/> resolves latch/wheel
-    /// targets through (Scroll v3, plan §3.4).</summary>
+    /// <see cref="ResolveScrollTarget"/> — the hit-test bridge wheel/contact routing resolves its target through.</summary>
     public NodeHandle ScrollableUnderForAxis(Point2 p, bool wantHorizontal)
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
@@ -2961,7 +2820,7 @@ public sealed class InputDispatcher
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0
             && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return;
-        if (!ClipRectAdmits(in np, local)) return;
+        if (!ClipRectAdmits(in np, local, hitH)) return;
 
         // An opaque covering surface (a modal card, a light-dismiss plate) is a Z-STACK SIBLING of whatever page
         // content it visually sits on top of, not an ancestor — this walk otherwise cannot tell it apart from a
@@ -2986,12 +2845,11 @@ public sealed class InputDispatcher
             ConsiderContainingScrollers(c, childLocal, netSx, netSy, wantHorizontal, ref overflow, ref any);
     }
 
-    /// <summary>Scroll v3 (plan §3.4) hit-test bridge: resolve the nearest same-axis scrollable ancestor under a
-    /// window-space point for <see cref="ScrollInputRouter"/> — same-axis ancestor with room to move
-    /// (<see cref="ScrollableUnderForAxis"/>) first, then the geometric same-axis containing scroller (a later-sibling
-    /// plate covering a list, <see cref="ContainingScrollerForAxis"/>), then the OPPOSITE axis of both (a standalone
-    /// cross-axis carousel), else null. Wired to the router's <c>ResolveAxisTarget</c> delegate by the <see cref="Scroll"/>
-    /// property setter — see that property's remarks for why the router needs this bridge at all.</summary>
+    /// <summary>Hit-test bridge: resolve the scroller under a window-space point that a wheel notch / contact stream
+    /// starts on, before <see cref="FluentGpu.Scroll.Runtime.ScrollRouter"/> latches and chains it — same-axis ancestor
+    /// with room to move (<see cref="ScrollableUnderForAxis"/>) first, then the geometric same-axis containing scroller
+    /// (a later-sibling plate covering a list, <see cref="ContainingScrollerForAxis"/>), then the OPPOSITE axis of both
+    /// (a standalone cross-axis carousel), else null.</summary>
     internal NodeHandle ResolveScrollTarget(Point2 p, bool horizontal)
     {
         NodeHandle vp = ScrollableUnderForAxis(p, horizontal);
@@ -3002,17 +2860,6 @@ public sealed class InputDispatcher
         if (!vp.IsNull) return vp;
         return ContainingScrollerForAxis(p, !horizontal);
     }
-
-    /// <summary>True while a latched touch contact or phase-producer gesture is live (Scroll v3 forwarding — the real
-    /// state lives in ScrollInputRouter now). Test/diagnostic observability for the scroll gates.</summary>
-    public bool GestureActive => Scroll?.GestureActive ?? false;
-
-    // Scroll v3 (plan §3.4): CancelGesture/OnScrollPhase/AssertInPhaseTick/AccumulateContactDelta/ResolveLatchTarget/
-    // LatchGestureTarget/TryRelatchFromWheelFallback/ApplyMomentumDelta/FeedGestureVelocitySide/RecordGestureSample/
-    // ContactSampleSec/EndScrollGesture are ALL GONE — the whole phase-tagged-producer state machine (the singleton
-    // "_sg*" latch, the wheel-fallback classifier, the single-writer guard) now lives in
-    // FluentGpu.Scroll.ScrollInputRouter.Phase/Wheel (the dispatch switch calls Scroll?.Phase(in e) directly — see the
-    // InputKind.ScrollBegin/ScrollDelta/ScrollEnd case above) and ScrollKernel (single-writer by construction).
 
 
     /// <summary>Nearest self-or-ancestor viewport under <paramref name="p"/> whose <see cref="ScrollState.Zoomable"/> opt-in
@@ -3205,10 +3052,6 @@ public sealed class InputDispatcher
     /// <summary>Diagnostic only: the topmost hit-test node at a point (the same walk wheel/click routing starts from).</summary>
     public NodeHandle DiagHitTest(Point2 p) => HitTestAny(p);
 
-    // Scroll v3 (plan §3.4): DiagScrollAt/ScrollAt/ScrollAxis/TryScrollNode/ScrollBy/SetScrollOffset/ChainFlingTarget/
-    // ApplyScrollPosition are ALL GONE (DiagScrollAt had no external callers; the rest was the whole wheel-routing +
-    // offset-write chokepoint). The dispatch switch’s InputKind.Wheel case now calls Scroll?.Wheel(in e) directly, which
-    // does its own same-axis ancestor resolution + at-edge test (ScrollInputRouter.WheelAxis) and posts WheelNotch.
     private bool TryScrollbarPointerDown(Point2 p)
     {
         var n = ScrollableUnder(p);
@@ -3217,13 +3060,12 @@ public sealed class InputDispatcher
         var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
         if (!InScrollbarLane(local, in m)) return false;
 
-        // Scrollbar grab over a Ballistic/Driven viewport zeros its motion first (plan §3.4): the thumb drag /
-        // track-click must own the offset, not fight a live fling/chase. (Also reached from the touch path's
+        // Scrollbar grab over a moving viewport stops it first: the thumb drag / track-click must own the offset, not
+        // fight a live fling/glide. (Also reached from the touch path's
         // TouchDown, so a touch scrollbar grab cancels the coast too.)
-        Scroll?.Cancel(n);
+        ScrollStop(n);
         Chrome?.SetPointerOver((int)n.Raw.Index, true, true);
 
-        ref ScrollState sc = ref _scene.ScrollRef(n);
         float axis = AxisPos(local, in m);
         if (axis >= m.ThumbStart && axis <= m.ThumbStart + m.ThumbLen)
         {
@@ -3232,20 +3074,16 @@ public sealed class InputDispatcher
             return true;
         }
 
-        // Scroll v3 (plan §3.4/§3.2): a track/button click posts an ABSOLUTE target through ThumbSet — an immediate,
-        // no-spring jump (the legacy WheelAnimating chase-to-page glide is Phase 5's ScrollController.ScrollTo(Glide)
-        // territory; interim simplification, documented). Small-change (arrow buttons) and page (track click) both
-        // clamp against the SAME scaled extent ThumbSet's own kernel-side clamp uses.
-        float off = m.Horizontal ? sc.OffsetX : sc.OffsetY;
-        float target;
-        if (m.Button > 1f && axis < m.Button) target = off - ScrollbarSmallChange;
-        else if (m.Button > 1f && axis >= m.Axis - m.Button) target = off + ScrollbarSmallChange;
+        // A track click pages and an arrow button steps a line — both as glides (scroll rework §4); the plan clamps.
+        float delta;
+        if (m.Button > 1f && axis < m.Button) delta = -ScrollbarSmallChange;
+        else if (m.Button > 1f && axis >= m.Axis - m.Button) delta = ScrollbarSmallChange;
         else
         {
             float page = MathF.Max(ScrollbarSmallChange, m.Viewport * 0.875f);
-            target = axis < m.ThumbStart ? off - page : off + page;
+            delta = axis < m.ThumbStart ? -page : page;
         }
-        Scroll?.ThumbSet(n, Math.Clamp(target, 0f, m.Max));
+        ScrollBy(n, delta);
         return true;
     }
 
@@ -3263,8 +3101,8 @@ public sealed class InputDispatcher
         float thumbStart = Math.Clamp(axis - _scrollDragGrab, m.TrackStart, m.TrackStart + m.Travel);
         float fraction = Math.Clamp((thumbStart - m.TrackStart) / MathF.Max(1f, m.Travel), 0f, 1f);
 
-        // Scroll v3 (plan §3.2 "scrollbar drag → ThumbSet(vp, offset)"): 1:1 thumb tracking, immediate, no spring.
-        Scroll?.ThumbSet(_scrollDragNode, fraction * m.Max);
+        // Thumb drag: a Hold at the mapped offset per pointer sample (scroll rework §4) — 1:1, no spring.
+        ThumbSet(_scrollDragNode, fraction * m.Max);
         Chrome?.SetPointerOver((int)_scrollDragNode.Raw.Index, true, true);
         return true;
     }
@@ -3286,8 +3124,8 @@ public sealed class InputDispatcher
         float cross = horizontal ? bounds.H : bounds.W;
         if (axis <= 1f || cross <= 1f) return false;
 
-        // Scroll v3 (plan §3.1): ExpandT moved off ScrollState onto SceneStore.ScrollChrome (a ScrollBarChromeTable) —
-        // read it directly (the same table ScrollBarChrome.Tick writes; SceneStore is shared, so no bridge is needed).
+        // The bar's expansion lives in SceneStore.ScrollChrome (the ScrollBarChromeTable the host's ScrollBarChrome ticker
+        // writes; SceneStore is shared, so it is read directly).
         float expand = Math.Clamp(_scene.ScrollChrome.Get((int)n.Raw.Index).ExpandT, 0f, 1f);
         float button = ScrollbarSize * expand;
         float trackStart = button;
@@ -3591,6 +3429,37 @@ public sealed class InputDispatcher
         PublishCursor(HitLinkSpan(node, local) >= 0 ? CursorId.Hand : ResolveCursorWalk(node));
     }
 
+    /// <summary>The row-cell index under a node-local point, or −1 (the <c>HitLinkSpan</c> shape generalized from
+    /// shaped-text hit rects — <c>SpanRunRects</c> — to a <c>ListRowEl</c>'s own row-local cell <see cref="RectF"/>s,
+    /// scroll-rework Wave 0.E). No seam/measure touch here — the rects are pure data the reconciler already copied
+    /// into <see cref="SceneStore.TryGetRowCells"/>'s scene-owned array.</summary>
+    private int HitRowCell(NodeHandle node, Point2 local)
+    {
+        if (!_scene.TryGetRowCells(node, out var cells, out _, out _)) return -1;
+        for (int i = 0; i < cells.Length; i++)
+        {
+            var rr = cells[i].Rect;
+            if (local.X >= rr.X && local.X < rr.X + rr.W && local.Y >= rr.Y && local.Y < rr.Y + rr.H) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>The exact <c>ResolveLinkSpan</c> shape: a row cell owns the WHOLE gesture (release/tap) only when the
+    /// release lands on the SAME node the press started on and that node actually carries row cells.</summary>
+    private int ResolveRowCell(NodeHandle up, bool sameNode, Point2 positionPx)
+    {
+        if (!sameNode || up.IsNull) return -1;
+        if ((_scene.Interaction(up).HandlerMask & InteractionInfo.RowCellsBit) == 0) return -1;
+        return HitRowCell(up, PointToLocal(up, positionPx));
+    }
+
+    /// <summary>Fires <c>ListRowEl.OnCellClick</c> with the resolved cell index (index-resolved, like
+    /// <c>SpanTextEl.OnSpanClick</c> — a row cell carries no per-cell closure of its own, only ONE node-level handler).</summary>
+    private void FireRowCell(NodeHandle up, int cell)
+    {
+        if (_scene.TryGetRowCellClickHandler(up, out var onCellClick)) onCellClick(cell);
+    }
+
     private void OnKey(in InputEvent e)
     {
         int key = e.KeyCode;
@@ -3704,9 +3573,9 @@ public sealed class InputDispatcher
                 if (args.Handled) return;
             }
 
-            // Scroll v3 (plan §4): no element handler consumed the key — arrow/PageUp/PageDown/Home/End glide the
-            // nearest scrollable self-or-ancestor of the focused node via ScrollInputRouter.Key.
-            if (Scroll is not null && Scroll.Key(in e, NearestScrollableSelfOrAncestor(_focused))) return;
+            // No element handler consumed the key — arrow/PageUp/PageDown/Home/End glide the nearest scrollable
+            // self-or-ancestor of the focused node (scroll rework §4).
+            if (ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
         }
 
         // Unhandled Escape is the app-wide "leave keyboard focus" gesture. Controls and overlays get first refusal
@@ -4081,7 +3950,7 @@ public sealed class InputDispatcher
         return _hitAbs.X >= pr.X && _hitAbs.X < pr.X + pr.W && _hitAbs.Y >= pr.Y && _hitAbs.Y < pr.Y + pr.H;
     }
 
-    /// <summary>The INPUT dual of the STICKY viewport cut (<c>ScrollBindDsl.ClipTopAtViewport</c>): a point above the
+    /// <summary>The INPUT dual of the STICKY viewport cut (<c>.StickyClip(inset)</c>, a ClipTop <c>ScrollEffect</c>): a point above the
     /// cut is outside every pixel this node and its subtree drew, so it takes no hit — exactly what
     /// <see cref="NodeFlags.ClipsToBounds"/> already does for the box.
     ///
@@ -4103,12 +3972,18 @@ public sealed class InputDispatcher
     /// opening menu reject the click that opened it. The sticky cut identifies itself by its sentinel sides
     /// (<see cref="NodePaint.StickyClipSpan"/>): a LINE across the node, not a box.</para>
     ///
+    /// <para><b>The collapse cut.</b> A leading <c>.Collapse</c>'s <see cref="NodePaint.CollapseCut"/> is the same kind
+    /// of line, at the BOTTOM: its top is open too, and a point at or below the node's presented edge
+    /// (<paramref name="hitH"/> — the presented height, exact, not the rect's float-rounded bottom) is outside every pixel
+    /// the collapsing hero drew — the rows beneath the compact band take it, with or without <c>ClipToBounds</c>.</para>
+    ///
     /// <para><paramref name="local"/> is the point in the node's own untransformed local space — the same space
     /// <c>ClipRect</c> is authored in (the recorder maps it with the node's world transform).</para></summary>
-    private static bool ClipRectAdmits(in NodePaint np, Point2 local)
+    private static bool ClipRectAdmits(in NodePaint np, Point2 local, float hitH)
     {
         var c = np.ClipRect;
         if (c.IsInfinite || c.X > -NodePaint.StickyClipSpan) return true;
+        if (NodePaint.IsCollapseCut(in c)) return local.Y < hitH;
         return local.Y >= c.Y;
     }
 
@@ -4212,7 +4087,7 @@ public sealed class InputDispatcher
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0
             && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return NodeHandle.Null;
-        if (!ClipRectAdmits(in np, local)) return NodeHandle.Null;
+        if (!ClipRectAdmits(in np, local, hitH)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
@@ -4267,7 +4142,7 @@ public sealed class InputDispatcher
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0
             && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return NodeHandle.Null;
-        if (!ClipRectAdmits(in np, local)) return NodeHandle.Null;
+        if (!ClipRectAdmits(in np, local, hitH)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
@@ -4314,6 +4189,10 @@ public sealed class InputDispatcher
                 // the gaps around the link text fall through to the container beneath (the list row), so clicking the
                 // empty space next to an artist/album link selects the ROW (WinUI inline-Hyperlink hit shape).
                 else if ((ii.HandlerMask & InteractionInfo.SpanLinksBit) != 0 && HitLinkSpan(node, local) >= 0)
+                    result = node;
+                // A RowCells-only ListRowEl (OnCellClick, no other whole-row handler) is hit ONLY over a cell rect —
+                // the SAME SpanLinks shape, generalized from shaped-text hit rects to plain row-local cell RectFs.
+                else if ((ii.HandlerMask & InteractionInfo.RowCellsBit) != 0 && HitRowCell(node, local) >= 0)
                     result = node;
             }
         }

@@ -170,7 +170,7 @@ sealed class SpringProbe : Component
     }
 }
 
-// Diagnostic root for FG_PROBE=marquee: a fixed 150px-wide stretch column holding a Marquee with a long title.
+// Diagnostic root for --probe: a fixed 150px-wide stretch column holding a Marquee with a long title.
 sealed class MarqueeProbeRoot : Component
 {
     public override Element Render() => new BoxEl
@@ -1041,7 +1041,7 @@ sealed class FastFlingProbe : Component
         => Virtual.List(N, RowH,
                renderItem: i => new BoxEl { Height = RowH, Fill = ColorF.FromRgba(30, 30, 30) },
                keyOf: i => "ff" + i)
-           with { Width = 300, Height = 400, Overscan = 40 };
+           with { Width = 300, Height = 400};
 }
 
 // A deliberately stateful/custom layout that keeps returning its OLD upper window bound after ItemCount shrinks.
@@ -1153,7 +1153,8 @@ sealed class SlotPoolOverscanProbe : Component
 {
     public const int N = 2_000;
     public const float RowH = 40f;
-    public readonly Signal<int> Overscan = new(12);
+    /// <summary>The viewport height: shrinking it at rest shrinks the realized window (surplus slots park), growing it takes them back.</summary>
+    public readonly Signal<float> Vh = new(400f);
     public int TemplateCalls;
     public override Element Render()
         => Virtual.ListBound(N, RowH, idx =>
@@ -1164,8 +1165,8 @@ sealed class SlotPoolOverscanProbe : Component
                    Height = RowH, Focusable = true, Fill = ColorF.FromRgba(30, 30, 30),
                    Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + idx.Value) }],
                };
-           }, overscan: Overscan.Value)
-           with { Width = 300, Height = 400 };
+           })
+           with { Width = 300, Height = Vh.Value };
 }
 
 // Slot pool alloc gate: BoundVirtualFillOnlyProbe's shape (no bound text ⇒ no per-recycle string) plus a rowBind
@@ -1214,7 +1215,7 @@ sealed class BoundOverlapProbe : Component
                     };
                 },
                 RepeatLayout.Stack(40f),
-                new ListOptions { Overscan = 0, Controller = Controller }),
+                new ListOptions { Controller = Controller }),
         ],
     };
 }
@@ -1260,7 +1261,7 @@ sealed class NestedRailProbe : Component
     {
         Element rail = Show.Value
             ? Virtual.List(400, 60f, i => new BoxEl { Width = 60f, Height = 100f, Fill = ColorF.FromRgba(40, 40, 40) }, keyOf: i => "c" + i)
-                  with { Horizontal = true, Width = 300, Height = 120, Overscan = 6 }
+                  with { Horizontal = true, Width = 300, Height = 120}
             : new BoxEl { Width = 300, Height = 120 };
         return new BoxEl { Width = 320, Height = 140, Children = [rail] };
     }
@@ -1478,13 +1479,10 @@ sealed class ColdStaggerRemountProbe : Component
 {
     public readonly Signal<int> Tier = new(0);
     public int TemplateCalls;
-    bool _listRealizedOnce;
 
     public override Element Render()
     {
         int tier = Tier.Value;
-        bool staggerCold = !_listRealizedOnce;
-        _listRealizedOnce = true;
         return new BoxEl
         {
             Width = 400, Height = 320, Direction = 1,
@@ -1499,7 +1497,7 @@ sealed class ColdStaggerRemountProbe : Component
                         {
                             TemplateCalls++;
                             return new BoxEl { MinHeight = 40f, Children = [new TextEl("row") { Size = 13f }] };
-                        }, RepeatLayout.Stack(40f), new ListOptions { Entrance = new EntranceOptions { StaggerColdRealize = staggerCold } }),
+                        }, RepeatLayout.Stack(40f), new ListOptions()),
                     ],
                 },
             ],
@@ -1507,84 +1505,6 @@ sealed class ColdStaggerRemountProbe : Component
     }
 }
 
-/// <summary>ONE heavy row, as a COMPONENT — which is what makes it heavy. A bound list's rows are prototype-cached
-/// when they are plain element trees: the first row mounts its shape and every sibling reuses it, so a "heavy" probe
-/// built from 288 identical boxes measures ~20 nodes a row and proves nothing. Wavee's track row and sidebar row are
-/// components (ExpandableRowSlot, RowOrRecContent, SidebarPaneSlot) that RUN per row, and a component is mounted, not
-/// cloned. This is the smallest thing with that property.</summary>
-sealed class HeavyRowComponent : Component
-{
-    public const int Leaves = 88;
-
-    public override Element Render()
-    {
-        var kids = new Element[Leaves + 1];
-        kids[0] = new TextEl("row") { Size = 12f };
-        for (int k = 0; k < Leaves; k++)
-            kids[k + 1] = new BoxEl { Width = 1f + k * 0.01f, Height = 1f, Fill = ColorF.FromRgba((byte)(20 + k % 200), 20, 20) };
-        return new BoxEl { MinHeight = HeavyHaloProbe.RowH, Height = HeavyHaloProbe.RowH, Children = kids };
-    }
-}
-
-// E4c — the HEAVY-row halo shape. Wavee's track row is ~90 scene nodes; the engine's steady realize pool is counted in
-// ROWS (12/frame), so a viewport of rows like these can be handed nine frame budgets of mounting in a single paint —
-// and the at-rest eager catch-up handed it the whole overscan halo at once.
-//
-// StaggerColdRealize is deliberately OFF, which is what makes the shape reachable at all. The cold ramp caps
-// MATERIALIZATION inside the desired window, so a ramping viewport is protected from the burst as a side effect; the
-// lists that actually take it are the ones with no ramp — Wavee's track list consumes a ONE-SHOT cold stagger and
-// scrolls with it false ever after, and the album arm never sets it. Those are exactly the lists whose per-row node
-// cost the steady pool has to be denominated in, which is why the reconciler now folds the node measurement on every
-// grow rather than only on a ramping one.
-sealed class HeavyHaloProbe : Component
-{
-    public const int N = 2_000;
-    public const float RowH = 40f;
-    public const int Overscan = 40;
-    public const int LeavesPerRow = HeavyRowComponent.Leaves;
-
-    public override Element Render()
-    {
-        return new BoxEl
-        {
-            Width = 400, Height = 400,
-            Children =
-            [
-                ItemsView.CreateBound(N, scope => Embed.Comp(() => new HeavyRowComponent()),
-                RepeatLayout.Stack(RowH),
-                new ListOptions { Overscan = Overscan }),
-            ],
-        };
-    }
-}
-
-// E4c, second half — the same heavy-row shape routed down the EXTENDED realize path. Declaring ContentType (which the
-// Wavee sidebar does, to pool its several row shapes) sends a list to RealizeBoundWindowExtended, which had no cold
-// ramp at all: StaggerColdRealize was accepted and then ignored, so the sidebar's whole cold window — ~50 slots, ~1 100
-// nodes — landed in one paint and was the single worst frame of a launch.
-sealed class ExtendedRampProbe : Component
-{
-    public const int N = 400;
-    public const float RowH = 40f;
-    public const int LeavesPerRow = HeavyRowComponent.Leaves;
-
-    public override Element Render() => new BoxEl
-    {
-        Width = 400, Height = 400,
-        Children =
-        [
-            ItemsView.CreateBound(N, scope => Embed.Comp(() => new HeavyRowComponent()),
-            RepeatLayout.Stack(RowH),
-            new ListOptions
-            {
-                Overscan = 4,
-                // What routes this list to the extended realizer at all — two pooled row shapes, the sidebar's shape.
-                ContentType = i => i % 2,
-                Entrance = new EntranceOptions { StaggerColdRealize = true },
-            }),
-        ],
-    };
-}
 
 // Detail-resize-flicker Fix-2 gate: a warming staggered list must keep refilling during modal-loop keep-alive paints
 // even when ambient loop animation is the only other wake reason.
@@ -1596,7 +1516,7 @@ sealed class ModalWarmProbe : Component
         Children =
         [
             ItemsView.CreateBound(200, _ => new BoxEl { MinHeight = 40f, Fill = ColorF.FromRgba(30, 30, 30) },
-                RepeatLayout.Stack(40f), new ListOptions { Entrance = new EntranceOptions { StaggerColdRealize = true } }),
+                RepeatLayout.Stack(40f), new ListOptions()),
         ],
     };
 }
@@ -1622,7 +1542,7 @@ sealed class ListOptProbe : Component
     public override Element Render()
     {
         var layout = ExplicitLayout ?? RepeatLayout.Stack(Extent);
-        var opts = Options ?? new ListOptions { Overscan = Overscan, Grow = 1f };
+        var opts = Options ?? new ListOptions { Grow = 1f };
         Element list = Bound
             ? ItemsView.CreateBound(Count, scope =>
               {
@@ -1785,7 +1705,7 @@ sealed class TouchFlingSettleProbe : Component
 // sets ScrollState.SnapInterval = RowH on the viewport after mount: the reconciler patches Orientation/ItemCount but its
 // snap patch is DECLARATION-GATED — it writes the snap fields only for an element that declares Snap (SnapSpec), and this
 // probe declares none, so a post-mount SnapInterval survives every reconcile. A flick then retargets its
-// friction decay to land EXACTLY on a RowH multiple (ScrollSnap + the ScrollKernel's SnapTarget physics). Large content keeps the snap target
+// fling to land EXACTLY on a RowH multiple (SnapTargets.ResolveFling re-solves the decay at authoring). Large content keeps the snap target
 // interior (never clamp-bounded), so the landing is purely the snap math. Viewport = Scene.Root.
 sealed class SnapFlingProbe : Component
 {
@@ -1834,11 +1754,9 @@ sealed class ScrollFlipProbe : Component
     }
 }
 
-// scroll-v3 HeadlessScrollProducer: scripts all six input kinds (contact begin/update/end, OS momentum,
-// discrete wheel notch, pointer-down-cancel) with SYNTHETIC timestamps into the headless Pal ring, and drives frames.
-// The frame clock the ScrollKernel resamples against is now built entirely inside AppHost's own Paint step from its
-// internal headless accumulator (FixedFrameTimeSource) — a caller no longer forces packet-clock/frame-clock alignment
-// by hand (the old FrameQpcSec test hook on the deleted ScrollIntegrator is gone). Packet stamps live on the ms domain
+// HeadlessScrollProducer: scripts touchpad contact streams (begin/sample/end), discrete wheel notches and pointer-downs
+// with SYNTHETIC timestamps into the headless Pal ring, and drives frames. The plan clock is AppHost's own headless
+// accumulator (FixedFrameTimeSource) — a caller never forces packet-clock/frame-clock alignment by hand. Packet stamps live on the ms domain
 // (QpcTicks=0 ⇒ the router falls back to TimestampMs/1000 for ContactMove's T field); FrameMs is kept here only as the
 // caller-visible "how far apart are my scripted packets" clock for gates that want explicit control over packet
 // spacing — it no longer feeds anything on the host side. No wall clock; 0-alloc per event (record-struct queue only).
@@ -1850,30 +1768,27 @@ sealed class HeadlessScrollProducer
     byte _seq;
     public uint Ms;          // per-packet stamp clock (ms)
     public double FrameMs;   // frame-present clock → FrameQpcSec (ms)
-    public byte Device = (byte)ScrollDeviceClass.WheelHiResFallback;   // fallback ⇒ a hard lift self-flings (§4.3)
+    public byte Device = DeviceClassIgnored;   // fallback ⇒ a hard lift self-flings (§4.3)
     public uint PointerId = 9;
 
     public HeadlessScrollProducer(HeadlessWindow win, AppHost host, Point2 at, uint startMs = 5000)
     { _win = win; _host = host; _at = at; Ms = startMs; FrameMs = startMs; }
 
-    InputEvent Ph(InputKind k, float dyDip) => new(k, _at, 0, 0, ScrollDelta: dyDip,
+    InputEvent Ph(FluentGpu.Scroll.Runtime.ScrollGesture k, float dyDip) => ScrollPhaseEvent(k, _at, 0, 0, ScrollDelta: dyDip,
         Pointer: PointerKind.Touchpad, TimestampMs: Ms, PointerId: PointerId, ScrollPhaseSeq: _seq++, DeviceClassRaw: Device);
 
-    public void ContactBegin(float dyDip = 0f) => _win.QueueInput(Ph(InputKind.ScrollBegin, dyDip));
-    public void ContactUpdate(float dyDip) => _win.QueueInput(Ph(InputKind.ScrollDelta, dyDip));
-    public void ContactEnd() => _win.QueueInput(Ph(InputKind.ScrollEnd, 0f));
-    public void WheelNotch(float notches) => _win.QueueInput(new InputEvent(InputKind.Wheel, _at, 0, 0,
+    public void ContactBegin(float dyDip = 0f) => _win.QueueInput(Ph(FluentGpu.Scroll.Runtime.ScrollGesture.Begin, dyDip));
+    public void ContactUpdate(float dyDip) => _win.QueueInput(Ph(FluentGpu.Scroll.Runtime.ScrollGesture.Sample, dyDip));
+    public void ContactEnd() => _win.QueueInput(Ph(FluentGpu.Scroll.Runtime.ScrollGesture.End, 0f));
+    public void WheelNotch(float notches) => _win.QueueInput(WheelEvent(_at, 0, 0,
         Pointer: PointerKind.Mouse, WheelNotch: notches, TimestampMs: Ms));
     public void PointerDownAt(Point2 p, PointerKind kind = PointerKind.Mouse, uint id = 0) =>
         _win.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0, Pointer: kind, TimestampMs: Ms, PointerId: id));
 
-    /// <summary>Present one frame, then advance the packet-spacing clock by <paramref name="dtMs"/>. Folds this frame's
-    /// offset-write count into the single-writer audit. (The host's own <c>ScrollClock</c> is built internally each
-    /// frame from its headless accumulator — no explicit clock hand-off from here any more.)</summary>
+    /// <summary>Present one frame, then advance the packet-spacing clock by <paramref name="dtMs"/>.</summary>
     public FrameStats Frame(float dtMs)
     {
         var f = _host.RunFrame();
-        FluentGpu.Foundation.ScrollTrace.AuditResetFrame();
         FrameMs += dtMs;
         return f;
     }
@@ -3091,28 +3006,81 @@ sealed class ForAllocProbe : Component
 // The deps signal (Key) re-keys the resource; the loader parks a controllable TaskCompletionSource per load so the gate
 // completes them in any order (epoch-ordering) or with an exception (refresh-failure). ObserveCancellation=false makes a
 // superseded load's completion still arrive (so the EPOCH guard — not the token — is what drops it).
+//
+// Race-free handoff between the gate (UI thread) and the loaders (pool threads):
+//   • Load(i) — the i-th load's gate, published through a per-index TaskCompletionSource the loader completes AFTER
+//     creating it, so the gate never reads a List mid-Add from another thread. Waiting on it is bounded by a wall-clock
+//     hang guard only.
+//   • SettlesRun — the resource cell marshals every completion (value OR error) to the UI thread through
+//     HostDispatch.Post; the probe provides a counting poster to its body, so SettlesRun counts completions that have
+//     ACTUALLY been delivered (Settle ran, whether it landed or was dropped by the epoch guard). PumpUntilSettled waits
+//     for that — not a frame count: a SetResult that wins the race against the loader's `await` resumes the loader on
+//     the pool thread, which posts whenever it is next scheduled.
 sealed class ResourceProbe : Component
 {
+    public const int MaxLoads = 8;
+    public const int HangGuardMs = 10_000;   // a hang guard only — every wait below ends on the real event
+
     public readonly Signal<int> Key = new(0);
     public ResourceOptions Options = ResourceOptions.Default;
     public bool ObserveCancellation = true;
-    public readonly List<TaskCompletionSource<string>> Gates = new();
-    public readonly List<int> StartedKeys = new();
     public Resource<string> Res;
+    public int SettlesRun;                    // UI thread only (incremented inside the posted action)
+
+    private readonly TaskCompletionSource<TaskCompletionSource<string>>[] _loads = NewLoadSlots();
+    private int _started;
+    private Action<Action>? _countingPost;
+
+    private static TaskCompletionSource<TaskCompletionSource<string>>[] NewLoadSlots()
+    {
+        var a = new TaskCompletionSource<TaskCompletionSource<string>>[MaxLoads];
+        for (int i = 0; i < a.Length; i++) a[i] = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        return a;
+    }
+
+    /// <summary>The <paramref name="index"/>-th load's gate, once that loader has started (throws on the hang guard).</summary>
+    public TaskCompletionSource<string> Load(int index)
+    {
+        if (!_loads[index].Task.Wait(HangGuardMs)) throw new TimeoutException($"resource load #{index} never started");
+        return _loads[index].Task.Result;
+    }
+
+    /// <summary>Pump frames until <paramref name="count"/> completions have been delivered to the UI thread (Settle
+    /// ran). False only if the hang guard expires.</summary>
+    public bool PumpUntilSettled(AppHost host, int count)
+    {
+        long deadline = Environment.TickCount64 + HangGuardMs;
+        while (SettlesRun < count)
+        {
+            if (Environment.TickCount64 > deadline) return false;
+            host.RunFrame();
+        }
+        return true;
+    }
 
     public override Element Render()
     {
-        int k = Key.Value;   // subscribe → a deps change re-renders and reloads the resource on the new key
-        Res = UseResource(async ct =>
+        var hostPost = UsePost();
+        _countingPost ??= a => hostPost(() => { a(); SettlesRun++; });
+        return Ctx.Provide<Action<Action>?>(HostDispatch.Post, _countingPost, Embed.Comp(() => new Body(this)));
+    }
+
+    private sealed class Body(ResourceProbe p) : Component
+    {
+        public override Element Render()
         {
-            var tcs = new TaskCompletionSource<string>();
-            lock (Gates) { Gates.Add(tcs); StartedKeys.Add(k); }
-            System.Threading.CancellationTokenRegistration reg = default;
-            if (ObserveCancellation) reg = ct.Register(() => tcs.TrySetCanceled());
-            try { return await tcs.Task.ConfigureAwait(false); }
-            finally { reg.Dispose(); }
-        }, seed: "", deps: k, options: Options);
-        return new BoxEl();
+            int k = p.Key.Value;   // subscribe → a deps change re-renders and reloads the resource on the new key
+            p.Res = UseResource(async ct =>
+            {
+                var tcs = new TaskCompletionSource<string>();
+                p._loads[Interlocked.Increment(ref p._started) - 1].SetResult(tcs);
+                System.Threading.CancellationTokenRegistration reg = default;
+                if (p.ObserveCancellation) reg = ct.Register(() => tcs.TrySetCanceled());
+                try { return await tcs.Task.ConfigureAwait(false); }
+                finally { reg.Dispose(); }
+            }, seed: "", deps: k, options: p.Options);
+            return new BoxEl();
+        }
     }
 }
 
@@ -4071,8 +4039,18 @@ sealed class MediaPlayerHostProbe : Component
     public IOverlayService? Service;
     public required IMediaPlayer Player;
     public float HideMs = 200f;
-    /// <summary>Forwarded to <c>MediaPlayerElement.DragMovesWindow</c> (the pop-out's drag-the-picture gesture gates).</summary>
-    public bool DragMovesWindow;
+    /// <summary>Forwarded to <c>MediaPlayerElement.SuppressTransport</c> — a host that draws its own on-media chrome
+    /// instead of the element's transport (the PlayerChromeFeed gates).</summary>
+    public bool SuppressTransport;
+    /// <summary>Forwarded to <c>MediaPlayerElement.ChromeFeed</c> — the activity seam a suppressed surface's host uses
+    /// to drive the chrome machine (see PlayerChromeFeed.cs). Null when the gate does not need it.</summary>
+    public FluentGpu.Controls.Media.PlayerChromeFeed? ChromeFeed;
+    /// <summary>Forwarded to <c>MediaPlayerElement.ChromeVisibleOut</c> — the ONE published visibility signal a gate
+    /// reads when the element draws no transport of its own to probe through the accessibility tree.</summary>
+    public readonly Signal<bool> ChromeVisible = new(true);
+    /// <summary>Mounts/unmounts the inner <c>MediaPlayerElement</c> — a gate flips this to false to prove a
+    /// PlayerChromeFeed call is inert once the element it drove has unmounted.</summary>
+    public readonly Signal<bool> Mounted = new(true);
     public override Element Render()
         => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new MediaPlayerHostInner(this)) });
 }
@@ -4084,14 +4062,18 @@ sealed class MediaPlayerHostInner : Component
     public override Element Render()
     {
         _p.Service = UseContext(Overlay.Service);
+        bool mounted = _p.Mounted.Value;
         return new BoxEl
         {
             Width = 480, Height = 300,
-            Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
-            {
-                Player = _p.Player, TransportControlsHideDelayMs = _p.HideMs, AutoHideTransportControls = true,
-                DragMovesWindow = _p.DragMovesWindow,
-            })],
+            Children = mounted
+                ? [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
+                {
+                    Player = _p.Player, TransportControlsHideDelayMs = _p.HideMs, AutoHideTransportControls = true,
+                    SuppressTransport = _p.SuppressTransport,
+                    ChromeFeed = _p.ChromeFeed, ChromeVisibleOut = _p.ChromeVisible,
+                })]
+                : [],
         };
     }
 }
@@ -4498,7 +4480,7 @@ sealed class W1SliderTipProbe : Component
     });
 }
 
-// FG_PROBE=ranged-tooltip: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation lever).
+// --probe-tooltip: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation lever).
 // The thumb follows the scrub via the compositor bind regardless of onChange — one code path (the unified Slider.Create).
 sealed class RangedTooltipProbeRoot : Component
 {
@@ -4548,7 +4530,7 @@ sealed class SliderUnifiedProbe : Component
     });
 }
 
-/// <summary>FG_PROBE=titlebar-resize root — the gallery's titlebar wiring (pane toggle + icon + title + the
+/// <summary>--probe-resize root — the gallery's titlebar wiring (pane toggle + icon + title + the
 /// signal-width AutoSuggestBox + engine caption buttons) over a filler page, for the resize-down regression probe.</summary>
 sealed class TitleBarResizeProbeRoot : Component
 {
@@ -4883,8 +4865,8 @@ sealed class PersistentPrefixProbe : Component
                 {
                     Height = 40f,
                     Fill = initial == 0 ? HeroFill : initial == 1 ? ChromeFill : RowFill,
-                    ScrollBinds = initial == 0 ? [new() { PinTop = 0f }]
-                        : initial == 1 ? [new() { PinTop = 40f }] : [],
+                    ScrollEffects = initial == 0 ? [new(FluentGpu.Scroll.Effects.ScrollEffect.Sticky(0f))]
+                        : initial == 1 ? [new(FluentGpu.Scroll.Effects.ScrollEffect.Sticky(40f))] : [],
                     OnClick = () => { Clicks++; LastClicked = scope.Index.Peek(); },
                     Children = [new TextEl(Prop.Of(() => $"row {scope.Index.Value}")) { Size = 12f }],
                 };
@@ -4892,7 +4874,6 @@ sealed class PersistentPrefixProbe : Component
             RepeatLayout.Stack(40f),
             new ListOptions
             {
-                Overscan = 4,
                 PersistentPrefixCount = 2,
                 Scroll = new ScrollOptions { ItemClipTopInset = 80f, ItemClipTopFadeBand = 22f },
             });
@@ -5131,11 +5112,7 @@ sealed class CollapsedHeroRebakeProbe : Component
             {
                 Height = h, ClipToBounds = true, Fill = ColorF.FromRgba(60, 80, 120),
                 OnRealized = n => owner.Hero = n,
-                ScrollBinds =
-                [
-                    new() { PinTop = 0f },
-                    new() { From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing, Range = ScrollRange.Px(0f, h), OutStart = h, OutEnd = 0f },
-                ],
+                ScrollEffects = [new(FluentGpu.Scroll.Effects.ScrollEffect.Sticky(0f))],
                 Children =
                 [
                     new BoxEl
@@ -5145,10 +5122,7 @@ sealed class CollapsedHeroRebakeProbe : Component
                         // The artist-page hero photo's dissolve: opacity rides the collapse to 0. A re-theme re-render
                         // re-bakes this row; the fresh row's first eval must RE-WRITE the 0 (LastWritten seeds NaN) or
                         // the reconciled literal (1) pops the photo back over the collapsed band.
-                        ScrollBinds =
-                        [
-                            new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(h * 0.16f, h * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
-                        ],
+                        ScrollEffects = [new(FluentGpu.Scroll.Effects.ScrollEffect.Fade(h * 0.16f, h * 0.66f, 1f, 0f))],
                     },
                 ],
             };
@@ -5523,7 +5497,6 @@ sealed class PrefixDisplacementProbe : Component
             RepeatLayout.Stack(RowH),
             new ListOptions
             {
-                Overscan = 2,
                 PersistentPrefixCount = Prefix,
                 Reorder = new ReorderOptions { ItemDisplacement = i => Displacement(i), DisplacementVersion = Ver },
             });
@@ -5569,7 +5542,7 @@ sealed class SpotlightScrollProbe : Component
                 RepeatLayout.Stack(RowH),
                 new ListOptions
                 {
-                    Overscan = 1, Grow = 1f,
+                    Grow = 1f,
                     Controller = Ctl,
                     SelectionMode = ItemsSelectionMode.None,
                     Selector = SelectorVisual.None,
@@ -5662,7 +5635,6 @@ sealed class InsertionProbe : Component
             RepeatLayout.Measured(_layout),
             new ListOptions
             {
-                Overscan = 2,
                 Controller = Ctl,
                 Insertion = new InsertionOptions
                 {

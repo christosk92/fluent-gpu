@@ -230,6 +230,35 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     /// <summary>How many live references hold the runtime (sessions; a manifest-time license takes and returns one).</summary>
     internal int References { get { lock (_gate) return _refs; } }
 
+    /// <summary>
+    /// Hold the native runtime — and with it the whole KID→license cache — warm with NO session attached. Dispose the
+    /// result to give the reference back.
+    /// <para><b>Why this exists (D15, the app's warm keeper).</b> <see cref="_licenses"/> holds native CDM key-session
+    /// handles: they are owned by the runtime instance that is about to be destroyed and cannot be replayed into the
+    /// next one (the native ABI has no license-import entry point — only <c>Acquire</c>/<c>State</c>/<c>Release</c>),
+    /// so <see cref="IdleElapsed"/> clearing them on teardown is correct, not a bug to route around with a second
+    /// ledger. What WAS missing is a way for a caller who is not opening a session — the app's warm keeper, which
+    /// knows a video-capable row is current or next well before any surface opens one — to say "not yet, keep this
+    /// license cache". Before this, the keeper's only lever was re-acquiring a license every beat
+    /// (<c>EnsureLicense</c>'s own <c>Acquire</c>+<c>Release</c> pair), which cancels a PENDING idle teardown but does
+    /// nothing across a gap wider than <see cref="WarmIdleDisposeMs"/> (a surface closed, the beat stopped, the next
+    /// open is more than 30 s later) — the exact gap that paid a full ~630 ms cold challenge for a KID whose license
+    /// was otherwise still good.</para>
+    /// <para>Returns null when the native component is missing or bring-up failed (<see cref="StartupError"/> says
+    /// why) — same failure the fast path of <see cref="Acquire"/> reports, just surfaced as "no token" instead of
+    /// <c>false</c> so a caller cannot forget to check it.</para>
+    /// </summary>
+    public IDisposable? TakeKeepAlive() => Acquire() ? new KeepAliveRef(this) : null;
+
+    /// <summary>The <see cref="TakeKeepAlive"/> token. Idempotent disposal (a double-dispose from a racing shed and a
+    /// new request must never double-release).</summary>
+    private sealed class KeepAliveRef : IDisposable
+    {
+        private ProtectedVideoRuntime? _owner;
+        internal KeepAliveRef(ProtectedVideoRuntime owner) => _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release();
+    }
+
     private void IdleElapsed()
     {
         lock (_lifecycleGate)

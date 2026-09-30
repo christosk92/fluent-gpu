@@ -179,7 +179,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     /// <summary>Reset this frame's policy cap + drop counter. Bank selection — and the fence discipline that makes
     /// writing that bank safe — belongs to the shared <see cref="UploadArena"/>, begun once per frame by the device.</summary>
-    public void BeginFrame(int frameIndex) { _ = frameIndex; _cursor = 0; _dropped = 0; }
+    public void BeginFrame(int slot) { _ = slot; _cursor = 0; _dropped = 0; }
 
     /// <summary>Record one run; shared SDF state and this pipeline's PSO can be rebound independently. Returns false
     /// when full (state untouched).</summary>
@@ -209,7 +209,7 @@ float4 PSMain(VSOut i) : SV_Target
         if (bindPipelineState)
             cmd->SetPipelineState(_pso);
         cmd->SetGraphicsRootShaderResourceView(1, gva);
-        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        cmd->DrawInstanced(4, (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
     }
 

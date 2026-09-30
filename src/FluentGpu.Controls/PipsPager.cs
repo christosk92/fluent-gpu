@@ -56,11 +56,51 @@ public static class PipsPager
                                  int MaxVisiblePips, PipsPagerButtonVisibility PrevVisibility,
                                  PipsPagerButtonVisibility NextVisibility, bool Vertical,
                                  Action<int>? OnReselect = null);
+
+    /// <summary>Value-controlled sibling of <see cref="Create"/> (the <c>ToggleButton.Controlled</c> precedent, E12
+    /// — home-redesign-remediation.md §2 E12/§3.2): the selected index is a caller VALUE, not a signal, so this
+    /// control writes NO selection state of its own — <see cref="PipsPagerControlledCore"/> never materializes an
+    /// internal signal the way <see cref="PipsPagerCore"/>'s <c>own</c> does. A click ALWAYS calls
+    /// <paramref name="onSelect"/>(i), including a re-click on the pip <paramref name="selectedIndex"/> already
+    /// names — unlike <see cref="Create"/>, which folds that case into the separate <c>onReselect</c> channel and
+    /// skips <c>onChange</c>. A paged shelf whose scroll can rest BETWEEN pages (free-pannable) needs exactly that
+    /// edge on the ONE channel: the pip still reads "page 2" while the strip sits mid-page, and the re-click is the
+    /// user asking to be put back on the boundary — <c>ShelfController.GoTo</c> re-snaps every time, so it must fire
+    /// every time. <paramref name="count"/>/<paramref name="selectedIndex"/> are plain values delivered through the
+    /// props-re-push contract (<c>Embed.Comp(props, factory)</c>): a caller that re-renders with a new
+    /// <paramref name="selectedIndex"/> re-skins the strip in place (live, no remount — same reconciler reuse as
+    /// <see cref="Create"/>'s signal bind). A caller that wants the strip to follow a value with NO PARENT re-render
+    /// (e.g. <c>ShelfController.Page</c> ticking while the owning row stays still) wraps this call in its own small
+    /// <c>Component</c> that reads the source signal in <c>Render()</c> — the <c>ChapterHeader</c>/<c>ShelfPips</c>
+    /// precedent (home-redesign-remediation.md §3.2) — rather than this control taking a signal itself: the pip
+    /// strip's own animation/focus state (the scroll-to-center glide, the roving tab stop) still needs a STABLE
+    /// node regardless of who owns re-rendering, which <c>Embed.Comp</c>'s reuse already gives it.</summary>
+    public static Element Controlled(int count, int selectedIndex, Action<int> onSelect, TemplateParts? parts = null,
+                                     int maxVisiblePips = 5,
+                                     PipsPagerButtonVisibility previousButtonVisibility = PipsPagerButtonVisibility.Collapsed,
+                                     PipsPagerButtonVisibility nextButtonVisibility = PipsPagerButtonVisibility.Collapsed,
+                                     bool vertical = false)
+        => Embed.Comp(new ControlledProps(count, selectedIndex, onSelect, parts, maxVisiblePips,
+                                          previousButtonVisibility, nextButtonVisibility, vertical),
+                      () => new PipsPagerControlledCore());
+
+    /// <summary>Controlled props RE-PUSHED to <see cref="PipsPagerControlledCore"/> — see <see cref="Controlled"/>
+    /// for the value-controlled contract. No <c>OnReselect</c> channel: <c>OnSelect</c> is the only one, and it
+    /// fires for every click, same index or not.</summary>
+    internal sealed record ControlledProps(int Count, int SelectedIndex, Action<int> OnSelect, TemplateParts? Parts,
+                                           int MaxVisiblePips, PipsPagerButtonVisibility PrevVisibility,
+                                           PipsPagerButtonVisibility NextVisibility, bool Vertical);
 }
 
-/// <summary>The stateful core: pointer-over/focus reveal for the nav buttons, the scroll-to-center strip animation,
-/// and the roving arrow-key focus across pips.</summary>
-internal sealed class PipsPagerCore : Component
+/// <summary>The stateful core shared by <see cref="PipsPagerCore"/> (<see cref="PipsPager.Create"/>) and
+/// <see cref="PipsPagerControlledCore"/> (<see cref="PipsPager.Controlled"/>, E12): pointer-over/focus reveal for
+/// the nav buttons, the scroll-to-center strip animation, and the roving arrow-key focus across pips — all of it
+/// identical regardless of who owns the selected value. The two subclasses differ only in WHERE <c>selected</c>
+/// comes from and what a click does with it (<see cref="RenderPager"/>'s <c>selectDifferent</c>/<c>selectSame</c>
+/// delegates) — the hooks below are declared at THIS class's call sites, so each subclass instance gets its own
+/// stable per-line hook identity across renders (hooks are keyed by call site, not call order — see the
+/// <c>Component</c> cell-backed-hooks note) regardless of which concrete subclass is mounted.</summary>
+internal abstract class PipsPagerCoreBase : Component
 {
     const string PipGlyph = "";    // PipsPagerNormalGlyph / PipsPagerSelectedGlyph (PipsPager_themeresources.xaml:100-101)
     const string PrevGlyph = "";   // PipsPagerPreviousPageButtonGlyph (PipsPager_themeresources.xaml:102)
@@ -75,23 +115,27 @@ internal sealed class PipsPagerCore : Component
     const float NormalGlyphSize = 4f;    // PipsPagerNormalGlyphFontSize (PipsPager_themeresources.xaml:108)
     const float NavScalePressed = 0.875f;// PipsPagerNavigationButtonScalePressed (PipsPager_themeresources.xaml:109)
 
-    public override Element Render()
+    /// <summary>Shared render body. <paramref name="selectedRaw"/> is the UNCLAMPED value from whichever source the
+    /// subclass owns (a signal's <c>.Value</c> or the controlled value straight from props); <paramref name="selectDifferent"/>
+    /// fires for a click on any OTHER pip, <paramref name="selectSame"/> for a click on the pip <paramref name="selectedRaw"/>
+    /// already (clamped) names — <see cref="PipsPagerCore"/> writes its signal + <c>OnChange</c> only for the former and
+    /// routes the latter to <c>OnReselect</c>; <see cref="PipsPagerControlledCore"/> routes BOTH to the single <c>OnSelect</c>
+    /// channel (Controlled's whole point — see <see cref="PipsPager.Controlled"/>).</summary>
+    protected Element RenderPager(int count, int selectedRaw, TemplateParts? parts, int maxVisiblePips,
+        PipsPagerButtonVisibility prevVisibility, PipsPagerButtonVisibility nextVisibility, bool vertical,
+        Action<int> selectDifferent, Action<int> selectSame)
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseProps<PipsPager.Props>();
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;   // pip node per index (roving focus targets)
         var stripRef = UseRef<NodeHandle>(default);
         var stripSeeded = UseRef(false);
         var pointerOver = UseSignal(false);
         var focusWithin = UseSignal(false);
-        var own = UseSignal(0);   // auto-materialize (unconditional hook)
 
-        var sig = props.Selected ?? own;   // caller's value signal, else the internal one (one code path)
-        int count = Math.Max(0, props.Count);
-        int selected = (uint)sig.Value < (uint)count ? sig.Value : 0;   // clamp like OnSelectedPageIndexChanged (PipsPager.cpp:419-428)
-        int maxVisible = Math.Max(0, props.MaxVisiblePips);
-        bool vertical = props.Vertical;
+        count = Math.Max(0, count);
+        int selected = (uint)selectedRaw < (uint)count ? selectedRaw : 0;   // clamp like OnSelectedPageIndexChanged (PipsPager.cpp:419-428)
+        int maxVisible = Math.Max(0, maxVisiblePips);
 
         // Animated scroll-to-center: the strip translates so the selected pip is centred in the clipped viewport —
         // WinUI UpdateSelectedPip → ScrollToCenterOfViewport with AnimationDesired(true) (PipsPager.cpp:240-272).
@@ -116,8 +160,6 @@ internal sealed class PipsPagerCore : Component
             anim.Animate(stripRef.Value, ch, from, to, Motion.ControlNormal, Easing.FluentPopOpen);
         }, DepKey.From(HashCode.Combine(selected, count, maxVisible, vertical)));
 
-        var parts = props.Parts;
-
         while (handles.Count < count) handles.Add(NodeHandle.Null);
 
         // Arrow roving focus: Left AND Up → previous pip, Right AND Down → next, regardless of orientation
@@ -141,8 +183,8 @@ internal sealed class PipsPagerCore : Component
 
         // Pointer-over / focus-within reveal state, tracked only when a button is VisibleOnPointerOver (the signals
         // re-render the pager on transitions; m_isPointerOver/m_isFocused — PipsPager.cpp:613-647, :568-588).
-        bool needsReveal = props.PrevVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver
-                        || props.NextVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver;
+        bool needsReveal = prevVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver
+                        || nextVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver;
         bool revealOn = needsReveal && (pointerOver.Value || focusWithin.Value);
         // WinUI counts only non-pointer focus (FocusState != Pointer, PipsPager.cpp:570-583); the engine does not
         // surface the focus source, so a pointer-acquired focus also reveals — sanctioned small deviation.
@@ -154,13 +196,14 @@ internal sealed class PipsPagerCore : Component
         {
             int index = i;
             bool isSelected = index == selected;
-            // Same-value select is a no-op for the VALUE channel: WinUI raises SelectedIndexChanged only through an actual
-            // DP change (PipsPager.cpp:418-448). The re-click is surfaced on the separate OnReselect channel instead, so a
-            // host that can rest between pages can re-arm its glide without the signal ever changing.
+            // A click routes to selectDifferent/selectSame — PipsPagerCore treats same-value as a no-op for the
+            // VALUE channel (WinUI raises SelectedIndexChanged only through an actual DP change, PipsPager.cpp:418-448)
+            // and surfaces the re-click on the separate OnReselect channel; PipsPagerControlledCore routes BOTH to
+            // the single OnSelect channel (see PipsPager.Controlled).
             Action select = () =>
             {
-                if (index != selected) { sig.Value = index; props.OnChange?.Invoke(index); }
-                else props.OnReselect?.Invoke(index);
+                if (index != selected) selectDifferent(index);
+                else selectSame(index);
             };
             // Glyph EA3B in the icon font; selected 6px / normal 4px (PipsPagerButtonBaseStyle + SelectedPipButtonStyle,
             // PipsPager_themeresources.xaml:209, :282). The wrapper carries the state size morph as a composited scale:
@@ -288,29 +331,30 @@ internal sealed class PipsPagerCore : Component
             };
         }
 
-        // OnPreviousButtonClicked / OnNextButtonClicked (PipsPager.cpp:522-565, sans wrap).
+        // OnPreviousButtonClicked / OnNextButtonClicked (PipsPager.cpp:522-565, sans wrap). Both land on a DIFFERENT
+        // pip whenever they act at all (the ni != selected guard), so both always route through selectDifferent.
         Action prevClick = () =>
         {
             if (count <= 1) return;
             int ni = Math.Max(0, selected - 1);
-            if (ni != selected) { sig.Value = ni; props.OnChange?.Invoke(ni); }
+            if (ni != selected) selectDifferent(ni);
         };
         Action nextClick = () =>
         {
             if (count <= 1) return;
             int ni = Math.Min(selected + 1, count - 1);
-            if (ni != selected) { sig.Value = ni; props.OnChange?.Invoke(ni); }
+            if (ni != selected) selectDifferent(ni);
         };
 
-        bool prevMounted = props.PrevVisibility != PipsPagerButtonVisibility.Collapsed;
-        bool nextMounted = props.NextVisibility != PipsPagerButtonVisibility.Collapsed;
+        bool prevMounted = prevVisibility != PipsPagerButtonVisibility.Collapsed;
+        bool nextMounted = nextVisibility != PipsPagerButtonVisibility.Collapsed;
         var children = new Element[1 + (prevMounted ? 1 : 0) + (nextMounted ? 1 : 0)];
         int ci = 0;
         if (prevMounted)
-            children[ci++] = NavButton(PrevGlyph, hiddenOnEdge: selected == 0, props.PrevVisibility, prevClick);
+            children[ci++] = NavButton(PrevGlyph, hiddenOnEdge: selected == 0, prevVisibility, prevClick);
         children[ci++] = viewport;
         if (nextMounted)
-            children[ci] = NavButton(NextGlyph, hiddenOnEdge: selected == count - 1, props.NextVisibility, nextClick);
+            children[ci] = NavButton(NextGlyph, hiddenOnEdge: selected == count - 1, nextVisibility, nextClick);
 
         var root = new BoxEl
         {
@@ -322,5 +366,37 @@ internal sealed class PipsPagerCore : Component
             Children = children,
         };
         return parts.Apply(PipsPager.PartRoot, root) with { Children = children, Role = AutomationRole.Pager };
+    }
+}
+
+/// <summary>Mounted by <see cref="PipsPager.Create"/>: the selected index lives in a caller <see cref="Signal{T}"/>
+/// (or an internally auto-materialized one) — a click on a DIFFERENT pip writes it and fires <c>OnChange</c>; a
+/// click on the pip already selected fires the separate <c>OnReselect</c> instead (no signal write).</summary>
+internal sealed class PipsPagerCore : PipsPagerCoreBase
+{
+    public override Element Render()
+    {
+        var props = UseProps<PipsPager.Props>();
+        var own = UseSignal(0);   // auto-materialize (unconditional hook)
+        var sig = props.Selected ?? own;   // caller's value signal, else the internal one (one code path)
+        return RenderPager(props.Count, sig.Value, props.Parts, props.MaxVisiblePips,
+            props.PrevVisibility, props.NextVisibility, props.Vertical,
+            selectDifferent: index => { sig.Value = index; props.OnChange?.Invoke(index); },
+            selectSame: index => props.OnReselect?.Invoke(index));
+    }
+}
+
+/// <summary>Mounted by <see cref="PipsPager.Controlled"/> (E12) — see that factory for the value-controlled
+/// contract. Writes NO selection state at all: every click, same pip or not, only calls
+/// <see cref="PipsPager.ControlledProps.OnSelect"/>.</summary>
+internal sealed class PipsPagerControlledCore : PipsPagerCoreBase
+{
+    public override Element Render()
+    {
+        var props = UseProps<PipsPager.ControlledProps>();
+        return RenderPager(props.Count, props.SelectedIndex, props.Parts, props.MaxVisiblePips,
+            props.PrevVisibility, props.NextVisibility, props.Vertical,
+            selectDifferent: props.OnSelect,
+            selectSame: props.OnSelect);
     }
 }

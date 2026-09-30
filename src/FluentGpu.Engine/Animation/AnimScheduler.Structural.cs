@@ -147,16 +147,21 @@ public sealed partial class AnimEngine
     // Place a channel at its end-state immediately (a settled 1ms eased track → Compose writes `to` from the first frame).
     private void SnapTo(NodeHandle node, AnimChannel ch, float to) => SeedEased(node, ch, to, to, 1f, Easing.Linear);
 
-    /// <summary>An inserted node animates FROM the enter terminal (offset/scale/opacity/blur) TO identity.</summary>
+    /// <summary>An inserted node animates FROM the enter terminal (offset/scale/opacity/blur) TO identity.
+    /// <see cref="EnterExit.DelayMs"/> (E20, Wavee Home redesign) is an enter-only extra delay, added on top of
+    /// <paramref name="spec"/>'s own <see cref="LayoutTransition.DelayMs"/> (which already carries any parent
+    /// <c>FluentGpu.Dsl.Element.Stagger</c> — <c>FluentGpu.Reconciler.TreeReconciler.SynthesizeDeclarative</c> bakes
+    /// <c>index * Stagger</c> in there). Default 0f sums to the pre-E20 delay exactly (byte-identical).</summary>
     public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
         TransitionDynamics dyn = Normalize(spec.Dynamics);
-        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity, delayMs: spec.DelayMs);
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx, delayMs: spec.DelayMs);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy, delayMs: spec.DelayMs);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: spec.DelayMs);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: spec.DelayMs);
-        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, 0f, dyn, initial: e.Blur, delayMs: spec.DelayMs);
+        float delay = spec.DelayMs + e.DelayMs;
+        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity, delayMs: delay);
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx, delayMs: delay);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy, delayMs: delay);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: delay);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: delay);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, 0f, dyn, initial: e.Blur, delayMs: delay);
         MarkStartPending(node);
     }
 

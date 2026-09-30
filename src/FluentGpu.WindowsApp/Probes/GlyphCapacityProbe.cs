@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
@@ -80,7 +80,7 @@ internal static class GlyphCapacityProbe
         RepaintDamageRegion damage = default;
         damage.ForceFull(RepaintFullReason.TargetInvalidated);
         var info = new FrameInfo(window.ClientSizePx, window.Scale, ColorF.FromRgba(18, 18, 22),
-            FrameEpoch: sequence, RepaintDamage: damage, PublishSequence: sequence);
+            RepaintDamage: damage, PublishSequence: sequence);
         device.SubmitDrawList(draw.Bytes, draw.SortKeys, in info, swapchain);
         swapchain.Present();
         Require(!device.LastPresentStoodDown, "present stood down");

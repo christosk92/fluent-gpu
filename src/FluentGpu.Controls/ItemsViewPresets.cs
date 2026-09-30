@@ -152,11 +152,10 @@ internal sealed class ItemsViewListPreset : Component
             if (reorder.Update(e.TotalDy))
                 orderVersion.Value = orderVersion.Peek() + 1;
             // Edge auto-scroll (E5-L3): pointer within 24dip of the viewport edge holds a continuous scroll velocity
-            // for as long as it stays there — SetAutoScrollVelocity(0) the instant it leaves the band, so the kernel's
-            // Autoscroll activity never outlives the hold. dipPerS keeps the old per-event ±8dip nudge's FELT speed
+            // for as long as it stays there — SetAutoScrollVelocity(0) the instant it leaves the band, so the
+            // constant-velocity plan never outlives the hold. dipPerS keeps the old per-event ±8dip nudge's FELT speed
             // (it fired once per pointer-move event, which at a ~60Hz pointer-move cadence read as ~8dip/16ms ⇒
-            // ~480dip/s) — now expressed as a rate instead of a per-event instant jump (Scroll v3 plan §3.2 row
-            // "Controls/ItemsView.cs:1088 ScrollByDelta (drag-edge autoscroll) … SetVelocity(vp, dipPerS)").
+            // ~480dip/s) — expressed as a rate instead of a per-event instant jump.
             var scene = ctx.Scene;
             if (scene is not null && !ctx.HostNode.IsNull && scene.IsLive(ctx.HostNode))
             {

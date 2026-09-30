@@ -15,7 +15,8 @@ public enum WakeReasons
     RuntimePending = 1 << 1,    // _runtime.HasPending (scheduled render-effects)
     DynamicText = 1 << 2,       // _scene.HasDynamicText (FPS/draw-count HUD strings)
     Anim = 1 << 3,              // an AnimEngine row is DUE now (NextDueMs <= 0) — a row paced at a slower cadence sets no bit until its next edge; the host shapes the wait from NextDueMs instead
-    Interact = 1 << 4,          // _interact.HasActive (eased hover/press)
+    // 1 << 4 is retired: it was Interact (_interact.HasActive), which nothing has set since hover/press fades became
+    // animation rows (the Anim bit). The position stays reserved so the [wake] census columns keep their meaning.
     ScrollAnim = 1 << 5,        // _scrollAnim.HasActive (smooth scroll + scrollbar fade)
     Repeat = 1 << 6,            // _repeat.HasActive (RepeatButton auto-repeat)
     Caret = 1 << 7,             // the focused-editor caret blink is DUE now (CaretBlinker.NextDueMs <= 0); between edges it shapes the wait, not the mask
@@ -35,12 +36,15 @@ public enum WakeReasons
     BakedBlurPending = 1 << 21, // queued static derivatives, serviced at a low 30 Hz budget only after interaction settles
     FrameClockPoller = 1 << 22, // an explicit FrameClock.Tick subscriber (for example the smooth compositor-bound playhead)
     VideoPumpPending = 1 << 23, // one coalesced native-video / geometry pump must run after layout settles
-    WarmingVirtuals = 1 << 24,  // bound cold-realize stagger and/or KeepAlive unpark replay drip still in flight
-    BudgetDeferredVirtuals = 1 << 25, // E4 overscan halo only partially realized this paint — catch-up owed next frame
-    ScrollProducer = 1 << 26,  // IPlatformWindow.ScrollProducerLive (scroll-v3-plan §5.2): a frame-aligned producer (DM
+    WarmingVirtuals = 1 << 24,  // a KeepAlive unpark replay still in flight
+    ScrollProducer = 1 << 26,  // IPlatformWindow.ScrollProducerLive: a frame-aligned producer (DM
                                // engaged/pending, or a hi-res wheel-fallback gesture live) needs one PumpScroll per refresh
     TextRepaintPending = 1 << 27, // IGpuDevice.TextRepaintPending: a glyph-atlas overflow deferred its flush and drew
                                    // text blank last frame — one more un-skippable frame is owed to re-record it clean
+    ImageLeftoverDue = 1 << 28,   // ImageCache.LeftoverRetryDueMs has passed: a PINNED canceled leftover (a decode that
+                                  // was canceled / refused by Begin while a node still holds it) is owed its sweep
+                                  // restart in the next Pump — a pending-but-future one sets NO bit (it only shapes
+                                  // RecommendedWaitMs, like Timer), so an idle page still wakes for it without input
 }
 
 /// <summary>
@@ -71,14 +75,14 @@ internal sealed class WakeDiagnostics
     // MUST cover every bit in WakeReasons. This was 26 while the enum already had 28, so scrollProducer and
     // textRepaintPending — a frame-aligned scroll producer and a deferred glyph-atlas flush, EITHER of which can hold
     // the loop at panel rate — were silently absent from every report this instrument ever printed.
-    private const int ReasonCount = 28;
+    private const int ReasonCount = 29;
     private static readonly string[] s_reasonNames =
     [
-        "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
+        "frameNeeded", "runtimePending", "dynamicText", "anim", "retired4", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
         "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
         "frameClockPoller", "videoPumpPending", "warmingVirtuals", "budgetDeferredVirtuals",
-        "scrollProducer", "textRepaintPending",
+        "scrollProducer", "textRepaintPending", "imageLeftoverDue",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake

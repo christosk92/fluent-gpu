@@ -1,4 +1,4 @@
-using TerraFX.Interop.DirectX;
+﻿using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
 using static TerraFX.Interop.Windows.Windows;
@@ -15,7 +15,7 @@ internal sealed unsafe class SdfSharedResources : IDisposable
     public ID3D12RootSignature* RootSignature => _rootSig;
     public D3D12_VERTEX_BUFFER_VIEW QuadView => _quadView;
 
-    // Reused viewport constants — Record() runs inside SubmitWithLayers' FlushSegment loop; stackalloc there
+    // Reused viewport constants — Record() runs inside the stream decoder's FlushSegment loop; stackalloc there
     // inlines into the loop and trips /GS (0xC0000409) under NativeAOT.
     private readonly float[] _vpConstants = new float[2];
 

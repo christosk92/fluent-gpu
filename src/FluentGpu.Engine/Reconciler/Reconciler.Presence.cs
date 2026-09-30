@@ -10,8 +10,9 @@ namespace FluentGpu.Reconciler;
 //   • WriteColumns' generic (every-element-type) section calls ApplyPresenceStatic for an UNBOUND Visible — equality-
 //     gated via SceneStore.SetCollapsedIfChanged so an identical re-render marks nothing (gate.hooks.layout-dirty-
 //     identical-tree stays green).
-//   • BindNode calls BindPresence for a BOUND Visible — one effect, mount-only wiring, equality-gated the same way,
-//     counted by NodeBindingFireCount/WriteCount (the P0 counters).
+//   • BindNode calls BindPresence for a BOUND Visible — one BindEffect wired at mount (re-wired in place when a re-render
+//     binds a new thunk/signal — Reconciler.Rewire.cs), equality-gated the same way, counted by
+//     NodeBindingFireCount/WriteCount (the P0 counters).
 // Both funnel through SetSubtreeHidden, which is the ONLY place that touches CompEntry.Hidden — the "renders not
 // suppressed" contract: Hidden feeds solely into the ActiveSig formula (UseIsActive/UseActivation/UseInterval), never
 // entry.Parked/DeferredRender/Effect, so a collapsed component keeps rendering (its bindings settle even though the
@@ -28,7 +29,8 @@ public sealed partial class TreeReconciler
 
     /// <summary>Bound Visible wiring — called once at mount from <c>BindNode</c> for every element type (the channel
     /// lives on the base <see cref="Element"/>, not a concrete subtype, so this runs unconditionally, unlike the
-    /// BoxEl-only channels above it). DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
+    /// BoxEl-only channels above it); a re-render that binds a new thunk/signal re-wires the same effect
+    /// (<c>RewireBinds</c>). DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
     /// Visible — collapsing a hero participant mid-flight would break ConnectedAnimation capture.</summary>
     private void BindPresence(NodeHandle node, Element el)
     {
@@ -36,12 +38,12 @@ public sealed partial class TreeReconciler
         if (BindContract.CompiledIn && BindContract.Enabled && el.MorphId is not null)
             BindContract.MorphVisibleBind(el.GetType().Name);
 
-        var vb = el.Visible.Thunk; var vs = el.Visible.Signal;
-        AddBinding(node, new Effect(Runtime, () =>
+        var fx = new BindEffect<bool>(Runtime, el, static e => e.Visible);
+        AddBinding(node, fx.Start(() =>
         {
             NodeBindingFireCount++;
             if (!_scene.IsLive(node)) return;
-            bool next = vb is not null ? vb() : vs!.Value;
+            bool next = fx.Read();
             bool wasCollapsed = _scene.IsCollapsed(node);
             bool nowCollapsed = !next;
             if (wasCollapsed == nowCollapsed) return;
@@ -50,14 +52,15 @@ public sealed partial class TreeReconciler
             SetSubtreeHidden(node, nowCollapsed);
             // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
             // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
-            // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of).
+            // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
+            // declared Enter is read off fx.El — the element this node was LAST reconciled against, not the mount one.
             if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion
-                && SynthesizeDeclarative(node, el) is { } dt && dt.Enter.Active)
+                && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
             {
                 anim.SeedEnter(node, dt.Enter, dt);
                 if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
             }
-        }, owner: null, runNow: true));
+        }));
     }
 
     /// <summary>Walk NODE and every live descendant's mounted <c>CompEntry</c>, setting <c>Hidden</c> and refreshing

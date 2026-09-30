@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- The Scroll Lab (docs/plans/scroll-lab-implementation.md): a standalone engine exe — no WinAppSDK — that replaces
+         "it feels heavy/jittery/floaty" with recorded sessions, baselines and metric verdicts, and live-tunes every
+         MotionFeel knob. WinExe = no console window. -->
+    <OutputType>WinExe</OutputType>
+    <!-- NativeAOT is the publish target: `dotnet publish -c Release -r win-arm64` (or win-x64) emits one native exe.
+         Scoped to THIS csproj so the netstandard2.0 SourceGen analyzer ref never sees it (NETSDK1207); `dotnet build` /
+         `dotnet run` stay JIT for iteration. -->
+    <PublishAot>true</PublishAot>
+    <!-- Windows-only by design (Win32/D3D12 backend + the WindowsApi file pickers) — CA1416 is a false positive here. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+    <ProjectReference Include="..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+    <ProjectReference Include="..\FluentGpu.ScrollLab.Surfaces\FluentGpu.ScrollLab.Surfaces.csproj" />
+  </ItemGroup>
+</Project>

@@ -52,9 +52,9 @@ public sealed class SceneFrameOwnershipTests
         {
             var region = default(RepaintDamageRegion);
             region.Add(in damaged);
-            var submit = new FrameInfo(new Size2(400, 300), 1f, default, default, 0f, 0, false, region);
+            var submit = new FrameInfo(new Size2(400, 300), 1f, default, RepaintDamage: region);
             publisher.PublishScene(scene, images, strings, default, default, default, default, detached, popups,
-                animation, in submit, suppressVsync: false, interactivePresent: false);
+                animation, in submit, suppressVsync: false);
         }
 
         var first = new RectF(0f, 0f, 10f, 10f);

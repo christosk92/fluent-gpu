@@ -96,7 +96,34 @@ public sealed class HeadlessWindow : IPlatformWindow
     /// window anywhere on the virtual desktop. Default (0,0).</summary>
     public Point2 ClientOriginPx { get; set; }
 
+    /// <summary>Last outer origin passed to <see cref="MoveToPx"/>, and how many times it was called — the headless
+    /// twin of the Win32 <c>SetWindowPos(SWP_NOSIZE)</c> call, recorded rather than acted on. Deliberately does NOT
+    /// touch <see cref="ClientSizePx"/>: a test asserting <c>MoveToPx</c> is a pure move (never a resize) reads
+    /// <see cref="ClientSizePx"/> unchanged across the call.</summary>
+    public Point2 LastMoveToPx { get; private set; }
+    public int MoveToCount { get; private set; }
+    public void MoveToPx(Point2 outerOriginPx) { LastMoveToPx = outerOriginPx; MoveToCount++; }
+
     public void QueueInput(in InputEvent e) => _queue.Enqueue(e);
+
+    /// <summary>The synthetic off-screen park position <c>WM_POINTERLEAVE</c>'s hover-clear move carries (Win32
+    /// <c>Win32Window.OffscreenDip</c>) — mirrored here so a headless gate can assert against the exact literal a
+    /// captured node must never see as a real sample.</summary>
+    public static readonly Point2 OffscreenDip = new(-10000f, -10000f);
+
+    /// <summary>Headless twin of Win32's <c>WM_POINTERLEAVE</c>-while-held path (input-capture hardening): queues a
+    /// <see cref="InputKind.PointerCancel"/> for <paramref name="pointerId"/> FIRST, then the off-screen
+    /// <see cref="InputKind.PointerMove"/> park sample — the exact emission order <c>Win32Window</c>'s
+    /// <c>WM_POINTERLEAVE</c> case now uses (cancel the held contact before the park move can reach a still-latched
+    /// drag node). A gate drives this directly instead of going through a real OS message to exercise the dispatcher's
+    /// reaction to that order without a Win32 window.</summary>
+    public void QueuePointerLeaveWhileDown(uint pointerId, uint timestampMs, PointerKind kind = PointerKind.Mouse)
+    {
+        QueueInput(new InputEvent(InputKind.PointerCancel, default, 0, 0,
+            Pointer: kind, TimestampMs: timestampMs, PointerId: pointerId));
+        QueueInput(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+            Pointer: kind, TimestampMs: timestampMs, PointerId: pointerId));
+    }
 
     public int PumpInto(InputEventRing ring)
     {
@@ -107,62 +134,88 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public void WaitForWork(int timeoutMs) { }
 
-    // ── scripted frame-aligned scroll producer (scroll-v3-plan §5.5 "Headless: PumpScroll returns scripted
-    // QueueScrollDelta(dipX, dipY) for that frame"). Additive to — and independent of — the QueueInput-based scripted
-    // scroll-phase API the VerticalSlice suites already use (InputKind.ScrollBegin/ScrollDelta/ScrollEnd queued
-    // directly and drained by the ordinary PumpInto above): that API stays intact. This one instead exercises the
-    // PumpScroll seam itself (a frame-aligned producer, called once per produced frame from Paint after the display-
-    // phase gate) so AppHost's PumpScroll→router→kernel wiring can be gated headlessly too.
+    // -- scripted frame-aligned scroll producer: a headless stand-in for DirectManipulation's touchpad contact stream.
+    // QueueScrollDelta(dipX, dipY) accumulates until the next PumpScroll (one produced frame), which emits one
+    // InputKind.Scroll Begin/Sample; QueueScrollLift emits the End. Exercises AppHost's PumpScroll -> dispatcher ->
+    // ScrollHandle wiring headlessly.
     private float _pendingScrollDipX, _pendingScrollDipY;
     private bool _pendingScrollDeltaQueued;
     private bool _pendingScrollLift;
     private bool _scrollGestureOpen;
     private PointerKind _scrollPointerKind = PointerKind.Touchpad;
-    private uint _scrollContactId = 1;   // fixed synthetic id — one concurrent scripted gesture
+    private uint _scrollContactId = 1;   // fixed synthetic id: one concurrent scripted gesture
+    private Point2 _scrollPointerDip;
+    private Action<FluentGpu.Scroll.Runtime.ScrollInputEvent>? _scrollSink;
 
-    /// <summary>Queue a frame-aligned scroll delta (DIP), accumulated until the next <see cref="PumpScroll"/> call —
-    /// so multiple calls between pumps sum into one frame's delta, matching a real per-frame producer. Opens the
-    /// gesture (emits <see cref="InputKind.ScrollBegin"/>) on the first pump after the gesture was closed/never
-    /// started.</summary>
-    public void QueueScrollDelta(float dipX, float dipY, PointerKind kind = PointerKind.Touchpad)
+    /// <summary>Queue a frame-aligned scroll delta (DIP, positive = toward the content end), accumulated until the next
+    /// <see cref="PumpScroll"/> call. Opens the gesture (a Begin) on the first pump after the gesture was closed.</summary>
+    public void QueueScrollDelta(float dipX, float dipY, PointerKind kind = PointerKind.Touchpad, Point2 pointerDip = default)
     {
         _pendingScrollDipX += dipX;
         _pendingScrollDipY += dipY;
         _pendingScrollDeltaQueued = true;
         _scrollPointerKind = kind;
+        if (pointerDip != default) _scrollPointerDip = pointerDip;
     }
 
-    /// <summary>Queue the gesture's lift — emits <see cref="InputKind.ScrollEnd"/> on the NEXT <see cref="PumpScroll"/>
-    /// call (after flushing any still-pending queued delta first).</summary>
+    /// <summary>Queue the gesture's lift: an End on the NEXT <see cref="PumpScroll"/> call.</summary>
     public void QueueScrollLift() => _pendingScrollLift = true;
 
     /// <inheritdoc cref="IPlatformWindow.ScrollProducerLive"/>
-    public bool ScrollProducerLive => _scrollGestureOpen;
+    /// <remarks>Live while a gesture is open OR a delta/lift is queued for the next pump — DirectManipulation's producer is
+    /// live from the contact's engage (before its first content update), so the frame that carries the first delta runs.</remarks>
+    public bool ScrollProducerLive => _scrollGestureOpen || _pendingScrollDeltaQueued || _pendingScrollLift;
 
+    /// <inheritdoc cref="IPlatformWindow.SetScrollInputSink"/>
+    public void SetScrollInputSink(Action<FluentGpu.Scroll.Runtime.ScrollInputEvent>? sink) => _scrollSink = sink;
+
+    /// <summary>Delivers a scroll input URGENTLY (synchronously through the host's sink, the way a real window's wheel
+    /// message does) when a sink is installed, else queues it for the next pump. Gates use this for wheel notches.</summary>
+    public void SendScroll(in FluentGpu.Scroll.Runtime.ScrollInputEvent e)
+    {
+        if (_scrollSink is { } sink) sink(e);
+        else QueueInput(InputEvent.ForScroll(in e, PointerKind.Mouse));
+    }
+
+    /// <summary>A detented wheel notch at <paramref name="pointerDip"/> (positive notches = toward the content end).</summary>
+    public void SendWheelNotch(Point2 pointerDip, float notches, long qpc = 0, KeyModifiers mods = KeyModifiers.None, bool horizontal = false)
+        => SendScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(FluentGpu.Scroll.Runtime.ScrollSource.MouseWheel,
+            FluentGpu.Scroll.Runtime.ScrollGesture.Notch, qpc, pointerDip, horizontal ? notches : 0f, horizontal ? 0f : notches, 0, mods));
+
+    /// <summary>The frame-aligned producer, modelled on the real one (DirectManipulation, <c>Win32DirectManipulation</c>):
+    /// a TOUCHPAD stream is composition-timed — every event is stamped by the production rule,
+    /// <see cref="FluentGpu.Scroll.Runtime.ContactStamp.ForFrame"/>: the NEXT tick's present (headless
+    /// <c>PresentQpc = frame + refresh</c>, so the stamp is <c>frame + 2·refresh</c> — the same one-tick-on relation as
+    /// on a real window), the first render turn guaranteed to see it — flagged <c>PresentTimed</c>, and carries
+    /// <c>ArrivalQpc</c> = the clock's <see cref="FrameClock.NowQpc"/> (when it was observed); a frame with no queued
+    /// delta emits nothing (DirectManipulation raises no content update without movement). A TOUCH pan is device-timed
+    /// at the frame instant.</summary>
     public int PumpScroll(in FrameClock clock, InputEventRing ring)
     {
         int n = 0;
+        bool touch = _scrollPointerKind == PointerKind.Touch;
+        var src = touch ? FluentGpu.Scroll.Runtime.ScrollSource.Touch : FluentGpu.Scroll.Runtime.ScrollSource.Touchpad;
+        long stamp = touch ? clock.FrameQpc : FluentGpu.Scroll.Runtime.ContactStamp.ForFrame(in clock, clock.NowQpc);
+        long arrival = touch ? 0L : clock.NowQpc;   // a device-timed stamp already is the arrival (0 ⇒ same as Qpc)
+        bool presentTimed = !touch;
         if (_pendingScrollDeltaQueued)
         {
             if (!_scrollGestureOpen)
             {
-                ring.Write(new InputEvent(InputKind.ScrollBegin, default, 0, 0, QpcTicks: clock.FrameQpc,
-                    Pointer: _scrollPointerKind, PointerId: _scrollContactId,
-                    DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+                ring.Write(InputEvent.ForScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(src, FluentGpu.Scroll.Runtime.ScrollGesture.Begin,
+                    stamp, _scrollPointerDip, 0f, 0f, _scrollContactId, KeyModifiers.None) { PresentTimed = presentTimed, ArrivalQpc = arrival }, _scrollPointerKind));
                 _scrollGestureOpen = true;
                 n++;
             }
-            ring.Write(new InputEvent(InputKind.ScrollDelta, default, 0, 0, _pendingScrollDipY, QpcTicks: clock.FrameQpc,
-                Pointer: _scrollPointerKind, PointerId: _scrollContactId,
-                ScrollDeltaX: _pendingScrollDipX, DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+            ring.Write(InputEvent.ForScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(src, FluentGpu.Scroll.Runtime.ScrollGesture.Sample,
+                stamp, _scrollPointerDip, _pendingScrollDipX, _pendingScrollDipY, _scrollContactId, KeyModifiers.None) { PresentTimed = presentTimed, ArrivalQpc = arrival }, _scrollPointerKind));
             n++;
             _pendingScrollDipX = 0f; _pendingScrollDipY = 0f; _pendingScrollDeltaQueued = false;
         }
         if (_pendingScrollLift && _scrollGestureOpen)
         {
-            ring.Write(new InputEvent(InputKind.ScrollEnd, default, 0, 0, QpcTicks: clock.FrameQpc,
-                Pointer: _scrollPointerKind, PointerId: _scrollContactId,
-                DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+            ring.Write(InputEvent.ForScroll(new FluentGpu.Scroll.Runtime.ScrollInputEvent(src, FluentGpu.Scroll.Runtime.ScrollGesture.End,
+                stamp, _scrollPointerDip, 0f, 0f, _scrollContactId, KeyModifiers.None) { PresentTimed = presentTimed, ArrivalQpc = arrival }, _scrollPointerKind));
             _scrollGestureOpen = false;
             _pendingScrollLift = false;
             n++;
@@ -223,17 +276,6 @@ public sealed class HeadlessWindow : IPlatformWindow
     public void SetFullscreen(bool fullscreen) { SetFullscreenCount++; IsFullscreen = fullscreen; }
 
     public void CloseWindow() => CloseCount++;
-
-    /// <summary>Recorded <see cref="IPlatformWindow.BeginSystemMove"/> calls (the pop-out's drag-the-picture gate).
-    /// Headless has no modal loop: a windowed request is ACCEPTED (so the caller holds its gesture exactly as on Win32)
-    /// and the gate ends it by queueing the pair the Win32 backend emits — <see cref="InputKind.PointerCancel"/> for the
-    /// captured contact, then <see cref="InputKind.WindowMoveSizeEnded"/>. Fullscreen declines, like Win32.</summary>
-    public int BeginSystemMoveCount { get; private set; }
-    public bool BeginSystemMove()
-    {
-        BeginSystemMoveCount++;
-        return !IsFullscreen;
-    }
 
     /// <summary>The most recent region push (copied), for drag-band/island/button-rect assertions.</summary>
     public TitleBarRegion[] LastTitleBarRegions { get; private set; } = [];

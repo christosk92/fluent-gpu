@@ -74,6 +74,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private long _measuredPeriodQpc;            // published: Volatile-written by the waiter, Volatile-read by the host
     private long _latticePeriodQpc;             // published: the period the published stamps are actually spaced by
     private long _slotDrops;                    // published: accepted ticks dropped because they were not window slots
+    private long _ignoredReturns;                // published: CompositorTickFilter.IgnoredCount mirror (always-on, not just bursts ≥ FastBurstLogMin)
     private bool _loggedDecimating;             // waiter-thread only: last mode we logged
     private volatile bool _decimating;          // published mirror of the filter's mode
     private volatile bool _reprobeRequested;    // set by any thread, consumed by the waiter at the top of its loop
@@ -141,6 +142,11 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// only; monotone for the life of the clock.</summary>
     internal long SlotDrops => Volatile.Read(ref _slotDrops);
 
+    /// <summary>Every <c>Ignored</c> (double-tick) return the filter has swallowed for the life of the clock, not just
+    /// the bursts long enough to earn their own <c>[compositor-clock] fast-burst</c> log line (<see cref="FastBurstLogMin"/>
+    /// = 8). Diagnostics only; monotone.</summary>
+    internal long IgnoredReturns => Volatile.Read(ref _ignoredReturns);
+
     /// <summary>Tell the clock which monitor period the WINDOW is on (<see cref="DisplayInfo.RefreshPeriodQpc"/>;
     /// 0 = unknown). UI thread, allocation-free, safe on the per-frame path: it only stores the value, and the waiter
     /// picks it up on its next iteration. When the window's period is at least 1.25x the compositor beat, the waiter
@@ -176,6 +182,12 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
         private bool _disposed;
         public WaitHandle Tick => Event;
         public bool IsAvailable => !_disposed && !owner._disposed && owner.IsAvailable;
+        public long TickSeq => owner.TickSeq;
+        public long TickQpc => owner.TickQpc;
+        public long MeasuredPeriodQpc => owner.MeasuredRefreshPeriodQpc;
+        public long IgnoredReturns => owner.IgnoredReturns;
+        public long SlotDrops => owner.SlotDrops;
+        public bool Decimating => owner.Decimating;
         public void SetActive(bool active)
         {
             lock (owner._renderGate)
@@ -301,6 +313,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     {
         Volatile.Write(ref _measuredPeriodQpc, _filter.MeasuredTickPeriodQpc);
         Volatile.Write(ref _latticePeriodQpc, _filter.PeriodQpc);
+        Volatile.Write(ref _ignoredReturns, _filter.IgnoredCount);
         _decimating = _filter.Decimating;
     }
 

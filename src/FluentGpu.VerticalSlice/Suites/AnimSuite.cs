@@ -23,10 +23,12 @@ using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
 using FluentGpu.Scene;
+using FluentGpu.Scroll.Effects;
 using FluentGpu.Signals;
 using FluentGpu.Text;
 using FluentGpu.Text.Headless;
 using static FluentGpu.Dsl.Ui;
+using FluentGpu.VerticalSlice.Harness;
 using static FluentGpu.VerticalSlice.Harness.Gate;
 using static FluentGpu.VerticalSlice.Harness.Asserts;
 
@@ -35,30 +37,36 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 static class AnimSuite
 {
-    /// <summary>Test-only motion write for bare-<see cref="SceneStore"/> recorder gates: drives a real
-    /// <c>SceneScrollSink.Apply</c> (the ONE writer of the kernel's RESULT columns — scroll-v3-plan §3.1) on the bare
-    /// scene to flip a derived column (UserScrollActive/LiveSpeedDip/...). The sink also rewrites the content node's
-    /// LocalTransform; the isolated span/blur gates that need a specific "moved" transform hand-set it AFTER this call.
-    /// <paramref name="offsetY"/> overrides the written OffsetY (default: carry the current value through unchanged,
-    /// same as every other field here) — <c>ScrollState.OffsetY</c> has a private setter (ApplyMotion is the sole
-    /// writer), so a gate that wants a REAL, persisted offset — not a hand-poked LocalTransform the sink's next real
-    /// write would silently undo, since it unconditionally recomputes the content transform from the live offset —
-    /// has to go through here.</summary>
+    /// <summary>Test-only motion write for bare-<see cref="SceneStore"/> recorder gates: sets the viewport's RESULT
+    /// columns (<c>ScrollState.Offset/Velocity/Motion</c> — in the host the ONE writer is <c>AppHost.RunScrollFrame</c>
+    /// evaluating the plan) and re-poses the content node's transform exactly as the UI pose sink does, so a derived
+    /// column (UserScrollActive / a moving Motion) flips for the recorder without a host. <paramref name="offsetY"/>
+    /// overrides the offset (default: carry the current value through unchanged); <paramref name="liveSpeedDip"/> is the
+    /// motion speed — a positive speed with <see cref="FluentGpu.Scroll.Motion.MotionKind.Idle"/> reads as a fling.</summary>
     static void TestApplyScroll(SceneStore s, NodeHandle viewport,
-        FluentGpu.Scroll.ScrollActivity activity = FluentGpu.Scroll.ScrollActivity.Idle,
-        FluentGpu.Scroll.ScrollActivityFlags flags = FluentGpu.Scroll.ScrollActivityFlags.None,
-        FluentGpu.Scroll.ScrollWriteMask moved = FluentGpu.Scroll.ScrollWriteMask.None,
+        FluentGpu.Scroll.Motion.MotionKind kind = FluentGpu.Scroll.Motion.MotionKind.Idle,
         float? liveSpeedDip = null,
         float? offsetY = null)
     {
-        // Through the ONE writer (a real sink on the bare scene) — the token is never minted by a test, so the
-        // structural single-writer guarantee holds in the gates exactly as it does in the host.
         ref ScrollState sc = ref s.ScrollRef(viewport);
-        var w = new FluentGpu.Scroll.ScrollWrite(
-            sc.OffsetX, offsetY ?? sc.OffsetY, sc.BandX, sc.BandY, sc.ZoomFactor,
-            sc.Velocity, liveSpeedDip ?? sc.LiveSpeedDip,
-            activity, flags, moved, sc.LastReleaseVelocity, FluentGpu.Scroll.ScrollWriteSource.Tick);
-        new FluentGpu.Scroll.SceneScrollSink(s, static () => { }).Apply((int)viewport.Raw.Index, in w);
+        if (offsetY is { } o) sc.Offset = o;
+        float speed = liveSpeedDip ?? 0f;
+        if (kind == FluentGpu.Scroll.Motion.MotionKind.Idle && speed > 0f) kind = FluentGpu.Scroll.Motion.MotionKind.Fling;
+        if (kind != FluentGpu.Scroll.Motion.MotionKind.Idle && liveSpeedDip is null) speed = 1f;   // moving, speed unmeasured
+        sc.Motion = kind == FluentGpu.Scroll.Motion.MotionKind.Idle
+            ? FluentGpu.Scroll.Runtime.ScrollMotionState.Idle
+            : new FluentGpu.Scroll.Runtime.ScrollMotionState(kind, speed, UserDriven: true);
+        sc.Velocity = speed;
+        var content = sc.ContentNode;
+        bool horizontal = sc.Orientation == 1;
+        float trans = FluentGpu.Scroll.Runtime.ScrollContentPose.Translate(sc.WindowOrigin, sc.Offset, 1f);
+        float zoom = sc.ZoomFactor;
+        if (!content.IsNull && s.IsLive(content))
+        {
+            ref NodePaint cp = ref s.Paint(content);
+            FluentGpu.Scroll.Runtime.ScrollContentPose.WriteContentTransform(ref cp, in s.Bounds(content), horizontal, trans, zoom);
+            s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
     }
 
     sealed class NeverImageDecoder : IImageDecoder
@@ -73,8 +81,6 @@ static class AnimSuite
         AnimChecks();
         NavigationSelectionChecks();
         ExpressiveMotionChecks(strings);
-        BlurPinKeyChecks(strings);
-        ScrollBlurPolicyChecks();
         SkeletonChecks(strings);
         ProjectionChecks(strings);
         EnterExitChecks(strings);
@@ -100,11 +106,69 @@ static class AnimSuite
         CrossfadeChecks(strings);
         NestedHoverBoundaryChecks(strings);
         TransparentHoverScopeChecks(strings);
+        HoverFillScopeChecks(strings);
         WaveeSkeletonChecks(strings);
         BrushTransitionChecks(strings);
         AnimRestChecks(strings);
         WhileRestPoseChecks(strings);
         RotationCurrentValueChecks(strings);
+        ScrollSnapChecks();
+    }
+
+    // gate.scroll.snapToDevicePixel (audit 2026-09-22, cause #1) — ScrollEffectEval.SnapToDevicePixel is the ONE snap
+    // function the scroll pose (ScrollContentPose.Translate → the content's LocalTransform) runs the translation through, so glyphs (which already snap to a device row, GlyphRenderer.cs:1068-
+    // 1083) and rects/hairlines/images (which previously landed at the raw fractional device position) agree on the
+    // SAME grid instead of shimmering a fraction of a row apart. Pure/static, so this is a plain value-in/value-out
+    // gate — no scene needed.
+    static void ScrollSnapChecks()
+    {
+        bool RoundTrips(float offsetDip, float scale, float expectedDip)
+            => Near(FluentGpu.Scroll.Effects.ScrollEffectEval.SnapToDevicePixel(offsetDip, scale), expectedDip, 1e-4f);
+
+        // Identity at scale 1: a device pixel IS a DIP, so snapping to the nearest whole device pixel is snapping to
+        // the nearest whole DIP.
+        bool wholeScale1 = RoundTrips(3f, 1f, 3f) && RoundTrips(0f, 1f, 0f);
+        bool roundsScale1 = RoundTrips(3.2f, 1f, 3f) && RoundTrips(3.6f, 1f, 4f);
+
+        // Half-pixel ties: MathF.Round's default MidpointRounding.ToEven — 0.5 → 0 (even), 1.5 → 2 (even), and the
+        // negative mirror rounds the same way in magnitude (ties-to-even is symmetric about zero).
+        bool tiesToEven = RoundTrips(0.5f, 1f, 0f) && RoundTrips(1.5f, 1f, 2f)
+                        && RoundTrips(-0.5f, 1f, 0f) && RoundTrips(-1.5f, 1f, -2f);
+
+        // Negative offsets (a rubber-band overscroll past the top/left edge, or an RTL/horizontal axis in the
+        // opposite direction) snap exactly like positive ones — same grid, mirrored.
+        bool negative = RoundTrips(-3.2f, 1f, -3f) && RoundTrips(-3.6f, 1f, -4f);
+
+        // Every DPI this product ships (100%/125%/150%/165%/200%): round(offset*scale)/scale lands on a multiple of
+        // 1/scale DIP, which IS a whole device pixel at that scale.
+        bool everyDpi = true;
+        foreach (float scale in new[] { 1f, 1.25f, 1.5f, 1.65f, 2f })
+        {
+            float snapped = FluentGpu.Scroll.Effects.ScrollEffectEval.SnapToDevicePixel(37.3f, scale);
+            float devicePx = snapped * scale;
+            everyDpi &= Near(devicePx, MathF.Round(devicePx), 1e-3f);
+        }
+
+        // NaN/0/negative scale ⇒ identity (nothing sane to snap to — pass the value through unrounded rather than
+        // produce NaN/Infinity or silently invert sign).
+        bool zeroScaleIdentity = RoundTrips(3.7f, 0f, 3.7f);
+        bool nanScaleIdentity = float.IsNaN(FluentGpu.Scroll.Effects.ScrollEffectEval.SnapToDevicePixel(3.7f, float.NaN)) == false
+                                && RoundTrips(3.7f, float.NaN, 3.7f);
+        bool negScaleIdentity = RoundTrips(3.7f, -2f, 3.7f);
+        bool infScaleIdentity = RoundTrips(3.7f, float.PositiveInfinity, 3.7f);
+
+        // NaN/Infinity offset ⇒ passthrough unrounded (nothing sane to snap an undefined position to).
+        bool nanOffsetPassthrough = float.IsNaN(FluentGpu.Scroll.Effects.ScrollEffectEval.SnapToDevicePixel(float.NaN, 2f));
+        bool infOffsetPassthrough = float.IsPositiveInfinity(FluentGpu.Scroll.Effects.ScrollEffectEval.SnapToDevicePixel(float.PositiveInfinity, 2f));
+
+        Check("gate.scroll.snapToDevicePixel",
+            wholeScale1 && roundsScale1 && tiesToEven && negative && everyDpi
+            && zeroScaleIdentity && nanScaleIdentity && negScaleIdentity && infScaleIdentity
+            && nanOffsetPassthrough && infOffsetPassthrough,
+            $"wholeScale1={wholeScale1} roundsScale1={roundsScale1} tiesToEven={tiesToEven} negative={negative} "
+            + $"everyDpi={everyDpi} zeroScaleIdentity={zeroScaleIdentity} nanScaleIdentity={nanScaleIdentity} "
+            + $"negScaleIdentity={negScaleIdentity} infScaleIdentity={infScaleIdentity} "
+            + $"nanOffsetPassthrough={nanOffsetPassthrough} infOffsetPassthrough={infOffsetPassthrough}");
     }
 
     static void AnimChecks()
@@ -154,326 +218,10 @@ static class AnimSuite
             $"opacity {faded:0.00}->{held:0.00}, active={scaleStillActive}");
     }
 
-    static (ulong key, bool ok) BlurStripKey(StringTable strings, float ox, float oy, float sigma, float scaleX, float w, float h,
-        StringId text, float childDx, float childDy, float split, StringId text2 = default, float child2Dx = 0f, float child2Dy = 0f)
-    {
-        var dl = new DrawList();
-        var fam = strings.Intern("Segoe UI");
-        var layerRect = new RectF(ox, oy, w * scaleX, h);
-        dl.PushBlurLayer(layerRect, default, sigma, 1f);
-        var local = new RectF(0f, 0f, w, h);
-        var world = new Affine2D(scaleX, 0f, 0f, 1f, ox + childDx, oy + childDy);   // world = translate(layer origin) ∘ child offset
-        if (split >= 0f)
-            dl.DrawGlyphRunGradient(local, text, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world, 1f,
-                new ColorF(1f, 1f, 1f, 1f), new ColorF(1f, 1f, 1f, 0.4f), split, 0.05f, 0f);
-        else
-            dl.DrawGlyphRun(local, new ColorF(1f, 1f, 1f, 1f), text, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world, 1f);
-        if (!text2.IsEmpty)
-        {
-            var world2 = new Affine2D(scaleX, 0f, 0f, 1f, ox + child2Dx, oy + child2Dy);
-            dl.DrawGlyphRun(new RectF(0f, 0f, w, h), new ColorF(1f, 1f, 1f, 1f), text2, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world2, 1f);
-        }
-        dl.PopLayer(layerRect);
-        var bytes = dl.Bytes;
-        var L = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(sizeof(int)));
-        int start = sizeof(int) + Unsafe.SizeOf<PushLayerCmd>();
-        bool ok = BlurPinKey.TryCompute(bytes, start, in L, out ulong key, out _);
-        return (key, ok);
-    }
-
-    static (ulong key, PushLayerCmd L) BlurStripKeyL(StringTable strings, float ox, float oy, float sigma, float w, float h, StringId text)
-    {
-        var dl = new DrawList();
-        var fam = strings.Intern("Segoe UI");
-        var layerRect = new RectF(ox, oy, w, h);
-        dl.PushBlurLayer(layerRect, default, sigma, 1f);
-        var world = new Affine2D(1f, 0f, 0f, 1f, ox + 8f, oy + 6f);
-        dl.DrawGlyphRun(new RectF(0f, 0f, w, h), new ColorF(1f, 1f, 1f, 1f), text, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world, 1f);
-        dl.PopLayer(layerRect);
-        var bytes = dl.Bytes;
-        var L = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(sizeof(int)));
-        int start = sizeof(int) + Unsafe.SizeOf<PushLayerCmd>();
-        BlurPinKey.TryCompute(bytes, start, in L, out ulong key, out _);
-        return (key, L);
-    }
-
-    static void BlurPinKeyChecks(StringTable strings)
-    {
-        // BP.1 — the core G3 invariant: a pure translation (scroll) at two DIFFERENT (and fractional) origins ⇒ SAME key.
-        var t1 = strings.Intern("lyric line");
-        var (k1, o1) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, t1, 8f, 6f, -1f);
-        var (k2, o2) = BlurStripKey(strings, 100f - 13.7f, 200f - 37.4f, 4f, 1f, 300f, 40f, t1, 8f, 6f, -1f);
-        Check("BP.1 translation-invariant key (scroll → HIT, not a re-blur)", o1 && o2 && k1 == k2 && k1 != 0, $"k1={k1:X16} k2={k2:X16}");
-
-        // BP.2 — determinism: sweep the origin across 200 sub-pixel AND integer-crossing offsets; the key must not wobble
-        // (a raw fl(P+X)-X rebase would leak a ≤1-ULP jitter — rounding to the integer grid kills it). Non-integer child
-        // offsets (12.3, 5.7) make the P+X and P subtractions genuinely inexact, so this exercises the wobble path.
-        ulong refk = 0; bool allSame = true, allOk = true;
-        var t2 = strings.Intern("determinism");
-        for (int i = 0; i < 200; i++)
-        {
-            float frac = i / 50f;   // 0.00 .. 3.98, crossing 0/1/2/3
-            var (k, ok) = BlurStripKey(strings, 100f + frac, 200f + frac, 4f, 1f, 300f, 40f, t2, 12.3f, 5.7f, -1f);
-            if (i == 0) refk = k;
-            if (k != refk) allSame = false;
-            if (!ok) allOk = false;
-        }
-        Check("BP.2 key constant across 200 sub-pixel + integer-crossing offsets (no float wobble)", allOk && allSame && refk != 0, $"ref={refk:X16}");
-
-        // BP.3 — content sensitivity: a glyph text change and a wipe-Split change (DrawGlyphRunGradient) each flip the key.
-        var ta = strings.Intern("verse one");
-        var tb = strings.Intern("verse two");
-        var (ka, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, ta, 8f, 6f, -1f);
-        var (kb, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tb, 8f, 6f, -1f);
-        var (ks1, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, ta, 8f, 6f, 0.3f);
-        var (ks2, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, ta, 8f, 6f, 0.7f);
-        Check("BP.3 content-sensitive: text change and wipe-split change each flip the key", ka != kb && ks1 != ks2, $"text={ka != kb} split={ks1 != ks2}");
-
-        // BP.4 — size/sigma sensitivity: a σ step and a ScaleX step (⇒ device W/H + world M11) each flip the key. This
-        // proves SIZE stays a CONTENT miss (scale reuse is a non-goal; the app steps scale so the ease is position-only).
-        var tz = strings.Intern("emphasis");
-        var (kg1, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tz, 8f, 6f, -1f);
-        var (kg2, _) = BlurStripKey(strings, 100f, 200f, 5f, 1f, 300f, 40f, tz, 8f, 6f, -1f);
-        var (kc1, _) = BlurStripKey(strings, 100f, 200f, 4f, 1.00f, 300f, 40f, tz, 8f, 6f, -1f);
-        var (kc2, _) = BlurStripKey(strings, 100f, 200f, 4f, 1.10f, 300f, 40f, tz, 8f, 6f, -1f);
-        Check("BP.4 size-sensitive: σ change and ScaleX change each flip the key (size stays a content miss)", kg1 != kg2 && kc1 != kc2, $"sigma={kg1 != kg2} scale={kc1 != kc2}");
-
-        // BP.5 — relative-layout sensitivity: shift ONE child's local offset by ≥1 px (same size/content) ⇒ the key flips.
-        // Proves the rebase catches a genuine relative move — it is NOT a blanket "ignore all Dx/Dy" (no false-share).
-        var tr = strings.Intern("main");
-        var tr2 = strings.Intern("child2");
-        var (kr1, or1) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tr, 8f, 6f, -1f, tr2, 40f, 6f);
-        var (kr2, or2) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tr, 8f, 6f, -1f, tr2, 44f, 6f);
-        Check("BP.5 relative-layout-sensitive: a ≥1px child-local shift flips the key (no false-share)", or1 && or2 && kr1 != kr2 && kr1 != 0, $"k1={kr1:X16} k2={kr2:X16}");
-
-        // BP.6 — alloc: 10000 TryCompute calls on a fixed byte buffer under the GC tripwire ⇒ delta == 0 (stackalloc only,
-        // safe for the phase 6–13 record hot path).
-        {
-            var dl = new DrawList();
-            var fam = strings.Intern("Segoe UI");
-            var layerRect = new RectF(100f, 200f, 300f, 40f);
-            dl.PushBlurLayer(layerRect, default, 4f, 1f);
-            dl.DrawGlyphRun(new RectF(0f, 0f, 300f, 40f), new ColorF(1f, 1f, 1f, 1f), strings.Intern("alloc"), fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, new Affine2D(1f, 0f, 0f, 1f, 108f, 206f), 1f);
-            dl.PopLayer(layerRect);
-            var pl = MemoryMarshal.Read<PushLayerCmd>(dl.Bytes.Slice(sizeof(int)));
-            int st = sizeof(int) + Unsafe.SizeOf<PushLayerCmd>();
-            BlurPinKey.TryCompute(dl.Bytes, st, in pl, out _, out _);   // warm
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            ulong last = 0;
-            for (int i = 0; i < 10000; i++) { BlurPinKey.TryCompute(dl.Bytes, st, in pl, out ulong k, out _); last = k; }
-            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
-            Check("BP.6 BlurPinKey.TryCompute is zero-alloc (10000 calls)", delta == 0 && last != 0, $"delta={delta}B/10000 last={last:X16}");
-        }
-
-        // BP.7 — a live sigma animation may use the region-local fast path, but if that path rejects the layer (for
-        // example because both axes are canvas-sized) it must fall back to an exact TRANSIENT render, never the
-        // stationary pin cache. Otherwise a slowly easing full-page reveal retains one large pin per recurring sigma
-        // bucket. A settled authored blur remains cacheable.
-        {
-            var tAdmission = strings.Intern("admission");
-            var (_, settled) = BlurStripKeyL(strings, 100f, 200f, 4f, 300f, 40f, tAdmission);
-            var transient = settled with { BlurIsTransient = 1 };
-            var zero = settled with { BlurSigma = 0f };
-            Check("BP.7 transient animated blur cannot enter the stationary pin cache",
-                BlurPinKey.CanUseStationaryCache(in settled)
-                && !BlurPinKey.CanUseStationaryCache(in transient)
-                && !BlurPinKey.CanUseStationaryCache(in zero),
-                $"settled={BlurPinKey.CanUseStationaryCache(in settled)} transient={BlurPinKey.CanUseStationaryCache(in transient)} zero={BlurPinKey.CanUseStationaryCache(in zero)}");
-        }
-
-        // gate.blur.edgeClampedPinCaches (FA-2a edge-clamp fix). A self-blur whose halo-inflated region is clamped by a
-        // canvas edge is STILL cacheable: SelfBlurRegion clamps the region and the compositor's FindPin matches SIZE-
-        // exactly, so a STATIONARY clamped row produces a byte-identical key AND a byte-identical clamped region box two
-        // frames running ⇒ a pin HIT (no re-blur — the fix for an edge-clamped blur re-running its Gaussian every submit).
-        // A ≥1-device-px move that shifts the clamp changes the region-box size ⇒ a size MISS (re-render the exact strip),
-        // never a full pin squished into a shorter viewport. The size-exact match is why removing the old clamped-refusal
-        // is sound. (The D3D12 pool/pin lease is a --screenshot golden; the portable predicate is gated here.)
-        {
-            int cw = 1920, ch = 1080;
-            var te = strings.Intern("edge line");
-            // Near the TOP edge: σ=8 ⇒ tap halo min(ceil(24),32)=24 px; DeviceRect.Y=10 ⇒ 10−24 = −14 < 0 ⇒ clamped.
-            var (ke1, Le1) = BlurStripKeyL(strings, 100f, 10f, 8f, 300f, 40f, te);
-            var (ke2, Le2) = BlurStripKeyL(strings, 100f, 10f, 8f, 300f, 40f, te);   // stationary: byte-identical next frame
-            bool clamped = SelfBlurRegion.IsClamped(in Le1, 1f, cw, ch);
-            SelfBlurRegion.RegionBox(in Le1, 1f, cw, ch, out int aX, out int aY, out int aXe, out int aYe);
-            SelfBlurRegion.RegionBox(in Le2, 1f, cw, ch, out int bX, out int bY, out int bXe, out int bYe);
-            bool stationaryHit = ke1 == ke2 && ke1 != 0 && aX == bX && aY == bY && aXe == bXe && aYe == bYe && aY == 0; // clamped at top ⇒ minY 0
-            // Fully on-canvas ⇒ not clamped (mints/hits a full pin as before).
-            var (_, Lon) = BlurStripKeyL(strings, 100f, 400f, 8f, 300f, 40f, te);
-            bool onCanvasUnclamped = !SelfBlurRegion.IsClamped(in Lon, 1f, cw, ch);
-            // A 1px move at the clamped edge changes the region SIZE ⇒ size-exact FindPin misses (re-blur, no squish).
-            var (_, Lmv) = BlurStripKeyL(strings, 100f, 11f, 8f, 300f, 40f, te);
-            SelfBlurRegion.RegionBox(in Lmv, 1f, cw, ch, out _, out int mY, out _, out int mYe);
-            bool moveChangesSize = (mYe - mY) != (aYe - aY);
-            Check("gate.blur.edgeClampedPinCaches: a stationary canvas-clamped self-blur keys + region-boxes identically (pin HIT); a 1px edge move changes the region size (size MISS, no squish)",
-                clamped && stationaryHit && onCanvasUnclamped && moveChangesSize,
-                $"clamped={clamped} hit={stationaryHit} onCanvas={onCanvasUnclamped} moveMiss={moveChangesSize}");
-        }
-
-        // gate.blur.selfBlurHaloCoversKernel. The self-blur RegionBox halo (SelfBlurRegion.TapRadius) MUST equal the
-        // ACTUAL support of the downsample-then-separable-Gaussian schedule OpacityLayerCompositor.BlurInPlace runs —
-        // KernelRadiusTexels(σ/down)·down phys px — so the region's scissor + the cross-frame pin capture keep every
-        // non-zero tap (a HIT stays pixel-identical to a MISS). At σ ≤ 4 (down 1, the exact full-res path) it is the
-        // un-capped ceil(3σ); at large σ it is the true ≈3σ reach, NOT the old 32 px cap (which truncated the Gaussian
-        // to ~1.2σ at σ26). This ties the portable halo to AcrylicBackdropMath, the schedule owner.
-        {
-            bool haloOk = true;
-            string detail = "";
-            // Each σ: halo == kernel support, and (crucially) halo >= the down==1 full-res shader's discrete radius
-            // min(ceil(3σ),32) at σ≤4 so the exact path's scissor never clips a tap.
-            foreach (float s in new[] { 1f, 2f, 4f, 5f, 8f, 16f, 26f, 32f })
-            {
-                int down = AcrylicBackdropMath.DownsampleFactor(s, 1f);
-                float texelSigma = AcrylicBackdropMath.EffectiveTexelSigma(s, 1f, down);
-                int expected = AcrylicBackdropMath.KernelRadiusTexels(texelSigma) * down;
-                int actual = SelfBlurRegion.TapRadius(s);
-                bool covers = actual == expected && texelSigma <= AcrylicBackdropMath.MaxEffectiveTexelSigma + 1e-4f;
-                if (s <= 4f) covers &= actual >= (int)MathF.Ceiling(s * 3f);   // exact path: halo covers the shader's radius
-                if (!covers) { haloOk = false; detail += $" σ{s}:halo={actual}!=support{expected}(down{down},texelσ{texelSigma:0.00})"; }
-            }
-            // σ26 (the editorial-card case): down 8, texelσ 3.25, radius 10 texels ⇒ 80 px support — well past the old 32 cap.
-            int r26 = SelfBlurRegion.TapRadius(26f);
-            bool liftsCap = r26 == 80 && r26 > 32;
-            Check("gate.blur.selfBlurHaloCoversKernel: the self-blur halo == the downsample schedule's KernelRadiusTexels(σ/down)·down support (σ26 ⇒ 80 px, lifting the old 32 px truncation)",
-                haloOk && liftsCap, $"haloOk={haloOk} r26={r26}{detail}");
-        }
-
-        // gate.blur.tightWorkGeometry. A self blur has three distinct regions: the clipped output pixels, the subset of
-        // crisp source that can contribute to those pixels, and their union (the local RT work box). All conversions are
-        // conservative floor/ceil in physical pixels; blur sigma is already physical, so DPI scales geometry/clip but
-        // not the kernel halo. These are the portable invariants used by the D3D12 local-surface implementation.
-        {
-            static PushLayerCmd Layer(RectF rect, float sigma, RectF clip) => new(
-                rect, default, default, default, 0f, sigma, 0f, 0f,
-                Kind: (int)LayerKind.Blur, CompositeClip: clip);
-            static bool Is(SelfBlurPixelBox b, int x0, int y0, int x1, int y1)
-                => b.MinX == x0 && b.MinY == y0 && b.MaxX == x1 && b.MaxY == y1;
-
-            // DPI: floor left/top, ceil right/bottom, then add the physical (not DIP-scaled) sigma-3 halo of 9 px.
-            var dpiLayer = Layer(new RectF(10.25f, 20.25f, 100.5f, 40.5f), 3f, new RectF(0f, 0f, 200f, 100f));
-            var dpi = SelfBlurRegion.ComputeWork(in dpiLayer, 1.5f, 300, 150);
-            bool dpiOk = Is(dpi.VisibleOutput, 6, 21, 176, 101)
-                && Is(dpi.RequiredSource, 15, 30, 167, 92)
-                && Is(dpi.Work, 6, 21, 176, 101);
-            Check("gate.blur.tightWorkGeometry.dpi: DIP layer/clip scale conservatively while the physical sigma halo stays unscaled",
-                dpiOk, $"out={dpi.VisibleOutput} src={dpi.RequiredSource} work={dpi.Work}");
-
-            // Partial clip: only source within one halo of the 50x30 visible output is required. The far-left 128 px of
-            // the layer never contributes, and the work area is much smaller than its full 224x84 halo box.
-            var partialLayer = Layer(new RectF(100f, 100f, 200f, 60f), 4f, new RectF(240f, 110f, 50f, 30f));
-            var partial = SelfBlurRegion.ComputeWork(in partialLayer, 1f, 500, 300);
-            bool partialOk = Is(partial.VisibleOutput, 240, 110, 290, 140)
-                && Is(partial.RequiredSource, 228, 100, 300, 152)
-                && Is(partial.Work, 228, 100, 300, 152)
-                && partial.Work.AreaPx == 3744 && partial.Work.AreaPx < 224L * 84L;
-            Check("gate.blur.tightWorkGeometry.partialClip: clipped output pulls only its contributing crisp-source neighborhood",
-                partialOk, $"out={partial.VisibleOutput} src={partial.RequiredSource} work={partial.Work} area={partial.Work.AreaPx}");
-
-            // Canvas edge: off-canvas layer/halo pixels do not enter either source or output. A clip that touches only
-            // the blur halo still retains the narrow strip of layer source that contributes to it.
-            var edgeLayer = Layer(new RectF(-5f, 5f, 40f, 20f), 3f, RectF.Infinite);
-            var edge = SelfBlurRegion.ComputeWork(in edgeLayer, 1f, 100, 50);
-            var haloOnlyLayer = Layer(new RectF(100f, 100f, 200f, 60f), 4f, new RectF(305f, 110f, 5f, 30f));
-            var haloOnly = SelfBlurRegion.ComputeWork(in haloOnlyLayer, 1f, 500, 300);
-            bool edgesOk = Is(edge.VisibleOutput, 0, 0, 44, 34)
-                && Is(edge.RequiredSource, 0, 5, 35, 25)
-                && Is(edge.Work, 0, 0, 44, 34)
-                && Is(haloOnly.VisibleOutput, 305, 110, 310, 140)
-                && Is(haloOnly.RequiredSource, 293, 100, 300, 152)
-                && Is(haloOnly.Work, 293, 100, 310, 152);
-            Check("gate.blur.tightWorkGeometry.edges: canvas clamping is exact and a halo-only clip keeps its contributing source strip",
-                edgesOk, $"edge(out={edge.VisibleOutput} src={edge.RequiredSource}) halo(out={haloOnly.VisibleOutput} src={haloOnly.RequiredSource})");
-
-            var outsideLayer = Layer(new RectF(100f, 100f, 80f, 40f), 3f, new RectF(300f, 200f, 20f, 20f));
-            var outside = SelfBlurRegion.ComputeWork(in outsideLayer, 1f, 500, 300);
-            Check("gate.blur.tightWorkGeometry.outsideClip: a clip outside the halo schedules zero blur work",
-                outside.VisibleOutput.IsEmpty && outside.RequiredSource.IsEmpty && outside.Work.IsEmpty,
-                $"out={outside.VisibleOutput} src={outside.RequiredSource} work={outside.Work}");
-        }
-    }
-
     // A lyric follow translates the scroll content just like a wheel scroll, but it is programmatic rather than direct
     // manipulation. It must invalidate spans (the entering text has moved) without downgrading a newly-emphasized DoF
     // layer to HoldIfCached: that policy renders a crisp fallback on a cache miss, which made every lyric line flash
     // active at the hand-off. A genuine user scroll still gets the hold policy.
-    static void ScrollBlurPolicyChecks()
-    {
-        var scene = new SceneStore();
-        var viewport = scene.CreateNode(1);
-        var content = scene.CreateNode(1);
-        var lyric = scene.CreateNode(1);
-        scene.Root = viewport;
-        scene.AppendChild(viewport, content);
-        scene.AppendChild(content, lyric);
-        scene.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
-        ref ScrollState scroll = ref scene.ScrollRef(viewport);
-        scroll.ContentNode = content;
-        scene.Bounds(viewport) = new RectF(0f, 0f, 240f, 160f);
-        scene.Bounds(content) = new RectF(0f, 0f, 240f, 320f);
-        scene.Bounds(lyric) = new RectF(0f, 48f, 240f, 42f);
-        ref NodePaint lyricPaint = ref scene.Paint(lyric);
-        lyricPaint = NodePaint.Default;
-        lyricPaint.VisualKind = VisualKind.Box;
-        lyricPaint.Fill = ColorF.FromRgba(0xF5, 0xF5, 0xF5);
-        lyricPaint.BlurSigma = 8f;
-        lyricPaint.BlurCachePolicy = BlurCachePolicy.HoldIfCached;
-
-        var dl = new DrawList();
-        scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -18f);
-        scene.Mark(content, NodeFlags.TransformDirty);
-        SceneRecordStats programmatic = SceneRecorder.Record(scene, dl);
-        BlurCachePolicy programmaticPolicy = FirstBlurPolicy(dl.Bytes);
-
-        scene.ClearTransformDirty();
-        scene.ClearRecordDirty();
-        TestApplyScroll(scene, viewport, FluentGpu.Scroll.ScrollActivity.Drag, moved: FluentGpu.Scroll.ScrollWriteMask.OffsetY);
-        scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -36f);
-        scene.Mark(content, NodeFlags.TransformDirty);
-        SceneRecordStats user = SceneRecorder.Record(scene, dl);
-        BlurCachePolicy userPolicy = FirstBlurPolicy(dl.Bytes);
-
-        // …and the FRAME-GLOBAL arm of the same gate. The hold is not only a lyrics-viewport scroll: AppHost latches
-        // `holdSelfBlurForScroll` for 0.12 s on ANY user scroll and the recorder ORs it in (`globalBlurHold ||
-        // userScrollActive`), so scrolling the MAIN app holds the lyrics panel's DoF layers while the panel itself is
-        // perfectly still — UserScrollActive false throughout. That is the exact state the "whole panel flashes crisp"
-        // report lives in, and nothing exercised it. Recorded from a CLEAN (untranslated) frame so the assertion is
-        // about the hold arm alone, not about motion.
-        scene.ClearTransformDirty();
-        scene.ClearRecordDirty();
-        TestApplyScroll(scene, viewport, FluentGpu.Scroll.ScrollActivity.Idle);
-        scene.Mark(lyric, NodeFlags.PaintDirty);
-        SceneRecordStats global = SceneRecorder.Record(scene, dl, holdSelfBlurForAnyUserScroll: true);
-        BlurCachePolicy globalPolicy = FirstBlurPolicy(dl.Bytes);
-
-        bool programmaticKeepsDof = programmatic.BlurHoldCandidateCount == 0
-            && programmaticPolicy == BlurCachePolicy.Normal;
-        bool userMayHold = user.BlurHoldCandidateCount == 1
-            && userPolicy == BlurCachePolicy.HoldIfCached;
-        bool globalHolds = global.BlurHoldCandidateCount == 1
-            && globalPolicy == BlurCachePolicy.HoldIfCached
-            && !scroll.UserScrollActive;
-        Check("gate.lyrics.programmaticFollowKeepsDoF: a programmatic content translation records the full blur, while direct user scroll — or a frame-global scroll hold with the panel itself still — may hold it",
-            programmaticKeepsDof && userMayHold && globalHolds,
-            $"programmatic={programmaticPolicy}/hold{programmatic.BlurHoldCandidateCount} user={userPolicy}/hold{user.BlurHoldCandidateCount} global={globalPolicy}/hold{global.BlurHoldCandidateCount}");
-
-        static BlurCachePolicy FirstBlurPolicy(ReadOnlySpan<byte> bytes)
-        {
-            int pos = 0;
-            while (pos + sizeof(int) <= bytes.Length)
-            {
-                DrawOp op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
-                pos += sizeof(int);
-                if (op == DrawOp.PushLayer)
-                {
-                    PushLayerCmd layer = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(pos));
-                    if (layer.Kind == (int)LayerKind.Blur) return (BlurCachePolicy)layer.BlurCachePolicy;
-                }
-                pos += DrawPayloadSize(op);
-            }
-            return (BlurCachePolicy)255;
-        }
-    }
-
     static void ExpressiveMotionChecks(StringTable strings)
     {
         // EM.a — the four expressive curves: endpoints 0→1; SmoothOut decelerates (past halfway by t=0.5); Overshoot &
@@ -506,31 +254,19 @@ static class AnimSuite
             scene.Paint(node).BlurSigma = 8f;
             scene.ClearFlagBits(node, NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
             engine.Animate(node, AnimChannel.BlurSigma, 8f, 0f, 100f, Easing.Linear);
-            bool intentSeeded = scene.Paint(node).BlurAnimationActive != 0;
             engine.Tick(0f);
             float b0 = scene.Paint(node).BlurSigma;
             engine.Tick(50f);
             float bMid = scene.Paint(node).BlurSigma;
             var fl = scene.Flags(node);
-            bool midOk = Near(bMid, 4f, 0.2f) && scene.Paint(node).BlurAnimationActive != 0
+            bool midOk = Near(bMid, 4f, 0.2f)
                 && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
             engine.Tick(60f);   // > 100ms → complete
             float bEnd = scene.Paint(node).BlurSigma;
-            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive && scene.Paint(node).BlurAnimationActive == 0;
-
-            // The bit follows slab lifecycle rather than sigma: KeepAlive parking turns it off without destroying
-            // the row, resume restores it, and cancellation clears it even if the last blur value remains.
-            engine.Animate(node, AnimChannel.BlurSigma, 0f, 8f, 100f, Easing.Linear);
-            bool reseeded = scene.Paint(node).BlurAnimationActive != 0;
-            engine.SetNodeParked(node, true);
-            bool parked = scene.Paint(node).BlurAnimationActive == 0;
-            engine.SetNodeParked(node, false);
-            bool resumed = scene.Paint(node).BlurAnimationActive != 0;
-            engine.Cancel(node, AnimChannel.BlurSigma);
-            bool cancelled = scene.Paint(node).BlurAnimationActive == 0;
-            Check("EM.b BlurSigma eases 8→0 and transient intent follows live/non-parked track lifecycle",
-                intentSeeded && Near(b0, 8f, 0.1f) && midOk && doneOk && reseeded && parked && resumed && cancelled,
-                $"intentSeed={intentSeeded} t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00} done={doneOk} park={parked}/{resumed} cancel={cancelled}");
+            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive;
+            Check("EM.b BlurSigma eases 8→0, marks PaintDirty (never LayoutDirty), and settles at 0",
+                Near(b0, 8f, 0.1f) && midOk && doneOk,
+                $"t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00} done={doneOk}");
         }
 
         // EM.c — the recorder wraps a node with Blur>0 in a balanced PushLayer{Blur} carrying its σ; a 0-blur node does not.
@@ -547,26 +283,12 @@ static class AnimSuite
             SceneRecorder.Record(s, dl);
             var dev = new HeadlessGpuDevice();
             dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
-            bool blurLayer = false; float sigma = 0f; RectF blurClip = default; bool staticIntent = true;
+            bool blurLayer = false; float sigma = 0f; RectF blurClip = default;
             foreach (var l in dev.LastLayers) if (l.Kind == (int)LayerKind.Blur)
             {
                 blurLayer = true; sigma = l.BlurSigma; blurClip = l.CompositeClip;
-                staticIntent &= l.BlurIsTransient == 0;
             }
             bool balanced = dev.LayerBalance == 0;
-
-            // A real BlurSigma row propagates the engine-owned transient intent into the POD layer command.
-            var animatedNode = s.FirstChild(s.Root);
-            var anim = new AnimEngine(s);
-            anim.Animate(animatedNode, AnimChannel.BlurSigma, 6f, 5f, 100f, Easing.Linear);
-            anim.Tick(0f);
-            var dlAnimated = new DrawList();
-            SceneRecorder.Record(s, dlAnimated);
-            var devAnimated = new HeadlessGpuDevice();
-            devAnimated.SubmitDrawList(dlAnimated.Bytes, dlAnimated.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
-            bool transientIntent = false;
-            foreach (var l in devAnimated.LastLayers)
-                if (l.Kind == (int)LayerKind.Blur) transientIntent |= l.BlurIsTransient == 1;
 
             var s0 = new SceneStore();
             var recon0 = new TreeReconciler(s0, strings);
@@ -601,10 +323,10 @@ static class AnimSuite
             foreach (var l in devi.LastLayers) if (l.Kind == (int)LayerKind.Blur) noBlurWhenInvisible = false;
             bool activeClipCarried = Near(blurClip.X, 0f) && Near(blurClip.Y, 0f) && Near(blurClip.W, 80f) && Near(blurClip.H, 60f);
 
-            Check("EM.c recorder emits balanced PushLayer{Blur} carrying clip + static/transient intent; none for invisible/zero blur",
-                blurLayer && Near(sigma, 6f, 0.01f) && activeClipCarried && balanced && staticIntent && transientIntent
+            Check("EM.c recorder emits balanced PushLayer{Blur} carrying its clip; none for invisible/zero blur",
+                blurLayer && Near(sigma, 6f, 0.01f) && activeClipCarried && balanced
                     && noBlurWhenZero && noBlurWhenInvisible,
-                $"blurLayer={blurLayer} sigma={sigma:0.0} clip={blurClip} balanced={balanced} static={staticIntent} transient={transientIntent} noneZero={noBlurWhenZero} noneInvisible={noBlurWhenInvisible}");
+                $"blurLayer={blurLayer} sigma={sigma:0.0} clip={blurClip} balanced={balanced} noneZero={noBlurWhenZero} noneInvisible={noBlurWhenInvisible}");
         }
 
         // EM.c2 — a self-blur is visible by its Gaussian support, not only by the sharp layout rect. The recorder must
@@ -1190,7 +912,7 @@ static class AnimSuite
                 resolves && plainNull, $"resolves={resolves} plainNull={plainNull}");
         }
 
-        // CF.a connected-fly rebuild (FG_DETACHED_FLY): SceneRecorder.RecordDetached draws a DetachedAnimSlab snapshot as
+        // CF.a connected-fly rebuild (ConnectedAnimation.DetachedFly): SceneRecorder.RecordDetached draws a DetachedAnimSlab snapshot as
         // an image at its baked WORLD transform + opacity — the render path that replaces the live overlay node. Device-
         // verified directly (the per-frame ConnectedAnimation.SyncDetached mirror, which feeds these fields, uses the exact
         // recorder world formula, so a fly drawn this way is pixel-identical to the live-overlay path).
@@ -1881,16 +1603,17 @@ static class AnimSuite
                 $"mid=({mid.R:0.00},{mid.G:0.00},{mid.B:0.00},{mid.A:0.00}) sameAlpha={sameAlphaIdentical}");
         }
 
-        // 23u — CSS position:sticky (a ScrollBinds PinTop op): the header scrolls normally, PINS at the viewport top while
+        // 23u — CSS position:sticky (an Element .Sticky() effect): the header scrolls normally, PINS at the viewport top while
         // its parent card is in view (hit-test follows — AbsoluteRect includes the pin transform), CLAMPS at the
-        // card's end (never escapes its containing block), releases on scroll-back, and fires OnFlag per transition.
+        // card's end (never escapes its containing block), and releases on scroll-back. There is no OnFlag callback
+        // any more (scroll rework) — pin state is asserted directly from `NodeFlags.StickyPinned`.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("sticky", new Size2(320, 200), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            int pinEvents = 0; bool lastPin = false; NodeHandle headerN = NodeHandle.Null;
+            NodeHandle headerN = NodeHandle.Null;
             var root = new W0fStaticProbe
             {
                 Build = () => ScrollView(new BoxEl
@@ -1904,7 +1627,7 @@ static class AnimSuite
                             Direction = 1,
                             Children =
                             [
-                                new BoxEl { Height = 40f, ScrollBinds = [ new() { PinTop = 0f, OnFlag = p => { pinEvents++; lastPin = p; } } ], OnRealized = h => headerN = h },
+                                new BoxEl { Height = 40f, OnRealized = h => headerN = h }.Sticky(0f),
                                 new BoxEl { Height = 400f },                       // card content
                             ],
                         },
@@ -1934,10 +1657,9 @@ static class AnimSuite
 
             void ScrollTo(float y)
             {
-                // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel
-                // (SceneScrollSink.Apply, the sole chokepoint, writes both the result columns and the content
-                // transform) and run a frame so Reclamp resolves it before the sticky pass reads geometry.
-                host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, y, immediate: true));
+                // An immediate plan on the viewport's handle; the frame below evaluates it (result columns + the
+                // posed content transform) before the pass reads geometry.
+                host.TryGetScrollHandle(vp)?.ScrollTo(y, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
                 // Wake the frame loop like real input would (a wheel scroll sets frameNeeded via dispatch; a raw
                 // ScrollRef write does not) — the sticky pass runs in the full frame pipeline.
                 window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
@@ -1960,25 +1682,25 @@ static class AnimSuite
             ScrollTo(0f);     // released, back at its natural slot
             bool releasedFlag = (s.Flags(headerN) & NodeFlags.StickyPinned) == 0;
             float releasedY = s.AbsoluteRect(headerN).Y;
-            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases even when reconcile already restored identity, OnPinned fires per transition",
+            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases even when reconcile already restored identity",
                 pinnedNow && Near(pinnedY, vpTop, 0.5f)
                 && stillPinned && Near(clampedY, vpTop - 20f, 0.5f)
-                && releasedFlag && Near(releasedY, restY, 0.5f)
-                && pinEvents == 2 && !lastPin,
-                $"restY={restY:0} pinnedY={pinnedY:0} (vpTop={vpTop:0}) clampedY={clampedY:0} releasedY={releasedY:0} pinEvents={pinEvents} lastPin={lastPin}");
+                && releasedFlag && Near(releasedY, restY, 0.5f),
+                $"restY={restY:0} pinnedY={pinnedY:0} (vpTop={vpTop:0}) clampedY={clampedY:0} releasedY={releasedY:0}");
         }
 
-        // 23u3 — sticky clip-top (ScrollBindDsl.ClipTopAtViewport, the paint dual of the 23u pin): the body's
+        // 23u3 — sticky clip-top (.StickyClip(), the paint dual of the 23u pin): the body's
         // ClipRect.top rides the viewport-anchored line (viewport top + inset) 1:1 with the offset while engaged,
-        // releases back to the Infinite sentinel when the line sits above the body, and OnFlag fires per edge —
-        // the mechanism that keeps the page backdrop (not the cards) behind a pinned section header.
+        // and releases back to the Infinite sentinel when the line sits above the body — the mechanism that keeps
+        // the page backdrop (not the cards) behind a pinned section header. There is no OnFlag callback any more
+        // (scroll rework); the engage/release edges are asserted directly from ClipRect.IsInfinite.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("sticky-clip", new Size2(320, 200), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            int clipEvents = 0; bool lastClip = false; NodeHandle bodyN = NodeHandle.Null;
+            NodeHandle bodyN = NodeHandle.Null;
             var root = new W0fStaticProbe
             {
                 Build = () => ScrollView(new BoxEl
@@ -1992,13 +1714,12 @@ static class AnimSuite
                             Direction = 1,
                             Children =
                             [
-                                new BoxEl { Height = 40f, ScrollBinds = [ new() { PinTop = 0f } ] },   // the pinned header
+                                new BoxEl { Height = 40f }.Sticky(0f),   // the pinned header
                                 new BoxEl                                                              // the section body
                                 {
                                     Height = 400f,
-                                    ScrollBinds = [ new() { ClipTopAtViewport = 40f, OnFlag = c => { clipEvents++; lastClip = c; } } ],
                                     OnRealized = h => bodyN = h,
-                                },
+                                }.StickyClip(40f),
                             ],
                         },
                         new BoxEl { Height = 600f },                               // after the section
@@ -2023,10 +1744,9 @@ static class AnimSuite
             var content = s.ScrollRef(vp).ContentNode;
             void ScrollTo(float y)
             {
-                // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel
-                // (SceneScrollSink.Apply, the sole chokepoint, writes both the result columns and the content
-                // transform) and run a frame so Reclamp resolves it before this pass reads geometry.
-                host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, y, immediate: true));
+                // An immediate plan on the viewport's handle; the frame below evaluates it (result columns + the
+                // posed content transform) before the pass reads geometry.
+                host.TryGetScrollHandle(vp)?.ScrollTo(y, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
                 window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
                 host.RunFrame();
             }
@@ -2040,10 +1760,10 @@ static class AnimSuite
             float clipB = s.Paint(bodyN).ClipRect.Y;
             ScrollTo(90f);    // line at content-y 130, above the body top (140) → released, not a stale 0-clip
             bool releasedMid = s.Paint(bodyN).ClipRect.IsInfinite;
-            Check("23u3. sticky clip-top — body ClipRect.top rides the viewport line 1:1, releases above the body, OnFlag per edge",
+            Check("23u3. sticky clip-top — body ClipRect.top rides the viewport line 1:1, releases above the body",
                 restReleased && Near(clipA, 150f, 0.5f) && Near(clipB - clipA, 1f, 0.1f)
-                && releasedMid && clipEvents == 2 && !lastClip,
-                $"rest={restReleased} clipA={clipA:0.#} clipB={clipB:0.#} releasedMid={releasedMid} clipEvents={clipEvents} lastClip={lastClip}");
+                && releasedMid,
+                $"rest={restReleased} clipA={clipA:0.#} clipB={clipB:0.#} releasedMid={releasedMid}");
 
             // Fully-hidden freeze: once the sticky line is past the body bottom, ClipRect.Y locks at Bounds.H so
             // further offset advances do not keep rewriting / dirtying the node (playlist overscan hitch).
@@ -2081,22 +1801,21 @@ static class AnimSuite
                         // The pinned band — FIRST sibling, exactly like ArtistPage's hero and DetailTracks' chrome.
                         new BoxEl
                         {
-                            Height = 40f, ScrollBinds = [ new() { PinTop = 0f } ],
+                            Height = 40f,
                             Children = [ new BoxEl { Height = 40f, Width = 320f, OnClick = () => bandClicks++,
                                                      OnRealized = h => bandBtn = h } ],
-                        },
+                        }.Sticky(0f),
                         // The scrolled body — LAST sibling, clipped at the band's lower edge.
                         new BoxEl
                         {
                             Direction = 1,
-                            ScrollBinds = [ new() { ClipTopAtViewport = 40f } ],
                             Children =
                             [
                                 new BoxEl { Height = 300f, Width = 320f, OnClick = () => rowClicks++,
                                             OnRealized = h => rowN = h },
                                 new BoxEl { Height = 600f },
                             ],
-                        },
+                        }.StickyClip(40f),
                     ],
                 }),
             };
@@ -2118,10 +1837,9 @@ static class AnimSuite
             var content = s.ScrollRef(vp).ContentNode;
             void ScrollTo(float y)
             {
-                // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel
-                // (SceneScrollSink.Apply, the sole chokepoint, writes both the result columns and the content
-                // transform) and run a frame so Reclamp resolves it before this pass reads geometry.
-                host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, y, immediate: true));
+                // An immediate plan on the viewport's handle; the frame below evaluates it (result columns + the
+                // posed content transform) before the pass reads geometry.
+                host.TryGetScrollHandle(vp)?.ScrollTo(y, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
                 window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
                 host.RunFrame();
             }
@@ -2135,87 +1853,13 @@ static class AnimSuite
                 $"clipEngaged={clipEngaged} inBand={inBand.Raw.Index} band={bandBtn.Raw.Index} belowCut={belowCut.Raw.Index} row={rowN.Raw.Index}");
         }
 
-        // 23u2 — trailing-anchored presented height: a pinned hero collapses without relayout, its bottom-authored
-        // child + edge stay attached to the live reveal edge, the following content meets that edge through normal
-        // scrolling, and hit-testing follows the child-group shift.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("scroll-collapse-trailing", new Size2(320, 240), 1f));
-            window.Show();
-            var device = new HeadlessGpuDevice();
-            var fonts = new HeadlessFontSystem(strings);
-            NodeHandle heroN = NodeHandle.Null, edgeN = NodeHandle.Null, bodyN = NodeHandle.Null;
-            int edgeClicks = 0, bodyClicks = 0;
-            var root = new W0fStaticProbe
-            {
-                Build = () => ScrollView(new BoxEl
-                {
-                    Direction = 1,
-                    Children =
-                    [
-                        new BoxEl
-                        {
-                            Height = 200f, Direction = 1, Justify = FlexJustify.End, ClipToBounds = true,
-                            ScrollBinds =
-                            [
-                                new() { PinTop = 0f },
-                                new()
-                                {
-                                    From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing,
-                                    Range = ScrollRange.Px(0f, 200f), OutStart = 200f, OutEnd = 0f
-                                },
-                            ],
-                            OnRealized = h => heroN = h,
-                            Children =
-                            [
-                                new BoxEl { Height = 30f, OnClick = () => edgeClicks++, OnRealized = h => edgeN = h },
-                            ],
-                        },
-                        new BoxEl { Height = 600f, OnClick = () => bodyClicks++, OnRealized = h => bodyN = h },
-                    ],
-                }),
-            };
-            using var host = new AppHost(app, window, device, fonts, strings, root);
-            host.RunFrame();
-            var s = host.Scene;
-            NodeHandle FindScrollable(NodeHandle n)
-            {
-                if (n.IsNull) return NodeHandle.Null;
-                if (s.HasScroll(n)) return n;
-                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
-                {
-                    var r = FindScrollable(c);
-                    if (!r.IsNull) return r;
-                }
-                return NodeHandle.Null;
-            }
-            var vp = FindScrollable(s.Root);
-            // scroll-v3: OffsetY/TargetY are gone as pokeable columns and ApplyContinuous is now called by
-            // SceneScrollSink.Apply itself — post an immediate ScrollTo and let the kernel/sink resolve everything.
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 80f, immediate: true));
-            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
-            host.RunFrame();
-
-            float vpTop = s.AbsoluteRect(vp).Y;
-            float ph = s.Paint(heroN).PresentedH;
-            float shift = s.Paint(heroN).ChildShiftY;
-            RectF edge = s.AbsoluteRect(edgeN);
-            RectF body = s.AbsoluteRect(bodyN);
-            var edgePoint = new Point2(edge.X + 5f, edge.Y + edge.H * 0.5f);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, edgePoint, 0, 0));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, edgePoint, 0, 0));
-            host.RunFrame();
-            var bodyPoint = new Point2(body.X + 5f, body.Y + 10f);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, bodyPoint, 0, 0));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, bodyPoint, 0, 0));
-            host.RunFrame();
-
-            bool geometry = Near(ph, 120f, 0.5f) && Near(shift, -80f, 0.5f)
-                && Near(edge.Bottom, vpTop + ph, 0.75f) && Near(body.Y, vpTop + ph, 0.75f);
-            Check("23u2. trailing PresentedH collapse keeps child/content on one live edge and hit-testing follows",
-                geometry && edgeClicks == 1 && bodyClicks == 1,
-                $"ph={ph:0.0} shift={shift:0.0} edgeBottom={edge.Bottom:0.0} bodyY={body.Y:0.0} vpTop={vpTop:0.0} edgeClicks={edgeClicks} bodyClicks={bodyClicks}");
-        }
+        // 23u2 (DELETED, scroll rework) — "trailing-anchored presented height" drove NodePaint.PresentedH/ChildShiftY
+        // straight from scroll offset via a ScrollBinds entry (`From = ScrollChannel.Offset, To =
+        // BindSink.PresentedHTrailing`). ScrollChannel/BindSink/the generic ScrollBind map-to-arbitrary-paint-field
+        // DSL are gone; the new `FluentGpu.Scroll.Effects.ScrollEffect` only writes TransY/Opacity/ClipTop/ScaleXY/
+        // ThumbPos (Sticky/StickyClip/Parallax/Fade/Scale/Thumb) — there is no channel that reaches PresentedH. The
+        // subject (a scroll-scrubbed presented-height collapse) has no replacement API, so this gate is deleted
+        // rather than ported.
 
         // 23v/23w — scroll-position restoration (ScrollKey): a revisit seeds the saved offset BEFORE the first realize
         // (no scroll-to-top flash, even cold), a never-seen key starts at the top, and a reused viewport saves/restores
@@ -2238,16 +1882,16 @@ static class AnimSuite
                 return NodeHandle.Null;
             }
             // Scroll "A" to row 20 (offset 400), then unmount → the offset is saved under its ScrollKey.
-            // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel.
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)Find(s.Root).Raw.Index, 400f, immediate: true));
+            // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the handle.
+            host.TryGetScrollHandle(Find(s.Root))?.ScrollTo(400f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             host.RunFrame();
             root.Mounted.Value = false; host.RunFrame();          // unmount → SaveScroll caches "A"=400
             root.Mounted.Value = true;  host.RunFrame();          // cold remount → seed BEFORE the first realize
             var restoredNode = Find(s.Root);
             ref ScrollState ra = ref s.ScrollRef(restoredNode);
             float restoredOffset = ra.OffsetY; int restoredFirst = ra.FirstRealized;
-            // RestorePending moved to the kernel's own ScrollBody (scroll-v3-plan §2.1) — not a scene column anymore.
-            bool noPending = !host.ScrollKernel.TryGetBody((int)restoredNode.Raw.Index, out var restoredBody) || !restoredBody.RestorePending;
+            // RestorePending is the handle's own state now (ScrollHandle.RestorePending, design §9) — not a scene column.
+            bool noPending = !(host.TryGetScrollHandle(restoredNode)?.RestorePending ?? false);
             Check("scroll-restore.cold-seed: a cold remount seeds the saved offset on the FIRST realized window (no scroll-to-top flash)",
                 Near(restoredOffset, 400f, 1f) && restoredFirst > 0 && noPending,
                 $"offset={restoredOffset:0} firstRealized={restoredFirst} pending={!noPending}");
@@ -2255,7 +1899,7 @@ static class AnimSuite
             // Switch the ScrollKey on the reused viewport: new content starts at the top; the old content's offset is saved.
             root.Key.Value = "B"; host.RunFrame();
             float bTop = s.ScrollRef(Find(s.Root)).OffsetY;
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)Find(s.Root).Raw.Index, 600f, immediate: true));
+            host.TryGetScrollHandle(Find(s.Root))?.ScrollTo(600f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             host.RunFrame();
             root.Key.Value = "A"; host.RunFrame();                // back to A → restore 400
             float aBack = s.ScrollRef(Find(s.Root)).OffsetY;
@@ -2289,7 +1933,7 @@ static class AnimSuite
             }
             var before = Find(s.Root);
             // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel.
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)before.Raw.Index, 400f, immediate: true));
+            host.TryGetScrollHandle(before)?.ScrollTo(400f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             host.RunFrame();
 
             root.WrapperKey.Value = 1; host.RunFrame();   // re-key the ANCESTOR → the list remounts onto a new viewport
@@ -3283,10 +2927,9 @@ static class AnimSuite
         bool edgeClipOk = edgeLayer.Kind == (int)LayerKind.EdgeFade
             && Near(edgeLayer.DeviceRect.H, 160f)
             && Near(edgeLayer.CompositeClip.H, 80f)
-            && Near(edgeLayer.CompositeClip.W, 200f)
-            && edgeLayer.LayerId != 0;
-        Check("30a. edge-fade layer carries effective composite clip + stable source id",
-            edgeClipOk, $"deviceH={edgeLayer.DeviceRect.H:0.#} clip=({edgeLayer.CompositeClip.W:0.#}x{edgeLayer.CompositeClip.H:0.#}) id={edgeLayer.LayerId}");
+            && Near(edgeLayer.CompositeClip.W, 200f);
+        Check("30a. edge-fade layer carries the effective composite clip",
+            edgeClipOk, $"deviceH={edgeLayer.DeviceRect.H:0.#} clip=({edgeLayer.CompositeClip.W:0.#}x{edgeLayer.CompositeClip.H:0.#})");
 
         // An authored/local ClipRect is the visible boundary of the fade. Sticky ClipTopAtViewport drives this same paint
         // column while scrolling; anchoring the layer at the node's un-clipped top puts the top ramp above the scissor,
@@ -3343,335 +2986,10 @@ static class AnimSuite
         bool nestedKinds = nestedDev.LastLayers.Count >= 2
             && nestedDev.LastLayers[0].Kind == (int)LayerKind.EdgeFade
             && nestedDev.LastLayers[1].Kind == (int)LayerKind.Acrylic
-            && nestedDev.LastLayers[0].LayerId != 0
-            && nestedDev.LastLayers[1].LayerId != 0
             && nestedDev.LayerBalance == 0;
-        Check("30b. edge-fade -> acrylic records balanced nested layers with stable target identities",
+        Check("30b. edge-fade -> acrylic records balanced nested layers",
             nestedKinds, $"layers={nestedDev.LastLayers.Count} balance={nestedDev.LayerBalance}");
 
-        EdgeFadeStripChecks();
-    }
-
-    // Build an EdgeFade PushLayerCmd exactly as DrawList.PushEdgeFadeLayer would (the recorder already zeroes the band
-    // of every edge missing from the mask, which is why band > 0 IS the shader's enabled-edge predicate).
-    static PushLayerCmd EdgeFadeLayer(RectF rect, RectF clip, CornerRadius4 radii,
-        float bandL, float bandT, float bandR, float bandB,
-        float blurSigma = 0f, float groupAlpha = 1f, float intensity = 1f, int falloff = 0)
-        => new(rect, radii, default, default, 0f, blurSigma, 0f, 0f,
-            (int)LayerKind.EdgeFade, groupAlpha,
-            bandL, bandT, bandR, bandB, falloff, intensity,
-            (bandL > 0f ? 1 : 0) | (bandT > 0f ? 2 : 0) | (bandR > 0f ? 4 : 0) | (bandB > 0f ? 8 : 0), clip);
-
-    // The PURE-fade strip path (Wave 2.5): EdgeFadeStrips.Compute replaces the full-canvas group RT with ≤ 4 snapshot +
-    // restore strips. Two invariants make that legal and BOTH are gated here, because either one failing is a silent
-    // visual corruption rather than a crash:
-    //   DISJOINT — a pixel restored twice gets the feather applied twice;
-    //   COVERING — every pixel of the composite box whose analytic feather is < 1 must be in a strip, else the
-    //              direct-drawn subtree keeps a hard edge where the fade should have dissolved it.
-    static void EdgeFadeStripChecks()
-    {
-        Span<SelfBlurPixelBox> strips = stackalloc SelfBlurPixelBox[EdgeFadeStrips.MaxStrips];
-
-        // ── disjointness + coverage + containment over the representative fade shapes ────────────────────────────────
-        bool ok = true;
-        string detail = "";
-        void Probe(string what, in PushLayerCmd L, float scale, int cw, int ch, int expectedCount)
-        {
-            Span<SelfBlurPixelBox> s = stackalloc SelfBlurPixelBox[EdgeFadeStrips.MaxStrips];
-            EdgeFadeStrips.Compute(in L, scale, cw, ch, s, out int n);
-            if (n != expectedCount) { ok = false; detail += $" {what}:count={n}!={expectedCount}"; return; }
-
-            int boxL = Math.Clamp((int)MathF.Floor(L.CompositeClip.X * scale), 0, cw);
-            int boxT = Math.Clamp((int)MathF.Floor(L.CompositeClip.Y * scale), 0, ch);
-            int boxR = Math.Clamp((int)MathF.Ceiling((L.CompositeClip.X + L.CompositeClip.W) * scale), boxL, cw);
-            int boxB = Math.Clamp((int)MathF.Ceiling((L.CompositeClip.Y + L.CompositeClip.H) * scale), boxT, ch);
-
-            for (int i = 0; i < n; i++)
-            {
-                var a = s[i];
-                if (a.IsEmpty) { ok = false; detail += $" {what}:emptyStrip{i}"; }
-                if (a.MinX < boxL || a.MinY < boxT || a.MaxX > boxR || a.MaxY > boxB)
-                { ok = false; detail += $" {what}:strip{i}OutsideBox"; }
-                for (int j = i + 1; j < n; j++)
-                {
-                    var b = s[j];
-                    bool overlap = Math.Max(a.MinX, b.MinX) < Math.Min(a.MaxX, b.MaxX)
-                                && Math.Max(a.MinY, b.MinY) < Math.Min(a.MaxY, b.MaxY);
-                    if (overlap) { ok = false; detail += $" {what}:overlap{i}/{j}"; }
-                }
-            }
-
-            for (int y = boxT; y < boxB; y++)
-                for (int x = boxL; x < boxR; x++)
-                {
-                    float f = EdgeFadeStrips.FeatherAt(in L, scale, x + 0.5f, y + 0.5f);
-                    if (f >= 1f - 1e-4f) continue;                     // identity pixel — the direct draw is already right
-                    bool covered = false;
-                    for (int i = 0; i < n && !covered; i++)
-                        covered = x >= s[i].MinX && x < s[i].MaxX && y >= s[i].MinY && y < s[i].MaxY;
-                    if (!covered) { ok = false; detail += $" {what}:uncovered({x},{y},f={f:0.000})"; return; }
-                }
-        }
-
-        // Bottom-only 32 (the scroll-fade shape): a single full-width strip flush against the box bottom.
-        Probe("bottom32", EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 32), 1f, 400, 300, 1);
-        // The SAME fade clipped ABOVE its band (a scroll viewport cutting at y=80): the band is entirely outside the
-        // composite box, every visible pixel has feather 1 ⇒ NO strip at all, not an empty one.
-        Probe("bottom32.clippedAway", EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 80), default, 0, 0, 0, 32), 1f, 400, 300, 0);
-        // Perimeter 40 with corner 28 — the corner ARCS are what force the top/bottom strips to widen to the radius.
-        Probe("perimeter", EdgeFadeLayer(new RectF(20, 20, 280, 200), new RectF(20, 20, 280, 200), CornerRadius4.All(28f), 40, 40, 40, 40), 1f, 400, 300, 4);
-        Probe("perimeter@2x", EdgeFadeLayer(new RectF(10, 10, 140, 100), new RectF(10, 10, 140, 100), CornerRadius4.All(28f), 40, 40, 40, 40), 2f, 400, 300, 4);
-        // A radius much larger than the band: the arc reaches well past the straight band, still fully covered.
-        Probe("bigRadius", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(60f), 8, 8, 8, 8), 1f, 400, 300, 4);
-        // Horizontal-only: the corners are INACTIVE (each needs both adjacent edges), so left/right take the full height.
-        Probe("horizontal", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(24f), 24, 0, 24, 0), 1f, 400, 300, 2);
-        Probe("vertical", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(24f), 0, 24, 0, 24), 1f, 400, 300, 2);
-        // Partial intensity never reaches 0, but the covered set is the same (feather < 1 only inside the bands).
-        Probe("intensity.5", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(28f), 40, 40, 40, 40, intensity: 0.5f), 1f, 400, 300, 4);
-        Probe("smoothstep", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(28f), 40, 40, 40, 40, falloff: 1), 1f, 400, 300, 4);
-        // Bands deeper than the box: top+bottom swallow every row, so no left/right strip is emitted (still disjoint).
-        Probe("swallow", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), default, 40, 400, 40, 400), 1f, 400, 300, 1);
-
-        // Degenerate inputs produce NO strips (the fade is an identity pass and the subtree just draws through).
-        var noEdges = EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 0);
-        EdgeFadeStrips.Compute(in noEdges, 1f, 400, 300, strips, out int noEdgeCount);
-        var emptyClip = EdgeFadeLayer(new RectF(0, 0, 200, 160), default, default, 0, 0, 0, 32);
-        EdgeFadeStrips.Compute(in emptyClip, 1f, 400, 300, strips, out int emptyClipCount);
-        var offCanvas = EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 32);
-        EdgeFadeStrips.Compute(in offCanvas, 1f, 0, 0, strips, out int noCanvasCount);
-
-        // Per-edge disabled ⇒ no strip on that side: bottom-only puts its single strip flush against the box BOTTOM.
-        var bottomOnly = EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 32);
-        EdgeFadeStrips.Compute(in bottomOnly, 1f, 400, 300, strips, out int bottomCount);
-        bool bottomShape = bottomCount == 1 && strips[0].MinX == 0 && strips[0].MaxX == 200
-                        && strips[0].MinY == 128 && strips[0].MaxY == 160;
-
-        Check("gate.edgefade.strips: pure-fade strips are disjoint, inside the composite box, and cover every feathered pixel",
-            ok && noEdgeCount == 0 && emptyClipCount == 0 && noCanvasCount == 0 && bottomShape,
-            $"noEdges={noEdgeCount} emptyClip={emptyClipCount} noCanvas={noCanvasCount} bottom={bottomCount}@" +
-            $"({strips[0].MinX},{strips[0].MinY},{strips[0].MaxX},{strips[0].MaxY}){detail}");
-
-        // ── the eligibility split the strip path rests on ───────────────────────────────────────────────────────────
-        // A blur-carrying fade MUST keep the legacy full-canvas lease (BlurInPlace reads a halo past the composite
-        // clip, so its RT needs a full-canvas clear); a pure fade clears only its box — and is what the strip path
-        // replaces outright. Landing the σ > 0 arm here guards the eligibility split itself.
-        var pure = EdgeFadeLayer(new RectF(20, 20, 100, 100), new RectF(20, 20, 100, 100), default, 0, 0, 0, 24);
-        var blurred = EdgeFadeLayer(new RectF(20, 20, 100, 100), new RectF(20, 20, 100, 100), default, 0, 0, 0, 24, blurSigma: 8f);
-        EdgeFadeLayerClear.Compute(in pure, 1f, 400, 300, out int pl, out int pt, out int pr, out int pb, out bool pFull);
-        EdgeFadeLayerClear.Compute(in blurred, 1f, 400, 300, out int bl, out int bt, out int br, out int bb, out bool bFull);
-        bool clearOk = !pFull && pl == 20 && pt == 20 && pr == 120 && pb == 120
-                    && bFull && bl == 0 && bt == 0 && br == 400 && bb == 300
-                    && EdgeFadeStrips.IsPureFade(in pure) && !EdgeFadeStrips.IsPureFade(in blurred);
-        // A group alpha below 1 is also ineligible: drawing the subtree direct would double-blend overlapping children.
-        var faded = EdgeFadeLayer(new RectF(20, 20, 100, 100), new RectF(20, 20, 100, 100), default, 0, 0, 0, 24, groupAlpha: 0.5f);
-        clearOk = clearOk && !EdgeFadeStrips.IsPureFade(in faded);
-        Check("gate.edgefade.clear-blur-fullcanvas: sigma>0 clears the FULL canvas (legacy path only); a pure fade clears its box and is strip-eligible",
-            clearOk, $"pure=({pl},{pt},{pr},{pb}) full={pFull} blur=({bl},{bt},{br},{bb}) full={bFull}");
-
-        // ── the exactness algebra the whole path rests on ───────────────────────────────────────────────────────────
-        // Legacy composite:  out = C*k + D*(1 - a*k)     (premultiplied SourceOver of src x k)
-        // Direct draw:       F   = C + D*(1 - a)
-        // Strip restore:     lerp(D, F, k) = D + k*(C - D*a) = C*k + D*(1 - a*k)   — identical for ANY backdrop alpha.
-        // A single-snapshot SourceOver restore would only match at d == 1, which a Mica back buffer never guarantees.
-        double worst = 0;
-        foreach (float a in new[] { 0f, 0.25f, 0.5f, 0.75f, 1f })
-            foreach (float cs in new[] { 0f, 0.3f, 1f })
-                foreach (float d in new[] { 0f, 0.2f, 0.6f, 1f })
-                    foreach (float ds in new[] { 0f, 0.4f, 1f })
-                        foreach (float k in new[] { 0f, 0.1f, 0.5f, 0.9f, 1f })
-                        {
-                            float c = cs * a, dc = ds * d;              // premultiplied channel values
-                            float legacy = c * k + dc * (1f - a * k);
-                            float f = c + dc * (1f - a);
-                            float restore = dc + k * (f - dc);
-                            worst = Math.Max(worst, Math.Abs(legacy - restore));
-                            float legacyA = a * k + d * (1f - a * k);
-                            float fA = a + d * (1f - a);
-                            worst = Math.Max(worst, Math.Abs(legacyA - (d + k * (fA - d))));
-                        }
-        Check("gate.edgefade.strip-lerp-exact: lerp(D, F, feather) reproduces the legacy composite for every (C, a, D, d, f)",
-            worst < 1e-6, $"maxAbsErr={worst:0.###e+0}");
-
-        StripInsideGroupChecks();
-        LocalBlurSizeBailChecks();
-        StaleHoldPinChecks();
-    }
-
-    // ── the ENCLOSING-TARGET half of strip eligibility (EdgeFadeStrips.GroupAllowsStrip) ─────────────────────────────
-    // The D3D12 arm of this decision is unreachable headlessly (it needs a real device + swapchain), so the DECISION is
-    // extracted as a pure function and gated here — the DmEngageWedge precedent. Two things are checked: the truth table
-    // itself, and that a recorder-emitted "pure fade nested inside a full-canvas blur group" stream is (a) classified as
-    // STRIP (so efL stays 0 for that shape) and (b) still perfectly balanced when walked with the backend's own
-    // push/pop bookkeeping — a strip group and a leased group both occupy one _layerKinds slot, so a misclassification
-    // that opened one and closed the other would desync the whole stream.
-    static void StripInsideGroupChecks()
-    {
-        // Truth table. Admitted: no group at all, or an innermost FULL-CANVAS Blur lease (UsedW == 0).
-        // Refused: a plain Opacity group (cleared only over its patched extent), an EdgeFade group (cleared only over
-        // its box), and a REGION-LOCAL blur (UsedW > 0 ⇒ shifted viewport into a bucketed scratch, i.e. exactly the
-        // group shape B.1's widened region-local path now produces on a pin miss).
-        bool table =
-               EdgeFadeStrips.GroupAllowsStrip(0, 0, 0)
-            && EdgeFadeStrips.GroupAllowsStrip(0, (int)LayerKind.Opacity, 0)          // no group open ⇒ kind is moot
-            && EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Blur, 0)
-            && EdgeFadeStrips.GroupAllowsStrip(3, (int)LayerKind.Blur, 0)             // only the INNERMOST is examined
-            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Blur, 512)          // region-local ⇒ shifted viewport
-            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Opacity, 0)
-            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.EdgeFade, 0)
-            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Acrylic, 0);
-
-        // The recorder shape: PushBlurLayer(σ 6, full canvas) → PushEdgeFadeLayer(pure) → fill → PopLayer → PopLayer.
-        var dl = new DrawList();
-        var outerRect = new RectF(0, 0, 400, 300);
-        var fadeRect = new RectF(20, 20, 200, 160);
-        dl.PushBlurLayer(outerRect, default, 6f, 1f);
-        dl.PushEdgeFadeLayer(fadeRect, fadeRect, default, 1f, 8, 0f, 0f, 0f, 32f, 0, 1f);
-        dl.FillRoundRect(new RectF(0, 0, 200, 160), default, new ColorF(1f, 1f, 1f, 1f), new Affine2D(1f, 0f, 0f, 1f, 20f, 20f), 1f);
-        dl.PopLayer(fadeRect);
-        dl.PopLayer(outerRect);
-
-        // Walk it exactly as SubmitWithLayers does: maintain the open-group stack (kind + localUsedW) and the layer-kind
-        // stack, taking the strip path iff IsPureFade ∧ GroupAllowsStrip. Depth never exceeds MaxStripFadeDepth here.
-        var groups = new List<(int Kind, int UsedW)>();
-        var kinds = new List<int>();
-        int strips = 0, leases = 0, imbalance = 0;
-        int pos = 0;
-        var bytes = dl.Bytes;
-        while (pos + sizeof(int) <= bytes.Length)
-        {
-            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos));
-            int body = pos + sizeof(int);
-            if (op == DrawOp.PushLayer)
-            {
-                var L = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(body));
-                pos = body + Unsafe.SizeOf<PushLayerCmd>();
-                bool strip = EdgeFadeStrips.IsPureFade(in L)
-                    && EdgeFadeStrips.GroupAllowsStrip(groups.Count,
-                        groups.Count > 0 ? groups[^1].Kind : 0,
-                        groups.Count > 0 ? groups[^1].UsedW : 0);
-                if (strip) { strips++; kinds.Add(-2); }
-                // A full-canvas blur lease (this stream's outer layer): UsedW 0. Nothing here goes region-local.
-                else { leases++; groups.Add((L.Kind, 0)); kinds.Add(L.Kind); }
-                continue;
-            }
-            if (op == DrawOp.PopLayer)
-            {
-                pos = body + Unsafe.SizeOf<PopLayerCmd>();
-                if (kinds.Count == 0) { imbalance++; continue; }
-                int k = kinds[^1];
-                kinds.RemoveAt(kinds.Count - 1);
-                if (k != -2)
-                {
-                    if (groups.Count == 0) imbalance++;
-                    else groups.RemoveAt(groups.Count - 1);
-                }
-                continue;
-            }
-            if (op == DrawOp.FillRoundRect) { pos = body + Unsafe.SizeOf<FillRoundRectCmd>(); continue; }
-            imbalance++;   // unexpected op — the fixture only records the three above
-            break;
-        }
-        bool balanced = imbalance == 0 && kinds.Count == 0 && groups.Count == 0;
-        Check("gate.edgefade.strip-in-blur-group: a pure fade inside a FULL-CANVAS blur group takes the STRIP path (efL 0) and the layer stream stays balanced",
-            table && balanced && strips == 1 && leases == 1,
-            $"table={table} strips={strips} leases={leases} balanced={balanced} kinds={kinds.Count} groups={groups.Count} imbalance={imbalance}");
-    }
-
-    // ── B.1: the region-local blur's own SIZE predicate ──────────────────────────────────────────────────────────────
-    // The backend no longer computes an eligibility test before calling TryAcquireLocalBlur — the ATTEMPT is the
-    // predicate, and its decline condition is the canvas-size bail (`usedW >= _w && usedH >= _h`, both axes). That bail
-    // is pure geometry: SelfBlurRegion.ComputeWork's clip-aware work box inflated by a full TapRadius guard on each
-    // side. Gate the truth of that arithmetic, since a region that is NOT smaller than the canvas must keep the legacy
-    // lease (the region-local target buys nothing and loses nested/overspill behaviour).
-    static void LocalBlurSizeBailChecks()
-    {
-        const int cw = 400, ch = 300;
-        static (int usedW, int usedH) Used(in PushLayerCmd L, int canvasW, int canvasH)
-        {
-            var g = SelfBlurRegion.ComputeWork(in L, 1f, canvasW, canvasH);
-            if (g.Work.IsEmpty || g.VisibleOutput.IsEmpty) return (0, 0);
-            int guard = SelfBlurRegion.TapRadius(L.BlurSigma);
-            return (g.Work.Width + guard * 2, g.Work.Height + guard * 2);
-        }
-        // A small transient row blur (the TextSwap/IconSwap shape): comfortably sub-canvas on both axes ⇒ the attempt
-        // succeeds and ~1.7 ms of full-canvas clear + Gaussian is not paid.
-        var small = BlurLayer(new RectF(40, 40, 160, 48), 4f);
-        var (sw, sh) = Used(in small, cw, ch);
-        // A canvas-filling blur: the work box already spans the canvas and the guard only grows it ⇒ the bail fires.
-        var full = BlurLayer(new RectF(0, 0, cw, ch), 4f);
-        var (fw, fh) = Used(in full, cw, ch);
-        // Wide-but-short: NOT bailed — the bail needs BOTH axes at canvas size (a full-width rail row is exactly this).
-        var wide = BlurLayer(new RectF(0, 100, cw, 40), 4f);
-        var (ww, wh) = Used(in wide, cw, ch);
-        bool ok = sw > 0 && !(sw >= cw && sh >= ch)
-               && fw >= cw && fh >= ch
-               && !(ww >= cw && wh >= ch);
-        Check("gate.blur.localSizeBail: the region-local attempt IS the size predicate — sub-canvas regions take it, a canvas-sized one declines (both axes)",
-            ok, $"small=({sw}x{sh}) full=({fw}x{fh}) wide=({ww}x{wh}) canvas=({cw}x{ch})");
-    }
-
-    static PushLayerCmd BlurLayer(RectF rect, float sigma)
-        => new(rect, default, default, default, 0f, sigma, 0f, 0f, (int)LayerKind.Blur, 1f, CompositeClip: rect);
-
-    // gate.blur.staleHoldPin — the HoldIfCached MISS fallback (the lyrics "whole panel flashes crisp" fix).
-    //
-    // The asymmetry this closes: AcrylicScrollHold's contract is that a hold EXTENDS an existing snapshot and never
-    // invents one, while the self-blur hold used to substitute a CRISP, full-alpha inline rendering on a miss — and
-    // because the recorder folds a row's opacity into the layer's GroupAlpha and resets the subtree to 1, that fallback
-    // dropped the dim as well as the blur. A lyric-line advance moves the distance-keyed σ ladder on every visible row
-    // at once, so the whole panel took it in the same frame.
-    //
-    // The D3D12 path itself (pool entries, SRV banks, viewports) is unreachable headlessly, so the two decisions that
-    // make the fallback correct are gated on their portable helpers, which the leaf calls verbatim:
-    // BlurPinKey.StalePinEligible (WHICH pin may serve) and SelfBlurRegion.StalePinBox (WHERE it lands, and — the
-    // load-bearing half — at WHAT SIZE). Pixels remain a --screenshot check.
-    static void StaleHoldPinChecks()
-    {
-        const int cw = 1920, ch = 1080;
-        const ulong layer = 0x0000002A_00000007UL;    // a scene layer id (index|gen), as SceneRecorder packs it
-        const ulong other = 0x0000002B_00000007UL;
-        ulong now = 1000UL;
-
-        // WHICH: a live, already-blurred pin OF THIS LAYER within the age bound serves; every other entry does not.
-        bool servesOwn = BlurPinKey.StalePinEligible(layer, 0xABCDUL, blurReady: true, inUse: false, mintFence: now - 3UL, layer, now);
-        bool refusesOtherLayer = !BlurPinKey.StalePinEligible(other, 0xABCDUL, true, false, now - 3UL, layer, now);
-        bool refusesTransient = !BlurPinKey.StalePinEligible(layer, 0UL, true, false, now - 3UL, layer, now);   // PinHash 0 = a transient scratch slot
-        bool refusesUnblurred = !BlurPinKey.StalePinEligible(layer, 0xABCDUL, false, false, now - 3UL, layer, now);
-        bool refusesInUse = !BlurPinKey.StalePinEligible(layer, 0xABCDUL, true, true, now - 3UL, layer, now);
-        bool refusesAnonymous = !BlurPinKey.StalePinEligible(0UL, 0xABCDUL, true, false, now - 3UL, 0UL, now);   // id 0 = manual/test draw lists
-        // …and the staleness BOUND: a layer id packs a node handle, and a recycled index+gen pair is the one route to a
-        // wrong-content pin. At the limit it still serves; one frame past it, it does not.
-        bool servesAtLimit = BlurPinKey.StalePinEligible(layer, 0xABCDUL, true, false, now - (ulong)BlurPinKey.StalePinMaxAgeFrames, layer, now);
-        bool refusesTooOld = !BlurPinKey.StalePinEligible(layer, 0xABCDUL, true, false, now - (ulong)BlurPinKey.StalePinMaxAgeFrames - 1UL, layer, now);
-        // The hold latch it must outlive is 0.12 s of scroll — ~8 frames at 60 Hz, ~15 at 120.
-        bool boundOutlivesHold = BlurPinKey.StalePinMaxAgeFrames >= 16;
-        Check("gate.blur.staleHoldPin.eligibility: a hold miss serves only a LIVE, already-blurred, age-bounded pin of its OWN layer (never another node's, never a transient slot, never an in-use lease)",
-            servesOwn && refusesOtherLayer && refusesTransient && refusesUnblurred && refusesInUse && refusesAnonymous
-            && servesAtLimit && refusesTooOld && boundOutlivesHold,
-            $"own={servesOwn} otherLayer={refusesOtherLayer} transient={refusesTransient} unblurred={refusesUnblurred} inUse={refusesInUse} anon={refusesAnonymous} limit={servesAtLimit}/{refusesTooOld} bound={BlurPinKey.StalePinMaxAgeFrames}");
-
-        // WHERE + WHAT SIZE. The pin was minted for other content at another σ, so its size is NOT this frame's region
-        // size. It must be drawn at its OWN size at THIS frame's region origin: position follows the node (a held blur
-        // still scrolls), size never does — mapping its UV[0,1] onto the current region is exactly the stretch the
-        // size-exact FindPin pairing exists to make impossible.
-        var thin = BlurLayer(new RectF(100f, 400f, 300f, 40f), 3f);     // this frame: σ3 ⇒ halo 9 ⇒ 318 x 58
-        SelfBlurRegion.RegionBox(in thin, 1f, cw, ch, out int rx, out int ry, out int rxe, out int rye);
-        int pinW = rxe - rx + 24, pinH = rye - ry + 24;                  // the pin: a FATTER σ from an earlier frame
-        var box = SelfBlurRegion.StalePinBox(in thin, 1f, cw, ch, pinW, pinH);
-        bool noStretch = box.Width == pinW && box.Height == pinH;
-        bool atCurrentOrigin = box.MinX == rx && box.MinY == ry;
-        bool differsFromRegion = box.MaxX != rxe || box.MaxY != rye;     // the whole point: sizes genuinely disagree
-        // A pure translation moves the box with the node, and nothing else about it changes.
-        var moved = BlurLayer(new RectF(140f, 460f, 300f, 40f), 3f);
-        var movedBox = SelfBlurRegion.StalePinBox(in moved, 1f, cw, ch, pinW, pinH);
-        SelfBlurRegion.RegionBox(in moved, 1f, cw, ch, out int mx, out int my, out _, out _);
-        bool travels = movedBox.MinX == mx && movedBox.MinY == my
-                    && movedBox.Width == pinW && movedBox.Height == pinH;
-        // A degenerate pin is no pin (the caller falls through to the crisp inline fallback).
-        bool emptyIsEmpty = SelfBlurRegion.StalePinBox(in thin, 1f, cw, ch, 0, 0).IsEmpty;
-        Check("gate.blur.staleHoldPin.geometry: a stale pin composites at THIS frame's region origin sized from the PIN's own W/H — it travels, and it is never stretched onto the current region box",
-            noStretch && atCurrentOrigin && differsFromRegion && travels && emptyIsEmpty,
-            $"box={box} pin=({pinW}x{pinH}) region=({rx},{ry},{rxe},{rye}) moved={movedBox} empty={emptyIsEmpty}");
     }
 
     static void AnimEngineChecks(StringTable strings)
@@ -4018,6 +3336,60 @@ static class AnimSuite
         Check("58d. a lazy affordance mounting into a hovered scope seeds a REVEAL but never a nested control's scale",
             mountedRevealOn && mountedButtonQuiet,
             $"reveal={mountedRevealOn} buttonQuiet={mountedButtonQuiet}");
+    }
+
+    // ── gate.record.hover-fill-scope: hover/press progress does not LEAK through an interaction scope at record time ──
+    // The page ItemsView wraps every row in an interactive ItemContainer that gets HoverWithin for any pointer inside
+    // the row (InputDispatcher publishes it for every PointerBit/ClickBit/PressedBit ancestor). SceneRecorder's
+    // InheritedState.ForChild only replaced the inherited progress when a node was interactive AND had local progress,
+    // so an interactive slot root WITHOUT an InteractionAnim row (a PagedShelf card slot: OnPointerReleased/PressedBit
+    // only) passed its ancestor's HoverT=1 down and every card's HoverFill painted at once. The rule is now the
+    // cascade's own boundary (IsNestedHoverBoundary): an interactive, non-HoverScopeTransparent node starts its
+    // subtree from ITS OWN state — eased progress when it has a row, else its instant Hovered/Pressed flags — never
+    // the ancestor's. A HoverScopeTransparent listener is not a scope and still passes the enclosing state through.
+    static void HoverFillScopeChecks(StringTable strings)
+    {
+        static BoxEl Slot(string key, bool transparent = false) => new BoxEl
+        {
+            Key = key, Width = 100f, Height = 40f,
+            OnPointerPressed = static _ => { },                       // PressedBit: a scope in its own right, no anim row
+            HoverScopeTransparent = transparent,
+            Children = [new BoxEl { Width = 100f, Height = 40f, Fill = ColorF.FromRgba(0, 0, 0), HoverFill = ColorF.FromRgba(255, 255, 255), PressedFill = ColorF.FromRgba(0, 255, 0) }],
+        };
+        var scene = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Width = 400f, Height = 40f,
+            OnPointerPressed = static _ => { },                       // the ItemContainer: PressedBit, HoverWithin below
+            Children = [Slot("a"), Slot("b"), Slot("c", transparent: true), Slot("d")],
+        });
+        var container = scene.Root;
+        var slotA = scene.FirstChild(container);
+        var slotB = scene.NextSibling(slotA);
+        var slotC = scene.NextSibling(slotB);
+        var slotD = scene.NextSibling(slotC);
+        scene.SetFlagBits(container, NodeFlags.HoverWithin);         // the pointer is somewhere in the row…
+        scene.SetFlagBits(slotA, NodeFlags.Hovered);                 // …directly on slot A (leaf hover, no HoverWithin, no row)
+        scene.SetFlagBits(slotD, NodeFlags.Pressed);                 // slot D is pressed (instant flag, no row)
+
+        var dl = new DrawList();
+        var dev = new HeadlessGpuDevice();
+        dl.Reset(); SceneRecorder.Record(scene, dl);
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 40), 1f, ColorF.Transparent));
+        // Only the four inner boxes carry a fill; identify each by its x (the slots and container paint nothing).
+        ColorF FillAt(float x)
+        {
+            foreach (var r in dev.LastRects)
+                if (MathF.Abs(r.Rect.X + r.Transform.Dx - x) < 0.5f) return r.Fill;
+            return ColorF.FromRgba(128, 128, 128);
+        }
+        ColorF a = FillAt(0f), b = FillAt(100f), c = FillAt(200f), d = FillAt(300f);
+        bool aHovered = a.R > 0.99f && a.G > 0.99f;                  // its own slot root is hovered → hover fill
+        bool bRest = b.R < 0.01f && b.G < 0.01f;                     // un-hovered scope → the row's HoverWithin does not leak
+        bool cPassThrough = c.R > 0.99f && c.G > 0.99f;              // transparent listener → the row's state passes through
+        bool dPressed = d.G > 0.99f && d.R < 0.01f;                  // pressed slot root → its own press, not the row's hover
+        Check("gate.record.hover-fill-scope an interactive slot root without an anim row scopes its subtree's record-time hover/press to ITS OWN flags (hovered A paints HoverFill, un-hovered B stays at rest under a HoverWithin row container, pressed D paints PressedFill) while a HoverScopeTransparent listener C still passes the row's hover through",
+            aHovered && bRest && cPassThrough && dPressed && dev.LastRects.Count == 4,
+            $"a=({a.R:0.00},{a.G:0.00}) b=({b.R:0.00},{b.G:0.00}) c=({c.R:0.00},{c.G:0.00}) d=({d.R:0.00},{d.G:0.00}) rects={dev.LastRects.Count}");
     }
 
     // ── 58e-58h: BoxEl.HoverScopeTransparent — a pointer LISTENER that is not an interaction scope ────────────────
@@ -4677,10 +4049,13 @@ static class AnimSuite
         ulong[] dirtySort = dl.SortKeys.ToArray();
         int dirtyCommands = dl.CommandCount;
         var steady = SceneRecorder.Record(scene, dl, spans: spans, collectSpanReuseMisses: true);
+        // Retained tiles: a clean root slice is KEPT whole — its arena untouched, zero bytes copied or recorded — and the
+        // flattened stream is byte-identical to the last.
         bool steadyCopy = steady.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
             && steady.SpansReused == 1
             && steady.SpansReRecorded == 0
-            && steady.SpanBytesCopied == dirtyBytes.Length
+            && steady.SpanBytesCopied == 0
+            && steady.Slices.KeptAll && steady.Slices.BytesRecorded == 0
             && dl.CommandCount == dirtyCommands
             && dl.Bytes.SequenceEqual(dirtyBytes)
             && dl.SortKeys.SequenceEqual(dirtySort);
@@ -4691,29 +4066,29 @@ static class AnimSuite
         scene.Mark(root, NodeFlags.TransformDirty);
         var moved = SceneRecorder.Record(scene, dl, spans: spans);
         float movedFirstDx = FirstFillDx(dl.Bytes);
-        bool transformRebase = moved.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
-            && moved.SpansRebased == 1
-            && moved.SpansReused == 1
-            && moved.SpansReRecorded == 0
-            && moved.SpanBytesCopied == dirtyBytes.Length
+        // A moved STATIC root re-records (its transform is recorded content); nothing is ever rebased by translation.
+        bool transformRecord = moved.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
+            && moved.SpansReRecorded == 3
             && dl.CommandCount == dirtyCommands
             && Near(movedFirstDx, steadyFirstDx + 25f);
 
+        // scroll-root-cause-2026-09-23 §5.2 (Part B): the SpanMiss* reason counters are ALWAYS ON now (cheap int
+        // increments against state the recorder already computed) in every build configuration — no longer compiled
+        // out of Release nor gated behind an opt-in the host never set. `Diag.CompiledIn` no longer has anything to
+        // do with whether these are populated, so these two checks no longer branch on it.
         Check("P6.clean-span first record populates spans under the normal recorder path",
             (first.SpanReuseDisabledReasons & SpanReuseDisabledReason.FirstRecord) != 0
             && first.SpansReRecorded >= 3
-            && (Diag.CompiledIn ? first.SpanReuseMisses.GlobalDisabled >= first.SpansReRecorded : first.SpanReuseMisses == default),
+            && first.SpanReuseMisses.GlobalDisabled >= first.SpansReRecorded,
             $"firstReason={first.SpanReuseDisabledReasons} recorded={first.SpansReRecorded} missDisabled={first.SpanReuseMisses.GlobalDisabled}");
         Check("P6.clean-span dirty child re-records ancestors while reusing a clean sibling",
-            dirtyBranch && (Diag.CompiledIn
-                ? dirty.SpanReuseMisses.ExactDirty > 0 && dirty.SpanReuseMisses.MoveGuard > 0
-                : dirty.SpanReuseMisses == default),
-            $"reused={dirty.SpansReused} recorded={dirty.SpansReRecorded} copied={dirty.SpanBytesCopied} exactDirty={dirty.SpanReuseMisses.ExactDirty} moveGuard={dirty.SpanReuseMisses.MoveGuard}");
-        Check("P6.clean-span steady frame copies the root span byte-identically",
+            dirtyBranch && dirty.SpanReuseMisses.ExactDirty > 0,
+            $"reused={dirty.SpansReused} recorded={dirty.SpansReRecorded} copied={dirty.SpanBytesCopied} exactDirty={dirty.SpanReuseMisses.ExactDirty}");
+        Check("gate.slices.keep-whole a steady frame KEEPS the clean root slice whole (0 bytes copied or recorded) and flattens byte-identically",
             steadyCopy && steady.SpanReuseMisses == default,
-            $"reused={steady.SpansReused} recorded={steady.SpansReRecorded} copied={steady.SpanBytesCopied}/{dirtyBytes.Length} misses={steady.SpanReuseMisses}");
-        Check("P6.v2 transform-only dirty root reuses by translating the prior span, not by re-recording",
-            transformRebase, $"reused={moved.SpansReused} rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} copied={moved.SpanBytesCopied}/{dirtyBytes.Length} firstDx={steadyFirstDx:0.##}->{movedFirstDx:0.##}");
+            $"reused={steady.SpansReused} recorded={steady.SpansReRecorded} copied={steady.SpanBytesCopied} keptAll={steady.Slices.KeptAll} bytes={steady.Slices.BytesRecorded} misses={steady.SpanReuseMisses}");
+        Check("gate.slices.static-transform-records a moved STATIC root re-records its subtree (a static slice's transform is recorded content — nothing is rebased)",
+            transformRecord, $"reused={moved.SpansReused} recorded={moved.SpansReRecorded} firstDx={steadyFirstDx:0.##}->{movedFirstDx:0.##}");
 
         var desc = new SceneStore();
         var descRoot = desc.CreateNode(1);
@@ -4734,9 +4109,9 @@ static class AnimSuite
         desc.Mark(descChild, NodeFlags.TransformDirty);
         var descMoved = SceneRecorder.Record(desc, descDl, spans: descSpans);
         float descMovedDx = FirstFillDx(descDl.Bytes);
-        Check("P6.v2 descendant transform re-records the ancestor span while rebasing the moving child",
-            descMoved.SpansReRecorded >= 1 && descMoved.SpansRebased >= 1 && Near(descMovedDx, 12f),
-            $"recorded={descMoved.SpansReRecorded} rebased={descMoved.SpansRebased} firstDx={descMovedDx:0.##}");
+        Check("P6.v2 a descendant transform re-records the moved child and its ancestor chain, nothing else",
+            descMoved.SpansReRecorded == 2 && Near(descMovedDx, 12f),
+            $"recorded={descMoved.SpansReRecorded} firstDx={descMovedDx:0.##}");
 
         var scrollScene = new SceneStore();
         var viewport = scrollScene.CreateNode(1);
@@ -4766,30 +4141,47 @@ static class AnimSuite
         rowBPaint.Fill = rowBColor;
         var scrollDl = new DrawList();
         var scrollSpans = new SpanTable();
-        _ = SceneRecorder.Record(scrollScene, scrollDl, spans: scrollSpans);
+        var scrollRec = new SlicedRecording();
+        _ = scrollRec.Record(scrollScene, scrollDl, scrollSpans);
         bool initialScrollColor = SameColor(FirstFillColor(scrollDl.Bytes), rowAColor);
         scrollScene.ClearRecordDirty();
 
         scrollScene.Paint(content).LocalTransform = Affine2D.Translation(0f, -70f);
         scrollScene.Mark(content, NodeFlags.TransformDirty);
-        var scrollMoved = SceneRecorder.Record(scrollScene, scrollDl, spans: scrollSpans);
-        bool enteringRowRecorded = initialScrollColor
+        var scrollMoved = scrollRec.Record(scrollScene, scrollDl, scrollSpans);
+        // Retained tiles: the content is a SCROLL slice recorded pose-free; the composite places it at the posed offset and
+        // culls the row that left the viewport — the first fill on screen is the entering row, and no row re-recorded.
+        bool enteringRowShown = initialScrollColor
             && SameColor(FirstFillColor(scrollDl.Bytes), rowBColor)
-            && scrollMoved.SpansReRecorded >= 1;
-        Check("P6.v2 moving scroll content re-walks entering rows instead of copying a stale viewport span",
-            enteringRowRecorded,
-            $"recorded={scrollMoved.SpansReRecorded} rebased={scrollMoved.SpansRebased} firstFill={FirstFillColor(scrollDl.Bytes)}");
+            && scrollMoved.SpansReused >= 2;
+        Check("gate.slices.scroll-flatten moving scroll content shows the entering row at its posed offset and culls the row that left, re-recording no row",
+            enteringRowShown,
+            $"recorded={scrollMoved.SpansReRecorded} reused={scrollMoved.SpansReused} firstFill={FirstFillColor(scrollDl.Bytes)}");
 
         scrollScene.ClearTransformDirty();
         scrollScene.ClearRecordDirty();
         scrollScene.Paint(content).LocalTransform = Affine2D.Translation(0f, -80f);
-        scrollScene.Mark(content, NodeFlags.TransformDirty);
-        var scrollMovedAgain = SceneRecorder.Record(scrollScene, scrollDl, spans: scrollSpans);
-        bool interiorRowRebased = SameColor(FirstFillColor(scrollDl.Bytes), rowBColor)
-            && scrollMovedAgain.SpansRebased >= 1;
-        Check("P6.v2 moving scroll still rebases fully visible interior row spans",
-            interiorRowRebased,
-            $"recorded={scrollMovedAgain.SpansReRecorded} rebased={scrollMovedAgain.SpansRebased} firstFill={FirstFillColor(scrollDl.Bytes)}");
+        var scrollMovedAgain = scrollRec.Record(scrollScene, scrollDl, scrollSpans);
+        bool poseOnly = SameColor(FirstFillColor(scrollDl.Bytes), rowBColor)
+            && scrollMovedAgain.Slices.KeptAll && scrollMovedAgain.Slices.BytesRecorded == 0
+            && Near(FirstFillDy(scrollDl.Bytes), 130f - 80f);
+        Check("gate.slices.pose-only-records-nothing a content pose change with nothing else dirty records 0 bytes (every slice kept) and the composite re-places the rows",
+            poseOnly,
+            $"keptAll={scrollMovedAgain.Slices.KeptAll} bytes={scrollMovedAgain.Slices.BytesRecorded} firstDy={FirstFillDy(scrollDl.Bytes):0.##}");
+
+        static float FirstFillDy(ReadOnlySpan<byte> bytes)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.FillRoundRect)
+                    return MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos, Unsafe.SizeOf<FillRoundRectCmd>())).Transform.Dy;
+                pos += DrawPayloadSize(op);
+            }
+            return float.NaN;
+        }
 
         static float FirstFillDx(ReadOnlySpan<byte> bytes)
         {
@@ -4917,69 +4309,6 @@ static class AnimSuite
                 $"reused={steady.SpansReused} blocks={steady.ScopedBlocks} reasons={steady.SpanReuseDisabledReasons}");
         }
 
-        // gate.span.userScrollBlurKeyed — UserScrollActive defers a self-blur to its hold policy, so it reaches emitted
-        // bytes and MUST be part of the span keys. It is not implied by scrollInMotion (a programmatic offset write sets
-        // that without it), and the translated-copy path is not gated on scrollInMotion at all — so keying the sigs on
-        // scrollInMotion let a scroll that merely turned direct rebase the stale full-blur span forever.
-        {
-            var s = new SceneStore();
-            var viewport = s.CreateNode(1);
-            var content = s.CreateNode(1);
-            var blurRow = s.CreateNode(1);
-            s.Root = viewport;
-            s.AppendChild(viewport, content);
-            s.AppendChild(content, blurRow);
-            s.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
-            s.ScrollRef(viewport).ContentNode = content;
-            s.Bounds(viewport) = new RectF(0, 0, 100, 100);
-            s.Bounds(content) = new RectF(0, 0, 100, 180);
-            s.Bounds(blurRow) = new RectF(30, 40, 40, 20);
-            ref var rowPaint = ref s.Paint(blurRow);
-            rowPaint = NodePaint.Default;
-            rowPaint.VisualKind = VisualKind.Box;
-            rowPaint.Fill = ColorF.FromRgba(0x30, 0x70, 0xB0);
-            rowPaint.BlurSigma = 4f;
-            rowPaint.BlurCachePolicy = BlurCachePolicy.HoldIfCached;
-
-            var dl = new DrawList();
-            var spans = new SpanTable();
-            _ = SceneRecorder.Record(s, dl, spans: spans);           // f1: fresh record, stores the blur span
-
-            // f2 — a programmatic offset write (UserScrollActive still false). scrollInMotion is set for the whole
-            // subtree, so nothing under the scroller reuses this frame; every descendant re-records and re-stores.
-            s.ClearTransformDirty();
-            s.ClearRecordDirty();
-            s.Paint(content).LocalTransform = Affine2D.Translation(0f, -6f);
-            s.Mark(content, NodeFlags.TransformDirty);
-            _ = SceneRecorder.Record(s, dl, spans: spans);
-
-            // f3 — settle: nothing changed at all. The keys stored during f2 must still match, so the subtree exact-
-            // copies. Keying on scrollInMotion instead re-keyed the whole scroller subtree for the duration of any
-            // programmatic scroll and forced this settle frame to re-record from scratch.
-            s.ClearTransformDirty();
-            s.ClearRecordDirty();
-            var f3 = SceneRecorder.Record(s, dl, spans: spans);
-            BlurCachePolicy f3Policy = FirstBlurLayerPolicy(dl.Bytes);
-
-            // f4 — the scroll turns direct with no other change: the blur defers to its hold policy...
-            TestApplyScroll(s, viewport, FluentGpu.Scroll.ScrollActivity.Drag, moved: FluentGpu.Scroll.ScrollWriteMask.OffsetY);
-            var f4 = SceneRecorder.Record(s, dl, spans: spans);
-            BlurCachePolicy f4Policy = FirstBlurLayerPolicy(dl.Bytes);
-
-            // f5 — ...and the moment it stops being direct the blur must go back to recording Normally. Nothing else
-            // changed, so the node is exact-copy eligible again: only the flag's presence in the span key stops f4's
-            // held bytes from being resurrected verbatim at rest.
-            TestApplyScroll(s, viewport, FluentGpu.Scroll.ScrollActivity.Idle);
-            _ = SceneRecorder.Record(s, dl, spans: spans);
-            BlurCachePolicy f5Policy = FirstBlurLayerPolicy(dl.Bytes);
-
-            Check("gate.span.userScrollBlurKeyed",
-                f3.SpansReused >= 1 && f3Policy == BlurCachePolicy.Normal
-                && f4Policy == BlurCachePolicy.HoldIfCached && f4.BlurHoldCandidateCount == 1
-                && f5Policy == BlurCachePolicy.Normal,
-                $"f3reused={f3.SpansReused} f3policy={f3Policy} f4policy={f4Policy} f4hold={f4.BlurHoldCandidateCount} f5policy={f5Policy}");
-        }
-
         // gate.span.storeGapHealed — a drag-ghost frame kills span REUSE globally, but it must not also skip the span
         // STORE: SpanTable only accepts an entry recorded on the immediately preceding frame, so one store-less frame
         // rejected the whole table on the frame after it too (a full-canvas re-record for a single ghost frame). The
@@ -5029,30 +4358,12 @@ static class AnimSuite
             return n;
         }
 
-        static BlurCachePolicy FirstBlurLayerPolicy(ReadOnlySpan<byte> bytes)
-        {
-            int pos = 0;
-            while (pos + sizeof(int) <= bytes.Length)
-            {
-                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
-                pos += sizeof(int);
-                if (op == DrawOp.PushLayer)
-                {
-                    var layer = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(pos));
-                    if (layer.Kind == (int)LayerKind.Blur) return (BlurCachePolicy)layer.BlurCachePolicy;
-                }
-                pos += DrawPayloadSize(op);
-            }
-            return (BlurCachePolicy)255;
-        }
     }
 
-    // ── Translated (REBASED) spans that CARRY glyph runs, clips and non-acrylic layers ───────────────────────────────
-    // A span holding any of those opcodes used to be refused outright, so a steady scroll re-recorded ~every real row
-    // (every real row has text). TranslateCopiedSpan now patches them per payload instead. These gates pin the
-    // byte-level contract (what moved, and the InMotion flags that make moving text ride sub-pixel), the ACRYLIC veto —
-    // the one position-DEPENDENT payload, which must roll the whole copy back — and the stationary-neighbour exact-copy
-    // that dropping `!scrollInMotion` from the exact-copy branch buys.
+    // ── Scrolled content through the slice partition (retained tiles P1) ────────────────────────────────────────────
+    // Scroll content records POSE-FREE into its own slice and the flatten places it at the posed offset — glyph runs,
+    // clips and layers (acrylic included) alike, re-recording no row. These gates pin the byte-level result of the
+    // flatten (what moved, crisp text, the self-blur layer rect while it moves) and the stationary-neighbour exact-copy.
     // ── The record walk's DEPTH BUDGET ─────────────────────────────────────────────────────────────────────────────
     // SceneRecorder.Walk is recursive with a large frame. Its stack-headroom guard (HasWalkStackHeadroom) degrades by NOT
     // painting the deepest subtree instead of overflowing — a Debug build once painted every detail page's row skins with
@@ -5144,52 +4455,62 @@ static class AnimSuite
         const float Shift = -20f;
         const float InteriorClipW = 150f;
 
+        // Stand-in for the deleted SceneRecorder.MotionSoftFullDip (audit 2026-09-22, cause #2: TextMotionSoftness
+        // itself is gone) — these gates only need SOME "the viewport is moving fast" speed to drive TestApplyScroll;
+        // text softness no longer reads it, so any big number does.
+        const float FastScrollSpeedDip = 1400f;
+
         // gate.span.textRowScrollRebase — three text rows (Box → interior ClipsToBounds child → Text leaf) plus one
         // self-blur row, all fully inside a scrolling viewport. One content translation ⇒ every row REBASES, and the
-        // copied bytes decode to the shifted geometry a fresh record would have emitted: glyph transform + InMotion,
-        // the interior clip rect, and the blur layer's rect + InMotion.
+        // copied bytes decode to the shifted geometry a fresh record would have emitted: glyph transform, the
+        // interior clip rect, and the blur layer's rect. Text's own InMotion is asserted 0 in EVERY frame regardless of
+        // scroll speed (cause #2: no more speed-ramped glyph softening).
         {
             var s = BuildRows(strings, LayerKind.Blur, out var content, out _, out _);
             var dl = new DrawList();
             var spans = new SpanTable();
-            _ = SceneRecorder.Record(s, dl, spans: spans);
+            var rec = new SlicedRecording();
+            _ = rec.Record(s, dl, spans);
             s.ClearRecordDirty();
 
             bool g0 = FirstGlyph(dl.Bytes, out var glyph0);
             bool c0 = ClipOfWidth(dl.Bytes, InteriorClipW, out var clip0);
             bool b0 = LayerOfKind(dl.Bytes, LayerKind.Blur, out var blur0);
             bool have0 = g0 && c0 && b0;
-            bool rest0 = glyph0.InMotion == 0 && blur0.InMotion == 0;
+            bool rest0 = glyph0.InMotion == 0;
 
-            TestApplyScroll(s, s.Root, liveSpeedDip: SceneRecorder.MotionSoftFullDip);
+            TestApplyScroll(s, s.Root, liveSpeedDip: FastScrollSpeedDip);
             s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
             s.Mark(content, NodeFlags.TransformDirty);
-            var moved = SceneRecorder.Record(s, dl, spans: spans);
+            var moved = rec.Record(s, dl, spans);
 
             bool g1 = FirstGlyph(dl.Bytes, out var glyph1);
             bool c1 = ClipOfWidth(dl.Bytes, InteriorClipW, out var clip1);
             bool b1 = LayerOfKind(dl.Bytes, LayerKind.Blur, out var blur1);
             bool have1 = g1 && c1 && b1;
+            // gate.record.textCrispDuringFastScroll: this viewport is moving at FastScrollSpeedDip — the OLD behavior
+            // would have shifted glyph1.InMotion to full softness (255) here; text now stays crisp (0) at ANY speed.
             bool glyphShifted = Near(glyph1.Transform.Dy, glyph0.Transform.Dy + Shift)
                                 && Near(glyph1.Transform.Dx, glyph0.Transform.Dx)
-                                && glyph1.InMotion == DrawList.QuantizeMotionSoft(1f);
+                                && glyph1.InMotion == 0;
             bool clipShifted = Near(clip1.DeviceRect.Y, clip0.DeviceRect.Y + Shift)
                                && Near(clip1.DeviceRect.X, clip0.DeviceRect.X)
                                && Near(clip1.DeviceRect.H, clip0.DeviceRect.H);
             bool blurShifted = Near(blur1.DeviceRect.Y, blur0.DeviceRect.Y + Shift)
-                               && Near(blur1.DeviceRect.X, blur0.DeviceRect.X) && blur1.InMotion == 1;
+                               && Near(blur1.DeviceRect.X, blur0.DeviceRect.X);
 
-            Check("gate.span.textRowScrollRebase",
-                have0 && rest0 && have1 && moved.SpansRebased >= 4 && glyphShifted && clipShifted && blurShifted,
-                $"rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} rejected={moved.SpansRebaseRejected} "
+            Check("gate.slices.textRowScrollFlatten a scrolled content slice composites at the shifted geometry a fresh record emits — glyph transform, interior clip rect, self-blur layer rect — with no row re-recorded and text crisp",
+                have0 && rest0 && have1 && moved.SpansReused >= 4 && glyphShifted && clipShifted && blurShifted,
+                $"reused={moved.SpansReused} recorded={moved.SpansReRecorded} "
                 + $"glyphDy={glyph0.Transform.Dy:0.##}->{glyph1.Transform.Dy:0.##}/im{glyph1.InMotion} "
                 + $"clipY={clip0.DeviceRect.Y:0.##}->{clip1.DeviceRect.Y:0.##} "
-                + $"blurY={blur0.DeviceRect.Y:0.##}->{blur1.DeviceRect.Y:0.##}/im{blur1.InMotion} decoded={have0}/{have1}");
+                + $"blurY={blur0.DeviceRect.Y:0.##}->{blur1.DeviceRect.Y:0.##} decoded={have0}/{have1}");
         }
 
-        // gate.span.rebaseSettleResnap — the rebased InMotion=1 bytes are a MOTION-only state. The recorder mixes its
-        // own inMotion into the span INPUT signature, so the first at-rest frame that walks a rebased row misses
-        // exact-copy once and re-records it crisp (InMotion == 0); the frame after that exact-copies again.
+        // gate.span.rebaseSettleResnap — before audit 2026-09-22 (cause #2) a rebased row briefly carried a MOTION-only
+        // InMotion=1 byte the settle frame had to re-snap to 0; TextMotionSoftness is deleted, so text is InMotion=0 in
+        // the moved, settle AND at-rest frame alike — this gate now just proves rebase + eventual exact-copy reuse
+        // still agree on position across all three, with text staying crisp throughout (never a transient soft byte).
         // NB the settle frame must actually REACH the row: an ancestor whose own key is unchanged legitimately
         // exact-copies the motion frame wholesale. The scrollbar fade tick is what walks it in the real engine (FadeT
         // decays for ~450 ms after a gesture and is part of every viewport's span key), so the gate ticks it too.
@@ -5197,12 +4518,13 @@ static class AnimSuite
             var s = BuildRows(strings, LayerKind.Blur, out var content, out var firstRow, out var viewport);
             var dl = new DrawList();
             var spans = new SpanTable();
-            _ = SceneRecorder.Record(s, dl, spans: spans);
+            var rec = new SlicedRecording();
+            _ = rec.Record(s, dl, spans);
             s.ClearRecordDirty();
 
-            // A REAL (persisted) offset, not a hand-poked LocalTransform: SceneScrollSink.Apply — the sink both
-            // TestApplyScroll calls below go through — unconditionally RECOMPUTES the content's LocalTransform from
-            // the viewport's CURRENT OffsetY/BandY every call (ScrollContentTransform.WriteContentTransform), exactly
+            // A REAL (persisted) offset, not a hand-poked LocalTransform: TestApplyScroll — both calls below go through
+            // it — unconditionally RECOMPUTES the content's LocalTransform from the viewport's CURRENT offset every call
+            // (ScrollContentPose.WriteContentTransform), exactly
             // as it does in the real engine (a settle write re-asserts the position the user is actually AT — offset
             // doesn't teleport back to 0 just because the gesture ended). The original hand-set
             // `s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift)` bypassed the sink for the "moved"
@@ -5212,11 +4534,11 @@ static class AnimSuite
             // glyphS.Dy=45 — the row's true base Y). Setting a real OffsetY BEFORE the "moved" call, and never
             // touching it again, makes the "moved" and "settle" sink calls agree — same offset in, same transform
             // out — exactly like a real scroll that settles AT the position it was scrolled to.
-            TestApplyScroll(s, viewport, liveSpeedDip: SceneRecorder.MotionSoftFullDip, offsetY: -Shift);   // Dy = -(offset+band) — matches the old hand-set Shift's sign/magnitude
-            var moved = SceneRecorder.Record(s, dl, spans: spans);
-            bool movedInMotion = FirstGlyph(dl.Bytes, out var glyphM)
-                                 && glyphM.InMotion == DrawList.QuantizeMotionSoft(1f)
-                                 && moved.SpansRebased >= 1;
+            TestApplyScroll(s, viewport, liveSpeedDip: FastScrollSpeedDip, offsetY: -Shift);   // Dy = -(offset+band) — matches the old hand-set Shift's sign/magnitude
+            var moved = rec.Record(s, dl, spans);
+            bool movedCrisp = FirstGlyph(dl.Bytes, out var glyphM)
+                                 && glyphM.InMotion == 0
+                                 && moved.SpansReused >= 1;
 
             // settle: the transform write is over (the host clears the bits right after record) and the scrollbar fades.
             s.ClearTransformDirty();
@@ -5227,23 +4549,65 @@ static class AnimSuite
             // ref-write access) but reachable here via the assembly's InternalsVisibleTo("FluentGpu.VerticalSlice")
             // grant — the same low-level unit poke this gate wanted, bypassing the ScrollBarChrome ticker.
             s.ScrollChrome.GetOrAddRow((int)viewport.Raw.Index).FadeT = 0.5f;
-            var settle = SceneRecorder.Record(s, dl, spans: spans);
-            uint settleFrame = spans.CurrentFrameId;
+            var settle = rec.Record(s, dl, spans);
             bool resnapped = FirstGlyph(dl.Bytes, out var glyphS) && glyphS.InMotion == 0
-                             && Near(glyphS.Transform.Dy, glyphM.Transform.Dy)
-                             && spans.StoredAtFrame((int)firstRow.Raw.Index, settleFrame);
+                             && Near(glyphS.Transform.Dy, glyphM.Transform.Dy);
 
             // and once crisp it settles into plain exact-copy — no per-frame re-record tail.
             s.ClearRecordDirty();
-            var atRest = SceneRecorder.Record(s, dl, spans: spans);
-            bool steady = atRest.SpansReused >= 1 && atRest.SpansRebased == 0
-                          && FirstGlyph(dl.Bytes, out var glyphR) && glyphR.InMotion == 0;
+            var atRest = rec.Record(s, dl, spans);
+            bool steady = atRest.SpansReused >= 1 && atRest.Slices.KeptAll
+                          && FirstGlyph(dl.Bytes, out var glyphR) && glyphR.InMotion == 0 && Near(glyphR.Transform.Dy, glyphM.Transform.Dy);
 
-            Check("gate.span.rebaseSettleResnap",
-                movedInMotion && resnapped && steady,
-                $"movedIm={glyphM.InMotion} rebased={moved.SpansRebased} settleIm={glyphS.InMotion} "
-                + $"settleRec={settle.SpansReRecorded} rowStored={spans.StoredAtFrame((int)firstRow.Raw.Index, settleFrame)} "
-                + $"restReused={atRest.SpansReused} restRebased={atRest.SpansRebased}");
+            Check("gate.slices.scrollSettle a scroll that settles keeps its position through the moved, settle and at-rest frames with text crisp throughout, and settles into keeping every slice whole",
+                movedCrisp && resnapped && steady,
+                $"movedIm={glyphM.InMotion} reused={moved.SpansReused} settleIm={glyphS.InMotion} "
+                + $"settleRec={settle.SpansReRecorded} restReused={atRest.SpansReused} restKeptAll={atRest.Slices.KeptAll}");
+        }
+
+        // gate.record.textCrispDuringFastScroll (audit 2026-09-22, cause #2) — the actual regression test for the
+        // deleted TextMotionSoftness: two INDEPENDENT, structurally identical scenes (a viewport scrolling a content
+        // node with one text leaf), one whose viewport reports a slow/idle live speed and one reporting a committed-
+        // fling speed (FastScrollSpeedDip) — each recorded fresh into its own DrawList/SceneStore, so there is no
+        // span table or dirty-bit history that could short-circuit either walk into a cached result. The OLD behavior
+        // would have stamped the fast one's glyph InMotion at full softness (255); text must now be BIT-IDENTICAL
+        // (Transform, InMotion, SpanRunId, ForceColor) between the two, proving speed no longer reaches the glyph at
+        // all, not just "less blurred than before".
+        {
+            static (DrawGlyphRunCmd glyph, bool have) RecordAtSpeed(StringTable strings, float speedDip)
+            {
+                var s = new SceneStore();
+                var viewport = s.CreateNode(1);
+                var content = s.CreateNode(1);
+                s.Root = viewport;
+                s.AppendChild(viewport, content);
+                s.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
+                s.ScrollRef(viewport).ContentNode = content;
+                s.Bounds(viewport) = new RectF(0, 0, 200, 400);
+                s.Bounds(content) = new RectF(0, 0, 200, 800);
+                AddText(s, strings, content, new RectF(8, 6, 120, 18), "scrolling row");
+
+                TestApplyScroll(s, viewport, liveSpeedDip: speedDip);
+                var dl = new DrawList();
+                _ = SceneRecorder.Record(s, dl);
+                bool have = FirstGlyph(dl.Bytes, out var glyph);
+                return (glyph, have);
+            }
+
+            var (glyphRest, haveRest) = RecordAtSpeed(strings, 0f);
+            var (glyphFast, haveFast) = RecordAtSpeed(strings, FastScrollSpeedDip);
+
+            bool bitIdentical = haveRest && haveFast
+                && glyphRest.Transform == glyphFast.Transform
+                && glyphRest.InMotion == glyphFast.InMotion
+                && glyphRest.SpanRunId == glyphFast.SpanRunId
+                && glyphRest.ForceColor == glyphFast.ForceColor
+                && glyphRest.InMotion == 0;   // and that shared value is crisp, not merely equal to itself
+
+            Check("gate.record.textCrispDuringFastScroll",
+                bitIdentical,
+                $"restIm={glyphRest.InMotion} fastIm={glyphFast.InMotion} "
+                + $"restDy={glyphRest.Transform.Dy:0.##} fastDy={glyphFast.Transform.Dy:0.##} have={haveRest}/{haveFast}");
         }
 
         // gate.span.acrylicNeverTranslates — an ACRYLIC layer blurs whatever the canvas holds UNDER its rect, so the same
@@ -5253,21 +4617,22 @@ static class AnimSuite
             var s = BuildRows(strings, LayerKind.Acrylic, out var content, out _, out _);
             var dl = new DrawList();
             var spans = new SpanTable();
-            _ = SceneRecorder.Record(s, dl, spans: spans);
+            var rec = new SlicedRecording();
+            _ = rec.Record(s, dl, spans);
             s.ClearRecordDirty();
 
             bool hadAcrylic = LayerOfKind(dl.Bytes, LayerKind.Acrylic, out var acr0);
 
             s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
             s.Mark(content, NodeFlags.TransformDirty);
-            var moved = SceneRecorder.Record(s, dl, spans: spans);
+            var moved = rec.Record(s, dl, spans);
             // The acrylic is still emitted — FRESHLY, at the new position (a re-record, not a copy).
             bool freshAcrylic = LayerOfKind(dl.Bytes, LayerKind.Acrylic, out var acr1)
                                 && Near(acr1.DeviceRect.Y, acr0.DeviceRect.Y + Shift);
 
-            Check("gate.span.acrylicNeverTranslates",
-                hadAcrylic && freshAcrylic && moved.SpansRebaseRejected >= 1 && moved.SpansRebased >= 3,
-                $"rejected={moved.SpansRebaseRejected} rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} "
+            Check("gate.slices.acrylicFlattensAtPose an ACRYLIC row inside scrolled content is an effect slice composited at its posed position (its backdrop is the composite of the slices beneath it there), its siblings re-recording nothing",
+                hadAcrylic && freshAcrylic && moved.SpansReused >= 3,
+                $"reused={moved.SpansReused} recorded={moved.SpansReRecorded} "
                 + $"acrylicY={acr0.DeviceRect.Y:0.##}->{acr1.DeviceRect.Y:0.##}");
         }
 
@@ -5299,14 +4664,15 @@ static class AnimSuite
 
             var dl = new DrawList();
             var spans = new SpanTable();
-            _ = SceneRecorder.Record(s, dl, spans: spans);
+            var rec = new SlicedRecording();
+            _ = rec.Record(s, dl, spans);
             s.ClearRecordDirty();
 
             // f2 — the gesture starts: userScrollActive flips, which legitimately re-keys the whole viewport subtree once.
-            TestApplyScroll(s, viewport, FluentGpu.Scroll.ScrollActivity.Drag, moved: FluentGpu.Scroll.ScrollWriteMask.OffsetY);
+            TestApplyScroll(s, viewport, FluentGpu.Scroll.Motion.MotionKind.Drag);
             s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
             s.Mark(content, NodeFlags.TransformDirty);
-            _ = SceneRecorder.Record(s, dl, spans: spans);
+            _ = rec.Record(s, dl, spans);
 
             // f3 — steady scroll: nothing about the pinned header changed. Only the viewport (descendant transform) and
             // the content node itself (the direct moving scroll content) may re-record; the row rebases and the pinned
@@ -5315,13 +4681,13 @@ static class AnimSuite
             s.ClearRecordDirty();
             s.Paint(content).LocalTransform = Affine2D.Translation(0f, 2f * Shift);
             s.Mark(content, NodeFlags.TransformDirty);
-            var scrolling = SceneRecorder.Record(s, dl, spans: spans);
-            int exactCopies = scrolling.SpansReused - scrolling.SpansRebased;
+            var scrolling = rec.Record(s, dl, spans);
 
+            // The pinned header exact-copies, the moving content's row copies inside its own (pose-free) slice, and only
+            // the viewport and the content node itself (marked by the hand-written transform) re-record.
             Check("gate.span.stationaryReusesDuringScroll",
-                scrolling.SpansRebased == 1 && exactCopies == 1 && scrolling.SpansReRecorded == 2,
-                $"reused={scrolling.SpansReused} rebased={scrolling.SpansRebased} exact={exactCopies} "
-                + $"recorded={scrolling.SpansReRecorded} reasons={scrolling.SpanReuseDisabledReasons}");
+                scrolling.SpansReused == 2 && scrolling.SpansReRecorded == 2,
+                $"reused={scrolling.SpansReused} recorded={scrolling.SpansReRecorded} reasons={scrolling.SpanReuseDisabledReasons}");
         }
 
         // A scrolling viewport of text rows: Box row → interior ClipsToBounds child (an emitted PushClip/PopClip pair)

@@ -7,10 +7,12 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace FluentGpu.SourceGen.Analyzers;
 
-/// <summary>FGRP002 — warns about the common mount-owned binding mistake: reading a reactive value before constructing
+/// <summary>FGRP002 — warns about the common snapshot-binding mistake: reading a reactive value before constructing
 /// a <c>Prop.Of</c> thunk and capturing that by-value snapshot (<c>var v = sig.Value; … Prop.Of(() =&gt; f(v))</c>).
-/// Replacement thunks are deliberately ignored when an element is reconciled, so the captured snapshot cannot become
-/// live — the channel freezes at the mount value.
+/// The reconciler re-wires a bound channel whose thunk changed (bound→bound), so the snapshot refreshes only when the
+/// ENCLOSING render re-runs: in a run-once scope (an <c>ItemsView.CreateBound</c> row template, a render that reads no
+/// signal) the channel freezes at its first value, and where the render does re-run every change costs a component
+/// re-render instead of a compositor-only bind fire. Read the signal inside the thunk.
 /// <para>The rule is deliberately precise (promoted to Warning in G4f): it fires ONLY on a captured LOCAL whose own
 /// initializer READS a signal's <c>.Value</c> — the true snapshot signature. Captures that are NOT snapshot bugs are
 /// left alone: <c>this</c> and parameters (frozen at mount by design), a stable object reference read reactively
@@ -23,16 +25,18 @@ public sealed class MountOwnedBindingAnalyzer : DiagnosticAnalyzer
 
     private static readonly DiagnosticDescriptor Rule = new(
         id: DiagnosticId,
-        title: "Prop.Of captures a mount-time snapshot",
-        messageFormat: "Prop.Of captures '{0}' by value; replacement thunks are ignored after mount. Read the source "
-                     + "signal inside the thunk or use a signal-backed BoundItemsSource.",
+        title: "Prop.Of captures a render-time snapshot",
+        messageFormat: "Prop.Of captures '{0}' by value; it refreshes only when the enclosing render re-runs (never in a "
+                     + "run-once template). Read the source signal inside the thunk or use a signal-backed BoundItemsSource.",
         category: "FluentGpu.Reactivity",
-        // Promoted Info -> Warning in G4f alongside FGRP001: a mount-time by-value capture in a Prop.Of thunk silently
-        // freezes at first render, which the props channel now makes avoidable.
+        // Promoted Info -> Warning in G4f alongside FGRP001. Since the bind re-wire (bound→bound, 2026-09-30) a snapshot
+        // no longer freezes a re-rendering component's channel, but it still freezes a run-once template's and turns a
+        // compositor-only bind fire into a component re-render everywhere else.
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "Bound element channels are wired once at mount. Capturing an ordinary local or parameter in a "
-                   + "Prop.Of thunk can silently retain the first render's value after later component renders.",
+        description: "A by-value snapshot captured in a Prop.Of thunk refreshes only when the enclosing render re-runs: "
+                   + "a run-once template keeps its first value forever, and a re-rendering component pays a full "
+                   + "re-render per change where reading the signal inside the thunk would be a single bind fire.",
         helpLinkUri: "https://github.com/christosk92/fluent-gpu/blob/main/docs/guide/reactivity.md");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
@@ -83,7 +87,7 @@ public sealed class MountOwnedBindingAnalyzer : DiagnosticAnalyzer
     }
 
     // True when <paramref name="local"/> is declared with an initializer that reads a signal's `.Value` — the
-    // mount-time snapshot the reconciler cannot refresh. Pattern/foreach/uninitialized locals return false.
+    // render-time snapshot only a re-run of the enclosing render can refresh. Pattern/foreach/uninitialized locals return false.
     private static bool LocalInitializerReadsSignalValue(ILocalSymbol local, SemanticModel model, System.Threading.CancellationToken ct)
     {
         foreach (var reference in local.DeclaringSyntaxReferences)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
@@ -43,8 +43,8 @@ public sealed partial class AnimEngine
     /// 33 ms row on the fourth 8.33 ms tick. Chromium's begin-frame judder margin plays the same role.</summary>
     internal const double CadenceSlackMs = 0.5;
 
-    // FG_MOTION_DIAG=1: projected-motion discrimination trace (structural seed/snap/tick). Gated — nothing when off.
-    private static readonly bool s_motionDiag = Diag.EnvFlag("FG_MOTION_DIAG");
+    // `--fg motion` (EngineSwitches.MotionDiag): projected-motion discrimination trace (structural seed/snap/tick).
+    private static bool s_motionDiag => FluentGpu.Hosting.EngineSwitches.MotionDiag;
 
     /// <summary>Live, non-parked rows drive the loop — a parked subtree's looping animation can't defeat the idle stop.</summary>
     public bool HasActive => _slab.Count - _parked > 0;
@@ -212,12 +212,10 @@ public sealed partial class AnimEngine
     {
         ref AnimValue r = ref _slab.At(slot);
         NodeHandle node = r.Node;
-        bool refreshBlurIntent = r.Channel == AnimChannel.BlurSigma;
         if (r.Has(AnimFlags.ClipAdded)) ReleaseReflowClip(node);   // reflow rows own the clip they added (see AnimFlags.ClipAdded)
         if (r.Has(AnimFlags.Parked)) _parked--;
         ClearKeys(slot);
         _slab.Free(slot);
-        if (refreshBlurIntent) RefreshBlurAnimationActive(node);
     }
 
     // ── compose (ported from AnimEngine.Tick, lines 698-727) ─────────────────────────────────────────
@@ -326,7 +324,6 @@ public sealed partial class AnimEngine
         r.DrivenSrc = AnimValue.WallClock;
         ClearKeys(s);   // ensure no stale Keyframe[] → AdvanceTimeline takes the 0-alloc two-point branch
         _slab.BumpVersion();   // a retarget can rewrite Loop in place (no slab call) — keep the census memo honest
-        if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Channels that drive a side-table (BrushAnim.T / InteractionAnim.HoverT/PressT) rather than NodePaint —
@@ -383,7 +380,6 @@ public sealed partial class AnimEngine
             e.Flags &= ~(AnimFlags.Done | AnimFlags.JustSeeded);
             StampCompositorSeed(existing, newInstance: false, explicitFrom: false);
             _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
-            if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
             return;
         }
         int s = Get(node, channel, composite != CompositeOp.Replace);
@@ -395,7 +391,6 @@ public sealed partial class AnimEngine
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags = (r.Flags & ~(AnimFlags.Done | AnimFlags.Loop)) | AnimFlags.JustSeeded;
         _slab.BumpVersion();   // Get may retarget an existing slot in place (no slab call) — keep the census memo honest
-        if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
     public void Cancel(NodeHandle node, AnimChannel channel)
@@ -414,7 +409,6 @@ public sealed partial class AnimEngine
             if (_slab.At(s).Has(AnimFlags.ClipAdded)) ReleaseReflowClip(node);   // ClearNode bypasses FreeSlot
         }
         _slab.ClearNode(idx);
-        RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Quiesce / resume a node's rows on a KeepAlive park edge (idempotent; keeps the parked census exact).</summary>
@@ -428,7 +422,6 @@ public sealed partial class AnimEngine
             if (parked) { r.Flags |= AnimFlags.Parked; _parked++; }
             else { r.Flags &= ~AnimFlags.Parked; _parked--; }
         }
-        RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Write one already-cancelled animation channel to retained paint immediately. This is the composition
@@ -446,29 +439,6 @@ public sealed partial class AnimEngine
         var acc = Accum.FromPaint(in _scene.Paint(node));
         acc.Fold(channel, value, replace: true);
         Compose(node, in acc);
-    }
-
-    /// <summary>Derive the compositor's transient-blur hint from the slab rather than from sigma. A static authored
-    /// blur and an animation paused by KeepAlive both remain stationary blurs; only a live, non-parked blur row opts
-    /// into the retained/adaptive motion path. Called only on blur-row lifecycle edges, never per recorded node.</summary>
-    private void RefreshBlurAnimationActive(NodeHandle node)
-    {
-        if (!_scene.IsLive(node)) return;
-        byte active = 0;
-        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
-        {
-            ref readonly AnimValue r = ref _slab.At(s);
-            if (r.Channel == AnimChannel.BlurSigma && !r.Has(AnimFlags.Parked) && !r.Has(AnimFlags.Done))
-            {
-                active = 1;
-                break;
-            }
-        }
-
-        ref NodePaint p = ref _scene.Paint(node);
-        if (p.BlurAnimationActive == active) return;
-        p.BlurAnimationActive = active;
-        _scene.Mark(node, NodeFlags.PaintDirty);
     }
 
     /// <summary>The live value of an in-flight row (so an interrupting tween departs from where it is, not a recomputed

@@ -11,8 +11,7 @@ namespace FluentGpu.Animation;
 //  carrying {value, velocity, target, generator}, plus the pure-POD `Generator` law (sampled at ABSOLUTE time) and
 //  the index-based `SignalSource` table that replaces the `DrivenClockTable` `List<Func<float>>` closure leak.
 //
-//  It is a faithful generalization of the `ScrollBind`/`ScrollBindTable` slab idiom (ScrollBind.cs) from
-//  "scroll-offset source" to "any signal source". Lifetimes are reconciler-owned via a free-list (NOT GC); the
+//  It is a generalization of a per-node slab idiom from a single source to "any signal source". Lifetimes are reconciler-owned via a free-list (NOT GC); the
 //  array grows ONLY at reconcile, never in frame phases 6–13.
 //
 //  The rework has LANDED: the old `class Track`/`AnimEngine.cs` model was replaced in place — `AnimEngine.Tick`
@@ -96,7 +95,7 @@ public readonly struct Sample
 /// <summary>The one value slot — a POD row keyed <c>(Node, Channel)</c>. Replaces the 33-field heap <c>class Track</c>.
 /// 64 bytes (lands the <c>backdrop-effects-animation.md §5</c> <c>AnimTrack</c>-in-a-slab spec). The two <c>int</c>
 /// chains replace the <c>List</c>/<c>Dictionary</c> container: <see cref="NextOnNode"/> threads every row on the same
-/// node (per-node fold + teardown, mirroring <c>ScrollBind.NodeNext</c>); <see cref="NextActive"/> threads the
+/// node (per-node fold + teardown); <see cref="NextActive"/> threads the
 /// scheduler's dense advance walk (wired in Phase 2).</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct AnimValue
@@ -138,7 +137,7 @@ public struct SignalSource
 }
 
 /// <summary>The reconciler-owned dense slab of <see cref="AnimValue"/> rows + the <c>(node → head)</c> index that
-/// threads each node's <see cref="AnimValue.NextOnNode"/> chain. Mirrors <see cref="ScrollBindTable"/> (ScrollBind.cs:94):
+/// threads each node's <see cref="AnimValue.NextOnNode"/> chain:
 /// slots are recycled through a free-list (lifetimes owned by the reconciler, NOT GC); the backing array grows ONLY
 /// here (at reconcile), never in the frame hot path. The canon-mandated <c>NodeHandle→TrackHead</c> map
 /// (<c>backdrop-effects-animation.md:454</c>) IS <see cref="_headByNode"/> + a per-node channel filter.</summary>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Signals;
@@ -393,6 +393,7 @@ public sealed class VideoSurfaceRegistry
         {
             ref Entry e = ref _entries[i];
             if (!e.InUse || !e.Dirty) continue;
+            bool announce = false;   // this drain created or (re)bound the surface: say where it was placed, once
 
             if (e.ReleasePending)
             {
@@ -419,6 +420,10 @@ public sealed class VideoSurfaceRegistry
                 }
                 _surfaceSignals[i].Value = e.SurfaceId;
                 changed = true;
+                announce = true;
+                // Always-on (one line per surface, ever): a pop-out that stays black cannot be told apart from one
+                // whose child visual was never created without this — 2026-09-22.
+                Diag.Line($"[video.surface] create token={i + 1} id={e.SurfaceId.Value}");
                 if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"CreateSurface -> id={e.SurfaceId.Value}");
             }
 
@@ -427,6 +432,10 @@ public sealed class VideoSurfaceRegistry
                 presenter.BindSurfaceHandle(e.SurfaceId, e.DesiredHandle);
                 e.BoundHandle = e.DesiredHandle;
                 changed = true;
+                announce = true;
+                // Always-on, one line per HANDLE CHANGE (the native engine swaps to a new swap chain on a resolution
+                // change): the line that says whether the visual follows it or keeps showing the first, now-dead one.
+                Diag.Line($"[video.surface] bind token={i + 1} id={e.SurfaceId.Value} handle=0x{e.DesiredHandle:X}");
                 if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"BindSurfaceHandle id={e.SurfaceId.Value} handle=0x{e.DesiredHandle:X}");
             }
 
@@ -440,6 +449,9 @@ public sealed class VideoSurfaceRegistry
             presenter.SetVisible(e.SurfaceId, e.Visible);
             changed = true;
             e.Dirty = false;
+            // Only on the drain that created/bound (a resize re-places every frame; that stays Debug-only below).
+            if (announce)
+                Diag.Line($"[video.surface] place token={i + 1} id={e.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) content={e.ContentW}x{e.ContentH} visible={e.Visible} scale={scale:0.##}");
             if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={e.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={e.Visible} scale={scale:0.##}");
         }
 
@@ -562,7 +574,7 @@ public readonly struct VideoBinding
 /// <c>DEBUG</c>/<c>FLUENTGPU_DIAG</c>), so <c>VideoSurfaceRegistry.Bind</c>'s
 /// <c>if (OneSurfacePerPlayerGuard.CompiledIn &amp;&amp; OneSurfacePerPlayerGuard.Enabled) { ... }</c> guard folds
 /// away entirely in the shipping AOT binary. When compiled in it defaults ON (kill-switch
-/// <c>FG_ONE_SURFACE_PER_PLAYER=0</c>) and is report-only unless <c>FG_ONE_SURFACE_PER_PLAYER_THROW=1</c>. This
+/// <c>--fg no-guards</c>) and is report-only unless <c>--fg guards-throw</c>. This
 /// registry's own remarks already place it OUTSIDE the zero-alloc gate surface, but the check costs nothing extra
 /// anyway: a fixed <c>MaxSurfaces</c>-slot scan over struct fields, no allocation on the passing path (the message
 /// is built only inside <see cref="Violation"/>).
@@ -578,13 +590,13 @@ public static class OneSurfacePerPlayerGuard
         false;
 #endif
 
-    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): defaults ON, kill-switch
-    /// <c>FG_ONE_SURFACE_PER_PLAYER=0</c> disables it.</summary>
-    public static bool Enabled = CompiledIn && !Diag.EnvFlagDisabled("FG_ONE_SURFACE_PER_PLAYER");
+    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): defaults ON; <c>--fg no-guards</c> or code
+    /// turns it off.</summary>
+    public static bool Enabled = CompiledIn;
 
     /// <summary>When set, a detected violation THROWS <see cref="OneSurfacePerPlayerException"/> instead of only
-    /// reporting — <c>FG_ONE_SURFACE_PER_PLAYER_THROW=1</c>, or a gate scoping the strict path. Default report-only.</summary>
-    public static bool ThrowOnViolation = CompiledIn && Diag.EnvFlag("FG_ONE_SURFACE_PER_PLAYER_THROW");
+    /// reporting — <c>--fg guards-throw</c>, or a gate scoping the strict path. Default report-only.</summary>
+    public static bool ThrowOnViolation;
 
     /// <summary>Count of violations since the last <see cref="Reset"/> — the VerticalSlice gate accessor for
     /// <c>gate.media.el.one-surface-per-player</c>.</summary>
@@ -615,6 +627,6 @@ public static class OneSurfacePerPlayerGuard
 }
 
 /// <summary>Thrown by <see cref="OneSurfacePerPlayerGuard"/> in strict mode
-/// (<c>FG_ONE_SURFACE_PER_PLAYER_THROW</c>) when two live registry slots were bound to the same DComp handle. Never
+/// (<c>--fg guards-throw</c>) when two live registry slots were bound to the same DComp handle. Never
 /// thrown in release (the guard is compiled out).</summary>
 public sealed class OneSurfacePerPlayerException(string message) : InvalidOperationException(message);

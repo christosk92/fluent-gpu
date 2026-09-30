@@ -2,41 +2,42 @@
 
 Tooling for one question: **Wavee reports high FPS while scrolling feels wrong — which end is at fault?**
 
-`ops/diag/AGENT.md` is the diagnosis rubric and the owner of the verdict vocabulary. It ships inside every
-bundle. This file owns the *mechanism*: what each flag does, what each metric means, and what the numbers cannot
-tell you.
+This file owns the *mechanism*: what each flag does, what each metric means, and what the numbers cannot tell you.
+The verdicts themselves are the engine's: `ScrollMetrics` over the `ScrollProbe` stream (Wavee's per-burst
+`scroll.burst` log line, the Diagnostics ▸ Scroll card's CSV export, and the Scroll Lab's `metrics.json`). The
+ScrollTrace-era packer and its rubric (`pack-feel-summary.ps1`, `AGENT.md`, `feel-summary.json`), the synthetic Wavee
+injector (`synthetic-scroll-capture.ps1`) and its A/B reader (`analyze-cadence.py`) were retired with ScrollTrace —
+they read `scroll.csv` latency rows and a phase marker that no build writes any more.
 
 ---
 
 ## Quick start
 
 ```powershell
-# Capture: publishes a diag build, opens Wavee, waits until YOU close the window, packs the bundle.
+# Capture: publishes a diag build, opens Wavee, waits until YOU close the window.
 # Use the app however you want for 10-30 minutes. No gestures, no ratings, no ENTER.
 ops\diag\wavee-scroll-session.cmd -Diag
 
 # Same, already published:
 ops\diag\wavee-scroll-session.cmd -Diag -SkipPublish
 
-# Then tell an agent the session folder under ops/diag/sessions/ — they read feel-summary.json + scroll.csv.
+# Before closing, export the probe stream (Diagnostics ▸ Scroll ▸ Export CSV, level Trace) into the session folder;
+# then tell an agent the folder — they read console.txt ([fps] / [render.pace] / scroll.burst lines) + the probe CSV.
 
 # Optional paired arm — same free-scroll, plain Release, so observer cost is a number:
 ops\diag\wavee-scroll-session.cmd
-ops\diag\pack-feel-summary.cmd -Session <diag session> -Control <plain-Release session>
 
-# Optional bisection (image pump off) as a SECOND session against a control with otherwise identical switches:
-ops\diag\wavee-scroll-session.cmd -Diag -NoImagePump
+# Optional A/B arms, each as a SECOND session against a control with otherwise identical switches:
+ops\diag\wavee-scroll-session.cmd -Diag -Opaque             # --fg opaque: opaque HWND swapchain instead of DWM Mica
+ops\diag\wavee-scroll-session.cmd -Diag -PresentInterval0   # --fg no-vsync: separates the present cap from frame cost
+ops\diag\wavee-scroll-session.cmd -Diag -GpuTiming          # --fg gpu-timing: per-pass GPU timeline (real per-frame cost)
 
 # Instrument self-test (no human): proves the build armed and the pipeline works. Never a feel result.
 ops\diag\wavee-scroll-session.cmd -Diag -Unattended
 
-# Unattended A/B of CADENCE (synthetic wheel packets, not a human):
-ops\diag\synthetic-scroll-capture.ps1 -ExePath <build A>\Wavee.exe -Label BEFORE
-ops\diag\synthetic-scroll-capture.ps1 -ExePath <build B>\Wavee.exe -Label AFTER
-python ops\diag\analyze-cadence.py <before-dir>[;<more>] <after-dir>[;<more>]
-
-# Re-pack an existing bundle after editing the packager:
-ops\diag\pack-feel-summary.cmd -Session ops\diag\sessions\<id>
+# Unattended A/B (synthetic wheel packets, not a human) — the Scroll Lab, one run per build, compare metrics.json:
+powershell -File ops\diag\scroll-lab-synthetic.ps1 -ExePath <build A>\FluentGpu.ScrollLab.exe
+powershell -File ops\diag\scroll-lab-synthetic.ps1 -ExePath <build B>\FluentGpu.ScrollLab.exe
 ```
 
 Bundles land in `ops/diag/sessions/`, which is gitignored. The scripts are tracked; the captures are not — a
@@ -66,16 +67,18 @@ Defined by a `PropertyGroup` in **both** `src/Directory.Build.props` **and** Wav
 `src/apps/` deliberately does not inherit the engine props, and `[Conditional]` erasure is decided by the
 **calling** assembly, so the app's own trace call sites stay erased if only the engine gets the symbol.
 
-Without it a publish loses: `scroll.csv` entirely (the ring is `const bool On = false`), the `[renderbudget]`
-roster, and the `FG_OPAQUE_WINDOW` A/B. The console streams (`[fps]`, `[scrollperf]`, `[wakediag]`,
-`[render-census]`, `[OFFSET-JUMP]`) all still work in plain Release, which is what makes the paired arm possible.
+Without it a publish loses the `[renderbudget]` roster (`--fg render` is a no-op: `RenderBudget.CompiledIn` folds to
+false) and the DEBUG guards. The `[fps]` line (`--fg fps`), the layout counts (`--fg layout`), the always-on `[wake]`
+census and the opaque A/B (`--fg opaque`) all still work in plain Release, which is what makes the paired arm
+possible.
 
 It is **not** `FGGUARD`: the render-seam thread asserts stay erased, so the diag build's threading behaviour
 matches Release. It is also distinct from the separately planned `FG_DEVTOOLS` symbol — do not conflate them.
 
-**The diag build is a different binary.** `FG_BIND_CONTRACT` and `FG_BACKWARDS_WRITE` become **default-ON** once
-compiled in, and the latter does a subscriber-list scan per signal write. The launcher clears both explicitly;
-if you launch by hand, do the same or you are measuring a different app from the one being complained about.
+**The diag build is a different binary.** The `BindContract` and `BackwardsWriteGuard` guards (and the one-surface-
+per-player guard) are **default-ON** once compiled in, and `BackwardsWriteGuard` does a subscriber-list scan per
+signal write. The launcher turns them off with `--fg no-guards`; if you launch by hand, pass it too or you are
+measuring a different app from the one being complained about.
 
 > **Toggling the posture needs `--no-incremental`.** MSBuild's up-to-date check does not notice that
 > `/p:FluentGpuDiag` changed, so a plain build after a diag build silently keeps the diag-compiled assemblies.
@@ -86,52 +89,62 @@ if you launch by hand, do the same or you are measuring a different app from the
 
 ---
 
-## Flag table — including how each one is *read*
+## Engine switches — `--fg name[,name...]`
 
-The read idiom matters: three different conventions are in play, and using the wrong spelling silently disables
-a probe, which then reports an empty bucket that looks like a clean result.
+**The engine reads no environment variables.** Its diagnostic switches are one command-line list,
+`--fg name[,name...]` (or `--fg=name,...`), applied by `FluentApp` from the host process's own arguments before the
+window exists (`FluentGpu.Hosting.EngineSwitches`, `src/FluentGpu.Engine/Hosting/EngineSwitches.cs`). Every FluentApp
+host — Wavee, the gallery, the benches — accepts it; an unknown name is reported once on stderr and ignored. The
+launcher records the exact list in `manifest.json` (`engineSwitches` = name → reason, `engineSwitchArg` = the literal
+`--fg …` argument), so a bundle is never read under the wrong assumption about what was on.
 
-| Flag | Read as | Works in plain Release | What it gives |
+| Switch | Needs `FLUENTGPU_DIAG` | Session default | What it gives |
 | --- | --- | --- | --- |
-| `FG_FPS_LOG` | `EnvFlag` (`1`/`true`/`on`) | yes | the `[fps]` line: loop + present cadence, per-phase ms, wait kind, seam deltas |
-| `FG_SCROLL_PERF` | `EnvFlag` | yes | `[scrollperf]` 1 Hz roll-up — the scroll-bind thrash evidence |
-| _(retired)_ `FG_WAKE_DIAG` | — | — | Now **always on**: one `[wake]` line per 30 s carries fps, the reconciled / layout-only / record-only split, `skipMiss`, and the kept/sole wake-reason roster. Nothing to enable. |
-| `FG_RENDER_CENSUS` | `EnvFlag` | yes | `[render-census]` — **suppressed unless flush ≥ 12 ms or comps ≥ 25** |
-| `FG_OFFSET_JUMP` | **`== "1"` exactly** | yes | `[OFFSET-JUMP]` large single-write jumps. `true`/`on` silently **disable** it |
-| `FG_LAYOUT_DIAG` | `EnvFlag` | yes | measure/arrange/text-shape counts; without it the `FrameTiming` i1 column is structurally 0 |
-| `FG_SCROLL_TRACE` | non-empty, `≠ "0"` | **no** | the POD ring. Any value other than `1` is used verbatim **as the output path** |
-| `FG_SCROLL_PHASE_FILE` | path | **no** | the capture-protocol phase marker, polled from the host loop |
-| `FG_RENDER_DIAG` | `EnvFlag` | **no** | `[renderbudget]` every-frame re-render roster |
-| `FG_BIND_CONTRACT` | `EnvFlagDisabled` — **default ON** | **no** | set to `0` for any measurement |
-| `FG_BACKWARDS_WRITE` | `EnvFlagDisabled` — **default ON** | **no** | set to `0` for any measurement |
-| `FG_OPAQUE_WINDOW` | `EnvFlag` | **no** | A/B arm: opaque HWND swapchain instead of DWM Mica. A **behaviour fork** |
-| `FG_BISECT_NO_IMAGE_PUMP` | `EnvFlag` | **no** | BISECTION arm: suppress the phase-7.5 image pump while scroll is active. A **behaviour fork** |
-| `FG_GPU_TIMING` | `EnvFlag` | yes | Tier 2. Per-pass GPU attribution at real per-frame cost — see below |
-| `FG_DIAG` / `FG_DIAG_CONSOLE` | `EnvFlag` | **no** | **never in a feel session** — see below |
+| `fps` | no | **on** | the `[fps]` line: loop + present cadence, per-phase ms, wait kind, seam deltas |
+| `layout` | no | **on** | measure/arrange/text-shape printout; without it the `FrameTiming` i1 column is structurally 0 |
+| `render` | **yes** | on with `-Diag` | `[renderbudget]` every-frame re-render roster (`RenderBudget`) + the device's submitted-area census |
+| `no-guards` | (only meaningful when compiled in) | on with `-Diag` | turns off the default-ON DEBUG guards (`BindContract`, `BackwardsWriteGuard`, one-surface-per-player) — mandatory for any measurement |
+| `opaque` | no | `-Opaque` | A/B arm: opaque HWND swapchain instead of DWM Mica. A **behaviour fork** |
+| `gpu-timing` | no | `-GpuTiming` | starts with the pass-granular GPU timeline on (`AppHost.GpuPassTimingEnabled`) — extra timestamp queries every frame |
+| `no-vsync` | no | `-PresentInterval0` | present at sync-interval 0 (separates the present cap from the frame cost) |
+| `diag` | **yes** | **never in a feel session** | engine `Diag` on with its stderr sink — see below |
+| `mem` / `mem=N`, `alloc`, `alloc-types` | no | off | memory census every N s (default 5) / allocation probes — separate runs |
 
-### Flags deliberately excluded from the default set
+Always on, nothing to enable: the `[wake]` census (one line per 30 s: fps, the reconciled / layout-only /
+record-only split, `skipMiss`, the kept/sole wake-reason roster), the per-frame `RenderFrameCensus` (repaint set,
+span reuse, capture, the device's per-submit counters, the retained-tile census) and the tile census the Wavee
+Diagnostics **Tiles** card reads. The per-component `[render-census]` line is the runtime property
+`AppHost.RenderCensus` (set in code — the Wavee Diagnostics page), not a switch.
 
-- **`FG_DIAG` / `FG_DIAG_CONSOLE`.** `Diag.Count`/`Set` concatenate a string and box a value under one
-  process-global lock, roughly twenty times per frame inside the submit path — on the **render thread** under the
-  async default, contending with UI-thread callers, inside the exact code path being measured. There is no
-  events-only mode; the two flags are identical.
-- **`FG_GPU_TIMING`.** Up to 256 extra `EndQuery` per frame from the category-boundary timeline, plus a
-  fixed-size resolve **every** frame. The boundary count **peaks** on a dense fill → image → glyph list — i.e.
-  maximally during the fling being diagnosed. Get GPU busy-vs-wait from PresentMon at zero in-app cost first, and
-  turn this on only after the GPU is already implicated.
-- **`FG_SCROLL_PRESENT_INTERVAL0`.** Unreachable without `FG_GPU_TIMING` (it requires a fresh detailed-profiler
-  sample as well as the always-on whole-frame execution sample), so it is a paired arm, never an independent switch.
-  The launcher enforces that.
-- **`FG_SCROLL_LOG` / `FG_SCROLLLOG`.** Per-event `Console.WriteLine` with `AutoFlush`. Its own class doc warns
-  that it perturbs pacing.
+**Retired environment variables** (none is read any more; a leftover in a script does nothing): `FG_FPS_LOG` →
+`--fg fps`; `FG_LAYOUT_DIAG` → `--fg layout`; `FG_RENDER_DIAG` → `--fg render`; `FG_BIND_CONTRACT=0` /
+`FG_BACKWARDS_WRITE=0` → `--fg no-guards`; `FG_OPAQUE_WINDOW` → `--fg opaque`; `FG_GPU_TIMING` → `--fg gpu-timing`
+(or the runtime toggle); `FG_SCROLL_PRESENT_INTERVAL0` → `--fg no-vsync`; `FG_DIAG` / `FG_DIAG_CONSOLE` → `--fg diag`;
+`FG_MEM_DIAG` → `--fg mem`. Deleted outright, with no replacement switch: `FG_SCROLL_PERF` (`[scrollperf]`),
+`FG_OFFSET_JUMP` (`[OFFSET-JUMP]`), `FG_SCROLL_LOG` / `FG_SCROLLLOG`, `FG_SCROLL_TRACE` and `FG_SCROLL_PHASE_FILE` (the
+`ScrollTrace` POD ring is deleted — per-input scroll traces are the Wavee Diagnostics **Scroll** card's CSV export,
+`ScrollProbe` level Trace), `FG_BISECT_NO_IMAGE_PUMP` (the `-NoImagePump` arm is gone), and `FG_RENDER_CENSUS` (now
+`AppHost.RenderCensus`). `FG_WAKE_DIAG` was retired earlier — the `[wake]` census is always on.
+
+### Switches deliberately excluded from the default set
+
+- **`--fg diag`.** `Diag.Count`/`Set` concatenate a string and box a value under one process-global lock, roughly
+  twenty times per frame inside the submit path — on the **render thread** under the async default, contending with
+  UI-thread callers, inside the exact code path being measured. There is no events-only mode.
+- **`--fg gpu-timing` (per-pass GPU attribution).** The pass-granular GPU timeline is `IGpuDevice.GpuPassTimingEnabled`
+  (host: `AppHost.GpuPassTimingEnabled`), read back per retired frame with `ISwapchain.CopyGpuPassTimeline` /
+  `AppHost.CopyGpuPassTimeline` (`Seams/Rhi/GpuFrameTelemetry.cs`); `--fg gpu-timing` only starts a run with it on. It
+  timestamps only at pass boundaries (never between two draws into one target), but it is still extra queries per
+  frame: get GPU busy-vs-wait from PresentMon (or the always-on whole-frame `gexec`) first, and turn it on only after
+  the GPU is implicated — mid-session from the Scroll Lab HUD's **GPU passes** switch or the Wavee Diagnostics
+  **Tiles** card. The always-on per-submit counters (`FrameStats.RenderCensus.Device`) need no toggle at all.
 - **`dotnet-trace`.** Dominant observer effect. Never in a feel session.
 
 ### "Probes are zero-cost when off" — the accurate version
 
 **Erased when compiled out; one well-predicted branch when compiled in and disabled.** True erasure applies to
-ScrollTrace, `Diag`, and `RenderBudget` (compile-time `const false` or `[Conditional]`). It does **not** apply to
-`FG_OFFSET_JUMP`, `FG_SCROLL_LOG`, `FG_SCROLLLOG` or `FG_SCROLL_PERF`, which are plain `static readonly bool`s
-costing one branch per call site in every build.
+`Diag` and `RenderBudget` (compile-time `const false` or `[Conditional]`). The `EngineSwitches` fields themselves are
+plain statics read at their call sites, so `fps` / `layout` / `opaque` cost one branch per site in every build.
 
 ---
 
@@ -165,23 +178,21 @@ are opposite conclusions and a bare 0 would merge them.
 
 ### Gates
 
-`gate.latency.kind-names-parity` is the important one. `ScrollTrace.FlushLocked` indexes the kind-name table
-unguarded, inside a swallow-all `catch` that then zeroes the pending count — so adding a record kind without its
-name throws on the first row of that kind, the catch eats it, and **every buffered row of the session is
-discarded with no error printed anywhere**. The operator sees a short CSV and concludes "not much happened".
+`gate.latency.join-forward` (a latency sample joins the FIRST present whose acked publish-seq is ≥ its own, so a
+DropOldest-coalesced publish joins forward instead of being dropped) and `gate.latency.probe-alloc-zero`
+(`ScrollProbe.Pose` records at the shipping Summary level allocate 0 bytes) — `DiagnosticsSuite`. The
+`ScrollTrace`-ring gates (`kind-names-parity`, `state-pack`, `alloc-zero`) went with the ring. The `ScrollTrace` rows in
+the table above are historical: the ring is deleted and per-input traces come from `ScrollProbe` (the Wavee
+Diagnostics Scroll card's CSV export).
 
-Also `gate.latency.state-pack`, `gate.latency.alloc-zero` and `gate.latency.join-forward`.
-
-The offline schema/packaging gate is dependency-free and runs under the same Windows PowerShell 5.1 runtime as the
-capture tools:
+The offline schema gate for the legacy-capture reader (`parse-scroll-csv.ps1`, for ScrollTrace captures taken before
+the ring was deleted) is dependency-free and runs under the same Windows PowerShell 5.1 runtime as the capture tools:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ops\diag\test-feel-diagnostics.ps1
 ```
 
-It locks JSON array cardinality (including 0/1/2 PresentMode populations), targeting-candidate classification,
-explicit/legacy tracking provenance, gexec sequence+age handling, wait/span parsing, sequence-deduplicated rq/rect-area
-snapshots, strict trace-number parsing, and PresentMon PID/QPC joins.
+It locks JSON array cardinality, targeting-candidate classification and explicit/legacy tracking provenance.
 
 ---
 
@@ -195,9 +206,10 @@ These have each produced a wrong conclusion before.
   committed capture contains exactly one such row. Gate on scroll-active or the percentile is fiction.
 - **`2>` loses the `[scrolltrace]` banner**, which goes to *stdout*. The previously committed capture has 476
   `[fps]` lines and zero scrolltrace lines for precisely this reason. Capture both streams.
-- **Arming `FG_SCROLL_TRACE` breaks the zero-alloc gates by design.** The ring's idle flush allocates a writer and
-  formats strings *inside* the frame. `gate.arena.alloc-zero` fails at ~219 KB on a clean tree with the trace
-  armed. Never compare a trace-armed VerticalSlice run against a plain one.
+- **(Historical) the deleted `ScrollTrace` ring broke the zero-alloc gates by design** — its idle flush allocated a
+  writer and formatted strings inside the frame (`gate.arena.alloc-zero` failed at ~219 KB with it armed). Its
+  successor, the Wavee Scroll card's `ScrollProbe` Trace level, is an app-side, opt-in capture: still never compare a
+  probe-armed run against a plain one.
 - **`gate.arena.alloc-zero` is intermittently flaky on its own.** Measured on a clean tree at `d082d67`: it failed
   4 of 5 consecutive runs of the same binary, at 2112–2208 bytes, with no code change between runs. **Never treat a
   single failing run as a regression** — run the slice 3–5 times and compare failure *rates* and byte counts
@@ -235,55 +247,37 @@ These have each produced a wrong conclusion before.
 - **`WaveeNavProbe` is a budget/regression harness, not this.** It calls `SuppressLatencyWaitOnce()` +
   `SuppressVsyncOnce()` per measured frame — it deliberately **removes the present path**, which is precisely why
   it structurally cannot see present cadence, DropOldest, or display-side smoothness. It answers a different question
-  (CPU work cost with presentation suppressed) and keeps its own summary format; `ops/diag/AGENT.md` owns the
+  (CPU work cost with presentation suppressed) and keeps its own summary format; the engine's `ScrollMetrics` owns the
   feel-verdict vocabulary.
-- **The three `ops/scratch/run-*.bat` files are untracked**, so replacing them with these tracked scripts is not
-  "retiring tracked tooling". For the record: `run-wavee-hitch.bat` sets `FG_GPU_TIMING=1` and `FG_DIAG=1` (not
-  `FG_MEM_DIAG`) and targets the JIT `bin/` directory rather than a publish; `run-playlist-regression-capture.bat`'s
-  dominant observer effect is its `dotnet-trace` wrapper, not its environment.
+- **`ops/scratch/run-wavee-hitch.bat` and `run-playlist-regression-capture.bat` are deleted** — they targeted the
+  pre-split `src/apps` path and set only environment variables the engine no longer reads. These tracked scripts
+  replace them.
 
 ## `-Unattended` — validates the instrument, never the feel
 
-Launches Wavee, idles a few seconds, closes it. The packager marks `humanObserved: false` / `captureMode:
-instrumentCheck`. Use it to answer *"does the toolchain work?"* — did the diag build arm, did the anchor land,
-did the streams merge, did the packager run. Use it for nothing else. With no input there is no scroll, so there
-are no latency rows, and the packager will correctly hard-fail on that: **a hard fail here is the expected and
-correct result**.
+Launches Wavee, idles a few seconds, closes it; the manifest is stamped `captureMode: instrumentCheck`. Use it to
+answer *"does the toolchain work?"* — did the diag build arm, did the anchor land, did the streams merge. Use it for
+nothing else: with no input there is no scroll, so there is nothing to score.
 
-## Synthetic capture: cadence without a human
+## Synthetic capture: the Scroll Lab
 
-`synthetic-scroll-capture.ps1` drives a real Wavee process with `SendInput` wheel packets on a fixed
-script, so two builds can be compared without gesture variation. It answers **cadence** questions —
-production-vs-present ratio, presented sample-time jitter, present interval — because those are properties
-of the frame loop and independent of which device drove it. It cannot answer **feel**, and it does not
-exercise the DirectManipulation touchpad path (DM contacts are real HID packets and cannot be
-synthesized). Bundles are stamped `synthetic: true`.
-
-Two traps it now guards, both of which produced confidently wrong results first:
-
-- **One-directional input measures nothing.** The first version scrolled only down; the page hit its
-  extent four seconds in and the remaining four phases recorded zero rows — which looks exactly like a
-  perfectly smooth app. Every moving phase now sawtooths, and the script hard-warns (`THIN CAPTURE`) if
-  fewer than three of the four moving phases produced data.
-- **A quiet app never flushes the trace.** `ScrollTrace`'s idle flush counts idle FRAMES, but a loop with
-  nothing to do stops running frames at all, so an app that simply goes quiet after a gesture never
-  reaches the threshold. A 50 s capture kept 32 of ~20,000 records. `FluentApp` now flushes before any
-  wait of 100 ms or longer.
+`scroll-lab-synthetic.ps1` launches the Scroll Lab, records (F10) a ~10 s session driven by `SendInput` wheel packets on
+a fixed script — isolated detented notches, a spin, an F8 marker, a reversal, four hi-res bursts — and prints the
+session folder (`events.csv` = `ScrollProbe.ExportCsv` rows, `frames.csv`, `markers.json`, `metrics.json`). Two builds
+run the same script, so their `metrics.json` compare without gesture variation: tracking AND cadence verdicts, scored by
+the engine's `ScrollMetrics` (`docs/guide/scroll-lab.md`). It does not exercise the DirectManipulation touchpad path
+(DM contacts are real HID packets and cannot be synthesized) — touchpad feel is judged from live lab sessions, whose
+contact Input rows the probe keeps at Summary level.
 
 ## Bisection: the only causal evidence here
 
-Every other signal in this kit is a **correlation**. `-NoImagePump` (`FG_BISECT_NO_IMAGE_PUMP`) suppresses the
-phase-7.5 image pump while scroll is active — decodes still complete on their workers and are applied the moment
-the gesture settles, which is deliberately the shape a real fix would take, so a positive result names an
-intervention rather than just an accusation.
-
-Run it as a **second** session with otherwise identical switches, and compare against the control. The bundle is
-stamped `validity.isObservation: false` + `validity.bisectionArm`, and the packager refuses to let it be read as a
-description of how the app behaves. Before believing a "no change" result, confirm the suppression actually
-engaged — a treatment that never fired reads exactly like a treatment that did nothing.
-
-The recommended order, cheapest causal evidence first: **image pump off** → **backdrop off** (`-Opaque`, already
-available) → DropOldest→block. Fence any new arm the way these two are fenced.
+Every other signal in this kit is a **correlation**. A causal claim needs a second session with ONE subsystem
+changed and otherwise identical switches, compared against the control. The image-pump bisection arm
+(`-NoImagePump` / `FG_BISECT_NO_IMAGE_PUMP`) is **deleted** — image applies are now metered by the one per-turn upload
+budget (`UploadBudget.BytesPerTurn`) and uploads ride the copy queue off the frame — so the arms the launcher still
+offers are A/B forks, not suppressions: **backdrop off** (`-Opaque`, `--fg opaque`) and **present cap off**
+(`-PresentInterval0`, `--fg no-vsync`). Read `manifest.json`'s `engineSwitches` to confirm which arm a bundle is, and
+fence any new arm the same way: one switch, recorded with its reason, compared against a control.
 
 ## Not yet built (named so buckets are not silently built on proxies)
 

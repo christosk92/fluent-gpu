@@ -14,12 +14,17 @@ public abstract record Element
     /// <c>ConnectedAnimation</c> registry. Null = not a participant (the default).</summary>
     public string? MorphId { get; init; }
 
-    /// <summary>Generic scroll-driven bindings (design/plans/generic-hookable-scroll-engine-design.md): each entry slaves
-    /// one of this node's compositor properties (transform / opacity / clip / presented-size) to a normalized scroll
-    /// progress of its enclosing <see cref="ScrollEl"/> — or pins it (sticky, <see cref="ScrollBindDsl.PinTop"/>) /
-    /// stretches it (overscroll hero, <see cref="ScrollBindDsl.StretchFromTop"/>). Evaluated allocation-free in the frame
-    /// loop. Empty = none. This is the one generic surface that subsumes the old StickyTop/OnPinned/ScrollStretchHeader.</summary>
-    public ScrollBindDsl[] ScrollBinds { get; init; } = [];
+    /// <summary>Scroll-linked effects (scroll rework §8): each entry drives one of this node's compositor channels
+    /// (translate / opacity / clip-top / scale) from the enclosing scroller's shown offset — sticky pins, parallax,
+    /// fades — evaluated with the SAME arithmetic on the UI thread (publish/hit-test) and the render thread (pixels).
+    /// Author with <c>el.OnScroll(ScrollEffect.Sticky(56), scope: "hero")</c> / <c>.Parallax(...)</c> / <c>.Fade(...)</c>
+    /// (<see cref="FluentGpu.Scroll.Effects.ScrollEffectDsl"/>). Empty = none.</summary>
+    public FluentGpu.Scroll.Effects.ScrollEffectSpec[] ScrollEffects { get; init; } = [];
+
+    /// <summary>Names this node as a sticky SCOPE (the containing block a <c>ScrollEffect.Sticky(…, scope: name)</c>
+    /// descendant clamps against — CSS position:sticky's containing block, declared explicitly so any element, a
+    /// component root included, can be the pin's boundary). Null = not a scope.</summary>
+    public string? ScrollScope { get; init; }
 
     /// <summary>Presence channel (P1, layout.md §4.7): <c>false</c> removes this node from layout flow AND paint AND
     /// hit-test — a COLLAPSED box (CSS <c>display:none</c>), not merely a hidden one (there is no separate
@@ -70,15 +75,10 @@ public abstract record Element
     /// Any layout move/resize of this node animates via transform only.</summary>
     public LayoutTransition? Layout { get; init; }
 
-    /// <summary>Route wheel input over this element to that scroller as a glide — a list header laid out ABOVE its
-    /// list (not a pass-through overlay): a notch over the header posts the list's kernel <c>WheelNotch</c> with the
-    /// same <c>PerNotchDip(viewport, LineDip)</c> a notch over the rows gets, so header and rows feel identical. The
-    /// input dispatcher walks the hit chain leaf→root for the nearest element naming a target (stopping at the first
-    /// scrollable ancestor) BEFORE <c>ScrollInputRouter</c>'s own ancestor resolution, and marks the event handled.
-    /// Any <see cref="FluentGpu.Scroll.IWheelTarget"/>: the engine's <see cref="FluentGpu.Scroll.ScrollController"/>
-    /// (<c>ScrollEl.Controller</c> / <c>VirtualListEl.Controller</c>) or a Controls <c>IScrollController</c> /
-    /// <c>ItemsViewController</c>. Re-asserted on every reconcile like any handler (null clears it). Null = none.</summary>
-    public FluentGpu.Scroll.IWheelTarget? WheelTarget { get; init; }
+    /// <summary>Wheel routing target: a header laid out ABOVE its list names the list's scroll handle here so wheel
+    /// input over the header drives the LIST instead of the header's own ancestor scroller
+    /// (<c>InputDispatcher.RouteWheelTarget</c>). Re-asserted on every reconcile (null clears it). Null = none.</summary>
+    public FluentGpu.Scroll.Runtime.ScrollHandle? WheelTarget { get; init; }
 
     /// <summary>Scroll-viewport line height hint (DIP) — <c>ScrollState.LineDip</c>: one wheel notch travels
     /// <c>WheelScrollLines × ScrollLineDip</c> (Windows semantics) instead of the viewport-fraction rule. Read only on a
@@ -283,7 +283,16 @@ public sealed record BoxEl : Element
     /// never falls past it to an ancestor — focus stays where it was, AppBarButton_themeresources.xaml:136); keyboard
     /// Tab still reaches it. True (default) = press focuses the nearest focusable self-or-ancestor.</summary>
     public bool AllowFocusOnInteraction { get; init; } = true;
-    public bool HitTestVisible { get; init; } = true;
+    /// <summary>Bindable like <see cref="Fill"/>/<see cref="Visible"/> (E15, home-redesign-remediation.md §2): a
+    /// resolved <c>false</c> clears <c>NodeFlags.HitTestVisible</c> on this node WITHOUT a component re-render (a bind
+    /// effect owns the flag, wired at mount by <c>Reconciler.BindNode</c>) — the same bind-scoped shape as
+    /// <see cref="Visible"/>'s presence channel, but for hit-testing alone (the node stays laid out, painted, and its
+    /// subtree still hit-tests; only THIS node stops being a target/blocking chain link — see
+    /// <see cref="HitTestPassThrough"/> for "yield to what's behind" instead of "exclude the subtree"). A static
+    /// (unbound) value is re-asserted every reconcile exactly like the pre-existing <c>bool</c> — the implicit
+    /// <c>bool</c>→<c>Prop&lt;bool&gt;</c> conversion keeps every existing <c>HitTestVisible = expr</c> call site
+    /// compiling unchanged.</summary>
+    public Prop<bool> HitTestVisible { get; init; } = true;
     /// <summary>Input pass-through (WinUI <c>OverlayInputPassThroughElement</c>): when true, this node yields the hit to
     /// whatever is BEHIND it wherever none of its OWN children are hit — so a full-bleed floating overlay can host an
     /// interactive child (a command bar) while clicks in its empty area fall through to the page beneath. (Unlike
@@ -336,9 +345,6 @@ public sealed record BoxEl : Element
     /// <c>AnimChannel.BlurSigma</c> (UseTransition/UseKeyframes) for the transitions.dev recipes (number pop-in, skeleton
     /// reveal, icon swap, page slide, …). 0 = no blur (the default). Composited only — never relayout.</summary>
     public float Blur { get; init; }
-    /// <summary>Optional retained-cache behavior for self-blur layers. Default renders normally; HoldIfCached lets
-    /// stationary effects reuse cached blurred pixels during user-scroll without globally disabling blur.</summary>
-    public BlurCachePolicy BlurCachePolicy { get; init; }
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
     public float TransformOriginX { get; init; } = 0.5f;
@@ -367,8 +373,9 @@ public sealed record BoxEl : Element
     /// <summary>The whole-matrix transform channel — a thunk/signal producing the full Affine2D, or a plain static
     /// matrix. Either spelling WINS over the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above, which are the
     /// convenience path for the common translate/scale/rotate cases.
-    /// ONE transform owner per node: never combine this with the decomposed statics, with a transform-owning ScrollBind
-    /// (PinTop / StretchFromTop / Morph* / a Trans*|Scale* sink), or with transform-channel animations. A DEBUG
+    /// ONE transform owner per node: never combine this with the decomposed statics, with a transform-owning scroll
+    /// effect (<c>.Sticky</c> / <c>.Parallax</c> / a TransX|TransY|ScaleXY <c>ScrollEffect</c>), or with transform-channel
+    /// animations. A DEBUG
     /// tripwire in the reconciler turns each of those into a stack trace at the offending element.
     /// NOTE <c>default(Affine2D)</c> is all-zeros, not identity — the reconciler treats "differs from default" as
     /// "declared", so leaving this unset costs nothing.</summary>
@@ -498,7 +505,23 @@ public sealed record GridEl : Element
     public float RowGap { get; init; }
     public float RowHeight { get; init; } = float.NaN;   // NaN = auto (tallest cell in the row)
     public float MinColWidth { get; init; }              // > 0 = auto-fill: as many 1fr columns as fit at this min width (Columns ignored)
+    /// <summary>Auto-fill mode only: the column count never exceeds this (0 = unlimited). The capped tracks still
+    /// share the full width (they grow past <see cref="MinColWidth"/>) — CSS <c>repeat(auto-fill, …)</c> with a max
+    /// column count. Ignored by fixed-track grids.</summary>
+    public int MaxColumns { get; init; }
     public Element[] Children { get; init; } = [];
+
+    /// <summary>The auto-fill column count for an inner width — THE formula the layout engine uses
+    /// (<c>FlexLayout.GridColCount</c>), exposed so app-side form rules (a cell count that depends on the column
+    /// count) compute the exact number the grid will lay out: <c>max(1, ⌊(innerW + colGap) / (minColWidth + colGap)⌋)</c>,
+    /// clamped to <paramref name="maxColumns"/> when that is &gt; 0. Unknown width (≤ 0, NaN, ∞) or a non-positive
+    /// <paramref name="minColWidth"/> ⇒ 1.</summary>
+    public static int AutoFillColumnCount(float innerW, float minColWidth, float colGap, int maxColumns = 0)
+    {
+        if (minColWidth <= 0f || !(innerW > 0f) || float.IsInfinity(innerW)) return 1;
+        int count = System.Math.Max(1, (int)((innerW + colGap) / (minColWidth + colGap)));
+        return maxColumns > 0 && count > maxColumns ? maxColumns : count;
+    }
 
     // sizing/participation
     public float Width { get; init; } = float.NaN;
@@ -973,9 +996,11 @@ public sealed record ScrollEl : Element
     public ColorF Fill { get; init; }
     public CornerRadius4 Corners { get; init; }
 
-    /// <summary>Scroll-edge cues (controls.md §8.3): a surface-colour gradient fade at any edge with more content past it,
-    /// so a clipped list signals there is more below the fold. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to
-    /// <see cref="ScrollEdgeCuesDefaults.Default"/> (ON, fade-only); set <see cref="ScrollEdgeCues.None"/> to opt out.</summary>
+    /// <summary>Scroll-edge cues (controls.md §8.3): the analytic edge feather at any edge with more content past it, so a
+    /// clipped list signals there is more below the fold (<see cref="ScrollEdgeCueResolver"/>: a Fade cue is
+    /// <see cref="AutoEdgeFade"/> with the standard band unless an explicit <see cref="EdgeFade"/> is authored).
+    /// <see cref="ScrollEdgeCues.Auto"/> (default) resolves to <see cref="ScrollEdgeCuesDefaults.Default"/> (ON,
+    /// fade-only); set <see cref="ScrollEdgeCues.None"/> to opt out.</summary>
     public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
     /// <summary>Explicit edge fade on the viewport (e.g. <c>EdgeFadeSpec.Horizontal()</c>) — the premium alpha-mask cue:
     /// content dissolves into anything behind, following the corners. One offscreen RT. Null = none.</summary>
@@ -1002,17 +1027,12 @@ public sealed record ScrollEl : Element
     /// declare a value the element can recompute each render — an interval derived from a frozen options record cannot.</para></summary>
     public FluentGpu.Scene.SnapSpec? Snap { get; init; }
 
-    /// <summary>Change-only scroll-geometry observer (the escape hatch; SwiftUI <c>onScrollGeometryChange</c>). The host
-    /// projects the live geometry to a coarse <c>long</c> key after the integrator settles and fires the action only when
-    /// that key changes (never per-px, never per-frame) — for pull-to-refresh triggers, analytics, bespoke app logic.
-    /// UI-thread, pre-publish. Project a COARSE key (e.g. <c>g => g.Band &lt; -80 ? 1 : 0</c>), not raw px.</summary>
-    public (Func<FluentGpu.Animation.ScrollGeometry, long> Project, Action<FluentGpu.Animation.ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
 
     /// <summary>Scroll-position restoration key: a STABLE per-content identity (e.g. a route key like <c>"artist:&lt;uri&gt;"</c>).
     /// When set, the engine saves this viewport's offset under it and restores it when the same content is shown again —
     /// even after the page was evicted from KeepAlive (cold remount), seeded BEFORE the first layout so there is no
-    /// scroll-to-top flash. Distinct content (a different key) starts at the top; the same content open in two tabs is
-    /// kept separate automatically (the engine namespaces by the enclosing KeepAlive slot). Null ⇒ no restoration.</summary>
+    /// scroll-to-top flash (<c>ScrollHandle.Restore</c>). Distinct content (a different key) starts at the top; compose
+    /// the tab/slot identity into the key when the same content can be open twice. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
     /// <summary>Never draw the conscious scrollbar for this viewport (parity with <see cref="VirtualListEl"/>); the offset
     /// is still programmatically scrollable. Used to hide the rail while a region is loading its skeleton.</summary>
@@ -1021,12 +1041,10 @@ public sealed record ScrollEl : Element
     /// drive the viewport programmatically while still using the engine's scroll animator.</summary>
     public Action<NodeHandle>? OnRealized { get; init; }
 
-    /// <summary>The ONE authoring handle over this viewport (scroll-v3-plan §7.2): an author-supplied
-    /// <see cref="FluentGpu.Scroll.ScrollController"/> the reconciler attaches to this node when it realizes (and
-    /// detaches on unmount / re-bake to a different scroller). Null (default, the common case) ⇒ the reconciler mints
-    /// and attaches its own internal instance instead — <c>Hooks.UseScroll()</c> always resolves SOME controller for
-    /// a mounted descendant, whether or not the author supplied one. Supply your own when you need to hold the handle
-    /// OUTSIDE the subtree (a sibling toolbar's PageUp/PageDown, a parent driving <c>ScrollTo</c> before the viewport's
-    /// own descendants have mounted).</summary>
-    public FluentGpu.Scroll.ScrollController? Controller { get; init; }
+    /// <summary>The ONE app-facing handle over this viewport (scroll rework §9): an author-supplied
+    /// <see cref="FluentGpu.Scroll.Runtime.ScrollHandle"/> the host binds to this node when it realizes (and unbinds on
+    /// unmount). Null (default) ⇒ the host mints an internal handle. Supply your own to hold the handle OUTSIDE the
+    /// subtree (a sibling toolbar's PageUp/PageDown, a parent driving <c>ScrollTo</c> before the viewport mounted — a
+    /// move on an unbound handle is latched and applied at bind).</summary>
+    public FluentGpu.Scroll.Runtime.ScrollHandle? Handle { get; init; }
 }

@@ -10,6 +10,12 @@
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <IsPublishable>false</IsPublishable>
+    <!-- Non-concurrent (blocking) gen2 GC — a MEASUREMENT fix for the zero-allocation facts that assert
+         GC.GetAllocatedBytesForCurrentThread() deltas == 0 (the shipping libraries keep background GC on via
+         src/Directory.Build.props). With background GC on, the counter over-reports up to ~8 KB when a background
+         gen2 GC suspends the runtime inside the measured window, so an allocation-free loop can read non-zero under
+         load. Same override as FluentGpu.VerticalSlice.csproj. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <!-- The backend under test is Windows-only interop; the tests inject fakes so no platform call runs, but the
          reference to the Windows backend surfaces CA1416 — suppress it in the test project only. -->
     <NoWarn>$(NoWarn);CA1416</NoWarn>

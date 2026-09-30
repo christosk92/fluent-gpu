@@ -250,7 +250,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     /// <summary>Reset this frame's policy cap + drop counter. Bank selection — and the fence discipline that makes
     /// writing that bank safe — belongs to the shared <see cref="UploadArena"/>, begun once per frame by the device.</summary>
-    public void BeginFrame(int frameIndex) { _ = frameIndex; _cursor = 0; _dropped = 0; }
+    public void BeginFrame(int slot) { _ = slot; _cursor = 0; _dropped = 0; }
 
     /// <summary>Bind the shared image-pass state ONCE (descriptor heap, root sig, PSO, viewport, topology, quad VB) — so
     /// the per-image draws don't re-bind the descriptor heap N times (the per-image churn that the acrylic scroll path
@@ -282,7 +282,7 @@ float4 PSMain(VSOut i) : SV_Target
         *(ImageInstance*)dst = inst;
         cmd->SetGraphicsRootDescriptorTable(1, srv);
         cmd->SetGraphicsRootShaderResourceView(2, gva);
-        cmd->DrawInstanced(4, 1, 0, 0);
+        cmd->DrawInstanced(4, 1, 0, 0); GpuDrawCount.Frame++;
     }
 
     /// <summary>Draw a consecutive same-SRV image span with one descriptor bind and one instanced draw.</summary>
@@ -299,7 +299,7 @@ float4 PSMain(VSOut i) : SV_Target
         _cursor += count;
         cmd->SetGraphicsRootDescriptorTable(1, srv);
         cmd->SetGraphicsRootShaderResourceView(2, gva);
-        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        cmd->DrawInstanced(4, (uint)count, 0, 0); GpuDrawCount.Frame++;
         return count;
     }
 

@@ -51,6 +51,13 @@ also have own-node `Component` hooks (`this.UseSoftReveal()`), the counterpart t
 | **Card resize** | `Animate = MotionRecipes.CardResize` | tween a container's size through real layout (neighbours reflow), SmoothOut 300ms |
 | **Panel reveal** | `Animate = MotionRecipes.PanelReveal` | slide a panel in (open 400ms / close 350ms asymmetry) |
 | **Semantic zoom** | `Flow.KeepAlive(... TransitionFor: SemanticZoomOut/In)` | overview comes forward while detail recedes, reversed on return; opacity + scale only, no root blur |
+| **Scale pop (checked glyph)** | `anim.Pulse(node, peak, ms)` | ScaleX/ScaleY `0:1 → .4:peak (SmoothOut) → 1:1 (SmoothOut)` — a single emphasis pop |
+
+`Pulse` is the one recipe here also called FROM inside a framework control: `ToggleButton`'s optional checked-glyph pop
+(`Style.CheckedPopScale`/`CheckedPopMs`, E2 — `docs/plans/wavee/home-redesign-implementation.md` Workstream E) wires
+it, gated so it fires only on a USER-initiated false→true click (never a programmatic/data-driven checked flip — see
+`docs/guide/components-elements-layout.md`'s `ToggleButton` section for the click-vs-programmatic mechanism). Every
+other recipe on this page stays an app-author-only palette; this is the documented, deliberate exception.
 
 ## Decision rules — situation → recipe
 
@@ -69,6 +76,7 @@ Match the *visible element* first, then the verb (from transitions.dev's decisio
 - **An element changes width/height** → card resize (`CardResize`).
 - **A panel slides into a region** → panel reveal (`PanelReveal`).
 - **Two retained views change semantic granularity** → directional `SemanticZoomOut` / `SemanticZoomIn` (normally via the `SemanticZoom` control).
+- **A single element needs one emphasis "pop" on a user action** (a checked glyph, a like/favorite confirming) → `Pulse`.
 
 If two could fit, prefer the lower-overhead one.
 
@@ -76,8 +84,9 @@ If two could fit, prefer the lower-overhead one.
 
 The recipes lean on a new **per-node self-blur**: `BoxEl.Blur` (a static σ in px) and `AnimChannel.BlurSigma` (animate it via
 `UseTransition`/`UseKeyframes` or the recipes). When σ > 0 the recorder wraps the node's subtree in a `PushLayer{Blur}`
-— the subtree renders to a pooled offscreen RT, gets a separable Gaussian, and composites once at the group alpha (the
-same offscreen-layer machinery as `OpacityGroup`, plus the blur). It blurs the element's **own** pixels (CSS
+— the node becomes an effect slice of the retained tiled composite: its subtree rasters into retained tiles, gets a
+separable Gaussian at composite time (the blurred result is kept while its tiles, σ and position do not change), and
+composites once at the group alpha (the same machinery as an opacity group, plus the blur). It blurs the element's **own** pixels (CSS
 `filter: blur()`), not the backdrop behind it. Composited only — never relayout.
 
 ## The expressive vocabulary

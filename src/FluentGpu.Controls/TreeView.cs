@@ -3,7 +3,6 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
-using FluentGpu.Scroll;
 
 namespace FluentGpu.Controls;
 
@@ -367,7 +366,7 @@ public sealed class TreeView : Component
 
         // Edge auto-scroll during a drag (WinUI band 100px, 150-1500px/s, ListViewBase_Partial_Reorder.cpp:39-47).
         // A HELD continuous velocity for as long as the pointer sits in the band — SetVelocity(0) the instant it
-        // leaves (below) or the drag ends/cancels (StopEdgeAutoScroll), so the kernel's Autoscroll never outlives it.
+        // leaves (below) or the drag ends/cancels (StopEdgeAutoScroll), so the constant-velocity plan never outlives it.
         void EdgeAutoScroll(float pointerY)
         {
             if (Context.Scene is not { } s) return;
@@ -382,7 +381,7 @@ public sealed class TreeView : Component
             float velocity = pointerY < rc.Y + band ? -dipPerS
                             : pointerY > rc.Y + rc.H - band ? dipPerS
                             : 0f;
-            s.ScrollPort!.Post(ScrollInput.SetVelocity((int)vp.Raw.Index, velocity));
+            s.ScrollHandleFor(vp)?.AutoScroll(velocity);
         }
 
         void StopEdgeAutoScroll()
@@ -390,7 +389,7 @@ public sealed class TreeView : Component
             if (Context.Scene is not { } s) return;
             var vp = FindEdgeAutoScrollViewport(s);
             if (!vp.IsNull && s.IsLive(vp) && s.HasScroll(vp))
-                s.ScrollPort!.Post(ScrollInput.SetVelocity((int)vp.Raw.Index, 0f));
+                s.ScrollHandleFor(vp)?.AutoScroll(0.0);
         }
 
         float BlockExtent(TreeNode n, string? collapsedId)

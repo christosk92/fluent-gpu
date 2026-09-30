@@ -5,6 +5,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Hooks;
@@ -437,12 +438,6 @@ public sealed partial class RenderContext
     public AnimEngine? Anim;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
-    // ArmScroll (host-injected → ScrollIntegrator.Arm) is deleted (scroll-v3): a control requests a smooth
-    // programmatic scroll by posting ScrollInput.ScrollTo through the viewport's ScrollController (Dsl/Element.cs
-    // §7.1's Controller) instead of arming a viewport by NodeHandle through this seam.
-    /// <summary>Host-injected peek: true while ANY viewport is in user scroll (wheel/fling/drag) or inside the post-scroll
-    /// hold window. Apps use this to defer heavy per-frame work (e.g. lyrics glow/wipe) so main-content scroll stays smooth.</summary>
-    public Func<bool>? PeekMainScrollBusy;
     /// <summary>Reconciler-injected bound-list removal seam: detach realized logical indices into the exit-orphan layer,
     /// commit the backing mutation, then remap surviving slot indices without remounting them.</summary>
     public Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? BeginVirtualRemoval;
@@ -799,6 +794,52 @@ public sealed partial class RenderContext
         if (idx < 0) { cell = new ContextSignalCell<T>(this, context); RegisterCell(__k, cell); }
         else cell = (ContextSignalCell<T>)_cells[idx];
         return cell.Signal;
+    }
+
+    // ── Scroll observation (the nearest scroller's signals) ───────────────────────────────────────────────────────
+
+    /// <summary>The observable state of the NEAREST enclosing scroller (<see cref="ScrollCtx.Nearest"/>, provided by every
+    /// <c>ScrollEl</c>/<c>VirtualListEl</c>), or of <paramref name="handle"/> when given. Returns the handle's own
+    /// signals — no allocation, no cell; this render subscribes only to the scroller's IDENTITY (stable for the viewport's
+    /// life). Outside every scroller: <see cref="ScrollObservation.None"/>.</summary>
+    public ScrollObservation UseScroll(FluentGpu.Scroll.Runtime.ScrollHandle? handle = null)
+    {
+        var h = handle ?? UseContext(ScrollCtx.Nearest);
+        return h is null ? ScrollObservation.None : ScrollObservation.Of(h);
+    }
+
+    /// <summary>A memo over the scroller's offset: <c>clamp01((offset − in0)/(in1 − in0))</c>
+    /// (<see cref="ScrollObservation.Progress"/>). Recomputes on every moved frame but notifies only when the progress
+    /// value changes — bind it to a node channel (opacity, a fill) for a render-free scroll-linked value. The range and
+    /// the scroller freeze at mount (a hook's inputs, like every propless factory); remount through a key to change them.</summary>
+    public IReadSignal<float> UseScrollProgress(double in0, double in1, FluentGpu.Scroll.Runtime.ScrollHandle? handle = null,
+        [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        var offset = UseScroll(handle).Offset;
+        return UseComputed(() => ScrollObservation.Progress(offset.Value, in0, in1), __hf, __hl);
+    }
+
+    /// <summary>A hysteresis threshold over the nearest scroller's offset (<see cref="FluentGpu.Scroll.Runtime.ScrollThreshold.Next"/>)
+    /// — the compact-band pattern (Wavee Home shows a compact facet band once scrolled past 64 DIP, hides it back below
+    /// 56). Starts hidden (<c>false</c>); flips to shown once offset moves strictly past <paramref name="enterAt"/>, and
+    /// back to hidden once offset drops strictly below <paramref name="exitAt"/> — the band between the two thresholds is
+    /// dead: whichever state is current holds there. Backed by a value-gated <see cref="Memo{T}"/> (see <see cref="Memo{T}"/>'s
+    /// push-pull equality cut-off): it recomputes on every moved frame but notifies subscribers ONLY on an actual flip, so
+    /// binding it costs one extra scalar comparison per moved frame and zero allocation in steady state — no new
+    /// per-frame work for scrollers with no threshold subscriber (nothing runs unless something reads this signal). The
+    /// thresholds and the scroller freeze at mount (a hook's inputs, like every propless factory); remount through a key
+    /// to change them.</summary>
+    public IReadSignal<bool> UseScrollThreshold(double enterAt, double exitAt, FluentGpu.Scroll.Runtime.ScrollHandle? handle = null,
+        [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        var offset = UseScroll(handle).Offset;
+        var shown = UseRef(false, __hf, __hl);   // non-reactive: holds the PREVIOUS flip state for the hysteresis rule
+        return UseComputed(() =>
+        {
+            bool next = FluentGpu.Scroll.Runtime.ScrollThreshold.Next(shown.Value, offset.Value, enterAt, exitAt);
+            shown.Value = next;
+            return next;
+        }, __hf, __hl);
     }
 
     // ── Activation lifecycle (parked-by-KeepAlive OR window-minimized) ───────────────────────────────────────────────

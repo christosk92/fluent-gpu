@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading;
 using FluentGpu.Foundation;
@@ -31,7 +31,6 @@ public sealed class BakedBlurQueue
     private int _quality = (int)Quality.Economy;
     private int _fastGpuStreak;
     private static readonly long s_upgradeDelayTicks = (long)(0.35 * Stopwatch.Frequency);
-    private static readonly bool s_diag = Environment.GetEnvironmentVariable("FG_BAKED_BLUR_DIAG") == "1";
 
     public volatile bool Paused;
     public int InitialJobCount => Volatile.Read(ref _initialJobCount);
@@ -125,7 +124,6 @@ public sealed class BakedBlurQueue
         Diag.Set("d3d12", "bakedBlurTier", (int)quality);
         Diag.Set("d3d12", "bakedBlurWidth", job.OutputW);
         Diag.Set("d3d12", "bakedBlurHeight", job.OutputH);
-        if (s_diag) Console.Error.WriteLine($"[baked-blur] tier={quality} upgrade={job.IsUpgrade} backlog={backlog} actual={job.OutputW}x{job.OutputH}");
     }
 
     private bool TryTake(ConcurrentQueue<QueuedJob> queue, ref int count, bool ignoreEligibility, out Job job)
@@ -184,7 +182,6 @@ public sealed class BakedBlurQueue
             }
         }
         else _fastGpuStreak = 0;
-        if (s_diag) Console.Error.WriteLine($"[baked-blur] gpu={milliseconds:0.000}ms next={AdaptiveQuality}");
     }
 
     public void Post(in Result result)

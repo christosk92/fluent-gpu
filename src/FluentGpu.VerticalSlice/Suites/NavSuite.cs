@@ -114,8 +114,7 @@ static class NavSuite
 
         var scrollA = FindScrollable(host.Scene, host.Scene.Root);
         var sr = host.Scene.AbsoluteRect(scrollA);
-        window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(sr.X + 20f, sr.Y + 20f), 0, 0, 120f));
-        host.RunFrame();
+        WheelDip(host, window, new Point2(sr.X + 20f, sr.Y + 20f), 120f);
         host.Scene.TryGetScroll(scrollA, out var scA);
         float offsetA = scA.OffsetY;
 
@@ -179,8 +178,7 @@ static class NavSuite
         var nestedRect = nestedHost.Scene.AbsoluteRect(nestedScroll);
         var nestedPoint = new Point2(nestedRect.X + 30f, nestedRect.Y + 30f);
         var nestedRouted = nestedHost.Input.ScrollableUnderForAxis(nestedPoint, wantHorizontal: false);
-        nestedWindow.QueueInput(new InputEvent(InputKind.Wheel, nestedPoint, 0, 0, 120f));
-        nestedHost.RunFrame();
+        WheelDip(nestedHost, nestedWindow, nestedPoint, 120f);
         nestedHost.Scene.TryGetScroll(nestedScroll, out var nestedState);
         Check("50a3. nested transparent component boundaries remain input-traversable when an inner branch becomes hit-testable",
             !nestedScroll.IsNull && nestedRouted == nestedScroll && nestedState.OffsetY > 1f,
@@ -288,12 +286,12 @@ static class NavSuite
             viewport = vp.IsNull ? -1 : (int)vp.Raw.Index;
             if (vp.IsNull) return false;
             var r = host.Scene.AbsoluteRect(vp);
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(r.X + 20f, r.Y + 20f), 0, 0, 120f));
-            host.RunFrame();
+            WheelDip(host, window, new Point2(r.X + 20f, r.Y + 20f), 120f);
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(250f, 215f), 0, 0));
-            for (int i = 0; i < 60 && host.ScrollKernel.WakeActiveCount > 0; i++) host.RunFrame();
+            // AnyUserScrollMoving is the closed-form plans' own "is anything still gliding" signal (2-frame latch).
+            for (int i = 0; i < 60 && host.AnyUserScrollMoving; i++) host.RunFrame();
             host.RunFrame();
-            return host.ScrollKernel.WakeActiveCount == 0 && host.ScrollChrome.NeedsFrame
+            return !host.AnyUserScrollMoving && host.ScrollChrome.NeedsFrame
                    && host.Scene.ScrollChrome.Get(viewport).FadeT > 0f;
         }
 

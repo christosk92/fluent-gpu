@@ -51,6 +51,44 @@ public enum DrawOp : int
                                // scope, so damage/headless-balance/scissor machinery keeps working unchanged.
     PopStencilClip = 22,       // closes the scope; RE-CARRIES the same realization so the backend can DECR_SAT-erase
                                // an inner nesting level without keeping a geometry stack of its own.
+    CompositeSlice = 23,       // the retained-tile SLICE MARKER (docs/plans/scroll-gpu-retained-tiles-implementation.md
+                               // §A.2): a recorder-internal op that stands, inside a slice's own stream, in the paint
+                               // position of a CHILD slice (a scroll content root, an effect root, a thumb, an item band)
+                               // whose commands live in that child's own arena. Never reaches a backend decoder: the
+                               // composite seam (IGpuDevice.SubmitComposite) consumes slices by descriptor — the
+                               // marker splits a slice's stream into segments. See CompositeSliceCmd.
+}
+
+/// <summary>What the composite applies around a <see cref="CompositeSliceCmd"/>'s child slice, and in which space its
+/// parameters live. <see cref="OuterClip"/> = push <see cref="CompositeSliceCmd.OuterClip"/> first (an item
+/// band's viewport-fixed clip); <see cref="Layer"/> = push <see cref="CompositeSliceCmd.Layer"/> (an effect slice's
+/// opacity / self-blur / edge-fade group, or a band's top feather); <see cref="InnerClip"/> = push
+/// <see cref="CompositeSliceCmd.InnerClip"/> right after the layer (the self-blur SOURCE clip); <see cref="ParamsUp"/> =
+/// the clip/layer parameters are expressed in the space ONE slice level above the containing stream (an item band's
+/// clip is fixed to the VIEWPORT while its rows ride the content's translation); <see cref="DistributeFade"/> = the
+/// layer is an edge fade that passed the RECORD-time half of the distribution test (fade mode, alpha 1, no own paint): it
+/// is cut without spending the effect budget, and the composite plan distributes it as an analytic per-item feather
+/// whenever the placement-time half holds (gpu-renderer.md §13.1e); <see cref="StickyClip"/> = the slice root's
+/// <c>.StickyClip</c> (its <c>NodePaint.ClipRect</c>, a ClipTop scroll pose) is NOT in the recorded bytes: the composite
+/// plan applies it as a clip on the slice's item(s) at placement, read from the node's current pose, so a page scroll that
+/// walks the band line through the slice records nothing (gpu-renderer.md §13.1e); <see cref="FadeWhileStuck"/> = the
+/// layer is an <c>EdgeFadeSpec.WhileStuck</c> edge fade on a <see cref="StickyClip"/> slice: the composite plan applies it
+/// only on a turn whose sticky clip is ENGAGED (posed at the band line) and places the slice with no layer otherwise — the
+/// feather switches on the same render turn as the cut, never a re-render later.</summary>
+[Flags]
+public enum CompositeSliceFlags : int { None = 0, OuterClip = 1, Layer = 2, InnerClip = 4, ParamsUp = 8, DistributeFade = 16, StickyClip = 32, FadeWhileStuck = 64 }
+
+/// <summary>The payload of <see cref="DrawOp.CompositeSlice"/>. (<see cref="NodeIndex"/>, <see cref="Gen"/>,
+/// <see cref="Sub"/>) is the child slice's stable key (the scene node it was cut at + its role: 0 main, 1 thumb, 2 item
+/// band, 3 pinned band). <see cref="Kind"/> is its <c>SliceKind</c>. <see cref="Clip"/> is the composite clip in effect at
+/// the marker — the analytic clip its composite item draws under (the containing stream's space, or one level up with
+/// <see cref="CompositeSliceFlags.ParamsUp"/>). <see cref="OuterClip"/>/<see cref="Layer"/>/<see cref="InnerClip"/>/
+/// <see cref="PopRect"/> are the group parameters that USED to be inline ops (see <see cref="CompositeSliceFlags"/>);
+/// <see cref="SortKey"/>/<see cref="LayerSortKey"/> the sort keys those ops carried.</summary>
+public readonly record struct CompositeSliceCmd(int NodeIndex, uint Gen, int Sub, int Kind, int Flags, RectF Clip,
+    ClipCmd OuterClip, PushLayerCmd Layer, ClipCmd InnerClip, RectF PopRect, ulong SortKey, ulong LayerSortKey)
+{
+    public bool Has(CompositeSliceFlags f) => (Flags & (int)f) != 0;
 }
 
 /// <summary>Which CLIP TIER a scope in the command stream establishes (gpu-renderer.md §6's three-tier table). The
@@ -70,11 +108,14 @@ public struct DrawListOpcodeStats
     public int DrawIconMask, DrawVideo, EraseRoundRect;
     public int FillPath, StrokePath;
     public int PushStencilClip, PopStencilClip;
+    /// <summary>Retained-tile slice markers (<see cref="DrawOp.CompositeSlice"/>) — a span whose stats carry any holds a
+    /// child slice's paint position.</summary>
+    public int CompositeSlice;
     /// <summary>PushLayer commands specifically of <see cref="LayerKind.Acrylic"/> (a subset of <see cref="PushLayer"/>,
     /// which does not discriminate kind). Incremented only by the raw <see cref="DrawList.PushLayer"/> emitter — the
     /// Opacity/Blur/EdgeFade convenience methods pass a different <c>Kind</c> and do not touch this field. Lets a caller
-    /// that only has a subtree's aggregate <see cref="DrawSpan.OpcodeStats"/> (scroll-v3-plan-2026-08-17.md §6.1, WP-Q1's
-    /// <c>ScrollLeaseCapture.HasAcrylicOrVideo</c>) answer "does this span contain an Acrylic layer" without re-walking it.</summary>
+    /// that only has a subtree's aggregate <see cref="DrawSpan.OpcodeStats"/> answer "does this span contain an Acrylic
+    /// layer" without re-walking it.</summary>
     public int Acrylic;
 
     public void Add(DrawOp op)
@@ -103,6 +144,7 @@ public struct DrawListOpcodeStats
             case DrawOp.StrokePath: StrokePath++; break;
             case DrawOp.PushStencilClip: PushStencilClip++; break;
             case DrawOp.PopStencilClip: PopStencilClip++; break;
+            case DrawOp.CompositeSlice: CompositeSlice++; break;
         }
     }
 
@@ -130,6 +172,7 @@ public struct DrawListOpcodeStats
         StrokePath += other.StrokePath;
         PushStencilClip += other.PushStencilClip;
         PopStencilClip += other.PopStencilClip;
+        CompositeSlice += other.CompositeSlice;
         Acrylic += other.Acrylic;
     }
 
@@ -157,11 +200,12 @@ public struct DrawListOpcodeStats
         StrokePath = StrokePath - other.StrokePath,
         PushStencilClip = PushStencilClip - other.PushStencilClip,
         PopStencilClip = PopStencilClip - other.PopStencilClip,
+        CompositeSlice = CompositeSlice - other.CompositeSlice,
         Acrylic = Acrylic - other.Acrylic,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} stencil={PushStencilClip}/{PopStencilClip} acrylic={Acrylic}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} stencil={PushStencilClip}/{PopStencilClip} slice={CompositeSlice} acrylic={Acrylic}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -222,9 +266,10 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // InMotion is a QUANTIZED 0..255 text-motion SOFTNESS (see DrawList.QuantizeMotionSoft), not the boolean the name
 // implies — kept as the same field/slot so the payload size and every rebase path stay unchanged. 0 = snap the run
 // onto the glyph atlas's sub-pixel phase grid (crisp); 255 = apply no correction, letting the run sit at its natural
-// fractional device Y so the LINEAR/CLAMP atlas sampler softens it. The recorder derives it from the enclosing
-// viewport's live scroll SPEED (SceneRecorder.TextMotionSoftness), so a slow reading nudge stays sharp while a fling
-// softens — the WinUI look, which gets it for free by resampling a composited surface at fractional offsets.
+// fractional device Y so the LINEAR/CLAMP atlas sampler softens it. DELETED at the source (audit 2026-09-22, cause
+// #2 — SceneRecorder.TextMotionSoftness, which used to derive this from the enclosing viewport's live scroll speed,
+// no longer exists): every call site now leaves this at its default, 0, so every run records crisp regardless of
+// scroll speed. The field/slot stays (renderer + GPU upload still read it) so the payload layout is unchanged.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
@@ -289,44 +334,24 @@ public readonly record struct DrawGradientRectCmd(RectF Rect, CornerRadius4 Radi
 // <see cref="StrokeWidth"/> centered on the rounded-box edge (instead of a fill). Same payload as the gradient fill + a width.
 public readonly record struct DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Radii, Point2 Start, Point2 End, int Shape, int StopCount,
     ColorF C0, ColorF C1, ColorF C2, ColorF C3, float O0, float O1, float O2, float O3, float StrokeWidth, Affine2D Transform, float Opacity);
-// Begin/end a layer. Kind = Acrylic (0, the default): the engine snapshots the canvas under DeviceRect, gaussian-blurs
-// it, then on PopLayer tints + adds noise + a luminosity wash; the subtree between the two draws on top.
-// Kind = Opacity (1): the subtree renders at FULL alpha into a pooled offscreen RT, then PopLayer composites it ONCE
-// over the canvas at <see cref="GroupAlpha"/> (flat group opacity — no double-blend of overlapping children); the
+// Begin/end a layer (gpu-renderer.md §13 — on the primary target every layer is an effect slice, composited by the
+// retained-tile composite). Kind = Acrylic (0, the default): the backdrop under DeviceRect is blurred, tinted, noised
+// and luminosity-washed; the subtree between the two draws on top.
+// Kind = Opacity (1): the subtree renders at FULL alpha offscreen, then composites ONCE at <see cref="GroupAlpha"/>
+// (flat group opacity — no double-blend of overlapping children); the
 // acrylic fields (Tint/Fallback/TintOpacity/BlurSigma/NoiseOpacity/LuminosityOpacity) are unused for this kind.
 public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity,
     int Kind = 0, float GroupAlpha = 1f,
     // EdgeFade (Kind == 3): per-edge feather band depth in DEVICE px (0 = edge disabled), falloff curve, fade intensity,
     // and enabled-edge bit mask. CompositeClip is the inherited active device-space clip for EdgeFade AND self-blur;
-    // it bounds the offscreen result that can reach the canvas. The rounded-corner radii come from Radii.
+    // it bounds the offscreen result that can reach the target. The rounded-corner radii come from Radii.
     // For Kind == Opacity the same field carries the group's DRAWN EXTENT (the recorder's accumulated subtree draw
     // bounds ∩ the enclosing clip), back-patched at PopLayer — see PatchOpacityLayerExtent. An EMPTY rect there (the
-    // default) means "extent unknown" and the backend falls back to the full-canvas clear + composite.
+    // default) means "extent unknown" and the backend composites over the whole target.
     float FadeBandL = 0f, float FadeBandT = 0f, float FadeBandR = 0f, float FadeBandB = 0f, int FadeFalloff = 0, float FadeIntensity = 1f, int FadeEdges = 0,
     RectF CompositeClip = default,
-    // Stable scene-layer id (the node handle, packed index|gen). Acrylic uses its own id to key the retained blurred-
-    // backdrop cache; enclosing opacity/blur/edge-fade groups expose theirs as the acrylic backdrop-source identity, so
-    // moving an acrylic between the main target and an offscreen group cannot reuse a snapshot from the wrong surface.
-    // 0 remains valid for manually-authored/test draw lists and disables acrylic caching when used on an acrylic layer.
-    ulong LayerId = 0,
-    int BlurCachePolicy = 0,
-    // Self-blur only: 1 = the node's world transform moved THIS frame (recorder's inMotion — scroll/fling/FLIP). NOT part
-    // of the cross-frame pin key (backdrop-effects-animation.md §FA-2a); at rest (0) the compositor does one exact re-mint
-    // when a HIT would otherwise composite a pin captured at a different position (settle exactness for non-glyph subtrees).
-    int InMotion = 0,
-    // Self-blur only: 1 while a live, non-parked AnimChannel.BlurSigma row drives the node. Unlike InMotion this is
-    // independent of world translation and lets the backend select a retained/adaptive sigma path without inferring
-    // animation state from changing values. Authored/static blur always carries 0.
-    int BlurIsTransient = 0,
     // Acrylic-only: feather the frost in from the TOP over this FRACTION of the layer height (0 = hard edge). See AcrylicSpec.FeatherTop.
-    float FeatherFrac = 0f,
-    // Acrylic retained-backdrop cache (design §2.3 / E9 own-subtree damage carve-out): the EXTERNAL damage rect for THIS
-    // layer this frame — the union of the frame's damage entries NOT emitted by the layer's own subtree, in the same DIP
-    // space as FrameInfo.Damage — plus the frame's DamageEpoch. The recorder patches both post-walk (PatchLayerExternalDamage)
-    // for every FRESHLY-WALKED cached acrylic; a span-COPIED layer keeps a STALE epoch (mismatches FrameInfo.FrameEpoch),
-    // so the compositor falls back to the whole-frame FrameInfo.Damage union (never a stale carve-out). Epoch 0 (default,
-    // popups / uncached) also means "use the union". See AcrylicBackdropMath.ExternalDamageUnion.
-    float OwnDmgX = 0f, float OwnDmgY = 0f, float OwnDmgW = 0f, float OwnDmgH = 0f, ulong DamageEpoch = 0);
+    float FeatherFrac = 0f);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 // A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
@@ -368,7 +393,7 @@ public readonly record struct EraseRoundRectCmd(RectF Rect, CornerRadius4 Radii,
 // scale key doesn't change — zero re-tessellation). RealizationId is reserved for a future GPU-resident realization
 // handle (§1.5's PathPipeline residency); unpopulated (0) until that lands — the CPU-side offsets already fully
 // identify the realization for the headless/decode paths that exist today. Self-describing POD: a clean-span memcpy
-// and a TRANSLATED rebase both work with only a Transform patch (see DrawList.TranslateCopiedSpan).
+// and a slice translation both work with only a Transform patch (see Render/SliceRecorder).
 public readonly record struct FillPathCmd(RectF Rect, ColorF Fill, int RealizationId,
     int VtxStart, int VtxCount, int IdxStart, int IdxCount, byte Rule,
     Affine2D Transform, float Opacity);
@@ -450,50 +475,6 @@ public sealed class DrawList
         }
         CommandCount += commandCount;
         _opcodeStats.Add(in opcodeStats);
-    }
-
-    public bool CopySpanFromPriorTranslated(int byteStart, int byteLength, int sortStart, int sortCount,
-                                            int commandCount, in DrawListOpcodeStats opcodeStats,
-                                            float dx, float dy, float motionSoft = 0f)
-    {
-        // No opcode PRE-check: the per-payload walk in TranslateCopiedSpan is the sole authority on what can be rebased
-        // (it is the thing that actually has to patch every command), and its `default: return false` fails safe for any
-        // opcode it does not know. A veto that needs the payload — an ACRYLIC PushLayer, whose blurred backdrop depends
-        // on where the layer sits — is only decidable there, and the rollback below discards the partial copy so the
-        // caller re-records exactly as if the span had never been eligible.
-        if (!CanCopyPriorSpan(byteStart, byteLength, sortStart, sortCount))
-            return false;
-
-        int byteDst = _len;
-        int sortDst = _sortLen;
-        int cmdBefore = CommandCount;
-        var statsBefore = _opcodeStats;
-
-        if (byteLength > 0)
-        {
-            Ensure(byteLength);
-            Array.Copy(_priorBuf, byteStart, _buf, _len, byteLength);
-            _len += byteLength;
-        }
-        if (sortCount > 0)
-        {
-            EnsureSort(sortCount);
-            Array.Copy(_priorSort, sortStart, _sort, _sortLen, sortCount);
-            _sortLen += sortCount;
-        }
-
-        if (!TranslateCopiedSpan(byteDst, byteLength, dx, dy, QuantizeMotionSoft(motionSoft)))
-        {
-            _len = byteDst;
-            _sortLen = sortDst;
-            CommandCount = cmdBefore;
-            _opcodeStats = statsBefore;
-            return false;
-        }
-
-        CommandCount += commandCount;
-        _opcodeStats.Add(in opcodeStats);
-        return true;
     }
 
     public void FillRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
@@ -649,11 +630,11 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0, ulong layerId = 0, float featherFrac = 0f, float groupAlpha = 1f)
+    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0, float featherFrac = 0f, float groupAlpha = 1f)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity,
-            GroupAlpha: Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId, FeatherFrac: featherFrac));
+            GroupAlpha: Math.Clamp(groupAlpha, 0f, 1f), FeatherFrac: featherFrac));
         PushSort(sortKey);
         _opcodeStats.Acrylic++;   // the raw PushLayer emitter's default Kind IS Acrylic (0) — see DrawListOpcodeStats.Acrylic
     }
@@ -662,27 +643,35 @@ public sealed class DrawList
     /// <see cref="PopLayer"/> renders at full alpha offscreen and composites once at <paramref name="groupAlpha"/> —
     /// WinUI Composition LayerVisual semantics (no double-blend of overlapping children). Subtree commands should be
     /// recorded with opacity relative to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushOpacityLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha, ulong sortKey = 0, ulong layerId = 0)
+    public void PushOpacityLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha, ulong sortKey = 0)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, 0f, 0f, 0f,
-            (int)LayerKind.Opacity, Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId));
+        WritePayload(OpacityLayerCmd(deviceRect, radii, groupAlpha));
         PushSort(sortKey);
     }
+
+    /// <summary>The payload <see cref="PushOpacityLayer"/> writes (shared with the slice marker's carried layer).</summary>
+    public static PushLayerCmd OpacityLayerCmd(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha)
+        => new(deviceRect, radii, default, default, 0f, 0f, 0f, 0f,
+            (int)LayerKind.Opacity, Math.Clamp(groupAlpha, 0f, 1f));
 
     /// <summary>Begin a per-node SELF-blur group (<see cref="LayerKind.Blur"/>): the subtree until the matching
     /// <see cref="PopLayer"/> renders at full alpha into a pooled offscreen RT, is separable-Gaussian-blurred by
     /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
     /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
     /// to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false, ulong layerId = 0, RectF compositeClip = default, bool blurIsTransient = false)
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, RectF compositeClip = default)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
-            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), CompositeClip: compositeClip, LayerId: layerId,
-            BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0, BlurIsTransient: blurIsTransient ? 1 : 0));
+        WritePayload(BlurLayerCmd(deviceRect, radii, blurSigma, groupAlpha, compositeClip));
         PushSort(sortKey);
     }
+
+    /// <summary>The payload <see cref="PushBlurLayer"/> writes (shared with the slice marker's carried layer).</summary>
+    public static PushLayerCmd BlurLayerCmd(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha,
+        in RectF compositeClip)
+        => new(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), CompositeClip: compositeClip);
 
     /// <summary>Begin an EDGE-FADE group (<see cref="LayerKind.EdgeFade"/>): the subtree until the matching
     /// <see cref="PopLayer"/> renders at full alpha into a pooled offscreen RT, then composites once while feathering the
@@ -691,15 +680,21 @@ public sealed class DrawList
     /// recorder scales the DIP spec by the world scale); <paramref name="blurSigma"/> &gt; 0 Gaussian-blurs the RT before
     /// the feather. Subtree commands record at opacity relative to 1.</summary>
     public void PushEdgeFadeLayer(in RectF deviceRect, in RectF compositeClip, in CornerRadius4 radii, float groupAlpha,
-        int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma = 0f, ulong sortKey = 0, ulong layerId = 0)
+        int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma = 0f, ulong sortKey = 0)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
-            (int)LayerKind.EdgeFade, Math.Clamp(groupAlpha, 0f, 1f),
-            MathF.Max(0f, bandL), MathF.Max(0f, bandT), MathF.Max(0f, bandR), MathF.Max(0f, bandB),
-            falloff, Math.Clamp(intensity, 0f, 1f), edges, compositeClip, LayerId: layerId));
+        WritePayload(EdgeFadeLayerCmd(deviceRect, compositeClip, radii, groupAlpha, edges, bandL, bandT, bandR, bandB,
+            falloff, intensity, blurSigma));
         PushSort(sortKey);
     }
+
+    /// <summary>The payload <see cref="PushEdgeFadeLayer"/> writes (shared with the slice marker's carried layer).</summary>
+    public static PushLayerCmd EdgeFadeLayerCmd(in RectF deviceRect, in RectF compositeClip, in CornerRadius4 radii, float groupAlpha,
+        int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma)
+        => new(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
+            (int)LayerKind.EdgeFade, Math.Clamp(groupAlpha, 0f, 1f),
+            MathF.Max(0f, bandL), MathF.Max(0f, bandT), MathF.Max(0f, bandR), MathF.Max(0f, bandB),
+            falloff, Math.Clamp(intensity, 0f, 1f), edges, compositeClip);
 
     public void PopLayer(in RectF deviceRect, ulong sortKey = 0)
     {
@@ -708,27 +703,13 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    /// <summary>Patch an already-emitted acrylic <see cref="PushLayerCmd"/> (at the byte offset captured before the
-    /// <see cref="PushLayer"/> call — i.e. the offset of its op code) with this frame's EXTERNAL damage rect + epoch
-    /// (design §2.3 / E9). The external rect is known only after the layer's whole subtree — and every later sibling —
-    /// has been walked, so it is written back post-walk over the payload in place. Alloc-free: reads the POD payload,
-    /// rewrites two fields, writes it back over the same span.</summary>
-    public void PatchLayerExternalDamage(int pushLayerByteStart, in RectF externalDmgDip, ulong damageEpoch)
-    {
-        int payloadOff = pushLayerByteStart + sizeof(int);   // skip the op code int
-        var span = _buf.AsSpan(payloadOff, Unsafe.SizeOf<PushLayerCmd>());
-        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
-        cmd = cmd with { OwnDmgX = externalDmgDip.X, OwnDmgY = externalDmgDip.Y, OwnDmgW = externalDmgDip.W, OwnDmgH = externalDmgDip.H, DamageEpoch = damageEpoch };
-        MemoryMarshal.Write(span, in cmd);
-    }
-
     /// <summary>Patch an already-emitted PLAIN-OPACITY <see cref="PushLayerCmd"/> (at the byte offset captured before the
     /// <see cref="PushOpacityLayer"/> call — i.e. the offset of its op code) with the group's DRAWN EXTENT: the recorder's
     /// accumulated subtree draw bounds, in the same device space as <see cref="PushLayerCmd.DeviceRect"/>. The extent is
-    /// known only once the whole subtree has been walked, so it is written back over the payload in place — alloc-free,
-    /// exactly like <see cref="PatchLayerExternalDamage"/>. It rides in <see cref="PushLayerCmd.CompositeClip"/>, unused
-    /// for <see cref="LayerKind.Opacity"/> (only EdgeFade/self-blur read it), so the opcode shape is unchanged. Leaving a
-    /// layer UNPATCHED keeps the empty default = "extent unknown" = the backend's full-canvas clear + composite.</summary>
+    /// known only once the whole subtree has been walked, so it is written back over the payload in place — alloc-free.
+    /// It rides in <see cref="PushLayerCmd.CompositeClip"/>, unused for <see cref="LayerKind.Opacity"/> otherwise (only
+    /// EdgeFade/self-blur read it), so the opcode shape is unchanged. Leaving a layer UNPATCHED keeps the empty default =
+    /// "extent unknown" = the whole target.</summary>
     public void PatchOpacityLayerExtent(int pushLayerByteStart, in RectF drawnExtent)
     {
         int payloadOff = pushLayerByteStart + sizeof(int);   // skip the op code int
@@ -866,346 +847,77 @@ public sealed class DrawList
         _buf = nb;
     }
 
-    private bool TranslateCopiedSpan(int start, int length, float dx, float dy, int motionSoft)
+    // ── raw access for the slice recorder (Render/SliceRecorder) and the headless composite model ───────────────────
+    // The slice recorder owns one DrawList per slice ARENA; a standalone record and the headless device's composed stream
+    // append whole runs. These keep the byte/sort/command/stats invariants in one place (every op = one opcode int + its
+    // payload + ONE sort key).
+
+    /// <summary>The live command bytes (valid for <see cref="BytePosition"/> bytes).</summary>
+    internal byte[] RawBytes => _buf;
+    /// <summary>The live sort keys (valid for <see cref="SortPosition"/> entries; one per command).</summary>
+    internal ulong[] RawSortKeys => _sort;
+
+    /// <summary>Push a layer whose payload was built by <see cref="OpacityLayerCmd"/> / <see cref="BlurLayerCmd"/> /
+    /// <see cref="EdgeFadeLayerCmd"/> (the recorder builds it once: inline, or carried by a slice marker).</summary>
+    internal void PushLayerCmdRaw(in PushLayerCmd cmd, ulong sortKey)
     {
-        if (dx == 0f && dy == 0f) return true;
-        int p = start;
-        int end = start + length;
-        while (p < end)
+        WriteOp(DrawOp.PushLayer);
+        WritePayload(cmd);
+        PushSort(sortKey);
+    }
+
+    /// <summary>A byte range of the PRIOR buffer (the one <see cref="CopySpanFromPrior"/> reads) — the slice recorder
+    /// inspects a clean span's child markers before copying it.</summary>
+    internal ReadOnlySpan<byte> PriorBytes(int byteStart, int byteLength) => _priorBuf.AsSpan(byteStart, byteLength);
+
+    /// <summary>Emit a <see cref="DrawOp.CompositeSlice"/> marker. Returns the op's byte offset (for
+    /// <see cref="PatchCompositeSlice"/>).</summary>
+    internal int CompositeSlice(in CompositeSliceCmd cmd, ulong sortKey)
+    {
+        int at = _len;
+        WriteOp(DrawOp.CompositeSlice);
+        WritePayload(cmd);
+        PushSort(sortKey);
+        return at;
+    }
+
+    /// <summary>Read the marker whose op starts at <paramref name="opByteStart"/>.</summary>
+    internal CompositeSliceCmd ReadCompositeSlice(int opByteStart)
+        => MemoryMarshal.Read<CompositeSliceCmd>(_buf.AsSpan(opByteStart + sizeof(int), Unsafe.SizeOf<CompositeSliceCmd>()));
+
+    /// <summary>Rewrite the marker whose op starts at <paramref name="opByteStart"/> in place (the opacity-group extent is
+    /// only known once the slice's subtree has been walked — the marker twin of <see cref="PatchOpacityLayerExtent"/>).</summary>
+    internal void PatchCompositeSlice(int opByteStart, in CompositeSliceCmd cmd)
+        => MemoryMarshal.Write(_buf.AsSpan(opByteStart + sizeof(int), Unsafe.SizeOf<CompositeSliceCmd>()), in cmd);
+
+    /// <summary>Append one op with a zeroed payload of <paramref name="payloadSize"/> bytes and return the payload span for
+    /// the caller to fill (the headless composite model's per-op translate path).</summary>
+    internal Span<byte> AppendOp(DrawOp op, int payloadSize, ulong sortKey)
+    {
+        WriteOp(op);
+        Ensure(payloadSize);
+        Span<byte> payload = _buf.AsSpan(_len, payloadSize);
+        _len += payloadSize;
+        PushSort(sortKey);
+        return payload;
+    }
+
+    /// <summary>Append a verbatim, already-framed run of commands (no translation) — a standalone record's bulk path.</summary>
+    internal void AppendRaw(ReadOnlySpan<byte> bytes, ReadOnlySpan<ulong> sortKeys, int commandCount, in DrawListOpcodeStats stats)
+    {
+        if (!bytes.IsEmpty)
         {
-            if (end - p < sizeof(int)) return false;
-            var op = (DrawOp)MemoryMarshal.Read<int>(_buf.AsSpan(p, sizeof(int)));
-            p += sizeof(int);
-            switch (op)
-            {
-                case DrawOp.FillRoundRect:
-                    if (!TranslatePayload<FillRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawImage:
-                    if (!TranslatePayload<DrawImageCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawRoundRectStroke:
-                    if (!TranslatePayload<DrawRoundRectStrokeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawShadow:
-                    if (!TranslatePayload<DrawShadowCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawGradientRect:
-                    if (!TranslatePayload<DrawGradientRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawGradientStroke:
-                    if (!TranslatePayload<DrawGradientStrokeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawArc:
-                    if (!TranslatePayload<DrawArcCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawPolylineStroke:
-                    if (!TranslatePayload<DrawPolylineStrokeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawTabShape:
-                    if (!TranslatePayload<DrawTabShapeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawIconMask:
-                    if (!TranslatePayload<DrawIconMaskCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawVideo:
-                    // Exact under translation, like FillRoundRect: the hole is pure geometry and the presenter drives the
-                    // video visual's own rect independently (PumpNow), so a rebased span can never desync from it.
-                    if (!TranslatePayload<DrawVideoCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.EraseRoundRect:
-                    // Exact under translation, like FillRoundRect: an erase is pure geometry.
-                    if (!TranslatePayload<EraseRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.FillPath:
-                    // Exact under translation, like FillRoundRect: the triangle soup is authored in the path's own
-                    // local space and only the Transform carries absolute position.
-                    if (!TranslatePayload<FillPathCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.StrokePath:
-                    if (!TranslatePayload<StrokePathCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawGlyphRun:
-                    // Patch the world transform AND stamp THIS frame's text-motion softness, which is exactly what a
-                    // FRESH record during the same motion emits: the renderer then relaxes the glyph atlas sub-pixel
-                    // phase snap by that amount, so a fast-moving run softens with its plate (see DrawGlyphRunCmd's
-                    // InMotion note). Previously a hard-coded 1 — correct while the field was a bool, wrong now that it
-                    // is a scalar, because a rebased span would have been pinned at maximum softness regardless of speed.
-                    // Re-snapping crisp on settle is automatic and needs no bookkeeping here — the recorder mixes the
-                    // softness into the span INPUT signature, so a change misses exact-copy once and re-records.
-                    if (!TranslatePayloadMotion<DrawGlyphRunCmd>(ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
-                    break;
-                case DrawOp.DrawGlyphRunGradient:
-                    if (!TranslatePayloadMotion<DrawGlyphRunGradientCmd>(ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
-                    break;
-                case DrawOp.PushClip:
-                    // Both clip rects are DEVICE space, so a translation is an exact offset. Soundness rests on the
-                    // rebase eligibility test, not on this patch: SceneRecorder requires ClipComplete at BOTH ends (the
-                    // stored span's own flag AND the translated subtree bounds inside the current clip), so an interior
-                    // clip was never clamped by the enclosing one and a row straddling a viewport edge fails eligibility
-                    // and re-records instead.
-                    if (!TranslatePayload<ClipCmd>(ref p, end, dx, dy, static (c, x, y) => c with
-                    {
-                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
-                        RoundedRect = c.CornerRadius > 0f ? OffsetRect(c.RoundedRect, x, y) : c.RoundedRect,
-                    })) return false;
-                    break;
-                case DrawOp.PopClip:
-                    break;   // zero payload — nothing to advance, nothing to patch
-                case DrawOp.PushStencilClip:
-                    // EXACT under translation — the two patches this file already proves, combined: the mask geometry
-                    // is authored-space (only Transform.Dx/Dy carries absolute position, like FillPath) and DeviceRect
-                    // is device space (like ClipCmd). Soundness rests on the same eligibility test the PushClip case
-                    // relies on: SceneRecorder requires ClipComplete at BOTH ends for a span containing clips.
-                    if (!TranslatePayload<PushStencilClipCmd>(ref p, end, dx, dy, static (c, x, y) => c with
-                    {
-                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
-                        Transform = Translate(c.Transform, x, y),
-                    })) return false;
-                    break;
-                case DrawOp.PopStencilClip:
-                    if (!TranslatePayload<PopStencilClipCmd>(ref p, end, dx, dy, static (c, x, y) => c with
-                    {
-                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
-                        Transform = Translate(c.Transform, x, y),
-                    })) return false;
-                    break;
-                case DrawOp.PushLayer:
-                    if (!TranslatePushLayer(ref p, end, dx, dy)) return false;
-                    break;
-                case DrawOp.PopLayer:
-                    if (!TranslatePayload<PopLayerCmd>(ref p, end, dx, dy, static (c, x, y) => c with { DeviceRect = OffsetRect(c.DeviceRect, x, y) })) return false;
-                    break;
-                default:
-                    return false;
-            }
+            Ensure(bytes.Length);
+            bytes.CopyTo(_buf.AsSpan(_len));
+            _len += bytes.Length;
         }
-        return p == end;
-    }
-
-    /// <summary>Static twin of <see cref="TranslateCopiedSpan"/> for the render-thread fling lease
-    /// (scroll-v3-plan-2026-08-17.md §6.2, WP-Q1): restores <paramref name="pristine"/>'s bytes at
-    /// [<paramref name="start"/>, <paramref name="start"/>+<paramref name="len"/>) into <paramref name="dst"/> at the
-    /// SAME offset, then patches every command in <paramref name="dst"/> in place by (<paramref name="dx"/>,
-    /// <paramref name="dy"/>) — the exact same per-opcode rules as the instance method, including the ACRYLIC
-    /// rejection (a <see cref="LayerKind.Acrylic"/> <see cref="PushLayerCmd"/> makes this return false; the caller —
-    /// the lease ticker — must then treat the lease as no longer eligible rather than present a partially-patched
-    /// frame, since unlike <see cref="CopySpanFromPriorTranslated"/> there is no arena length to roll back to here).
-    /// <para><paramref name="motionSoft"/> defaults to full softness (255): a leased body is Ballistic/Driven and
-    /// therefore mid-motion on every tick it exists for — the "just settled, re-snap crisp" transition happens on the
-    /// UI thread at Revoke/settle (outside this call), never inside a lease tick.</para>
-    /// <para>Allocation-free; both buffers are caller-owned (the render-private scratch arena — a pristine copy of the
-    /// acquired frame's bytes, taken once per acquire — and the frame buffer being submitted this tick). No instance
-    /// state is touched, so this is safe to call from the render thread against render-owned memory only.</para></summary>
-    public static bool TranslateSpan(Span<byte> dst, ReadOnlySpan<byte> pristine, int start, int len, float dx, float dy, int motionSoft = 255)
-    {
-        if (start < 0 || len < 0 || (uint)(start + len) > (uint)pristine.Length || (uint)(start + len) > (uint)dst.Length)
-            return false;
-        pristine.Slice(start, len).CopyTo(dst.Slice(start, len));
-        if (dx == 0f && dy == 0f) return true;
-        int p = start;
-        int end = start + len;
-        while (p < end)
+        if (!sortKeys.IsEmpty)
         {
-            if (end - p < sizeof(int)) return false;
-            var op = (DrawOp)MemoryMarshal.Read<int>(dst.Slice(p, sizeof(int)));
-            p += sizeof(int);
-            switch (op)
-            {
-                case DrawOp.FillRoundRect:
-                    if (!TranslatePayloadStatic<FillRoundRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawImage:
-                    if (!TranslatePayloadStatic<DrawImageCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawRoundRectStroke:
-                    if (!TranslatePayloadStatic<DrawRoundRectStrokeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawShadow:
-                    if (!TranslatePayloadStatic<DrawShadowCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawGradientRect:
-                    if (!TranslatePayloadStatic<DrawGradientRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawGradientStroke:
-                    if (!TranslatePayloadStatic<DrawGradientStrokeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawArc:
-                    if (!TranslatePayloadStatic<DrawArcCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawPolylineStroke:
-                    if (!TranslatePayloadStatic<DrawPolylineStrokeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawTabShape:
-                    if (!TranslatePayloadStatic<DrawTabShapeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawIconMask:
-                    if (!TranslatePayloadStatic<DrawIconMaskCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawVideo:
-                    // Exact under translation, like FillRoundRect (see TranslateCopiedSpan's DrawVideo case).
-                    if (!TranslatePayloadStatic<DrawVideoCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.EraseRoundRect:
-                    if (!TranslatePayloadStatic<EraseRoundRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.FillPath:
-                    if (!TranslatePayloadStatic<FillPathCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.StrokePath:
-                    if (!TranslatePayloadStatic<StrokePathCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
-                    break;
-                case DrawOp.DrawGlyphRun:
-                    if (!TranslatePayloadMotionStatic<DrawGlyphRunCmd>(dst, ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
-                    break;
-                case DrawOp.DrawGlyphRunGradient:
-                    if (!TranslatePayloadMotionStatic<DrawGlyphRunGradientCmd>(dst, ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
-                    break;
-                case DrawOp.PushClip:
-                    if (!TranslatePayloadStatic<ClipCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with
-                    {
-                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
-                        RoundedRect = c.CornerRadius > 0f ? OffsetRect(c.RoundedRect, x, y) : c.RoundedRect,
-                    })) return false;
-                    break;
-                case DrawOp.PopClip:
-                    break;   // zero payload — nothing to advance, nothing to patch
-                case DrawOp.PushStencilClip:
-                    // Exact under translation (see TranslateCopiedSpan's PushStencilClip case).
-                    if (!TranslatePayloadStatic<PushStencilClipCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with
-                    {
-                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
-                        Transform = Translate(c.Transform, x, y),
-                    })) return false;
-                    break;
-                case DrawOp.PopStencilClip:
-                    if (!TranslatePayloadStatic<PopStencilClipCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with
-                    {
-                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
-                        Transform = Translate(c.Transform, x, y),
-                    })) return false;
-                    break;
-                case DrawOp.PushLayer:
-                    if (!TranslatePushLayerStatic(dst, ref p, end, dx, dy)) return false;
-                    break;
-                case DrawOp.PopLayer:
-                    if (!TranslatePayloadStatic<PopLayerCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { DeviceRect = OffsetRect(c.DeviceRect, x, y) })) return false;
-                    break;
-                default:
-                    return false;
-            }
+            EnsureSort(sortKeys.Length);
+            sortKeys.CopyTo(_sort.AsSpan(_sortLen));
+            _sortLen += sortKeys.Length;
         }
-        return p == end;
+        CommandCount += commandCount;
+        _opcodeStats.Add(in stats);
     }
-
-    private static bool TranslatePayloadStatic<T>(Span<byte> buf, ref int p, int end, float dx, float dy, TranslatePayloadFunc<T> translate) where T : unmanaged
-    {
-        int size = Unsafe.SizeOf<T>();
-        if (p + size > end) return false;
-        var span = buf.Slice(p, size);
-        T cmd = MemoryMarshal.Read<T>(span);
-        cmd = translate(cmd, dx, dy);
-        MemoryMarshal.Write(span, in cmd);
-        p += size;
-        return true;
-    }
-
-    private static bool TranslatePayloadMotionStatic<T>(Span<byte> buf, ref int p, int end, float dx, float dy, int soft, TranslatePayloadMotionFunc<T> translate) where T : unmanaged
-    {
-        int size = Unsafe.SizeOf<T>();
-        if (p + size > end) return false;
-        var span = buf.Slice(p, size);
-        T cmd = MemoryMarshal.Read<T>(span);
-        cmd = translate(cmd, dx, dy, soft);
-        MemoryMarshal.Write(span, in cmd);
-        p += size;
-        return true;
-    }
-
-    /// <summary>Static twin of <see cref="TranslatePushLayer"/> — same ACRYLIC rejection, same field patch.</summary>
-    private static bool TranslatePushLayerStatic(Span<byte> buf, ref int p, int end, float dx, float dy)
-    {
-        int size = Unsafe.SizeOf<PushLayerCmd>();
-        if (p + size > end) return false;
-        var span = buf.Slice(p, size);
-        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
-        if (cmd.Kind == (int)LayerKind.Acrylic) return false;
-        cmd = cmd with
-        {
-            DeviceRect = OffsetRect(cmd.DeviceRect, dx, dy),
-            CompositeClip = cmd.CompositeClip == default ? cmd.CompositeClip : OffsetRect(cmd.CompositeClip, dx, dy),
-            InMotion = cmd.Kind == (int)LayerKind.Blur ? 1 : cmd.InMotion,
-        };
-        MemoryMarshal.Write(span, in cmd);
-        p += size;
-        return true;
-    }
-
-    /// <summary>Translate a <see cref="PushLayerCmd"/> in place, or REJECT the whole span (false) when the layer's pixels
-    /// are position-dependent. ACRYLIC is the one rejection: its recipe blurs whatever the canvas holds UNDER DeviceRect,
-    /// so the same bytes at a new position would composite last position's backdrop. Every other kind renders its own
-    /// subtree into an offscreen RT (Opacity/Blur/EdgeFade), which the same translation moves consistently.
-    /// <para>Deliberately untouched: OwnDmg*/DamageEpoch. A span-copied layer keeping a STALE epoch is the DOCUMENTED
-    /// safe path (see <see cref="PushLayerCmd"/>) — the epoch mismatches FrameInfo.FrameEpoch and the compositor falls
-    /// back to the whole-frame damage union rather than trusting a carve-out computed at the old position.</para></summary>
-    private bool TranslatePushLayer(ref int p, int end, float dx, float dy)
-    {
-        int size = Unsafe.SizeOf<PushLayerCmd>();
-        if (p + size > end) return false;
-        var span = _buf.AsSpan(p, size);
-        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
-        if (cmd.Kind == (int)LayerKind.Acrylic) return false;
-        cmd = cmd with
-        {
-            DeviceRect = OffsetRect(cmd.DeviceRect, dx, dy),
-            // Self-blur/EdgeFade: the inherited device clip bounding what the offscreen result may reach. Plain opacity
-            // groups reuse the field for the back-patched drawn extent (PatchOpacityLayerExtent) — same device space,
-            // same offset. The empty default means "unset/unknown" in both readings, so leave it alone.
-            CompositeClip = cmd.CompositeClip == default ? cmd.CompositeClip : OffsetRect(cmd.CompositeClip, dx, dy),
-            // Self-blur InMotion, the layer twin of the glyph patch: a rebased blur layer IS moving this frame, so mark
-            // it moving and let the compositor's at-rest exact re-mint happen on the settle frame (which re-records).
-            InMotion = cmd.Kind == (int)LayerKind.Blur ? 1 : cmd.InMotion,
-        };
-        MemoryMarshal.Write(span, in cmd);
-        p += size;
-        return true;
-    }
-
-    private delegate T TranslatePayloadFunc<T>(T value, float dx, float dy) where T : unmanaged;
-
-    /// <summary>Variant carrying the frame's text-motion softness, so a rebased glyph run is patched with the softness
-    /// the CURRENT frame is drawing at rather than a hard-coded flag. Separate delegate type (not a capture) so the
-    /// lambdas stay <c>static</c> and the record path keeps allocating nothing.</summary>
-    private delegate T TranslatePayloadMotionFunc<T>(T value, float dx, float dy, int soft) where T : unmanaged;
-
-    private bool TranslatePayloadMotion<T>(ref int p, int end, float dx, float dy, int soft, TranslatePayloadMotionFunc<T> translate) where T : unmanaged
-    {
-        int size = Unsafe.SizeOf<T>();
-        if (p + size > end) return false;
-        var span = _buf.AsSpan(p, size);
-        T cmd = MemoryMarshal.Read<T>(span);
-        cmd = translate(cmd, dx, dy, soft);
-        MemoryMarshal.Write(span, in cmd);
-        p += size;
-        return true;
-    }
-
-    private bool TranslatePayload<T>(ref int p, int end, float dx, float dy, TranslatePayloadFunc<T> translate) where T : unmanaged
-    {
-        int size = Unsafe.SizeOf<T>();
-        if (p + size > end) return false;
-        var span = _buf.AsSpan(p, size);
-        T cmd = MemoryMarshal.Read<T>(span);
-        cmd = translate(cmd, dx, dy);
-        MemoryMarshal.Write(span, in cmd);
-        p += size;
-        return true;
-    }
-
-    private static Affine2D Translate(in Affine2D t, float dx, float dy)
-        => new(t.M11, t.M12, t.M21, t.M22, t.Dx + dx, t.Dy + dy);
-
-    /// <summary>Offset a DEVICE-space rect carried directly in a payload (clip/layer geometry, which has no Transform of
-    /// its own) by the span's translation delta.</summary>
-    private static RectF OffsetRect(in RectF r, float dx, float dy) => new(r.X + dx, r.Y + dy, r.W, r.H);
 }

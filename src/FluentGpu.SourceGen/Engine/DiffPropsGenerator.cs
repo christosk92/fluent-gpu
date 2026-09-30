@@ -108,7 +108,8 @@ namespace FluentGpu.SourceGen.Engine
         }
 
         // A bindable channel is a FluentGpu.Signals.Prop<T> — the ONE shape whose static-vs-bound state (IsBound) the
-        // BindContract tripwire checks for a mount-only-bind flip. Detected structurally (constructed generic named
+        // BindContract tripwire checks for a static↔bound flip (a bind is created only at mount and re-wired only
+        // bound→bound, so a flip silently loses). Detected structurally (constructed generic named
         // Prop in FluentGpu.Signals) so the check is generated, never hand-listed per element type.
         private static bool IsPropChannel(ITypeSymbol t)
             => t is INamedTypeSymbol { Name: "Prop", IsGenericType: true } n
@@ -126,7 +127,8 @@ namespace FluentGpu.SourceGen.Engine
               .Append("</c> (DiffProps): every settable data prop across the inheritance chain; Element-typed children excluded.</summary>\n");
             sb.Append(pad).Append("internal static class ").Append(m.TypeName).Append("Diff\n").Append(pad).Append("{\n");
             sb.Append(pad).Append("    /// <summary>True iff any diffable prop differs (no GetType, no box for value props). The reconciler\n");
-            sb.Append(pad).Append("    /// skips a redundant WriteColumns when this is false — Children + bound channels are handled elsewhere.</summary>\n");
+            sb.Append(pad).Append("    /// skips a redundant WriteColumns (and the bound→bound re-wire, RewireBinds) when this is false — a bound\n");
+            sb.Append(pad).Append("    /// channel diffs by its thunk/signal payload. Children are reconciled separately.</summary>\n");
             sb.Append(pad).Append("    public static bool AnyChanged(").Append(m.FqTypeName).Append(" a, ").Append(m.FqTypeName).Append(" b)\n");
             for (int i = 0; i < m.Props.Length; i++)
             {
@@ -138,12 +140,13 @@ namespace FluentGpu.SourceGen.Engine
             }
 
             // BindContract helper (DEBUG tripwire): the name of the FIRST bindable channel (a Prop<T>) whose bound-vs-
-            // static shape FLIPPED between the two element versions, or null if none did. Bind wiring is mount-only, so a
-            // static→bound or bound→static flip on a reused node silently loses; the reconciler reports it. Generated (not
-            // hand-listed) so every element type + every Prop<T> channel is covered mechanically, with no drift.
+            // static shape FLIPPED between the two element versions, or null if none did. A bind is created only at mount
+            // and a re-render only RE-WIRES bound→bound, so a static→bound or bound→static flip on a reused node silently
+            // loses; the reconciler reports it. Generated (not hand-listed) so every element type + every Prop<T> channel
+            // is covered mechanically, with no drift.
             sb.Append("\n");
             sb.Append(pad).Append("    /// <summary>The first bindable <c>Prop&lt;T&gt;</c> channel whose <c>IsBound</c> flipped between\n");
-            sb.Append(pad).Append("    /// <paramref name=\"a\"/> and <paramref name=\"b\"/> (mount-only bind wiring ⇒ a silent loss), or null. BindContract tripwire.</summary>\n");
+            sb.Append(pad).Append("    /// <paramref name=\"a\"/> and <paramref name=\"b\"/> (binds are created only at mount, re-wired only bound→bound ⇒ a flip silently loses), or null. BindContract tripwire.</summary>\n");
             sb.Append(pad).Append("    public static string? FirstBoundFlip(").Append(m.FqTypeName).Append(" a, ").Append(m.FqTypeName).Append(" b)\n");
             sb.Append(pad).Append("    {\n");
             bool anyProp = false;

@@ -7,7 +7,7 @@ description: Use when changing FluentGpu.WindowsApi — the AOT-clean Windows OS
 
 Scope: `src/FluentGpu.WindowsApi/**` only. Engine work: the repo-root [fluentgpu](../fluentgpu/SKILL.md)
 skill. Wavee app wiring: the [wavee](../wavee/SKILL.md) skill. **Do not** edit `FluentGpu.Windows` or
-`FluentGpu.Engine` from this skill, and **do not** read `src/apps/.native/**` / PlayPlay paths.
+`FluentGpu.Engine` from this skill.
 
 `FluentGpu.WindowsApi` is the WinAppSDK-shaped OS-services surface (toasts, jump lists, network, power,
 credentials, …) with **zero CsWinRT, zero `Microsoft.WindowsAppSDK` NuGet, zero reflection on the call-OUT

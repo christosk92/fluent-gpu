@@ -4,6 +4,14 @@
     <!-- AOT baseline for the app; stable alloc measurement for the slice's zero-alloc assertion. -->
     <PublishAot>true</PublishAot>
     <TieredCompilation>false</TieredCompilation>
+    <!-- Non-concurrent (blocking) gen2 GC for the harness only — a MEASUREMENT fix for the zero-alloc gates, not a
+         product setting (src/Directory.Build.props keeps background GC on for everything that ships). With background
+         GC on, GC.GetAllocatedBytesForCurrentThread() over-reports up to ~8 KB when a background gen2 GC suspends the
+         runtime inside the measured window (the thread's allocation context is retired/re-issued mid-window and the
+         counter charges the difference), so an allocation-free frame can read non-zero under load. Reproduced
+         engine-free; the gate.arena.alloc-zero / gate.touch4.*alloc-zero family failed ~1 in 10 runs under CPU load
+         with it on and 0 with it off. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Pre-existing warning backlog (IL2026/IL2070/IL2075 trim warnings in suites); the solution baseline
          enforces warnings-as-errors — clear the backlog before removing this opt-out. -->

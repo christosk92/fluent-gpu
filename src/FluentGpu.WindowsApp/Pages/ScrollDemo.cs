@@ -18,28 +18,40 @@ sealed class TrackListDemo : Component
     static readonly string[] Artists =
         { "M83", "Childish Gambino", "Kavinsky", "Massive Attack", "Sigur Rós", "Jon Hopkins", "Aphex Twin", "Brian Eno" };
 
-    // The list's authoring handle (VirtualListEl.Controller). The header band names it as its WheelTarget, so a wheel
-    // notch over the header glides the LIST — the same PerNotchDip(viewport, LineDip = 56) chase a notch over the rows
-    // gets — instead of being lost on a row that scrolls nothing (Element.WheelTarget; not a pass-through overlay).
-    readonly FluentGpu.Scroll.ScrollController _list = new();
+    // The list's scroll handle (VirtualListEl.Handle). The header band names it as its WheelTarget, so a wheel
+    // notch over the header glides the LIST — the same fixed WheelNotchDip chase a notch over the rows gets —
+    // instead of being lost on a row that scrolls nothing (Element.WheelTarget; not a pass-through overlay).
+    readonly FluentGpu.Scroll.Runtime.ScrollHandle _list = new();
 
-    public override Element Render() => new BoxEl
+    public override Element Render()
     {
-        Direction = 1,
-        Children =
-        [
-            // header band (a normal row above the scroller) — wheel over it routes to the list below
-            new BoxEl
-            {
-                Height = 64, Padding = new Edges4(24, 16, 24, 16), AlignItems = FlexAlign.Center,
-                Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
-                WheelTarget = _list,
-                Children = [Heading("Liked Songs"), Text($"   {N:N0} songs").Foreground(Grey)],
-            },
-            // the virtualized list fills the rest of the window and scrolls (Virtual.List stamps ScrollLineDip = 56)
-            Virtual.List(N, 56f, Row, keyOf: i => "t" + i) with { Grow = 1f, Controller = _list },
-        ],
-    };
+        // The Wavee Home compact-band pattern (home-redesign-implementation.md §E6): the header shrinks to a
+        // slim bar once the list scrolls past 64 DIP, and grows back once it settles below 56 — the 8px dead
+        // band means a wheel-jitter right at the edge never chatters. UseScrollThreshold does the hysteresis;
+        // this render just reads the flip (it re-renders only on an actual flip, never per scrolled frame).
+        bool compact = UseScrollThreshold(64.0, 56.0, _list).Value;
+
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                // header band (a normal row above the scroller) — wheel over it routes to the list below
+                new BoxEl
+                {
+                    Height = compact ? 40 : 64, Padding = new Edges4(24, compact ? 8 : 16, 24, compact ? 8 : 16),
+                    AlignItems = FlexAlign.Center,
+                    Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
+                    WheelTarget = _list,
+                    Children = compact
+                        ? [Text("Liked Songs").FontSize(14f), Text($"  {N:N0}").Foreground(Grey).FontSize(12f)]
+                        : [Heading("Liked Songs"), Text($"   {N:N0} songs").Foreground(Grey)],
+                },
+                // the virtualized list fills the rest of the window and scrolls (Virtual.List stamps ScrollLineDip = 56)
+                Virtual.List(N, 56f, Row, keyOf: i => "t" + i) with { Grow = 1f, Handle = _list },
+            ],
+        };
+    }
 
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);
 

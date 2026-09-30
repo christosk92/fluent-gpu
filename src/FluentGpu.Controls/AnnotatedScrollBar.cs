@@ -273,9 +273,9 @@ internal sealed class AnnotatedScrollBarCore : Component
         float railHeight = MathF.Max(0f, height - 2f * AnnotatedScrollBar.ButtonCell);
         // Range/viewport changes are layout events and re-render the rail. Offset is deliberately read only by the
         // thumb binding and event handlers, so ordinary scrolling remains compositor-only.
-        float minimumOffset = controller.MinimumOffset.Value;
-        float maximumOffset = controller.MaximumOffset.Value;
-        float viewportLength = controller.ViewportLength.Value;
+        float minimumOffset = (float)controller.MinimumOffset.Value;
+        float maximumOffset = (float)controller.MaximumOffset.Value;
+        float viewportLength = (float)controller.ViewportLength.Value;
         var metrics = new RailMetrics(minimumOffset, maximumOffset, viewportLength,
             railHeight, AnnotatedScrollBar.ThumbHeight);
         // Bind thunks keep the first Func they were mounted with — a captured `railHeight` local would freeze the
@@ -368,9 +368,9 @@ internal sealed class AnnotatedScrollBarCore : Component
         UseEffect(() =>
         {
             float y = hoverY.Value;
-            _ = controller.Offset.Value;
-            _ = controller.MaximumOffset.Value;
-            _ = controller.ViewportLength.Value;
+            _ = (float)controller.Offset.Value;
+            _ = (float)controller.MaximumOffset.Value;
+            _ = (float)controller.ViewportLength.Value;
             _ = liveRailHeight.Value;
             if (float.IsNaN(y)) return;
             ResolveDetailAt(y);
@@ -380,9 +380,6 @@ internal sealed class AnnotatedScrollBarCore : Component
         {
             var live = LiveMetrics(controller, liveRailHeight.Value);
             float target = live.ClampScrollOffset(live.RailYToContentOffset(y));
-            // 112: annotated-rail pointer decode. f0=railY, i1=kind, i2=(int)target, f1=railHeight.
-            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
-                ScrollTrace.Note(112, y, (int)kind, (int)target, live.RailHeight);
             if (options.Scrolling is null || options.Scrolling(target, kind))
                 controller.ScrollTo(target);
         }
@@ -439,7 +436,7 @@ internal sealed class AnnotatedScrollBarCore : Component
             // route through the same controller seam used by sticky overlays and other external scroll chrome.
             if (!float.IsFinite(e.Delta) || e.Delta == 0f) return;   // leave horizontal-only input available to ancestors
             float target = LiveMetrics(controller, railHeight)
-                .ClampScrollOffset(controller.Offset.Peek() + e.Delta);
+                .ClampScrollOffset((float)controller.Offset.Peek() + e.Delta);
             if (options.Scrolling is null || options.Scrolling(target, AnnotatedScrollBarScrollKind.Wheel))
             {
                 // The ghost/tip deliberately survive the wheel: the pointer has not moved, and the re-resolve effect
@@ -456,8 +453,8 @@ internal sealed class AnnotatedScrollBarCore : Component
 
         void OnKey(KeyEventArgs e)
         {
-            float offset = controller.Offset.Peek();
-            float viewport = MathF.Max(0f, controller.ViewportLength.Peek());
+            float offset = (float)controller.Offset.Peek();
+            float viewport = MathF.Max(0f, (float)controller.ViewportLength.Peek());
             float small = viewport / 8f; // AnnotatedScrollBar.cpp s_defaultViewportToSmallChangeRatio = 8.
             float target;
             AnnotatedScrollBarScrollKind kind;
@@ -474,9 +471,9 @@ internal sealed class AnnotatedScrollBarCore : Component
                 case Keys.PageDown:
                     target = offset + viewport; kind = AnnotatedScrollBarScrollKind.IncrementButton; break;
                 case Keys.Home:
-                    target = controller.MinimumOffset.Peek(); kind = AnnotatedScrollBarScrollKind.Click; break;
+                    target = (float)controller.MinimumOffset.Peek(); kind = AnnotatedScrollBarScrollKind.Click; break;
                 case Keys.End:
-                    target = controller.MaximumOffset.Peek(); kind = AnnotatedScrollBarScrollKind.Click; break;
+                    target = (float)controller.MaximumOffset.Peek(); kind = AnnotatedScrollBarScrollKind.Click; break;
                 default:
                     return;
             }
@@ -493,7 +490,7 @@ internal sealed class AnnotatedScrollBarCore : Component
         };
         Func<float> ghostOpacity = () => float.IsNaN(hoverY.Value) ? 0f : 1f;
         Func<Affine2D> thumbTransform = () => Affine2D.Translation(0f,
-            LiveMetrics(controller, liveRailHeight.Value).ScrollOffsetToThumbTop(controller.Offset.Value));
+            LiveMetrics(controller, liveRailHeight.Value).ScrollOffsetToThumbTop((float)controller.Offset.Value));
         Func<Affine2D> tipTransform = () =>
         {
             float rh = liveRailHeight.Value;
@@ -732,12 +729,12 @@ internal sealed class AnnotatedScrollBarCore : Component
             Children =
             [
                 ScrollButton(up: true, interactive
-                    ? () => Request(controller.Offset.Peek() - MathF.Max(0f, controller.ViewportLength.Peek()) / 8f,
+                    ? () => Request((float)controller.Offset.Peek() - MathF.Max(0f, (float)controller.ViewportLength.Peek()) / 8f,
                         AnnotatedScrollBarScrollKind.DecrementButton)
                     : null),
                 rail,
                 ScrollButton(up: false, interactive
-                    ? () => Request(controller.Offset.Peek() + MathF.Max(0f, controller.ViewportLength.Peek()) / 8f,
+                    ? () => Request((float)controller.Offset.Peek() + MathF.Max(0f, (float)controller.ViewportLength.Peek()) / 8f,
                         AnnotatedScrollBarScrollKind.IncrementButton)
                     : null),
             ],
@@ -750,7 +747,7 @@ internal sealed class AnnotatedScrollBarCore : Component
     /// (`.Peek()` there kept the stale denominator until the next offset write). In plain event handlers there is no
     /// tracking scope and a `.Value` read is just the live value.</summary>
     private static RailMetrics LiveMetrics(AnnotatedScrollBarController controller, float railHeight)
-        => new(controller.MinimumOffset.Value, controller.MaximumOffset.Value, controller.ViewportLength.Value,
+        => new((float)controller.MinimumOffset.Value, (float)controller.MaximumOffset.Value, (float)controller.ViewportLength.Value,
             railHeight, AnnotatedScrollBar.ThumbHeight);
 
     /// <summary>Content height of a label, never a ZStack-stretched wrapper (those report <paramref name="railHeight"/>).</summary>

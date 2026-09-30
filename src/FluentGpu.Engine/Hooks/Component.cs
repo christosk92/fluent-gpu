@@ -43,6 +43,18 @@ public abstract class Component
     protected T UseMemo<T>(Func<T> factory, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMemo(factory, deps, __hf, __hl);
     protected Ref<T> UseRef<T>(T initial, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseRef(initial, __hf, __hl);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
+    /// <summary>The nearest enclosing scroller's observable state (or <paramref name="handle"/>'s) — offset, motion, the
+    /// start/end edges, extent and viewport as signals. See <see cref="RenderContext.UseScroll"/>.</summary>
+    protected FluentGpu.Scroll.Runtime.ScrollObservation UseScroll(FluentGpu.Scroll.Runtime.ScrollHandle? handle = null) => Context.UseScroll(handle);
+    /// <summary>Normalized scroll progress over <c>[in0, in1]</c> of the nearest scroller's offset, as a memo to bind.
+    /// See <see cref="RenderContext.UseScrollProgress"/>.</summary>
+    protected IReadSignal<float> UseScrollProgress(double in0, double in1, FluentGpu.Scroll.Runtime.ScrollHandle? handle = null,
+        [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseScrollProgress(in0, in1, handle, __hf, __hl);
+    /// <summary>A hysteresis threshold over the nearest scroller's offset (or <paramref name="handle"/>'s) — shown once
+    /// past <paramref name="enterAt"/>, hidden again once below <paramref name="exitAt"/>, dead band between the two
+    /// (the compact-band pattern). Writes only on a flip; zero-alloc steady state. See <see cref="RenderContext.UseScrollThreshold"/>.</summary>
+    protected IReadSignal<bool> UseScrollThreshold(double enterAt, double exitAt, FluentGpu.Scroll.Runtime.ScrollHandle? handle = null,
+        [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseScrollThreshold(enterAt, exitAt, handle, __hf, __hl);
     /// <summary>Read this component's RE-PUSHED props (<c>Embed.Comp(props, () =&gt; new This())</c>) as
     /// <typeparamref name="T"/> — the parent→child data channel. Subscribes this component's render-effect so a changed
     /// re-push re-renders it in place (no remount, node identity + hook state preserved). Throws (naming this type) when

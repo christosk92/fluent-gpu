@@ -1,5 +1,5 @@
 {
-  "$comment": "comabi manifest for the render-thread hot path (com-interop.md §2.2). A real one is AbiHarvest-produced (winmd x ClangSharp) + runtime self-checked; this representative file drives GEN-COM so the hand-vtable calli bindings emit and are CALLED from the backend (no human-typed slots; FGCOM0006). Slots are absolute, reconciled from the base chain. 'ret'/'params' are C# types after the implicit `this`.",
+  "$comment": "comabi manifest for the render-thread hot path (com-interop.md §2.2). A real one is AbiHarvest-produced (winmd x ClangSharp) + runtime self-checked; this representative file drives GEN-COM so the hand-vtable calli bindings emit and are CALLED from the backend (no human-typed slots; FGCOM0006). Slots are absolute, reconciled from the base chain. 'ret'/'params' are C# types after the implicit `this`. Retained-tiles P0 (docs/plans/scroll-gpu-retained-tiles-implementation.md §B-§D) adds the render-pass (ID3D12GraphicsCommandList4), Present1, copy/compute side-queue (create/allocator/list/fence/Wait) and D3D12_OPTIONS5 feature-query bindings; struct/enum parameter types are TerraFX's (one ABI definition), and FluentGpu.Windows.Tests/ComAbiBindingTests checks every slot against TerraFX's Vtbl layout.",
   "interfaces": [
     {
       "name": "IUnknown",
@@ -23,7 +23,8 @@
       "iid": "0ec870a6-5d7e-4c22-8cfc-5baae07616ed",
       "methods": [
         { "name": "ExecuteCommandLists", "slot": 10, "ret": "void", "params": ["uint", "void**"] },
-        { "name": "Signal", "slot": 14, "ret": "int", "params": ["void*", "ulong"] }
+        { "name": "Signal", "slot": 14, "ret": "int", "params": ["void*", "ulong"] },
+        { "name": "Wait", "slot": 15, "ret": "int", "params": ["void*", "ulong"] }
       ]
     },
     {
@@ -31,6 +32,56 @@
       "iid": "310d36a0-d2e7-4c0a-aa04-6a9d23b8886a",
       "methods": [
         { "name": "Present", "slot": 8, "ret": "int", "params": ["uint", "uint"] }
+      ]
+    },
+    {
+      "name": "ID3D12Device",
+      "iid": "189819f1-1db6-4b57-be54-1821339b85f7",
+      "methods": [
+        { "name": "CreateCommandQueue", "slot": 8, "ret": "int", "params": ["global::TerraFX.Interop.DirectX.D3D12_COMMAND_QUEUE_DESC*", "global::System.Guid*", "void**"] },
+        { "name": "CreateCommandAllocator", "slot": 9, "ret": "int", "params": ["global::TerraFX.Interop.DirectX.D3D12_COMMAND_LIST_TYPE", "global::System.Guid*", "void**"] },
+        { "name": "CreateCommandList", "slot": 12, "ret": "int", "params": ["uint", "global::TerraFX.Interop.DirectX.D3D12_COMMAND_LIST_TYPE", "void*", "void*", "global::System.Guid*", "void**"] },
+        { "name": "CheckFeatureSupport", "slot": 13, "ret": "int", "params": ["global::TerraFX.Interop.DirectX.D3D12_FEATURE", "void*", "uint"] },
+        { "name": "CreateFence", "slot": 36, "ret": "int", "params": ["ulong", "global::TerraFX.Interop.DirectX.D3D12_FENCE_FLAGS", "global::System.Guid*", "void**"] }
+      ]
+    },
+    {
+      "name": "ID3D12CommandAllocator",
+      "iid": "6102dee4-af59-4b09-b999-b44d73f09b24",
+      "methods": [
+        { "name": "Reset", "slot": 8, "ret": "int", "params": [] }
+      ]
+    },
+    {
+      "name": "ID3D12GraphicsCommandList",
+      "iid": "5b160d0f-ac1b-4185-8ba8-b3ae42a5a455",
+      "methods": [
+        { "name": "Close", "slot": 9, "ret": "int", "params": [] },
+        { "name": "Reset", "slot": 10, "ret": "int", "params": ["void*", "void*"] },
+        { "name": "Dispatch", "slot": 14, "ret": "void", "params": ["uint", "uint", "uint"] },
+        { "name": "CopyBufferRegion", "slot": 15, "ret": "void", "params": ["void*", "ulong", "void*", "ulong", "ulong"] },
+        { "name": "CopyTextureRegion", "slot": 16, "ret": "void", "params": ["global::TerraFX.Interop.DirectX.D3D12_TEXTURE_COPY_LOCATION*", "uint", "uint", "uint", "global::TerraFX.Interop.DirectX.D3D12_TEXTURE_COPY_LOCATION*", "global::TerraFX.Interop.DirectX.D3D12_BOX*"] },
+        { "name": "SetPipelineState", "slot": 25, "ret": "void", "params": ["void*"] },
+        { "name": "ResourceBarrier", "slot": 26, "ret": "void", "params": ["uint", "global::TerraFX.Interop.DirectX.D3D12_RESOURCE_BARRIER*"] },
+        { "name": "SetDescriptorHeaps", "slot": 28, "ret": "void", "params": ["uint", "void**"] },
+        { "name": "SetComputeRootSignature", "slot": 29, "ret": "void", "params": ["void*"] },
+        { "name": "SetComputeRootDescriptorTable", "slot": 31, "ret": "void", "params": ["uint", "global::TerraFX.Interop.DirectX.D3D12_GPU_DESCRIPTOR_HANDLE"] },
+        { "name": "SetComputeRoot32BitConstants", "slot": 35, "ret": "void", "params": ["uint", "uint", "void*", "uint"] }
+      ]
+    },
+    {
+      "name": "ID3D12GraphicsCommandList4",
+      "iid": "8754318e-d3a9-4541-98cf-645b50dc4874",
+      "methods": [
+        { "name": "BeginRenderPass", "slot": 68, "ret": "void", "params": ["uint", "global::TerraFX.Interop.DirectX.D3D12_RENDER_PASS_RENDER_TARGET_DESC*", "global::TerraFX.Interop.DirectX.D3D12_RENDER_PASS_DEPTH_STENCIL_DESC*", "global::TerraFX.Interop.DirectX.D3D12_RENDER_PASS_FLAGS"] },
+        { "name": "EndRenderPass", "slot": 69, "ret": "void", "params": [] }
+      ]
+    },
+    {
+      "name": "IDXGISwapChain1",
+      "iid": "790a45f7-0d42-4876-983a-0a55cfe6f4aa",
+      "methods": [
+        { "name": "Present1", "slot": 22, "ret": "int", "params": ["uint", "uint", "global::TerraFX.Interop.DirectX.DXGI_PRESENT_PARAMETERS*"] }
       ]
     }
   ]

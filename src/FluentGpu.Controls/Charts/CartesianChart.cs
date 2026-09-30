@@ -41,6 +41,10 @@ public static class CartesianChart
         public float PlotPaddingTop { get; init; } = 8f;
         public float TooltipOffset { get; init; } = 12f;
         public ChartTooltip.Style? Tooltip { get; init; }
+        /// <summary>Default ink of a <see cref="ChartMark"/> whose colour is unset.</summary>
+        public ColorF MarkInk { get; init; }
+        /// <summary>Default fill of a <see cref="ChartBand"/> whose colour is unset.</summary>
+        public ColorF BandFill { get; init; }
     }
 
     public static Style? StyleOverride;
@@ -52,6 +56,8 @@ public static class CartesianChart
         CrosshairInk = Tok.StrokeControlStrongDefault,
         ActiveWash = Tok.AccentSubtle,
         ActiveRim = Tok.AccentTextPrimary,
+        MarkInk = Tok.TextTertiary,
+        BandFill = Tok.AccentSubtle,
     };
 
     internal enum Kind : byte { Line, Area, Bar }
@@ -76,6 +82,8 @@ internal readonly record struct PlotFrame(
     public float Y(float v) => PlotH - ValuePx(v);
     public float Slot => Points > 0 ? (Horizontal ? PlotH : PlotW) / Points : 0f;
     public float Centre(int i) => Slot * (i + 0.5f);
+    /// <summary>A fractional CATEGORY position (0 = the first slot centre) → px along the category axis.</summary>
+    public float At(float category) => Slot * (category + 0.5f);
     public float ZeroPx => ValuePx(Math.Clamp(0f, Min, Max));
 }
 
@@ -83,6 +91,10 @@ internal sealed class CartesianChartComponent : Component
 {
     sealed record Geometry(PathData? Grid, PathData?[] Lines, PathData?[] Fills, PathData?[] Dots, float[][]? Cumulative,
                            float[] Ticks, int TickCount);
+
+    /// <summary>The options' bands and marks, one path per distinct colour (memoised like <see cref="Geometry"/>).</summary>
+    sealed record Annotations(PathData[] BandPaths, ColorF[] BandColors, PathData[] MarkPaths, ColorF[] MarkColors,
+                              (float At, string Label)[] Labels);
 
     public override Element Render()
     {
@@ -135,12 +147,21 @@ internal sealed class CartesianChartComponent : Component
                 DepKey.Combine(DepKey.FromRef(data), DepKey.From(plotW, plotH, niceMin, niceMax)),
                 DepKey.Combine(DepKey.FromRef(p.Line, p.Area), DepKey.From(p.Bar is null ? 0 : p.Bar.GetHashCode(), (int)p.Kind))));
 
+        var notes = UseMemo(() => ready ? BuildAnnotations(o, frame, st) : null,
+            DepKey.Combine(DepKey.FromRef(o, st), DepKey.From(plotW, plotH, n, horizontal ? 1f : 0f)));
+
         // ── layers ───────────────────────────────────────────────────────────────────────────────────────────────
         var layers = new List<Element>(6);
         if (geo is not null)
         {
             if (o.Grid && geo.Grid is not null)
                 layers.Add(PathLayer(geo.Grid, plotW, plotH, default, st.GridInk, new StrokeStyle(1f, LineCap.Butt, LineJoin.Miter, 4f, st.GridDashOn, st.GridDashOff)));
+            if (notes is not null)
+            {
+                for (int b = 0; b < notes.BandPaths.Length; b++) layers.Add(PathLayer(notes.BandPaths[b], plotW, plotH, notes.BandColors[b], default, default));
+                for (int m = 0; m < notes.MarkPaths.Length; m++) layers.Add(PathLayer(notes.MarkPaths[m], plotW, plotH, default, notes.MarkColors[m], new StrokeStyle(1f)));
+                if (notes.Labels.Length > 0) layers.Add(AnnotationLabels(notes, frame, st));
+            }
             if (p.Kind == CartesianChart.Kind.Bar) layers.Add(Bars(p, frame, geo, st));
             else
             {
@@ -426,6 +447,86 @@ internal sealed class CartesianChartComponent : Component
         => ax.ValueFormatter is { } vf ? vf(v) : MathF.Abs(v - MathF.Round(v)) < 1e-3f ? v.ToString("N0", culture) : v.ToString("0.##", culture);
 
     // ── geometry (memoised) ───────────────────────────────────────────────────────────────────────────────────────
+
+    // ── annotations (bands + marks) ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Bands and marks in plot px along the CATEGORY axis (x for vertical charts, y for horizontal bars), one
+    /// path per colour. Bands are clamped to the plot; marks off it are dropped.</summary>
+    static Annotations? BuildAnnotations(CartesianChartOptions o, PlotFrame f, CartesianChart.Style st)
+    {
+        var bands = o.Bands.Span;
+        var marks = o.Marks.Span;
+        if (bands.Length == 0 && marks.Length == 0) return null;
+        float along = f.Horizontal ? f.PlotH : f.PlotW;   // the category axis length
+        float across = f.Horizontal ? f.PlotW : f.PlotH;
+        var bandInks = new List<(ColorF Ink, PathBuilder Path)>();
+        var markInks = new List<(ColorF Ink, PathBuilder Path)>();
+        var labels = new List<(float, string)>();
+
+        foreach (var b in bands)
+        {
+            float a = Math.Clamp(f.At(MathF.Min(b.From, b.To)), 0f, along);
+            float z = Math.Clamp(f.At(MathF.Max(b.From, b.To)), 0f, along);
+            if (z - a < 0.5f) continue;
+            var path = InkPath(bandInks, b.Color.A > 0f ? b.Color : st.BandFill);
+            if (f.Horizontal) { path.MoveTo(0f, a); path.LineTo(across, a); path.LineTo(across, z); path.LineTo(0f, z); }
+            else { path.MoveTo(a, 0f); path.LineTo(z, 0f); path.LineTo(z, across); path.LineTo(a, across); }
+            path.Close();
+            if (!string.IsNullOrEmpty(b.Label)) labels.Add((a, b.Label));
+        }
+        foreach (var m in marks)
+        {
+            float x = f.At(m.At);
+            if (x < 0f || x > along) continue;
+            var path = InkPath(markInks, m.Color.A > 0f ? m.Color : st.MarkInk);
+            if (f.Horizontal) { path.MoveTo(0f, x); path.LineTo(across, x); }
+            else { path.MoveTo(x, 0f); path.LineTo(x, across); }
+            if (!string.IsNullOrEmpty(m.Label)) labels.Add((x, m.Label));
+        }
+
+        var bandPaths = new PathData[bandInks.Count];
+        var bandColors = new ColorF[bandInks.Count];
+        for (int i = 0; i < bandInks.Count; i++)
+        {
+            bandPaths[i] = bandInks[i].Path.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
+            bandColors[i] = bandInks[i].Ink;
+        }
+        var markPaths = new PathData[markInks.Count];
+        var markColors = new ColorF[markInks.Count];
+        for (int i = 0; i < markInks.Count; i++)
+        {
+            markPaths[i] = markInks[i].Path.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
+            markColors[i] = markInks[i].Ink;
+        }
+        return new Annotations(bandPaths, bandColors, markPaths, markColors, labels.ToArray());
+
+        static PathBuilder InkPath(List<(ColorF Ink, PathBuilder Path)> inks, ColorF ink)
+        {
+            for (int i = 0; i < inks.Count; i++) if (inks[i].Ink == ink) return inks[i].Path;
+            var path = new PathBuilder();
+            inks.Add((ink, path));
+            return path;
+        }
+    }
+
+    /// <summary>Band/mark captions in the axis font: along the top edge of the plot (vertical charts) or its left edge
+    /// (horizontal bars), just past the band's leading edge / the mark.</summary>
+    static Element AnnotationLabels(Annotations notes, PlotFrame f, CartesianChart.Style st)
+    {
+        var kids = new Element[notes.Labels.Length];
+        for (int i = 0; i < kids.Length; i++)
+        {
+            var (at, label) = notes.Labels[i];
+            kids[i] = new BoxEl
+            {
+                OffsetX = f.Horizontal ? 2f : at + 3f,
+                OffsetY = f.Horizontal ? at + 2f : 2f,
+                HitTestVisible = false,
+                Children = [new TextEl(label) { Size = st.AxisFontSize, Color = st.LabelInk, MaxLines = 1 }],
+            };
+        }
+        return new BoxEl { Key = "annotation-labels", ZStack = true, Width = f.PlotW, Height = f.PlotH, HitTestVisible = false, Children = kids };
+    }
 
     static Geometry Build(CartesianChart.Props p, PlotFrame f, float[] ticks)
     {

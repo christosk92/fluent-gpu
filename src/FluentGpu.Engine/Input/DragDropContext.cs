@@ -75,18 +75,15 @@ public sealed class DragDropContext
     private float _edgeVelocity;         // px/s along the viewport's scroll orientation (negative = toward 0)
     private float _edgeDelayLeftMs;
     private bool _edgeScrolling;         // past the 50ms delay-start
-    // Scroll v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.2): the LAST velocity actually posted to the kernel (and
-    // which viewport it was posted to) — AutoScroll is a time-true continuous command (the kernel integrates
-    // off += v·dt itself), so it is posted only on a CHANGE (new value or new viewport), not every Tick like the old
-    // per-frame delta poke. Lets Tick/UpdateEdgeScroll/End all detect "does the router need a fresh post" cheaply.
+    // The LAST velocity actually posted (and to which viewport) — AutoScroll authors a closed-form constant-velocity plan
+    // (PlanAuthor.Constant: the edge crossing solved at authoring), so it is posted only on a CHANGE (new value or new
+    // viewport), not every Tick. Lets Tick/UpdateEdgeScroll/End all detect "does the handle need a fresh plan" cheaply.
     private NodeHandle _postedVp;
     private float _postedVelocity;
 
-    /// <summary>Wired by the dispatcher (Scroll v3): a time-true edge-scroll VELOCITY (DIP/s; 0 = stop) — replaces the
-    /// legacy per-frame delta-write <c>ScrollBy</c> (<c>Func&lt;NodeHandle,float,bool&gt;</c>, immediate clamped write +
-    /// "did it move" feedback). The kernel now owns the clamp/at-the-edge stop internally (plan §2.2 Autoscroll:
-    /// <c>off += v·dt</c>), so this is fire-and-forget — <see cref="Tick"/> posts it only when the desired velocity or
-    /// target viewport changes (see <see cref="_postedVp"/>/<see cref="_postedVelocity"/>).</summary>
+    /// <summary>Wired by the dispatcher: a time-true edge-scroll VELOCITY (DIP/s; 0 = stop) for the hovered viewport.
+    /// The plan owns the clamp/at-the-edge stop, so this is fire-and-forget — <see cref="Tick"/> posts it only when the
+    /// desired velocity or target viewport changes (see <see cref="_postedVp"/>/<see cref="_postedVelocity"/>).</summary>
     internal Action<NodeHandle, float>? AutoScroll;
 
     public DragDropContext(SceneStore scene, Action requestRerender)
@@ -322,8 +319,8 @@ public sealed class DragDropContext
         if (!_spring.IsNull && !_scene.IsLive(_spring)) ClearSpring();
         if (!_scrollViewport.IsNull && !_scene.IsLive(_scrollViewport))
         {
-            // The node died — SceneStore's removal path already posted Unbind to the kernel (WP-B), so there is
-            // nothing further to tell it; just forget the local bookkeeping (StopPostedAutoScroll would no-op here
+            // The node died — its handle was unbound by the host's scroll-node removal, so there is nothing further to
+            // tell it; just forget the local bookkeeping (StopPostedAutoScroll would no-op here
             // anyway, since it also gates on IsLive, but a dead handle should never linger in these fields).
             _scrollViewport = NodeHandle.Null;
             _edgeVelocity = 0f;
@@ -334,8 +331,8 @@ public sealed class DragDropContext
 
     /// <summary>Phase-7 host tick, driving the two time-based behaviours of a live session. (1) SPRING-LOAD: accumulate
     /// the dwell on the current host and fire it once. (2) EDGE AUTO-SCROLL: hold the 50ms delay-start, then post the
-    /// desired velocity through <see cref="AutoScroll"/> (Scroll v3: the kernel integrates + clamps continuously — no
-    /// more per-frame delta write / "did it move" feedback; the at-the-edge stop is the kernel's, not this class's).
+    /// desired velocity through <see cref="AutoScroll"/> (a closed-form constant-velocity plan; the at-the-edge stop is
+    /// the plan's, not this class's).
     /// Returns true while EITHER still has work so the host keeps frames coming — the two are deliberately independent,
     /// since a spring-load usually counts down over a perfectly stationary pointer. 0-alloc.</summary>
     public bool Tick(float dtMs)

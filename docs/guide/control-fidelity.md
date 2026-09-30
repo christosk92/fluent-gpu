@@ -203,7 +203,8 @@ Three layers; use all three. **Evidence before claiming an animation works.**
   temporarily slow its duration/spring response and capture an early frame** - a slow draw/grow forces a visibly
   mid-animation glyph; if it is already settled, the animation is not reaching the GPU. (Static screenshots can look
   settled because window init can paint/tick several times before capture.) Add per-control shot ids in `ShotScene.cs`.
-- **Diagnostics** - `FG_DIAG=1` enables `Diag` (anim seed/retarget events, scene dumps with `FG_DUMP=1`).
+- **Diagnostics** - `--fg diag` on the app's command line enables `Diag` (anim seed/retarget events); `--fg dump`
+  dumps the scene. The engine reads no environment variables.
   `FrameStats` from `RunFrame()`: `Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes` (0 steady).
 
 Timing note: a sub-300ms WinUI token can still be visually real; screenshot startup can consume enough frames to make

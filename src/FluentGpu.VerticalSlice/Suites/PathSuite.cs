@@ -882,9 +882,11 @@ static class PathSuite
         dl.PopLayer(rect);
         dl.PopClip();
 
-        int expectedOps = Enum.GetValues<DrawOp>().Length;
+        // Every SUBMITTABLE opcode: DrawOp.CompositeSlice is the slice recorder's internal marker and never reaches a
+        // backend decoder (the flattening seam replaces it), so it is framed by the table but not part of this stream.
+        int expectedOps = Enum.GetValues<DrawOp>().Length - 1;
 
-        // Walk #1: the shared payload-size TABLE (Asserts.DrawPayloadSize, also consumed by BlurPinKey/RepaintStreamSafety/
+        // Walk #1: the shared payload-size TABLE (Asserts.DrawPayloadSize, also consumed by RepaintStreamSafety/
         // the D3D12 backend) must exactly consume every byte with no truncation and no overrun.
         ReadOnlySpan<byte> bytes = dl.Bytes;
         int pos = 0, opCount = 0;
@@ -930,7 +932,6 @@ static class PathSuite
         RecordOpcodeOrderCheck(strings);
         RecordTrimChannelCheck(strings);
         RecordRebaseCheck();
-        RecordRepaintSafeCheck();
         RecordViewBoxCheck(strings);
     }
 
@@ -1020,8 +1021,8 @@ static class PathSuite
             + $"livePayload={(dev.LastStrokePaths.Count == 1 ? dev.LastStrokePaths[0].TrimEnd : -1f):0.###}");
     }
 
-    // gate.path.record.rebase — a translated span copy (the scroll clean-span rebase, DrawList.CopySpanFromPriorTranslated)
-    // patches FillPathCmd/StrokePathCmd's Transform exactly like it patches FillRoundRectCmd's.
+    // gate.path.record.rebase — the flattening seam places a translated scroll slice by patching FillPathCmd/
+    // StrokePathCmd's Transform exactly like FillRoundRectCmd's (the triangle soup is authored in path-local space).
     private static void RecordRebaseCheck()
     {
         var dl = new DrawList();
@@ -1030,48 +1031,30 @@ static class PathSuite
         var pathRef = new PathRef(0, 3, 0, 3, rect, 12f);
         dl.FillPath(rect, ColorF.FromRgba(200, 40, 40, 255), pathRef, (byte)FillRule.NonZero, xf, 1f, 1UL);
         dl.StrokePath(rect, ColorF.FromRgba(20, 20, 200, 255), pathRef, 0f, 1f, 0f, 0f, 0, xf, 1f, 2UL);
-        int byteLen = dl.BytePosition, sortLen = dl.SortPosition, cmds = dl.CommandCount;
-        var stats = dl.OpcodeStats;
+        byte[] bytes = dl.Bytes.ToArray();
 
         const float dx = -17.5f, dy = 23.25f;
-        dl.SwapAndReset();
-        bool copied = dl.CopySpanFromPriorTranslated(0, byteLen, 0, sortLen, cmds, in stats, dx, dy);
-
-        var outBytes = dl.Bytes;
         int p = 0;
         FillPathCmd movedFill = default;
         StrokePathCmd movedStroke = default;
-        while (p + sizeof(int) <= outBytes.Length)
+        while (p + sizeof(int) <= bytes.Length)
         {
-            var op = (DrawOp)MemoryMarshal.Read<int>(outBytes.Slice(p));
+            var op = (DrawOp)MemoryMarshal.Read<int>(bytes.AsSpan(p));
             p += sizeof(int);
-            if (op == DrawOp.FillPath) movedFill = MemoryMarshal.Read<FillPathCmd>(outBytes.Slice(p));
-            else if (op == DrawOp.StrokePath) movedStroke = MemoryMarshal.Read<StrokePathCmd>(outBytes.Slice(p));
-            p += DrawPayloadSize(op);
+            int size = DrawPayloadSize(op);
+            DrawOpTranslate.Apply(op, bytes.AsSpan(p, size), dx, dy);
+            if (op == DrawOp.FillPath) movedFill = MemoryMarshal.Read<FillPathCmd>(bytes.AsSpan(p));
+            else if (op == DrawOp.StrokePath) movedStroke = MemoryMarshal.Read<StrokePathCmd>(bytes.AsSpan(p));
+            p += size;
         }
 
         bool fillMoved = Near(movedFill.Transform.Dx, xf.Dx + dx, 0.01f) && Near(movedFill.Transform.Dy, xf.Dy + dy, 0.01f);
         bool strokeMoved = Near(movedStroke.Transform.Dx, xf.Dx + dx, 0.01f) && Near(movedStroke.Transform.Dy, xf.Dy + dy, 0.01f);
 
-        Check("gate.path.record.rebase", copied && fillMoved && strokeMoved,
-            $"copied={copied} fillDx={movedFill.Transform.Dx:0.##} fillDy={movedFill.Transform.Dy:0.##} "
+        Check("gate.path.record.rebase", fillMoved && strokeMoved,
+            $"fillDx={movedFill.Transform.Dx:0.##} fillDy={movedFill.Transform.Dy:0.##} "
             + $"strokeDx={movedStroke.Transform.Dx:0.##} strokeDy={movedStroke.Transform.Dy:0.##} "
             + $"expectedDx={xf.Dx + dx:0.##} expectedDy={xf.Dy + dy:0.##}");
-    }
-
-    // gate.path.repaint.safe — RepaintStreamSafety.Scan still returns true (safe to replay under a damage-clamped
-    // root scissor) for a stream carrying FillPath/StrokePath alongside ordinary geometry.
-    private static void RecordRepaintSafeCheck()
-    {
-        var dl = new DrawList();
-        var rect = new RectF(0f, 0f, 24f, 24f);
-        var pathRef = new PathRef(0, 3, 0, 3, rect, 12f);
-        dl.FillRoundRect(rect, default, ColorF.FromRgba(10, 10, 10, 255), Affine2D.Identity, 1f);
-        dl.FillPath(rect, ColorF.FromRgba(200, 40, 40, 255), pathRef, (byte)FillRule.NonZero, Affine2D.Identity, 1f);
-        dl.StrokePath(rect, ColorF.FromRgba(20, 20, 200, 255), pathRef, 0f, 1f, 0f, 0f, 0, Affine2D.Identity, 1f);
-
-        bool safe = RepaintStreamSafety.Scan(dl.Bytes);
-        Check("gate.path.repaint.safe", safe, $"Scan(...)={safe} for a FillRoundRect+FillPath+StrokePath stream");
     }
 
     // gate.path.record.viewbox — a non-zero ViewBoxW/H bakes the uniform-fit scale into the baked Transform: a
@@ -1541,10 +1524,8 @@ static class PathSuite
             + $"outerFirst={outerFirst} innerPopsFirst={innerPopsFirst}");
     }
 
-    // gate.path.stencil.framing — the registration/safety surface every stream walker shares. TryBodySize must SIZE both
-    // ops (it is the ONE opcode->payload-size table, and framing is not safety) and agree with Asserts.DrawPayloadSize;
-    // RepaintStreamSafety.Scan admits this balanced, layer-disjoint stencil scope; cross-kind nesting remains covered
-    // by the damage suite's rejection gates. Opcode stats must count the pair.
+    // gate.path.stencil.framing — the registration surface every stream walker shares. TryBodySize must SIZE both ops (it
+    // is the ONE opcode->payload-size table) and agree with Asserts.DrawPayloadSize. Opcode stats must count the pair.
     private static void StencilFramingGate()
     {
         bool pushSized = RepaintStreamSafety.TryBodySize(DrawOp.PushStencilClip, out int pushBody);
@@ -1556,21 +1537,15 @@ static class PathSuite
 
         var rect = new RectF(0f, 0f, 24f, 24f);
         var pathRef = new PathRef(0, 3, 0, 3, rect, 0f);
-        var plain = new DrawList();
-        plain.FillRoundRect(rect, default, ColorF.FromRgba(10, 10, 10, 255), Affine2D.Identity, 1f);
-        bool plainSafe = RepaintStreamSafety.Scan(plain.Bytes);
-
         var stencil = new DrawList();
         stencil.PushStencilClip(rect, pathRef, (byte)FillRule.NonZero, Affine2D.Identity);
         stencil.FillRoundRect(rect, default, ColorF.FromRgba(10, 10, 10, 255), Affine2D.Identity, 1f);
         stencil.PopStencilClip(rect, pathRef, Affine2D.Identity);
-        bool stencilSafe = RepaintStreamSafety.Scan(stencil.Bytes);
         var stats = stencil.OpcodeStats;
         bool counted = stats.PushStencilClip == 1 && stats.PopStencilClip == 1;
 
-        Check("gate.path.stencil.framing", sizesAgree && plainSafe && stencilSafe && counted,
-            $"sizesAgree={sizesAgree} (push={pushBody}B pop={popBody}B) plainStreamSafe={plainSafe} "
-            + $"layerDisjointStencilSafe={stencilSafe} stats={stats.PushStencilClip}/{stats.PopStencilClip}");
+        Check("gate.path.stencil.framing", sizesAgree && counted,
+            $"sizesAgree={sizesAgree} (push={pushBody}B pop={popBody}B) stats={stats.PushStencilClip}/{stats.PopStencilClip}");
     }
 
     // gate.path.stencil.alloc-zero — a settled frame carrying a stencil scope allocates NOTHING on the UI thread and

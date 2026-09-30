@@ -1,0 +1,143 @@
+﻿using System.Globalization;
+using FluentGpu.Foundation;
+using FluentGpu.Media;
+using FluentGpu.Reconciler;
+using FluentGpu.Signals;
+
+namespace FluentGpu.Hosting;
+
+/// <summary>
+/// The engine's runtime diagnostic toggles — plain static state, set in code (a host, a probe, a Diagnostics page) or
+/// from the hosting process's command line through <see cref="Apply(ReadOnlySpan{string})"/>. There are NO environment
+/// variable switches in the engine: an ambient variable silently changes a run nobody can see the cause of, while a
+/// command-line flag is on the launch line of the process it changes. <c>FluentApp</c> applies its own process's
+/// arguments once, before the window exists, so every FluentApp host (the gallery, Wavee, the benches) accepts:
+/// <code>--fg name[,name...]</code> (or <c>--fg=name,...</c>), with names
+/// <list type="bullet">
+/// <item><c>diag</c> — engine <see cref="Diag"/> on (compiled-in builds) with its sink on stderr, plus the boot trace.</item>
+/// <item><c>fps</c> — the periodic <c>[fps]</c> line.</item>
+/// <item><c>alloc</c> / <c>alloc-types</c> — per-segment allocation probes / the process-global allocation-type listener.</item>
+/// <item><c>mem</c> or <c>mem=N</c> — interval memory census every N seconds (default 5).</item>
+/// <item><c>resize</c>, <c>motion</c>, <c>layout</c>, <c>layout-overflow</c>, <c>layout-verify</c> — their printouts.</item>
+/// <item><c>render</c> — the render-budget tripwire (<see cref="RenderBudget"/>) and the device's submitted-area census.</item>
+/// <item><c>img=FILTER</c> — narrow the image-cache trace (a <c>diag</c> run) to sources containing FILTER.</item>
+/// <item><c>d3d-mem</c> — per-resource D3D12 allocation lines. <c>nc</c> — the non-client hit-test trace.</item>
+/// <item><c>dump=MODE</c> — the one-shot scene dump.</item>
+/// <item><c>shelf</c>, <c>morph</c> — the paged-shelf / connected-animation traces.</item>
+/// <item><c>no-guards</c> — the default-on DEBUG guards (BindContract, BackwardsWriteGuard, one-surface-per-player)
+/// off, for a measurement that must not pay their per-write scans. <c>guards-throw</c> — every guard throws.</item>
+/// <item><c>device-lost=N</c> — inject a device loss at frame N (the recovery path's test arm).</item>
+/// <item><c>opaque</c> — an opaque HWND swapchain instead of the DWM Mica composition (A/B arm).</item>
+/// <item><c>no-precise-wait</c> — the frame wait falls back from the high-resolution waitable timer.</item>
+/// <item><c>no-vsync</c> — present at sync-interval 0 (diagnose present cap vs frame cost).</item>
+/// <item><c>gpu-timing</c> — start with the pass-granular GPU timeline on (<c>AppHost.GpuPassTimingEnabled</c>, the
+/// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
+/// </list>
+/// Unknown names are reported once on stderr and ignored.
+/// </summary>
+public static class EngineSwitches
+{
+    public static bool DiagConsole;
+    public static bool FpsLog;
+    public static bool AllocDiag;
+    public static bool AllocTypes;
+    /// <summary>Interval memory census period in seconds; 0 = off.</summary>
+    public static int MemDiagSeconds;
+    public static bool ResizeDiag;
+    public static bool MotionDiag;
+    public static bool LayoutDiag;
+    public static bool LayoutOverflow;
+    public static bool LayoutVerify;
+    public static bool RenderDiag;
+    /// <summary>Image-cache trace source filter (null = trace every source while <see cref="Diag"/> is on).</summary>
+    public static string? ImageTrace;
+    public static bool D3DMemLog;
+    public static bool NcDiag;
+    /// <summary>One-shot scene dump mode (null = off).</summary>
+    public static string? SceneDump;
+    public static bool ShelfLog;
+    public static bool MorphLog;
+    /// <summary>Inject a device loss at this frame ordinal (-1 = never).</summary>
+    public static int ForceDeviceLostAtFrame = -1;
+    public static bool OpaqueWindow;
+    /// <summary>High-resolution waitable-timer frame waits (default on).</summary>
+    public static bool PreciseWait = true;
+    /// <summary>Present at sync-interval 0 (+ ALLOW_TEARING) instead of 1.</summary>
+    public static bool NoVsync;
+    /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
+    public static bool GpuPassTiming;
+
+    /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
+    public static void Apply(ReadOnlySpan<string> args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+            if (a == "--fg" && i + 1 < args.Length) ApplyList(args[++i]);
+            else if (a.StartsWith("--fg=", StringComparison.Ordinal)) ApplyList(a.Substring(5));
+        }
+    }
+
+    /// <summary>Apply one comma-separated switch list (<c>fps,layout,mem=10</c>).</summary>
+    public static void ApplyList(string list)
+    {
+        foreach (string raw in list.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            int eq = raw.IndexOf('=');
+            string name = eq < 0 ? raw : raw.Substring(0, eq);
+            string? value = eq < 0 ? null : raw.Substring(eq + 1);
+            if (!ApplyOne(name, value)) Console.Error.WriteLine($"[fg] unknown engine switch '{raw}' (ignored)");
+        }
+    }
+
+    private static bool ApplyOne(string name, string? value)
+    {
+        switch (name)
+        {
+            case "diag":
+                DiagConsole = true;
+                Diag.Enabled = Diag.CompiledIn;
+                return true;
+            case "fps": FpsLog = true; return true;
+            case "alloc": AllocDiag = true; return true;
+            case "alloc-types": AllocTypes = true; return true;
+            case "mem":
+                MemDiagSeconds = value is not null && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int sec) && sec > 0 ? sec : 5;
+                return true;
+            case "resize": ResizeDiag = true; return true;
+            case "motion": MotionDiag = true; return true;
+            case "layout": LayoutDiag = true; return true;
+            case "layout-overflow": LayoutOverflow = true; return true;
+            case "layout-verify": LayoutVerify = true; return true;
+            case "render":
+                RenderDiag = true;
+                RenderBudget.Enabled = RenderBudget.CompiledIn;
+                return true;
+            case "img": ImageTrace = string.IsNullOrEmpty(value) ? null : value; return ImageTrace is not null;
+            case "d3d-mem": D3DMemLog = true; return true;
+            case "nc": NcDiag = true; return true;
+            case "dump": SceneDump = string.IsNullOrEmpty(value) ? "1" : value; return true;
+            case "shelf": ShelfLog = true; return true;
+            case "morph": MorphLog = true; return true;
+            case "no-guards":
+                BindContract.Enabled = false;
+                BackwardsWriteGuard.Enabled = false;
+                OneSurfacePerPlayerGuard.Enabled = false;
+                return true;
+            case "guards-throw":
+                BindContract.ThrowOnViolation = BindContract.CompiledIn;
+                BackwardsWriteGuard.ThrowOnViolation = BackwardsWriteGuard.CompiledIn;
+                FluentGpu.Hooks.ReuseGuard.ThrowOnViolation = FluentGpu.Hooks.ReuseGuard.CompiledIn;
+                OneSurfacePerPlayerGuard.ThrowOnViolation = OneSurfacePerPlayerGuard.CompiledIn;
+                return true;
+            case "device-lost":
+                ForceDeviceLostAtFrame = value is not null && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int f) && f > 0 ? f : -1;
+                return ForceDeviceLostAtFrame > 0;
+            case "opaque": OpaqueWindow = true; return true;
+            case "no-precise-wait": PreciseWait = false; return true;
+            case "no-vsync": NoVsync = true; return true;
+            case "gpu-timing": GpuPassTiming = true; return true;
+            default: return false;
+        }
+    }
+}

@@ -1,8 +1,8 @@
-namespace FluentGpu.Hosting.Threading;
+﻿namespace FluentGpu.Hosting.Threading;
 
 /// <summary>Render-consumer proof connecting GPU submissions across adopted publications that were verified
-/// byte-identical with empty damage and therefore elided. This is not producer drop detection: an unverified gap
-/// must still reach the backend's conservative canvas invalidation.</summary>
+/// byte-identical with empty damage and therefore elided. This is not producer drop detection: an unverified gap's
+/// damage must still ride forward (<see cref="FluentGpu.Rhi.FrameInfo.CarriedFromSeq"/>).</summary>
 internal struct RenderSubmissionContinuity
 {
     private ulong _submitted, _verified;

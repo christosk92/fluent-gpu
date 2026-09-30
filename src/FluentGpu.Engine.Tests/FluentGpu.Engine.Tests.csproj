@@ -10,6 +10,12 @@
     <!-- A test assembly is never published AOT; don't emit doc XML for it. -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <IsPublishable>false</IsPublishable>
+    <!-- Non-concurrent (blocking) gen2 GC — a MEASUREMENT fix for the zero-allocation facts that assert
+         GC.GetAllocatedBytesForCurrentThread() deltas == 0 (the shipping libraries keep background GC on via
+         src/Directory.Build.props). With background GC on, the counter over-reports up to ~8 KB when a background
+         gen2 GC suspends the runtime inside the measured window, so an allocation-free loop can read non-zero under
+         load. Same override as FluentGpu.VerticalSlice.csproj. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <!-- Pre-existing warning backlog (xUnit1051 cancellation-token nags across the media suites); the solution
          baseline enforces warnings-as-errors — clear the backlog before removing this opt-out. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>

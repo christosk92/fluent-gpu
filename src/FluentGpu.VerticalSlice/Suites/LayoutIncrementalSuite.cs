@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Dsl;
 using FluentGpu.Pal;
@@ -41,13 +41,16 @@ static class LayoutIncrementalSuite
     }
 
     // ── gate.layout.virtual-scroll-is-layout-free ─────────────────────────────────────────────────────────────────
-    // The LITERAL virtualization path the deterministic sibling gate above stands in for: a real ItemsView over a real
-    // ScrollKernel, scrolled through its controller. Two legs, because either one alone would be misleading:
-    //   (A) a scroll that stays inside the realized band costs ZERO Measure/Arrange and moves no row's Bounds at all -
-    //       scroll is a transform, and the P4 early-out is what keeps the whole realized subtree from being re-solved
-    //       every frame the offset changes;
-    //   (B) a scroll far enough to move the realize window DOES run layout and DOES recycle rows - which is what makes
-    //       (A)'s zero a real property of the engine rather than "the harness never actually scrolled".
+    // The LITERAL virtualization path: a real ItemsView scrolled through its controller. Three legs, because any one
+    // alone would be misleading:
+    //   (A) a scroll that stays inside the realized band (the realize window only moves when the velocity-sized lead
+    //       band outruns the realized rows) costs ZERO Measure/Arrange and moves no row's Bounds at all — scroll is a
+    //       transform;
+    //   (B) a scroll that shifts the realize window DOES run layout for the entering rows, yet every row realized both
+    //       before and after keeps a byte-identical box — rows are arranged relative to an origin row that is KEPT across
+    //       window shifts (Virtualizer.ArrangeOriginIndex), so a retained row's recorded span stays reusable;
+    //   (C) a far jump re-realizes and re-lays the whole window — which is what makes (A)'s zero a real property of
+    //       the engine rather than "the harness never actually scrolled".
     static void VirtualRecycleRowsSkippedChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -59,48 +62,67 @@ static class LayoutIncrementalSuite
         for (int i = 0; i < 4; i++) host.RunFrame();
         var vp = itemsController.Viewport;
 
-        var before = new List<(NodeHandle Node, RectF Rect)>();
+        var before = new Dictionary<int, RectF>();
         CollectRealized(host.Scene, vp, before);
+        host.Scene.TryGetScroll(vp, out var s0);
+        // The band's slack: how far the offset can move before the lead band (viewport + the feel's behind/ahead floor)
+        // reaches past the last realized row.
+        double leadEdge = s0.Offset + s0.ViewportH + FluentGpu.Scroll.Diag.ScrollTunables.Current.OverscanMinPx;
+        float slack = (float)(s0.CoverEnd - leadEdge);
 
         // (A) inside the realized band.
-        itemsController.ScrollBy(400f);
+        float stepA = MathF.Max(1f, slack - 1f);
+        itemsController.ScrollBy(stepA);
         var a1 = host.RunFrame();
         var a2 = host.RunFrame();
         host.Scene.TryGetScroll(vp, out var sA);
-        var afterA = new List<(NodeHandle Node, RectF Rect)>();
+        var afterA = new Dictionary<int, RectF>();
         CollectRealized(host.Scene, vp, afterA);
-        int movedA = 0;
-        foreach (var (node, rect) in before)
-            foreach (var (n2, r2) in afterA)
-                if (node == n2)
-                {
-                    if (r2.X != rect.X || r2.Y != rect.Y || r2.W != rect.W || r2.H != rect.H) movedA++;
-                    break;
-                }
+        int movedA = MovedRows(before, afterA, out _);
         int measureA = a1.MeasureCount + a2.MeasureCount, arrangeA = a1.ArrangeCount + a2.ArrangeCount;
+        bool windowStillA = sA.FirstRealized == s0.FirstRealized && sA.LastRealized == s0.LastRealized;
 
-        // (B) past the realized band.
-        itemsController.ScrollBy(2000f);
+        // (B) a few rows past the band: the window shifts, the overlap keeps its boxes.
+        itemsController.ScrollBy(160f);
         var b1 = host.RunFrame();
         var b2 = host.RunFrame();
         host.Scene.TryGetScroll(vp, out var sB);
-        var afterB = new List<(NodeHandle Node, RectF Rect)>();
+        var afterB = new Dictionary<int, RectF>();
         CollectRealized(host.Scene, vp, afterB);
-        int reboundB = 0;
-        foreach (var (node, rect) in afterA)
-            foreach (var (n2, r2) in afterB)
-                if (node == n2)
-                {
-                    if (r2.Y != rect.Y) reboundB++;
-                    break;
-                }
+        int movedB = MovedRows(afterA, afterB, out int retainedB);
         int measureB = b1.MeasureCount + b2.MeasureCount;
+        bool shiftedB = sB.FirstRealized != sA.FirstRealized || sB.LastRealized != sA.LastRealized;
 
-        Check("gate.layout.virtual-scroll-is-layout-free a REAL ItemsView/ScrollKernel scroll inside the realized band moves the offset for ZERO Measure/Arrange and leaves every realized row's Bounds byte-identical (scroll is a transform); a scroll PAST the band does re-realize and re-lay rows, so that zero is a property, not a stalled harness",
-            System.Math.Abs(sA.OffsetY - 400f) < 0.5f && before.Count > 6 && movedA == 0 && measureA == 0 && arrangeA == 0
-            && System.Math.Abs(sB.OffsetY - 2400f) < 0.5f && measureB > 0 && reboundB > 0,
-            $"(A) offset->{sA.OffsetY} rows={before.Count}->{afterA.Count} movedRows={movedA} measure={measureA} arrange={arrangeA} | " +
-            $"(B) offset->{sB.OffsetY} rows->{afterB.Count} reboundRows={reboundB} measure={measureB}");
+        // (C) past the whole band.
+        itemsController.ScrollBy(2000f);
+        var c1 = host.RunFrame();
+        var c2 = host.RunFrame();
+        host.Scene.TryGetScroll(vp, out var sC);
+        int measureC = c1.MeasureCount + c2.MeasureCount;
+        double expectC = stepA + 160.0 + 2000.0;
+
+        Check("gate.layout.virtual-scroll-is-layout-free a REAL ItemsView scroll inside the realized band moves the offset for ZERO Measure/Arrange and leaves every realized row's Bounds byte-identical (scroll is a transform); a scroll that shifts the window lays out only the entering rows and keeps every retained row's box byte-identical (the arrange origin is kept); a far jump re-lays the window, so the zero is a property, not a stalled harness",
+            before.Count > 6 && slack > 1f
+            && Math.Abs(sA.Offset - stepA) < 0.5 && windowStillA && movedA == 0 && measureA == 0 && arrangeA == 0
+            && shiftedB && retainedB > 3 && movedB == 0 && measureB > 0
+            && Math.Abs(sC.Offset - expectC) < 0.5 && measureC > 0,
+            $"(A) step={stepA:0.#} offset->{sA.Offset:0.#} rows={before.Count}->{afterA.Count} moved={movedA} measure={measureA} arrange={arrangeA} | " +
+            $"(B) shifted={shiftedB} retained={retainedB} moved={movedB} measure={measureB} | (C) offset->{sC.Offset:0.#} measure={measureC}");
+    }
+
+    /// <summary>Rows present (by item index) in both maps whose box changed; <paramref name="shared"/> counts the rows
+    /// present in both.</summary>
+    static int MovedRows(Dictionary<int, RectF> a, Dictionary<int, RectF> b, out int shared)
+    {
+        int moved = 0;
+        shared = 0;
+        foreach (var (index, rect) in a)
+        {
+            if (!b.TryGetValue(index, out var r2)) continue;
+            shared++;
+            if (r2.X != rect.X || r2.Y != rect.Y || r2.W != rect.W || r2.H != rect.H) moved++;
+        }
+        return moved;
     }
 
     sealed class RecycleProbe : Component
@@ -129,15 +151,17 @@ static class LayoutIncrementalSuite
             new ListOptions { Controller = Controller, Selector = SelectorVisual.None });
     }
 
-    static void CollectRealized(SceneStore s, NodeHandle viewport, List<(NodeHandle, RectF)> into)
+    /// <summary>Realized rows by ITEM index (rows recycle, so node identity is not a row's identity).</summary>
+    static void CollectRealized(SceneStore s, NodeHandle viewport, Dictionary<int, RectF> into)
     {
         if (viewport.IsNull || !s.TryGetScroll(viewport, out var sc) || sc.ContentNode.IsNull) return;
-        for (var row = s.FirstChild(sc.ContentNode); !row.IsNull; row = s.NextSibling(row))
-            into.Add((row, s.Bounds(row)));
+        int index = sc.FirstRealized;
+        for (var row = s.FirstChild(sc.ContentNode); !row.IsNull; row = s.NextSibling(row), index++)
+            into[index] = s.Bounds(row);
     }
 
     // ── gate.layout.parity-oracle ─────────────────────────────────────────────────────────────────────────────────
-    // The FG_LAYOUT_VERIFY oracle itself (FlexLayout.Verify.cs), exercised through its forced-run test hook: after a
+    // The --fg layout-verify oracle itself (FlexLayout.Verify.cs), exercised through its forced-run test hook: after a
     // pile of scoped incremental edits, a from-scratch re-solve of the SAME root must land on the SAME rects, and the
     // oracle must leave the scene byte-identical afterwards (it observes, it never decides).
     static void ParityOracleChecks(StringTable strings)
@@ -171,7 +195,7 @@ static class LayoutIncrementalSuite
 
         // Release compiles the oracle out entirely and reports -1 — an honest "not available", never a silent pass.
         bool ok = FlexLayout.VerifyCompiledIn ? mismatches == 0 && restored : mismatches == -1;
-        Check("gate.layout.parity-oracle the FG_LAYOUT_VERIFY oracle re-solves the incrementally-edited tree from scratch, finds ZERO diverging rects, and restores the scene byte-identically (DEBUG only; Release reports -1 = compiled out)",
+        Check("gate.layout.parity-oracle the --fg layout-verify oracle re-solves the incrementally-edited tree from scratch, finds ZERO diverging rects, and restores the scene byte-identically (DEBUG only; Release reports -1 = compiled out)",
             ok, $"compiledIn={FlexLayout.VerifyCompiledIn} mismatches={mismatches} boundsRestored={restored}");
     }
 
@@ -478,12 +502,12 @@ static class LayoutIncrementalSuite
 
     // ── gate.layout.virtual-clean-rows-skipped ────────────────────────────────────────────────────────────────────
     // A deterministic stand-in for "48 realized bound rows, one row's content changes": 48 SIBLING rows (not routed
-    // through ItemsView/ScrollKernel — that recycler's realize-then-catch-up timing is its own subsystem and not
+    // through ItemsView's virtualizer — that recycler's realize timing is its own subsystem and not
     // what P4 owns) each ~12 nodes deep, mounted once and settled, then ONE row's title changes (the plan's "a
     // one-row scroll" stand-in — the same shape of update a recycled slot's rebind produces: one row's subtree
     // content changes, the other 47 must stay untouched). Exercises the exact same Measure/Arrange fan-out the
     // virtualization recycler would hit per row; what's NOT covered by this specific gate (documented in the
-    // progress file) is the ItemsView/ScrollKernel realize-timing path itself.
+    // progress file) is the ItemsView virtualizer's realize-timing path itself (gate.layout.virtual-scroll-is-layout-free).
     sealed class ManyRowsProbe : Component
     {
         public const int RowCount = 48;

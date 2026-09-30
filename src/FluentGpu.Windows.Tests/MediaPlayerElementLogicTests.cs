@@ -50,13 +50,37 @@ public sealed class MediaPlayerElementLogicTests
     }
 
     [Fact]
-    public void FitVideoRect_None_CentersNativeSizeClampedToArea()
+    public void FitVideoRect_None_CentersNativeSize()
     {
         var r = MediaPlayerElement.FitVideoRect(new RectF(0, 0, 320, 180), new SizeI(100, 100), MediaStretch.None);
         Assert.Equal(100f, r.W, P);
         Assert.Equal(100f, r.H, P);
         Assert.Equal(110f, r.X, P);   // (320-100)/2
         Assert.Equal(40f, r.Y, P);    // (180-100)/2
+    }
+
+    [Fact]
+    public void FitVideoRect_Native_larger_than_area_overflows_centred_without_distortion()
+    {
+        // True 1:1: no per-axis clamp to the area. A frame larger than the area overflows on both axes (a caller's
+        // viewport clip crops the excess — the same road UniformToFill already takes) rather than shrinking to fit.
+        var r = MediaPlayerElement.FitVideoRect(new RectF(0, 0, 999, 564), new SizeI(1280, 720),
+            VideoAspectMode.Native, 0, scale: 1f);
+        Assert.Equal(1280f, r.W, P);
+        Assert.Equal(720f, r.H, P);
+        Assert.Equal(-140.5f, r.X, P);   // (999-1280)/2
+        Assert.Equal(-78f, r.Y, P);      // (564-720)/2
+    }
+
+    [Fact]
+    public void FitVideoRect_Native_is_device_pixels()
+    {
+        // natural is PIXELS, area is DIP: at scale 1.65 a 1280x720 frame occupies 1280/1.65 x 720/1.65 DIP —
+        // never natural size verbatim — regardless of how much larger the area is.
+        var r = MediaPlayerElement.FitVideoRect(new RectF(0, 0, 2000, 2000), new SizeI(1280, 720),
+            VideoAspectMode.Native, 0, scale: 1.65f);
+        Assert.Equal(775.75757f, r.W, P);
+        Assert.Equal(436.36364f, r.H, P);
     }
 
     [Fact]
@@ -179,11 +203,11 @@ public sealed class MediaPlayerElementLogicTests
     }
 
     [Fact]
-    public void PumpClampsOverflow_skips_crop_so_UniformToFill_keeps_overflow()
+    public void PumpClampsOverflow_skips_crop_and_native_so_both_keep_overflow()
     {
         Assert.True(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Uniform));
         Assert.True(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Fill));
-        Assert.True(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Native));
+        Assert.False(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.Native));
         Assert.False(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.UniformToFill));
     }
 

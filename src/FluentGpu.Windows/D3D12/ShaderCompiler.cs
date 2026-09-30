@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -26,9 +26,9 @@ internal static unsafe class ShaderCompiler
 
     private static readonly TimeSpan CacheMaxAge = TimeSpan.FromDays(30);
 
-    // FG_DIAG cold-start attribution: per-compile ms to stderr. Runtime-gated (not Diag.CompiledIn) so the published
+    // `--fg diag` cold-start attribution: per-compile ms to stderr. Runtime-gated (not Diag.CompiledIn) so the published
     // Release bench can attribute its own bring-up.
-    private static readonly bool s_bootDiag = FluentGpu.Foundation.Diag.EnvFlag("FG_DIAG");
+    private static bool s_bootDiag => FluentGpu.Hosting.EngineSwitches.DiagConsole;
 
     private static readonly string s_cacheDir = Path.Combine(Path.GetTempPath(), "fluent-gpu", "shadercache");
 

@@ -11,7 +11,7 @@ namespace FluentGpu.Rhi.Headless;
 /// CPU/null RHI backend (the structural test path from validation.md). Decodes the POD DrawList into reusable
 /// command lists for assertions — no GPU, and no per-frame managed allocation once warmed (lists keep capacity).
 /// </summary>
-public sealed class HeadlessGpuDevice : IGpuDevice
+public sealed partial class HeadlessGpuDevice : IGpuDevice
 {
     private readonly List<FillRoundRectCmd> _rects = new(64);
     private readonly List<int> _rectClipDepth = new(64);
@@ -161,8 +161,25 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// present. The main window's target is unaffected.</summary>
     public bool StandDownPopupPresents { get; set; }
 
+    // Render-ownership tripwire (INCIDENT 2026-09, detached-window-render-isolation-implementation.md §2/§7.2): inert
+    // (false) for every existing headless host — only a test that opts in with MarkRenderConfined() arms it, mirroring
+    // D3D12Device's AssertDeviceOwner/_renderConfined gate so the headless RenderOwnershipTests exercise the same
+    // contract without a real GPU.
+    private bool _renderConfined;
+    public void MarkRenderConfined() => _renderConfined = true;
+
+    // The FIRST swapchain created is the "primary" for the handful of device-level diagnostic getters that predate
+    // per-target state (detached-window-render-isolation-implementation.md §3.3) and have not been migrated to a
+    // per-call target parameter — today only HintSettlePresentCount below.
+    private HeadlessSwapchain? _primarySwapchain;
+
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
-        => new HeadlessSwapchain(desc.SizePx) { PresentStandDown = desc.DesktopAcrylic && StandDownPopupPresents };
+    {
+        if (_renderConfined) ThreadGuard.AssertRenderOwner();
+        var sc = new HeadlessSwapchain(desc.SizePx, _renderConfined) { PresentStandDown = desc.DesktopAcrylic && StandDownPopupPresents };
+        _primarySwapchain ??= sc;
+        return sc;
+    }
 
     public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
     {
@@ -181,10 +198,22 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public int ReclaimCalls { get; private set; }
     public void ReclaimCompletedUploads() => ReclaimCalls++;
 
-    public int HintSettlePresentCount { get; private set; }
-    public void HintSettlePresent() => HintSettlePresentCount++;
+    /// <summary>Phase 1: <c>HintSettlePresent</c> moved to <see cref="ISwapchain"/> (per-target seam), so the counter
+    /// itself now lives on <see cref="HeadlessSwapchain"/>. Reads the PRIMARY target's counter — every existing
+    /// headless gate (LayoutShellSuite.cs RZ-SETTLE) creates exactly one swapchain, so this keeps them passing
+    /// unchanged.</summary>
+    public int HintSettlePresentCount => _primarySwapchain?.HintSettlePresentCount ?? 0;
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
+    {
+        BeginModel(in ctx);
+        int balance = 0, layerBalance = 0, stencilBalance = 0;
+        DecodeInto(drawList, 0f, 0f, ref balance, ref layerBalance, ref stencilBalance);
+        EndModel(balance, layerBalance, stencilBalance);
+    }
+
+    /// <summary>Open one modelled frame: clear every per-frame list (capacity kept) and take one baked-blur job.</summary>
+    private void BeginModel(in FrameInfo ctx)
     {
         _rects.Clear();   // retains capacity → no alloc after warmup
         if (_bakedBlurs is { Paused: false } bakes)
@@ -226,15 +255,59 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         LastClear = ctx.Clear;
         LastFrameInfo = ctx;
         FrameCount++;
-        int balance = 0;
-        int layerBalance = 0;
-        int stencilBalance = 0;
+    }
 
-        int pos = 0;
-        while (pos + sizeof(int) <= drawList.Length)
+    /// <summary>Decode one command stream INTO the current modelled frame, every op translated by (<paramref name="dx"/>,
+    /// <paramref name="dy"/>) (a composite item's posed offset), continuing the clip / layer / stencil balances.</summary>
+    private void DecodeInto(ReadOnlySpan<byte> stream, float dx, float dy, ref int balance, ref int layerBalance, ref int stencilBalance)
+        => DecodeInto(stream, dx, dy, ref balance, ref layerBalance, ref stencilBalance, default, default, 0f, 0f, compose: false);
+
+    /// <summary>The composite form: <paramref name="spans"/> (segment-relative, slice px) culls every clean subtree whose
+    /// placed bounds (+ <paramref name="placeX"/>/<paramref name="placeY"/> device px) miss <paramref name="clipPx"/> (empty =
+    /// unbounded) — what the per-tile replay culls — and <paramref name="compose"/> appends each decoded op to
+    /// <see cref="LastComposedStream"/>.</summary>
+    private void DecodeInto(ReadOnlySpan<byte> stream, float dx, float dy, ref int balance, ref int layerBalance, ref int stencilBalance,
+        ReadOnlySpan<Render.Tiles.SliceSpan> spans, RectF clipPx, float placeX, float placeY, bool compose)
+    {
+        Span<byte> moved = _moved;
+        bool translate = dx != 0f || dy != 0f;
+        bool cull = !spans.IsEmpty && !(clipPx.W <= 0f && clipPx.H <= 0f && clipPx.X == 0f && clipPx.Y == 0f);
+        int at = 0, e = 0;
+        while (at + sizeof(int) <= stream.Length)
         {
-            int op = MemoryMarshal.Read<int>(drawList.Slice(pos));
-            pos += sizeof(int);
+            if (cull)
+            {
+                while (e < spans.Length && spans[e].ByteStart < at) e++;
+                bool skipped = false;
+                while (e < spans.Length && spans[e].ByteStart == at)
+                {
+                    var en = spans[e];
+                    if (!en.HasMarker && en.ByteLength > 0)
+                    {
+                        var wb = new RectF(en.Bounds.X + placeX, en.Bounds.Y + placeY, en.Bounds.W, en.Bounds.H);
+                        if (!wb.Overlaps(clipPx)) { at = en.ByteStart + en.ByteLength; skipped = true; break; }
+                    }
+                    e++;
+                }
+                if (skipped) continue;
+            }
+            int op = MemoryMarshal.Read<int>(stream.Slice(at));
+            if (!RepaintStreamSafety.TryBodySize((DrawOp)op, out int body) || at + sizeof(int) + body > stream.Length) return;
+            ReadOnlySpan<byte> drawList = stream.Slice(at + sizeof(int), body);
+            if (translate && body <= moved.Length)
+            {
+                drawList.CopyTo(moved);
+                DrawOpTranslate.Apply((DrawOp)op, moved[..body], dx, dy);
+                drawList = moved[..body];
+            }
+            at += sizeof(int) + body;
+            if (compose)
+            {
+                drawList.CopyTo(_composed.AppendOp((DrawOp)op, body, 0));
+                if ((DrawOp)op == DrawOp.PushClip) _modelClipTop.Add(MemoryMarshal.Read<ClipCmd>(drawList).DeviceRect);
+                else if ((DrawOp)op == DrawOp.PopClip && _modelClipTop.Count > 0) _modelClipTop.RemoveAt(_modelClipTop.Count - 1);
+            }
+            int pos = 0;
             switch ((DrawOp)op)
             {
                 case DrawOp.FillRoundRect:
@@ -290,10 +363,17 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
                     break;
                 case DrawOp.PushLayer:
-                    _layers.Add(MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(pos)));
+                {
+                    var layer = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(pos));
+                    _layers.Add(layer);
+                    // An ACRYLIC PushLayer decoded out of a composite item's segment: the invariant gates pair it with the
+                    // frame's Backdrop items (a frost exists only as a composite item placed before its slice).
+                    if (compose && _modelItem >= 0 && layer.Kind == (int)LayerKind.Acrylic)
+                        _acrylicLayerItems.Add((_modelItem, layer.DeviceRect));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
                     layerBalance++;
                     break;
+                }
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
                     layerBalance--;
@@ -337,27 +417,60 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     balance--;
                     stencilBalance--;
                     break;
+                case DrawOp.CompositeSlice:
+                    break;   // a slice marker is recorder-internal: its child composites as its own item
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)
             }
         }
+    }
+
+    private const int MaxTranslatedPayload = 1024;
+    private readonly byte[] _moved = new byte[MaxTranslatedPayload];
+    private readonly List<RectF> _modelClipTop = new(16);
+    // The composite item whose segment the model is decoding (−1 outside a composite) and the acrylic layers found in them.
+    private int _modelItem = -1;
+    private readonly List<(int Item, RectF RectDip)> _acrylicLayerItems = new(4);
+
+    /// <summary>Every ACRYLIC PushLayer the most recent composite decoded out of an item's segment: (the composite item
+    /// index, the layer's frosted rect in window DIP at the item's posed offset). A frost exists only as a
+    /// <see cref="CompositeKind.Backdrop"/> item placed BEFORE that item; an acrylic layer without one is a hole.</summary>
+    public IReadOnlyList<(int Item, RectF RectDip)> LastAcrylicLayerItems => _acrylicLayerItems;
+
+    private void EndModel(int balance, int layerBalance, int stencilBalance)
+    {
         ClipBalance = balance;
         LayerBalance = layerBalance;
         StencilClipBalance = stencilBalance;
     }
 
+
+    // Test seam (CANDIDATE FIX, INCIDENT 2026-09 gate): arm a ONE-SHOT throw against a SPECIFIC target's next submit —
+    // keyed by target so a gate can fault a detached CHILD's swapchain without touching the parent's own submits (the
+    // real incident: a child-only D3D12 failure that must not take the shared render thread down with it). Lets
+    // `gate.detached.render-failure-survives` exercise AppHost.SubmitPresentOnRenderThread's catch (RenderFailed
+    // latch, OnRenderFailed, DrainChildRenderSources skipping a failed child) against a real headless AppHost/render
+    // thread, with no D3D12 device involved.
+    private readonly Dictionary<ISwapchain, Exception> _throwOnNextSubmit = new();
+    public void ThrowOnNextSubmit(ISwapchain target, Exception ex) => _throwOnNextSubmit[target] = ex;
+
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
-        => SubmitDrawList(drawList, sortKeys, in ctx);
+    {
+        if (_throwOnNextSubmit.Remove(target, out var armedEx)) throw armedEx;
+        SubmitDrawList(drawList, sortKeys, in ctx);
+    }
 
     public void Dispose() { }
 }
 
 public sealed class HeadlessSwapchain : ISwapchain
 {
-    public HeadlessSwapchain(Size2 size) => SizePx = size;
+    private readonly bool _renderConfined;
+
+    public HeadlessSwapchain(Size2 size, bool renderConfined = false) { SizePx = size; _renderConfined = renderConfined; }
     public Size2 SizePx { get; private set; }
     public int PresentCount { get; private set; }
-    public void Resize(Size2 px) => SizePx = px;
+    public void Resize(Size2 px) { if (_renderConfined) ThreadGuard.AssertRenderOwner(); SizePx = px; }
 
     /// <summary>Model the real backend's PRESENT STAND-DOWN: <c>D3D12Device.Present</c> paints nothing when its target
     /// is covered / cloaked / hidden, so a requested present is not a painted one. While this is set
@@ -374,7 +487,17 @@ public sealed class HeadlessSwapchain : ISwapchain
 
     /// <inheritdoc/>
     public bool HasPresentedContent => PresentCount > 0;
-    public void Dispose() { }
+    public void Dispose() { if (_renderConfined) ThreadGuard.AssertRenderOwner(); }
+
+    /// <summary>THIS target's last-present stand-down (Phase 1: per-target, not device-global). Mirrors
+    /// <see cref="PresentStandDown"/> — when the configured stand-down suppresses a present, it stood down.</summary>
+    public bool LastPresentStoodDown => PresentStandDown;
+
+    /// <summary>Phase 1 (detached-window-render-isolation-implementation.md §3.3): moved off IGpuDevice onto the
+    /// target it actually describes. `HeadlessGpuDevice.HintSettlePresentCount` delegates to the primary swapchain's
+    /// count so the existing gate keeps reading it off the device.</summary>
+    public int HintSettlePresentCount { get; private set; }
+    public void HintSettlePresent() => HintSettlePresentCount++;
 
     // Windowed desktop-acrylic popup chrome (the real D3D12 backend drives Windows.UI.Composition; headless captures the
     // parameters so the cross-seam wiring — content rect, open direction, closedRatio, corner — is verifiable).

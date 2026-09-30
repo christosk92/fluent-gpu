@@ -1,5 +1,5 @@
 ﻿using FluentGpu.Foundation;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
@@ -28,6 +28,10 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<RectBuffer> _selectionRects = new(), _underlineRects = new();
     private readonly SnapshotColumn<OrphanChildren> _orphanChildren = new();
     private readonly SnapshotColumn<SpanDecoration> _spanDecorations = new();
+    // Scroll-rework Wave 0.E (scroll-rework-design.md §B.4): ListRowEl's ≤8-cell payload, captured/parity-checked/
+    // freed the EXACT same way _spanDecorations is (a VisualKind-gated capture-time copy, not a NodeFlags.SparsePaint
+    // row — ListRowEl has no other sparse paint of its own).
+    private readonly SnapshotColumn<RowCellsCapture> _rowCells = new();
     private readonly HashSet<int> _retainedSpanRuns = new(), _seenSpanRuns = new();
     private readonly List<int> _releasedSpanRuns = new();
     private StringTable? _stringOwner; // UI-only retention bookkeeping; recorder never reads this table.
@@ -80,7 +84,10 @@ public sealed partial class SceneRecordingSnapshot
     public bool PendingRemovalOverflow { get; private set; }
     public ReadOnlySpan<SceneStore.RemovedNodeExtent> PendingRemovalExtents => _removals.AsSpan(0, _removalCount);
     public RecordingScrollChrome ScrollChrome { get; } = new();
-    public RecordingScrollBinds ScrollBinds { get; } = new();
+    /// <summary>This publication's scroll coverage (design §5): one row per viewport the UI thread realized content
+    /// for, plus the scroll-effect rows scoped to it. Filled by the host at capture (<c>AppHost.CaptureScrollCoverage</c>),
+    /// adopted by the render thread's <see cref="ScrollPoser"/> on a fresh publication.</summary>
+    public ScrollCoverageTable ScrollCoverage { get; } = new();
 
     // Reachability walk state. A slot is live in this snapshot only when the walk reached it this capture; a slot the
     // previous capture reached and this one did not has its handle and topology row cleared so nothing can chain
@@ -124,6 +131,8 @@ public sealed partial class SceneRecordingSnapshot
 
     /// <summary>Whether the most recent capture took the incremental path (diagnostics/gates).</summary>
     public bool LastCaptureWasIncremental { get; private set; }
+    // Incremental captures since the last full one (the DEBUG parity self-check's cadence, Parity.cs).
+    private int _incrementalStreak;
 
     /// <summary>The publication this snapshot's contents describe - <c>SceneStore.PublishSeq + 1</c> at capture time.
     /// The publisher hands this back as the baseline of the NEXT incremental capture into the same slot.</summary>
@@ -185,9 +194,25 @@ public sealed partial class SceneRecordingSnapshot
     /// </summary>
     public bool CaptureIncremental(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, ulong lastCapturedSeq)
     {
-        if (!CanCaptureIncremental(source, lastCapturedSeq)) return false;
+        LastCaptureFullReason = IncrementalRefusal(source, lastCapturedSeq);
+        if (LastCaptureFullReason != CaptureFullReason.None) return false;
         CaptureCore(source, extraRoots, incremental: true, baseline: lastCapturedSeq);
         return true;
+    }
+
+    /// <summary>Why the last <see cref="CaptureIncremental"/> refused (the first failing clause of
+    /// <see cref="CanCaptureIncremental"/>, in its order); <see cref="CaptureFullReason.None"/> when it captured
+    /// incrementally. Always on — the render census's answer to "why was this publish a full capture?".</summary>
+    public CaptureFullReason LastCaptureFullReason { get; private set; }
+
+    private CaptureFullReason IncrementalRefusal(SceneStore source, ulong lastCapturedSeq)
+    {
+        if (_lastSource is null || !ReferenceEquals(_lastSource, source) || lastCapturedSeq == 0) return CaptureFullReason.NoBaseline;
+        if (_lastCaptureSeq != lastCapturedSeq || source.PublishSeq + 1 <= lastCapturedSeq) return CaptureFullReason.BaselineMismatch;
+        if (source.RecordingNodeCount < _nodeCount) return CaptureFullReason.StoreShrank;
+        if (source.CaptureLedgerFloor > lastCapturedSeq) return CaptureFullReason.LedgerTruncated;
+        if (source.BulkMutationSeq > lastCapturedSeq) return CaptureFullReason.BulkMutation;
+        return CaptureFullReason.None;
     }
 
     /// <summary>Whether an incremental refresh from <paramref name="source"/> against baseline
@@ -206,12 +231,7 @@ public sealed partial class SceneRecordingSnapshot
     /// </list>
     /// </summary>
     public bool CanCaptureIncremental(SceneStore source, ulong lastCapturedSeq)
-        => _lastSource is not null && ReferenceEquals(_lastSource, source)
-           && lastCapturedSeq > 0 && _lastCaptureSeq == lastCapturedSeq
-           && source.PublishSeq + 1 > lastCapturedSeq
-           && source.RecordingNodeCount >= _nodeCount
-           && source.CaptureLedgerFloor <= lastCapturedSeq
-           && source.BulkMutationSeq <= lastCapturedSeq;
+        => IncrementalRefusal(source, lastCapturedSeq) == CaptureFullReason.None;
 
     private void CaptureCore(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool incremental, ulong baseline)
     {
@@ -250,6 +270,7 @@ public sealed partial class SceneRecordingSnapshot
         {
             BeginSparseCapture();
             _spanDecorations.BeginCapture();
+            _rowCells.BeginCapture();
         }
         // These three are rebuilt wholesale on EVERY capture: they are tiny (orphans are budget-capped, scroll rows
         // are a handful of viewports) and rebuilding is cheaper than tracking deltas through them.
@@ -284,16 +305,13 @@ public sealed partial class SceneRecordingSnapshot
         // back to the original captured-order derivation, preserving both de-duplication and ownership semantics.
         if (_resourceReferencesDirty) RebuildResourceReferences();
 
-        // Scrollbar chrome + the scroll-bind topology: rebuilt for the captured scrollable set (collected during the
-        // walk). Both are keyed by the SCROLLER's index, both are a handful of entries, and the bind table is a shared
-        // dense chain arena that cannot be edited per node - so a full rebuild is the only correct cheap option.
+        // Scrollbar chrome: rebuilt for the captured scrollable set (collected during the walk) — keyed by the
+        // SCROLLER's index, a handful of entries, so a full rebuild is the only correct cheap option.
         ScrollChrome.BeginCapture();
-        ScrollBinds.BeginCapture();
         for (int i = 0; i < _scrollNodeCount; i++)
         {
             int index = _scrollNodes[i];
             if (_scroll.Contains(index)) ScrollChrome.Add(index, source.ScrollChrome.Get(index));
-            ScrollBinds.CaptureChain(index, source.ScrollBinds);
         }
 
         Grow(ref _orphans, OrphanCount);
@@ -316,12 +334,14 @@ public sealed partial class SceneRecordingSnapshot
         {
             EndSparseCapture();
             _spanDecorations.EndCapture();
+            _rowCells.EndCapture();
         }
         _orphanChildren.EndCapture();
 
         _lastSource = source;
         _lastCaptureSeq = source.PublishSeq + 1;
         LastCaptureWasIncremental = incremental;
+        _incrementalStreak = incremental ? _incrementalStreak + 1 : 0;
         if (incremental) VerifyIncrementalParity(source, extraRoots);
     }
 
@@ -370,6 +390,7 @@ public sealed partial class SceneRecordingSnapshot
         _selectionRects.Remove(index);
         _underlineRects.Remove(index);
         _spanDecorations.Remove(index);
+        _rowCells.Remove(index);
         _interact.Remove(index);
         _shadow.Remove(index);
         _arc.Remove(index);
@@ -484,13 +505,12 @@ public sealed partial class SceneRecordingSnapshot
             {
                 // Physics/virtual-layout inputs are not recorder inputs; none may retain app objects.
                 scroll.Layout = null;
+                scroll.Extent = null;
                 scroll.SnapPoints = null;
-                scroll.ScrollKey = scroll.ScrollScope = null;
+                scroll.ScrollKey = null;
                 _scroll.Set(index) = scroll;
             }
-            // The chrome row and the bind chain are captured by the post-walk scrollable pass in CaptureCore: both are
-            // keyed by the SCROLLER's index (ScrollBind.cs Add(): `_headByVp[scrollerIndex]`), and the bind table is a
-            // shared dense chain arena an incremental capture cannot edit slot-by-slot.
+            // The chrome row is captured by the post-walk scrollable pass in CaptureCore (keyed by the SCROLLER's index).
         }
         if ((flags & NodeFlags.InteractionAnim) != 0 && source.TryGetInteract(node, out InteractionAnim interact)) _interact.Set(index) = interact;
         if ((flags & NodeFlags.SparsePaint) != 0)
@@ -519,6 +539,16 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetGlyphWipe(node, out GlyphWipe glyphWipe)) _glyphWipe.Set(index) = glyphWipe;
             CopyRects(_selectionRects, index, source.GetTextEditSelectionRects(node));
             CopyRects(_underlineRects, index, source.GetTextEditUnderlineRects(node));
+        }
+        if (_paint[index].VisualKind == VisualKind.ListRow
+            && source.TryGetRowCells(node, out var rowCells, out bool rowPlaceholder, out ColorF rowPlaceholderColor))
+        {
+            ref var rc = ref _rowCells.Set(index);
+            if (rc.Cells is null || rc.Cells.Length < rowCells.Length) rc.Cells = new RowCellRecorded[rowCells.Length];
+            rowCells.CopyTo(rc.Cells);
+            rc.Count = rowCells.Length;
+            rc.Placeholder = rowPlaceholder;
+            rc.PlaceholderColor = rowPlaceholderColor;
         }
         if (!_resourceReferencesDirty && previousReferences != ResourceReferencesAt(index))
             _resourceReferencesDirty = true;
@@ -612,6 +642,24 @@ public sealed partial class SceneRecordingSnapshot
             styles = decoration.Styles; rects = decoration.Rects; return true;
         }
         styles = []; rects = []; return false;
+    }
+
+    /// <summary>The recorder's read of a captured <c>ListRowEl</c> row (scroll-rework Wave 0.E) — the render-thread
+    /// twin of <c>SceneStore.TryGetRowCells</c>, resolved against THIS snapshot's captured column instead of the
+    /// live UI-thread SceneStore (the render thread never touches SceneStore directly).</summary>
+    public bool TryGetRowCells(NodeHandle node, out ReadOnlySpan<RowCellRecorded> cells, out bool placeholder, out ColorF placeholderColor)
+    {
+        if (_rowCells.TryGet((int)node.Raw.Index, out var capture) && capture.Cells is not null)
+        {
+            cells = capture.Cells.AsSpan(0, capture.Count);
+            placeholder = capture.Placeholder;
+            placeholderColor = capture.PlaceholderColor;
+            return true;
+        }
+        cells = default;
+        placeholder = false;
+        placeholderColor = default;
+        return false;
     }
 
     /// <summary>
@@ -931,6 +979,7 @@ public sealed partial class SceneRecordingSnapshot
     private struct RectBuffer { public RectF[] Items; public int Count; }
     private struct OrphanChildren { public List<NodeHandle>? Items; }
     private struct SpanDecoration { public SpanStyle[] Styles; public SpanRect[] Rects; }
+    private struct RowCellsCapture { public RowCellRecorded[]? Cells; public int Count; public bool Placeholder; public ColorF PlaceholderColor; }
 }
 
 /// <summary>Reusable dense visual rows indexed by sparse scene slots. Mutation is confined to exclusive capture.</summary>
@@ -1001,33 +1050,4 @@ public sealed class RecordingScrollChrome
     internal void BeginCapture() => _rows.Clear();
     internal void Add(int index, ScrollBarChromeRow row) => _rows.Add(index, row);
     public ScrollBarChromeRow Get(int index) => _rows.TryGetValue(index, out var value) ? value : default;
-}
-
-/// <summary>Only the bind topology needed for span-reuse eligibility; UI OnFlag delegates are excluded.</summary>
-public sealed class RecordingScrollBinds
-{
-    public readonly record struct Row(NodeHandle Target, int Next);
-    private readonly Dictionary<int, int> _heads = new();
-    private Row[] _rows = [];
-    private int _count;
-    /// <summary>Invocations of <see cref="CaptureChain"/> since the last <see cref="BeginCapture"/> — diagnostics/gates
-    /// only (perf plan item 3: proves the caller gates on <c>NodeFlags.Scrollable</c> instead of probing every node).</summary>
-    internal int CaptureChainCalls { get; private set; }
-    internal void BeginCapture() { _count = 0; _heads.Clear(); CaptureChainCalls = 0; }
-    internal void CaptureChain(int index, FluentGpu.Animation.ScrollBindTable source)
-    {
-        CaptureChainCalls++;
-        int first = source.Head(index);
-        if (first < 0) return;
-        _heads.Add(index, _count);
-        for (int slot = first; slot >= 0; slot = source.At(slot).Next)
-        {
-            ref var row = ref source.At(slot);
-            SceneRecordingSnapshot.Grow(ref _rows, _count + 1);
-            _rows[_count] = new(row.Target, row.Next < 0 ? -1 : _count + 1);
-            _count++;
-        }
-    }
-    public int Head(int index) => _heads.TryGetValue(index, out int head) ? head : -1;
-    public ref readonly Row At(int slot) => ref _rows[slot];
 }

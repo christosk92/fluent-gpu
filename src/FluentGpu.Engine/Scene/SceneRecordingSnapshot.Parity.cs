@@ -9,8 +9,9 @@ namespace FluentGpu.Scene;
 /// snapshot it produces is column-for-column indistinguishable from a from-scratch capture of the same store at the
 /// same instant. Every <c>gate.capture.*</c> check is that comparison against a scratch snapshot, and so is the DEBUG
 /// self-check below.</para>
-/// <para><b>The DEBUG self-check.</b> In a DEBUG (or <c>FLUENTGPU_DIAG</c>) build EVERY incremental capture is
-/// immediately re-derived in full into a scratch snapshot and compared. On a divergence it does not assert and die —
+/// <para><b>The DEBUG self-check.</b> In a DEBUG (or <c>FLUENTGPU_DIAG</c>) build incremental captures are re-derived
+/// in full into a scratch snapshot and compared — the first of every incremental streak, then every Nth (the cost is
+/// bounded; see <see cref="VerifyIncrementalParity"/>). On a divergence it does not assert and die —
 /// it reports the offending column to stderr and REDOES the capture as a full one, so the published frame is correct
 /// either way. That makes the whole VerticalSlice suite, the engine tests and any DEBUG app run a continuous audit of
 /// the store's capture ledger: the day someone adds a column write without a <c>NoteCaptureChanged</c> /
@@ -30,9 +31,36 @@ public sealed partial class SceneRecordingSnapshot
     /// correct build; a gate asserts it stays there.</summary>
     public int IncrementalParityFailures { get; private set; }
 
+    /// <summary>Incremental captures the self-check actually re-derived and compared (DEBUG only).</summary>
+    internal int ParityVerifications { get; private set; }
+
+    /// <summary>The self-check never runs more often than every Nth publish of an incremental streak (after the first)…</summary>
+    internal const int ParityVerifyMinInterval = 8;
+    /// <summary>…and on a large scene not more than this many captured nodes' worth of verification per publish.</summary>
+    internal const int ParityNodesPerPublish = 256;
+
+    /// <summary>
+    /// Re-derive a FULL capture and compare — bounded, deterministic, always compiled into Debug. A verification is one
+    /// complete re-capture of the reachable scene plus a column-by-column compare; measured on the gallery's 100k-row
+    /// list page (412 live nodes, Debug, the Adreno X1 dev machine) it costs ~1.8 ms and ~2.2 MB of allocation. Run on
+    /// EVERY incremental publish that made each Debug frame 2 ms of UI work instead of 0.2 ms and drove 67 gen-0 GCs a
+    /// second (266 MB/s) — the margin every Debug measurement is taken against, erased by the verifier.
+    /// <para>The rule: within a streak of incremental captures (reset by every full capture) the FIRST one is always
+    /// verified, then every Nth, N = max(<see cref="ParityVerifyMinInterval"/>, ceil(capturedNodes /
+    /// <see cref="ParityNodesPerPublish"/>)). Amortized that is ≤ 1/8 of a verification per publish on a small scene
+    /// and ≤ 256 nodes' worth on a large one. It stays a real verifier because the bug class it exists for — a store
+    /// write without <c>NoteCaptureChanged</c> — leaves the snapshot's row stale until that node is captured again: the
+    /// divergence PERSISTS, so the next verification (at most N publishes later) sees it and heals the frame by redoing
+    /// it as a full capture; a unit fixture's first incremental capture after its full one is always checked. A
+    /// divergence that heals itself inside the window (the node was re-captured for another reason) was on screen for
+    /// fewer than N frames. Deterministic: a per-snapshot counter, no clock, no sampling.</para>
+    /// </summary>
     private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots)
     {
         if (_inParityVerify) return;
+        int every = Math.Max(ParityVerifyMinInterval, (_captured.Count + ParityNodesPerPublish - 1) / ParityNodesPerPublish);
+        if (_incrementalStreak != 1 && _incrementalStreak % every != 0) return;
+        ParityVerifications++;
         var scratch = _parityScratch ??= new SceneRecordingSnapshot();
         scratch.Capture(source, extraRoots);
         bool equal = EqualsForParity(scratch, out string mismatch);
@@ -54,6 +82,9 @@ public sealed partial class SceneRecordingSnapshot
 
     /// <summary>Always 0 in Release — the self-check is compiled out.</summary>
     public int IncrementalParityFailures => 0;
+
+    /// <summary>Always 0 in Release — the self-check is compiled out.</summary>
+    internal int ParityVerifications => 0;
 
     private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots) { }
 #endif
@@ -177,14 +208,13 @@ public sealed partial class SceneRecordingSnapshot
                 if (!mineRects[k].Equals(theirRects[k])) return Fail(out mismatch, $"n#{i} span rect[{k}]");
         }
 
+        bool hasRow = TryGetRowCells(node, out var mineCells, out bool minePh, out ColorF minePhColor);
+        bool otherRow = other.TryGetRowCells(node, out var theirCells, out bool theirPh, out ColorF theirPhColor);
+        if (hasRow != otherRow) return Fail(out mismatch, $"n#{i} row cells presence");
+        if (hasRow && !RowCellsEqual(mineCells, minePh, minePhColor, theirCells, theirPh, theirPhColor))
+            return Fail(out mismatch, $"n#{i} row cells");
+
         if (!ScrollChrome.Get(i).Equals(other.ScrollChrome.Get(i))) return Fail(out mismatch, $"n#{i} scroll chrome");
-        int head = ScrollBinds.Head(i), otherHead = other.ScrollBinds.Head(i);
-        if ((head < 0) != (otherHead < 0)) return Fail(out mismatch, $"n#{i} scroll-bind chain presence");
-        for (int a = head, b = otherHead; a >= 0 || b >= 0; a = ScrollBinds.At(a).Next, b = other.ScrollBinds.At(b).Next)
-        {
-            if (a < 0 || b < 0) return Fail(out mismatch, $"n#{i} scroll-bind chain length");
-            if (ScrollBinds.At(a).Target != other.ScrollBinds.At(b).Target) return Fail(out mismatch, $"n#{i} scroll-bind target");
-        }
         return true;
     }
 
@@ -222,6 +252,14 @@ public sealed partial class SceneRecordingSnapshot
         => a.Valid == b.Valid && a.Text == b.Text && a.MaxW.Equals(b.MaxW) && a.Style == b.Style
            && a.Size.Width == b.Size.Width && a.Size.Height == b.Size.Height && a.FitSize == b.FitSize
            && a.UnderlineY == b.UnderlineY && a.UnderlineThickness == b.UnderlineThickness && a.StrikeY == b.StrikeY;
+
+    private static bool RowCellsEqual(ReadOnlySpan<RowCellRecorded> a, bool aPh, ColorF aPhColor,
+        ReadOnlySpan<RowCellRecorded> b, bool bPh, ColorF bPhColor)
+    {
+        if (aPh != bPh || !aPhColor.Equals(bPhColor) || a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++) if (!a[i].Equals(b[i])) return false;
+        return true;
+    }
 
     private static bool RectsEqual(ReadOnlySpan<RectF> a, ReadOnlySpan<RectF> b)
     {

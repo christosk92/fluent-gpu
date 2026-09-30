@@ -1,4 +1,4 @@
-using FluentGpu.Controls;
+﻿using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Forms;
 using FluentGpu.Foundation;
@@ -76,11 +76,11 @@ sealed class ShotScene : Component
                 EfCard("Bottom only", new EdgeFadeSpec(EdgeMask.Bottom, 64f)),
             ],
         },
-        // The d < 1 exactness case for the PURE-fade STRIP path (EdgeFadeStrips): identical cards, but the page ground
+        // The d < 1 exactness case for the PURE-fade path (the composite's analytic feather): identical cards, but the page ground
         // is TRANSLUCENT, so the back buffer under every fade holds premultiplied pixels with alpha < 1 (what a Mica
-        // window always composites through). The strip restore is lerp(D, F, feather), which is exact for ANY backdrop
-        // alpha; a single-snapshot SourceOver restore would only match where the backdrop is opaque, so this shot is
-        // the one that would visibly break it. Run it with --mica for the real Theme.WindowBackground = Transparent
+        // window always composites through). The feather multiplies the premultiplied content in the composite, which is
+        // exact for ANY backdrop alpha; a restore that re-blended a snapshot of the target would only match where the
+        // backdrop is opaque, so this shot is the one that would visibly break it. Run it with --mica for the real Theme.WindowBackground = Transparent
         // path; the half-alpha ground below keeps d < 1 even in an opaque window.
         "edgefade-mica" => new BoxEl
         {
@@ -126,7 +126,7 @@ sealed class ShotScene : Component
         "treeview" => CenterShot(Embed.Comp(() => new TreeViewShot())),
         "listview" => CenterShot(Embed.Comp(() => new ItemsViewListShot())),   // id kept stable; renders the List preset
         "itemsview" => CenterShot(Embed.Comp(() => new ItemsViewShot())),
-        // Acrylic material proof (needs-pixels loop for Rhi.D3D12 AcrylicCompositor): the flyout acrylic surface over
+        // Acrylic material proof (needs-pixels loop for the composite's acrylic backdrop pass): the flyout acrylic surface over
         // HIGH-CONTRAST saturated bars — the σ=30 DIP backdrop blur (AcrylicBrush.h:64 sc_blurRadius) must read as
         // soft color washes through the surface; over a flat page the blur would be invisible.
         "acrylic" => new BoxEl

@@ -107,6 +107,36 @@ public static class LineBreaker
         return k;
     }
 
+    /// <summary>The ellipsis fit of a SPANNED (rich-text) line — the trim decision the DirectWrite
+    /// <c>TextLayoutEngine.EmitLine</c> runs on a paragraph with inline runs. Returns how many of the line's visual-order
+    /// glyphs stay visible and, in <paramref name="ellipsisSpan"/>, WHOSE style the "…" takes: the span of the last
+    /// visible glyph (the run the cut lands in; −1 = the paragraph base style). A 20-px semibold title + 12-px regular
+    /// subtitle cut inside the subtitle therefore ends in a 12-px regular "…", not a base-size one. Each candidate cut
+    /// reserves the ellipsis advance of ITS span (<paramref name="spanEllipsisAdvance"/>[span]; an index outside it —
+    /// incl. −1 — uses <paramref name="baseEllipsisAdvance"/>), so the reserved width is exactly the width drawn and
+    /// measure ≡ render. With every glyph on the base style this is the single-style fit verbatim (same budget
+    /// expression, same comparison). The first glyph is always kept — a collapsed box degrades to one glyph + "…".
+    /// <paramref name="advances"/> and <paramref name="spans"/> are parallel, in visual order. Pure, allocation-free.</summary>
+    public static int FitEllipsisBySpan(ReadOnlySpan<float> advances, ReadOnlySpan<short> spans, float maxWidth,
+        float baseEllipsisAdvance, ReadOnlySpan<float> spanEllipsisAdvance, out int ellipsisSpan)
+    {
+        float acc = 0f; int useLen = 0;
+        for (int k = 0; k < advances.Length; k++)
+        {
+            float a = advances[k];
+            float budget = MathF.Max(0f, maxWidth - EllipsisAdvanceFor(spans[k], baseEllipsisAdvance, spanEllipsisAdvance));
+            if (acc + a > budget && useLen > 0) break;
+            acc += a; useLen++;
+        }
+        ellipsisSpan = useLen > 0 ? spans[useLen - 1] : -1;
+        return useLen;
+    }
+
+    /// <summary>The "…" advance for <paramref name="span"/> (see <see cref="FitEllipsisBySpan"/>): its own entry when the
+    /// index is inside <paramref name="spanEllipsisAdvance"/>, else the base style's.</summary>
+    public static float EllipsisAdvanceFor(int span, float baseEllipsisAdvance, ReadOnlySpan<float> spanEllipsisAdvance)
+        => (uint)span < (uint)spanEllipsisAdvance.Length ? spanEllipsisAdvance[span] : baseEllipsisAdvance;
+
     /// <summary>Sum of advances over [s,e). Hard-break characters contribute nothing (zero-width) — a stray '\r' inside a
     /// CRLF line would otherwise add a .notdef advance and over-measure the line.</summary>
     public static float MeasureRange<TAdv>(ReadOnlySpan<char> text, int s, int e, in TAdv adv)

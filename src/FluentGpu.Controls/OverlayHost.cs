@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -944,11 +944,10 @@ public sealed class OverlayHost : Component
     /// <see cref="OsBackedTintFill"/> — the presenter's residual tint — over it.</item>
     /// <item><b>Over a video hole</b> — clear the acrylic, keep the shadow, paint <see cref="FlatAcrylicFill"/>. The
     /// acrylic there is pure loss: <c>DrawOp.DrawVideo</c> is a DestOut erase and the video is a sibling DComp visual
-    /// z-BELOW the UI swapchain, so the backdrop the plate samples is premultiplied ZERO — it blurs NOTHING — while an
-    /// acrylic layer anywhere in the stream is <c>RepaintPolicy.Decide</c>'s FIRST hard disqualifier: it forces
-    /// <c>RepaintRoute.FullDirect</c> for the WHOLE window and invalidates the retained canvas, so the frame AFTER the
-    /// flyout closes pays a full rebuild too. Dropping it is a visual no-op and is the difference between a small
-    /// partial repaint and a full-window one on every frame a menu is up over playing video.</item>
+    /// z-BELOW the UI swapchain, so the backdrop the plate samples is premultiplied ZERO — it blurs NOTHING — while the
+    /// composite still pays a backdrop pass (a mini-composite of everything beneath, blurred) every frame the video
+    /// under it changes. Dropping it is a visual no-op and saves that pass on every frame a menu is up over playing
+    /// video.</item>
     /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored.</item>
     /// </list></summary>
     internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)
@@ -965,8 +964,7 @@ public sealed class OverlayHost : Component
         // subtree is served by a clean-span reuse. A plate straddling the Dst's bottom edge therefore fails the
         // coverage test against one rect and passes against the other, and flips with NO scene change at all. Each
         // flip mutates the plate (paint-dirty), which changes which subtrees are span-reused next frame, which flips
-        // the answer back: self-sustaining, and each acrylic-on frame costs a FULL-WINDOW repaint (an acrylic layer is
-        // RepaintPolicy.Decide's first hard disqualifier ⇒ RepaintRoute.FullDirect + retained-canvas invalidation).
+        // the answer back: self-sustaining, and each flip re-records the popup's slice and re-rasters its tiles.
         // Latching kills the loop, and it is also the CORRECT answer: the hole does not move under a pinned anchor for
         // the popup's lifetime, so the first affirmative is the right one for the whole life of the entry. The latch
         // dies with the entry — a re-open re-asks.
@@ -1112,9 +1110,9 @@ public sealed class OverlayHost : Component
                         // So: windowed IFF the caller declared the popup may leave the root bounds, AND its chrome
                         // carries an OS window material. The material clause is a DELIBERATE DEVIATION from WinUI: a
                         // material-less popup HWND gets no CompositionBackdrop (D3D12Device creates one only for
-                        // DesktopAcrylic), and the engine's in-app acrylic compositor snapshots THE CANVAS IT IS
-                        // RENDERING INTO — inside a popup swapchain that canvas is the popup's own transparent-cleared
-                        // back buffer, so a windowed FlyoutPresenter would composite a flat, unfrosted ~0.97-coverage
+                        // DesktopAcrylic), and the engine's in-app acrylic is a backdrop pass of the PRIMARY window's
+                        // composite — a popup swapchain replays its stream directly with no composite behind it, so a
+                        // windowed FlyoutPresenter would composite a flat, unfrosted ~0.97-coverage
                         // slab instead of blurred app content (and ConfigurePopupChrome/AnimatePopupOpen/Close would
                         // all be silent no-ops). Such a popup therefore stays IN-WINDOW even when it asked to escape.
                         //
@@ -1643,8 +1641,8 @@ internal sealed class FlyoutSurface : Component
                     {
                         // Fill is the acrylic's FALLBACK, not Transparent. The plate's visible body is the engine
                         // acrylic LAYER, and a layer is a DrawOp.PushLayer that the D3D12 backend honours only on the
-                        // device's PRIMARY swapchain (D3D12Device: `layerKind = isPrimary ? StreamLayerKind(..) : 0`,
-                        // guarding the one shared acrylic canvas against a differently-sized secondary target). Any
+                        // device's PRIMARY swapchain (the retained-tile composite; a secondary target replays its
+                        // stream directly and paints an acrylic's fallback flat). Any
                         // host that is NOT the first window — a detached child window, e.g. the video pop-out — is
                         // therefore secondary, its PushLayer is silently skipped, and a Transparent-filled plate
                         // rendered as nothing but its 1px border, its shadow and the item text: a menu of floating

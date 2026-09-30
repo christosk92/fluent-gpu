@@ -18,7 +18,8 @@ sealed partial class ProgressBarPage : Component
         ExampleCard.Show(DeterminateSample),
         ExampleCard.Show(IndeterminateSample),
         ExampleCard.Show(DeterminateStatesSample),
-        ExampleCard.Show(IndeterminateStatesSample));
+        ExampleCard.Show(IndeterminateStatesSample),
+        ExampleCard.Show(StretchedSample));
 
     [Sample("A determinate ProgressBar")]
     static Element Determinate() => VStack(16,
@@ -54,6 +55,22 @@ sealed partial class ProgressBarPage : Component
         return VStack(12,
             ProgressBar.Indeterminate(state: ProgressBarState.Paused),
             ProgressBar.Indeterminate(state: ProgressBarState.Error));
+    }
+
+    [Sample("Stretched to the available width")]
+    static Element Stretched()
+    {
+        // width: float.NaN — the facet-switch busy bar: it fills whatever width the parent offers instead of a
+        // fixed DIP value, and re-arms the sweep if that parent is later resized. A visible track (the app's
+        // "pinned across the full content width" look) is a PartTrack override — the track is opacity-0 by
+        // default in every indeterminate state, same as the fixed-width bar above.
+        var parts = new TemplateParts();
+        parts[ProgressBar.PartTrack] = b => b with { Opacity = 1f };
+        return new BoxEl
+        {
+            Width = 320f,   // the "parent" — resize the window/card to see the sweep re-arm at the new extent
+            Children = [ProgressBar.Indeterminate(width: float.NaN, parts: parts)],
+        };
     }
 }
 

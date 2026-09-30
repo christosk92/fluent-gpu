@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 
 namespace FluentGpu.Dsl;
 
@@ -21,7 +21,7 @@ public static class Modifiers
     /// the box's current bounds. A boundary <b>implies clipping</b> (a firewalled subtree must not paint outside the bounds the
     /// parent gave it), so this sets <see cref="BoxEl.ClipToBounds"/> too. A window resize still triggers a full layout, so
     /// resize stays correct. See <see cref="BoxEl.IsolateLayout"/> and the relayout-escape diagnostic
-    /// (<c>FrameStats.RootRelayoutEscapes</c> + the <c>FG_DIAG</c> "relayout escaped to root" message).</summary>
+    /// (<c>FrameStats.RootRelayoutEscapes</c> + the <c>--fg diag</c> "relayout escaped to root" message).</summary>
     public static BoxEl Boundary(this BoxEl b) => b with { IsolateLayout = true, ClipToBounds = true };
     public static BoxEl Pad(this BoxEl b, float all) => b with { Padding = Edges4.All(all) };
     public static BoxEl Pad(this BoxEl b, float left, float top, float right, float bottom) => b with { Padding = new Edges4(left, top, right, bottom) };

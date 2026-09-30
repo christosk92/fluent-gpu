@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Animation;
@@ -15,7 +15,7 @@ namespace FluentGpu.Animation;
 //  Implemented here: the snapshot row (mirrors the real NodePaint renderable fields — Fill/Border are ColorF, image is
 //  an int ImageId, per Scene/Columns.cs), the gen-versioned slab + free-list, and the DetachGroup completion gate.
 //  WIRED: the phase-8 RecordDetached() render-walk (SceneRecorder) emits opcodes from a snapshot — the flag-gated
-//  ConnectedAnimation Hero-fly rebuild (FG_DETACHED_FLY) drives it (gate CF.a). REMAINING for full AnimatePresence:
+//  ConnectedAnimation Hero-fly rebuild (ConnectedAnimation.DetachedFly) drives it (gate CF.a). REMAINING for full AnimatePresence:
 //  the reconciler detach-on-unmount + logical-identity enter/exit keying (exits currently use the orphan/reclaim path).
 //  Design: docs/plans/animation-engine-rework-design.md §3.6 / §4.7.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -91,6 +91,10 @@ public sealed class DetachedAnimSlab
     public int NodeCount => _nodeCount;
 
     public ref DetachedNode At(int slot) => ref _nodes[slot];
+
+    /// <summary>The slot range [0, <see cref="NodeCount"/>) (check <see cref="DetachedNode.InUse"/>) — the recorder's
+    /// top-band pass reads it as one span.</summary>
+    internal ReadOnlySpan<DetachedNode> Nodes => _nodes.AsSpan(0, _nodeCount);
 
     /// <summary>Open a presence detach group (the boundary defers its removal until the group's pending count hits 0).</summary>
     public int OpenGroup(NodeHandle anchor, PresenceMode mode)

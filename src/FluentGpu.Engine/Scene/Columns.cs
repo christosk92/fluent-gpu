@@ -1,9 +1,9 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7, Path = 8 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7, Path = 8, ListRow = 9 }
 
 /// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
@@ -154,16 +154,10 @@ public struct NodePaint
     public float Opacity;
     public float HoverOpacity, PressedOpacity;
     // Per-node self-blur sigma (px), animated by AnimChannel.BlurSigma (the Expressive Motion Kit's perceptual softener).
-    // When > ε the recorder wraps this node's subtree in a PushLayer{Blur}…PopLayer (subtree → pooled offscreen RT →
-    // separable Gaussian → composite) — the same offscreen-layer machinery as OpacityGroup, with the AcrylicCompositor
-    // Gaussian. 0 = no blur layer (the default); a change sets PaintDirty (never LayoutDirty).
+    // When > ε the recorder cuts this node's subtree as an effect slice (gpu-renderer.md §13): its tiles are blurred
+    // into a retained surface by the composite (separable Gaussian, AcrylicBackdropMath). 0 = no blur (the default); a
+    // change sets PaintDirty (never LayoutDirty).
     public float BlurSigma;
-    public BlurCachePolicy BlurCachePolicy;
-    // Engine-owned transient intent: 1 only while a LIVE, non-parked AnimChannel.BlurSigma row drives this node.
-    // Kept beside BlurCachePolicy so it consumes that byte field's existing alignment padding (no NodePaint growth).
-    // This is deliberately not authored by BoxEl: the animation slab is the single source of truth and clears it on
-    // settle/cancel/park, allowing the compositor to choose an animated-blur strategy without guessing from sigma.
-    internal byte BlurAnimationActive;
     // Composited transform origin (normalized 0..1 of the node box; default centre 0.5,0.5). The recorder scales/transforms
     // the node about (OriginX·W, OriginY·H) — so e.g. a menu can scale/unfold from its TOP edge (OriginY=0).
     public float OriginX, OriginY;
@@ -175,8 +169,8 @@ public struct NodePaint
     // with ClipsToBounds). Animated by AnimEngine ClipL/T/R/B (e.g. an Expander/CommandBarFlyout reveal). Default Infinite.
     public RectF ClipRect;
 
-    /// <summary>The half-extent the STICKY viewport cut (<c>ScrollBindDsl.ClipTopAtViewport</c>, written by
-    /// <c>ScrollBindEval.ApplyStickyClip</c>) puts on the three edges it does not own, and therefore the SIGNATURE that
+    /// <summary>The half-extent the STICKY viewport cut (<c>ScrollEffect.StickyClip</c>, written by the host's
+    /// scroll-effect pass) puts on the three edges it does not own, and therefore the SIGNATURE that
     /// tells a sticky cut apart from every other <see cref="ClipRect"/> writer.
     ///
     /// <para>The distinction is load-bearing beyond paint: <c>InputDispatcher</c> gates INPUT on a sticky cut (content
@@ -186,6 +180,20 @@ public struct NodePaint
     /// over a surface that is already logically live. Big enough to be unreachable as a real coordinate, small enough
     /// that it can never be mistaken for <see cref="RectF.Infinite"/> (whose sentinel is 1e9).</para></summary>
     public const float StickyClipSpan = 1e8f;
+
+    /// <summary>The COLLAPSE cut (a leading-anchor <c>ScrollEffect.CollapseClip</c> row, written by the host's
+    /// scroll-effect pass): a <see cref="ClipRect"/> OPEN on its top, left and right (<see cref="StickyClipSpan"/>) whose
+    /// bottom is the node's presented edge — so a collapsing hero cuts its children (paint and input) below the presented
+    /// edge while a child that draws ABOVE the node's top (an overscroll stretch) keeps those pixels.
+    ///
+    /// <para>The recorder and hit-testing identify it by its open TOP (<see cref="IsCollapseCut"/> — no other writer puts
+    /// the top at the sentinel: a sticky cut owns its top, a reveal/flight box is finite) and cut at the EXACT presented
+    /// edge (<see cref="PresentedH"/>, else the laid-out height). The rect's own <c>Bottom</c> (<c>Y + H</c> at the
+    /// sentinel's magnitude) is float-rounded to a few DIP, so it is only an approximation for a generic reader.</para></summary>
+    public static RectF CollapseCut(float bottom) => RectF.FromLTRB(-StickyClipSpan, -StickyClipSpan, StickyClipSpan, bottom);
+
+    /// <summary>True when <paramref name="clip"/> is a <see cref="CollapseCut"/> (its top is open).</summary>
+    public static bool IsCollapseCut(in RectF clip) => !clip.IsInfinite && clip.Y <= -StickyClipSpan;
 
     // Child-group offset (a SizeMode.Reflow Trailing anchor): when non-zero, the recorder shifts every CHILD's origin
     // by this amount while the node's own fill/border/clip stay put — so the content's end edge rides the animated
@@ -263,187 +271,97 @@ public struct NodePaint
 /// <summary>
 /// Scroll + virtualization state for a viewport node (marked <c>NodeFlags.Scrollable</c>). There are O(viewports)
 /// of these — not one per node — so the store keeps them in a sparse side-table keyed by node index, not a parallel
-/// column. Ownership (scroll-v3-plan §3.1 — supersedes the scroll-feel-rework-v2 contract this doc used to state):
-/// <b>Layout</b> publishes <c>Content*</c>/<c>Viewport*</c>; the <b>virtualizer</b> owns the <c>Item*</c> /
-/// realized-range / anchor fields; the reconciler/controls own the config fields (Snap*, EdgeCue*, zoom bounds, …).
-/// The RESULT columns (offset, band, zoom, velocity, activity — see the group below) are owned by the
-/// <c>FluentGpu.Scroll.ScrollKernel</c> and are settable ONLY through <see cref="ApplyMotion"/>, called exactly once
-/// per moved body per kernel tick/reclamp from <c>FluentGpu.Scroll.SceneScrollSink.Apply</c> — the kernel is the sole
-/// writer, the sink is the sole call site. Scroll is layout-free: the <c>-ScrollOffset</c> translation is the
-/// <see cref="ContentNode"/>'s <c>LocalTransform</c>, never a relayout. Scrollbar chrome (fade/expand/hover/idle) is
-/// NOT here — it lives in <c>FluentGpu.Scroll.ScrollBarChromeTable</c>, a separate side-table chrome never mixes
-/// with motion (scroll-v3-plan §4).
+/// column. Ownership (scroll rework, <c>docs/plans/scroll-rework-implementation.md</c> §2/§6): <b>layout</b> publishes
+/// <c>Content*</c>/<c>Viewport*</c>; the <b>virtualizer</b> (reconciler + layout) owns the realized window,
+/// <see cref="WindowOrigin"/> and the coverage fields; the reconciler/controls own the config fields (Snap*, EdgeCue*,
+/// zoom bounds, …). The RESULT columns (<see cref="Offset"/>, <see cref="Velocity"/>, <see cref="Motion"/>) are
+/// written once per UI frame by the host's scroll step from the viewport's <c>ScrollPlan</c> evaluated at present
+/// time (<c>AppHost.RunScrollFrame</c>) — the UI thread's view of the same closed-form plan the render thread poses
+/// from. Scroll is layout-free: the content translate is <c>WindowOrigin − Offset</c> on the <see cref="ContentNode"/>
+/// (UI-side for hit-testing; render-side by <c>ScrollPoser</c> at the predicted present time). Scrollbar chrome
+/// (fade/expand/hover/idle) lives in <c>FluentGpu.Scroll.Runtime.ScrollBarChromeTable</c>.
 /// </summary>
 public struct ScrollState
 {
-    // ── RESULT columns (scroll-v3-plan §3.1): the kernel's per-tick physics output. Backing storage is private —
-    // the public members are get-only ({ get; private set; }-equivalent); the ONLY method that assigns them is
-    // ApplyMotion below, which itself only accepts a FluentGpu.Scroll.SceneScrollSink.ScrollWriteToken minted for the
-    // duration of SceneScrollSink.Apply (DEBUG/FLUENTGPU_DIAG: a ThreadStatic nonce check; Release: erased to a plain
-    // call). No other file can write these — every former direct writer (dispatcher/layout/reconciler/controls) now
-    // posts a FluentGpu.Scroll.ScrollInput command instead (scroll-v3-plan §3.2).
-    public float OffsetX { get; private set; }   // live scroll position (DIP) on X
-    public float OffsetY { get; private set; }   // live scroll position (DIP) on Y
-    public float BandX { get; private set; }     // rubber-band visual displacement past the X clamp (0 = at rest)
-    public float BandY { get; private set; }     // …and Y (rename of the old single-axis OverscrollPx — a viewport only
-                                                  // ever bands on its own Orientation axis, but the kernel's ScrollWrite
-                                                  // is a fixed POD carrying both, so both live here too)
-    /// <summary>The band on this viewport's own scroll axis (<see cref="Orientation"/> picks X or Y) — the field the
-    /// rest of the engine actually wants; <see cref="BandX"/>/<see cref="BandY"/> exist because the kernel writes a
-    /// fixed-shape POD, not because a viewport bands on both axes at once.</summary>
-    public readonly float BandMain => Orientation == 1 ? BandX : BandY;
-    public float ZoomFactor { get; private set; }        // committed content scale (1 = unzoomed)
-    /// <summary>Signed live coast/chase velocity along <see cref="Orientation"/> (DIP/s, offset space) — the kernel's
-    /// current physics velocity for this body (drag/ballistic/driven all funnel through here). Replaces the old
-    /// dual-purpose <c>FlingVelocity</c> intent column; this is a RESULT, not something a caller seeds.</summary>
-    public float Velocity { get; private set; }
-    // Live CONTENT speed (DIP/s, unsigned) of the composed -(offset + band) transform, written every kernel tick from
-    // the advance that tick actually committed. Read by SceneRecorder to soften text in proportion to how fast the
-    // list is really moving (see TextMotionSoftness).
-    public float LiveSpeedDip { get; private set; }
-    /// <summary>What kind of motion is moving this body right now (scroll-v3-plan §2.1 <c>FluentGpu.Scroll.ScrollActivity</c>:
-    /// Idle/Drag/Ballistic/Driven). Overscroll is NOT a state here — it's <see cref="BandMain"/> ≠ 0 under any activity.</summary>
-    public FluentGpu.Scroll.ScrollActivity Activity { get; private set; }
-    /// <summary>Auxiliary sub-mode bits on <see cref="Activity"/> (scroll-v3-plan §2.1 <c>ScrollActivityFlags</c>:
-    /// Programmatic/Wheel/Chained/Banding/Bouncing/Autoscroll).</summary>
-    public FluentGpu.Scroll.ScrollActivityFlags ActivityFlags { get; private set; }
-    /// <summary>Derived each <see cref="ApplyMotion"/> call: true while this viewport is in USER-driven motion this
-    /// write (<see cref="Activity"/> != Idle, not Programmatic, and the write actually moved something). Replaces the
-    /// old FSM-computed field of the same name — the derivation lives at the one chokepoint instead of the deleted
-    /// ScrollIntegrator. SceneRecorder's self-blur (DoF) defer keys off this.</summary>
-    public bool UserScrollActive { get; private set; }
-    public float LastReleaseVelocity { get; private set; }   // the LIFT velocity of the most recent contact gesture on
-                                                              // this viewport (px/s, signed, offset space) — a release
-                                                              // RECORD, not physics (PagedShelf's directional commit).
-    /// <summary>The frame index (SceneScrollSink.FrameIndex, stamped into the write token) of the most recent
-    /// ApplyMotion call that actually moved this body. <see cref="ScrollBarChromeTable"/>'s "moved this frame" test is
-    /// <c>LastMovedFrame == currentFrame</c> — chrome never reads Offset/Band itself (scroll-v3-plan §4).</summary>
-    public uint LastMovedFrame { get; private set; }
+    // ── RESULT columns — written by the host's per-frame scroll step (AppHost.RunScrollFrame) from the plan. ──
+    /// <summary>The displayed main-axis content offset this UI frame (DIP, content coordinates, double — positions
+    /// stay double until the one narrowing cast into a translate relative to <see cref="WindowOrigin"/>).</summary>
+    public double Offset;
+    /// <summary>Signed plan velocity at this frame's present time (DIP/s along the scroll axis).</summary>
+    public double Velocity;
+    /// <summary>Motion classification from the render poser's feedback (design §7).</summary>
+    public FluentGpu.Scroll.Runtime.ScrollMotionState Motion;
+    /// <summary>Committed pinch-zoom factor (1 = unzoomed). Written by the input dispatcher's pinch session.</summary>
+    public float ZoomFactor;
 
-    /// <summary>The ONE chokepoint that writes the result columns above (scroll-v3-plan §3.1 "Token"). Only
-    /// <c>FluentGpu.Scroll.SceneScrollSink.Apply</c> can construct a valid token, and only for the duration of one
-    /// <c>IScrollSink.Apply</c> call — see <c>SceneScrollSink.ScrollWriteToken</c>. Zero-alloc, AggressiveInlining in
-    /// Release (the token collapses to an empty ref struct there).</summary>
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    public void ApplyMotion(in FluentGpu.Scroll.SceneScrollSink.ScrollWriteToken token, in FluentGpu.Scroll.ScrollWrite w)
-    {
-#if DEBUG || FLUENTGPU_DIAG
-        if (!token.IsValid)
-            throw new System.InvalidOperationException("ScrollState.ApplyMotion: token is only valid inside SceneScrollSink.Apply — result columns are the kernel's alone to write (scroll-v3-plan §3.1).");
-#endif
-        OffsetX = w.OffsetX; OffsetY = w.OffsetY;
-        BandX = w.BandX; BandY = w.BandY;
-        ZoomFactor = w.Zoom;
-        Velocity = w.VelocityMain;
-        LiveSpeedDip = w.VisualSpeedMain;
-        Activity = w.Activity;
-        ActivityFlags = w.Flags;
-        bool moved = w.Moved != default;
-        UserScrollActive = w.Activity != FluentGpu.Scroll.ScrollActivity.Idle
-            && (w.Flags & FluentGpu.Scroll.ScrollActivityFlags.Programmatic) == 0
-            && moved;
-        LastReleaseVelocity = w.LastReleaseVelocity;
-        if (moved) LastMovedFrame = token.FrameIndex;
-    }
+    /// <summary>The X offset the rest of the engine reads (0 for a vertical scroller).</summary>
+    public readonly float OffsetX => Orientation == 1 ? (float)Offset : 0f;
+    /// <summary>The Y offset the rest of the engine reads (0 for a horizontal scroller).</summary>
+    public readonly float OffsetY => Orientation == 0 ? (float)Offset : 0f;
+    /// <summary>True while this viewport is in USER-driven motion (wheel/drag/fling/thumb, not settled).</summary>
+    public readonly bool UserScrollActive => Motion.UserDriven;
 
-    // ── config/geometry (unchanged writers — layout/reconciler/virtualizer, per scroll-v3-plan §3.1) ──
+    // ── coverage (virtualizer-owned): what the realized rows cover, in content coordinates ──
+    /// <summary>The content offset the realized rows are arranged relative to (<c>OffsetOf(WindowOriginIndex)</c> for a
+    /// virtual list, 0 for a plain scroller). Row main-axis positions are <c>OffsetOf(i) − WindowOrigin</c> — small
+    /// floats (<see cref="FluentGpu.Scroll.Runtime.Virtualizer.MaxLocalExtent"/>).</summary>
+    public double WindowOrigin;
+    /// <summary>The row <see cref="WindowOrigin"/> is the offset of — kept across window shifts while the window stays
+    /// within <see cref="FluentGpu.Scroll.Runtime.Virtualizer.MaxLocalExtent"/> of it
+    /// (<see cref="FluentGpu.Scroll.Runtime.Virtualizer.ArrangeOriginIndex"/>), so retained rows keep their boxes.</summary>
+    public int WindowOriginIndex;
+    /// <summary>Realized coverage start (content coordinates) — 0 for a plain scroller.</summary>
+    public double CoverStart;
+    /// <summary>Realized coverage end (content coordinates) — the content extent for a plain scroller.</summary>
+    public double CoverEnd;
+    /// <summary>The main-axis extent source the virtualizer plans against (null for a plain scroller).</summary>
+    public FluentGpu.Scroll.Extent.IExtentSource? Extent;
+
+    // ── config/geometry (writers: layout / reconciler / virtualizer) ──
     public float ContentW, ContentH;      // Layout-published full content extent (DIP)
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
-    public int PrevArrangedFirst;         // the realized row window [first..last] the PREVIOUS virtual arrange saw. A row outside
-    public int PrevArrangedLast;          // it is FRESH this arrange: its first measure can be transiently short (deferred inner
-                                          // content lands a frame later), so a fresh row ABOVE the anchor must not push that
-                                          // transient into the extent table — the dip+restore re-pin pair was the felt scroll
-                                          // jitter. Default 0/-1 = empty window (a mount treats every row as fresh).
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
-    /// <summary>The scroller's line height in DIP for Windows-style wheel notches (<c>WheelScrollLines × LineDip</c> per
-    /// notch — <c>ScrollFeel.PerNotchDip(viewportExtent, lineDip)</c>); 0 = no hint, the router falls back to the
-    /// viewport rule (<c>max(WheelNotchMinDip, WheelNotchViewportFrac·viewport)</c>). Written by the reconciler from
-    /// <c>Element.ScrollLineDip</c> (a <c>Virtual.List</c> stamps its item extent); a config column, never kernel-owned.</summary>
+    /// <summary>The scroller's row pitch in DIP (a <c>Virtual.List</c> stamps its item extent; 0 = no hint). Written
+    /// by the reconciler from <c>Element.ScrollLineDip</c>; a config column.</summary>
     public float LineDip;
     // Pinch-zoom (WinUI ScrollPresenter ZoomFactor; opt-in like ScrollingZoomMode — default Disabled). When Zoomable, a
     // SECOND touch contact over this viewport scales the content about the gesture midpoint (Input owns ZoomFactor; it is
-    // applied as a TRANSFORM-only term composed with the -offset translation on the ContentNode, never a relayout). The
-    // committed factor scales the content extent the offset clamps against (Content*Zoom − Viewport), so a zoomed-in pan
-    // reaches the full magnified content. Defaults: factor 1, Min 0.1 / Max 10.0 (ScrollPresenter.h:63-64).
+    // applied as a TRANSFORM-only term composed with the -offset translation on the ContentNode, never a relayout).
     public bool  Zoomable;                // the viewport opts into pinch-zoom (WinUI ScrollingZoomMode.Enabled)
     public float MinZoom, MaxZoom;        // zoom clamp bounds (ScrollPresenter s_defaultMin/MaxZoomFactor = 0.1 / 10.0)
     // ── Snap points (WinUI ScrollPresenter Mandatory snap-point model — controls\dev\ScrollPresenter\SnapPoint.cpp).
-    // A touch fling retargets its friction decay to land EXACTLY on the nearest applicable snap value (the kernel's
-    // ScrollPhysics.SnapTarget — ported from this file's old ScrollSnap — computes the natural rest from v0 over the
-    // decay integral, picks the snap per the zone rules, then re-solves the velocity so the SAME decay curve lands
-    // there). POD, per-viewport: a uniform
-    // interval (the WinUI RepeatedScrollSnapPoint, e.g. a LoopingSelector item row) and/or an explicit sorted list (the
-    // WinUI ScrollSnapPoint irregular case). Both empty (SnapInterval ≤ 0 ∧ SnapPoints null) ⇒ no snapping, the plain
-    // fling. The snap math is "Mandatory" (no applicable-range gaps): every value falls in some snap point's zone, the
-    // zone boundary between two adjacent points being their midpoint (SnapPoint.cpp Influence(), :453/:474). Snapping
-    // applies to flings only (a wheel/keyboard/programmatic offset is hard-clamped, never snapped — matching the clamp
-    // contract); the offset axis is Orientation's.
-    // WRITER CONTRACT: these four fields are DECLARATION-GATED. The reconciler writes them ONLY when the element carries a
-    // non-null Snap (ScrollEl.Snap / VirtualListEl.Snap ⇒ SnapSpec.ApplyTo) — for every other viewport the patch never
-    // touches them, so a control/probe that writes SnapInterval onto the scene after mount keeps it across every
-    // reconcile. A declaring element OWNS them and re-asserts on each patch; a control whose interval is a live layout
-    // measure (a page stride that re-fits on resize) therefore writes the scene directly instead of declaring, because a
-    // frozen-at-mount options record cannot re-declare a width-reactive value.
+    // A touch fling lands on the nearest applicable snap value (FluentGpu.Scroll.Motion.SnapTargets resolves it at
+    // fling-authoring time). Snapping applies to flings only (wheel/keyboard/programmatic offsets are hard-clamped).
+    // WRITER CONTRACT: DECLARATION-GATED — the reconciler writes these ONLY when the element carries a non-null Snap
+    // (SnapSpec.ApplyTo); a control writing SnapInterval onto the scene after mount keeps it across every reconcile.
     public float SnapInterval;            // uniform snap spacing (DIP) on the scroll axis; ≤ 0 = no interval snapping
     public float SnapStart;               // first snap value / lower bound of the repeated zone (DIP; default 0)
     public float SnapEnd;                 // upper bound of the repeated zone (DIP); ≤ SnapStart = open (clamp-max bound)
-    public float[]? SnapPoints;           // optional explicit sorted snap values (the irregular case); null = none. The
-                                          // managed ref is fine in the dict-backed side-table (like Layout / GridSpec.Columns).
-    // Rubber-band overscroll (WinUI manipulation overpan) is the RESULT-column pair BandX/BandY declared above — the
-    // kernel is the sole writer via ApplyMotion, same chokepoint as Offset. Nothing config-level lives here anymore.
+    public float[]? SnapPoints;           // optional explicit sorted snap values (the irregular case); null = none.
 
-    // Scroll-edge cues (controls.md §8.3): a surface-colour gradient fade (+ optional chevron) at any edge with more
-    // content past it, so a clipped list signals there is more below the fold. Reconciler-resolved from the
-    // ScrollEdgeCues prop (Auto already resolved to ScrollEdgeCuesDefaults.Default), read at record time by
-    // SceneRecorder.EmitScrollEdgeCues. 0 = no cue (None / a synthetic scroller the reconciler never touched).
-    public byte EdgeCueConfig;            // bit0 = fade, bit1 = chevron
-    public const byte EdgeCueFadeBit = 1, EdgeCueChevronBit = 2;
-    public readonly bool EdgeCueFade => (EdgeCueConfig & EdgeCueFadeBit) != 0;
+    // Scroll-edge cue chevrons (controls.md §8.3, ScrollEdgeCues.FadeAndChevron): a small directional glyph at any edge
+    // with more content past it. The cue's FADE is the analytic edge feather (AutoEdgeFade below), resolved by the
+    // reconciler (ScrollEdgeCueResolver); only the chevron is painted, by SceneRecorder.EmitScrollEdgeChevrons. 0 = none.
+    public byte EdgeCueConfig;            // bit1 = chevron
+    public const byte EdgeCueChevronBit = 2;
     public readonly bool EdgeCueChevron => (EdgeCueConfig & EdgeCueChevronBit) != 0;
     // Auto edge fade (premium alpha-mask cue): the recorder feathers only the edges that currently overflow, ramped by
     // the scroll offset. Set by the reconciler from ScrollEl/VirtualListEl.AutoEdgeFade. Band 0 = off.
     public bool  AutoEdgeFade;
     public float AutoEdgeFadeBand;        // DIP
-    // Programmatic bring-into-view spring shape (zeta/omega/settle velocity/halflife) is now a FluentGpu.Scroll.ScrollInput
-    // ScrollTo/ScrollBy argument (C/D/E, halflife via B) posted per-call, not a per-viewport latch here — the kernel
-    // body carries the live chase state (scroll-v3-plan §2.1/§3.2).
-    // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide FadeT
+    // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;
     public bool  SuppressBar;             // never draw the conscious scrollbar (paged shelves nav by pager, not the bar)
-    public int   LoadingBarSuppressors;   // number of live descendant skeleton regions currently loading. This is
-                                          // ownership-counted: a region may unmount while pending, and sibling regions
-                                          // may resolve independently. A plain bool can therefore latch forever or clear
-                                          // too early. Recorder suppression is LoadingBarSuppressors > 0.
-    // FadeT/ExpandT/PointerOver/PointerOverScrollbar/IdleMs moved to FluentGpu.Scroll.ScrollBarChromeTable
-    // (scroll-v3-plan §3.1/§4) — chrome is a UI-side ticker, never a motion writer. ScrollMoved (the old
-    // synchronous-write reveal pulse) is subsumed by LastMovedFrame above; UserScrollActive is now a RESULT column
-    // (see the group at the top of this struct) derived once inside ApplyMotion instead of by a separate FSM pass.
-
-    // ── Predicate channel (generic scroll-binding model — design/plans/generic-hookable-scroll-engine-design.md §3.5/§7).
-    // A fixed bitfield recomputed AFTER the integrator settles, struct-compared to ScrollFlagsPrev so a managed OnFlag
-    // callback / flag-triggered time-animation fires only on an edge flip (CSS scroll-state container queries). Different
-    // update cadence from the continuous progress channel (every frame) is what keeps both paths zero-alloc.
-    public byte ScrollFlags;              // current frame's scroll-state vector
-    public byte ScrollFlagsPrev;          // last frame's vector — struct-compare gate
-    public const byte StuckTopBit = 1, SnappedBit = 4, ScrollableUpBit = 8,
-                      ScrollableDownBit = 16, ScrolledFwdBit = 32, MovingNowBit = 64, IdleExpiredBit = 128;
-    // StuckBottomBit (was 2) deleted (scroll-v3-plan §3.1) — dead bind channel per the plan §1 deletion list.
-    // Distance-latched scroll direction: OffsetPrev advances to Offset only when |Offset − OffsetPrev| crosses a px
-    // hysteresis, so ScrolledFwd is geometry-derived and dt-invariant (no raw per-frame delta that scales with dt).
-    public float OffsetPrev;              // last latched offset (direction reference)
-    public bool  DirLatched;              // OffsetPrev has been seeded (the first sample never spuriously flips the dir bit)
-
-    // Nested-scroll chaining (the overscroll-behavior analog) is now Auto-only, always (scroll-v3-plan §2.2 "Policy is
-    // always Auto — ScrollChainingMode deleted"): the kernel's drag-time chain routing needs no per-viewport mode.
+    public int   LoadingBarSuppressors;   // number of live descendant skeleton regions currently loading (ownership-counted)
 
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
     public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent
-                                          // estimate-then-correct + anchoring); null ⇒ the legacy Fenwick extent-table path
-    public int   Overscan;                // rows realized beyond the viewport on each side
+                                          // estimate-then-correct + anchoring); null ⇒ the MeasuredExtent path
     public int   PersistentPrefixCount;   // leading logical items retained before the recyclable [First,Last) window
+    public bool  MeasureAll;              // VirtualListEl.MeasureAll: the realized window is every item (bounded by ItemCount)
     public float ItemClipTopInset;         // viewport-space top clip for recyclable items; NaN = disabled
     public float ItemClipTopFadeBand;      // top alpha feather for recyclable items; 0 = disabled
     // One contiguous expand/collapse band over the flat virtual child ladder. Progress 0 = collapsed, 1 = expanded;
@@ -453,36 +371,33 @@ public struct ScrollState
     public float DisclosureTop;
     public float DisclosureExtent;
     public float DisclosureT;
-    public int   FirstRealized, LastRealized;
-    public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
-    public NodeHandle ContentNode;        // the single content child carrying the -ScrollOffset LocalTransform
+    public int   FirstRealized, LastRealized;   // the realized window [First, Last) (exclusive end)
+    public NodeHandle ContentNode;        // the single content child carrying the content translate
 
-    // Scroll anchoring (variable path): keep the topmost-visible item visually fixed across extent corrections.
+    /// <summary>The first fully visible row — the row a measured-extent correction anchors against (design §6).</summary>
     public int   AnchorIndex;
-    public StringId AnchorKey;
-    public float AnchorViewportDelta;
 
-    // ── Scroll-position restoration (per content-identity, survives KeepAlive eviction). The reconciler keys a global
-    // ScrollMemory cache by (ScrollScope, ScrollKey): ScrollKey is the app-supplied content identity (a route key), and
-    // ScrollScope is the engine-computed enclosing KeepAlive-slot key (so the SAME content open in two tabs never shares a
-    // saved position). On mount / content-identity change the reconciler posts a FluentGpu.Scroll.ScrollInput.Restore
-    // command instead of latching Restore* fields here (scroll-v3-plan §3.2 Reconciler.cs:1921) — the kernel body keeps
-    // retrying it each Reclamp() until the real, taller content extent can hold it. Managed refs are fine here
-    // (dict-backed, like SnapPoints/Layout). The whole point of the cache living off-node is to outlive the freed
-    // subtree on eviction.
+    // ── Scroll-position restoration (per content-identity). The host saves a viewport's offset under ScrollKey when
+    // its handle is destroyed and calls ScrollHandle.Restore on the next mount with the same key (design §9).
     public string? ScrollKey;             // content identity (app-supplied); null ⇒ no restoration for this viewport
-    public string? ScrollScope;           // enclosing KeepAlive-slot key (engine-computed at mount); composes the cache key
 
-    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, ItemClipTopInset = float.NaN, DisclosureFirst = -1, DisclosureT = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
+    public static ScrollState Default => new() { ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, ItemClipTopInset = float.NaN, DisclosureFirst = -1, DisclosureT = float.NaN, Motion = FluentGpu.Scroll.Runtime.ScrollMotionState.Idle };
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });
+
+    /// <summary>The main-axis viewport extent.</summary>
+    public readonly float ViewportMain => Orientation == 1 ? ViewportW : ViewportH;
+    /// <summary>The main-axis content extent.</summary>
+    public readonly float ContentMain => Orientation == 1 ? ContentW : ContentH;
+    /// <summary>The main-axis clamp maximum: <c>max(0, ContentMain·Zoom − ViewportMain)</c>.</summary>
+    public readonly float MaxOffset => MathF.Max(0f, ContentMain * (ZoomFactor > 0f ? ZoomFactor : 1f) - ViewportMain);
 }
 
 /// <summary>
 /// The DECLARATIVE snap-point spec: one POD an element (<c>ScrollEl.Snap</c> / <c>VirtualListEl.Snap</c>) or a control
 /// (<c>ScrollOptions.Snap</c>) hands the reconciler to configure a viewport's <see cref="ScrollState"/> snap fields.
-/// Mirrors the two WinUI kinds 1:1 (the math is <c>FluentGpu.Scroll.ScrollPhysics.SnapTarget</c>'s): a uniform <see cref="Interval"/> (the
+/// Mirrors the two WinUI kinds 1:1 (the math is <c>FluentGpu.Scroll.Motion.SnapTargets</c>'s): a uniform <see cref="Interval"/> (the
 /// <c>RepeatedScrollSnapPoint</c>) and/or an explicit ascending <see cref="Points"/> list (the irregular
 /// <c>ScrollSnapPoint</c>). Both empty ⇒ no snapping.
 /// <para>Snapping applies to FLINGS only — a wheel/keyboard/programmatic offset stays hard-clamped (the clamp contract),
@@ -506,13 +421,8 @@ public readonly record struct SnapSpec(float Interval, float Start = 0f, float E
 
     /// <summary>Write this declaration onto a viewport's snap fields. The single translation from spec → columns: the
     /// reconciler patch sites call it, and so does a control writing the scene directly, so the two paths can never
-    /// disagree about field semantics.
-    /// <para>Scroll-v3-plan §3.1: these four fields are config, not kernel state — <see cref="ApplyTo"/> only writes
-    /// <see cref="ScrollState"/>'s own columns here. Getting them INTO the kernel body (so a fling can actually snap
-    /// to them) is the layout's job: the reconciler/layout patch site that calls this also posts a
-    /// <c>FluentGpu.Scroll.ScrollInput.SetFrame</c> carrying the same interval/start/end/points on the
-    /// <c>ScrollFrameSpec</c> (§3.2) — <see cref="ApplyTo"/> has no scene/node handle to post that command itself, so
-    /// it stays a pure column writer and the SetFrame call site is the one that actually arms snapping.</para></summary>
+    /// disagree about field semantics. The host's fling authoring reads these columns directly
+    /// (<c>FluentGpu.Scroll.Motion.SnapTargets</c>) — there is no second copy to arm.</summary>
     public readonly void ApplyTo(ref ScrollState sc)
     {
         sc.SnapInterval = Interval > 0f ? Interval : 0f;
@@ -521,12 +431,6 @@ public readonly record struct SnapSpec(float Interval, float Start = 0f, float E
         sc.SnapPoints = Points is { Length: > 0 } p ? p : null;
     }
 }
-
-// Snap-point evaluation (WinUI ScrollPresenter "Mandatory" snap points, SnapPoint.cpp) — the old static ScrollSnap
-// class that lived here is DELETED (scroll-v3-plan §3.1): its only caller was Animation/ScrollIntegrator.cs, which
-// this phase deletes outright, and nothing else in Scene/Layout referenced it (verified). The math is ported
-// verbatim into FluentGpu.Scroll.ScrollPhysics.SnapTarget (WP-A, §2 kernel shape) — SnapSpec above is unchanged; only
-// the evaluator moved out of the Scene assembly boundary into the portable kernel.
 
 /// <summary>
 /// Grid layout spec for a grid container node (sparse side-table, O(grids)). The reconciler writes it from a
@@ -538,6 +442,7 @@ public struct GridSpec
     public float ColGap, RowGap;
     public float RowHeight;       // NaN ⇒ auto (max child height per row)
     public float MinColWidth;     // > 0 ⇒ auto-fill: ignore Columns; pack as many equal 1fr tracks as fit at this min width
+    public int MaxColumns;        // auto-fill only: cap on the packed column count (0 = unlimited); the capped tracks still fill the width
 }
 
 /// <summary>
@@ -692,16 +597,22 @@ public struct InteractionInfo
                                                     // self-hit mask: the implied ClickBit already covers hit-test /
                                                     // press / hover / press-target. This is the ONE bit above 15 —
                                                     // hence HandlerMask is uint; clear it as `~(uint)ClickRequestsContextBit`.
+    public const uint RowCellsBit = 1u << 21;       // ListRowEl.OnCellClick is set (scroll-rework Wave 0.E): the node's
+                                                    // RowPaint carries per-cell hit rects; hit-testable ONLY over a cell
+                                                    // rect (the gaps between cells fall through to the row's own
+                                                    // click/select handler) — the exact SpanLinksBit shape, generalized
+                                                    // from shaped-text hit rects to plain row-local cell RectFs.
 
     /// <summary>Any handler bit that makes a node a PRESS TARGET (interactive, though not necessarily focusable). A press
     /// on such a node is NOT an inert "background" press — the light-dismiss/modal scrim (Click/Pressed), an OnDrag/OnPointer
-    /// node (Pointer), a CanDrag handle (Drag), a selectable label (SelectableText), a hyperlink span (SpanLinks), a
-    /// NumberBox wheel-stepper (Wheel), a UseGesture node (Gesture). Excludes the pure MARKER bits (Key/Char/Focus/Repeat/
-    /// Cursor/NoEnterActivate/NoPointerFocus) that don't make a node a press target. Consumed by InputDispatcher's
-    /// clear-focus-on-inert-background-press rule (input-a11y §8). Note: scroll-viewport-ness is NOT a HandlerMask bit
-    /// (it lives in ScrollState/NodeFlags.Scrollable) — the touch press site additionally excludes a pan candidate.</summary>
-    public const ushort AnyInteractiveMask =
-        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit;
+    /// node (Pointer), a CanDrag handle (Drag), a selectable label (SelectableText), a hyperlink span (SpanLinks), a row
+    /// cell (RowCells), a NumberBox wheel-stepper (Wheel), a UseGesture node (Gesture). Excludes the pure MARKER bits
+    /// (Key/Char/Focus/Repeat/Cursor/NoEnterActivate/NoPointerFocus) that don't make a node a press target. Consumed by
+    /// InputDispatcher's clear-focus-on-inert-background-press rule (input-a11y §8). Note: scroll-viewport-ness is NOT a
+    /// HandlerMask bit (it lives in ScrollState/NodeFlags.Scrollable) — the touch press site additionally excludes a pan
+    /// candidate. Widened to uint (was ushort) so it can also carry <see cref="RowCellsBit"/> (bit 21).</summary>
+    public const uint AnyInteractiveMask =
+        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit | RowCellsBit;
 
     /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
     /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>

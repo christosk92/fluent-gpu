@@ -20,7 +20,12 @@ public static class Segmented
     public const string PartRoot = "Root";
     public const string PartItem = "Item";
     public const string PartContent = "Content";
+    public const string PartLabel = "Label";
     public const string PartSelectionPill = "SelectionPill";
+    /// <summary>The 3px pill-row underneath the selected item's content (the whole row, not just the pill itself —
+    /// see <see cref="PartSelectionPill"/>). A caller restyles or hides the row via this part, e.g. a page-title pivot
+    /// preset that drops the pill in favour of larger type, or a compact-band preset that shrinks it.</summary>
+    public const string PartSelectionPillSlot = "SelectionPillSlot";
 
     public sealed record Style
     {
@@ -46,6 +51,14 @@ public static class Segmented
         public ColorF DisabledForeground { get; init; }
         public ColorF SelectionPill { get; init; }
         public ushort SelectedFontWeight { get; init; } = 400;
+        /// <summary>The root's item-row <c>Gap</c> (E13, Wavee Home redesign) — a token bundle value, not a per-item
+        /// margin. Default 0f is today's behaviour: items sit flush and the selected item's own fill/border carry
+        /// the visual separation.</summary>
+        public float ItemGap { get; init; } = 0f;
+        /// <summary>Each item root's own <c>Padding</c> (E19, Wavee Home redesign) — lets a preset (e.g. the compact
+        /// facet band, `(12,0,12,0)`) give items horizontal breathing room independent of <see cref="ItemMinWidth"/>.
+        /// Default <c>default</c> (all-zero <see cref="Edges4"/>) is today's behaviour: no padding on the item root.</summary>
+        public Edges4 ItemPadding { get; init; } = default;
     }
 
     public sealed record SegmentedOptions
@@ -53,8 +66,25 @@ public static class Segmented
         /// <summary>Select the first enabled item when the supplied/owned index has no initial selection.</summary>
         public bool AutoSelection { get; init; } = true;
         public bool IsEnabled { get; init; } = true;
+        /// <summary>Left/Right wrap the roving focus stop from the last enabled item to the first, and vice versa,
+        /// instead of stopping at the edge. Default off matches today's clamped behaviour.</summary>
+        public bool WrapFocus { get; init; } = false;
+        /// <summary>The item's accessibility role. Default <see cref="AutomationRole.RadioButton"/> (today's
+        /// behaviour — a segmented control is a mutually-exclusive choice group). Set <see cref="AutomationRole.Tab"/>
+        /// for a facet/pivot preset presented as a tablist.</summary>
+        public AutomationRole ItemRole { get; init; } = AutomationRole.RadioButton;
         public Style? Style { get; init; }
         public TemplateParts? Parts { get; init; }
+        /// <summary>Fires on hover EDGES only (E13, Wavee Home redesign) — once with the item index when the pointer
+        /// enters an item, once with -1 when it leaves the control's item row (never a continuous stream of moves,
+        /// never a duplicate fire for the same edge). Null (default) wires nothing — byte-identical to pre-E13
+        /// output.</summary>
+        public Action<int>? OnItemHoverChanged { get; init; }
+        /// <summary>Fires on focus EDGES only (E13, Wavee Home redesign) — once with the item index when an item
+        /// gains keyboard/programmatic focus, once with -1 when focus leaves it. This tracks the roving FOCUS stop,
+        /// not selection (arrows move focus without selecting — see <see cref="Segmented"/>'s keyboard model). Null
+        /// (default) wires nothing — byte-identical to pre-E13 output.</summary>
+        public Action<int>? OnItemFocusChanged { get; init; }
     }
 
     static readonly SegmentedOptions DefaultOptions = new();
@@ -87,7 +117,8 @@ public static class Segmented
     {
         var o = options ?? DefaultOptions;
         return Embed.Comp(
-            new Props(items, selectedIndex, onChange, o.AutoSelection, o.IsEnabled, o.Style ?? DefaultStyle, o.Parts),
+            new Props(items, selectedIndex, onChange, o.AutoSelection, o.IsEnabled, o.WrapFocus, o.ItemRole,
+                o.Style ?? DefaultStyle, o.Parts, o.OnItemHoverChanged, o.OnItemFocusChanged),
             () => new SegmentedCore());
     }
 
@@ -97,8 +128,12 @@ public static class Segmented
         Action<int>? OnChange,
         bool AutoSelection,
         bool IsEnabled,
+        bool WrapFocus,
+        AutomationRole ItemRole,
         Style Style,
-        TemplateParts? Parts);
+        TemplateParts? Parts,
+        Action<int>? OnItemHoverChanged,
+        Action<int>? OnItemFocusChanged);
 }
 
 internal sealed class SegmentedCore : Component
@@ -119,6 +154,12 @@ internal sealed class SegmentedCore : Component
         var selectedIndex = p.SelectedIndex ?? own;
         var handles = UseRef(new List<NodeHandle>()).Value;
         int selected = selectedIndex.Value;
+
+        // E13: hover/focus edge tracking. Each item's own OnHoverMove/OnFocusChanged fires continuously (every
+        // pointer move within it; every focus transition Windows reports) — these refs dedupe to a single fire per
+        // EDGE (enter/gain and leave/lose), so a caller never sees a duplicate index or a stream of moves.
+        var hoverRef = UseRef(-1);
+        var focusRef = UseRef(-1);
 
         while (handles.Count < count) handles.Add(NodeHandle.Null);
         if (handles.Count > count) handles.RemoveRange(count, handles.Count - count);
@@ -149,6 +190,11 @@ internal sealed class SegmentedCore : Component
                 Keys.End => FirstEnabled(p, count - 1, -1),
                 _ => -1,
             };
+            if (target < 0 && p.WrapFocus)
+            {
+                if (args.KeyCode == Keys.Left) target = FirstEnabled(p, count - 1, -1);
+                else if (args.KeyCode == Keys.Right) target = FirstEnabled(p, 0, +1);
+            }
             if (target < 0) return;
             args.Handled = true;
             Focus(target);
@@ -173,6 +219,35 @@ internal sealed class SegmentedCore : Component
                 if (index < handles.Count) handles[index] = h;
             };
 
+            // E13: only wired when the caller supplies a callback — no options ⇒ the pre-E13 tree (gate.segmented.byte-identical).
+            Action<Point2>? onHoverMove = p.OnItemHoverChanged is null ? null : _ =>
+            {
+                if (hoverRef.Value == index) return;
+                hoverRef.Value = index;
+                p.OnItemHoverChanged(index);
+            };
+            Action? onPointerExit = p.OnItemHoverChanged is null ? null : () =>
+            {
+                if (hoverRef.Value != index) return;
+                hoverRef.Value = -1;
+                p.OnItemHoverChanged(-1);
+            };
+            Action<bool>? onFocusChanged = p.OnItemFocusChanged is null ? null : focused =>
+            {
+                if (focused)
+                {
+                    if (focusRef.Value == index) return;
+                    focusRef.Value = index;
+                    p.OnItemFocusChanged(index);
+                }
+                else
+                {
+                    if (focusRef.Value != index) return;
+                    focusRef.Value = -1;
+                    p.OnItemFocusChanged(-1);
+                }
+            };
+
             var contentChildren = new List<Element>(2);
             if (!item.Icon.IsNone)
                 contentChildren.Add(IconView.Render(
@@ -180,7 +255,7 @@ internal sealed class SegmentedCore : Component
                     p.Style.IconSize,
                     foreground,
                     disabledColor: p.Style.DisabledForeground));
-            contentChildren.Add(new TextEl(item.Content)
+            contentChildren.Add(p.Parts.Apply(Segmented.PartLabel, new TextEl(item.Content)
             {
                 Size = p.Style.FontSize,
                 Color = foreground,
@@ -188,7 +263,7 @@ internal sealed class SegmentedCore : Component
                 PressedColor = foreground,
                 DisabledColor = p.Style.DisabledForeground,
                 Weight = (ushort)(isSelected ? p.Style.SelectedFontWeight : 400),
-            });
+            }));
 
             var content = p.Parts.Apply(Segmented.PartContent, new BoxEl
             {
@@ -209,7 +284,7 @@ internal sealed class SegmentedCore : Component
                 Fill = p.Style.SelectionPill,
                 Animate = PillTransition,
             };
-            var pillSlot = new BoxEl
+            var pillSlot = p.Parts.Apply(Segmented.PartSelectionPillSlot, new BoxEl
             {
                 Direction = 0,
                 Height = 3f,
@@ -217,7 +292,7 @@ internal sealed class SegmentedCore : Component
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
                 Children = isSelected ? [p.Parts.Apply(Segmented.PartSelectionPill, pill)] : [],
-            };
+            });
 
             var root = new BoxEl
             {
@@ -225,6 +300,7 @@ internal sealed class SegmentedCore : Component
                 Grow = 1f,
                 MinWidth = p.Style.ItemMinWidth,
                 Height = p.Style.Height - 2f * p.Style.Padding.Top,
+                Padding = p.Style.ItemPadding,
                 AlignItems = FlexAlign.Stretch,
                 Corners = CornerRadius4.All(p.Style.ItemCornerRadius),
                 Fill = isSelected ? p.Style.SelectedBackground : ColorF.Transparent,
@@ -239,11 +315,14 @@ internal sealed class SegmentedCore : Component
                 Focusable = enabled,
                 TabStop = enabled && index == tabStop,
                 FocusVisualMargin = p.Style.FocusVisualMargin,
-                Role = AutomationRole.RadioButton,
+                Role = p.ItemRole,
                 IsEnabled = enabled,
                 OnClick = select,
                 OnKeyDown = a => OnItemKey(index, a),
                 OnRealized = capture,
+                OnHoverMove = onHoverMove,
+                OnPointerExit = onPointerExit,
+                OnFocusChanged = onFocusChanged,
                 Children = [content, pillSlot],
             };
             var styled = p.Parts.Apply(Segmented.PartItem, root);
@@ -252,7 +331,10 @@ internal sealed class SegmentedCore : Component
                 OnClick = select,
                 OnKeyDown = root.OnKeyDown,
                 OnRealized = TemplateParts.Chain(capture, styled.OnRealized),
-                Role = AutomationRole.RadioButton,
+                OnHoverMove = onHoverMove,
+                OnPointerExit = onPointerExit,
+                OnFocusChanged = onFocusChanged,
+                Role = p.ItemRole,
                 IsEnabled = enabled,
                 Focusable = enabled,
                 TabStop = root.TabStop,
@@ -263,7 +345,7 @@ internal sealed class SegmentedCore : Component
         var control = new BoxEl
         {
             Direction = 0,
-            Gap = 0f,
+            Gap = p.Style.ItemGap,
             Height = p.Style.Height,
             Padding = p.Style.Padding,
             Corners = CornerRadius4.All(p.Style.CornerRadius),

@@ -23,8 +23,9 @@ namespace FluentGpu.Rhi.D3D12;
 /// <see cref="ImagePipeline"/> binds the SRV via a descriptor table and samples the per-image sub-rect (a half-texel
 /// inset, so an image smaller than its cell/texture never bleeds). Texture/cell returns are DEFERRED behind the frame
 /// fence (a freed resource is reusable only once its last submission's actual GPU fence completes).
-/// <para><b>Two page flavours, one packer.</b> Discrete pages are DEFAULT-heap textures written by
-/// <c>CopyTextureRegion</c> out of a staging buffer (barriered <c>… → COPY_DEST → PSR</c> per flush). UMA pages are
+/// <para><b>Two page flavours, one packer.</b> Discrete pages are DEFAULT-heap simultaneous-access textures written by
+/// <c>CopyTextureRegion</c> on the COPY queue out of a staging buffer (never barriered — COMMON for life, the copy queue
+/// promotes and decays them). UMA pages are
 /// <c>ROW_MAJOR</c> textures on a <c>CUSTOM</c>(L0/WRITE_BACK) heap, mapped once at creation and written by a plain
 /// row-by-row memcpy, sampled straight out of <c>COMMON</c> by implicit promotion: no staging buffer, no
 /// <c>CopyTextureRegion</c>, and never a <c>COPY_DEST</c> transition — the barrier the Adreno UMD mishandles
@@ -43,6 +44,13 @@ namespace FluentGpu.Rhi.D3D12;
 /// beyond the cap releases the heap instead (the ring bridges the copy latency, it is not a cache), and a request above
 /// the largest bucket still gets a one-off heap released on retire (<c>Kind 3</c>), exactly as before. UMA never
 /// allocates a staging heap (pixels go straight into the CPU-visible texture), so the ring is inert there.</para>
+/// <para><b>Off-frame uploads (retained tiles §C).</b> The discrete copies ride their own COPY queue
+/// (<see cref="UploadQueue"/>): every image texture is created and kept in COMMON, the copy queue promotes it to
+/// COPY_DEST and it decays back, the frame's DIRECT queue samples it by implicit promotion — no barrier anywhere. An image
+/// is DRAWABLE only once its batch's fence completed (<see cref="UploadFencePolicy"/>, a compare, never a wait); until
+/// then the scene draws its placeholder (or the pixels it replaces, kept published until the new ones land) and the host
+/// keeps turning (<see cref="HasPendingUploads"/>). A baked derivative is written the same way by the COMPUTE queue
+/// (<see cref="BakedBlurCompositor"/>). A resident id is never rewritten in place: a re-stage takes a fresh placement.</para>
 /// </summary>
 internal sealed unsafe class ImageTextureStore : IDisposable
 {
@@ -67,6 +75,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public D3D12_RESOURCE_STATES State;       // actual state of Resource (atlas state lives on AtlasPage)
         public bool NeedsCopy, Live;
         public SmallImageHeapPool.Lease Placed;
+        public ulong Fence;                      // the side-queue batch writing it (0 = drawable once published)
+        public byte FenceQueue;                  // 0 none | 1 copy (upload) | 2 compute (baked derivative)
+        public ulong ComputeReadFence;           // the last compute batch that READS it (a bake source); 0 = none
+        public bool Derived;                     // a baked derivative (RGBA8 UAV texture from the derived pool)
     }
 
     private sealed class AtlasPage
@@ -109,12 +121,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public ImageAtlasCell Cell;             // kind 2: the packed cell to hand back to the packer
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
         public D3D12_RESOURCE_STATES State;
-    }
-
-    private struct UploadTransition
-    {
-        public ID3D12Resource* Resource;
-        public D3D12_RESOURCE_STATES Before;
+        public ulong SideFence;                 // a side-queue batch that may still write it (0 = none)
+        public byte SideQueue;                  // 1 copy | 2 compute
+        public ulong ComputeReadFence;          // a compute batch that may still read it (0 = none)
     }
 
     private ID3D12Device* _device;
@@ -157,8 +166,35 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private readonly Dictionary<int, Tex> _byId = new(64);
     private readonly List<int> _pendingCopies = new(32);
     private readonly Stack<int> _freeSlots = new();
+    // CANDIDATE FIX (INCIDENT 2026-09, defensive): a slot a Kind-0/Kind-4 retire hands back in ReclaimCompleted below
+    // is already fence-correct FOR THE RESOURCE (r.Fence is the last frame that could reference it, and the slot is
+    // only reachable once completedFence has passed that exact value — no different from the resource release
+    // right next to it). This is EXTRA slack specifically for the descriptor SLOT: a slot index can be read back out
+    // of a GPU-visible descriptor table copy made for a frame the recorder built from state that is already a step
+    // removed from "the resource's own last use" (opacity/blur/image-pipeline paths stamp descriptor-table copies
+    // with their OWN `_fenceValue + 1` reads, not this store's `r.Fence`), so a slot freed the instant its owning
+    // resource's fence clears could in principle be handed to a NEW image whose fresh SRV gets written into that
+    // table entry while an adjacent, unrelated in-flight frame still holds a copied descriptor-table pointer at the
+    // same slot for something else. `FluentGpu.Rhi.SlotQuarantinePolicy.InitialGenerations` (== the engine's own
+    // consume-gated quarantine, threading-render-seam.md §5.1) is the standard belt-and-suspenders slack the rest of
+    // the engine already applies to exactly this class of "safe by fence, still quarantine the reusable slot a bit
+    // longer" hazard (PathRealizationCache, AudioGraphHost — see their own references to this same constant). A slot
+    // sits in <see cref="_slotQuarantine"/> for that many additional <see cref="ReclaimCompleted"/> CALLS (each call
+    // is one render-thread "generation": either a real submitted frame's FlushUploads or a skip-turn's
+    // ReclaimCompletedUploads — both advance forward progress) before it becomes reusable via <see cref="_freeSlots"/>.
+    private readonly List<(int Slot, int GenerationsLeft)> _slotQuarantine = new(8);
     private readonly List<Retire> _retired = new();
-    private readonly List<UploadTransition> _uploadTransitions = new(32);
+    // A re-staged id whose new pixels are still on their side queue keeps its PRIOR (drawable) placement published here
+    // until they land — a cover never flashes to its placeholder between its blur-hash and its art.
+    private readonly List<(int Id, Tex Prior)> _replacing = new(8);
+    // Derivative placements reserved by the compute bake, keyed by token, until committed or abandoned.
+    private readonly List<(int Token, Tex T)> _reserved = new(2);
+    private int _nextReserveToken;
+    private UploadQueue? _copyQueue;
+    private UploadQueue? _computeQueue;
+    // Baked derivatives: RGBA8 unordered-access textures (the compute bake writes them directly), pooled by bucket.
+    private readonly Dictionary<int, Stack<Pooled>> _derivedPool = new();
+    private const int MaxFreeDerivedPerBucket = 2;
     private readonly List<AtlasPage> _pages = new();
     // Index-aligned with _pages: the packer hands out the page index, this class creates the resource for it.
     private ImageAtlasPacker _packer = null!;
@@ -201,7 +237,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private void AssertRenderThread() { if (_renderConfined) FluentGpu.Hosting.Threading.ThreadGuard.AssertRender(); }
 
     // O(1) census mirrors of the former AtlasPageCount/PooledTextureCount ENUMERATIONS. Under async the store mutates on
-    // the render thread while DiagResourceTotals (FG_MEM_DIAG) reads the census on another thread: a foreach over _pages
+    // the render thread while DiagResourceTotals (--fg mem) reads the census on another thread: a foreach over _pages
     // (torn Tex pointer) / _pool.Values (structural Dictionary add ⇒ InvalidOperationException) is unsafe. These ints are
     // maintained at every Tex-alloc/free (atlas pages) and free-stack push/pop (pool), read via Volatile.Read. Interlocked
     // is belt-and-suspenders — post-Step-1 both writers are render-side, but it costs ~nothing at these rare sites.
@@ -222,12 +258,18 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// idle frame whose DrawList is unchanged. The retire backlog (<see cref="HasRetireBacklog"/>) is deliberately
     /// NOT folded in here: it is fence-only maintenance (<see cref="ReclaimCompleted"/>), reclaimable on an elided
     /// frame via <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> without opening a command list.</summary>
-    public bool HasPendingUploads => _pendingCopies.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false);
+    public bool HasPendingUploads => _pendingCopies.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false)
+        || (_copyQueue?.HasInFlightAnyThread ?? false) || (_computeQueue?.HasInFlightAnyThread ?? false);
     /// <summary>True while resources evicted from residency are still waiting on their retire fence (queued by
-    /// <see cref="Free"/>/<see cref="RetirePlacement"/>, drained by <see cref="ReclaimCompleted"/>). Does NOT force a
-    /// submit on its own — an elided/idle frame reclaims it for free via
-    /// <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> instead of waking the render loop.</summary>
-    internal bool HasRetireBacklog => _retired.Count > 0;
+    /// <see cref="Free"/>/<see cref="RetirePlacement"/>, drained by <see cref="ReclaimCompleted"/>), OR a descriptor
+    /// slot has cleared its fence but is still sitting out <see cref="FluentGpu.Rhi.SlotQuarantinePolicy.InitialGenerations"/> generations in
+    /// <see cref="_slotQuarantine"/> before <see cref="_freeSlots"/> can reuse it (CANDIDATE FIX, INCIDENT 2026-09 —
+    /// see that field's doc). Both drain from the SAME call (<see cref="ReclaimCompleted"/>/
+    /// <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/>), so folding them together keeps this flag's
+    /// existing meaning — "there is still fence/generation-gated cleanup work outstanding" — accurate for BOTH kinds,
+    /// without adding a second flag callers would have to remember to check. Does NOT force a submit on its own — an
+    /// elided/idle frame reclaims it for free via ReclaimCompletedUploads instead of waking the render loop.</summary>
+    internal bool HasRetireBacklog => _retired.Count > 0 || _slotQuarantine.Count > 0;
     internal ulong PlacedHeapBytes => _smallImages?.HeapBytes ?? 0;
     internal ulong PlacedOccupiedBytes => _smallImages?.OccupiedBytes ?? 0;
     internal int PlacedResourceCreates => _smallImages?.ResourceCreateCount ?? 0;
@@ -271,6 +313,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         _device = device;
         _uma = unifiedMemory;
+        if (!_uma)
+        {
+            _copyQueue = new UploadQueue(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_COPY, "Image.CopyQueue");
+            _copyQueue.Init(device);
+        }
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.NumDescriptors = MaxSrv;
@@ -286,11 +333,41 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         // Query the texture allocation, not its upload footprint. Optional ROW_MAJOR descriptors may be rejected
         // here before CreateCommittedResource. In that case no pages are admitted; the packer's positive placeholder
         // is unreachable bookkeeping, never a measured allocation or a live census contribution.
-        var pageDesc = DescribeTexture(PageSize, PageSize, _uma);
+        var pageDesc = DescribeTexture(PageSize, PageSize, _uma, simultaneous: !_uma);
         ulong pageBytes = AllocationBytes(&pageDesc);
         _atlasAllocationKnown = pageBytes != 0;
         _packer = new ImageAtlasPacker(PageSize, _atlasAllocationKnown ? (long)pageBytes : 1,
             _uma ? ImageAtlasUpload.CpuWrite : ImageAtlasUpload.GpuCopy);
+    }
+
+    /// <summary>The compute queue baked derivatives are written on (its fences gate their readiness).</summary>
+    internal void AttachComputeQueue(UploadQueue queue) => _computeQueue = queue;
+
+    private bool SideDone(byte queue, ulong fence) => queue switch
+    {
+        1 => _copyQueue is null || _copyQueue.IsComplete(fence),
+        2 => _computeQueue is null || _computeQueue.IsComplete(fence),
+        _ => true,
+    };
+
+    /// <summary>Published AND its side-queue batch (if any) completed: the frame may sample it.</summary>
+    private bool Drawable(in Tex t) => t.Live && SideDone(t.FenceQueue, t.Fence);
+
+    private int FindReplacing(int id)
+    {
+        for (int i = 0; i < _replacing.Count; i++) if (_replacing[i].Id == id) return i;
+        return -1;
+    }
+
+    /// <summary>The placement the frame draws for <paramref name="id"/>: the current one when drawable, else the prior one
+    /// it is replacing.</summary>
+    private bool TryDrawable(int id, out Tex t)
+    {
+        if (_byId.TryGetValue(id, out t) && Drawable(in t)) return true;
+        int r = FindReplacing(id);
+        if (r >= 0) { t = _replacing[r].Prior; return true; }
+        t = default;
+        return false;
     }
 
     private static int BucketFor(int px) => px <= 64 ? 64 : px <= 128 ? 128 : px <= 256 ? 256 : px <= 512 ? 512 : px;
@@ -300,12 +377,18 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private bool WantAtlas(int bucket)
         => _atlasAllocationKnown && bucket <= ImageAtlasPacker.MaxPackedBucket && _packer.CanPack(bucket) && !(_uma && _umaPagesDisabled);
 
-    public bool Has(int id) => _byId.TryGetValue(id, out var t) && (t.Live || t.NeedsCopy);
+    /// <summary>True when the frame can sample pixels for <paramref name="id"/> now (<see cref="TryGet"/> succeeds).</summary>
+    public bool IsResident(int id) => TryDrawable(id, out _);
+
+    /// <summary>True when <paramref name="id"/> has pixels staged or on a side queue that have not landed yet — a frame that
+    /// drew its placeholder instead is not the final picture (the tile holding it re-rasters once they land).</summary>
+    public bool IsInFlight(int id)
+        => _byId.TryGetValue(id, out var t) && (t.NeedsCopy || (t.Live && !SideDone(t.FenceQueue, t.Fence)));
 
     /// <summary>The resolved SRV + the per-image sub-rect UV (origin+size in 0..1, half-texel inset) for the pipeline.</summary>
     public bool TryGet(int id, out D3D12_GPU_DESCRIPTOR_HANDLE srv, out RectF uv)
     {
-        if (_byId.TryGetValue(id, out var t) && t.Live)
+        if (TryDrawable(id, out var t))
         {
             srv = t.Srv;
             // Atlas pages and pooled textures are square, but >512px images use an exact-size standalone texture.
@@ -325,7 +408,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     internal bool TryGetBakeSource(int id, out ID3D12Resource* resource, out RectF uv)
     {
-        if (TryGet(id, out _, out uv) && _byId.TryGetValue(id, out var t))
+        if (TryGet(id, out _, out uv) && TryDrawable(id, out var t))
         {
             resource = t.Atlas ? _pages[t.Page].Tex : t.Resource;
             return resource != null;
@@ -334,83 +417,86 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return false;
     }
 
-    /// <summary>Copy a render-produced image out of a temporary shader-readable target into the ordinary atlas/pool
-    /// residency path. Pool growth may allocate once, but steady derivatives reuse the same placements as decoded art;
-    /// no committed output render target is created per bake.</summary>
-    internal bool TryAdoptBakedFrom(ID3D12GraphicsCommandList* cmd, int id, ID3D12Resource* source, int w, int h)
+    /// <summary>Reserve a PRIVATE placement (pool / standalone, never a shared atlas page — the copy queue may be writing
+    /// one of its cells) for a <paramref name="w"/>×<paramref name="h"/> baked derivative. The compute bake writes it at
+    /// (0, 0) of <paramref name="destination"/> (COMMON, promoted on the compute queue and returned to COMMON there), then
+    /// <see cref="CommitDerived"/> publishes it behind the batch's fence, or <see cref="AbandonDerived"/> returns it.</summary>
+    internal bool TryReserveDerived(int w, int h, out ID3D12Resource* destination, out int token)
     {
         AssertRenderThread();
-        if (source == null || w <= 0 || h <= 0) return false;
+        destination = null; token = 0;
         int bucket = BucketFor(Math.Max(w, h));
-        // A baked derivative arrives as a GPU texture, so adopting it is a CopyTextureRegion — the destination must
-        // transition through COPY_DEST. That is precisely the barrier a CPU-written page must never see (I1), so on UMA
-        // a baked thumbnail takes the private pool/standalone path instead of a shared page. (A private UMA texture's
-        // COMMON→COPY_DEST→PSR pair is the shipped behaviour of this default-off path and is shared with nothing.)
-        bool wantAtlas = _packer.Upload == ImageAtlasUpload.GpuCopy && WantAtlas(bucket);
-        Tex t = default;
-        if (wantAtlas)
-        {
-            if (!AcquireCell(bucket, out var cell)) return false;
-            t.Atlas = true; t.Page = cell.Page; t.Cell = cell.Index; t.PageGen = cell.Generation;
-            t.Slot = -1; t.Bucket = bucket;
-            t.Srv = _pages[cell.Page].Srv; t.TexSize = PageSize; t.Ox = cell.X; t.Oy = cell.Y;
-        }
-        else if (bucket <= 512)
-        {
-            if (!AcquirePooled(bucket, out var pt)) return false;
-            t.Resource = pt.Resource; t.Srv = pt.Srv; t.Slot = pt.Slot; t.Bucket = bucket;
-            t.TexSize = bucket; t.State = pt.State;
-        }
+        if (w <= 0 || h <= 0 || bucket > 512) return false;
+        Pooled pt;
+        if (_derivedPool.TryGetValue(bucket, out var stk) && stk.Count > 0) pt = stk.Pop();
         else
         {
             if (!TryAcquireSlot(out int slot)) return false;
-            t.Resource = CreateTexture(w, h);
-            if (t.Resource == null) { _freeSlots.Push(slot); return false; }   // device-removed window: soft-fail, never throw
-            t.Slot = slot; t.Bucket = 0;
-            t.TexSize = Math.Max(w, h); t.State = InitialTexState;   // COMMON on UMA (honest state for the adopt transition)
-            CreateSrv(t.Resource, slot, out t.Srv);
+            var res = CreateDerivedTexture(bucket);
+            if (res == null) { _freeSlots.Push(slot); return false; }   // device-removed window: soft-fail
+            CreateSrv(res, slot, out var srv, DXGI_FORMAT.DXGI_FORMAT_R8G8B8A8_UNORM);
+            pt = new Pooled { Resource = res, Srv = srv, Slot = slot, State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON };
         }
-
-        if (_byId.Remove(id, out var old))
-        {
-            _pendingCopies.Remove(id);
-            RetirePlacement(ref old);
-            if (old.Atlas) _atlasCount--; else if (old.Bucket > 0) _poolCount--;
-        }
-
-        ID3D12Resource* destination = t.Atlas ? _pages[t.Page].Tex : t.Resource;
-        D3D12_RESOURCE_STATES destinationState = t.Atlas ? _pages[t.Page].State : t.State;
-        Transition(cmd, source, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
-        if (destinationState != D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST)
-            Transition(cmd, destination, destinationState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
-
-        D3D12_TEXTURE_COPY_LOCATION dst = default;
-        dst.pResource = destination;
-        dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.Anonymous.SubresourceIndex = 0;
-        D3D12_TEXTURE_COPY_LOCATION src = default;
-        src.pResource = source;
-        src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        src.Anonymous.SubresourceIndex = 0;
-        D3D12_BOX box = new() { right = (uint)w, bottom = (uint)h, back = 1 };
-        cmd->CopyTextureRegion(&dst, (uint)t.Ox, (uint)t.Oy, 0, &src, &box);
-
-        Transition(cmd, destination, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Transition(cmd, source, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        t.W = w; t.H = h; t.Live = true; t.NeedsCopy = false;
-        t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        if (t.Atlas)
-        {
-            _pages[t.Page].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            _pages[t.Page].Live = true;
-            _atlasCount++;
-        }
-        else if (t.Bucket > 0) _poolCount++;
-        _byId[id] = t;
+        Tex t = default;
+        t.Resource = pt.Resource; t.Srv = pt.Srv; t.Slot = pt.Slot; t.Bucket = bucket; t.TexSize = bucket; t.State = pt.State;
+        t.Derived = true; t.W = w; t.H = h;
+        token = ++_nextReserveToken;
+        _reserved.Add((token, t));
+        destination = t.Resource;
         return true;
+    }
+
+    /// <summary>A compute batch (<paramref name="computeFence"/>) reads <paramref name="id"/>'s drawable pixels (a bake
+    /// source): its placement is not reclaimed before that batch completes.</summary>
+    internal void NoteComputeRead(int id, ulong computeFence)
+    {
+        if (_byId.TryGetValue(id, out var t) && Drawable(in t))
+        {
+            t.ComputeReadFence = computeFence;
+            _byId[id] = t;
+            return;
+        }
+        int r = FindReplacing(id);
+        if (r >= 0)
+        {
+            var prior = _replacing[r].Prior;
+            prior.ComputeReadFence = computeFence;
+            _replacing[r] = (id, prior);
+        }
+    }
+
+    /// <summary>Publish reserved derivative <paramref name="token"/> as <paramref name="id"/>'s pixels, drawable once compute
+    /// batch <paramref name="computeFence"/> completed; the id's current pixels stay drawable until then.</summary>
+    internal void CommitDerived(int token, int id, ulong computeFence)
+    {
+        AssertRenderThread();
+        int r = FindReserved(token);
+        if (r < 0) return;
+        Tex t = _reserved[r].T;
+        _reserved.RemoveAt(r);
+        t.Live = true; t.NeedsCopy = false; t.Fence = computeFence; t.FenceQueue = 2;
+        bool had = _byId.TryGetValue(id, out var prior);
+        if (had) _pendingCopies.Remove(id);
+        PublishReplacement(id, t, prior, reroute: had);
+    }
+
+    /// <summary>Return reserved derivative <paramref name="token"/> unpublished — behind compute batch
+    /// <paramref name="computeFence"/> when one was recorded into it (0 = never written).</summary>
+    internal void AbandonDerived(int token, ulong computeFence)
+    {
+        AssertRenderThread();
+        int r = FindReserved(token);
+        if (r < 0) return;
+        Tex t = _reserved[r].T;
+        _reserved.RemoveAt(r);
+        t.Fence = computeFence; t.FenceQueue = computeFence != 0 ? (byte)2 : (byte)0;
+        RetireCounted(ref t);
+    }
+
+    private int FindReserved(int token)
+    {
+        for (int i = 0; i < _reserved.Count; i++) if (_reserved[i].Token == token) return i;
+        return -1;
     }
 
     /// <summary>Heap/upload-only (NO command list): runs during the host's <c>ImageCache.Pump</c>, before the frame list
@@ -437,7 +523,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         // On UMA, ALSO force a reroute for any re-stage of a resident id: an in-place WriteToSubresource would race an
         // in-flight frame still sampling that exact texture, so instead acquire a FRESH (fenced) texture and retire the
         // old placement through the normal 2-frame fence path — the same guarantee that makes a pooled reuse safe.
-        bool reroute = had && (_uma || t.Atlas != wantAtlas || t.Bucket != (wantAtlas ? bucket : (bucket <= 512 ? bucket : 0)));
+        // Discrete: a placement already handed to the GPU (copied, or on the copy queue) is never rewritten either — the
+        // copy queue runs beside the frames that may still sample it.
+        bool published = had && (t.Live || t.Fence != 0);
+        bool reroute = had && (_uma || published || t.Atlas != wantAtlas || t.Bucket != (wantAtlas ? bucket : (bucket <= 512 ? bucket : 0)));
         // Acquire the replacement before retiring the old placement. A rejected full-res upload must not destroy an
         // already-resident blur-hash texture.
         Tex prior = reroute ? t : default;
@@ -470,7 +559,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 if (res == null) { _freeSlots.Push(slot); return RejectDeviceFault(); }
                 t.Atlas = false; t.Resource = res; t.Slot = slot; t.Bucket = 0;
                 t.TexSize = Math.Max(w, h); t.Ox = 0; t.Oy = 0;
-                t.State = InitialTexState; t.Live = false;   // COMMON on UMA (WriteToSubresource path); COPY_DEST discrete
+                t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON; t.Live = false;   // COMMON for life, both paths
                 CreateSrv(t.Resource, slot, out t.Srv);
             }
         }
@@ -615,9 +704,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>Retire only the failed placement; a rerouted id keeps its prior pixels and descriptor published.</summary>
     private ImageUploadResult RejectReplacement(int id, ref Tex t, Tex prior, bool reroute)
     {
-        _byId[id] = t;
-        Free(id);
-        if (reroute) _byId[id] = prior; // old pixels/SRV remain published until a replacement succeeds
+        _pendingCopies.Remove(id);
+        RetireCounted(ref t);
+        if (reroute) _byId[id] = prior;   // old pixels/SRV remain published until a replacement succeeds
+        else _byId.Remove(id);
         return RejectDeviceFault();
     }
 
@@ -636,10 +726,33 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         if (reroute)
         {
-            RetirePlacement(ref prior);
-            if (prior.Atlas) _atlasCount--; else if (prior.Bucket > 0) _poolCount--;
+            // Keep the prior pixels drawable while the new ones are still on a side queue (the first such prior only:
+            // a replacement superseded before it landed is simply retired).
+            if (!Drawable(in t) && Drawable(in prior) && FindReplacing(id) < 0) _replacing.Add((id, prior));
+            else RetireCounted(ref prior);
         }
         _byId[id] = t;
+    }
+
+    /// <summary>Retire a placement and drop it from the atlas / pool census.</summary>
+    private void RetireCounted(ref Tex t)
+    {
+        bool atlas = t.Atlas;
+        int bucket = t.Derived ? 0 : t.Bucket;
+        RetirePlacement(ref t);
+        if (atlas) _atlasCount--; else if (bucket > 0) _poolCount--;
+    }
+
+    /// <summary>Retire every prior placement whose replacement is now drawable (or whose id went away).</summary>
+    private void SweepReplacing()
+    {
+        for (int i = _replacing.Count - 1; i >= 0; i--)
+        {
+            var (id, prior) = _replacing[i];
+            if (_byId.TryGetValue(id, out var t) && !Drawable(in t)) continue;
+            _replacing.RemoveAt(i);
+            RetireCounted(ref prior);
+        }
     }
 
     /// <summary>Evict an image (residency dropped it): return its atlas cell / pool texture for reuse and release its
@@ -650,16 +763,28 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if (_byId.Remove(id, out var t))
         {
             _pendingCopies.Remove(id);
-            RetirePlacement(ref t);
-            if (t.Atlas) _atlasCount--; else if (t.Bucket > 0) _poolCount--;
+            RetireCounted(ref t);
+        }
+        int r = FindReplacing(id);
+        if (r >= 0)
+        {
+            var prior = _replacing[r].Prior;
+            _replacing.RemoveAt(r);
+            RetireCounted(ref prior);
         }
     }
 
     // Queue this Tex's GPU resources for deferred reclaim (cell return / pool return / standalone release + upload).
     private void RetirePlacement(ref Tex t)
     {
-        var r = new Retire { Fence = _retireFence, Upload = t.Upload, UploadCapacity = t.UploadCapacity, State = t.State };
+        var r = new Retire
+        {
+            Fence = _retireFence, Upload = t.Upload, UploadCapacity = t.UploadCapacity, State = t.State,
+            SideFence = t.Fence, SideQueue = t.FenceQueue,   // a side queue may still be writing it
+            ComputeReadFence = t.ComputeReadFence,           // ...or a bake still reading it
+        };
         if (t.Placed.IsValid) { r.Kind = 4; r.Placed = t.Placed; r.Slot = t.Slot; }
+        else if (t.Derived) { r.Kind = 6; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
         else if (t.Atlas) { r.Kind = 2; r.Cell = new ImageAtlasCell(t.Page, t.Cell, t.Ox, t.Oy, t.Bucket, t.PageGen); }
         else if (t.Bucket > 0) { r.Kind = 1; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
         else { r.Kind = 0; r.Resource = t.Resource; r.Slot = t.Slot; }
@@ -669,14 +794,23 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     /// <summary>Frame top: reclaim only resources whose last possible GPU-use fence completed, then record the
     /// deferred copies (atlas cells into their page; pool/standalone into the whole texture) and transition to PSR.</summary>
+    /// <summary>Image texture copies recorded by the most recent <see cref="FlushUploads"/>, and their pixel bytes
+    /// (width × height × 4). Always-on plain counters (render thread) — the device folds them into its per-submit
+    /// <c>GpuFrameCounters</c>.</summary>
+    internal int LastFlushCopies { get; private set; }
+    /// <inheritdoc cref="LastFlushCopies"/>
+    internal long LastFlushBytes { get; private set; }
+
     public void FlushUploads(ID3D12GraphicsCommandList* cmd, ulong submitFence, ulong completedFence)
     {
         AssertRenderThread();   // seam Step 1: render-confined under async (always render-side; assert makes it explicit)
+        LastFlushCopies = 0;
+        LastFlushBytes = 0;
         _retireFence = submitFence;
         ReclaimCompleted(completedFence);
         _smallImages?.RecordActivations(cmd, submitFence);
 
-        FlushCopies(cmd);
+        FlushCopies();
     }
 
     /// <summary>Fence-only maintenance, safe without opening a command list or requesting another presentation.</summary>
@@ -684,44 +818,61 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         AssertRenderThread();
         if (completedFence == ulong.MaxValue) return; // removal sentinel is not a completed GPU submission
+        SweepReplacing();
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
-            if (_retired[i].Fence > completedFence) continue;
+            if (_retired[i].Fence > completedFence || !SideDone(_retired[i].SideQueue, _retired[i].SideFence)
+                || !SideDone(2, _retired[i].ComputeReadFence)) continue;
             var r = _retired[i];
             // The staging heap rides on ANY kind (a Free before the copy flushed carries it too): ring-sized heaps go
             // back to their bucket, one-offs and over-cap returns are released. Kinds 3 and 5 exist only for this.
             if (r.Upload != null) RecycleUpload(r.Upload, r.UploadCapacity);
             switch (r.Kind)
             {
-                case 0: if (r.Resource != null) { D3D12MemoryDiagnostics.Release(r.Resource, "Image.Texture"); r.Resource->Release(); } _freeSlots.Push(r.Slot); break;
+                case 0: if (r.Resource != null) { D3D12MemoryDiagnostics.Release(r.Resource, "Image.Texture"); r.Resource->Release(); } QuarantineSlot(r.Slot); break;
                 case 1: ReleasePooled(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, State = r.State }); break;
                 case 2: ReleaseAtlasCell(r.Cell); break;
                 case 3: break;   // one-off upload heap: released above
+                case 6: ReleaseDerived(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, State = r.State }); break;
                 case 5: break;   // ring upload heap: returned to its bucket above
                 case 4:
                     if (!_smallImages!.Release(r.Placed, r.Fence, completedFence))
                         throw new InvalidOperationException("Invalid or stale placed-image return.");
-                    _freeSlots.Push(r.Slot);
+                    QuarantineSlot(r.Slot);
                     break;
             }
             _retired.RemoveAt(i);
         }
         _smallImages?.Reclaim(completedFence);
+        AdvanceSlotQuarantine();
     }
 
-    private void FlushCopies(ID3D12GraphicsCommandList* cmd)
+    // CANDIDATE FIX (INCIDENT 2026-09, defensive) — see _slotQuarantine's own doc. A slot that just cleared its
+    // OWNING resource's fence is not pushed straight to _freeSlots; it sits here for SlotQuarantinePolicy.InitialGenerations more
+    // ReclaimCompleted calls first. Never used for a slot that was reserved but never handed to any GPU work (e.g.
+    // AcquireCell's own failed-create path a few lines below) — those are still safe to reuse immediately and push
+    // to _freeSlots directly, unchanged.
+    private void QuarantineSlot(int slot) => _slotQuarantine.Add((slot, FluentGpu.Rhi.SlotQuarantinePolicy.InitialGenerations));
+
+    // One "generation" = one ReclaimCompleted call (a real submitted frame's FlushUploads, or a skip-turn's
+    // ReclaimCompletedUploads — both are forward progress on the render thread). Walk backwards so RemoveAt is cheap
+    // and doesn't disturb the not-yet-visited prefix, same shape as the _retired sweep above.
+    private void AdvanceSlotQuarantine()
     {
-        _uploadTransitions.Clear();
-        for (int i = 0; i < _pendingCopies.Count; i++)
+        for (int i = _slotQuarantine.Count - 1; i >= 0; i--)
         {
-            int id = _pendingCopies[i];
-            if (!_byId.TryGetValue(id, out var t) || !t.NeedsCopy) continue;
-            ID3D12Resource* destTex = t.Atlas ? _pages[t.Page].Tex : t.Resource;
-            if (destTex == null) continue;
-            AddUploadTransition(destTex, t.Atlas ? _pages[t.Page].State : t.State);
+            var (slot, left) = _slotQuarantine[i];
+            var (next, ready) = FluentGpu.Rhi.SlotQuarantinePolicy.Advance(left);
+            if (ready) { _freeSlots.Push(slot); _slotQuarantine.RemoveAt(i); }
+            else _slotQuarantine[i] = (slot, next);
         }
-        EmitUploadTransitions(cmd, toCopyDest: true);
+    }
 
+    private void FlushCopies()
+    {
+        if (_pendingCopies.Count == 0) return;
+        ID3D12GraphicsCommandList* copy = null;
+        ulong batch = 0;
         for (int i = 0; i < _pendingCopies.Count; i++)
         {
             int id = _pendingCopies[i];
@@ -729,7 +880,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
             ID3D12Resource* destTex = t.Atlas ? _pages[t.Page].Tex : t.Resource;
             if (destTex == null) continue;
+            if (copy == null) { copy = _copyQueue!.Open(); batch = _copyQueue.PendingValue; }
 
+            // COMMON → (copy-queue promotion) COPY_DEST → (decay at the batch end) COMMON: no barrier, on either queue.
             D3D12_TEXTURE_COPY_LOCATION dst = default;
             dst.pResource = destTex; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
             D3D12_TEXTURE_COPY_LOCATION srcLoc = default;
@@ -739,32 +892,29 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             srcLoc.Anonymous.PlacedFootprint.Footprint.Height = (uint)t.H;
             srcLoc.Anonymous.PlacedFootprint.Footprint.Depth = 1;
             srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = (uint)t.RowPitch;
-            cmd->CopyTextureRegion(&dst, (uint)t.Ox, (uint)t.Oy, 0, &srcLoc, null);
+            FluentGpu.Interop.Generated.ID3D12GraphicsCommandListVtbl.CopyTextureRegion(copy, &dst, (uint)t.Ox, (uint)t.Oy, 0, &srcLoc, null);
+            LastFlushCopies++;
+            LastFlushBytes += (long)t.W * t.H * 4;
 
             t.NeedsCopy = false; t.Live = true;
-            if (t.Atlas)
-            {
-                _pages[t.Page].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-                _pages[t.Page].Live = true;
-            }
-            else t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            t.Fence = batch; t.FenceQueue = 1;
+            if (t.Atlas) _pages[t.Page].Live = true;
             if (t.Upload != null)
             {
-                // The copy is on the list now: the heap is busy until this submit's fence passes, then it returns to
-                // the ring (Kind 5) or, for a one-off above the largest bucket, is released (Kind 3).
+                // The staging heap is busy until the copy batch's fence passes, then it returns to the ring (Kind 5)
+                // or, for a one-off above the largest bucket, is released (Kind 3).
                 _retired.Add(new Retire
                 {
-                    Fence = _retireFence,
                     Kind = t.UploadCapacity <= MaxUploadBucket ? 5 : 3,
                     Upload = t.Upload,
                     UploadCapacity = t.UploadCapacity,
+                    SideFence = batch, SideQueue = 1,
                 });
                 t.Upload = null; t.UploadCapacity = 0;
             }
             _byId[id] = t;
         }
-        EmitUploadTransitions(cmd, toCopyDest: false);
-        _uploadTransitions.Clear();
+        if (copy != null) _copyQueue!.Submit();
         _pendingCopies.Clear();
     }
 
@@ -796,9 +946,37 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         pt = new Pooled
         {
             Resource = res, Srv = srv, Slot = slot,
-            State = InitialTexState   // COMMON on UMA (WriteToSubresource, no copy/barrier); COPY_DEST discrete
+            State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON   // COMMON for life, both paths (never barriered)
         };
         return true;
+    }
+
+    private void ReleaseDerived(int bucket, Pooled pt)
+    {
+        if (!_derivedPool.TryGetValue(bucket, out var stk)) { stk = new Stack<Pooled>(); _derivedPool[bucket] = stk; }
+        if (stk.Count >= MaxFreeDerivedPerBucket)
+        {
+            _retired.Add(new Retire { Fence = _retireFence, Kind = 0, Resource = pt.Resource, Slot = pt.Slot });
+            return;
+        }
+        stk.Push(pt);
+    }
+
+    /// <summary>A bucket² RGBA8 texture the compute bake writes through an unordered-access view (RGBA8 is the typed-UAV
+    /// store every D3D12 device supports; BGRA8's is optional). COMMON for life: the compute queue barriers it to
+    /// UNORDERED_ACCESS for its write and back, the frames promote it to read.</summary>
+    private ID3D12Resource* CreateDerivedTexture(int bucket)
+    {
+        D3D12_RESOURCE_DESC td = DescribeTexture(bucket, bucket, rowMajor: false);
+        td.Format = DXGI_FORMAT.DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        D3D12_HEAP_PROPERTIES dp = default; dp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
+        ID3D12Resource* tex = null;
+        if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
+        { NoteResourceFault("Image.CreateDerived"); return null; }
+        TrackTexture(tex, $"Image.Derived.{bucket}x{bucket} RGBA8", &td);
+        return tex;
     }
 
     private void ReleasePooled(int bucket, Pooled pt)
@@ -862,10 +1040,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         pg.CpuWritten = cpuWritten;
         pg.Live = false;
         // I1: a CPU-written page is created in COMMON and stays there for its whole life (sampled by implicit
-        // promotion, never a copy destination). A discrete page starts in COPY_DEST like every staging destination.
-        pg.State = cpuWritten
-            ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON
-            : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+        // promotion, never a copy destination). A discrete page is COMMON for life too: the copy queue writes its cells
+        // (simultaneous access — the frames keep sampling the other cells meanwhile) and nothing ever barriers it.
+        pg.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;
         CreateSrv(tex, srvSlot, out pg.Srv);
         System.Threading.Interlocked.Increment(ref _atlasPageMirror);            // census mirrors: count and bytes are
         System.Threading.Interlocked.Add(ref _atlasPageBytesMirror, (long)bytes); // PER PAGE, never per packed image
@@ -899,7 +1076,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         pg.Srv = default;
         pg.Live = false;
         pg.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;
-        if (pg.Slot >= 0) { _freeSlots.Push(pg.Slot); pg.Slot = -1; }
+        if (pg.Slot >= 0) { QuarantineSlot(pg.Slot); pg.Slot = -1; }
         _packer.RetirePage(page);   // the slot is reusable at ANY bucket; its generation stays bumped
     }
 
@@ -927,20 +1104,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     }
 
     // ── resource helpers ──────────────────────────────────────────────────────
-    // The state a freshly-created image texture is tracked in. Discrete: COPY_DEST (the CopyTextureRegion dest). UMA:
-    // COMMON — the CPU-writable texture is populated by WriteToSubresource (not a GPU copy) and promotes to
-    // PIXEL_SHADER_RESOURCE implicitly on first sample, so it is never barriered on the upload path. Keeping the tracked
-    // state honest also means the (default-off) baked-blur adopt path emits the correct COMMON→COPY_DEST transition on UMA.
-    private D3D12_RESOURCE_STATES InitialTexState =>
-        _uma ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON
-             : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
 
     /// <summary>The BGRA8 TEXTURE2D desc. <paramref name="rowMajor"/> is for CPU-WRITTEN atlas pages only: <c>Map</c> on
     /// a texture is legal only for a ROW_MAJOR layout, and the linear layout is what makes a per-cell write byte-disjoint
     /// from every other cell on the page (invariant I3). Every other texture keeps UNKNOWN so the driver picks its
     /// optimal (tiled/compressed) layout — including the private UMA textures, which are populated by
     /// <c>WriteToSubresource</c> exactly as they ship today.</summary>
-    private static D3D12_RESOURCE_DESC DescribeTexture(int w, int h, bool rowMajor)
+    private static D3D12_RESOURCE_DESC DescribeTexture(int w, int h, bool rowMajor, bool simultaneous = false)
     {
         D3D12_RESOURCE_DESC td = default;
         td.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -949,6 +1119,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         td.Layout = rowMajor
             ? D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR
             : D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        if (simultaneous) td.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
         return td;
     }
 
@@ -1003,16 +1174,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         // NULL on failure, never a throw: on a removed device (DXGI_ERROR_DEVICE_REMOVED, 0x887A0005) every create here
         // fails, and this runs on the fgpu-render thread INSIDE the image drain — a throw past that seam is unobserved
         // and kills the process. Every caller treats null as "could not admit" (media-pipeline.md §4.1).
+        // COMMON for life: the copy (or compute) queue promotes it for its write, the frames promote it to read.
         if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
         { NoteResourceFault("Image.CreateTexture"); return null; }
         TrackTexture(tex, $"Image.Texture.{w}x{h} BGRA8", &td);   // per-bucket class key, see the UMA arm
         return tex;
     }
 
     /// <summary>Create ONE atlas page resource for the index the packer reserved.
-    /// <para><b>Discrete:</b> a DEFAULT-heap UNKNOWN-layout texture in COPY_DEST — the <c>CopyTextureRegion</c>
-    /// destination, barriered per flush exactly as it ships today.</para>
+    /// <para><b>Discrete:</b> a DEFAULT-heap UNKNOWN-layout SIMULTANEOUS-ACCESS texture in COMMON — the copy queue writes
+    /// a new cell while the frames sample the others, and nothing ever barriers it.</para>
     /// <para><b>UMA:</b> a ROW_MAJOR texture on a CUSTOM(L0/WRITE_BACK) heap created in COMMON and MAPPED once for the
     /// resource's life. It is only ever GPU-READ, so it promotes COMMON→PIXEL_SHADER_RESOURCE implicitly on first sample
     /// and is NEVER barriered (I1). The page is zero-filled once here so the gutter texels are transparent black rather
@@ -1022,14 +1194,14 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private ID3D12Resource* CreatePageTexture(bool cpuWritten, out byte* mapped, out int rowPitch, out ulong bytes)
     {
         mapped = null; rowPitch = 0; bytes = 0;
-        D3D12_RESOURCE_DESC td = DescribeTexture(PageSize, PageSize, rowMajor: cpuWritten);
+        D3D12_RESOURCE_DESC td = DescribeTexture(PageSize, PageSize, rowMajor: cpuWritten, simultaneous: !cpuWritten);
         ID3D12Resource* tex = null;
 
         if (!cpuWritten)
         {
             D3D12_HEAP_PROPERTIES dp = default; dp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
             if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
-                D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
+                D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
             { NoteResourceFault("Image.CreateAtlasPage"); return null; }
             bytes = TrackTexture(tex, $"Image.AtlasPage {PageSize}x{PageSize} BGRA8", &td);
             return tex;
@@ -1072,10 +1244,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return tex;
     }
 
-    private void CreateSrv(ID3D12Resource* tex, int slot, out D3D12_GPU_DESCRIPTOR_HANDLE gpu)
+    private void CreateSrv(ID3D12Resource* tex, int slot, out D3D12_GPU_DESCRIPTOR_HANDLE gpu,
+        DXGI_FORMAT format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = default;
-        sd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+        sd.Format = format;
         sd.ViewDimension = D3D12_SRV_DIMENSION.D3D12_SRV_DIMENSION_TEXTURE2D;
         sd.Shader4ComponentMapping = 0x1688;   // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
         sd.Anonymous.Texture2D.MipLevels = 1;
@@ -1162,63 +1335,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return res;
     }
 
-    /// <summary>Enqueue one upload-path <c>… → COPY_DEST → PSR</c> transition pair. A CPU-written atlas page can never
-    /// reach here (its pixels never go through <c>_pendingCopies</c>), and the guard makes that structural rather than
-    /// incidental: emitting the pair for such a page is the exact barrier the Adreno UMD mishandles (I1).</summary>
-    private void AddUploadTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before)
-    {
-        if (IsCpuWrittenPage(resource)) return;
-        for (int i = 0; i < _uploadTransitions.Count; i++)
-            if (_uploadTransitions[i].Resource == resource) return;
-        _uploadTransitions.Add(new UploadTransition { Resource = resource, Before = before });
-    }
-
-    private bool IsCpuWrittenPage(ID3D12Resource* resource)
-    {
-        if (_packer.Upload != ImageAtlasUpload.CpuWrite) return false;   // discrete: no CPU-written page exists
-        for (int i = 0; i < _pages.Count; i++)
-            if (_pages[i].Tex == resource) return _pages[i].CpuWritten;
-        return false;
-    }
-
-    private void EmitUploadTransitions(ID3D12GraphicsCommandList* cmd, bool toCopyDest)
-    {
-        const int Chunk = 32;
-        D3D12_RESOURCE_BARRIER* barriers = stackalloc D3D12_RESOURCE_BARRIER[Chunk];
-        int n = 0;
-        for (int i = 0; i < _uploadTransitions.Count; i++)
-        {
-            var t = _uploadTransitions[i];
-            D3D12_RESOURCE_STATES before = toCopyDest ? t.Before : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
-            D3D12_RESOURCE_STATES after = toCopyDest ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            if (before == after) continue;
-            barriers[n] = default;
-            barriers[n].Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barriers[n].Anonymous.Transition.pResource = t.Resource;
-            barriers[n].Anonymous.Transition.StateBefore = before;
-            barriers[n].Anonymous.Transition.StateAfter = after;
-            barriers[n].Anonymous.Transition.Subresource = 0xFFFFFFFF;
-            n++;
-            if (n == Chunk) { cmd->ResourceBarrier((uint)n, barriers); n = 0; }
-        }
-        if (n > 0) cmd->ResourceBarrier((uint)n, barriers);
-    }
-
-    private static void Transition(ID3D12GraphicsCommandList* cmd, ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
-    {
-        D3D12_RESOURCE_BARRIER b = default;
-        b.Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        b.Anonymous.Transition.pResource = res;
-        b.Anonymous.Transition.StateBefore = before;
-        b.Anonymous.Transition.StateAfter = after;
-        b.Anonymous.Transition.Subresource = 0xFFFFFFFF;
-        cmd->ResourceBarrier(1, &b);
-    }
-
     private static void Check(HRESULT hr, string what) { if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}"); }
 
     public void Dispose()
     {
+        _copyQueue?.Dispose(); _copyQueue = null;   // waits for every copy batch first
+        foreach (var (_, prior) in _replacing)
+            if (prior.Resource != null && !prior.Placed.IsValid) { D3D12MemoryDiagnostics.Release(prior.Resource, "Image.Texture"); prior.Resource->Release(); }
+        _replacing.Clear();
+        foreach (var (_, t) in _reserved)
+            if (t.Resource != null && !t.Placed.IsValid) { D3D12MemoryDiagnostics.Release(t.Resource, "Image.Texture"); t.Resource->Release(); }
+        _reserved.Clear();
         foreach (var t in _byId.Values)
         {
             if (t.Upload != null) { D3D12MemoryDiagnostics.Release(t.Upload, "Image.Upload"); t.Upload->Release(); }
@@ -1232,6 +1359,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         foreach (var stk in _pool.Values)
             foreach (var p in stk)
                 if (p.Resource != null) { D3D12MemoryDiagnostics.Release(p.Resource, "Image.Texture"); p.Resource->Release(); }
+        foreach (var stk in _derivedPool.Values)
+            foreach (var p in stk)
+                if (p.Resource != null) { D3D12MemoryDiagnostics.Release(p.Resource, "Image.Texture"); p.Resource->Release(); }
+        _derivedPool.Clear();
         for (int i = 0; i < _uploadRing.Length; i++)
         {
             var ring = _uploadRing[i];

@@ -43,6 +43,7 @@ static partial class ControlsSuite
         HoverBoundaryChecks(strings);
         MediaCardEngineChecks(strings);
         VideoHoleChecks(strings);
+        VideoChromeOverHoleChecks(strings);
         MediaPlayerElementChecks(strings);
         ControlsChecks(strings);
         RecipeChecks(strings);
@@ -77,6 +78,9 @@ static partial class ControlsSuite
         D67SplitButtonFlyoutChecks(strings);
         ExpanderSettingsChecks(strings);
         SettingsExpanderWideContentChecks(strings);
+        SettingsCardHeaderIconElementChecks(strings);
+        SettingsCardSkeletonProxyChecks(strings);
+        SelectorBarStyleChecks(strings);
         CardPickerRadioGroupChecks(strings);
         PipsPagerOutputChecks(strings);
         AutoFitTextChecks(strings);
@@ -91,6 +95,14 @@ static partial class ControlsSuite
         AutoSuggestInlineFocusChecks(strings);
         AutoSuggestGhostChecks(strings);
         ChartsChecks(strings);
+        SegmentedPresetChecks(strings);
+        ShelfControllerChecks(strings);
+        ProgressStretchChecks(strings);
+        ShelfLeadChecks(strings);
+        ShelfKeyboardInvokeChecks(strings);
+        ShelfLiftChecks(strings);
+        PipsControlledChecks(strings);
+        IconButtonBoundEnabledChecks(strings);
         InfoBarClosePlateChecks(strings);
     }
 
@@ -752,11 +764,11 @@ static partial class ControlsSuite
             Right(w, CenterOf(host.Scene, probe.Row)); RunN(host, 3);
             bool opened = probe.Service!.AnyOpen;
             var listPt = new Point2(150f, 250f);   // over the list, under the scrim
-            w.QueueInput(new InputEvent(InputKind.Wheel, listPt, 0, 0, 240f)); RunN(host, 2);
+            w.QueueInput(WheelEvent(listPt, 0, 0, 240f)); RunN(host, 2);
             host.Scene.TryGetScroll(scroller, out var afterBlocked);
             bool blocked = Near(afterBlocked.OffsetY, before.OffsetY, 0.5f);
             probe.Service!.CloseAll(); RunN(host, 45);
-            w.QueueInput(new InputEvent(InputKind.Wheel, listPt, 0, 0, 240f)); RunN(host, 3);
+            w.QueueInput(WheelEvent(listPt, 0, 0, 240f)); RunN(host, 3);
             host.Scene.TryGetScroll(scroller, out var afterFree);
             bool scrolls = afterFree.OffsetY > before.OffsetY + 4f;
             Check("gate.ctx.scrim-blocks-wheel a wheel over the covered list does not scroll while a menu is open; the same wheel scrolls it once closed",
@@ -991,6 +1003,59 @@ static partial class ControlsSuite
         Check("gate.ctl.recipe.control standard control-surface preset resolves FillControl ramp + control border (theme-live in both kinds)",
             controlNow && controlLiveOtherTheme, $"control={controlNow} liveOtherTheme={controlLiveOtherTheme}");
 
+        // gate.interaction.tile-ramp (E26, docs/plans/wavee/home-rebuild-implementation.md "Sixth pass"): the tile
+        // preset ramps card fills into the CONTROL secondary/tertiary hover/press legs under a flat card stroke, and
+        // declares no While* motion (fill/border only, like Control/Card's stroke-but-no-geometry siblings above).
+        // Theme-live: re-proven in the flipped theme kind.
+        bool tileNow = Interaction.Tile.Fill.Rest == Tok.FillCardDefault
+                      && Interaction.Tile.Fill.Hover == Tok.FillControlSecondary
+                      && Interaction.Tile.Fill.Pressed == Tok.FillControlTertiary
+                      && Interaction.Tile.Fill.Disabled == Tok.FillCardDefault
+                      && Interaction.Tile.Stroke is { } tileStroke && tileStroke.Rest == Tok.StrokeCardDefault
+                      && Interaction.Tile.StrokeWidth == 1f
+                      && Interaction.Tile.HoverScale == 1f && Interaction.Tile.PressScale == 1f;   // no While* geometry
+        Tok.Use(kind0 == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+        bool tileLiveOtherTheme = Interaction.Tile.Fill.Rest == Tok.FillCardDefault
+                                  && Interaction.Tile.Stroke is { } tileStroke2 && tileStroke2.Rest == Tok.StrokeCardDefault;
+        Tok.Use(kind0);   // restore
+        Check("gate.interaction.tile-ramp Tile resolves card fill/stroke ramping into the control hover/press legs, no WhileHover/WhilePressed motion (theme-live)",
+            tileNow && tileLiveOtherTheme, $"tile={tileNow} liveOtherTheme={tileLiveOtherTheme}");
+
+        // gate.button.palette.for-accent (E1, docs/plans/wavee/home-redesign-implementation.md Workstream E,
+        // C:\wavee\waveemusic): Button.ButtonPalette.ForAccent(base) tracks AccentSet.From(base)'s fill/ink tiers
+        // exactly (the "one shade function" contract — no second tier-math copy), keeps the STOCK Accent border +
+        // OuterBorderEdge sizing (a page-accent button is still an AccentButtonStyle shape), never colors the
+        // disabled legs with the custom hue, and re-derives live on a theme flip (no memoized snapshot).
+        {
+            static bool SameGradient(GradientSpec? a, GradientSpec? b)
+                => a is null ? b is null
+                   : b is { } bv && a.Value.Shape == bv.Shape && a.Value.AngleDeg == bv.AngleDeg
+                     && a.Value.Stops.SequenceEqual(bv.Stops);
+
+            var baseColor = ColorF.FromRgba(0x2E, 0x8B, 0x57);   // an arbitrary sea-green accent, not the live Tok accent
+            var stockAccent = Button.ButtonPalette.For(ButtonAppearance.Accent);
+            var custom = Button.ButtonPalette.ForAccent(baseColor);
+            var set = AccentSet.From(baseColor);
+            bool background = custom.Background.Rest == set.Fill && custom.Background.Hover == set.FillSecondary
+                              && custom.Background.Pressed == set.FillTertiary && custom.Background.Disabled == Tok.AccentDisabled;
+            bool foreground = custom.Foreground.Rest == set.Ink && custom.Foreground.Hover == set.Ink
+                              && custom.Foreground.Pressed == set.InkSecondary && custom.Foreground.Disabled == Tok.TextOnAccentDisabled;
+            bool borderSizing = SameGradient(custom.Border.Rest, stockAccent.Border.Rest)
+                                && SameGradient(custom.Border.Hover, stockAccent.Border.Hover)
+                                && SameGradient(custom.Border.Pressed, stockAccent.Border.Pressed)
+                                && SameGradient(custom.Border.Disabled, stockAccent.Border.Disabled)
+                                && custom.Sizing == BackgroundSizing.OuterBorderEdge;
+            var kindB = Tok.Theme;
+            Tok.Use(kindB == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+            var customOtherTheme = Button.ButtonPalette.ForAccent(baseColor);
+            var setOtherTheme = AccentSet.From(baseColor);
+            Tok.Use(kindB);   // restore
+            bool themeLive = customOtherTheme.Background.Rest == setOtherTheme.Fill;
+            Check("gate.button.palette.for-accent ButtonPalette.ForAccent(base) tracks AccentSet.From(base)'s fill/ink tiers, keeps the stock Accent border/sizing, disabled legs stay neutral, theme-live",
+                background && foreground && borderSizing && themeLive,
+                $"bg={background} fg={foreground} border={borderSizing} themeLive={themeLive}");
+        }
+
         // gate.ctl.recipe.disabled — isEnabled=false applies the Disabled legs, sets IsEnabled=false (the engine's
         // hover/press gate), and suppresses the motion half (no hover/press response).
         var dis = pre.Interactive(recipe, isEnabled: false);
@@ -1067,6 +1132,191 @@ static partial class ControlsSuite
             bool decoupled = probeRenders == rendersAtMount;   // the Signal write never re-rendered the owner
             Check("gate.ctl.bind.toggle ToggleSwitch: user toggle writes the signal then fires onChange once; programmatic write re-skins with no echo (owner not re-rendered)",
                 wrote && noEcho && decoupled, $"wrote={wrote} changes={changes} noEcho={noEcho} ownerRenders={probeRenders}(mount {rendersAtMount})");
+        }
+
+        // ── E2 (docs/plans/wavee/home-redesign-implementation.md Workstream E, C:\wavee\waveemusic): ToggleButton
+        // glyph + controlled + checked-label + pop gates. ──────────────────────────────────────────────────────────
+
+        static int ChildCount(SceneStore s, NodeHandle n)
+        {
+            int c = 0;
+            for (var k = s.FirstChild(n); !k.IsNull; k = s.NextSibling(k)) c++;
+            return c;
+        }
+
+        // gate.toggle.glyph.slot — no glyph: the tree stays exactly [label] (byte-identical to the pre-E2 shape, one
+        // child under the ToggleButton root). With a glyph: [icon, label] (two children) and the glyph codepoint is
+        // present in the last-frame glyph runs.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tgl-glyph", new Size2(320, 160), 1f)); window.Show();
+            var sigNoGlyph = new Signal<bool>(false);
+            var sigGlyph = new Signal<bool>(false);
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12),
+                    Children = [
+                        ToggleButton.Create("Plain", sigNoGlyph),
+                        ToggleButton.Create("Follow", sigGlyph, glyph: Icons.Heart, checkedGlyph: Icons.HeartFill),
+                    ] } });
+            host.RunFrame();
+            var toggles = Roles(host.Scene, AutomationRole.ToggleButton);
+            bool noGlyphOneChild = toggles.Count == 2 && ChildCount(host.Scene, toggles[0]) == 1;
+            bool glyphTwoChildren = toggles.Count == 2 && ChildCount(host.Scene, toggles[1]) == 2;
+            bool glyphPresent = HasGlyph(device, strings, Icons.Heart);
+            Check("gate.toggle.glyph.slot no-glyph ToggleButton stays a single-child [label] tree; a glyph adds a second [icon,label] child with the codepoint drawn",
+                noGlyphOneChild && glyphTwoChildren && glyphPresent,
+                $"noGlyphChildren={(toggles.Count == 2 ? ChildCount(host.Scene, toggles[0]) : -1)} glyphChildren={(toggles.Count == 2 ? ChildCount(host.Scene, toggles[1]) : -1)} glyphPresent={glyphPresent}");
+        }
+
+        // gate.toggle.checked-label.swap — checkedLabel swaps the label text while ON; the glyph codepoint swaps too,
+        // but the glyph NODE stays the same handle across the flip (only its codepoint changes — no remount).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tgl-label-swap", new Size2(320, 160), 1f)); window.Show();
+            var sig = new Signal<bool>(false);
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [ToggleButton.Create("Follow", sig, glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, checkedLabel: "Following")] } });
+            host.RunFrame();
+            var tb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleButton);
+            var iconBefore = Child(host.Scene, tb, 0);
+            var glyphBefore = Child(host.Scene, iconBefore, 0);
+            bool offLabel = !FindTextNode(host.Scene, strings, tb, "Follow").IsNull;
+            bool offGlyph = HasGlyph(device, strings, Icons.Heart);
+            ClickNode(host, window, tb);
+            tb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleButton);   // BoxEl root's own handle is stable; re-find defensively
+            var iconAfter = Child(host.Scene, tb, 0);
+            var glyphAfter = Child(host.Scene, iconAfter, 0);
+            bool onLabel = !FindTextNode(host.Scene, strings, tb, "Following").IsNull;
+            bool onGlyph = HasGlyph(device, strings, Icons.HeartFill);
+            bool glyphNodeStable = glyphBefore == glyphAfter && !glyphBefore.IsNull;
+            Check("gate.toggle.checked-label.swap checkedLabel/checkedGlyph swap text+codepoint on check; the glyph node identity stays stable across the flip",
+                offLabel && offGlyph && onLabel && onGlyph && glyphNodeStable,
+                $"off(label={offLabel},glyph={offGlyph}) on(label={onLabel},glyph={onGlyph}) glyphStable={glyphNodeStable}");
+        }
+
+        // gate.toggle.pop.user-only — a click-driven false→true seeds a ScaleX/ScaleY pop track on the glyph node;
+        // a PROGRAMMATIC false→true (no click) seeds none; under reduced motion, a click seeds none either.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tgl-pop", new Size2(320, 160), 1f)); window.Show();
+            // THREE independent instances (separate signals + separate glyph nodes) — a track seeded on one must
+            // never be read back on another, so each scenario gets its own toggle rather than reusing one across
+            // sequential transitions (a still-running pop from an earlier click would otherwise contaminate the
+            // NEXT scenario's "no track" assertion).
+            var sigUser = new Signal<bool>(false);
+            var sigProgrammatic = new Signal<bool>(false);
+            var sigReduced = new Signal<bool>(false);
+            var popStyle = ToggleButton.DefaultStyle with { CheckedPopScale = 1.18f, CheckedPopMs = 250f };
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12),
+                    Children = [
+                        ToggleButton.Create("Follow", sigUser, glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, style: popStyle),
+                        ToggleButton.Create("Follow", sigProgrammatic, glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, style: popStyle),
+                        ToggleButton.Create("Follow", sigReduced, glyph: Icons.Heart, checkedGlyph: Icons.HeartFill, style: popStyle),
+                    ] } });
+            host.RunFrame();
+            var toggles = Roles(host.Scene, AutomationRole.ToggleButton);
+            var glyphUser = Child(host.Scene, Child(host.Scene, toggles[0], 0), 0);
+            var glyphProgrammatic = Child(host.Scene, Child(host.Scene, toggles[1], 0), 0);
+            var glyphReduced = Child(host.Scene, Child(host.Scene, toggles[2], 0), 0);
+
+            ClickNode(host, window, toggles[0]);   // false -> true, USER click
+            bool userPop = host.Animation.TryGetTrackValue(glyphUser, AnimChannel.ScaleX, out _);
+
+            sigProgrammatic.Value = true; host.RunFrame();   // false -> true, PROGRAMMATIC (no click)
+            bool programmaticNoPop = !host.Animation.TryGetTrackValue(glyphProgrammatic, AnimChannel.ScaleX, out _);
+
+            bool prevReduced = Motion.ReducedMotion;
+            try
+            {
+                Motion.ReducedMotion = true;
+                ClickNode(host, window, toggles[2]);   // false -> true, USER click, but reduced motion
+                bool reducedNoPop = !host.Animation.TryGetTrackValue(glyphReduced, AnimChannel.ScaleX, out _);
+                Check("gate.toggle.pop.user-only a USER click on false->true pops the glyph (ScaleX track); a programmatic write or a click under reduced motion seeds no track",
+                    userPop && programmaticNoPop && reducedNoPop,
+                    $"userPop={userPop} programmaticNoPop={programmaticNoPop} reducedNoPop={reducedNoPop}");
+            }
+            finally { Motion.ReducedMotion = prevReduced; }
+        }
+
+        // gate.toggle.reflow — Style.ContentReflow (root Animate) with SizeMode.Reflow genuinely eases the ROOT's
+        // LAID-OUT width through real boundary-scoped relayout (AnimChannel.LayoutW/LayoutH — AnimScheduler.Structural.cs
+        // ReflowSize) when a checkedLabel-driven width change lands, so AbsoluteRect reads a TRANSITIONAL value
+        // mid-flight before settling at the final width; with ContentReflow null (the default) the root snaps straight
+        // to the final width in the SAME frame. Mirrors AnimSuite's Expander reflow gate (23r.a/23r.b): sample
+        // AbsoluteRect mid-flight, not just track presence — SizeMode.Auto (no explicit Size:) resolves to Reveal
+        // (AnimChannel.SizeW/SizeH, a compositor-only clip-window ease that snaps LAID-OUT bounds immediately), which
+        // would show no AbsoluteRect delta at all even though a track exists; Reflow is the mode that actually delays
+        // AbsoluteRect settling, and the mode ContentReflow's own doc ("lets that swap's width change reflow instead
+        // of snap") describes. AnimChannel.LayoutW/LayoutH only — NOT a blanket AnimEngine.HasTracks(node), because
+        // the root's own BrushTransitionMs (checked↔unchecked fill cross-fade, on by default) seeds an UNRELATED
+        // BrushFade track on the SAME node every click, snap or reflow alike.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tgl-reflow", new Size2(320, 160), 1f)); window.Show();
+            var sigSnap = new Signal<bool>(false);
+            var sigReflow = new Signal<bool>(false);
+            var reflowStyle = ToggleButton.DefaultStyle with
+            {
+                ContentReflow = new LayoutTransition(TransitionChannels.Size, TransitionDynamics.Tween(260f, Easing.FluentDecelerate), SizeMode.Reflow),
+            };
+            using var host = new AppHost(app, window, device, fonts, strings,
+                // AlignItems=Start: a stretched column child would be parent-width both before and after the label swap
+                // (no width change to animate at all), so the toggles must size to their content.
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12), AlignItems = FlexAlign.Start,
+                    Children = [
+                        ToggleButton.Create("Follow", sigSnap, checkedLabel: "Following"),
+                        ToggleButton.Create("Follow", sigReflow, checkedLabel: "Following", style: reflowStyle),
+                    ] } });
+            host.RunFrame();
+            var toggles = Roles(host.Scene, AutomationRole.ToggleButton);
+            var snapNode = toggles[0];
+            var reflowNode = toggles[1];
+            float snapBefore = host.Scene.AbsoluteRect(snapNode).W;
+            float reflowBefore = host.Scene.AbsoluteRect(reflowNode).W;
+
+            ClickNode(host, window, snapNode);      // one frame in — the checkedLabel width change has already landed
+            float snapMidFlight = host.Scene.AbsoluteRect(snapNode).W;
+            bool snapTrackGone = !host.Animation.TryGetTrackValue(snapNode, AnimChannel.LayoutW, out _)
+                                 && !host.Animation.TryGetTrackValue(snapNode, AnimChannel.LayoutH, out _);
+            for (int i = 0; i < 20; i++) host.RunFrame();   // settle — snap has nothing to settle
+            float snapSettled = host.Scene.AbsoluteRect(snapNode).W;
+
+            ClickNode(host, window, reflowNode);    // one frame in — SizeMode.Reflow should NOT be at final width yet
+            float reflowMidFlight = host.Scene.AbsoluteRect(reflowNode).W;
+            bool reflowFlying = host.Animation.TryGetTrackValue(reflowNode, AnimChannel.LayoutW, out _)
+                               || host.Animation.TryGetTrackValue(reflowNode, AnimChannel.LayoutH, out _);
+            for (int i = 0; i < 20; i++) host.RunFrame();   // ≈260ms+ at the harness's own frame step — let the tween settle
+            float reflowSettled = host.Scene.AbsoluteRect(reflowNode).W;
+            bool reflowSettledClean = !host.Animation.TryGetTrackValue(reflowNode, AnimChannel.LayoutW, out _)
+                                      && !host.Animation.TryGetTrackValue(reflowNode, AnimChannel.LayoutH, out _);
+
+            bool widthChanged = !Near(snapBefore, snapSettled, 0.5f) && !Near(reflowBefore, reflowSettled, 0.5f);
+            bool snapWasInstant = Near(snapMidFlight, snapSettled, 0.5f) && snapTrackGone;
+            bool reflowWasTransitional = reflowFlying && !Near(reflowMidFlight, reflowSettled, 0.5f) && reflowSettledClean;
+            Check("gate.toggle.reflow Style.ContentReflow (SizeMode.Reflow) eases the root's laid-out width through a checkedLabel change (LayoutW/H track, AbsoluteRect transitional then settles); null ContentReflow snaps to final width in one frame",
+                widthChanged && snapWasInstant && reflowWasTransitional,
+                $"snap(before={snapBefore:F1},mid={snapMidFlight:F1},settled={snapSettled:F1},trackGone={snapTrackGone}) reflow(before={reflowBefore:F1},mid={reflowMidFlight:F1},settled={reflowSettled:F1},flying={reflowFlying},cleanAfter={reflowSettledClean})");
+        }
+
+        // Controlled: a click calls onToggle(!isChecked) exactly once and the control writes NO internal checked
+        // state (the value only ever changes because the CALLER re-renders with a new isChecked).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tgl-controlled", new Size2(320, 160), 1f)); window.Show();
+            bool isChecked = false; int toggles_ = 0; bool? lastArg = null;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [ToggleButton.Controlled("Follow", isChecked, v => { toggles_++; lastArg = v; }, glyph: Icons.Heart, checkedGlyph: Icons.HeartFill)] } });
+            host.RunFrame();
+            var tb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleButton);
+            bool restsOff = !FindTextNode(host.Scene, strings, tb, "Follow").IsNull;
+            ClickNode(host, window, tb);   // isChecked is still `false` in this closure — Controlled never wrote it
+            bool calledOnce = toggles_ == 1 && lastArg == true;
+            bool stillRendersOff = restsOff && !FindTextNode(host.Scene, strings, tb, "Follow").IsNull;   // no internal flip
+            Check("gate.toggle.controlled Controlled calls onToggle(!isChecked) exactly once per click and never writes the checked value itself",
+                calledOnce && stillRendersOff, $"calledOnce={calledOnce} arg={lastArg} stillRendersOff={stillRendersOff}");
         }
 
         // gate.ctl.bind.automaterialize — a signal-less ToggleSwitch toggles via its OWN internal signal; an external
@@ -1792,6 +2042,236 @@ static partial class ControlsSuite
             $"panel.bottom={panel.Y + panel.H:0} item.y={itemRow.Y:0}");
     }
 
+    // ── gate.settingscard.header-icon-element — E25: SettingsCard.Options.HeaderIconElement replaces the glyph in the
+    // PartHeaderIcon slot when set (a CommunityToolkit HeaderIcon may be an ImageIconSource, not a glyph), and
+    // Style.HeaderIconSize sizes that slot instead of the old hard-coded HeaderIconMaxSize literal. Default stays
+    // byte-identical: a card with neither set still gets the 20-DIP glyph slot.
+    static void SettingsCardHeaderIconElementChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("settingscard-header-icon", new Size2(600, 240), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        string glyph = ((char)0xE713).ToString();
+        string overriddenGlyph = ((char)0xE70F).ToString();
+        NodeHandle defaultSlot = default, customSlot = default;
+        var defaultParts = new TemplateParts { [SettingsCard.PartHeaderIcon] = e => e with { OnRealized = h => defaultSlot = h } };
+        var customParts = new TemplateParts { [SettingsCard.PartHeaderIcon] = e => e with { OnRealized = h => customSlot = h } };
+
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1, Gap = 8f, Padding = Edges4.All(16f),
+                Children =
+                [
+                    // Default byte-identical leg: glyph only, no element, no style override.
+                    SettingsCard.Create(new SettingsCard.Options
+                    {
+                        Header = "DefaultHeader",
+                        HeaderIcon = glyph,
+                        Parts = defaultParts,
+                    }),
+                    // The new leg: HeaderIconElement WINS over a HeaderIcon glyph also set on the same options, and a
+                    // custom Style.HeaderIconSize resizes the slot.
+                    SettingsCard.Create(new SettingsCard.Options
+                    {
+                        Header = "CustomHeader",
+                        HeaderIcon = overriddenGlyph,
+                        HeaderIconElement = new TextEl("icon-marker") { Size = 12f },
+                        Style = SettingsCard.DefaultStyle with { HeaderIconSize = 32f },
+                        Parts = customParts,
+                    }),
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        var defaultRect = host.Scene.AbsoluteRect(defaultSlot);
+        var customRect = host.Scene.AbsoluteRect(customSlot);
+        bool defaultSizedAtLiteral = Near(defaultRect.W, SettingsCard.HeaderIconMaxSize, 0.5f)
+                                      && Near(defaultRect.H, SettingsCard.HeaderIconMaxSize, 0.5f);
+        bool defaultShowsGlyph = HasGlyph(device, strings, glyph);
+        bool customSizedByStyle = Near(customRect.W, 32f, 0.5f) && Near(customRect.H, 32f, 0.5f);
+        bool customShowsElementNotGlyph = HasGlyph(device, strings, "icon-marker") && !HasGlyph(device, strings, overriddenGlyph);
+
+        Check("gate.settingscard.header-icon-element HeaderIconElement replaces the glyph in PartHeaderIcon and Style.HeaderIconSize resizes the slot; default (neither set) stays the byte-identical 20-DIP glyph",
+            defaultSizedAtLiteral && defaultShowsGlyph && customSizedByStyle && customShowsElementNotGlyph,
+            $"default {defaultRect.W:0}x{defaultRect.H:0} glyph={defaultShowsGlyph} custom {customRect.W:0}x{customRect.H:0} marker={customShowsElementNotGlyph}");
+    }
+
+    // E27 (docs/plans/wavee/home-rebuild-implementation.md "Sixth pass"): SettingsCard.Create's SkeletonProxy — a
+    // ComponentEl boundary the deriver can't see into falls back to ONE default 160-DIP bar (SkeletonDeriver's
+    // opaque-boundary case); the proxy hands it the REAL card at the measured width instead (the Responsive +
+    // DeriveRenderedOutput idiom PagedShelf.Create's ShelfProxy uses for its cards), so a card with a header icon and
+    // two lines of text shimmers as an icon bar + (at least) two text bars.
+    static void SettingsCardSkeletonProxyChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("settingscard-skeleton-proxy", new Size2(600, 300), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        string glyph = ((char)0xE713).ToString();
+        var options = new SettingsCard.Options
+        {
+            Header = "Notifications",
+            Description = "Choose what you want to be notified about",
+            HeaderIcon = glyph,
+        };
+
+        NodeHandle wrapNode = default;
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1, Width = 600f,
+                OnRealized = h => wrapNode = h,
+                Children =
+                [
+                    new SkelRegionEl(
+                        Pending: () => true, Failed: () => false,
+                        Content: () => SettingsCard.Create(options),
+                        ShimmerSource: null, OnFailed: null,
+                        Reveal: SkelReveal.None, Style: SkeletonStyle.Default, Group: null, SmoothResize: false),
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        // Frame 1 renders the ResponsiveBox at its Fallback (0) width; OnBoundsChanged then reports the real measured
+        // slot, which schedules the re-render that rebuilds the proxied card at the true width — settle a few frames.
+        host.RunFrame(); host.RunFrame(); host.RunFrame();
+
+        var leaves = new List<RectF>();
+        CollectSkeletonLeaves(host.Scene, wrapNode, leaves);
+
+        // The icon glyph derives to a narrow bar at Style.HeaderIconSize (default 20 — TextBarWidth returns the glyph's
+        // own Size for an IconFont run); Header/Description derive to WIDER bars from their estimated text extent
+        // (TextBarWidth's own min clamp is size*2.5, comfortably above the icon's width). Distinguishing on width, not
+        // shape, since the icon glyph's derived bar is NOT square (its height rides the same 0.72 TextRatio).
+        bool hasIconBar = leaves.Any(r => r.W is >= 12f and <= 28f && r.H > 0.5f);
+        int textBars = leaves.Count(r => r.W > 28f && r.H > 0.5f && r.H < 20f);
+        bool notFallbackBar = !(leaves.Count == 1 && Near(leaves[0].W, 160f, 0.5f));
+
+        Check("gate.settingscard.skeleton-proxy SkeletonProxy derives an icon bar + at least two text bars from the real header/description/icon subtree, not one default 160-DIP bar",
+            hasIconBar && textBars >= 2 && notFallbackBar,
+            $"leaves={leaves.Count} icon={hasIconBar} textBars={textBars} fallback160={!notFallbackBar}");
+    }
+
+    // E28 (the Wavee Home page-title pivot): SelectorBar.Create's optional SelectorBarStyle. The PartItem modifier
+    // observes each item BoxEl exactly as the core built it (before any parts restyle — it returns it unchanged), keyed
+    // by label text, and the PartPill modifier chains an OnRealized counter, so the gates read the element tree the
+    // control emits plus which pills actually mount. The rendered glyph runs pin the resolved label size/weight.
+    static void SelectorBarStyleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("selectorbar-style", new Size2(800, 300), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        static TextEl? Label(BoxEl? item) =>
+            item is { Children: [BoxEl content, ..] } && content.Children is [.., TextEl label] ? label : null;
+        static BoxEl? PillSlot(BoxEl? item) => item is { Children: [_, BoxEl slot] } ? slot : null;
+
+        var stockItems = new Dictionary<string, BoxEl>();
+        var titleItems = new Dictionary<string, BoxEl>();
+        int stockPills = 0, titlePills = 0;
+        TemplateParts Observe(Dictionary<string, BoxEl> seen, Action pillRealized)
+        {
+            var parts = new TemplateParts();
+            parts[SelectorBar.PartItem] = e => { if (Label(e) is { } l) seen[l.Text.Value] = e; return e; };   // latest render wins
+            parts[SelectorBar.PartPill] = e => e with { OnRealized = _ => pillRealized() };
+            return parts;
+        }
+        var stockParts = Observe(stockItems, () => stockPills++);
+        var titleParts = Observe(titleItems, () => titlePills++);
+
+        var plate = new ColorF(1f, 1f, 1f, 0.06f);
+        var titleStyle = new SelectorBarStyle { LabelSize = 28f, SelectedWeight = 600, ShowPill = false, HoverFill = plate };
+        var stockSel = new Signal<int>(0);
+        var titleSel = new Signal<int>(0);
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1, Width = 800f,
+                Children =
+                [
+                    SelectorBar.Create(["Alpha", "Beta", "Gamma"], stockSel, parts: stockParts),
+                    SelectorBar.Create(["Home", "Music", "Podcasts"], titleSel, parts: titleParts, style: titleStyle),
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        // ── gate.selectorbar.style-default-identical ──
+        stockItems.TryGetValue("Alpha", out var s0); stockItems.TryGetValue("Beta", out var s1);
+        var sl0 = Label(s0); var sl1 = Label(s1);
+        var sp0 = PillSlot(s0); var sp1 = PillSlot(s1);
+        bool stockLabel = sl0 is not null && sl1 is not null
+            && sl0.Size == 14f && sl0.Weight == 0 && sl0.ResolvedWeight == 400 && sl1.Weight == 0
+            && float.IsNaN(sl0.LineHeight) && sl0.FontFamily is null && sl0.CharSpacing == 0f
+            && sl0.Color.Value == Tok.TextPrimary && sl0.HoverColor == Tok.TextSecondary
+            && sl0.PressedColor == Tok.TextSecondary && sl1.PressedColor == Tok.TextTertiary;   // SelectedPressed stays Secondary
+        bool stockPadding = s0 is { Children: [BoxEl c0, ..] } && c0.Padding == new Edges4(12, 10, 12, 7);
+        bool stockPillSlot = sp0 is not null && sp1 is not null
+            && sp0.Height.Value == 3f && sp1.Height.Value == 3f                                // the row is reserved on every item…
+            && sp0.Children.Length == 1 && sp1.Children.Length == 0 && stockPills >= 1;       // …the pill mounts on the selected one
+        bool stockItem = s0 is not null && s1 is not null
+            && s0.HoverFill.Value == ColorF.Transparent && s0.PressedFill.Value == ColorF.Transparent
+            && float.IsNaN(s0.Height.Value) && s0.Margin == default && s0.Justify == FlexJustify.Start
+            && s0.Corners.Value == Radii.ControlAll && s0.TabStop == true && s1.TabStop != true;
+        bool stockGlyphs = GlyphRun(device, strings, "Alpha") is { FontSize: 14f, Weight: 400 };
+        Check("gate.selectorbar.style-default-identical SelectorBar.Create without a style emits the stock WinUI tree: 14-px weight-unset labels (Primary/Secondary/Tertiary ramp), 12,10,12,7 padding, a reserved 3-px pill slot on every item with the pill mounted only on the selected one, no hover/press plate",
+            stockLabel && stockPadding && stockPillSlot && stockItem && stockGlyphs,
+            $"label={stockLabel} padding={stockPadding} pillSlot={stockPillSlot} (pillsRealized={stockPills}) item={stockItem} glyph={stockGlyphs}");
+
+        // ── gate.selectorbar.style-title ──
+        titleItems.TryGetValue("Home", out var t0); titleItems.TryGetValue("Music", out var t1);
+        var tl0 = Label(t0); var tl1 = Label(t1);
+        bool titleLabels = tl0 is not null && tl1 is not null
+            && tl0.Size == 28f && tl0.ResolvedWeight == 600 && tl1.Size == 28f && tl1.ResolvedWeight == 400;
+        bool noPill = t0 is { Children.Length: 1 } && t1 is { Children.Length: 1 } && titlePills == 0;
+        bool plateOn = t0 is not null && t0.HoverFill.Value == plate && t0.PressedFill.Value == ColorF.Transparent
+            && t0.Corners.Value == Radii.ControlAll;
+        bool titleGlyphs = GlyphRun(device, strings, "Home") is { FontSize: 28f, Weight: 600 }
+            && GlyphRun(device, strings, "Music") is { FontSize: 28f, Weight: 400 };
+        // Selection moves the weight: select "Music" → it renders 600 and "Home" drops back to 400.
+        titleSel.Value = 1;
+        for (int i = 0; i < 3; i++) host.RunFrame();
+        bool weightFollows = GlyphRun(device, strings, "Music") is { Weight: 600 } && GlyphRun(device, strings, "Home") is { Weight: 400 }
+            && titlePills == 0;
+        Check("gate.selectorbar.style-title a title style (LabelSize 28, SelectedWeight 600, ShowPill false, HoverFill) renders 28-px labels whose weight follows selection (600 selected / 400 rest), mounts no pill and reserves no pill row, and puts the hover plate on the 4-px-radius item",
+            titleLabels && noPill && plateOn && titleGlyphs && weightFollows,
+            $"labels={titleLabels} noPill={noPill} (pillsRealized={titlePills}) plate={plateOn} glyphs={titleGlyphs} weightFollows={weightFollows}");
+    }
+
+    static DrawGlyphRunCmd? GlyphRun(HeadlessGpuDevice dev, StringTable strings, string text)
+    {
+        foreach (var g in dev.LastGlyphs)
+            if (strings.Resolve(g.Text) == text) return g;
+        return null;
+    }
+
+    static void CollectSkeletonLeaves(SceneStore scene, NodeHandle node, List<RectF> leaves)
+    {
+        if (node.IsNull) return;
+        if (scene.ChildCount(node) == 0)
+        {
+            var r = scene.AbsoluteRect(node);
+            if (r.W > 0.5f && r.H > 0.5f) leaves.Add(r);
+            return;
+        }
+        for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
+            CollectSkeletonLeaves(scene, c, leaves);
+    }
+
     // ── RadioButtons as a preview-card picker ────────────────────────────────────────────────────────────────────────
     // The two additions that let the WinUI RadioButtons container host a strip of preview CARDS (Wavee's row-density /
     // page-layout / palette / sidebar-design pickers, which were four hand-rolled bags of independent tab stops):
@@ -2473,7 +2953,7 @@ static partial class ControlsSuite
                 new BoxEl { Width = 40, Height = 20, OnPointerWheel = e => { calls++; sawDelta = e.Delta; e.Handled = true; } }, null);
             new FlexLayout(scene, fonts).Run(scene.Root);
             var disp = new InputDispatcher(scene);
-            int handled = disp.Dispatch(new[] { new InputEvent(InputKind.Wheel, new Point2(10, 10), 0, 0, ScrollDelta: -48f) });
+            int handled = disp.Dispatch(new[] { WheelEvent(new Point2(10, 10), 0, 0, ScrollDelta: -48f) });
             Check("B.5 element wheel hook consumes the wheel (Handled) with the raw delta",
                 handled == 1 && calls == 1 && sawDelta == -48f, $"handled={handled} calls={calls} delta={sawDelta}");
         }
@@ -3470,14 +3950,14 @@ static partial class ControlsSuite
             new FlexLayout(scene, fonts).Run(scene.Root);
             var disp = new InputDispatcher(scene);
 
-            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000) });
-            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(60, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_016) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 50), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(60, 50), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_016) });
             bool firstMove = Near(dx, 10f) && Near(vx, 151.5f, 0.5f) && vy == 0f;
-            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_032) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 50), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_032) });
             bool secondMove = Near(dx, 20f) && Near(dy, 0f) && Near(vx, 266.3f, 0.5f)
                 && Near(abs.X, 70f) && Near(abs.Y, 50f)
                 && Near(local.X, 50f) && Near(local.Y, 50f);   // grab offset: Local tracks the MOVING box
-            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(70, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_048) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(70, 50), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_048) });
 
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 50), 0, 0) });
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(80, 50), 0, 0) });
@@ -3815,14 +4295,14 @@ static partial class ControlsSuite
             new FlexLayout(scene, fonts).Run(scene.Root);
             var disp = new InputDispatcher(scene);
             var ev = new InputEvent[1];
-            ev[0] = new InputEvent(InputKind.PointerDown, new Point2(50, 30), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000);
+            ev[0] = new InputEvent(InputKind.PointerDown, new Point2(50, 30), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000);
             disp.Dispatch(ev);
             for (int i = 1; i <= 6; i++)   // promote + warm the move path (shadow row, EMA, transform writes)
             {
-                ev[0] = new InputEvent(InputKind.PointerMove, new Point2(50 + i * 10, 30), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000 + (uint)(i * 16));
+                ev[0] = new InputEvent(InputKind.PointerMove, new Point2(50 + i * 10, 30), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000 + (uint)(i * 16));
                 disp.Dispatch(ev);
             }
-            ev[0] = new InputEvent(InputKind.PointerMove, new Point2(140, 30), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_200);
+            ev[0] = new InputEvent(InputKind.PointerMove, new Point2(140, 30), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_200);
             long before = GC.GetAllocatedBytesForCurrentThread();
             disp.Dispatch(ev);
             long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -3844,14 +4324,14 @@ static partial class ControlsSuite
             host.RunFrame();   // mount + layout
             var item = Child(host.Scene, host.Scene.Root, 0);
             var c = CenterOf(host.Scene, item);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
             host.RunFrame();
             for (int i = 1; i <= 12; i++)   // promote, then warm: shadow slab, draw-list growth, eased press/hover settle
             {
-                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + i * 4, c.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000 + (uint)(i * 16)));
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + i * 4, c.Y), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_000 + (uint)(i * 16)));
                 host.RunFrame();
             }
-            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 60, c.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_300));
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 60, c.Y), 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 1_300));
             var dragFrame = host.RunFrame();
             bool zero = dragFrame.HotPhaseAllocBytes == 0;
             // E5b spring-lag follow (the adopted Flutter/rbd ghost feel): with real timestamps the lifted visual EASES
@@ -7263,11 +7743,11 @@ static partial class ControlsSuite
         if (eyes.Count == 1)
         {
             var bc = CenterOf(scene, eyes[0]);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000));
+            window.QueueInput(new InputEvent(InputKind.PointerDown, bc, 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 5_000));
             host.RunFrame();
             host.RunFrame();
             peeked = strings.Resolve(scene.Paint(tn).Text) == "ab";
-            window.QueueInput(new InputEvent(InputKind.PointerUp, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_100));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, bc, 0, 0, KeyModifiers.None, PointerKind.Mouse, false, 5_100));
             host.RunFrame();
             host.RunFrame();
             remasked = strings.Resolve(scene.Paint(tn).Text) == "●●";
@@ -7289,7 +7769,7 @@ static partial class ControlsSuite
         host.RunFrame();
         host.RunFrame();
         bool typingPopulatedHidden = Roles(scene, AutomationRole.Button).Count == 0;
-        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, 0f, KeyModifiers.Ctrl));
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, KeyModifiers.Ctrl));
         window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
         host.RunFrame();
         window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
@@ -8880,13 +9360,13 @@ static partial class ControlsSuite
         //    headless 16 ms frame step, driven to steady Playing. The transport's Button-role nodes lose their Role at
         //    the hide EDGE (hidden chrome leaves the accessibility tree), so ChromeButtons reads the edge, not the fade.
         static (HeadlessPlatformApp App, HeadlessWindow Window, AppHost Host, HeadlessScriptedPlayer Player) ChromeRig(
-            StringTable strings, string name, float hideMs = 200f, bool dragMovesWindow = false)
+            StringTable strings, string name, float hideMs = 200f)
         {
             var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc(name, new Size2(560, 360), 1f));
             window.Show();
             var player = PlayingPlayer(new SizeI(640, 360));
-            var probe = new MediaPlayerHostProbe { Player = player, HideMs = hideMs, DragMovesWindow = dragMovesWindow };
+            var probe = new MediaPlayerHostProbe { Player = player, HideMs = hideMs };
             var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
             host.RunFrame();
             player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
@@ -8962,81 +9442,6 @@ static partial class ControlsSuite
                     mid > 0.05f && mid < 0.95f && after >= mid - 0.02f && after < 0.99f && next >= after,
                     $"mid={mid:0.000} after={after:0.000} next={next:0.000}");
             }
-        }
-
-        // gate.media.el.drag-moves-window — the pop-out's chromeless window moves by dragging the PICTURE: a press that
-        // travels past the 4 px drag box asks the PAL for the OS move loop exactly once; within the box it is still a
-        // click. The chrome is held for the whole loop and is NOT pinned afterwards (D7) — the loop ends the way Win32
-        // reports it: the capture cancel for the contact, then WindowMoveSizeEnded.
-        {
-            var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-drag", dragMovesWindow: true);
-            using (app) using (host)
-            {
-                var p0 = OnPicture(host.Scene, ChromeRootOf(host.Scene));
-                window.QueueInput(new InputEvent(InputKind.PointerDown, p0, 0, 0, TimestampMs: 60_000)); host.RunFrame();
-                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + 2f, p0.Y), 0, 0, TimestampMs: 60_016)); host.RunFrame();
-                int afterSlop = window.BeginSystemMoveCount;
-                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + 12f, p0.Y), 0, 0, TimestampMs: 60_032)); host.RunFrame();
-                int afterTravel = window.BeginSystemMoveCount;
-                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + 30f, p0.Y), 0, 0, TimestampMs: 60_048)); host.RunFrame();
-                int afterMore = window.BeginSystemMoveCount;
-                for (int i = 0; i < 30; i++) host.Paint(0);                               // the loop runs well past the 200 ms dwell
-                bool heldDuringMove = ChromeButtons(host) > 0;
-                window.QueueInput(new InputEvent(InputKind.PointerCancel, default, 0, 0, TimestampMs: 60_600));
-                window.QueueInput(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: 60_600));
-                host.RunFrame();
-                bool shownAtEnd = ChromeButtons(host) > 0;
-                for (int i = 0; i < 40; i++) host.Paint(0);                               // the dwell restarts at the loop's end
-                bool notPinned = ChromeButtons(host) == 0;
-                Check("gate.media.el.drag-moves-window",
-                    afterSlop == 0 && afterTravel == 1 && afterMore == 1 && heldDuringMove && shownAtEnd && notPinned,
-                    $"slop={afterSlop} travel={afterTravel} more={afterMore} held={heldDuringMove} shownAtEnd={shownAtEnd} notPinned={notPinned}");
-            }
-        }
-
-        // gate.media.el.drag-click-still-a-click — the gesture never steals a click or a control: a press with no travel
-        // is the reveal-only click it always was (no move); a press on the seek rail that travels SCRUBS (the rail is its
-        // own press target, so it never arms the move); and a surface without DragMovesWindow never asks for a move.
-        {
-            int clickMoves, railMoves, offMoves;
-            bool clickRevealed, railSeeked;
-            {
-                var (app, window, host, player) = ChromeRig(strings, "g5g-mpe-dragclick", dragMovesWindow: true);
-                using (app) using (host)
-                {
-                    var s = host.Scene;
-                    var pic = OnPicture(s, ChromeRootOf(s));
-                    for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // idle away first
-                    window.QueueInput(new InputEvent(InputKind.PointerDown, pic, 0, 0, TimestampMs: 30_000)); host.RunFrame();
-                    window.QueueInput(new InputEvent(InputKind.PointerUp, pic, 0, 0, TimestampMs: 30_050)); host.RunFrame();
-                    clickRevealed = ChromeButtons(host) > 0;
-                    clickMoves = window.BeginSystemMoveCount;
-                    // The seek rail — the only Slider-role node while the volume flyout is closed: press a quarter in, drag.
-                    var sliders = Roles(s, AutomationRole.Slider);
-                    var rail = sliders.Count > 0 ? s.AbsoluteRect(sliders[0]) : default;
-                    var r0 = new Point2(MathF.Round(rail.X + rail.W * 0.25f), MathF.Round(rail.Y + rail.H * 0.5f));
-                    window.QueueInput(new InputEvent(InputKind.PointerDown, r0, 0, 0, TimestampMs: 31_000)); host.RunFrame();
-                    window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(r0.X + 30f, r0.Y), 0, 0, TimestampMs: 31_016)); host.RunFrame();
-                    window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(r0.X + 30f, r0.Y), 0, 0, TimestampMs: 31_032)); host.RunFrame();
-                    for (int i = 0; i < 2; i++) { player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame(); }   // the scripted player applies the seek
-                    railSeeked = sliders.Count > 0 && player.PositionSeconds.Peek() > 5f;
-                    railMoves = window.BeginSystemMoveCount;
-                }
-            }
-            {
-                var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-dragoff", dragMovesWindow: false);
-                using (app) using (host)
-                {
-                    var pic = OnPicture(host.Scene, ChromeRootOf(host.Scene));
-                    window.QueueInput(new InputEvent(InputKind.PointerDown, pic, 0, 0, TimestampMs: 32_000)); host.RunFrame();
-                    window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(pic.X + 30f, pic.Y), 0, 0, TimestampMs: 32_016)); host.RunFrame();
-                    window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(pic.X + 30f, pic.Y), 0, 0, TimestampMs: 32_032)); host.RunFrame();
-                    offMoves = window.BeginSystemMoveCount;
-                }
-            }
-            Check("gate.media.el.drag-click-still-a-click",
-                clickRevealed && clickMoves == 0 && railSeeked && railMoves == 0 && offMoves == 0,
-                $"clickRevealed={clickRevealed} clickMoves={clickMoves} railSeeked={railSeeked} railMoves={railMoves} offMoves={offMoves}");
         }
 
         // gate.media.el.leave-hides — D4: the pointer LEAVING the player hides the chrome after the short leave debounce,
@@ -9974,6 +10379,157 @@ static partial class ControlsSuite
                 + $"sepBetween={separatorBetween1}(sep={sepY1:0.#}) closed={closedBeforeReopen} open2={secondOpenRan} "
                 + $"newShown={newRowShown} oldGone={oldRowGone}");
         }
+
+        // ── PART A — PlayerChromeFeed: a host that draws its OWN on-media chrome (SuppressTransport) instead of this
+        //    element's transport. The chrome machine itself is pinned by PlayerChromeVisibilityTests; these three gate
+        //    the WIRING — MediaPlayerHostProbe.SuppressTransport/ChromeFeed/ChromeVisible forward straight to
+        //    MediaPlayerElement's own props (Probes.cs), and a suppressed surface renders no transport at all, so the
+        //    only observable is the ONE published ChromeVisibleOut signal (Roles(...Button) is always empty here).
+        static (HeadlessPlatformApp App, HeadlessWindow Window, AppHost Host, MediaPlayerHostProbe Probe) ChromeRigFeed(
+            StringTable s, string name, FluentGpu.Controls.Media.PlayerChromeFeed feed, float hideMs = 200f)
+        {
+            var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc(name, new Size2(560, 360), 1f));
+            window.Show();
+            var player = PlayingPlayer(new SizeI(640, 360));
+            var probe = new MediaPlayerHostProbe
+            {
+                Player = player, HideMs = hideMs, SuppressTransport = true, ChromeFeed = feed,
+            };
+            var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(s), s, probe);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            host.Paint(0);
+            return (app, window, host, probe);
+        }
+
+        // gate.media.el.feed.over-controls-holds — PlayerChromeFeed.SetPointerOverControls: the host's own control
+        // panel is a SIBLING of the element, so hovering it is invisible to the element's routed pointer-within
+        // events; the feed is the only way that hold ever reaches the machine. Held past the dwell while "over",
+        // released restarts it.
+        {
+            var feed = new FluentGpu.Controls.Media.PlayerChromeFeed();
+            var (app, _, host, probe) = ChromeRigFeed(strings, "g5g-mpe-feed-over", feed);
+            using (app) using (host)
+            {
+                feed.SetPointerOverControls(true);
+                for (int i = 0; i < 30; i++) host.Paint(0);           // ~480ms ≫ 200ms hide delay
+                bool heldWhileOver = probe.ChromeVisible.Peek();
+                feed.SetPointerOverControls(false);
+                for (int i = 0; i < 30; i++) host.Paint(0);
+                bool hiddenAfterRelease = !probe.ChromeVisible.Peek();
+                Check("gate.media.el.feed.over-controls-holds", heldWhileOver && hiddenAfterRelease,
+                    $"heldWhileOver={heldWhileOver} hiddenAfterRelease={hiddenAfterRelease}");
+            }
+        }
+
+        // gate.media.el.feed.window-move — PlayerChromeFeed.WindowMoveStarted: the host observed the window's OS move
+        // loop begin; the hold releases on WindowMoveSizeEndedObserved and is NOT pinned afterwards.
+        {
+            var feed = new FluentGpu.Controls.Media.PlayerChromeFeed();
+            var (app, window, host, probe) = ChromeRigFeed(strings, "g5g-mpe-feed-move", feed);
+            using (app) using (host)
+            {
+                feed.WindowMoveStarted();
+                for (int i = 0; i < 30; i++) host.Paint(0);           // the loop runs well past the 200 ms dwell
+                bool heldDuringMove = probe.ChromeVisible.Peek();
+                window.QueueInput(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: 60_600));
+                host.RunFrame();
+                bool shownAtEnd = probe.ChromeVisible.Peek();
+                for (int i = 0; i < 40; i++) host.Paint(0);           // the dwell restarts at the loop's end
+                bool notPinned = !probe.ChromeVisible.Peek();
+                Check("gate.media.el.feed.window-move", heldDuringMove && shownAtEnd && notPinned,
+                    $"heldDuringMove={heldDuringMove} shownAtEnd={shownAtEnd} notPinned={notPinned}");
+            }
+        }
+
+        // gate.media.el.feed.inert-after-unmount — every PlayerChromeFeed call is a harmless no-op once the element it
+        // drove has unmounted (PlayerChromeFeed.Owner cleared by the element's own cleanup): no exception, and no
+        // further write to the published ChromeVisible signal (its last value — hidden — simply holds).
+        {
+            var feed = new FluentGpu.Controls.Media.PlayerChromeFeed();
+            var (app, _, host, probe) = ChromeRigFeed(strings, "g5g-mpe-feed-unmount", feed);
+            using (app) using (host)
+            {
+                for (int i = 0; i < 30; i++) host.Paint(0);           // idle away first
+                bool hiddenBeforeUnmount = !probe.ChromeVisible.Peek();
+
+                probe.Mounted.Value = false;
+                host.RunFrame();                                      // unmounts MediaPlayerElement (Owner cleared)
+
+                bool threw = false;
+                try
+                {
+                    feed.Activity();
+                    feed.SetPointerOverControls(true);
+                    feed.SetPressed(true);
+                    feed.SetScrubbing(true);
+                    feed.WindowMoveStarted();
+                }
+                catch { threw = true; }
+
+                for (int i = 0; i < 10; i++) host.Paint(0);
+                bool signalUntouched = !probe.ChromeVisible.Peek();   // nothing wrote a fresh value after unmount
+
+                Check("gate.media.el.feed.inert-after-unmount", hiddenBeforeUnmount && !threw && signalUntouched,
+                    $"hiddenBeforeUnmount={hiddenBeforeUnmount} threw={threw} signalUntouched={signalUntouched}");
+            }
+        }
+
+        // gate.media.el.poster-until-first-frame — PART B: `PlaybackState` leaving Opening only means "no backend
+        // session anymore", not "a decoded frame has ever reached the compositor" — a real MF session can take up to
+        // ~1s after Opening to actually present. Player.VideoSurface (IsNone until the first video frame) is what now
+        // gates the poster/hole (MediaPlayerElement.cs Render's `framePresented`), not PlaybackState alone: a player
+        // that reaches Playing with NO frame keeps the poster up and the hole inert; the first frame drops the poster
+        // and activates the hole. HeadlessScriptedPlayer optimistically publishes VideoSurface alongside its geometry
+        // (EnterBuffering) since it models no real decode latency at all — overridden back to `default` here to force
+        // the exact race this gate pins.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-firstframe", new Size2(480, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer(new SizeI(640, 360));
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            // The scripted double publishes its surface the moment its geometry lands (EnterBuffering); a FIRST open
+            // has no frame until decode catches up, so the surface is cleared BEFORE every paint that could observe
+            // it — the element's hadVideo latch must never see a frame here, or this becomes the source-switch case
+            // (hole held under the poster) rather than the first-open case this gate pins.
+            player.Pump(TimeSpan.FromMilliseconds(1)); player.Core.SetVideoSurface(default); host.RunFrame();     // Opening → Buffering
+            player.Pump(TimeSpan.FromMilliseconds(1)); player.Core.SetVideoSurface(default); host.RunFrame();     // Buffering → Playing
+            for (int i = 0; i < 5; i++) host.Paint(0);
+            bool playingNoFrame = player.State.Peek() == PlaybackState.Playing;
+
+            // Locate the always-mounted stage/hole/poster structurally (via the letterbox fill, which is unconditional
+            // — see Render's video-stage comment) rather than by VisualKind: with no frame the hole's VisualKind is
+            // NOT Video (Reconciler.cs gates VisualKind on the VideoHole PROP), so FindVisual(...,VisualKind.Video)
+            // would find nothing to anchor on.
+            var stage = FindFillNode(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            var hole = stage.IsNull ? NodeHandle.Null : host.Scene.NextSibling(stage);
+            var poster = hole.IsNull ? NodeHandle.Null : host.Scene.NextSibling(hole);
+            bool holeInertNoFrame = !hole.IsNull && host.Scene.Paint(hole).VisualKind != VisualKind.Video;
+            bool posterUpNoFrame = !poster.IsNull && Near(host.Scene.Paint(poster).Opacity, 1f, 0.02f);
+            int videosDrawnNoFrame = device.LastVideos.Count;
+
+            // The frame finally lands.
+            player.Core.SetVideoSurface(new VideoSurfaceId(1));
+            for (int i = 0; i < 12; i++) host.Paint(0);                    // settle the poster's crossfade-out (150ms)
+            bool holeActiveWithFrame = !hole.IsNull && host.Scene.IsLive(hole)
+                && host.Scene.Paint(hole).VisualKind == VisualKind.Video;
+            bool posterHiddenWithFrame = !poster.IsNull && Near(host.Scene.Paint(poster).Opacity, 0f, 0.02f);
+            int videosDrawnWithFrame = device.LastVideos.Count;
+
+            Check("gate.media.el.poster-until-first-frame",
+                playingNoFrame && holeInertNoFrame && posterUpNoFrame && videosDrawnNoFrame == 0
+                    && holeActiveWithFrame && posterHiddenWithFrame && videosDrawnWithFrame == 1,
+                $"playingNoFrame={playingNoFrame} holeInert={holeInertNoFrame} posterUp={posterUpNoFrame} "
+                + $"videosNoFrame={videosDrawnNoFrame} holeActive={holeActiveWithFrame} posterHidden={posterHiddenWithFrame} "
+                + $"videosWithFrame={videosDrawnWithFrame}");
+        }
     }
 
     /// <summary>Decodes a raw POD draw list exactly like <see cref="FluentGpu.Rhi.Headless.HeadlessGpuDevice"/>'s own
@@ -10098,11 +10654,10 @@ static partial class ControlsSuite
                 + $"stats={st.DrawVideo}/{st.FillRoundRect} cmds={dl.CommandCount} clamp={clamped}");
         }
 
-        // gate.video.op.translate — the hole PARTICIPATES in clean-span reuse: a copied span containing it translates
-        // (Dx/Dy rebased, exactly like FillRoundRect — pure geometry, and the presenter drives the video visual's own
-        // rect independently, so a rebased span cannot desync). Control: a span carrying an ACRYLIC layer still refuses
-        // and rolls back (the one position-DEPENDENT payload — its recipe blurs whatever the canvas holds under the
-        // layer rect). Glyph/clip/non-acrylic-layer spans DO translate now; gate.span.textRowScrollRebase owns that.
+        // gate.video.op.translate — the hole rides the retained-tile composite like any primitive: the flattening seam
+        // places a scroll slice at its posed offset by patching each primitive's Transform (Dx/Dy — pure geometry; the
+        // presenter drives the video visual's own rect independently, so the hole can never desync from it), leaving every
+        // other field untouched.
         {
             var dl = new DrawList();
             var xf = new Affine2D(1f, 0f, 0f, 1f, 40f, 60f);
@@ -10110,48 +10665,31 @@ static partial class ControlsSuite
             var radii = CornerRadius4.All(6f);
             dl.FillRoundRect(dst, radii, ColorF.FromRgba(0x20, 0x20, 0x20), xf, 1f, 1UL);
             dl.DrawVideo(dst, radii, 5, 1f, xf, 1f, 2UL);
-            int byteLen = dl.BytePosition, sortLen = dl.SortPosition, cmds = dl.CommandCount;
-            var stats = dl.OpcodeStats;
+            byte[] bytes = dl.Bytes.ToArray();
 
             const float dx = -17.5f, dy = 23.25f;
-            dl.SwapAndReset();
-            bool copied = dl.CopySpanFromPriorTranslated(0, byteLen, 0, sortLen, cmds, in stats, dx, dy);
-
-            var outBytes = dl.Bytes;
             int p = 0, seen = 0;
             DrawVideoCmd movedHole = default;
             FillRoundRectCmd movedFill = default;
-            while (p + sizeof(int) <= outBytes.Length)
+            while (p + sizeof(int) <= bytes.Length)
             {
-                var op = (DrawOp)MemoryMarshal.Read<int>(outBytes.Slice(p));
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.AsSpan(p));
                 p += sizeof(int);
-                if (op == DrawOp.DrawVideo) movedHole = MemoryMarshal.Read<DrawVideoCmd>(outBytes.Slice(p));
-                else if (op == DrawOp.FillRoundRect) movedFill = MemoryMarshal.Read<FillRoundRectCmd>(outBytes.Slice(p));
-                p += DrawPayloadSize(op);
+                int size = DrawPayloadSize(op);
+                DrawOpTranslate.Apply(op, bytes.AsSpan(p, size), dx, dy);
+                if (op == DrawOp.DrawVideo) movedHole = MemoryMarshal.Read<DrawVideoCmd>(bytes.AsSpan(p));
+                else if (op == DrawOp.FillRoundRect) movedFill = MemoryMarshal.Read<FillRoundRectCmd>(bytes.AsSpan(p));
+                p += size;
                 seen++;
             }
-            bool rebased = copied && seen == 2 && p == outBytes.Length
+            bool rebased = seen == 2 && p == bytes.Length
                 && movedHole.Transform.Dx == 40f + dx && movedHole.Transform.Dy == 60f + dy
                 && movedFill.Transform.Dx == 40f + dx && movedFill.Transform.Dy == 60f + dy
-                // everything except the transform survives the memcpy untouched
-                && movedHole.Dst == dst && movedHole.Radii == radii && movedHole.SurfaceId == 5 && movedHole.VideoReady == 1f
-                && dl.CommandCount == 2 && dl.OpcodeStats.DrawVideo == 1;
+                // everything except the transform is untouched
+                && movedHole.Dst == dst && movedHole.Radii == radii && movedHole.SurfaceId == 5 && movedHole.VideoReady == 1f;
 
-            // Control: an ACRYLIC layer's pixels depend on WHERE it sits (it blurs the canvas beneath DeviceRect), so its
-            // span must refuse and leave the destination list untouched (no half-written span — the rollback).
-            var dg = new DrawList();
-            dg.FillRoundRect(dst, radii, ColorF.FromRgba(0x20, 0x20, 0x20), xf, 1f, 1UL);
-            dg.PushLayer(dst, radii, ColorF.FromRgba(0x30, 0x30, 0x30), ColorF.FromRgba(0x20, 0x20, 0x20), 0.6f, 30f, 0.02f, 0.8f, 2UL);
-            dg.PopLayer(dst, 3UL);
-            int gBytes = dg.BytePosition, gSort = dg.SortPosition, gCmds = dg.CommandCount;
-            var gStats = dg.OpcodeStats;
-            dg.SwapAndReset();
-            bool refused = !dg.CopySpanFromPriorTranslated(0, gBytes, 0, gSort, gCmds, in gStats, dx, dy)
-                && dg.BytePosition == 0 && dg.CommandCount == 0;
-
-            Check("gate.video.op.translate", copied && rebased && refused,
-                $"copied={copied} ops={seen} dx={movedHole.Transform.Dx:0.##} dy={movedHole.Transform.Dy:0.##} "
-                + $"(want {40f + dx:0.##}/{60f + dy:0.##}) rebased={rebased} acrylicRefused={refused}");
+            Check("gate.video.op.translate", rebased,
+                $"ops={seen} dx={movedHole.Transform.Dx:0.##} dy={movedHole.Transform.Dy:0.##} (want {40f + dx:0.##}/{60f + dy:0.##})");
         }
 
         // gate.video.op.headless — the full reconcile → record → RHI-decode path: a BoxEl{VideoHole} inside a rounded
@@ -10430,7 +10968,6 @@ sealed class SortableCloseProbe : Component
             RepeatLayout.Stack(RowH),
             new ListOptions
             {
-                Overscan = 2,
                 Controller = Ctl,
                 // The channel WITHOUT a provider - the exact wiring that made the close edge unreachable.
                 Reorder = new ReorderOptions { DisplacementVersion = Ver },

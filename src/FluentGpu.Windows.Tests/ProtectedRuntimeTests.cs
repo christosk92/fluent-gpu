@@ -366,6 +366,64 @@ public sealed class ProtectedRuntimeTests
     }
 
     [Fact]
+    public async Task AKeepAliveToken_KeepsTheRuntimeAndItsLicensesWarm_PastTheIdleWindow()
+    {
+        // D15's gap: a surface closed (no session left), the app's warm keeper still knows a video-capable row is
+        // current/next, and the idle window is short enough to fire while nothing else holds a reference. Without a
+        // token the runtime — and every license in it — is torn down; with one it must not be, however long the
+        // window waits.
+        using var h = new Harness(idleMs: 200);
+        Assert.True(h.Runtime.Acquire());
+        h.Ensure(1);
+        ulong lic = h.HandleFor(1);
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 12, 0, Kid(1));
+        Assert.Equal(LicenseCacheState.Usable, h.StateFor(1));
+
+        IDisposable? token = h.Runtime.TakeKeepAlive();
+        Assert.NotNull(token);
+        Assert.Equal(2, h.Runtime.References);
+
+        h.Runtime.Release();   // the session's own reference goes away — only the keep-alive is left
+        Assert.Equal(1, h.Runtime.References);
+
+        await Task.Delay(500, Ct);   // well past the 200 ms idle window
+        Assert.True(h.Runtime.IsRunning);
+        Assert.Equal(0, h.Native.DestroyCount);
+        Assert.Equal(LicenseCacheState.Usable, h.StateFor(1));
+        Assert.Equal(lic, h.HandleFor(1));
+
+        token!.Dispose();      // the keeper let go: NOW the idle window (and eventual teardown) applies
+        await h.Native.Destroyed.Task.WaitAsync(TimeSpan.FromSeconds(2), Ct);
+        Assert.False(h.Runtime.IsRunning);
+        Assert.Equal(0, h.Runtime.LicenseCount);
+    }
+
+    [Fact]
+    public void AKeepAliveToken_DisposedTwice_ReleasesOnlyOnce()
+    {
+        using var h = new Harness(idleMs: 60_000);
+        Assert.True(h.Runtime.Acquire());
+        IDisposable? token = h.Runtime.TakeKeepAlive();
+        Assert.Equal(2, h.Runtime.References);
+
+        token!.Dispose();
+        Assert.Equal(1, h.Runtime.References);
+        token.Dispose();       // idempotent: must not drive References negative or double-release
+        Assert.Equal(1, h.Runtime.References);
+    }
+
+    [Fact]
+    public void AKeepAliveToken_FailsWhenTheNativeComponentIsMissing()
+    {
+        using var h = new Harness();
+        h.Native.Available = false;
+
+        Assert.Null(h.Runtime.TakeKeepAlive());
+        Assert.False(h.Runtime.IsRunning);
+        Assert.Equal(0, h.Runtime.References);
+    }
+
+    [Fact]
     public void AMissingNativeComponent_FailsAcquireWithAStartupError()
     {
         using var h = new Harness();

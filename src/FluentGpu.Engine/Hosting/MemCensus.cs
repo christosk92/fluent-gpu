@@ -61,7 +61,7 @@ public readonly struct CensusSnapshot
         SceneLive = scene.LiveCount;
         SceneCapacity = scene.Capacity;
         SceneOrphans = scene.OrphanCount;
-        SceneSticky = scene.ScrollBindCount;
+        SceneSticky = scene.ScrollEffectCount;
         SceneScrollState = scene.ScrollStateCount;
         SceneBrushAnims = scene.BrushAnimCount;
         var snapshots = host.SceneCapacityCensus;
@@ -113,7 +113,7 @@ public readonly struct CensusSnapshot
 }
 
 /// <summary>
-/// FG_MEM_DIAG=1 (interval seconds = FG_MEM_DIAG_SEC, default 5): a low-overhead memory/residency census. The host
+/// --fg mem (interval seconds = --fg mem=N, default 5): a low-overhead memory/residency census. The host
 /// ticks <see cref="MaybeReport"/> once per frame (a cheap timestamp compare when on; nothing when off). Every
 /// interval it prints a compact multi-line "[memcensus]" block to stderr: the managed GC picture
 /// (<see cref="GC.GetGCMemoryInfo()"/> heap/committed + collection counts + an allocation rate), the process working

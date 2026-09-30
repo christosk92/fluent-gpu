@@ -117,7 +117,7 @@ public static partial class ToggleSwitch
     /// <summary>The controlled on/off state is a caller <see cref="Signal{T}"/> (the value is read directly inside the
     /// core — no props re-push needed for the value; signals are live). A gesture WRITES the signal first, then fires
     /// <paramref name="onChange"/> once; a programmatic signal write re-skins the switch with NO onChange echo. The
-    /// signal INSTANCE freezes at mount (bind wiring is mount-only) — swap it by re-keying. Pass no signal
+    /// signal INSTANCE is a mount-time contract — swap it by re-keying. Pass no signal
     /// (<paramref name="isOn"/> = null) and the control materializes its own internal signal ("uncontrolled" = "the
     /// control made its own signal" — one code path).
     ///

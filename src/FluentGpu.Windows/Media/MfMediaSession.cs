@@ -69,6 +69,18 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private int _presentationEpoch;
     private TimeSpan _duration = TimeSpan.Zero;
     private nuint _handle;
+    private VideoSurfaceId _publishedSurface;   // last value handed to sink.VideoSurface (PublishSurface)
+
+    /// <summary>The player's VideoSurface signal — what MediaPlayerElement's poster/hole gate reads: non-None while
+    /// a swap chain is bound for the live presentation, None otherwise. No real backend wrote this signal until
+    /// 2026-09-22 (only the headless scripted player did), so the poster never dropped and the hole was never punched.
+    /// Value-gated: a steady pump publishes nothing.</summary>
+    private void PublishSurface(MediaSignalSink sink, VideoSurfaceId id)
+    {
+        if (id == _publishedSurface) return;
+        _publishedSurface = id;
+        sink.VideoSurface(id);
+    }
     // The size (px) the video stream was last sized to inside MF's own swap chain — the (capped) NATURAL frame size,
     // NOT the destination rect: MF renders the full frame 1:1 into its swap chain and DirectComposition performs the
     // fit — see the §3 comment in PumpVideo.
@@ -418,6 +430,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         {
             _presentationEpoch = snap.PresentationEpoch;
             _handle = 0;
+            PublishSurface(sink, default);   // the old swap chain is gone with its presentation; the poster covers until the next handle
             Volatile.Write(ref _repaintPending, 1);
         }
 
@@ -481,6 +494,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             if (_handle != 0)
             {
                 binding.Bind(_handle);
+                PublishSurface(sink, new VideoSurfaceId(1));   // frames follow the handle at once on the clear path
 
                 // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
                 // fit — the same contract the protected/PlayReady path has always used. The stream is sized to the

@@ -56,7 +56,7 @@ internal static class SkeletonDeriver
                     OnClick = null, OnPointerWheel = null, OnHoverMove = null, OnPointerExit = null, Cursor = null, CanDrag = false,
                     HoverFill = default, PressedFill = default, HoverOpacity = float.NaN, PressedOpacity = float.NaN,
                     OffsetX = 0f, OffsetY = 0f, ScaleX = 1f, ScaleY = 1f, Rotation = 0f,
-                    ScrollBinds = [],
+                    ScrollEffects = [],
                 };
             }
             case BoxEl b:

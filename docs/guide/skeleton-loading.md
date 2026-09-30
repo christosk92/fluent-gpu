@@ -118,29 +118,31 @@ blinks between two renders — the cause is almost always a **new `ImageCache` k
 CDN art, where the same artwork exists under several size hashes), a changed decode target (a size hint that only
 resolves after the first width measure), or a node that unmounted and re-pinned an entry that had been evicted.
 
-Set **`FG_DIAG=1`** (DEBUG builds, or any build compiled with `FLUENTGPU_DIAG`) to route the engine's `[img]` and
-`[morph]` events to `Diag.Sink`, and optionally **`FG_IMG_TRACE=<substring>`** to log only sources containing that
-substring (case-insensitive; read once at startup, unset = everything).
+Pass **`--fg diag`** on the app's command line (DEBUG builds, or any build compiled with `FLUENTGPU_DIAG`) to route
+the engine's `[img]` and `[morph]` events to `Diag.Sink`, and optionally **`--fg img=<substring>`** (e.g.
+`--fg diag,img=ab67616d`) to log only sources containing that substring (case-insensitive; applied once at startup,
+absent = everything).
 
 | event | when | the field that answers "why did it reload?" |
 | --- | --- | --- |
 | `[img] request miss\|hit\|restart` | every `ImageCache.Request` | `src=` (last 24 chars of the final path segment — for a 40-hex Spotify id, the size-independent art identity) + `decode=WxH` + `state=` |
 | `[img] mount` / `src-change` / `decode-change` / `unmount` | the reconciler's `ImageEl` path | `from=`/`to=` — equal `src` tails across a `src-change` means *same art, different size hash* |
 | `[img] pin` / `unpin` / `cancel` / `evict` | residency ref-counting + LRU | a `pin … state=None` is a re-pin of an entry whose texture was already evicted (one blank frame minimum) |
+| `[img] leftover-restart` | `ImageCache.Pump`'s pinned-leftover sweep re-begins a decode that was canceled, or refused by `Begin` under backpressure, while a node still holds it — at `Visible`, once `ImageCache.CanceledLeftoverRetryMs` has passed since its last restart, with no `Request`/`Pin` needed | `from=None\|Failed` + `refs=` — a placeholder that recovers ~0.5 s late instead of never; real failures (`NotFound`, `HttpError`, `GpuUpload`) are never swept. An idle host wakes for it on its own: a pending retry shapes `RecommendedWaitMs`, a due one is the always-on `[wake]` reason `imageLeftoverDue` |
 | `[img] reveal` | a texture appeared → the cross-fade starts | `cause=blurhash\|decode\|derived`, `revealMs=`, `suppress=` |
 | `[morph] tagged-visible` / `hold` / `retire` | connected-animation (shared-element fly) | a tagged destination is **record-culled** while a fly is in the air, so `visible=0`→`visible=1` on one key is a disappear/reappear with no image work at all |
 
 Everything above is `[Conditional]`-erased in Release and additionally guarded by `Diag.CompiledIn && Diag.Enabled`,
-so a Release build *and* a Debug run with `FG_DIAG` unset both allocate nothing (the zero-alloc gates run Debug).
+so a Release build *and* a Debug run without `--fg diag` both allocate nothing (the zero-alloc gates run Debug).
 
 App-side: Wavee folds these into its own log (`Diag.Sink = WaveeLog.DiagSink`, so they arrive as `D [engine] [img] …`)
 and adds `D [detail] cover …` lines for each decision point that chooses the hero's url and decode bucket. Both halves
-at once — `WAVEE_LOG_FILE_LEVEL` matters because Wavee's *file* sink defaults to Info even on a Debug build, so without
-it the lines exist only in the in-app Diagnostics ring:
+at once — raise Wavee's *file* log level to Debug in its Diagnostics settings (`diagnostics.log.fileMinLevel`),
+because the file sink defaults to Info even on a Debug build, so otherwise the lines exist only in the in-app
+Diagnostics ring:
 
 ```powershell
-$env:FG_DIAG = "1"; $env:WAVEE_LOG_LEVEL = "Debug"; $env:WAVEE_LOG_FILE_LEVEL = "Debug"
-dotnet run --project src/apps/Wavee     # (in the WaveeMusic repo) → %LOCALAPPDATA%\Wavee\logs\wavee-<yyyyMMdd>.log
+dotnet run --project src/apps/Wavee -- --fg diag   # (in the WaveeMusic repo) → %LOCALAPPDATA%\Wavee\logs\wavee-<yyyyMMdd>.log
 ```
 
 ## See also

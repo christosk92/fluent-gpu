@@ -180,8 +180,9 @@ The dispatch you'll touch most:
 - **`WriteColumns(NodeHandle, Element, bool isMount, Element? old)`** is the big `switch (el)` that writes an element's
   fields into the scene's SoA columns (`Paint`, `Layout`, interaction). This is where a new `Element` type's static
   props land.
-- **`BindNode(NodeHandle, Element)`** wires a reactive `Effect` for each *bound* channel (`Prop<T>.IsBound`). The
-  effect reads the thunk/signal inside itself (so it re-subscribes) and writes one scene field. Note the dirty split
+- **`BindNode(NodeHandle, Element)`** wires a reactive `BindEffect<T>` for each *bound* channel (`Prop<T>.IsBound`). The
+  effect reads the thunk/signal inside itself (so it re-subscribes) and writes one scene field; `Update` re-points it
+  (`RewireBinds`, `Reconciler.Rewire.cs`) when a re-render binds the channel with a new thunk/signal. Note the dirty split
   it encodes: `Transform`/`Opacity`/`Fill` mark `TransformDirty`/`PaintDirty` only (**compositor-only** — no relayout);
   `Width`/`Height` mark `LayoutDirty` (a **scoped** relayout). That split is the whole performance story.
 - **`ChildrenOf(Element?)`** returns the positional children of a container (`BoxEl.Children` / `GridEl.Children`),

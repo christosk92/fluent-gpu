@@ -1,11 +1,12 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Motion;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -39,6 +40,24 @@ public enum ShelfSnap : byte
     Page = 1,
 }
 
+/// <summary>Whether a <see cref="PagedShelf"/>'s slot root reserves the hover-lift/shadow clearance and paints the
+/// hover-elevate halo (E10). Frozen MOUNT CONFIGURATION — like <see cref="ShelfSnap"/>/<c>rows</c> — never a
+/// <c>Parts</c> style, because it changes the slot root's Padding (a layout-shape prop no <c>TemplateParts</c> door
+/// can touch) and the clip chain's headroom, not paint alone.</summary>
+public enum ShelfLift : byte
+{
+    /// <summary>Default — byte-identical to a shelf built before this enum existed: the slot root reserves
+    /// <c>LiftClearance</c>/<c>ShadowClearance</c> padding (single-row/measured shapes) and cards translate up +
+    /// paint a soft halo on hover.</summary>
+    Elevate = 0,
+    /// <summary>No lift clearance, no shadow pad, no hover-elevate paint: the slot root's Padding is the shape's
+    /// default (none) and <c>PartRoot</c>'s own top edge sits flush with the first card's visual top. For a
+    /// headerless shelf (<c>pager: ShelfPager.None</c>, no title/header — the E4 external-controller shape) mounted
+    /// directly under an app-owned sticky header, so the app never has to cancel <c>LiftClearance</c> with a
+    /// <c>Margin.Top = -12</c> hack.</summary>
+    None = 1,
+}
+
 // The two PURE decisions this control's card-mount budget rests on — the progressive probe progression
 // (ShelfProbeMath) and the viewport band (ShelfViewportBand) — live in ShelfProbeMath.cs, System-only, so a headless
 // test compiles them without the engine (the SortableMath / SplitterMath / ToastCoalescing pattern).
@@ -67,9 +86,74 @@ static class ShelfProbeKeys
 /// <summary>State handed to a custom pager builder (<c>customPager</c>). The three ACTION slots are REFERENCE-STABLE for
 /// the shelf's lifetime (they read the live page + grid, never a render's locals) — so a pager that packs this context
 /// into a props record for its own component gets value equality across renders and its subtree short-circuits instead of
-/// re-rendering on every shelf render. Only the four value slots change.</summary>
+/// re-rendering on every shelf render. Only the four value slots change.
+/// <para><see cref="PageSignal"/> is the shelf's OWN internal page signal — the same live channel the stock Pips pager
+/// binds directly (<c>PipsPager.Create(pageCount, PageSignal, …)</c>, a signal-direct bind, never a per-render value
+/// read) — handed out for a custom pager that wants to bind a control straight to it instead of re-deriving a mirror
+/// signal from the four value slots above. Reference-stable for the shelf's lifetime, same as the three actions.</para></summary>
 public readonly record struct ShelfPagerContext(
-    int Page, int PageCount, bool CanPrev, bool CanNext, Action Prev, Action Next, Action<int> GoTo);
+    int Page, int PageCount, bool CanPrev, bool CanNext, Action Prev, Action Next, Action<int> GoTo,
+    IReadSignal<int> PageSignal);
+
+/// <summary>
+/// An external controller for a <see cref="PagedShelf"/>'s pager — for when the pager affordances (chevrons, a
+/// <see cref="PipsPager"/>) live OUTSIDE the shelf, e.g. in the app's own sticky chapter header (the shelf itself is
+/// built with <c>pager: ShelfPager.None</c>). Pass the SAME instance to <see cref="PagedShelf.Create{T}"/> that the
+/// header reads — a plain propless field, frozen at mount like every other <c>Embed.Comp</c> factory capture, so the
+/// controller's identity must be stable for the shelf's lifetime (a <c>static readonly</c> field or a value held by an
+/// ancestor component, never a per-render <c>new ShelfController()</c>).
+/// <para><see cref="Page"/>/<see cref="PageCount"/>/<see cref="CanPrev"/>/<see cref="CanNext"/> are published by the
+/// bound shelf on every render it takes (equality-gated — an unchanged frame writes nothing and notifies nobody); they
+/// follow BOTH edges that can move them — a pager action (<see cref="GoTo"/>/<see cref="Prev"/>/<see cref="Next"/>) AND
+/// a free user gesture (swipe/wheel) settling on a different page, since the shelf's own settled-offset re-sync writes
+/// its page signal exactly the same way regardless of who asked. <see cref="GoTo"/>/<see cref="Prev"/>/<see cref="Next"/>
+/// forward to the bound shelf's own CACHED action delegates (the same reference-stable ones <see cref="ShelfPagerContext"/>
+/// carries) — no per-call allocation, and a no-op (returns silently) before any shelf has bound.</para>
+/// <para>With NO controller passed to <see cref="PagedShelf.Create{T}"/>, none of this wiring runs — the shelf's tree and
+/// behavior are byte-identical to a shelf built before this type existed.</para></summary>
+public sealed class ShelfController
+{
+    readonly Signal<int> _page = new(0);
+    readonly Signal<int> _pageCount = new(1);
+    readonly Signal<bool> _canPrev = new(false);
+    readonly Signal<bool> _canNext = new(false);
+
+    public IReadSignal<int> Page => _page;
+    public IReadSignal<int> PageCount => _pageCount;
+    public IReadSignal<bool> CanPrev => _canPrev;
+    public IReadSignal<bool> CanNext => _canNext;
+
+    // The bound shelf's own cached _pagerGoTo/_pagerPrev/_pagerNext — wired once, at the shelf's construction (see
+    // PagedShelfCore's ctor), and reference-stable for its lifetime; forwarding through here adds no allocation.
+    Action<int>? _goTo;
+    Action? _prev;
+    Action? _next;
+
+    /// <summary>Wired by the bound <c>PagedShelfCore</c> at construction — internal, so only a <see cref="PagedShelf"/>
+    /// can bind a controller. Rebinding (a shelf remount) simply overwrites the three delegates.</summary>
+    internal void Bind(Action<int> goTo, Action prev, Action next)
+    {
+        _goTo = goTo; _prev = prev; _next = next;
+    }
+
+    /// <summary>Called by the bound shelf on every render with its just-computed page state (the same four values its
+    /// own header would have shown). <see cref="Signal{T}.SetIfChanged"/> is the whole cost on a steady frame — no
+    /// notify, no allocation.</summary>
+    internal void Publish(int page, int pageCount, bool canPrev, bool canNext)
+    {
+        _page.SetIfChanged(page);
+        _pageCount.SetIfChanged(pageCount);
+        _canPrev.SetIfChanged(canPrev);
+        _canNext.SetIfChanged(canNext);
+    }
+
+    /// <summary>Navigate to an absolute page (clamped by the bound shelf). No-op before a shelf has bound.</summary>
+    public void GoTo(int page) => _goTo?.Invoke(page);
+    /// <summary>Step to the previous page. No-op before a shelf has bound.</summary>
+    public void Prev() => _prev?.Invoke();
+    /// <summary>Step to the next page. No-op before a shelf has bound.</summary>
+    public void Next() => _next?.Invoke();
+}
 
 /// <summary>
 /// A SIZE-REACTIVE, virtualized, paged horizontal card shelf (the Spotify "Made for you" / "Popular artists" rail). It
@@ -142,12 +226,49 @@ public static class PagedShelf
         // Opt-in page-mandatory snapping (see ShelfSnap.Page). Default None keeps every existing shelf free-panning.
         ShelfSnap snap = ShelfSnap.None,
         int maxItems = int.MaxValue,
-        Action<int, int>? onVisibleRange = null)
-        => Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange),
+        Action<int, int>? onVisibleRange = null,
+        // External pager controller (E4): pass when the chevrons/PipsPager live OUTSIDE this shelf (an app sticky
+        // chapter header) instead of the shelf's own header row. A plain propless factory capture — FROZEN at mount,
+        // like every field below — so the instance must be stable for the shelf's lifetime (see ShelfController).
+        // Byte-identical tree/behavior when null: nothing below reads it.
+        ShelfController? controller = null,
+        // Lead-item span (E7) — item 0 occupies this many cells (a wide "hero" first card: MixedCovers/CoverShelf's
+        // lead when it carries a header image). A LIVE prop, like title/header below: it depends on DATA (whether
+        // THIS lead item has a header image), which can change after mount without remounting the shelf, so it rides
+        // the same re-pushed-every-render channel as Title/Header (see ShelfProps below) rather than a frozen ctor
+        // field. 1 = no lead item, byte-identical to a shelf built before this parameter existed. Only takes effect
+        // when rows == 1 (FillRowVirtualLayout.EffectiveLeadSpan); ignored by a multi-row grid.
+        int leadSpan = 1,
+        // Hover-lift clearance/paint (E10) — frozen mount configuration, like snap/rows above (see ShelfLift). Default
+        // Elevate is byte-identical to a shelf built before this parameter existed.
+        ShelfLift lift = ShelfLift.Elevate,
+        // Keyboard/pointer invoke (E9, F21) — fires with the invoked item + its index on Tap/EnterKey/SpaceKey via the
+        // ItemsView roving-focus model the slot root now joins (see BindCard/ShelfCardSlot). Re-pushed via ShelfProps
+        // like CardAt/KeyOf/OnVisibleRange above: IGNORED by the props equality gate, always resolved through the
+        // NEWEST pushed delegate at invocation time — never captured/frozen at mount. Null (the default) is
+        // byte-identical to a shelf built before this parameter existed (IsItemInvokedEnabled stays false).
+        Action<T, int>? onInvoke = null,
+        // Lead-item TEMPLATE (E21) — builds item 0 INSTEAD of cardAt, but only while the lead's span is actually
+        // in effect (the EFFECTIVE span — FillRowVirtualLayout.EffectiveLeadSpan — is > 1, i.e. the page is wide
+        // enough for the lead to keep its extra cells). Once the fit narrows past that point the shelf mounts
+        // cardAt for item 0 like every other item, so "the template follows the cell, not the data": a wide
+        // hero never gets letterboxed into a single square cell. A behaviour delegate re-pushed through
+        // ShelfProps like CardAt (IGNORED by the props equality gate, always the newest at invocation); the
+        // switch is a keyed REMOUNT of item 0's card subtree, never a patch of one template into the other.
+        // Null (the default) is byte-identical to a shelf built before this parameter existed: cardAt builds
+        // item 0 at every span, exactly as before.
+        Func<T, int, float, Element>? leadCardAt = null,
+        // Per-shelf lead minimum (E22) — the column count a page must reach before `leadSpan` is honoured at all.
+        // 0 (the default) keeps the engine's half-row rule (2*leadSpan+1 columns — byte-identical); a positive
+        // value replaces it with max(leadSpan+1, leadMinColumns): Home's cover shelf passes 4 so a 4-column page
+        // still gets its wide lead beside two ordinary cells. Frozen MOUNT CONFIGURATION like snap/rows/lift (it
+        // configures the layout instance); see FillRowVirtualLayout.MinColsFor — the one place the rule lives.
+        int leadMinColumns = 0)
+        => Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange, leadSpan, onInvoke, leadCardAt),
                       () => new PagedShelfCore<T>(cardHeight, pager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
-                                               cardWidthAgnostic, maxColumns, snap))
+                                               cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -157,16 +278,27 @@ public static class PagedShelf
            {
                SkeletonProxy = () => Embed.Comp(new ResponsiveBox.Props(
                        w => ShelfProxy(items, cardAt, header, title,
-                           FillRowVirtualLayout.Fit(w, minCardW, maxCardW, gap, perPageOverride, fixedCardW, maxColumns).CardW,
-                           gap, headerGap, maxItems), 0f, 0f),
+                           FillRowVirtualLayout.Fit(w, minCardW, maxCardW, gap, perPageOverride, fixedCardW, maxColumns),
+                           gap, headerGap, maxItems, rows, measured, leadSpan, leadCardAt, leadMinColumns), 0f, 0f),
                    static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
            };
 
-    static Element ShelfProxy<T>(IReadOnlyList<T> items, Func<T, int, float, Element> cardAt, Element? header, string? title, float cardW, float gap, float headerGap, int maxItems)
+    static Element ShelfProxy<T>(IReadOnlyList<T> items, Func<T, int, float, Element> cardAt, Element? header, string? title,
+                                 (int PerPage, float CardW) fit, float gap, float headerGap, int maxItems,
+                                 int rows, bool measured, int leadSpan, Func<T, int, float, Element>? leadCardAt, int leadMinColumns)
     {
         int n = Math.Clamp(Math.Min(items.Count, maxItems), 0, 6);
         var cards = new Element[n];
-        for (int i = 0; i < n; i++) cards[i] = cardAt(items[i], i, cardW);
+        float cardW = fit.CardW;
+        // E21 — the proxy mirrors the live strip's lead decision at the SAME fit (EffectiveSpanFor's rule through
+        // FillRowVirtualLayout.MinColsFor), so a shelf shimmers with the very template its first real frame mounts.
+        // leadCardAt == null ⇒ span 1 here regardless (the lead template is the only thing this proxy widens for).
+        int span = leadCardAt is not null && (measured || Math.Max(1, rows) == 1) && leadSpan > 1
+                   && fit.PerPage >= FillRowVirtualLayout.MinColsFor(leadSpan, leadMinColumns) ? leadSpan : 1;
+        for (int i = 0; i < n; i++)
+            cards[i] = i == 0 && span > 1
+                ? leadCardAt!(items[0], 0, span * cardW + (span - 1) * gap)
+                : cardAt(items[i], i, cardW);
         Element head = header ?? (title is { Length: > 0 } t ? new TextEl(t) { Size = 20f, Weight = 700 } : new BoxEl());
         return new BoxEl
         {
@@ -199,7 +331,19 @@ public static class PagedShelf
 /// </list></summary>
 internal sealed record ShelfProps<T>(IReadOnlyList<T> Items, Func<T, int, float, Element> CardAt,
     string? Title, Element? Header, Func<ShelfPagerContext, Element>? CustomPager,
-    Func<T, int, string>? KeyOf, int MaxItems, Action<int, int>? OnVisibleRange)
+    Func<T, int, string>? KeyOf, int MaxItems, Action<int, int>? OnVisibleRange,
+    // E7 — see PagedShelf.Create's leadSpan parameter. IGNORED by Equals/GetHashCode below, same as Title/Header/
+    // CustomPager: it rides the chrome-style "always re-applied, never gates the data signal" path in ApplyProps.
+    int LeadSpan = 1,
+    // E9 — see PagedShelf.Create's onInvoke parameter. A behaviour delegate, IGNORED by Equals/GetHashCode below
+    // exactly like CardAt/KeyOf/CustomPager/OnVisibleRange: a fresh closure over the same lambda is allocated on
+    // every parent render, so gating on it would gate on nothing. Resolved through PagedShelfCore._latest at
+    // invocation time (see PagedShelfCore.InvokeItem), never captured by the frozen ItemsView/ListOptions.
+    Action<T, int>? OnInvoke = null,
+    // E21 — see PagedShelf.Create's leadCardAt parameter. A builder delegate, IGNORED by Equals/GetHashCode below
+    // exactly like CardAt (a fresh closure per parent render); resolved through PagedShelfCore._latest by the lead
+    // slot at render time, and chosen over CardAt only while the EFFECTIVE span is > 1 (PagedShelfCore._effSpanSig).
+    Func<T, int, float, Element>? LeadCardAt = null)
 {
     /// <summary>The number of items this shelf actually renders (the <see cref="MaxItems"/> clamp).</summary>
     internal int VisibleCount => Math.Min(Items.Count, Math.Max(0, MaxItems));
@@ -260,6 +404,18 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // the strip's top, shaving both. The pad lives in the item container's TOP padding, and the root column's gap
     // between header and strip shrinks by the same amount (see Render) — so the on-screen rhythm is unchanged: the
     // former header gap simply moves INSIDE the clip, where the lift and halo can paint into it.
+    //
+    // HEADERLESS SHELVES (pager: ShelfPager.None, no title/header — the E4 external-controller shape: Home's
+    // CoverShelf/MixedCovers/RadioShelf/ShowGrid, whose pager lives in the app's OWN sticky ChapterHeader instead of
+    // this shelf's own header row): with no headerEl, PartRoot has a single child (the viewport) and the Gap
+    // reduction above never applies — so with ShelfLift.Elevate (the default), PartRoot's own top edge sits exactly
+    // LiftClearance (12 DIP) ABOVE the card's visual top (PartViewport's Height already includes the pad; the card
+    // starts LiftClearance down inside it), which reads as a 12 DIP gap under an external header that placement never
+    // asked for. PASS `lift: ShelfLift.None` (E10) instead: no LiftClearance/ShadowClearance padding is reserved at
+    // all, so PartRoot's top edge sits flush with the first card's visual top with nothing to cancel — see
+    // `component-props-contract.md` "An external pager is a bound instance, not a prop." (formerly closed with a
+    // `Margin.Top = -12` on PartRoot; ShelfLift.None removes the gap at its source instead of cancelling it after
+    // the fact — no band-aid margin, per this repo's "no legacy paths" rule).
     const float LiftClearance = 12f;
     // Hover-halo headroom on the MAIN (horizontal) axis — LiftClearance's horizontal sibling. The first/last card's
     // elevation halo would hard-clip at the viewport's left/right edge (the viewport must keep clipping to page). The
@@ -289,14 +445,13 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     const long PageKeyQuantumCap = (1L << 20) - 1L;
     // ── LIFT DEBOUNCE (ShelfSnap.Page). Grace window (ms) between a settle that WANTS a re-snap and the moment the glide
     // is actually armed. This is WALL-CLOCK SCHEDULING ONLY: it delays WHEN the one programmatic seam is called, never the
-    // glide itself (which stays the exact closed-form Driven chase the kernel runs — dt-deterministic, untouched).
+    // glide itself (a closed-form Glide plan — a function of absolute time, untouched).
     //
-    // Why it exists: a live two-finger pan is NOT one continuous motion. The OS segments it, and the kernel's contact
-    // resampler clamps at the newest sample during a micro-pause — so no offset moves, and UserScrollActive drops
-    // ~14–20 ms into any pause while Activity is still Drag. Arming ScrollIntoView.ScrollTo there would post a Driven
-    // chase INTO the live gesture and kill the pan just as surely as the old integrator's phase overwrite did — a
-    // fresh contact sample arriving mid-glide is not what "resumed panning" means to the kernel. The ACTIVITY GATE
-    // (in the observer action) is the STRUCTURAL fix for that. This window covers the other half: the OS also
+    // Why it exists: a live two-finger pan is NOT one continuous motion. The OS segments it into several contacts, and
+    // the offset rests during a micro-pause while the contact is still live. Arming a ScrollTo there would author a
+    // Glide INTO the live gesture and kill the pan — a fresh contact sample arriving mid-glide re-grabs the content,
+    // which is not what "resumed panning" means. The ACTIVITY GATE (in the observer action: no re-snap while the motion
+    // is user-driven) is the STRUCTURAL fix for that. This window covers the other half: the OS also
     // segments one continuous scroll into several complete gesture cycles, and between two segments Activity
     // genuinely IS Idle — no gate can tell that rest from a real one, only elapsed time can. A resumed pan pushes the
     // deadline out (both gesture edges bump _snapTick), so a segmented pan is never snapped mid-flight.
@@ -314,7 +469,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // panning on a real shelf page (≈612 DIP on the artist chart — the strip runs out of finger first), which is why a
     // pan used to be answered by a yank back to where it started. 0.25 is the touch convention.
     const float CommitFraction = 0.25f;
-    static readonly bool ShelfLog = Environment.GetEnvironmentVariable("FG_SHELFLOG") == "1";
+    static bool ShelfLog => FluentGpu.Hosting.EngineSwitches.ShelfLog;   // `--fg shelf`
 
     /// <summary>Tolerance equality for the probe-lock signals: equal within <see cref="MeasureTolerance"/>, NaN-aware
     /// (NaN equals NaN — the "never probed" sentinel must not notify itself; NaN never equals a real measurement).
@@ -336,6 +491,25 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // THE CHROME signal — title/header/pager presence. Written on every push (a rebuilt header is a new reference), so
     // the shelf's own header row stays live while the cards stay parked behind the data gate.
     readonly Signal<ShelfChrome> _chrome = new(default);
+    // E7 — the lead-item span, LIVE like chrome: written UNCONDITIONALLY on every ApplyProps push (never gated by the
+    // data-props equality check), so a caller can flip 1→2→1 as the underlying item's header-image data changes
+    // without remounting the shelf. A SEPARATE signal from _chrome (not folded into ShelfChrome): Render subscribes
+    // it (page count, the controller/pips, _layout.SetLeadSpan) and derives _effSpanSig below from it — no card
+    // slot subscribes the RAW span at all.
+    readonly Signal<int> _leadSpanSig = new(1);
+    // E21 — the EFFECTIVE lead span: the raw request above resolved against the live fit's column count through
+    // FillRowVirtualLayout.MinColsFor (EffectiveSpanFor — the same rule PageCountFor and the layout's own
+    // EffectiveLeadSpan apply, so the three can never disagree). Written by Render (SetIfChanged — a steady render
+    // writes nothing) at the ONE point the per-page column count and the requested span are both known, and read by
+    // exactly ONE place: the lead card's own slot (ShelfCardSlot at index 0), which picks LeadCardAt vs CardAt and
+    // widens its width hint from it. So a span flip — from a raw push OR a resize that crosses the column threshold —
+    // re-renders ONLY the lead slot; every other card slot never subscribes to it and is untouched. Render itself
+    // never reads it (no read+write in one run — BackwardsWriteGuard-clean, the same shape as _controller.Publish).
+    readonly Signal<int> _effSpanSig = new(1);
+    // The effective span the strip's viewport was last re-laid-out for (see the E21 layout effect in Render): a
+    // FillRowVirtualLayout.SetLeadSpan is a plain field write that only shows on the layout's NEXT geometry query,
+    // and nothing else dirties the viewport when the span alone moves — so the shelf marks it itself, once per change.
+    int _lastAppliedEffSpan = 1;
     // The NEWEST props object the parent pushed, delegates included — deliberately a plain field, not a signal: reading
     // it must never subscribe anything (the delegates are behaviour, not data). Every delegate invocation goes through
     // here so the shelf always calls the latest CardAt/KeyOf/CustomPager/OnVisibleRange even while the data gate holds.
@@ -356,6 +530,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         if (ReuseGuard.CompiledIn && ReuseGuard.Enabled && previous is not null) ReportDelegateDrift(previous, next);
         _latest = next;                       // delegates + chrome: always the newest, never gated
         _chrome.Value = new ShelfChrome(next.Title, next.Header, next.CustomPager is not null);
+        _leadSpanSig.SetIfChanged(Math.Max(1, next.LeadSpan));   // E7 — live, never gated by the data-props check below
         // ONE compare decides both: the equality-gated write returns false for a rebuilt-but-equal snapshot, and the
         // content revision (which invalidates the measured-height lock) must move exactly when that write does. Call it
         // FIRST and unconditionally — a `previous is null ||` short-circuit here would skip the mount write entirely.
@@ -373,6 +548,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             : !SameMethod(previous.KeyOf, next.KeyOf) ? nameof(ShelfProps<T>.KeyOf)
             : !SameMethod(previous.CustomPager, next.CustomPager) ? nameof(ShelfProps<T>.CustomPager)
             : !SameMethod(previous.OnVisibleRange, next.OnVisibleRange) ? nameof(ShelfProps<T>.OnVisibleRange)
+            : !SameMethod(previous.OnInvoke, next.OnInvoke) ? nameof(ShelfProps<T>.OnInvoke)
+            : !SameMethod(previous.LeadCardAt, next.LeadCardAt) ? nameof(ShelfProps<T>.LeadCardAt)
             : null;
         if (field is null) return;
         _delegateDriftReported = true;
@@ -400,13 +577,90 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     }
 
     void VisibleRange(int first, int last) => _latest.OnVisibleRange?.Invoke(first, last);
+    // E9 (F21) — the ONE place ShelfProps.OnInvoke is resolved: wired unconditionally onto ListOptions<T>.OnInvokedTyped
+    // (see MeasuredLiveStrip/VirtualLiveStrip) and always calls through _latest, so a caller that starts with no
+    // onInvoke and later pushes one is answered the moment IsItemInvokedEnabled was decided true at mount — see the
+    // ReportDelegateDrift note above for the one case (null → non-null across a remount) that note exists to catch.
+    void InvokeItem(int index, T item) => _latest.OnInvoke?.Invoke(item, index);
+
+    // E9 (F21) — the slot root JOINS the ItemsView keyboard/roving-focus model instead of leaving every card an inert
+    // box: Focusable=false + OnPointerReleased/OnKeyDown/OnFocusChanged wired straight onto scope.Row is the exact
+    // seam ItemContainer.Build and SelectorVisualsBound.None use for a BOUND row (see BoundItemScope.cs's RowScope
+    // doc) — "the slot roots are built Focusable=false, so the tab WALK skips them" (ItemsView.cs's SetSlotTabStop
+    // comment) and the owner toggles the CURRENT slot's scene focusability imperatively, no re-render. The card
+    // template itself (cardAt) declares NEITHER Focusable NOR OnClick/OnPointerReleased — this root is the one and
+    // only invoke/focus target; a template that also wired its own click would fight the roving tab stop (the F21
+    // bug this closes).
     Element BindCard(BoundItemScope<T> scope) => new BoxEl
     {
         Direction = 1,
-        Padding = _measured || _rows == 1 ? new Edges4(0f, LiftClearance, 0f, ShadowClearance) : default,
-        HoverElevatePaint = HoverElevate,
+        // E10 (ShelfLift) — Elevate (the default, byte-identical to a shelf built before ShelfLift existed) reserves
+        // the hover-lift/shadow clearance in the slot's own padding; None reserves nothing, so PartRoot's top edge
+        // sits flush with the first card's visual top under an app-owned external header (no -12 DIP margin hack).
+        Padding = _lift == ShelfLift.Elevate && (_measured || _rows == 1)
+            ? new Edges4(0f, LiftClearance, 0f, ShadowClearance) : default,
+        HoverElevatePaint = _lift == ShelfLift.Elevate && HoverElevate,
+        Focusable = false,
+        Role = AutomationRole.Button,
+        OnPointerReleased = args => scope.Row.OnInteraction(
+            args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
+        OnKeyDown = args =>
+        {
+            if (args.KeyCode == Keys.Enter) { scope.Row.OnInteraction(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }
+            else if (args.KeyCode == Keys.Space && !args.IsRepeat) { scope.Row.OnInteraction(ItemContainerTrigger.SpaceKey, args.Mods); args.Handled = true; }
+        },
+        // ItemsView's own keyboard-current tracking FIRST (unchanged), then the keyboard page-follow: a slot that gains
+        // KEYBOARD focus on a different page pages the shelf (see FollowFocusToPage). One closure per SLOT (BindCard
+        // runs once per slot), nothing allocated per focus move.
+        OnFocusChanged = got =>
+        {
+            scope.Row.OnFocusChanged(got);
+            if (got) FollowFocusToPage(scope.Index.Peek());
+        },
         Children = [Embed.Comp(() => new ShelfCardSlot(this, scope))],
     };
+
+    // ── Keyboard PAGE-FOLLOW (E9). ItemsView's arrow navigation only minimal-scrolls the newly current card into view
+    // (a ~one-card nudge), and the settle re-sync rounds that fractional rest back to the page the strip started on —
+    // so arrowing past a page boundary used to leave the shelf (and its external controller) on the old page with the
+    // focused card peeking in at the edge. A shelf pages: when a card gains KEYBOARD focus (the dispatcher sets
+    // NodeFlags.FocusVisual before it fires the focus event — arrow nav, typeahead, Tab-in) on a page other than the
+    // current one, go to that page through the ONE pager entry point (GoToPage), so the glide is page-aligned exactly
+    // like a chevron's and the controller republishes Page. A POINTER press focuses without the visual (FocusIndex
+    // visual:false) and is left alone — clicking a half-visible card must not flip the page under the pointer.
+    // Allocation-free: Peek reads, the count-independent Fit, integer page math; a same-page move writes nothing.
+    void FollowFocusToPage(int index)
+    {
+        if (Context.Scene is not { } scene) return;
+        var focused = _inputHooks?.GetFocus?.Invoke() ?? NodeHandle.Null;
+        if (focused.IsNull || !scene.IsLive(focused) || (scene.Flags(focused) & NodeFlags.FocusVisual) == 0) return;
+        int count = _items.Count.Peek();
+        if ((uint)index >= (uint)count) return;
+        // Peek-only page grid (PageGrid reads the subscribing _count — this runs from focus dispatch, which may sit
+        // inside a tracked run; it must never subscribe anything).
+        int cols = Math.Max(1, FillRowVirtualLayout.Fit(_w.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns).PerPage);
+        int leadSpan = _leadSpanSig.Peek();
+        int maxPage = Math.Max(0, PageCountFor(count, cols, leadSpan) - 1);
+        int page = Math.Clamp(PageOfItem(index, cols, leadSpan), 0, maxPage);
+        if (page != Math.Clamp(_page.Peek(), 0, maxPage)) GoToPage(page);
+    }
+
+    // The page an item sits on — the inverse of the bring-into-view effect's page → start-item mapping (single-row:
+    // FillRowVirtualLayout.FirstItemOfPage, page·cols − (s−1) past page 0; multi-row: page·cols·rows). Single-row it is
+    // CELL math: item 0 occupies the lead's `s` cells, item i ≥ 1 sits at cell i + s − 1, and a page holds `cols`
+    // cells — so page(i) is the largest p with FirstItemOfPage(p) ≤ i. The span is the EFFECTIVE one (EffectiveSpanFor,
+    // the same rule PageCountFor and the layout apply), so this never disagrees with where the item is drawn.
+    int PageOfItem(int index, int cols, int leadSpan)
+    {
+        cols = Math.Max(1, cols);
+        if (_measured || _rows == 1)
+        {
+            int s = EffectiveSpanFor(cols, leadSpan);
+            int cell = index <= 0 ? 0 : index + s - 1;
+            return cell / cols;
+        }
+        return index / Math.Max(1, cols * _rows);
+    }
 
     sealed class ShelfCardSlot(PagedShelfCore<T> owner, BoundItemScope<T> scope) : Component
     {
@@ -421,9 +675,35 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             if ((uint)index >= (uint)p.VisibleCount) return new BoxEl();
             float width = owner._cardWidthAgnostic ? owner._maxCardW : owner._cardW.Value;
             if (width <= 0f) width = owner._layout?.CardW ?? owner._maxCardW;
+            // E7 — the lead item's width hint widens to its spanned cell (2*cardW+gap for a 2-span lead). Read ONLY at
+            // index 0: this is the one place `_effSpanSig` is subscribed, so a span change re-renders ONLY the lead
+            // slot, never the rest of the strip. A cardWidthAgnostic card ignores this hint entirely and gets the
+            // right width for free from its arranged cell (FillRowVirtualLayout.ItemRect is already span-aware).
+            // E11/E21 — the EFFECTIVE span is the owner's `_effSpanSig` (derived in Render from the live fit through
+            // FillRowVirtualLayout.MinColsFor — the same rule the layout's own EffectiveLeadSpan applies), never a
+            // local re-derivation and never a direct read of `_layout.EffectiveLeadSpan`: that read raced the
+            // owner's own render (this slot and the owner both woke on the raw span push, and whichever ran first
+            // decided whether `_layout.SetLeadSpan` had happened yet), which is why the lead's width hint used to
+            // stay a plain card's width across a live 1→2 flip. A signal the owner writes AFTER it resolved the span
+            // is ordered by construction.
+            // E21 — the TEMPLATE follows the effective span too: LeadCardAt builds item 0 only while its span is in
+            // effect, else CardAt like any other item. The key carries the choice, so the switch is a keyed REMOUNT
+            // of the card subtree (never one template patched into the other's retained nodes).
+            var template = d.CardAt;
+            bool lead = false;
+            if (index == 0)
+            {
+                int effSpan = owner._effSpanSig.Value;   // subscribe — a span flip re-renders ONLY this slot
+                if (effSpan > 1)
+                {
+                    width = effSpan * width + (effSpan - 1) * owner._gap;
+                    if (d.LeadCardAt is { } leadCardAt) { template = leadCardAt; lead = true; }
+                }
+            }
             string key = d.KeyOf?.Invoke(item, index) ?? index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (lead) key += LeadKeySuffix;
             return new BoxEl { Direction = 1, Grow = 1f,
-                Children = [d.CardAt(item, index, width) with { Key = key }] };
+                Children = [template(item, index, width) with { Key = key }] };
         }
     }
     readonly Func<float, float>? _cardHeight;     // null in measured mode (the engine measures instead)
@@ -437,6 +717,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     readonly int _overscan;
     readonly bool _cardWidthAgnostic;
     readonly ShelfSnap _snap;
+    readonly ShelfLift _lift;   // E10 — frozen mount config; see ShelfLift
+    readonly int _leadMinColumns;   // E22 — frozen mount config; see PagedShelf.Create's leadMinColumns
+    // E21 — appended to the lead card's key while LeadCardAt is the mounted template (see ShelfCardSlot.Render): a
+    // control character no caller's KeyOf can plausibly produce, so a plain card key never collides with a lead key.
+    const string LeadKeySuffix = "\u0001lead";
 
     readonly Signal<float> _w = new(0f);              // self-measured available width (no app broker)
     readonly Signal<int> _page = new(0);              // current page (chevrons/pips; re-synced from the settled offset)
@@ -450,6 +735,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     readonly Signal<float> _measuredH = new(0f, MeasureTolerantComparer.Instance);   // probe-locked card height (measured-virtual mode)
     readonly Signal<float> _cardW = new(0f);          // fitted width consumed by the mounted ItemsView template
     readonly ItemsViewController _ctl = new();
+    readonly ScrollHandle _shelfHandle = new();   // the strip viewport's handle: the settle/page re-sync reads its signals
+    readonly Action _onShelfScroll;
     FillRowVirtualLayout? _layout;                    // stateful — hoisted once, reused across renders
     // SIGNAL (not a field): the re-probe completes by WRITING this — when the re-measured height happens to equal the
     // already-locked value, the equality-gated _measuredH write alone would never re-render us out of probe mode.
@@ -496,10 +783,19 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     int _lastVirtualNav = -1;
     int _lastVirtualColumns;
     float _lastVirtualCardW = float.NaN;
+    int _lastVirtualLeadSpan = 1;   // E7 — a live span change reseats the bring-into-view target (FirstItemOfPage shifts)
+    // E18 — true until the bring-into-view effect below has run once. A REBOUND controller (ShelfController.Bind
+    // overwrote its cached delegates but this is a fresh PagedShelfCore instance — a remount) seeds _page from the
+    // controller's retained PageState BEFORE this effect ever runs (see the ctor), so without this flag the first
+    // bring-into-view would treat that non-zero seed as a NAV (nav 0 != _lastVirtualNav -1) and GLIDE from offset 0
+    // to the retained page instead of landing on it. Consumed (set false) the first time the effect fires, whether or
+    // not it actually seeks anywhere — a shelf that never had a controller starts on page 0 and this only forces its
+    // otherwise-harmless first StartBringItemIntoView(0, …) to Immediate instead of a no-op Glide.
+    bool _firstRealize = true;
 
     // ── Snap-feel state (ShelfSnap.Page). Plain UI-thread scalars: written by the settled-offset observer (which the host
-    // runs after the scroll kernel's tick) and read by the one debounce callback. None of it is scene state, and none of
-    // it is physics — the offset stays single-writer (the kernel), reached only through ScrollIntoView.ScrollTo.
+    // runs after the scroll frame step) and read by the one debounce callback. None of it is scene state, and none of
+    // it is physics — the offset is a plan on the shelf's ScrollHandle, reached only through ScrollHandle.ScrollTo.
     float _pendingSnapTarget = float.NaN;   // the offset the debounce will glide to when it fires; NaN = nothing armed
     float _gestureAnchorX = float.NaN;      // the offset the CURRENT user gesture STARTED at; NaN = no gesture in flight
     bool _userScrollWas;                    // last observed UserScrollActive — the rising-edge detector for that anchor
@@ -515,6 +811,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // the live page + the live grid through _page/PageGrid() — so one instance each serves forever.
     readonly Action<int> _pagerGoTo;
     readonly Action _pagerPrev, _pagerNext;
+    // External controller (E4) — null unless the caller passed one. Bound ONCE, at construction (the cached delegates
+    // above already exist by then), so GoTo/Prev/Next forward with no further allocation. Published to on every render.
+    readonly ShelfController? _controller;
+    // The host's input hooks (refreshed every render): FollowFocusToPage reads the focused node through GetFocus to
+    // tell a KEYBOARD focus move (FocusVisual set) from a pointer one.
+    InputHooks? _inputHooks;
 
     /// <summary>The retained ItemsView viewport. Null before the body realizes.</summary>
     NodeHandle ShelfViewport => _ctl.Viewport;
@@ -531,8 +833,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           float minCardW, float maxCardW, float gap, int rows, int perPageOverride, float fixedCardW,
                           float headerGap, float edgeFade, string prevGlyph, string nextGlyph, TemplateParts? parts,
                           int overscan, bool measured, bool cardWidthAgnostic, int maxColumns = 0,
-                          ShelfSnap snap = ShelfSnap.None)
+                          ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
+                          ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0)
     {
+        _leadMinColumns = Math.Max(0, leadMinColumns);
         _items = BoundItems.Project(_props, static p => p is null ? 0 : Math.Min(p.Items.Count, Math.Max(0, p.MaxItems)),
             static (p, i) => p!.Items[i], default!);
         _cardHeight = cardHeight; _measured = measured;
@@ -544,6 +848,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _maxColumns = Math.Max(0, maxColumns);
         _snap = snap;
         _commitPendingSnap = CommitPendingSnap;
+        _onShelfScroll = OnShelfScroll;
         _advanceProbe = AdvanceProbe;
         _captureProbeHost = h => _probeHostNode = h;
         _captureRoot = h => { _rootNode = h; };
@@ -557,6 +862,17 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _pagerGoTo = GoToPage;
         _pagerPrev = () => StepPage(-1);
         _pagerNext = () => StepPage(+1);
+        _lift = lift;
+        _controller = controller;
+        _controller?.Bind(_pagerGoTo, _pagerPrev, _pagerNext);
+        // E18 (gate.shelf.controller.rebind-restores-page) — a shelf recycled out of the window and back (a fresh
+        // PagedShelfCore behind the SAME ShelfController instance the app kept, e.g. ItemsView row recycling) must
+        // resume on the page it left, not snap back to 0: the controller's Page signal already retained it (Publish
+        // never resets on Bind), so seed THIS shelf's own page signal from it right here — before the first Render
+        // ever runs, let alone publishes 0 over it. Peek, not a subscribed read: this is a one-shot restore at
+        // construction, not a live binding (the shelf owns _page after this; Publish below is the only later writer
+        // the controller ever sees). No controller ⇒ _page keeps its 0 default, byte-identical to before E18.
+        if (controller is not null) _page.Value = controller.Page.Peek();
     }
 
     // ── The ONE pager navigation entry point (the cached delegates + the stock chevrons/pips all route here). Bumps the
@@ -587,9 +903,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // rails) is untouched.
         var pageScrollSig = UseContext(LazyScroll.Slot);
         _pageScrollSig = pageScrollSig;                 // the hoisted watcher/latch delegates read the live slot
+        _inputHooks = UseContext(InputHooks.Current);   // keyboard page-follow's focus-visual probe (FollowFocusToPage)
         _ = _bandTick.Value;                           // subscribe → the latch's wake re-renders us with the strip
         float w = _w.Value;                            // subscribe → re-fit on resize
         int page = _page.Value;                        // subscribe → pager state + glide retarget
+        int leadSpan = _leadSpanSig.Value;              // subscribe (E7) — a live span push re-renders us: pageCount,
+                                                        // the controller/pips, and _layout.SetLeadSpan below all follow
 
         // Compute the fit the layout will land at (count-independent), to size the strip + page math.
         var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
@@ -598,10 +917,37 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
         }, cardW);
         int perPageItems = Math.Max(1, perPageColumns * (_measured ? 1 : _rows));
-        int pageCount = Math.Max(1, (_count + perPageItems - 1) / perPageItems);
+        int pageCount = PageCountFor(_count, perPageColumns, leadSpan);   // E7 — span-aware (identity when leadSpan==1)
         int maxPage = pageCount - 1;
         int p = Math.Clamp(page, 0, maxPage);
         bool canPrev = p > 0, canNext = p < maxPage;
+        // Publish to the external controller (E4), if any — the SAME four values this render's own header would have
+        // shown, so an app header reading the controller never disagrees with a shelf-drawn one. SetIfChanged-gated
+        // inside Publish: a steady render (nothing moved) notifies nobody and allocates nothing.
+        _controller?.Publish(p, pageCount, canPrev, canNext);
+        // E21 — publish the EFFECTIVE span the same way (the one point where the fit's column count and the raw
+        // request are both in hand): the lead slot reads it to pick its template + width hint. SetIfChanged-gated,
+        // never read by this render (no read+write in one run), and identity (1) for a plain shelf — a steady render
+        // or a shelf with no lead notifies nobody.
+        int effSpan = EffectiveSpanFor(perPageColumns, leadSpan);
+        _effSpanSig.SetIfChanged(effSpan);
+        // E21 — a span flip re-lays the strip out. `_layout.SetLeadSpan` (below) is a plain field write the layout only
+        // consults on its NEXT geometry query, and a span-only change dirties nothing by itself (the ItemsView element
+        // is the same cached instance, so the reconciler skips it; the lead slot's own re-render is scoped inside its
+        // cell) — so the lead's arranged cell kept its old width across a live 1→2 flip. Mark the viewport LayoutDirty
+        // (ArrangeVirtual re-queries ItemRect for every realized cell) + VirtualRangeDirty (the cell→item window
+        // mapping moved with the span) and ask for a frame — the exact seam ItemsView's own CorrectMeasuredExtent
+        // uses. Once per CHANGE (a shelf whose span never moves — every plain shelf — never marks anything).
+        UseLayoutEffect(() =>
+        {
+            if (_lastAppliedEffSpan == effSpan) return;
+            if (Context.Scene is not { } scene) return;
+            var vp = ShelfViewport;
+            if (vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
+            _lastAppliedEffSpan = effSpan;
+            scene.Mark(vp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+            (Context.RequestFrame ?? Context.RequestRerender)();
+        }, DepKey.From(HashCode.Combine(effSpan, ShelfViewport.IsNull)));
 
         // Keep the stored page in range when a resize shrinks the page count (effect — never write a signal in render).
         UseEffect(() => { if (_page.Peek() > maxPage) _page.Value = maxPage; }, maxPage);
@@ -621,12 +967,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             float pageW = perPageColumns * (cardW + _gap);
             ref ScrollState snapState = ref scene.ScrollRef(vp);
             ApplySnapGrid(ref snapState, pageW, snapState.ContentW - snapState.ViewportW);
-            // ApplySnapGrid only writes ScrollState's own snap columns (SnapSpec.ApplyTo's contract) — the kernel body
-            // caches its OWN copy of the snap grid (ScrollBody.Frame, set only by SetFrame) and a snap-only change is
-            // not itself layout-affecting, so nothing else would re-post it. Without this the kernel keeps flinging
-            // against whatever grid (or none) was live at the last real layout pass (scroll-v3-plan §2 kernel-side gap).
-            FluentGpu.Layout.FlexLayout.RepostFrame(scene, vp);
         }, DepKey.From(HashCode.Combine(perPageColumns, cardW, _count, ShelfViewport.IsNull)));
+
+        // The settle/page re-sync: an effect over the strip handle's Offset/Motion signals (see OnShelfScroll).
+        UseEffect(_onShelfScroll);
 
         // ── The LIFT-DEBOUNCE timer (ShelfSnap.Page). Every gesture edge bumps _snapTick; reading it here subscribes us,
         // so the bump re-renders and this one-shot RE-ARMS from now — a resumed pan therefore pushes the pending snap out
@@ -783,18 +1127,35 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         UseLayoutEffect(() =>
         {
             if (needProbe || w <= 1f) return;
-            bool animate = nav != _lastVirtualNav;
-            bool refit = perPageColumns != _lastVirtualColumns || MathF.Abs(cardW - _lastVirtualCardW) > 0.25f;
-            if (!animate && !refit) return; // metadata remeasurement preserves a free-panned offset
+            // E18 — the FIRST realize always seeks (even a page-0 rest, harmlessly), and NEVER animates: a retained
+            // page seeded from a rebound controller (see the ctor) must land immediately, not glide into view from
+            // offset 0. Consumed unconditionally, whether or not a controller was bound at all.
+            bool firstRealize = _firstRealize;
+            _firstRealize = false;
+            bool animate = !firstRealize && nav != _lastVirtualNav;
+            // E7: a live leadSpan push (no page nav) must also reseat the strip — FirstItemOfPage shifts by (s-1) for
+            // every page past 0, so resting on page 2 while the lead gains/loses its span must snap (never animate,
+            // exactly like a resize refit) onto the new item boundary or the strip goes stale relative to the header.
+            bool refit = perPageColumns != _lastVirtualColumns || MathF.Abs(cardW - _lastVirtualCardW) > 0.25f
+                       || leadSpan != _lastVirtualLeadSpan;
+            if (!firstRealize && !animate && !refit) return; // metadata remeasurement preserves a free-panned offset
             _lastVirtualNav = nav;
             _lastVirtualColumns = perPageColumns;
             _lastVirtualCardW = cardW;
-            _ctl.StartBringItemIntoView(_page.Peek() * perPageItems, 0f, animate && !Motion.ReducedMotion);
-        }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, needProbe)));
+            _lastVirtualLeadSpan = leadSpan;
+            int targetPage = _page.Peek();
+            // Span-aware start index (FirstItemOfPage; identity page*perPageItems when leadSpan==1 — see VirtualLayout).
+            // _layout is non-null here: it was built earlier in THIS render (Element body = … below runs before this
+            // effect, since UseLayoutEffect callbacks fire post-commit, after the whole render already ran).
+            int startIndex = (_measured || _rows == 1) && _layout is { } lay
+                ? lay.FirstItemOfPage(targetPage) : targetPage * perPageItems;
+            _ctl.StartBringItemIntoView(startIndex, 0f, animate && !Motion.ReducedMotion);
+        }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, needProbe, leadSpan)));
 
         Element body = _measured
             ? MeasuredVirtualBody(perPageItems, cardW, fade, stripMounted)
             : VirtualBody(perPageItems, cardW, fade, stripMounted);
+        _layout?.SetLeadSpan(leadSpan);   // E7 — LIVE: no remount, takes effect on the layout's next geometry query
         if ((_pager & ShelfPager.HoverEdge) != 0)
             body = ZStack(body, new BoxEl
             {
@@ -811,9 +1172,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         {
             // LiftClearance of the header gap lives INSIDE the strip's clip (the item container's top pad), so the
             // header→card distance on screen stays _headerGap while the clip gains hover-lift headroom — but only where
-            // that pad is actually re-added (measured bodies and the single-row virtual strip). The multi-row grid keeps
-            // its tight clip with NO top pad, so its header gap must not spend clearance it never gets back.
-            Direction = 1, Gap = _measured || _rows == 1 ? MathF.Max(0f, _headerGap - LiftClearance) : _headerGap,
+            // that pad is actually re-added (measured bodies and the single-row virtual strip, AND ShelfLift.Elevate —
+            // E10's None reserves no such pad, so it must not spend a gap it never gets back either).
+            Direction = 1,
+            Gap = _lift == ShelfLift.Elevate && (_measured || _rows == 1) ? MathF.Max(0f, _headerGap - LiftClearance) : _headerGap,
             // No explicit width: the parent sizes us, so OnBoundsChanged reports the real available width (which the
             // strip's viewport then fills → FillRowVirtualLayout fits the same cardW).
             // Cached delegate (the Root part is re-emitted every render). It also re-evaluates the viewport gate: the
@@ -829,78 +1191,40 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
     // ── The settled-offset → page re-sync: the strip is a real scroller, so ANY scroll source (chevron glide, touchpad
     // pan, tilt-wheel) can move it — the page state must follow the truth or the chevrons/pips (and anything derived
-    // from them) go stale. Change-only (the long projection) and settle-only (a mid-glide write would retarget the
-    // glide it's reporting on). The re-sync writes _page but NOT _pageNav, so it never re-arms a bring-into-view.
-    //
-    // The CHANGE-DETECTION bit is UserScrollActive, NOT ScrollFlags.MovingNowBit: ScrollFlags is computed only for
-    // viewports that own a ScrollBind row (ScrollBindEval.ApplyPinAndFlagPass), and a shelf viewport owns none — so the bit
-    // read 0 on every frame and a gate written against it was inert. UserScrollActive is maintained per-tick for every
-    // armed viewport and is false on the settle tick, and RunObservers runs after the integrator, so both gesture edges are
-    // observable here. It is NOT the settle GATE, though: it is a per-frame MOTION bit that goes false during any
-    // micro-pause of a live pan (see the phase gate in the action — that is what "settled" means).
-    //
-    // The projection also carries a COARSE OFFSET term. Keyed on the rounded page alone, a settle that does not change
-    // the page produces no key change and the change-only observer never fires — which is precisely the wheel notch
-    // shorter than half a stride, the case ShelfSnap.Page exists to fix. Quantized so a sub-pixel remainder cannot
-    // pulse it, and ReSnapSettled is idempotent within SettleSnapEpsPx, so the extra fires cost nothing. ──
-    (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) PageScrollSync() =>
-    (
-        g => ((long)PageFromOffset(g.OffsetX) << 21)
-             | (Math.Clamp((long)(MathF.Max(0f, g.OffsetX) / PageKeyQuantumPx), 0L, PageKeyQuantumCap) << 1)
-             | (g.UserScrollActive ? 1L : 0L),
-        g =>
+    // from them) go stale. An EFFECT over the strip handle's Offset + Motion signals (design §7: the shelf is one of the
+    // three motion-signal consumers): re-runs on every signal edge, acts only on a REAL REST (Motion.Kind == Idle) and on
+    // the rising edge of a user gesture (the directional commit's anchor). The re-sync writes _page but NOT _pageNav, so
+    // it never re-arms a bring-into-view.
+    void OnShelfScroll()
+    {
+        var motion = _shelfHandle.Motion.Value;
+        float offsetX = (float)_shelfHandle.Offset.Value;
+        // ── (1) LIVE GESTURE. The rising edge is where the directional commit's anchor is latched: the offset the
+        // gesture started from, which is the only thing that can tell a forward flick from a backward one. CONTACT pans
+        // only (a wheel notch is ALSO user scroll, but it is a DISCRETE request whose contract is the plain
+        // nearest-boundary re-snap — anchoring it would turn a sub-half-stride notch into a page advance).
+        if (motion.UserDriven)
         {
-            // The LIVE activity is what "settled" means (see below), so read it once up front — both branches need it.
-            if (Context.Scene is not { } scene) return;
-            var vp = ShelfViewport;
-            if (vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
-            ScrollActivity activity;
+            if (!_userScrollWas)
             {
-                ref ScrollState liveState = ref scene.ScrollRef(vp);
-                activity = liveState.Activity;
+                _userScrollWas = true;
+                if (motion.Kind == MotionKind.Drag) _gestureAnchorX = offsetX;
+                // A gesture RESUMING on top of an armed snap pushes its deadline out (scheduling only — see SnapGraceMs).
+                if (!float.IsNaN(_pendingSnapTarget)) _snapTick.Value = _snapTick.Peek() + 1;
             }
-
-            // ── (1) LIVE GESTURE. UserScrollActive keeps its change-detection role (it is in the key, so BOTH edges of a
-            // gesture fire this action), and its RISING edge is where the directional commit's anchor is latched: the
-            // offset the gesture started from, which is the only thing that can tell a forward flick from a backward one.
-            // A micro-pause mid-pan drops this bit but NOT the activity, so the anchor can never be re-latched mid-gesture
-            // (gate 2 below returns first and leaves _userScrollWas set) — it stays the true gesture start.
-            if (g.UserScrollActive)
-            {
-                if (!_userScrollWas)
-                {
-                    _userScrollWas = true;
-                    // CONTACT pans only (ScrollActivity.Drag — overscroll is now a property (Band ≠ 0) of that same
-                    // activity, not a separate phase). A mouse-wheel notch is ALSO user scroll (Driven|Wheel), but it is a
-                    // DISCRETE request with no release velocity and its contract is the plain nearest-boundary re-snap —
-                    // anchoring it would turn a sub-half-stride notch into a page advance. No anchor ⇒ the nearest rule,
-                    // unchanged.
-                    if (activity == ScrollActivity.Drag)
-                        _gestureAnchorX = g.OffsetX;
-                    // A gesture RESUMING on top of an armed snap pushes its deadline out (scheduling only — see
-                    // SnapGraceMs). Bumped only when something is actually pending, so a normal pan costs no re-render.
-                    if (!float.IsNaN(_pendingSnapTarget)) _snapTick.Value = _snapTick.Peek() + 1;
-                }
-                return;
-            }
-
-            // ── (2) THE ACTIVITY GATE — the root fix. UserScrollActive is a per-frame MOTION bit: the resampler clamps
-            // at the newest sample during any micro-pause of a live two-finger pan, so no offset is written, movingNow
-            // goes false, and this bit reads false ~14–20 ms into the pause WHILE Activity is still Drag. Acting there
-            // re-snapped INTO the live gesture and killed it. Activity == Idle is reached ONLY through a real gesture end
-            // or a settled fling/glide, so this one test subsumes Drag / Ballistic / Driven (Wheel or Programmatic) — a
-            // chase mid-flight is not a rest either, and re-snapping there glides back where it came from.
-            if (activity != ScrollActivity.Idle) return;
-
-            // ── (3) A REAL REST. Consume the gesture anchor (a wheel notch / keyboard / chevron re-arm has none, which is
-            // what degenerates the commit below to today's plain nearest rule) and let the commit decide the page.
-            _userScrollWas = false;
-            float anchorX = _gestureAnchorX;
-            _gestureAnchorX = float.NaN;
-            int page = ReSnapSettled(in g, PageFromOffset(g.OffsetX), anchorX);
-            if (page != _page.Peek()) _page.Value = page;
+            return;
         }
-    );
+        // ── (2) THE MOTION GATE: a fling/glide mid-flight is not a rest either; re-snapping there glides back where it
+        // came from. Idle is reached ONLY through a settled plan (the host's settle rule writes the Idle hold).
+        if (motion.IsMoving) return;
+        // ── (3) A REAL REST. Consume the gesture anchor (a wheel notch / keyboard / chevron re-arm has none, which is
+        // what degenerates the commit below to the plain nearest rule) and let the commit decide the page.
+        _userScrollWas = false;
+        float anchorX = _gestureAnchorX;
+        _gestureAnchorX = float.NaN;
+        int page = ReSnapSettled(offsetX, PageFromOffset(offsetX), anchorX);
+        if (page != _page.Peek()) _page.Value = page;
+    }
 
     // ── The page-mandatory snap grid for a viewport: interval = the live page stride, BOUNDED at the last WHOLE page
     // boundary. Open-ended, the repeated-snap zone keeps emitting multiples past the content clamp, so a fling into a
@@ -920,6 +1244,39 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         SnapSpec.Every(paged ? pageW : 0f, start: 0f, end: end).ApplyTo(ref sc);
     }
 
+    // ── E7 page count, span-aware. ONE place, used by both Render (the live pageCount the header/controller/pips show)
+    // and PageGrid (the untracked page-math the pager callbacks/settle path use) — so they can never disagree.
+    // Rows == 1 (the only shape a lead span ever applies to): the page grid is CELLS, not items — CellsOf(count) total
+    // cells over `cols` cells/page (identity count == CellsOf(count) when leadSpan == 1 ⇒ byte-identical fallback).
+    // Rows > 1: untouched — a multi-row grid never spans its lead item, so this is exactly the old item/(cols*rows) math.
+    int PageCountFor(int count, int cols, int leadSpan)
+    {
+        cols = Math.Max(1, cols);
+        // Single-row shape: a measured shelf's strip is ALWAYS built with layout Rows==1 regardless of the _rows
+        // field (see MeasuredLiveStrip) — mirror HoverElevate's same condition rather than just `_rows == 1`.
+        if (_measured || _rows == 1)
+        {
+            int s = EffectiveSpanFor(cols, leadSpan);
+            int totalCells = count <= 0 ? 0 : count + s - 1;
+            return Math.Max(1, (totalCells + cols - 1) / cols);
+        }
+        int perPageItems = Math.Max(1, cols * (_measured ? 1 : _rows));
+        return Math.Max(1, (count + perPageItems - 1) / perPageItems);
+    }
+
+    // ── E11/E21/E22 — the shelf-side resolution of a raw lead span against a column count: the SAME threshold as
+    // FillRowVirtualLayout.EffectiveLeadSpan (through MinColsFor — the one place the rule lives; E22's per-shelf
+    // leadMinColumns rides there too). Computed here from a caller-supplied `cols` rather than read off `_layout`,
+    // because `cols` may be a fit the layout instance has not been SetViewport'd to yet — Render computes
+    // `perPageColumns` fresh every call and PageGrid's caller-supplied `cols` is likewise independent of `_layout`'s
+    // own live `_perPage`. ONE place for the three consumers (PageCountFor, the `_effSpanSig` publish the lead slot
+    // reads, and the layout via SetLeadSpan+LeadMinColumns) so PageCountFor always agrees with what ItemRect/
+    // FirstItemOfPage actually draw and with the template the lead slot mounts. Rows > 1 never spans (a multi-row
+    // grid's lead has no meaning stacked across rows — same condition as PageCountFor/HoverElevate).
+    int EffectiveSpanFor(int cols, int leadSpan)
+        => (_measured || _rows == 1) && leadSpan > 1 && cols >= FillRowVirtualLayout.MinColsFor(leadSpan, _leadMinColumns)
+            ? leadSpan : 1;
+
     // ── The LIVE page grid at the current fit: columns per page, the page stride in OFFSET space, and the page count.
     // Every page↔offset conversion goes through this one place, so the pager, the settled-offset re-sync, the snap interval
     // and the re-snap target can never disagree. Reads _w.Peek() (never subscribes): the callers are effects and scroll
@@ -927,8 +1284,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     (int Cols, float PageW, int PageCount) PageGrid()
     {
         var (cols, cw) = FillRowVirtualLayout.Fit(_w.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
-        int perPage = Math.Max(1, cols * (_measured ? 1 : _rows));
-        return (cols, cols * (cw + _gap), Math.Max(1, (_count + perPage - 1) / perPage));
+        return (cols, cols * (cw + _gap), PageCountFor(_count, cols, _leadSpanSig.Peek()));
     }
 
     // The page the settled offset actually shows. Mirrors the glide target math: page ⇒ page·cols·stride px.
@@ -950,7 +1306,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // Returns the page the settle COMMITS to. With no gesture anchor (<paramref name="anchorX"/> NaN — a wheel notch, a
     // keyboard page, a chevron re-arm, the glide's own settle) that is byte-identically <paramref name="nearestPage"/> and
     // the whole directional block below is skipped: this path must stay exactly what it always was.
-    int ReSnapSettled(in ScrollGeometry g, int nearestPage, float anchorX)
+    int ReSnapSettled(float offsetX, int nearestPage, float anchorX)
     {
         if (_snap != ShelfSnap.Page) return nearestPage;
         if (Context.Scene is not { } scene) return nearestPage;
@@ -958,15 +1314,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         if (vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return nearestPage;
         var grid = PageGrid();
         if (grid.PageW <= 1f) return nearestPage;
-        float maxX = MathF.Max(0f, g.ContentW - g.ViewportW);
+        float maxX = (float)_shelfHandle.MaxOffset;
         // Re-assert the bounded grid from the PUBLISHED extent (see ApplySnapGrid): the fit-keyed layout effect can only
         // read whatever ContentW existed at that fit, and on a fresh mount that is 0 — which leaves the grid open-ended
         // for the rest of the shelf's life unless the fit happens to change again.
         ApplySnapGrid(ref scene.ScrollRef(vp), grid.PageW, maxX);
-        // Same kernel-side gap as the fit-keyed layout effect above: a scene-column-only write is invisible to the
-        // kernel's cached Frame until a real layout pass reposts it, so a later fling would retarget onto the STALE
-        // (open-ended, or pre-bound) grid without this.
-        FluentGpu.Layout.FlexLayout.RepostFrame(scene, vp);
 
         // Already PARKED — on the nearest boundary, or at the content end. Nothing to re-snap, whatever the commit rule
         // below would have chosen. This is the SettleSnapEpsPx idempotence that makes re-entering on every settle free
@@ -978,16 +1330,17 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // wins the choice; the end stays reachable because a wheel/fling into it is hard-clamped to maxX exactly, which
         // lands inside this deadband.
         float nearestBoundary = Math.Clamp(nearestPage * grid.PageW, 0f, maxX);
-        if (MathF.Abs(g.OffsetX - nearestBoundary) <= SettleSnapEpsPx
-            || MathF.Abs(g.OffsetX - maxX) <= SettleSnapEpsPx) return nearestPage;
+        if (MathF.Abs(offsetX - nearestBoundary) <= SettleSnapEpsPx
+            || MathF.Abs(offsetX - maxX) <= SettleSnapEpsPx) return nearestPage;
 
-        int page = CommitPage(g.OffsetX, anchorX, scene.ScrollRef(vp).LastReleaseVelocity,
-                              grid.PageW, grid.PageCount, nearestPage);
+        // A settled fling has already travelled its projection (the decay landed), so the commit reads the REST offset
+        // with no extra velocity term.
+        int page = CommitPage(offsetX, anchorX, 0f, grid.PageW, grid.PageCount, nearestPage);
 
         // page·stride clamped to maxX is itself the last whole boundary whenever the committed page's boundary lies past
         // the clamp (the bounded-grid rule above, in target form).
         float target = Math.Clamp(page * grid.PageW, 0f, maxX);
-        if (MathF.Abs(g.OffsetX - target) <= SettleSnapEpsPx) return page;
+        if (MathF.Abs(offsetX - target) <= SettleSnapEpsPx) return page;
         // STASH, don't glide: the lift-debounce owns the arming instant (see SnapGraceMs + CommitPendingSnap). The bump is
         // what re-arms the grace timer; _pendingSnapTarget must be written first so a fire can never read a stale target.
         _pendingSnapTarget = target;
@@ -1000,10 +1353,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     /// <para>A pan is answered by "how far did you get from the page you STARTED on, projected forward by how fast you let
     /// go" — never by "which boundary is closest NOW". The nearest rule is what made a touchpad pan feel broken: on a real
     /// page (≈612 DIP on the artist chart) 50% is unreachable by panning, so every pan was yanked back to its start page.
-    /// <paramref name="releaseVelocity"/> is <see cref="ScrollState.LastReleaseVelocity"/> (px/s, signed in offset space,
-    /// recorded at lift; 0 for an OS-momentum gesture — which degenerates this to a pure "did the finger physically pass
-    /// <see cref="CommitFraction"/>" rule), projected over the bounded settle window by the shared kernel divisor
-    /// <c>ScrollFeel.Shipping.FlickProjectK</c>. The result is RAILED to ±1 page: one gesture never skips a page.</para>
+    /// <paramref name="releaseVelocity"/> is a release velocity (px/s, signed in offset space) projected over the bounded
+    /// settle window by <see cref="FlickMath.FlickProjectK"/>; the shelf's settle passes 0 — a fling over the snap grid
+    /// has already landed on a boundary (SnapTargets.ResolveFling), so a settle only ever sees a slow lift, and 0
+    /// degenerates this to a pure "did the finger physically pass <see cref="CommitFraction"/>" rule. The result is
+    /// RAILED to ±1 page: one gesture never skips a page.</para>
     /// <para><paramref name="anchorX"/> NaN = no gesture anchor (a wheel notch, a keyboard page, a chevron re-arm, a
     /// glide's own settle) ⇒ returns <paramref name="nearestPage"/> verbatim. That is the degenerate contract this whole
     /// feature rests on: every non-gesture settle keeps exactly the behaviour it had before the directional commit.</para></summary>
@@ -1016,7 +1370,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // OS split into several ScrollBegin/End segments still accumulate correctly — each segment measures progress from
         // the page it is basically on, so two 40% segments still commit one page forward.
         int anchorPage = Math.Clamp((int)MathF.Round(anchorX / pageW), 0, maxPage);
-        float projected = offsetX + releaseVelocity / ScrollFeel.Shipping.FlickProjectK;
+        float projected = offsetX + releaseVelocity / FlickMath.FlickProjectK;
         float progress = (projected - anchorPage * pageW) / pageW;
         // The step must also agree with the gesture's NET TRAVEL. Without this, a tiny nudge that ends just past a page
         // midpoint (so the anchor page rounded UP) reads as "0.4 pages backwards from the anchor page" and would commit
@@ -1040,16 +1394,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         if (Context.Scene is not { } scene) return;
         var vp = ShelfViewport;
         if (vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
-        // Copy the fields out before the call: ScrollTo takes its own ref, and holding one across it would alias.
-        ScrollActivity activity;
-        float offset;
-        {
-            ref ScrollState sc = ref scene.ScrollRef(vp);
-            activity = sc.Activity; offset = sc.OffsetX;
-        }
-        if (activity != ScrollActivity.Idle) return;                          // a gesture/chase owns the offset again
+        if (_shelfHandle.Motion.Peek().IsMoving) return;                       // a gesture/glide owns the offset again
+        float offset = (float)_shelfHandle.Offset.Peek();
         if (MathF.Abs(offset - target) <= SettleSnapEpsPx) return;             // already there (idempotent)
-        ScrollIntoView.ScrollTo(Context, vp, target, animate: !Motion.ReducedMotion);
+        _shelfHandle.ScrollTo(target, Motion.ReducedMotion ? ScrollMove.Immediate : ScrollMove.Glide);
     }
 
     // Tear a probe pass down to nothing: no emitted cells, no cached cell subtrees, no running max, no retry budget
@@ -1203,8 +1551,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     {
         if (_liveStrip is { } cached) return cached;
         var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW, _maxColumns,
-            leadInset: HaloBleed, trailInset: HaloBleed);
-        int shelfOverscan = Math.Max(_overscan, perPageItems);
+            leadInset: HaloBleed, trailInset: HaloBleed, leadMinColumns: _leadMinColumns);
         Element strip = ItemsView.CreateBound(
             _items,
             BindCard,
@@ -1213,12 +1560,17 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             {
                 SelectionMode = ItemsSelectionMode.None,
                 Controller = _ctl,
-                Overscan = shelfOverscan,
-                Entrance = new EntranceOptions { StaggerColdRealize = true },
                 KeyOf = ItemKey,
                 OnVisibleRange = VisibleRange,
+                // E9 — IsItemInvokedEnabled is decided ONCE, from whatever onInvoke the caller had pushed by the
+                // render that actually mounts this strip (ListOptions freezes at Embed.Comp mount, like every other
+                // field here): a caller that starts with none and pushes one later is a documented no-op, exactly
+                // like a CardAt/KeyOf method swap (see ReportDelegateDrift). OnInvokedTyped itself is a STABLE
+                // delegate (the method group), so it costs nothing whether or not it ever fires.
+                IsItemInvokedEnabled = _latest.OnInvoke is not null,
+                OnInvokedTyped = InvokeItem,
                 Grow = 1f,
-                Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, AutoEdgeFadeBand = _edgeFade, OnScrollGeometryChanged = PageScrollSync() },
+                Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, AutoEdgeFadeBand = _edgeFade, Handle = _shelfHandle },
             }) with { Key = "mshelf-strip" };
         _liveStrip = strip;
         return strip;
@@ -1288,12 +1640,16 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // item container, so the card itself still measures/fills exactly measuredH).
             Width = widenedW,
             Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
-            Height = measuredH > 0f ? measuredH + ShadowClearance + LiftClearance : float.NaN,
+            // E10 — the clearance is only ever spent when BindCard actually reserved it (ShelfLift.Elevate); with
+            // ShelfLift.None the probe's measuredH is already the whole box (BindCard's Padding is default there).
+            Height = measuredH > 0f
+                ? measuredH + (_lift == ShelfLift.Elevate ? ShadowClearance + LiftClearance : 0f)
+                : float.NaN,
             ClipToBounds = true,
             // Clip-ESCAPE root: the hover-elevated cell hoists out of this viewport's clip AND the inner
             // scroller's edge fade, so the lifted card's halo paints into the page — resting content stays clipped.
             // PAIRED with the cell flag above: park and hoist arm together or not at all (see HoverElevate).
-            HoverElevateClipRoot = HoverElevate,
+            HoverElevateClipRoot = _lift == ShelfLift.Elevate && HoverElevate,
             Children = [ ZStack(strip, probeHost) with { Width = widenedW } ],
         });
     }
@@ -1306,7 +1662,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
         // Lead/Trail = HaloBleed carve the halo gutters INSIDE the viewport (widened below by the same amount).
         var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW, _maxColumns,
-            leadInset: HaloBleed, trailInset: HaloBleed);
+            leadInset: HaloBleed, trailInset: HaloBleed, leadMinColumns: _leadMinColumns);
         // ItemsView is an Embed.Comp → its template closure FREEZES at first mount (when width was 0 ⇒ cardW=min). Read
         // the layout's LIVE fitted width at realize time (the engine sets it via SetViewport every arrange) so the card
         // always matches its cell — otherwise cards stay min-width inside full-width cells (huge gaps + short cards).
@@ -1315,7 +1671,6 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // Multi-row: one neighbor column is enough for the snap-glide fade. The old max(_overscan, cols) on a
         // 2-column × 5-row chart realized 2+2+2 columns = 30 ChartRows on the artist's first content frame.
         int cols = Math.Max(1, perPageItems / _rows);
-        int shelfOverscan = _rows > 1 ? 1 : Math.Max(_overscan, cols);
         Element strip = ItemsView.CreateBound(
             _items,
             BindCard,
@@ -1324,13 +1679,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             {
                 SelectionMode = ItemsSelectionMode.None,
                 Controller = _ctl,
-                Overscan = shelfOverscan,
-                Entrance = new EntranceOptions { StaggerColdRealize = true },
                 KeyOf = ItemKey,
                 OnVisibleRange = VisibleRange,
+                // E9 — see MeasuredLiveStrip's note: frozen at this strip's mount, from whatever onInvoke the caller
+                // had pushed by then.
+                IsItemInvokedEnabled = _latest.OnInvoke is not null,
+                OnInvokedTyped = InvokeItem,
                 Grow = 1f,
                 // paged: navigate by the chevron/pips pager, not a draggable scrollbar
-                Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, AutoEdgeFadeBand = _edgeFade, OnScrollGeometryChanged = PageScrollSync() },
+                Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, AutoEdgeFadeBand = _edgeFade, Handle = _shelfHandle },
             }) with { Key = "mshelf-strip" };
         _liveStrip = strip;
         return strip;
@@ -1350,7 +1707,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // the FIRST layout whether or not the cards are mounted — this leg of the gate never moves anything at all.
         Element items = stripMounted ? strip : StripPlaceholder;
 
-        float vpH = shelfH > 0f ? (_rows == 1 ? shelfH + ShadowClearance + LiftClearance : shelfH) : float.NaN;
+        // E10 — same gating as MeasuredVirtualBody: the clearance is only ever spent when BindCard reserved it.
+        float vpH = shelfH > 0f
+            ? (_rows == 1 && _lift == ShelfLift.Elevate ? shelfH + ShadowClearance + LiftClearance : shelfH)
+            : float.NaN;
         return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
             Height = vpH,
@@ -1360,7 +1720,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // lift/halo paint into the page while resting content stays exactly clipped. SINGLE-ROW ONLY (HoverElevate):
             // a multi-row grid has no lift and no halo to make room for, so the hoist would only let the hovered row
             // paint outside the band. PAIRED with the cell flag in the ContainerFactory above.
-            HoverElevateClipRoot = HoverElevate,
+            HoverElevateClipRoot = _lift == ShelfLift.Elevate && HoverElevate,
             // Widen the clip 2×HaloBleed into the surrounding gutters WITHOUT moving the shelf's layout box: a negative
             // horizontal margin on a cross-STRETCH child resolves to width = availCross − crossMargin (= _w + 2·Bleed)
             // at x = −Bleed (FlexLayout arrange). The ItemsView (grow:1) fills it, so SetViewport is fed _w+2·Bleed and
@@ -1384,7 +1744,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // custom pager that packs this context into a props record re-renders its whole subtree every shelf render.
             // Only the four VALUE slots (page/count/canPrev/canNext) change, which is exactly what should re-render it.
             row.Add(customPager(new ShelfPagerContext(p, pageCount, canPrev, canNext,
-                _pagerPrev, _pagerNext, _pagerGoTo)));
+                _pagerPrev, _pagerNext, _pagerGoTo, _page)));
         else
         {
             if ((_pager & ShelfPager.Pips) != 0 && pageCount > 1)

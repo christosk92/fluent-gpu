@@ -116,8 +116,8 @@ public sealed class MediaPlayerElement : Component
         PointerPlacement = FlyoutPlacement.BottomEdgeAlignedLeft,
         KeyboardPlacement = FlyoutPlacement.TopEdgeAlignedRight,
         // The transport's More menu opens OVER the video by construction, and a video hole is a DestOut erase whose
-        // backdrop is premultiplied zero — an acrylic plate there blurs nothing while forcing RepaintRoute.FullDirect
-        // for the whole window on every frame it is up. Flat from frame one, the same opt-out OpenPicker takes.
+        // backdrop is premultiplied zero — an acrylic plate there blurs nothing while still costing a backdrop pass every
+        // frame the video under it changes. Flat from frame one, the same opt-out OpenPicker takes.
         OpaqueSurface = true,
     };
 
@@ -214,14 +214,15 @@ public sealed class MediaPlayerElement : Component
     /// off the same edge — two machines would mean a host strip that is up while the cursor is gone. The element only
     /// ever writes it (from the timer sync, never from Render); a host only reads.</summary>
     public Signal<bool>? ChromeVisibleOut { get; init; }
-    /// <summary>A press on the VIDEO (never on a control) that travels past the drag box moves the WINDOW through the OS
-    /// move loop (<see cref="InputHooks.WindowBeginMove"/>) — Aero Snap, the snap bar, shake and monitor hops all work,
-    /// because it is the system's own loop. A press that does not travel stays a click (reveal) / double-click
-    /// (fullscreen), and right-click stays the player menu: the video remains ordinary client area. mpv's
-    /// <c>window-dragging</c> (default on, 3 px deadzone). For a CHROMELESS host window (the pop-out) only — on an
-    /// in-window card it would drag the MAIN window, and inside a scroller the drag capture would steal touch pans.
-    /// Ignored while presenting fullscreen and for touch (a finger has no system move loop to hand to).</summary>
-    public bool DragMovesWindow { get; init; }
+    /// <summary>The activity seam for a host that draws its OWN on-media chrome instead of this element's transport
+    /// (<see cref="SuppressTransport"/>). The host's controls are SIBLINGS of this element in the host's tree, so the
+    /// dispatcher's routed pointer-within events (ancestors only) never see them — without this seam, hovering the
+    /// host's own strip is invisible to <see cref="PlayerChromeVisibility"/> and the chrome fades under the pointer.
+    /// An init prop, so the host hands in a STABLE instance (a field, never a render local) — see
+    /// <see cref="PlayerChromeFeed"/>'s own doc. With <see cref="SuppressTransport"/> set this element never mounts its
+    /// own seek bar or transport, so the machine's OverControls/Scrubbing/Pressed/WindowMove holds are otherwise never
+    /// written at all; the feed becomes their ONLY writer, and the two paths can never disagree about a hold's state.</summary>
+    public PlayerChromeFeed? ChromeFeed { get; init; }
     /// <summary>The host is presenting this element fullscreen (its own surface, not the element's overlay path).
     /// Drives the transport glyph, the ⋯ row label and Esc handling so a host-owned fullscreen does not render a
     /// control named for the state the user is already in. Distinct from the internal overlay-owned
@@ -262,9 +263,13 @@ public sealed class MediaPlayerElement : Component
     internal static float VideoAreaMinHeight(bool presentingFullscreen, bool decorative)
         => presentingFullscreen || decorative ? 0f : 160f;
 
-    /// <summary>Crop (UniformToFill) keeps an overflowing rect + viewport clip. The pump clamp would shrink that overflow
-    /// back into the stage and crop would silently stretch like Fill.</summary>
-    internal static bool PumpClampsOverflow(VideoAspectMode mode) => mode != VideoAspectMode.UniformToFill;
+    /// <summary>The two modes whose fitted rect deliberately OVERFLOWS the area: crop (UniformToFill) scales up to
+    /// cover, and native (true 1:1 device pixels) simply is whatever size the frame is — both rely on the viewport
+    /// clip to crop the excess rather than a fit that shrinks to stay inside.</summary>
+    internal static bool ModeMayOverflow(VideoAspectMode mode) => mode is VideoAspectMode.UniformToFill or VideoAspectMode.Native;
+    /// <summary>Crop (UniformToFill) and native (1:1) keep an overflowing rect + viewport clip. The pump clamp would
+    /// shrink that overflow back into the stage and silently behave like Fill/Uniform instead.</summary>
+    internal static bool PumpClampsOverflow(VideoAspectMode mode) => !ModeMayOverflow(mode);
     /// <summary>When set, F11 and the transport's fullscreen button DELEGATE instead of opening this element's own
     /// overlay — the host app owns where fullscreen lives. Unset keeps the standalone behaviour verbatim.</summary>
     public Action? FullscreenRequested { get; init; }
@@ -319,8 +324,6 @@ public sealed class MediaPlayerElement : Component
         _onWindowBlur = OnWindowBlur;
         _seedPointerPresence = SeedPointerPresence;
         _onPointerMoved = OnPointerMoved;
-        _onMoveArm = OnMoveArm;
-        _onMoveDrag = OnMoveDrag;
     }
 
     private void QueuePumpRequest()
@@ -370,14 +373,11 @@ public sealed class MediaPlayerElement : Component
     private bool _cursorHidden;
     private NodeHandle _playerRoot;
     private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowBlur, _seedPointerPresence;
-    private readonly Action<Point2> _onPointerMoved, _onMoveArm, _onMoveDrag;
-    // The window-move gesture (DragMovesWindow): where the press landed, whether it may still start a move, whether the
-    // press was a touch contact, and whether a move this element requested is still running.
-    private Point2 _moveOrigin;
-    private bool _moveArmed, _pressIsTouch, _moveInFlight;
-    // When the last OS move loop this element started ended (host timer clock). A press within the double-click window
-    // of it is never the second half of a double-click: after a quick flick the next press lands on the SAME client
-    // point, and it is not a request for fullscreen (mpv clears last_doubleclick_time on a drag for the same reason).
+    private readonly Action<Point2> _onPointerMoved;
+    private bool _pressIsTouch, _moveInFlight;
+    // When the last OS move loop ended (host timer clock). A press within the double-click window of it is never the
+    // second half of a double-click: a press right after a caption drag lands on the same client point, and it is not
+    // a request for fullscreen.
     private double _lastWindowMoveMs = double.NegativeInfinity;
 
     /// <summary>The host timer clock (ms) — the SAME clock the wake is scheduled on, so the machine's deadlines and the
@@ -531,27 +531,6 @@ public sealed class MediaPlayerElement : Component
         return scene is not null && !_playerRoot.IsNull && scene.IsLive(_playerRoot) && scene.AbsoluteRect(_playerRoot).Contains(p);
     }
 
-    // ── the window drag (DragMovesWindow) ──
-    private void OnMoveArm(Point2 local) { _moveOrigin = local; _moveArmed = true; }
-
-    /// <summary>The press on the picture is travelling. Past the Windows drag box it becomes an OS window move — once per
-    /// press — handed to the system loop; within the box it is still a click and nothing happens here.</summary>
-    private void OnMoveDrag(Point2 local)
-    {
-        if (!_moveArmed) return;
-        float dx = local.X - _moveOrigin.X, dy = local.Y - _moveOrigin.Y;
-        // The Windows drag box (SM_CXDRAG/SM_CYDRAG = 4, per axis) — the same slop a click tolerates, so a press that is
-        // still a click never moves the window, and a press that moved the window is never a click.
-        const float slop = FluentGpu.Input.InputDispatcher.ClickSlopPx;
-        if (MathF.Abs(dx) <= slop && MathF.Abs(dy) <= slop) return;
-        _moveArmed = false;                                                // one loop per press
-        if (_pressIsTouch || IsFullscreenNow() || _hooks?.WindowBeginMove is not { } begin) return;
-        if (!begin()) return;                                              // nothing to run (button already up, fullscreen, no backend loop)
-        _moveInFlight = true;                                              // posted: the loop's capture cancel ends this contact
-        _vis?.WindowMoveStarted(Now());
-        Sync();
-    }
-
     private Signal<int>? _startupPhase;
 
     private void OnStartupSpinnerDue() => _startupPhase?.SetIfChanged(1);
@@ -596,6 +575,18 @@ public sealed class MediaPlayerElement : Component
     /// activity. Leaving the panel restarts the dwell.</summary>
     private void OnChromePointerMove(Point2 _) { _vis?.SetPointerOverControls(true, Now()); Sync(); }
     private void OnChromePointerExit() { _vis?.SetPointerOverControls(false, Now()); Sync(); }
+
+    // ── the PlayerChromeFeed seam (PART A): a host's OWN on-media chrome, driving the SAME machine the element's own
+    // transport would have. _vis is null before this element's first Render — every call below is a harmless no-op
+    // then, and PlayerChromeFeed.Owner is cleared on unmount so nothing here runs afterwards either (see the binding
+    // effect near the window-hooks effect below).
+    internal void FeedActivity() { _vis?.Activity(ChromeActivity.Pointer, Now()); Sync(); }
+    internal void FeedOverControls(bool over) { _vis?.SetPointerOverControls(over, Now()); Sync(); }
+    internal void FeedPressed(bool pressed) { _vis?.SetPressed(pressed, Now()); Sync(); }
+    internal void FeedScrubbing(bool scrubbing) { _vis?.SetScrubbing(scrubbing, Now()); Sync(); }
+    /// <summary>The host's window began an OS move loop (a caption-region drag; <see cref="InputHooks.WindowMoveSizeBeganObserved"/>).
+    /// <see cref="_moveInFlight"/> makes <see cref="OnMoveSizeEnded"/> release the hold.</summary>
+    internal void FeedWindowMoveStarted() { _moveInFlight = true; _vis?.WindowMoveStarted(Now()); Sync(); }
 
     public override Element Render()
     {
@@ -656,15 +647,28 @@ public sealed class MediaPlayerElement : Component
         double customAspect = customAspectSig.Value;
         bool audioOnly = IsAudioOnly(natural);
         bool videoReady = !audioOnly && state is not (PlaybackState.Idle or PlaybackState.Opening);
-        if (videoReady) hadVideo.Value = true;
+        // PART B (poster-until-first-frame): `videoReady` says only "MF is no longer in Opening" — it says NOTHING
+        // about whether a DECODED FRAME has ever reached the compositor. Gating the poster/hole on it alone punches
+        // the erase hole (and drops the poster) the instant the state leaves Opening, up to ~1 s before the backend's
+        // first frame actually lands — a black rectangle where the poster used to be.
+        // Player.VideoSurface is IMediaPlayer's own documented contract for this: "IsNone until the first video
+        // frame" (IMediaPlayer.cs) — the presenter's own readiness signal for the CURRENT open cycle, reset to None by
+        // every fresh OpenAsync and flipped non-None only once the backend truly has a composited frame to present.
+        // No dedicated FirstFrame/FrameReady EVENT exists on the seam; this is the closest (and only) existing signal
+        // that answers the question, so `framePresented` — not `videoReady` — is what actually gates the poster/hole.
+        bool framePresented = !audioOnly && !Player.VideoSurface.Value.IsNone;
+        // The hadVideo latch must ALSO key off framePresented, not videoReady: latching on state alone would let the
+        // very defect this fixes back in on the FIRST ever open (hadVideo would latch true the instant state left
+        // Opening, and `holeActive` below ORs it in — punching an erase hole with nothing yet composited behind it).
+        if (framePresented) hadVideo.Value = true;
         // The hole stays active across a switch (Playing -> Opening on the same element) so the compositor keeps
         // presenting the outgoing frame while the poster crossfades over it — no erase-to-transparent flash and no
         // subtree rebuild. EXCEPTION: IsDecorative never latches — a decorative clip must never erase the caller's
         // own still before its own first frame ever arrives.
-        bool holeActive = IsDecorative ? videoReady : !audioOnly && (videoReady || hadVideo.Value);
-        // The poster is up whenever the element is not presenting a ready frame; IsDecorative never shows one (its
-        // "no poster" contract — the caller's own still shows through the transparent hole instead).
-        bool posterUp = !IsDecorative && !videoReady;
+        bool holeActive = IsDecorative ? framePresented : !audioOnly && (framePresented || hadVideo.Value);
+        // The poster is up whenever the element has not yet PRESENTED a ready frame; IsDecorative never shows one
+        // (its "no poster" contract — the caller's own still shows through the transparent hole instead).
+        bool posterUp = !IsDecorative && !framePresented;
         // "media-stage" is mounted iff !IsDecorative && ShowLetterboxBars — both frozen at mount (init props), so this
         // is a CONSTANT for the element's whole life: the fixed child shape below never gains or loses this slot.
         bool showStage = !IsDecorative && ShowLetterboxBars;
@@ -750,6 +754,10 @@ public sealed class MediaPlayerElement : Component
         // scrim that becomes the topmost hit target, so hover stops reaching the player while the dwell would run on
         // UNDER the menu; and the epoch drives an effect because subscribing to the host-global PinEpoch in Render
         // re-rendered the whole player for every menu opened anywhere in the shell.
+        // With SuppressTransport set, seekBar is never MOUNTED (BuildTransport is skipped below), so its Scrubbing
+        // signal never changes and this effect never fires — the ENGINE'S OWN rail is silent for the whole life of a
+        // suppressed surface. PlayerChromeFeed.SetScrubbing (PART A) is then the Scrubbing hold's only writer, so the
+        // two can never disagree about whether a scrub is in progress.
         UseSignalEffect(() => { bool scrubbing = seekBar.Scrubbing.Value; vis.SetScrubbing(scrubbing, Now()); Sync(); });
         UseSignalEffect(() =>
         {
@@ -764,9 +772,9 @@ public sealed class MediaPlayerElement : Component
         bool presentedFullscreen = PresentingFullscreen || fullscreen.Value;   // subscribe: the policy edge must re-render
         UseEffect(() => { vis.SetCursorMayHide(CursorHidingAllowed(), Now()); Sync(); }, presentedFullscreen ? 1 : 0);
 
-        // The OS move loop a drag on the picture started (DragMovesWindow) reports its end through the host; a window
-        // blur is a LEAVE (the dispatcher clears hover before it drops the pointer position, so the exit alone would read
-        // as "covered" and the controls would linger over a window the user has switched away from).
+        // An OS move/size loop of the host window reports its end through the host; a window blur is a LEAVE (the
+        // dispatcher clears hover before it drops the pointer position, so the exit alone would read as "covered" and
+        // the controls would linger over a window the user has switched away from).
         UseEffect(() =>
         {
             if (hooks is null) return (Action?)null;
@@ -777,6 +785,15 @@ public sealed class MediaPlayerElement : Component
                 hooks.WindowMoveSizeEndedObserved -= _onMoveSizeEnded;
                 hooks.WindowBlurObserved -= _onWindowBlur;
             };
+        }, DepKey.Empty);
+        // PART A: claim ChromeFeed on mount, release it on unmount — but only if it is STILL this instance. A keyed
+        // remount binds the NEW instance's Owner first (its own mount effect), so the OLD instance's cleanup (which
+        // runs after, per the reconciler's mount-then-unmount ordering for a Key swap) must not null out the new claim.
+        UseEffect(() =>
+        {
+            if (ChromeFeed is not { } feed) return (Action?)null;
+            feed.Owner = this;
+            return () => { if (feed.Owner == this) feed.Owner = null; };
         }, DepKey.Empty);
         UseEffect(OnMounted, DepKey.Empty);
         UseEffect(() => (Action?)ReleaseCursorOverride, DepKey.Empty);
@@ -1068,7 +1085,6 @@ public sealed class MediaPlayerElement : Component
             // second half of a double-click (see _lastWindowMoveMs).
             if (e.ClickCount >= 2 && now - _lastWindowMoveMs > FluentGpu.Input.InputDispatcher.DoubleClickMs)
             {
-                _moveArmed = false;
                 ToggleFullscreen();
                 e.Handled = true;
                 return;
@@ -1080,14 +1096,12 @@ public sealed class MediaPlayerElement : Component
 
         void HandleRelease(PointerEventArgs e)
         {
-            _moveArmed = false;
             _vis?.SetPressed(false, Now());
             Sync();
         }
 
         void HandleExit()
         {
-            _moveArmed = false;
             // A real leave (the window, the non-client resize band, a blur) hides after the short leave debounce; hover
             // TAKEN over the player (a scrim, the OS move loop's capture cancel) only drops the pointer holds.
             if (PointerStillOverPlayer()) _vis?.PointerCovered(Now());
@@ -1097,10 +1111,25 @@ public sealed class MediaPlayerElement : Component
 
         void HandleWheel(WheelEventArgs e)
         {
-            // Wheel over the VIDEO is volume (the universal player gesture); Shift+wheel seeks. The seek bar consumes
-            // its own wheel first, so a wheel over the rail never reaches here.
-            if ((e.Mods & KeyModifiers.Shift) != 0) seekBar.SeekBy(e.Delta > 0f ? 10f : -10f);
-            else AdjustVolume(e.Delta > 0f ? VolumeStep : -VolumeStep);
+            // Decorative clips are never operated by the user (IsDecorative: "an artist portrait, a hover preview —
+            // never for a player the user operates") — like the missing context menu and transport above, the wheel
+            // passes straight through so the page underneath a decorative surface can always scroll.
+            if (IsDecorative) return;
+
+            // Shift+wheel seeks (unchanged). Alt+wheel is volume — Ctrl stays reserved for the app's window-zoom
+            // gesture (bound at the dispatcher and in the host shell's Shell.UI.cs), so a Ctrl+wheel is left
+            // unhandled here and bubbles on, the same way FlipView ignores it (FlipView.cs:193). A PLAIN wheel (no
+            // modifier) belongs to the page the player is docked in: it falls back to volume only when there is
+            // nothing left to scroll — fullscreen presentation — matching how every browser, YouTube and Spotify
+            // treat a wheel over a docked/inline video. The seek bar consumes its own wheel first, so a wheel over
+            // the rail never reaches here.
+            bool shift = (e.Mods & KeyModifiers.Shift) != 0;
+            bool alt = (e.Mods & KeyModifiers.Alt) != 0;
+            bool ctrl = (e.Mods & KeyModifiers.Ctrl) != 0;
+            if (shift) seekBar.SeekBy(e.Delta > 0f ? 10f : -10f);
+            else if (!ctrl && (alt || PresentingFullscreen)) AdjustVolume(e.Delta > 0f ? VolumeStep : -VolumeStep);
+            else return;   // not a player gesture: leave Handled=false so it bubbles (ambient scroller, or app zoom)
+
             _vis?.Activity(ChromeActivity.Pointer, Now());
             Sync();
             e.Handled = true;
@@ -1127,12 +1156,6 @@ public sealed class MediaPlayerElement : Component
             OnPointerReleased = HandleRelease,
             OnPointerExit = HandleExit,
             OnPointerWheel = HandleWheel,
-            // The window-move gesture (DragMovesWindow only — frozen at mount): OnDrag gives the frame the dispatcher's
-            // capture, so a travelling press is seen past the slop. The transport's buttons and the seek rail are their
-            // OWN press targets (interaction-gated hit-testing), so a press on a control never arms it; when the move loop
-            // starts, its capture cancel reaches HandleExit's "covered" arm, never a click.
-            OnPointerDown = DragMovesWindow ? _onMoveArm : null,
-            OnDrag = DragMovesWindow ? _onMoveDrag : null,
             // Only KEYBOARD focus on the player is activity (it reveals with the long dwell); pointer/programmatic focus
             // (a press, a surface parking focus here at mount) is not.
             OnFocusChanged = focused => { if (focused && IsKeyboardFocus()) { _vis?.Activity(ChromeActivity.Keyboard, Now()); Sync(); } },
@@ -1157,7 +1180,8 @@ public sealed class MediaPlayerElement : Component
     /// <para>The video rect is read from the HOLE node itself — the same node whose rect the recorder erases — so the
     /// erased region and the composited video visual are identical by construction (no second, independently computed
     /// fit to drift out of alignment at fractional device scale). The viewport stays the whole area: it is what clips a
-    /// <see cref="VideoAspectMode.UniformToFill"/> crop, whose fitted rect deliberately overflows the stage.</para></summary>
+    /// <see cref="VideoAspectMode.UniformToFill"/> crop or a <see cref="VideoAspectMode.Native"/> 1:1 frame, either of
+    /// whose fitted rect deliberately overflows the stage.</para></summary>
     private void PumpNow(float scale)
     {
         VideoBinding b = _binding;
@@ -1210,15 +1234,16 @@ public sealed class MediaPlayerElement : Component
             if (live) geom = hole;
             if (!live || videoRect.W <= 0f || videoRect.H <= 0f)
                 videoRect = FitVideoRect(area, natural, mode, customAspect, s);
-            else if (mode == VideoAspectMode.UniformToFill)
+            else if (ModeMayOverflow(mode))
             {
-                // CENTER-CROP is the one mode whose fitted rect deliberately OVERFLOWS the stage: the frame is scaled
-                // until it covers the area and the excess is clipped (by the viewport, below). The hole node carries
-                // that overflow as NEGATIVE margins (LetterboxInsets is signed for exactly this), but a layout that
-                // clamps a negative margin to zero hands back the stage rect itself — and placing the video at the
-                // stage rect scales the frame DOWN to fit instead of cropping it, which is the crop mode silently
-                // behaving like Fill. Recomputing the fit here is right either way: when the margins do survive
-                // layout this is the same rect the hole already has.
+                // CENTER-CROP and NATIVE are the two modes whose fitted rect deliberately OVERFLOWS the stage: crop
+                // scales the frame until it covers the area, native is simply the frame's own device-pixel size —
+                // either way the excess is clipped (by the viewport, below). The hole node carries that overflow as
+                // NEGATIVE margins (LetterboxInsets is signed for exactly this), but a layout that clamps a negative
+                // margin to zero hands back the stage rect itself — and placing the video at the stage rect scales
+                // the frame DOWN to fit instead of cropping it, which is the overflow mode silently behaving like
+                // Fill/Uniform. Recomputing the fit here is right either way: when the margins do survive layout
+                // this is the same rect the hole already has.
                 videoRect = FitVideoRect(area, natural, mode, customAspect, s);
                 geom = h;   // the rect now derives from the AREA, so follow the area's geometry
             }
@@ -1517,8 +1542,7 @@ public sealed class MediaPlayerElement : Component
             // and the video is a sibling DComp visual below the UI swapchain, so there is nothing there for an acrylic
             // layer to blur: it would composite premultiplied zero and leave the menu as floating text. Declaring it
             // here instead of letting OverlayHost discover it geometrically makes the plate solid from frame ONE — no
-            // query, no frame of latency, and no per-frame full-window repaint from the answer flipping (an acrylic
-            // layer is RepaintPolicy.Decide's first hard disqualifier).
+            // query, no frame of latency, and no per-frame slice re-record from the answer flipping.
             m = overlayService.Open(() => anchor.Value,
                 () => MenuFlyout.Build(items, () => m?.Close()), FlyoutPlacement.TopEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss)
@@ -2060,9 +2084,10 @@ public sealed class MediaPlayerElement : Component
     /// <summary>The per-edge letterbox insets (DIP) that place <paramref name="video"/> inside <paramref name="area"/> —
     /// the ONE piece of geometry the video stage is built from. The hole child is laid out with exactly these as its
     /// Margin, so its arranged rect IS the fitted video rect and <see cref="PumpNow"/> can place the presenter from it.
-    /// Signed: a <see cref="VideoAspectMode.UniformToFill"/> crop yields NEGATIVE insets (the fitted rect overflows the
-    /// stage and is clipped). Sub-half-pixel insets collapse to zero — a &lt;0.5px bar was never a bar (the same
-    /// threshold <see cref="CalculateLetterboxBars"/> has always used).</summary>
+    /// Signed: a <see cref="VideoAspectMode.UniformToFill"/> crop or an oversized <see cref="VideoAspectMode.Native"/>
+    /// frame yields NEGATIVE insets (the fitted rect overflows the stage and is clipped). Sub-half-pixel insets
+    /// collapse to zero — a &lt;0.5px bar was never a bar (the same threshold <see cref="CalculateLetterboxBars"/> has
+    /// always used).</summary>
     internal static Edges4 LetterboxInsets(RectF area, RectF video)
     {
         if (area.W <= 0f || area.H <= 0f) return default;
@@ -2238,8 +2263,9 @@ public sealed class MediaPlayerElement : Component
     internal static bool IsAudioOnly(SizeI natural) => natural.IsEmpty;
 
     /// <summary>Fit a <paramref name="natural"/>-sized frame into <paramref name="area"/> (DIP) per <paramref name="stretch"/>.
-    /// Returns the placed video rect (DIP), centered; never larger than the area for <see cref="MediaStretch.UniformToFill"/>
-    /// (the overflow axis is clipped to the area — true center-crop via an MF source-rect is a later refinement).</summary>
+    /// Returns the placed video rect (DIP), centered. <see cref="MediaStretch.UniformToFill"/> and
+    /// <see cref="MediaStretch.None"/> (native 1:1) both deliberately OVERFLOW the area when the frame is larger —
+    /// the caller's viewport clip crops the excess (true center-crop, no distortion); the other modes fit within it.</summary>
     internal static RectF FitVideoRect(RectF area, SizeI natural, MediaStretch stretch)
         => FitVideoRect(area, natural, ToAspectMode(stretch), 16.0 / 9.0);
 
@@ -2259,9 +2285,12 @@ public sealed class MediaPlayerElement : Component
             {
                 // natural is PIXELS, area is DIP — "native size" means 1 video px per DEVICE px, so convert first.
                 // Without this the Native fit rendered scale× too large on any high-DPI display (px used as DIP).
+                // TRUE 1:1: no per-axis clamp to the area. A frame larger than the area overflows and the viewport
+                // clip crops it — the same road UniformToFill already takes — and a smaller frame is centred with a
+                // border. Either way the picture is never distorted (both axes share the one `inv` scale). Uses
+                // `natural`, not the Custom-rewritten vw/vh, because Native ignores the custom-aspect rewrite above.
                 float inv = scale > 0f ? 1f / scale : 1f;
-                float w = MathF.Min(vw * inv, aw), h = MathF.Min(vh * inv, ah);
-                return Center(area, w, h);
+                return Center(area, natural.Width * inv, natural.Height * inv);
             }
             case VideoAspectMode.UniformToFill:
             {

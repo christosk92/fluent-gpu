@@ -49,6 +49,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private double _volume = 1.0;
     private bool _muted;
     private long _lastFirstFrameEpoch;
+    private VideoSurfaceId _publishedSurface;   // last value handed to sink.VideoSurface (see pump step 2a)
     private bool _settledPlayIntent;
 
     // Seek (UI thread): the target is published immediately; the landed value replaces it on the Seeked event.
@@ -385,6 +386,17 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         {
             _lastFirstFrameEpoch = firstFrameEpoch;
             DisarmStartDeadline();
+        }
+        // 2a. The player's VideoSurface signal — what MediaPlayerElement's poster/hole gate reads (framePresented):
+        //     non-None once THIS source has presented a frame and still has a surface, None before that. No real
+        //     backend wrote this signal until 2026-09-22 (only the headless scripted player did), so the poster never
+        //     dropped and the video hole was never punched: every placement showed the letterbox fill — black — over
+        //     a perfectly good picture. Value-gated here so a steady pump publishes nothing.
+        var surfaceNow = _lastFirstFrameEpoch != 0 && _player.HasSurface ? new VideoSurfaceId(1) : default;
+        if (surfaceNow != _publishedSurface)
+        {
+            _publishedSurface = surfaceNow;
+            sink.VideoSurface(surfaceNow);
         }
 
         // 2b. The CANPLAY deadline passed with no first frame: a typed failure, categorised by where the switch stuck.

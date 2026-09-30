@@ -120,10 +120,10 @@ public sealed unsafe partial class D3D12Device
     {
         SmallTextureResetCommands();
         store.FlushUploads(_cmdList, _fenceValue + 1, _fence->GetCompletedValue());
-        _uploadArena!.BeginFrame((int)_frameIndex); _imagePipe!.BeginFrame((int)_frameIndex);
-        var back = _backBuffers[_frameIndex];
+        _uploadArena!.BeginFrame(_smallTextureSlot); _imagePipe!.BeginFrame(_smallTextureSlot);
+        var back = _f!.Target.BackBuffers[_f!.FrameIndex];
         Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var rtv = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); rtv.ptr += _frameIndex * _rtvSize;
+        var rtv = _f!.Target.RtvHeap->GetCPUDescriptorHandleForHeapStart(); rtv.ptr += _f!.FrameIndex * _rtvSize;
         _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
         float* clear = stackalloc float[4] { 0, 0, 0, 1 }; _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
         D3D12_VIEWPORT viewport = new() { Width = _w, Height = _h, MaxDepth = 1 };

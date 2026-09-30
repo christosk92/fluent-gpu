@@ -253,21 +253,31 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
   `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, and `Composited` so `AppHost.DeferModalResize`
   and span-reuse policy can key off the same PAL state Win32 derives from `WM_ENTERSIZEMOVE`/`WM_SIZE`.
 
-  **Content-driven MOVE — `bool IPlatformWindow.BeginSystemMove()`** (default `false`). A chromeless window whose
-  CONTENT decides what is draggable (the pop-out video: a press on the picture that travelled past the drag box)
-  starts the SAME system move loop a caption press would — Aero Snap, the snap bar, shake, monitor hops and
-  drag-to-restore come for free — while the content stays `HTCLIENT`, so hover, the cursor override, click,
-  double-click and right-click keep their content meaning (reporting `TitleBarHit.Caption` over the content would
-  lose every one of them to the NC path). mpv's `window-dragging` model. Win32: only while the primary mouse/pen
-  button is held in the client (tracked from `WM_POINTERDOWN`/`UP`/`CAPTURECHANGED`) and not fullscreen; it enqueues
-  a `PointerCancel` for that contact (so the dispatcher never keeps a press the loop captured), `ReleaseCapture`s, and
-  POSTS `WM_NCLBUTTONDOWN`+`HTCAPTION` at the cursor — never `SendMessage` (the caller is mid-frame; the modal loop
-  must not run re-entrantly under it) and never the undocumented `SC_MOVE`+`HTCAPTION` syscommand. That posted press
-  reaches `DefWindowProc`, which runs the loop inside the call. Returns `true` ⇒ exactly ONE
-  `InputKind.WindowMoveSizeEnded` follows: every `WM_EXITSIZEMOVE` enqueues it (edge resizes too — consumers filter),
-  and when `DefWindowProc` returns without having entered a loop (the button was released before the post was
-  handled) the backend enqueues it itself. Always-on `[window.move] begin/end` lines, one per gesture. Headless
-  counts calls (`BeginSystemMoveCount`) and accepts every windowed request; gates end it by queueing the Win32 pair.
+  **Content-driven MOVE: none — drag handles are `TitleBarHit.Caption` regions.** A throwaway Win32 probe
+  (2026-09-22, `EnableMouseInPointer(TRUE)`) proved that a press which starts as a CLIENT `WM_POINTERDOWN` can never
+  be handed to `DefWindowProc`'s SC_MOVE loop by posting `WM_NCLBUTTONDOWN`/`HTCAPTION` (the mpv `window-dragging`
+  trick the removed `IPlatformWindow.BeginSystemMove` implemented): the loop entered ~500 ms AFTER the release, the
+  window did not move during the drag, no `WM_POINTERUP` reached the window at all, and the loop did not end until
+  the NEXT click — regardless of whether the in-loop pointer messages were consumed or passed to `DefWindowProc`
+  (Microsoft's own docs: "If an application selectively consumes some pointer input and passes the rest to
+  DefWindowProc, the resulting behavior is undefined"). A press that starts in the NON-CLIENT area (`WM_NCHITTEST` →
+  `HTCAPTION`, i.e. a `TitleBarHit.Caption` region) entered the loop 63 ms after the press, moved the window, and
+  ended within 2 ms of the release. The content-driven move was therefore removed outright (no legacy paths): a
+  chromeless window's drag handle is a `TitleBarHit.Caption` region reported through `IPlatformWindow.SetTitleBarRegions`
+  — the SAME path the main window's title bar already uses. Win32 enqueues `InputKind.WindowMoveSizeBegan` at
+  `WM_ENTERSIZEMOVE` and `InputKind.WindowMoveSizeEnded` at `WM_EXITSIZEMOVE`, for EVERY loop (edge resizes included;
+  consumers filter). Win32 also synthesizes the pointer's real position over a Caption region to the engine on the
+  reserved NC pointer id, so content under the band still hovers/holds normally while the OS owns the drag. Always-on
+  `[window.loop] begin` / `[window.move] end` / `[window.size] end` lines, one per gesture.
+- **Programmatic MOVE (no resize) — `void IPlatformWindow.MoveToPx(Point2 outerOriginPx)`** (default no-op). The
+  pure-move sibling of `SetBoundsPx`: restore a remembered outer ORIGIN without re-deriving the current size, and
+  without `SetBoundsPx`'s implicit "this may also be a resize" shape. Win32: `SetWindowPos(hwnd, NULL, round(x),
+  round(y), 0, 0, SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE)` — `MathF.Round`, not a truncating cast (a restore→persist
+  round-trip through a truncating cast drifts a pixel per cycle); `SetBoundsPx` was fixed to the same rounding.
+  Headless (`HeadlessWindow`) records `LastMoveToPx`/`MoveToCount` and does not touch `ClientSizePx`. The detached-
+  window owner seam mirrors it: `IDetachedVideoWindow.MoveTo(Point2)` defaults to `SetBounds` with the window's
+  CURRENT size (`BoundsPx`) for a backend with no standalone move primitive; `AppHost.DetachedWindowHandle.MoveTo`
+  overrides straight to `IPlatformWindow.MoveToPx` to skip that read-back.
 - **Window lifecycle — close veto, hide, park** *(as-built 2026-09; the notification-area app's seams).* Three
   default-interface members on `IPlatformWindow` plus portable decision types in `FluentGpu.Pal`
   (`Seams/Pal/WindowLifecycle.cs`):
@@ -407,12 +417,35 @@ Per `architecture-spec.md` §4.8 re-cut by `hardened-v1-plan.md` §2.2:
 | 1 pump | `IPlatformWindow.PumpInto(ring)`; **read device-lost word + present-ack seq** (single Volatile reads) | UI |
 | 2 input dispatch | drain ring; `WindowEvent.Resized/DpiChanged/ThemeChanged/DeviceLost` consumed | UI |
 | 10 submit | leaf walks POD opcodes (devirtualized) → `ID3D12GraphicsCommandList` → `ExecuteCommandLists` → `Signal(fence)` | RENDER |
-| 11 present | wait latency waitable (normally already paid before the frame was chosen — `WaitForPresentSlot`; skipped here while that credit is held) → `Present(SyncInterval, Flags)` → DComp `Commit` (only if composition dirty) → `Volatile.Write(present-ack)` | RENDER |
+| 11 present | wait latency waitable (normally already paid before the frame was chosen — `TryTakePresentSlot`; skipped here while that credit is held) → `Present(SyncInterval, Flags)` → DComp `Commit` (only if composition dirty) → `Volatile.Write(present-ack)` | RENDER |
 | 13 arena swap | drain deferred-delete ring behind retired fence; `StagingRing`/`UploadRing` reset behind fence | RENDER |
 
 In single-thread v1 every row is the UI thread (one thread). Submit/present become the render thread at
 build-order step 4. **The device-lost word + present-ack are the only render→UI channel** (single
 aligned words, `Volatile`); the resize request is the only UI→render side channel besides `SceneFrame`.
+
+
+### 2.3 `SubmitComposite` — the primary window's submit (AS-BUILT 2026-09)
+
+The retained tiled composite adds ONE `IGpuDevice` member pair and its POD frame types — as-built definitions in
+`src/FluentGpu.Engine/Seams/Rhi/Composite.cs` (this doc registers the seam; what a backend must DO with each field —
+raster order, the render-pass discipline, what each `CompositeKind` draws, the present rule — is owned by
+`gpu-renderer.md` §13.1):
+
+- `bool SupportsComposite` (default false) and `void SubmitComposite(in CompositeFrame frame)` (default throws). Every
+  backend that renders a PRIMARY window implements both (`HeadlessGpuDevice`, `D3D12Device`); the host has no other
+  primary route. Render thread; spans only — no copies, no allocation.
+- `CompositeFrame` (a `ref struct`): the `FrameInfo`, the slice rows (`SliceRow`) and their concatenated streams, the
+  tile raster list (`TileRaster`, visible first), the resident tile placements grouped by slice (`TilePlacement`), the
+  painter-ordered `CompositeItem`s + their marker layers, the slices' damage and span indices, the staged
+  `PresentParams`, and `RasterDone` — the ONE span the backend writes (1 per raster it actually completed).
+- `CompositeItem` / `CompositeKind` / `AcrylicRecipe` — one painter-ordered composite draw and its kind.
+- `PresentParams` (as built a `ref struct` of device-px `PixelRect` dirty rects + an optional scroll rect/offset,
+  `IsFull` when empty) — the composite frame's present CENSUS. It is **not** the §2.1 design sketch of the same name
+  (sync interval / flags); the as-built `ISwapchain.Present()` takes no parameters, and the D3D12 `FLIP_DISCARD`
+  target presents whole frames (`gpu-renderer.md` §13.1h).
+
+Secondary swapchains (windowed popups, detached pop-outs) keep `SubmitDrawList` (`RepaintRoute.FullDirect`).
 
 ---
 
@@ -506,8 +539,8 @@ Rules (implementation `FluentGpu.Windows/D3D12/UploadArena.cs`; the sizing/growt
   private rings did.
 - **The ceiling stays ≥ the full-frame worst case** — the sum of every sharing pipeline's own per-frame cap
   (`UploadArenaPolicy.PipelineWorstCaseBytes` = 1,556,480 B). The per-pipeline `MaxInstances` constants survive
-  as per-frame POLICY caps, not as standing memory. Replayed §13.1 partial frames cannot exceed that sum: a
-  pipeline's cursor accumulates across every replay inside one frame.
+  as per-frame POLICY caps, not as standing memory. A composite turn's tile rasters and offscreen passes cannot
+  exceed that sum either: a pipeline's cursor accumulates across every replay inside one frame.
 - **The census counts it:** each bank is `D3D12MemoryDiagnostics.Track`ed (so it is inside `gpu bytes`), and
   `DiagGpuDetail` reports `upload: arena=… bank=…/… peak=… refused=…` — capacity *and* the largest real
   single-frame demand, which is what "right-sized" is measured against. Alongside it, the **first successful
@@ -586,8 +619,8 @@ On the render thread: `IDXGIFactory2.CreateSwapChainForComposition(queue, desc)`
 UI), `PREMULTIPLIED`, `STRETCH`, `FRAME_LATENCY_WAITABLE | ALLOW_TEARING` → QI `IDXGISwapChain3`, then
 `SetMaximumFrameLatency(1)` — **not** `BufferCount - 1` (AS-BUILT 2026-09: the present-queue depth is a
 LATENCY decision, decoupled from the 3 CPU-side frame banks; depth 2 pre-paid a frame of input lag on every
-frame because backpressure is permanent on a weak GPU, and the render loop now waits for the slot before it
-picks a frame — `IGpuDevice.WaitForPresentSlot`; see
+frame because backpressure is permanent on a weak GPU, and the render loop now takes the slot before it
+picks a frame — `IGpuDevice.TryTakePresentSlot(timeoutMs)`; see
 [`budgets.md`](../budgets.md) §1 back-buffers row and [`threading-render-seam.md`](./threading-render-seam.md) §11.1).
 Back-buffer **RTVs created as `B8G8R8A8_UNORM_SRGB`** (RTV format independent of buffer format — folds
 the flip-model/DComp sRGB BLOCKER; blend+resolve in linear, hardware sRGB-encodes on write, output
@@ -715,12 +748,12 @@ our loop.
 
 - `VideoSurfaceRegistry` (`FluentGpu.Media`, portable) arbitrates a single surface by priority
   (theatre > PiP > sidebar); atomic handoff = no black frame.
-- **Two-clock tear fix:** PiP drag moves the DComp child via `Place` **with the canvas-RT hole committed
-  in lockstep in the SAME phase-11 DComp `Commit`**. Partial present: re-punch the hole whenever any node
-  overlapping the video rect is in the damage set (inflate the video node's damage to its own rect).
+- **Two-clock tear fix:** PiP drag moves the DComp child via `Place` **with the UI swapchain's hole presented
+  on the same phase-11 frame turn as its DComp `Commit`**. The retained-tile composite redraws the whole back buffer
+  and re-punches every hole every presented frame (`gpu-renderer.md` §7.3), so no damage-inflation rule exists.
 - macOS: `AVPlayerLayer`/`CALayer` sibling under the `CAMetalLayer`.
 
-13-phase: P11 `IVideoPresenter.Place` + canvas hole committed in one DComp `Commit`; P8 emits the
+13-phase: P11 `IVideoPresenter.Place` + the swapchain's hole on one frame turn; P8 emits the
 hole-punch quads; no video pixel work, no relayout, ever on our thread.
 
 ---
@@ -757,8 +790,8 @@ public interface IBackdropSource
 `FluentGpu.Windows` Pal/ → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` and/or a DComp backdrop **sibling
 visual below** our swapchain visual. Our root clears transparent (premul-0); DWM composes Mica through.
 HC → `None` + opaque fill. macOS → `NSVisualEffectView`. **In-app Acrylic** (toast/add-to-playlist over
-content) is NOT this seam — it is a renderer two-pass FrameGraph step (snapshot behind-region into a
-layer RT → blur → composite), owned by the renderer subsystem, and is BLOCKED on `OQ-7` (canvas-RT path).
+content) is NOT this seam — it is the renderer's composite-time `Backdrop` item (a mini-composite of the retained
+tiles beneath → dual-Kawase blur → tint; `gpu-renderer.md` §13.1e).
 
 ### 8.3 `IVirtualMemory` (backs `ChunkedArena` — `foundations.md` §6 supersede)
 
@@ -867,8 +900,8 @@ device-lost rebuild). The only permitted per-frame GC is freshly-captured user c
   path. AA goldens use a perceptual tolerance vs hardware (WARP is not bit-identical).
 - **Video surface lost (external decoder dies):** `IVideoPresenter.SetVisible(false)`, fall back to the
   poster/art lower layer (`DrawVideoCmd.PosterBlur`); `VideoReady` drives the crossfade back.
-- **Two-clock PiP tear:** the `Place` move and the canvas hole-punch commit in the SAME phase-11 DComp
-  `Commit` (§7).
+- **Two-clock PiP tear:** the `Place` move and the swapchain hole-punch land on the same phase-11 frame turn
+  (§7).
 - **OOM on `IVirtualMemory.Commit`:** clean fatal exception (not corruption); native high-water gates
   growth before this in normal operation.
 

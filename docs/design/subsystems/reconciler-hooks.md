@@ -70,6 +70,24 @@ contracts owned elsewhere:
 >   latest-write forwarder** (a fresh
 >   lambda does NOT re-render; the wired handler invokes the newest delegate — Compose Strong-Skipping shape).
 >   `FGSG001-005` diagnose the generator contract.
+> - **A `ComponentEl` anchor applies its own base-`Element` props (E14, 2026-09-26; `WriteAnchorColumns`).** The anchor
+>   node — the layout-transparent node `MountComponent` creates for an `Embed.Comp(...)` — used to carry NONE of the
+>   base-`Element` fields (`ScrollEffects`/`.Sticky`, `ScrollScope`, `Visible`, `Transition`, `WhileHover`/`WhilePressed`/
+>   `WhileFocus`, `Enter`, `Exit`, `Stagger`, `Layout`, `WheelTarget`, `RelativeTo`, `MorphId`) declared directly on the
+>   `Embed.Comp(...) with { … }` record: `Mount` returns at `MountComponent` **before** reaching `WriteColumns` (the
+>   only caller of `BakeScrollEffects`), and the `Update` reuse branch (a live component is autonomous — a parent
+>   re-render never touches it) returned early too, so every one of those props was silently dropped. `WriteAnchorColumns`
+>   (`Reconciler.cs`) now applies exactly that base-`Element` subset to the anchor from BOTH paths — mirroring the same
+>   lines `WriteColumns` already runs for every other element type, never duplicating the logic. Layout-SHAPE props
+>   (`Fill`/`Margin`/`Shrink`/`Grow`/`Animate`/…) remain `BoxEl`-only (no meaning on a transparent anchor); the sanctioned
+>   door for those on a control is `Parts[PartRoot]` (`component-props-contract.md` "Base props on the embed"). Gates:
+>   `gate.reconcile.componentel.{sticky,visible,exit,alloc}`, `gate.scroll-effects.sticky-in-realized-row.componentel`.
+> - **`BoxEl.HitTestVisible : Prop<bool>` (E15, 2026-09-26).** Bindable exactly like `Visible`/`Fill`/`Opacity`: a bound
+>   channel is wired at mount (`Reconciler.BindNode`; re-wired bound→bound like every channel) into its own effect, which clears/sets `NodeFlags.HitTestVisible`
+>   directly on a resolved flip — no layout pass (unlike `Visible`, which removes the node from flow) and no component
+>   re-render, so the flip is compositor-only (`FrameStats.Rendered` stays false). The static (unbound) reconcile-time
+>   write is unchanged, guarded the same way as `Fill`/`Opacity` so it never clobbers a live bind between signal fires.
+>   Gate: `gate.hit.bindable`.
 > - **Effects: auto-tracked is the DEFAULT; `DepKey` is explicit opt-in (G1a).** `UseEffect(Func<Action?>)` with **no
 >   deps** = auto-tracked (re-runs when any signal it *read* changes — signals-first, never a static dep list);
 >   `UseEffect(fn, DepKey)` = "run only when THIS changes" over-scoping. Tracking is RUNTIME, re-armed **every** run
@@ -82,7 +100,7 @@ contracts owned elsewhere:
 >   reference-compare `GcDepTable` upgrade (§3.3) is the **gated** `[EnableHookDepsLowering]` (GEN-02) path — probabilistic
 >   FromRef today, exact if collisions ever bite. See the §3.2 status note (updated).
 > - **`UseRequiredContext<T>`** (throws naming the type if unprovided) + the **`BindContract`** DEBUG tripwire
->   (`FG_BIND_CONTRACT`) flagging a bound↔static channel flip at the Update seam (mount-only bind wiring loses it).
+>   (on whenever compiled in; `--fg no-guards` turns it off, `--fg guards-throw` makes it throw) flagging a bound↔static channel flip at the Update seam (a bind is created only at mount and re-wired only bound→bound, so a flip loses).
 > - **Typed keyed `Flow.For<T>` + `UpdateFor` (G2).** `Flow.For<T>(items, keyOf, row)` (thunk or signal-direct source;
 >   **key mandatory**, DEBUG duplicate-key tripwire; `Fill` reads the source ONCE per effect run). `UpdateFor`
 >   **re-points the row/key closures on parent re-render** — fixing the latent `ForEl.Update` no-op where For closures
@@ -103,7 +121,7 @@ contracts owned elsewhere:
 >   `UseMeasuredWidth(quantum)` read the bounds-changed column; a layout-phase write only `MarksStale` so the re-render
 >   lands **next frame** (no re-entrancy) — quantum + delivered-baseline dedupe + a DEBUG oscillation tripwire (>8
 >   consecutive changed frames warns). `.Boundary()` = `IsolateLayout + ClipToBounds`; `FrameStats.RootRelayoutEscapes`
->   counts relayouts that reached the root (+ a throttled `FG_DIAG` diagnostic).
+>   counts relayouts that reached the root (+ a throttled `Diag` diagnostic under `--fg diag`).
 
 - **Reactive core** (`FluentGpu.Signals`, shipped in FluentGpu.Engine's `Foundation/` folder): `Signal<T>`/`FloatSignal`
   (observable cells, auto-tracked on read), `Memo<T>` (lazy derived), `Effect`/`Computation` (re-runs on dep change),
@@ -136,16 +154,19 @@ contracts owned elsewhere:
   their outgoing branch rather than park it, and a removed computation is already skipped by the drain's disposed check;
   prioritizing them would only re-reconcile regions whose element a later parent render re-points. Gate:
   `gate.reconciler.park-before-render` (both subscription orders).
-- **Deadline flush (2026-09).** `ReactiveRuntime.Flush(long deadlineTicks)` uses an absolute `Stopwatch` deadline and
-  returns `ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks)`. A hosted UI turn supplies one
-  deadline to all its reflushes; re-entering flush must not replenish the slice. Expiration yields before the next
-  computation, retaining unread normal/structural queue cursors and their queued flags. Structural work preempts
-  carried normal work just as it preempts a fresh batch. A unit includes synchronous memo pulls and the whole
-  reconciliation callback: it may exceed the deadline and its measured duration makes that visible. A throwing unit
-  is consumed before invocation so remaining siblings are retained; scheduler state and frame requests recover in
-  `finally`. The 1000-batch runaway guard counts from the last quiescent point, not the current call, so a cycle cannot
-  evade it by yielding once per frame. `Flush()` remains an explicit unbounded drain for deterministic harness and
-  non-frame callers. Steady slice processing allocates no managed objects. Gates: `gate.signals.deadline-*`.
+- **Flush to quiescence (2026-09-24; replaces the 2026-09 deadline flush).** Every hosted UI turn's `FlushHosted` runs
+  `ReactiveRuntime.Flush()` until nothing is pending — there is no time slice (`ReactiveSliceMaxMs` and the
+  `Flush(long deadlineTicks)` overload are deleted): a slice that yields leaves the UI one frame behind its own signals
+  (a keep-alive park, a migration sweep, a fan-out that lands a frame late), which is a correctness bug dressed as a
+  frame-time policy. Flush returns `ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks,
+  Computation? LongestUnit)`. Structural work preempts normal work within the drain. A throwing unit is consumed before
+  invocation so remaining siblings run; scheduler state recovers in `finally`. **Hang guard:** the structural
+  `MaxFlushIterations` = 1000 batches — past it the flush stops and writes the always-on `[signals.runaway]` line naming
+  the owners still queued (`RunawayCount`). **Slow units are fixed at the source, not sliced:** a unit longer than the
+  frame period is reported by the always-on `[signals.slow-unit] one reactive unit ran X ms (owner=…; frame period Y ms)`
+  line (`SlowReactiveUnits`: the first at once, then ≤ 1 line a second with the folded count), and `FrameStats` carries
+  `ReactiveUnits` / `ReactiveLongestUnitMs`. The drain allocates no managed objects. Gates: `gate.signals.flush-*`,
+  `gate.signals.frame-reaches-quiescence`, `gate.signals.keepalive-parks-in-one-frame`; `SlowReactiveUnitsTests`.
   **This is computation-boundary scheduling, not the staged per-node reconciliation described in §5.** The existing
   reconciler still completes a tree mutation synchronously; no partially executed mutation is yielded or published.
 - **Isolated keyed identity planning (2026-09).** `ChildReconcilePlan` copies immutable element references and
@@ -177,9 +198,17 @@ contracts owned elsewhere:
   element kind since it lives above the per-type `switch`, see `layout.md` §4.7) accepting a static `T`, a `Func<T>`
   thunk, or a concrete signal (signal-direct — the
   engine effect reads `sig.Value`, the caller allocates no closure; inline lambdas wrap in `Prop.Of(...)`). The
-  reconciler wires a BOUND channel into an effect **once at mount** (a fresh thunk on a re-render is ignored —
-  the signals-first contract: change the signal's value, not the bind; check `bind.mount-only.stale`); the STATIC
-  value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
+  reconciler wires a BOUND channel into ONE effect **at mount** (`BindNode` → a `BindEffect<T>` per channel, which
+  reads its source and its static companions through itself, never through mount-captured locals); **a re-render that
+  binds the channel again with a different payload RE-WIRES that effect** (bound→bound, 2026-09-30 — `RewireBinds`,
+  `Reconciler.Rewire.cs`: the reused node's `Update`, behind the same DiffProps `RecordChanged` gate, swaps the thunk/
+  signal and re-runs the body once, so `RunComputation` re-tracks whatever the new thunk reads; an equal payload — the
+  same delegate/signal by `Prop<T>` equality — re-runs nothing; zero managed allocation; a layout channel's re-run that
+  wrote is promoted to a layout-shape change, as its static write would be. Before this, wiring was mount-only and a
+  fresh thunk capturing new render-time values was silently ignored — `ProgressBar.Create`'s indicator kept its
+  fallback-width product while its static track followed. Gates `gate.bind.rewire-*`). A static↔bound **flip** is not
+  re-wired — the mount effect keeps the channel and the new form silently loses (the `BindContract` tripwire below);
+  the STATIC value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
   Opacity `!= 1f` reappear bug and the Fill/TextColor bound-value clobbers by construction. A bound fire writes ONE
   scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text → scoped
   relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via

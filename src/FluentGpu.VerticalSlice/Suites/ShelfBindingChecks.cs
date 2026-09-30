@@ -225,10 +225,10 @@ static class ShelfBindingChecks
         Settle(host);
         var viewport = FindScrollNode(host.Scene, host.Scene.Root);
         var first = probe.Visible;
-        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)viewport.Raw.Index, 1200, immediate: true));
+        host.TryGetScrollHandle(viewport)?.ScrollTo(1200, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         Settle(host);
         var outside = probe.Visible;
-        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)viewport.Raw.Index, 0, immediate: true));
+        host.TryGetScrollHandle(viewport)?.ScrollTo(0, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         Settle(host);
         Check("gate.lazygrid.visibility publishes an empty demand window offscreen and restores it on return",
             first.LastIndexExclusive > first.FirstIndex && outside.LastIndexExclusive == outside.FirstIndex
@@ -238,24 +238,32 @@ static class ShelfBindingChecks
 
     sealed class GridVisibilityProbe : Component
     {
+        // ScrollEl.OnScrollGeometryChanged is gone (scroll rework): a ScrollHandle is created here and bound via
+        // ScrollEl.Handle at mount; an auto-tracked UseEffect mirrors its Offset signal into the plain Signal<float>
+        // LazyGrid's demand-window plumbing already expects, exactly like the deleted callback used to.
+        readonly FluentGpu.Scroll.Runtime.ScrollHandle _handle = new();
         readonly Signal<float> _offset = new(0f);
         public LazyGridVisibleRange Visible;
-        public override Element Render() => Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)_offset,
-            ScrollView(new BoxEl
-            {
-                Direction = 1,
-                Children =
-                [
-                    Embed.Comp(() => new LazyGrid(() => 6,
-                        (index, width) => new BoxEl { Height = width, Children = [Text("release-" + index)] },
-                        (_, _) => { }, onVisibleRangeChanged: range => Visible = range)),
-                    new BoxEl { Height = 1800f },
-                ],
-            }) with
-            {
-                Grow = 1f,
-                OnScrollGeometryChanged = (g => (int)g.OffsetY, g => _offset.SetIfChanged(g.OffsetY)),
-            });
+        public override Element Render()
+        {
+            UseEffect(() => _offset.SetIfChanged((float)_handle.Offset.Value));
+            return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)_offset,
+                ScrollView(new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        Embed.Comp(() => new LazyGrid(() => 6,
+                            (index, width) => new BoxEl { Height = width, Children = [Text("release-" + index)] },
+                            (_, _) => { }, onVisibleRangeChanged: range => Visible = range)),
+                        new BoxEl { Height = 1800f },
+                    ],
+                }) with
+                {
+                    Grow = 1f,
+                    Handle = _handle,
+                });
+        }
     }
 
     // ── The render gate: the realized window is the render's ONLY scroll subscription ───────────────────────────────
@@ -285,7 +293,7 @@ static class ShelfBindingChecks
         int ScrollAndCount(float offset)
         {
             probe.CellBuilds = 0; probe.VisibleCallbacks = 0;
-            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)viewport.Raw.Index, offset, immediate: true));
+            host.TryGetScrollHandle(viewport)?.ScrollTo(offset, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
             int rendered = 0;
             for (int i = 0; i < 12; i++) rendered += host.RunFrame().ComponentsRendered;
             return rendered;
@@ -327,27 +335,34 @@ static class ShelfBindingChecks
 
     sealed class GridRenderGateProbe : Component
     {
+        // ScrollEl.OnScrollGeometryChanged is gone (scroll rework): see GridVisibilityProbe above for the
+        // Handle + auto-tracked UseEffect replacement shape.
+        readonly FluentGpu.Scroll.Runtime.ScrollHandle _handle = new();
         readonly Signal<float> _offset = new(0f);
         public readonly Signal<int> Count = new(30);
         public int CellBuilds, VisibleCallbacks;
         public LazyGridVisibleRange Visible;
-        public override Element Render() => Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)_offset,
-            ScrollView(new BoxEl
-            {
-                Direction = 1, Width = 600f,
-                Children =
-                [
-                    // The churn-free overload: the grid's render subscribes to Count and its realized-window key only.
-                    Embed.Comp(() => new LazyGrid(Count,
-                        (index, _) => { CellBuilds++; return new BoxEl { Height = 200f, Children = [Text("card-" + index)] }; },
-                        (_, _) => { }, onVisibleRangeChanged: range => { VisibleCallbacks++; Visible = range; })),
-                    new BoxEl { Height = 1800f },
-                ],
-            }) with
-            {
-                Grow = 1f,
-                OnScrollGeometryChanged = (g => (int)g.OffsetY, g => _offset.SetIfChanged(g.OffsetY)),
-            });
+        public override Element Render()
+        {
+            UseEffect(() => _offset.SetIfChanged((float)_handle.Offset.Value));
+            return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)_offset,
+                ScrollView(new BoxEl
+                {
+                    Direction = 1, Width = 600f,
+                    Children =
+                    [
+                        // The churn-free overload: the grid's render subscribes to Count and its realized-window key only.
+                        Embed.Comp(() => new LazyGrid(Count,
+                            (index, _) => { CellBuilds++; return new BoxEl { Height = 200f, Children = [Text("card-" + index)] }; },
+                            (_, _) => { }, onVisibleRangeChanged: range => { VisibleCallbacks++; Visible = range; })),
+                        new BoxEl { Height = 1800f },
+                    ],
+                }) with
+                {
+                    Grow = 1f,
+                    Handle = _handle,
+                });
+        }
     }
     // ── The props DATA GATE (docs/design/subsystems/component-props-contract.md "Retained shelf authoring") ──────────
     // ShelfProps' equality IS the reconciler's re-render gate. It compares the item snapshot (reference, else the

@@ -34,21 +34,16 @@ public sealed unsafe partial class D3D12Device
         get
         {
             AssertMemoryProbeOwner();
-            return new(_lastRepaintRoute, _lastReplayRectCount, _lastRepaintFullReason,
-                _frameSegments, _frameRuns, _frameClipOps, _frameLayerOps, _framePipeBinds, _frameScissorSets,
+            return new(_frameSegments, _frameRuns, _frameClipOps, _frameLayerOps, _framePipeBinds, _frameScissorSets,
                 _frameRectCount, _frameGlyphInstanceCount, _frameImageCount, _frameImageSkipped,
-                _frameStencilClips, _opacity?.OpacityGroupsThisFrame ?? 0, _opacity?.BoundedOpacityGroupsThisFrame ?? 0,
-                _opacity?.BlurGroupsThisFrame ?? 0,
-                _opacity?.EdgeFadeGroupsThisFrame ?? 0, DroppedInstanceCount(), _frameTextCoverFlushes,
-                _blurCacheHit, _blurCacheMiss, _opacity?.RtCreatesThisFrame ?? 0, _pathPipe?.DrawsThisFrame ?? 0);
+                _frameStencilClips, DroppedInstanceCount(), _frameTextCoverFlushes, _pathPipe?.DrawsThisFrame ?? 0,
+                _frameTilesRastered, _frameInlineGroups, _frameDirectRegions);
         }
     }
 
-    internal readonly record struct MemoryProbeWorkloadCounters(RepaintRoute Route, int ReplayRects,
-        RepaintFullReason FullReason, int Segments, int Runs, int ClipOps, int LayerOps, int PipeBinds,
+    internal readonly record struct MemoryProbeWorkloadCounters(int Segments, int Runs, int ClipOps, int LayerOps, int PipeBinds,
         int Scissors, int Rects, int GlyphInstances, int Images, int ImagesSkipped, int StencilClips,
-        int OpacityGroups, int BoundedOpacityGroups, int BlurGroups, int EdgeFadeGroups, int DroppedInstances, int TextCoverFlushes,
-        int BlurCacheHits, int BlurCacheMisses, int OpacityRtCreates, int PathDraws);
+        int DroppedInstances, int TextCoverFlushes, int PathDraws, int TilesRastered, int InlineGroups, int DirectRegions);
 
     internal MemoryProbeSampler? CreateMemoryProbeSampler()
     {
@@ -65,51 +60,60 @@ public sealed unsafe partial class D3D12Device
         WaitForGpu();
     }
 
-    /// <summary>Control for the list Reset required to detach a bank before replacement. Does not reset/replace its allocator.</summary>
+    /// <summary>Control for the list Reset required to detach a bank before replacement. Does not reset/replace its allocator.
+    /// Phase 1 (§3.3): operates on the PRIMARY target's own list (`Frame.List`) directly — this runs BETWEEN closed
+    /// submissions, i.e. outside any BeginTargetFrame/EndTargetFrame window, so the `_cmdList`/`_f` ambient aliases
+    /// are null here and must not be read.</summary>
     internal void MemoryProbeResetCommandList(int bank)
     {
-        if ((uint)bank >= FRAME_COUNT) throw new ArgumentOutOfRangeException(nameof(bank));
+        if ((uint)bank >= SubmissionRing.Depth) throw new ArgumentOutOfRangeException(nameof(bank));
         MemoryProbeDrain();
-        Check(_cmdList->Reset(_allocators[bank], null), "MemoryProbe.CommandList.Reset(control)");
-        Check(_cmdList->Close(), "MemoryProbe.CommandList.Close(control)");
+        var list = _primarySwapchain!.Frame.List;
+        Check(list->Reset(_ring.Allocators[bank], null), "MemoryProbe.CommandList.Reset(control)");
+        Check(list->Close(), "MemoryProbe.CommandList.Close(control)");
         InvalidateCmdState();
     }
 
     /// <summary>
     /// Diagnostic intervention, not a trim policy. A successful full-queue fence precedes replacement; resetting the
     /// CLOSED list onto the new bank drops its old recording references before releasing the old allocator.
-    /// Compare against MemoryProbeResetCommandList, since list reset is a necessary additional operation.
+    /// Compare against MemoryProbeResetCommandList, since list reset is a necessary additional operation. Bank is now
+    /// a SubmissionRing slot (Phase 1 §3.2/§3.3), not a back-buffer index.
     /// </summary>
     internal void MemoryProbeReplaceAllocator(int bank)
     {
-        if ((uint)bank >= FRAME_COUNT) throw new ArgumentOutOfRangeException(nameof(bank));
+        if ((uint)bank >= SubmissionRing.Depth) throw new ArgumentOutOfRangeException(nameof(bank));
         MemoryProbeDrain();
         ID3D12CommandAllocator* replacement = null;
         Check(_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT,
             __uuidof<ID3D12CommandAllocator>(), (void**)&replacement), "MemoryProbe.CreateCommandAllocator");
-        var reset = _cmdList->Reset(replacement, null);
+        var list = _primarySwapchain!.Frame.List;
+        var reset = list->Reset(replacement, null);
         if ((int)reset < 0)
         {
             replacement->Release(); // The old bank/list remain owned; abort the experiment rather than losing them.
             Check(reset, "MemoryProbe.CommandList.Reset(replacement)");
             return;
         }
-        var retired = _allocators[bank];
-        _allocators[bank] = replacement;
+        var retired = _ring.Allocators[bank];
+        _ring.Allocators[bank] = replacement;
         SetName(replacement, $"FluentGpu.MemoryProbe.CommandAllocator[{bank}]");
         retired->Release();
-        Check(_cmdList->Close(), "MemoryProbe.CommandList.Close(replacement)");
+        Check(list->Close(), "MemoryProbe.CommandList.Close(replacement)");
         InvalidateCmdState();
         // Fence numbering, per-bank fences, swapchain depth and upload-bank indices remain unchanged. The next
         // production submission resets this already-retired bank normally; no resources or instances are trimmed.
     }
 
+    /// <summary>Phase 1 (§3.3): replaces the PRIMARY target's own list (`Frame.List`), not a device-global `_cmdList`
+    /// (there is no longer such a thing outside an active submit).</summary>
     internal void MemoryProbeReplaceCommandList()
     {
         MemoryProbeDrain();
+        TargetFrameState f = _primarySwapchain!.Frame;
         ID3D12GraphicsCommandList* replacement = null;
         Check(_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT,
-            _allocators[0], null, __uuidof<ID3D12GraphicsCommandList>(), (void**)&replacement), "MemoryProbe.CreateCommandList");
+            _ring.Allocators[0], null, __uuidof<ID3D12GraphicsCommandList>(), (void**)&replacement), "MemoryProbe.CreateCommandList");
         var close = replacement->Close();
         if ((int)close < 0)
         {
@@ -117,8 +121,8 @@ public sealed unsafe partial class D3D12Device
             Check(close, "MemoryProbe.CommandList.Close(new)");
             return;
         }
-        var retired = _cmdList;
-        _cmdList = replacement;
+        var retired = f.List;
+        f.List = replacement;
         SetName(replacement, "FluentGpu.MemoryProbe.CommandList");
         retired->Release();
         InvalidateCmdState();

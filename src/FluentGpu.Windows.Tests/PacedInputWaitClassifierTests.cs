@@ -5,10 +5,10 @@ using Xunit;
 namespace FluentGpu.Windows.Tests;
 
 /// <summary>Locks the pure decision seam of the display-paced native input wait (<c>Win32Window.WaitForPacedWork</c>):
-/// which messages may wait for the display tick and how the absolute deadline is honoured. Wheel packets became
-/// deferrable with the scroll pacing fix (S2): the input ring sums consecutive wheel deltas, so a packet waiting for
-/// the tick loses nothing, and the frame that consumes it is produced in phase instead of slipping one refresh.
-/// Down/Up/Key/Timer stay urgent — they end the wait at once.</summary>
+/// which messages may wait for the display tick and how the absolute deadline is honoured. Only pointer-motion
+/// companions may wait. Wheel packets are URGENT (scroll rework §1 #3): a notch authors its scroll plan during message
+/// dispatch and the render thread poses it on its next tick, so a wheel packet parked behind the paced wait would add
+/// a refresh of notch-to-present latency. Down/Up/Key/Timer stay urgent too — they end the wait at once.</summary>
 public sealed class PacedInputWaitClassifierTests
 {
     [Fact]
@@ -22,15 +22,16 @@ public sealed class PacedInputWaitClassifierTests
     }
 
     [Fact]
-    public void WheelPackets_AreDeferrable_ButNotMotion()
+    public void WheelPackets_AreUrgent_AndNotMotion()
     {
         Assert.Equal(0x024Eu, PacedInputWaitClassifier.WmPointerWheel);
         Assert.Equal(0x024Fu, PacedInputWaitClassifier.WmPointerHWheel);
 
-        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmPointerWheel));
-        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmPointerHWheel));
+        // A notch ends the paced wait at once: its plan must reach the render thread's next pose, not the next frame.
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmPointerWheel));
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmPointerHWheel));
 
-        // The motion census counts pointer-motion messages only; a wheel packet waiting for the tick is not motion.
+        // The motion census counts pointer-motion messages only; a wheel packet is not motion.
         Assert.False(PacedInputWaitClassifier.IsMotion(PacedInputWaitClassifier.WmPointerWheel));
         Assert.False(PacedInputWaitClassifier.IsMotion(PacedInputWaitClassifier.WmPointerHWheel));
     }

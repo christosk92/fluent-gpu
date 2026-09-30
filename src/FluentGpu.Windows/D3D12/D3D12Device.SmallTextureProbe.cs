@@ -192,13 +192,20 @@ public sealed unsafe partial class D3D12Device
         if (!pattern.AsSpan().SequenceEqual(readback)) throw new InvalidOperationException("CPU texture round-trip differs.");
     }
 
+    // Phase 1 (§3.1/§3.3): this synchronous, single-swapchain probe now goes through BeginTargetFrame/EndTargetFrame
+    // and the SubmissionRing like the real submit path, just serially (WaitForGpu before every reset — no in-flight
+    // overlap to worry about, so a fixed ring slot per call is fine).
+    private int _smallTextureSlot;
+
     private void SmallTextureResetCommands()
     {
         WaitForGpu();
-        Activate(_primarySwapchain!);
-        _frameIndex = _swapChain->GetCurrentBackBufferIndex();
-        Check(_allocators[_frameIndex]->Reset(), "SmallTexture.allocator.Reset");
-        Check(_cmdList->Reset(_allocators[_frameIndex], null), "SmallTexture.list.Reset");
+        TargetFrameState f = _primarySwapchain!.Frame;
+        BeginTargetFrame(f);
+        f.FrameIndex = f.Target.SwapChain->GetCurrentBackBufferIndex();
+        _smallTextureSlot = _ring.NextSlot;
+        Check(_ring.Allocators[_smallTextureSlot]->Reset(), "SmallTexture.allocator.Reset");
+        Check(_cmdList->Reset(_ring.Allocators[_smallTextureSlot], null), "SmallTexture.list.Reset");
         InvalidateCmdState();
     }
 
@@ -207,18 +214,22 @@ public sealed unsafe partial class D3D12Device
         Check(_cmdList->Close(), "SmallTexture.Close");
         ID3D12CommandList* list = (ID3D12CommandList*)_cmdList;
         _queue->ExecuteCommandLists(1, &list);
-        SignalFrame(_frameIndex);
-        StoreActive();
+        TargetFrameState f = _f!;
+        ulong v = SignalNext();
+        f.FenceValues[f.FrameIndex] = v;
+        f.LastSubmitFence = v;
+        _ring.Stamp(_smallTextureSlot, v, f.Target, 0);
+        EndTargetFrame();
     }
 
     private byte[] SmallTextureRender(ID3D12DescriptorHeap* descriptors, int first, uint increment, out int width, out int height)
     {
         SmallTextureResetCommands();
-        _uploadArena!.BeginFrame((int)_frameIndex);
-        _imagePipe!.BeginFrame((int)_frameIndex);
-        var back = _backBuffers[_frameIndex];
+        _uploadArena!.BeginFrame(_smallTextureSlot);
+        _imagePipe!.BeginFrame(_smallTextureSlot);
+        var back = _f!.Target.BackBuffers[_f!.FrameIndex];
         Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var rtv = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); rtv.ptr += _frameIndex * _rtvSize;
+        var rtv = _f!.Target.RtvHeap->GetCPUDescriptorHandleForHeapStart(); rtv.ptr += _f!.FrameIndex * _rtvSize;
         _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
         float* clear = stackalloc float[4] { 0, 0, 0, 1 };
         _cmdList->ClearRenderTargetView(rtv, clear, 0, null);

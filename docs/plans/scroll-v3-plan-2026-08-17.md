@@ -1,5 +1,9 @@
 # Scroll v3 — delete-and-rebuild the FluentGpu scroll mechanic
 
+> **SUPERSEDED (2026-09-23) by [`scroll-rework-implementation.md`](scroll-rework-implementation.md)** — the delete-and-rebuild
+> that actually shipped: stateless `p(t)` motion, render-thread posing, and no legacy path, in place of this plan's
+> UI-thread `ScrollKernel`/lease design.
+
 Plan date: 2026-08-17. Supersedes `docs/plans/scroll-complete-rework-inventory-2026-08-17.md` §12/§14 (the inventory stays the as-built map; this is the decision + the build plan).
 
 ## 0. Context

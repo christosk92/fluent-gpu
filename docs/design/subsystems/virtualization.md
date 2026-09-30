@@ -228,6 +228,42 @@ sole use is **halo/elevation bleed**: a card is inset from the clipping viewport
 into the gutter instead of hard-clipping, while the widened-viewport/negative-margin shift keeps rest positions pixel-
 identical (a page bring-into-view subtracts `LeadInset` so `page·cols·stride` still lands the card at its rest position).
 
+**Lead-item span (E7 — `FillRowVirtualLayout.SetLeadSpan`/`LeadSpan`; half-row rule E11).** A `FillRowVirtualLayout`
+with `Rows == 1` (the shelf shape) MAY dedicate item 0 to a wide "hero" lead — the Wavee Home CoverShelf/MixedCovers
+lead when it carries a header image — occupying `s` cells instead of one. `s` is
+`EffectiveLeadSpan = Rows == 1 && LeadSpan > 1 && PerPage > 2*LeadSpan ? LeadSpan : 1`: a multi-row grid never spans
+its lead (a hero has no meaning stacked across rows), and — the E11 **half-row rule** — a single-row shelf honours the
+raw `LeadSpan` only while at least `LeadSpan + 1` ordinary cells remain beside it (`PerPage > 2*LeadSpan`); once the
+viewport narrows past that point the span **collapses to 1** (an ordinary, unspanned lead) rather than clamping down
+to whatever column count remains. The earlier rule (`min(LeadSpan, PerPage)`) let a lead claim half a row or more —
+down to being the row's *only* card once `PerPage` itself fell to the span — which reads as a broken shelf, not a
+lead; the app passes `leadSpan: 2` unconditionally and relies on the collapse at 3–4 columns instead of gating it
+itself. `SetLeadSpan` is a plain field write on the already-stateful, hoisted-and-reused layout instance — **LIVE**:
+it takes effect on the very next geometry call, no remount, exactly like a resize re-fit.
+- **Cell accounting.** Item 0 occupies cells `[0, s)`; every later item *i* occupies exactly one cell, at
+  `i + s − 1` (`CellsOf(n) = n + s − 1` for `n ≥ 1`, `0` for `n ≤ 0` — the identity `CellsOf(n) == n` when `s == 1` is
+  the byte-identical fallback every other formula below reduces to). `ItemRect` reads this directly: item 0's rect
+  widens to `s·cardW + (s−1)·gap` at the lead inset; item *i ≥ 1*'s rect shifts to cell `i + s − 1`; `Window`'s
+  cell→item mapping is the inverse (`ItemAtCell`); `ContentExtent` uses `CellsOf(n)` as its column count (`Rows == 1`
+  only — a multi-row grid keeps its untouched `ColCount(n) = ⌈n/Rows⌉` row-major shape, a *different* accounting that
+  `CellsOf` must never replace there).
+- **Paging.** The page **stride stays a card edge** (`PerPage·(cardW+gap)`, unchanged by the span) — only which ITEM a
+  page boundary lands on moves: `FirstItemOfPage(p) = p == 0 ? 0 : p·PerPage − (s−1)`, since the lead ate `s−1` extra
+  cells out of page 0 that a non-spanning grid would have given to page-0 items, and every later page starts that many
+  items earlier to compensate. Page COUNT is `⌈CellsOf(n) / PerPage⌉` (Rows == 1) — strictly `≥` the unspanned page
+  count, and can tip a whole page higher once the span's extra cell crosses a `PerPage` boundary.
+- **Keyboard nav for free.** `ItemsView`'s `RepeatKind.Custom` XY navigation (`NavigateGeometric`, ItemsView.cs) walks
+  by `layout.ItemRect(i, cross)` alone — nearest-in-direction over real geometry, no shelf-side special case — so a
+  span-aware `ItemRect` is the *entire* keyboard-nav contract: arrowing off the wide lead lands on its true visual
+  neighbour with no further work.
+- **PagedShelf's live prop (`Controls/PagedShelf.cs`).** `PagedShelf.Create(..., leadSpan: 1)` rides the SAME
+  re-pushed-every-render channel as `title`/`header` (never the item-equality-gated data props) — it depends on DATA
+  (does THIS lead item carry a header image?), which can flip after mount without remounting the shelf. A DEDICATED
+  signal, not folded into the shelf's chrome record, so only the lead card's own realized slot (index 0 — the one
+  place that reads it) re-renders on a span change; every other card is untouched. The shelf's own page math
+  (`Controller.PageCount`/pips/the bring-into-view target) and the card template's width hint for index 0 both read
+  the live value, so a 1→2→1 flip needs no remount anywhere in the chain.
+
 ### 3.2 `UseInfiniteCollection<T>` — incremental load (composes `UseInfiniteResource`)
 
 `UseInfiniteCollection` = `UseVirtual` + a paged data layer (`UseInfiniteResource` from Reactor's
@@ -304,6 +340,20 @@ remount. A state that is **rare or expensive** to keep mounted (a spinner, a mar
 `ShowWhen` — `Flow.Show`, an actual mount/unmount. Reaching for `ShowWhen` on a frequent flip defeats shape
 stability (the branch element gets rebuilt on every toggle); reaching for `Show` on a genuinely rare, heavy
 branch keeps dead weight mounted for nothing.
+
+**Bound rows own the scope (E9).** Every bound row template receives a `RowScope` (`BoundItemScope<T>.Row`) carrying
+`OnInteraction`/`OnFocusChanged` — the SAME seam `ItemContainerFactory`'s `onInteraction`/`onFocusChanged` parameters
+give a `RenderItem`-mode container (`ItemContainer.Build`, `SelectorVisualsBound.None`): the slot root is built
+`Focusable = false` (bound mode's roving SINGLE tab stop moves imperatively via `ItemsView.SetSlotTabStop`, never a
+re-render) and wires `OnPointerReleased`/`OnKeyDown` (Enter/Space)/`OnFocusChanged` straight onto `scope.Row`. A
+bound row that skips this wiring gives `ItemsView` no `current` item to navigate from at all — arrow keys, the roving
+tab stop, and `ListOptions<T>.IsItemInvokedEnabled`/`OnInvokedTyped` all go silently inert, which is exactly the gap
+`PagedShelf`'s `BindCard` (`Controls/PagedShelf.cs`) had before E9: its slot root now consumes `RowScope` the same
+way, and `PagedShelf.Create`'s new `onInvoke: Action<T, int>?` parameter rides the shelf's existing re-pushed-props
+channel (alongside `CardAt`/`KeyOf`/`OnVisibleRange`, per component-props-contract's "Retained shelf authoring") to
+`ListOptions<T>.OnInvokedTyped`. The card template itself must declare **neither** `Focusable` **nor**
+`OnClick`/`OnPointerReleased` — the slot root is the one and only invoke/focus target; a template that also wires its
+own click fights the roving tab stop.
 
 `FluentGpu.Engine/Foundation/FormatCache.cs`: `FormatCache<TKey>` is a bounded `Dictionary<TKey,string>` (cap
 `FormatCache<TKey>.Capacity` = 4096; a miss past the cap **clears the whole table** rather than evicting

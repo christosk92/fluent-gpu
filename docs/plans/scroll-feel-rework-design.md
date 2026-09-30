@@ -1,5 +1,9 @@
 # Scroll-Feel Rework — phase-tagged input, one integrator, OS-owned PTP momentum
 
+> **SUPERSEDED (2026-09-23) by [`scroll-rework-implementation.md`](scroll-rework-implementation.md)** — DirectManipulation
+> is kept only as a stripped contact producer (no OS-owned inertia); physics is a stateless analytic plan, not an
+> integrator.
+
 Status: **DECIDED — Phase 0 COMPLETE (GO for DManip), Phases 1–4 not yet landed.**
 Phase 0 verdict (2026-07-01, dev machine, ARM64 Win11 26300, probe at `tools/dm-probe`): **cell B
 PASS** — with `EnableMouseInPointer(true)` ON: 13/13 `DM_POINTERHITTEST→SetContact` S_OK, full

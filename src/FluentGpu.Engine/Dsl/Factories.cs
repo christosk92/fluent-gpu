@@ -150,7 +150,8 @@ public static partial class Ui
 
     /// <summary>A responsive auto-fill grid: packs as many equal (1fr) columns as fit at ≥ <paramref name="minColWidth"/>,
     /// stretched to fill the width with no ragged edge, reflowing the column count as the width changes — CSS
-    /// <c>repeat(auto-fill, minmax(minColWidth, 1fr))</c>. Cells flow row-major; <paramref name="gap"/> applies on both axes.</summary>
+    /// <c>repeat(auto-fill, minmax(minColWidth, 1fr))</c>. Cells flow row-major; <paramref name="gap"/> applies on both axes.
+    /// Set <see cref="GridEl.MaxColumns"/> on the result to cap the packed count (the tracks still fill the width).</summary>
     public static GridEl AutoGrid(float minColWidth, float gap, float rowHeight, params Element[] children)
         => new() { MinColWidth = minColWidth, ColGap = gap, RowGap = gap, RowHeight = rowHeight, Children = children };
 

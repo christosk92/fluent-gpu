@@ -1,10 +1,10 @@
-using System.Diagnostics.Tracing;
+﻿using System.Diagnostics.Tracing;
 using System.Globalization;
 
 namespace FluentGpu.Hosting;
 
 /// <summary>
-/// FG_ALLOC_TYPES=1: a per-TYPE allocation profiler. An <see cref="EventListener"/> on the CLR's
+/// --fg alloc-types: a per-TYPE allocation profiler. An <see cref="EventListener"/> on the CLR's
 /// "Microsoft-Windows-DotNETRuntime" provider captures <c>GCAllocationTick</c> (event id 10) — the runtime emits one
 /// per ~100KB allocated, carrying the allocating type's name and the chunk size — and aggregates bytes per type.
 /// Once per second it prints "[alloctypes] top: TypeA NN.NKB/s | …" (top 12) to stderr and resets the window, so
@@ -37,7 +37,7 @@ public sealed class AllocTypeProfiler : EventListener
     private EventSource? _runtimeSource;   // captured in OnEventSourceCreated so Dispose can disable it
 
     /// <summary>Construct the singleton listener once. Safe to call repeatedly; only the first call wires the
-    /// listener. Call only when FG_ALLOC_TYPES is set.</summary>
+    /// listener. Call only when --fg alloc-types is set.</summary>
     public static void Start()
     {
         if (s_instance is not null) return;

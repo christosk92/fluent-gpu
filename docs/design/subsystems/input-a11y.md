@@ -132,15 +132,15 @@ public readonly record struct InputEvent(
 - Leave tracking via `WM_POINTERLEAVE` + `TrackMouseEvent(TME_LEAVE|TME_HOVER)` — **not** `RegisterTouchHitTestingWindow`.
 - Committed text is `WM_CHAR` after `TranslateMessage` (`WM_UNICHAR` optional for >BMP keyboards).
 
-**The content-driven window move (`WindowMoveSizeEnded` + the `InputHooks` pair).** A control whose surface moves its
-chromeless window (the pop-out video, `MediaPlayerElement.DragMovesWindow`) calls `InputHooks.WindowBeginMove:
-Func<bool>?` — host-wired to `IPlatformWindow.BeginSystemMove` (seam + Win32 guarantee: `pal-rhi.md` §1.2 "Modal
-loops") — from a press that travelled past `ClickSlopPx` on that surface; its buttons and sliders are their own
-interaction-gated press targets, so a press on a control never arms it. `true` means the OS loop was requested and the
-backend's `PointerCancel` ends the engine contact (the captured `OnDrag` owner sees `OnPointerExit`, never a click);
-the loop's end arrives as `InputKind.WindowMoveSizeEnded` → `InputDispatcher.OnWindowMoveSizeEnded` →
-`InputHooks.WindowMoveSizeEndedObserved` (raised for EVERY move/size loop of the window, edge resizes included —
-a subscriber that did not start one ignores it). Never coalesced; not a pointer event (no per-contact slot).
+**The window move/size loop (`WindowMoveSizeBegan`/`Ended` + the `InputHooks` pair).** There is no content-driven
+move: a chromeless window's drag handle is a `TitleBarHit.Caption` region reported through
+`IPlatformWindow.SetTitleBarRegions` (`pal-rhi.md` "Content-driven MOVE: none" — a client-press-to-`SC_MOVE` trick
+was measured broken under mouse-in-pointer and removed 2026-09-22). Every OS move/size loop of the window — a
+caption drag or an edge resize — arrives as `InputKind.WindowMoveSizeBegan` at `WM_ENTERSIZEMOVE` →
+`InputDispatcher.OnWindowMoveSizeBegan` → `InputHooks.WindowMoveSizeBeganObserved`, and ends as
+`InputKind.WindowMoveSizeEnded` at `WM_EXITSIZEMOVE` → `InputDispatcher.OnWindowMoveSizeEnded` →
+`InputHooks.WindowMoveSizeEndedObserved`. Both are raised for EVERY loop (edge resizes included — a subscriber that
+does not hold chrome for a move ignores them). Never coalesced; not a pointer event (no per-contact slot).
 
 **DPI (foundations / architecture-spec §7):** DIP↔px conversion happens **once** at the pump boundary using the window's post-`WM_DPICHANGED` `Scale`. Everything above the seam is in DIP. The shared transform helper (§5) never re-applies DPI — it composes node-local DIP transforms only.
 
@@ -257,6 +257,16 @@ HitTest(ptDip, out HitResult result, Span<NodeHandle> routeBuf) -> int routeLen
 - **A `ClipPath` node narrows that same early-out to its GEOMETRY** (AS-BUILT 2026-08): with `BoxEl.ClipPath` set, `ClipContains` additionally requires the point to land inside the authored silhouette under its own `FillRule` — same flatten/tolerance and the same ViewBox min-fit mapping the recorder bakes, so click and pixels agree. Still a CLIP culling the subtree, not paint-derived hit-testing (see `gpu-renderer.md` §6.1 and §5.1's one licensed paint-derived exception).
 - **`ReverseChildren` via `LastChild → PrevSibling`** — O(children), zero alloc, uses the doubly-linked Topology column (foundations §4.4 has `LastChild`/`PrevSibling`).
 - **Route captured into a `stackalloc Span<NodeHandle>`** during the descent: the descent is recursive but bounded by tree depth; the route (root→hit) is written into a caller-supplied `stackalloc NodeHandle[MaxDepth]` (typical UI depth ≤ 64; overflow falls back to an arena slice, never the heap). The route is the spine for tunnel/bubble (§6).
+- **`Flags[n].HitTestVisible` is bindable (E15, 2026-09-26): `BoxEl.HitTestVisible : Prop<bool>`.** Same shape as
+  `Visible` (§0bis of `reconciler-hooks.md`) but narrower in effect — a resolved `false` clears ONLY this flag
+  (`Reconciler.BindNode` wires a mount-time bind effect that flips it directly), so the node stays in the tree exactly
+  as `HitTestPassThrough` leaves it: laid out, painted, its subtree still hit-tests normally, and it drops out ONLY as
+  the self-test target/blocking chain link here in §5.1 — unlike `Visible=false`, which additionally pulls the node
+  out of layout and paint. The flip is compositor-only: no component re-render, no re-record (`FrameStats.Rendered`
+  stays false across it), because hit-testing reads the flag straight off the live `Flags` column every dispatch — no
+  cached/derived copy to invalidate. A static (unbound) value re-asserts on every reconcile exactly as before; the
+  implicit `bool`→`Prop<bool>` conversion keeps every existing `HitTestVisible = expr` call site unchanged. Gate:
+  `gate.hit.bindable`.
 
 ### 5.2 Shape-accurate self-test (shares the *fill rule*, not just vertices)
 
@@ -545,6 +555,12 @@ This is the honest scoping note the gap analysis demanded:
 
 ### 7B. Per-pointer FSM + from-scratch inertia integrator
 
+> **Scroll is owned by [`scroll.md`](./scroll.md) (as-built 2026-09-24).** Everything below about scroll offsets,
+> inertia, wheel distance, DirectManipulation and the hi-res wheel is either the pre-rework design (the phase-7
+> integrator, `SetScrollOffset`/`ApplyScrollPosition`) or a history note of how the rework landed; the canonical motion
+> model, input classification, routing, posing, virtualization and diagnostics live in `scroll.md` §3–§6 and §10. This
+> section still owns the per-pointer FSM, the touch-pan claim that feeds `ScrollHandle` (§7A), and `InputHooks.ZoomWheel`.
+
 `GestureRecognizer` runs a per-pointer FSM over the coalesced pointer stream; each FSM is an **arena member** (§7A) and produces `ArenaVote`s, not direct events. Gesture structs are **re-typed off `Vec2`** (Reactor uses `Windows.Foundation.Point` — gone).
 
 ```csharp
@@ -576,152 +592,147 @@ Recognized gestures emit their bubble events **only after the arena declares thi
 >    An OS engine cannot pass either gate. (Confined-to-`FluentGpu.Windows` Pal/ Win32 calls like `EnableMouseInPointer`
 >    are fine; an OS *animation/physics* engine in the hot integrator path is the rejected dependency.)
 
-> **Settled (as-built): scroll has ONE engine-owned offset mechanism; Windows may supply phase intent.** The old
+> **Settled (as-built): scroll has ONE engine-owned offset mechanism; Windows may supply contact intent.** The old
 > `Win32DmScrollSource` design was removed: `IScrollSource`/`IScrollHost`/`ScrollSourceMux`,
 > `IPlatformWindow.CreateScrollSource`, `DmScrollMath`, and the `FG_DM_*` knobs remain gone. In particular, no OS object
-> owns a scene transform, viewport offset, clamp, or virtual-window realization. `ScrollIntegrator` plus
-> `SetScrollOffset`/`WriteScrollOffset` remain the sole mutation path, so every real movement still fires
-> `VirtualRangeDirty` and every portable physics/ownership gate remains headless.
+> owns a scene transform, viewport offset, clamp, or virtual-window realization. **As built (the scroll rework,
+> `src/FluentGpu.Engine/Scroll/**`),** every scroll input — wheel notch, contact stream, touch/pen pan, thumb, key,
+> programmatic move — authors a closed-form `ScrollPlan` (a short list of `MotionSeg` arcs: `Hold` / `Cubic` / `Decay` /
+> `Spring` / `Glide`, or a contact ring for a live drag) through the viewport's `ScrollHandle` (`PlanAuthor.*`), published
+> to the render thread through `PlanSlots`. The render-thread `ScrollPoser` evaluates each plan at the PREDICTED PRESENT
+> time, clamps it to the realized coverage (a would-be blank row is recorded as a clamp, never shown), snaps the translate
+> to the device-pixel grid and poses the content and its scroll effects through `IScrollPoseSink`; the UI thread reads
+> `ScrollPoseFeedback` back (`ScrollHandle.ApplyFeedback`) to drive the offset / motion signals, and the `Virtualizer`
+> sizes the realized window from the shown position plus a velocity-scaled overscan. That is the one mutation path; every
+> portable physics/ownership gate stays headless (the motion is a pure function of absolute time, so it is dt-invariant
+> by construction). The phase-7 integrator, `SetScrollOffset`/`ApplyScrollPosition` chokepoint and `ScrollIntegrator`
+> the paragraphs above describe are the pre-rework design.
 >
-> Windows now has a narrower `Win32DirectManipulation` **event producer**, not the removed scroll-source seam. When a
-> precision-touchpad contact is accepted, manual-update DirectManipulation emits only the shared
-> `ScrollBegin/Update/End` + `MomentumBegin/Update/End` phase contract (including OS-curved momentum deltas) into
-> `InputDispatcher`; the engine applies those deltas through its one offset chokepoint. If DM is unavailable or wedges,
-> the hi-resolution `WM_POINTERWHEEL` phase producer takes over. A positively identified physical mouse synchronously
-> stops either live contact or inertia before its wheel event is queued; touchpad evidence stays DM-owned and unknown
-> devices keep the conservative hold/confirm classifier.
+> Windows has a narrower `Win32DirectManipulation` **contact producer**, not the removed scroll-source seam. When a
+> precision-touchpad contact is accepted, manual-update DirectManipulation (configured with NO inertia) re-emits it as
+> `ScrollInputEvent`s of `ScrollSource.Touchpad` — `Begin` on RUNNING, one DIP `Sample` per produced frame, `End` on the
+> lift — and the engine's own `ScrollHandle.ContactEnd` authors any fling from the contact ring; DM is never a physics
+> owner. A claimed contact that does not reach RUNNING within `EngageTimeoutMs` is released back to the OS, and the
+> touchpad's `WM_POINTERWHEEL` packets then arrive as a touchpad CONTACT stream (lift by packet silence — see the as-built
+> hi-res note below). A positively identified physical mouse synchronously stops a live contact before its wheel event
+> is queued; touchpad evidence stays DM-owned.
 >
-> Manual `UpdateManager.Update` stays on the STA window thread but is paced by an absolute ~7 ms deadline. Messages that
-> DM posts during an update may wake the pump early, but cannot slide that deadline or trigger a catch-up burst. This
-> distinction is load-bearing: Windows can provide high-fidelity contact/lift/momentum **intent**, while the deterministic
-> engine remains the only offset/virtualization owner and the only portable fallback physics implementation.
+> One `IDirectManipulationUpdateManager::Update` runs per PRODUCED frame on the STA window thread (after the
+> display-phase gate, stamped with the frame's own clock), plus an idle drain roughly every 250 ms while enabled and not
+> live. This distinction is load-bearing: Windows provides high-fidelity contact/lift **intent**, while the deterministic
+> engine remains the only offset/virtualization owner and the only physics implementation.
 
-> **Settled (as-built, scroll pacing fix S1/S3/S6): one notch scale for every wheel device; the glide is cadence-planned.**
-> The hi-res `WM_POINTERWHEEL` fallback producer (sub-notch mouse or precision touchpad without DirectManipulation) no
-> longer converts to DIP in `FluentGpu.Windows` — the frozen `0.11 DIP/unit` one-machine calibration and its speed
-> multiplier are deleted. Its `ScrollBegin`/`ScrollDelta` phase events carry **notch units** (`raw/120`) in
-> `ScrollDelta`/`ScrollDeltaX` (the fields the ring sums per frame) and tag the gesture by writing the same units into
-> `WheelNotch`/`WheelNotchX` (`ScrollInputRouter.IsNotchUnits`, latched for the whole gesture); `ScrollInputRouter`
-> converts with the **same** `ScrollFeel.PerNotchDip(viewport, lineDip)` the detented `Wheel` path uses — `WheelScrollLines`
-> × the scroller's declared line height (`ScrollState.LineDip`; Virtual lists publish their item extent) when it has one,
-> else `max(48 DIP, 10 %·viewport)` — so 120 raw units always travel exactly one notch whether they arrive as one packet
-> or twenty, and `SystemParams.WheelScrollLines` applies to both. A DIP-scripted producer (DirectManipulation, touch, the
-> headless `HeadlessScrollProducer`) never sets the notch fields and stays DIP byte-for-byte. Element-level
-> `OnPointerWheel` handlers on the hi-res path receive the detented element convention (60 DIP per notch). The detented
-> notch itself is no longer a cold critically-damped chase from `Velocity = 0` per notch: `ScrollPhysics.WheelPlanNotch`
-> plans each notch as a **cadence-aware chase** — the arrival time is set from the observed inter-notch cadence, velocity
-> is carried continuously across notches (no per-notch ease-in, no creep), and the landing snaps to the DIP grid — see the
-> kernel (`ScrollKernel.ApplyWheelNotch`) and `docs/plans/scroll-v3-plan-2026-08-17.md` §5.3. Gates:
-> `gate.scroll.wheel-line-dip`, `gate.kernel.wheel-plan-*`.
+> **Superseded 2026-09-25 (numbers only; `subsystems/scroll.md` §3 owns the wheel):** the default profile is now
+> `FeelProfiles.Standard` — 64 DIP per notch, a 0.15 s front-loaded cubic, C1 re-plans (`PlanAuthor.WheelSeg`: a re-plan
+> keeps the shown velocity instead of stepping to `1.5R/T`), and a spin curve with a unity gap (`AccelFor`) so fast spins
+> travel what the 32 DIP model below did. The touchpad wheel fallback uses `MotionFeel.TouchpadWheelDip` (32 DIP per 120
+> raw), not `WheelNotchDip`. `WinUiExact` and `Snappy` are deleted. The block below is the 2026-09-23 history.
+>
+> **Settled (as-built, 2026-09-23 wheel-model rewrite): the detented notch is a FIXED, measured distance on WinUI's
+> cubic, accumulating onto the pending destination — not a viewport-relative content chase.** The prior
+> WinUI-content-relative per-notch distance and the Firefox/Chromium Bézier retarget it fed are gone. Measured from
+> WinUI 3's `ScrollView` (the compositor `InteractionTracker`) on a real machine (120 Hz, wheel lines = 3, scale 1.5, a
+> Logitech MX-style mouse — `C:\WAVEE\wheel-curve-probe` captures 2026-09-23): every detented notch moves the destination
+> by a FIXED `MotionFeel.WheelNotchDip` = 32 DIP (`FeelProfiles.WinUiExact`, the default profile — never
+> viewport-relative, never row-snapped), scaled by the system wheel-lines setting (`SystemParams.WheelScrollLines / 3`,
+> folded into the notch count by the Win32 PAL). `PlanAuthor.WheelNotch` authors ONE `SegKind.Cubic` segment
+> `p = P0 + (P1 − P0)(1.5u − 0.5u³)`, `u = clamp((t − T0)/T, 0, 1)`, over a FIXED `T = MotionFeel.WheelDurationS` =
+> 0.257 s — velocity maximal at the notch instant, exactly 0 at `u = 1`, where the position IS the destination (a clean
+> stop, no crawl, no epsilon snap). The segment starts at the previous plan's position at `T0` (never a jump); while the
+> previous plan is a LIVE same-direction wheel glide the new destination is `prev.Dest + notches·WheelNotchDip·accel`
+> (the undelivered remainder is kept, so a fast spin travels every notch's full distance), and a first notch, a notch
+> after the glide settled, or a reversal re-bases on the displayed position (WinUI reverses immediately). `accel` is the
+> spin acceleration `PlanAuthor.AccelFor`: an EMA of the same-direction notch gap mapped to `[1, MotionFeel.AccelMax]`
+> (4×), reset past `AccelResetGapS` = 0.12 s. `T0 = max(tNotch, shownFloorSec)` — the latest present time a frame has
+> already been POSED for — so frames posed ahead of the device stamp never see a catch-up step or a step back. There is
+> **no duration adaptation** to cadence, and the curve is a pure function of absolute time, so the posed position is
+> identical at any frame rate. Wheel never overpans.
+>
+> **As built (the hi-res wheel stream — supersedes the old "hi-res fallback is unchanged" note).** Every
+> `WM_POINTERWHEEL` packet outside a live DirectManipulation contact goes through the pure per-gesture classifier
+> `WheelClassifier` (`Scroll/Runtime/ScrollInput.cs`, driven by the Win32 PAL's `HandlePointerWheel`): (1)
+> authoritative touchpad evidence (PT_TOUCHPAD / DM touchpad evidence) ⇒ `ScrollSource.Touchpad`; (2) a sub-notch
+> delta (not a multiple of `WHEEL_DELTA` = 120) ⇒ `ScrollSource.MouseWheelHiRes`; (3) otherwise a detented
+> `ScrollSource.MouseWheel`. Rules 1/2 only escalate within a gesture (a positively identified physical mouse is never
+> read as a touchpad), and a packet gap above `WheelClassifier.GestureGapMs` = 200 ms re-evaluates from scratch. Then:
+> - **A hi-res (free-spin) MOUSE wheel is FRACTIONAL NOTCHES.** Each packet is one `ScrollGesture.Notch` of
+>   `raw/120` notches (`WheelClassifier.HiResNotch`) on the SAME accumulating wheel plan a detented notch rides
+>   (`PlanAuthor.WheelNotch` — WinUI InteractionTracker / Chromium / Firefox smooth-wheel): 120 raw units travel exactly
+>   one notch (`WheelNotchDip`) whether they arrive as one packet or twenty, the spin rate is judged per WHOLE notch
+>   (a fractional packet's gap is divided by its magnitude, so 3 packets per notch never read as a 3× faster spin),
+>   and the content stops where the wheel stopped — a mouse wheel has no lift, so there is no silence-detected
+>   release and no coast.
+> - **Touchpad-evidenced packets are a CONTACT stream.** A precision touchpad outside DirectManipulation (e.g. a pan
+>   over a popup) emits `Begin` on its first packet, one `Sample` per packet in DIP (`WheelClassifier.TouchpadWheelSample`
+>   = `raw/120 × WheelNotchDip`), and an `End` on packet silence (a cadence-adaptive lift threshold, clamped 50–120 ms),
+>   stamped at the LAST packet and flagged `ScrollInputEvent.LiftDetectedLate`; the dispatcher routes it through the
+>   contact path (`DispatchContactStream`), so it follows and flings like any contact. While DirectManipulation is live
+>   it owns the touchpad and these packets never reach the wheel path.
+> - Ctrl + a hi-res or touchpad stream is the OS's legacy pinch synthesis and is consumed, never scrolled
+>   (`WheelClassifier.IsPinchSynthesis`).
+>
+> A DIP-scripted producer (DirectManipulation, touch, the headless `HeadlessScrollProducer`) never sets the notch
+> fields and stays DIP byte-for-byte. The hi-res gate is `gate.scroll.hires-burst` (`ScrollMotionSuite`: a 12 × −40 raw
+> burst travels exactly 4 notches and stops, no lift, no coast). The wheel gates are `gate.scroll.notch-to-present`
+> (a notch authors its plan synchronously and shows on the very next present) and `gate.scroll.hires-burst`
+> (`ScrollMotionSuite`), plus the Engine.Tests `ScrollMotionTests.WheelNotch_*` (no jump at the displayed position, a
+> fast spin accumulating every notch, reversal / settled re-base, hi-res packets travelling exactly the turned distance,
+> no catch-up step / never stepping back behind the last posed present) and `ScrollRuntimeTests.WheelClassifier_*`.
 
-> **Settled (as-built, 2026-09-17 scroll-kernel fix pass — from the app's `scroll.trace` lines).** Five kernel rules,
-> each with a `gate.kernel.*` gate in `ScrollKernelSuite`:
-> 1. **Park settles.** `ScrollInputKind.Park` (parked = true) settles the body on the way in — Idle, velocity 0, band 0,
->    no wheel/programmatic plan, no pending edge or drag state (`ScrollKernel.SettleParked`) — and `UpdateSummary`
->    skips parked bodies, so a page parked mid-fling never keeps `AnyLiveMotion`/`AnyUserActive` alive. Unparking
->    finds an idle body. `gate.kernel.park-settles-live-motion`.
-> 2. **The precise stream is paced, not 1:1.** A FrameDelta packet (DirectManipulation / hi-res wheel fallback,
->    `DragMode` 2) is a sample of the stream's cumulative position; `ScrollKernel.PaceStream` resamples it every Tick
->    at `frame − PacedLatencyS(mean packet interval)` (`1.25·interval + 1 ms`, clamped 4–34 ms) through
->    `ScrollPhysics.ResamplePaced` (never back-projects before the oldest sample; extrapolates past the newest for at
->    most `DragExtrapolateMaxMs`). A 60 Hz stream drawn at 120 Hz yields one even step per frame instead of
->    `0 / 2×`. The latch frame still applies its packet verbatim (no dead zone). 1:1 holds at REST: a release below
->    the fling seed gate lands the paced residual exactly; a fling starts from the displayed position (the coast
->    covers the residual). `gate.kernel.precise-pacing-jitter`, `gate.kernel.framedelta-1to1`.
-> 3. **Release is inferred from the stream.** When the paced resample instant runs past the newest sample by more
->    than `DragExtrapolateMaxMs`, the stream has stopped: the kernel releases the drag at the newest sample's time
->    (`ReleaseDrag`, the same estimate the producer's End would give) and the fling coasts on that same Tick — no
->    zero-shift frame between the last input frame and the first coast frame. The producer's late End is then a
->    no-op; a late packet resumes the stream against the displayed position (`ScrollBody.InferredRelease`).
->    `gate.kernel.precise-release-no-gap`.
-> 4. **The programmatic chase lands exactly.** The ζ=1 Driven glide (ScrollTo/ScrollBy/restore) steps through
->    `ScrollPhysics.ProgrammaticStep`: the wheel plan's displacement floor (`WheelFloorDipPerS·dt`) while heading in,
->    a distance-only snap at `WheelSnapEpsDip`, and a step under 0.75 DIP with the target within 4 DIP lands. The
->    velocity-floor settle predicate is gone. `gate.kernel.programmatic-lands-exactly`.
-> 5. **The slack discriminator is always-on.** `AppHost.Paint` fills `FrameStats.SlackMs`/`FrameStats.SlackCause`
->    (`SlackCause { None, Gc, WakeSlept, Preempted }`) on every scroll-active frame whose raw inter-frame gap exceeds
->    12 ms: slack = raw gap − measured phase work; a GC delta in the frame ⇒ `Gc`, a requested wait ≥ half the slack ⇒
->    `WakeSlept`, else `Preempted`. Zero-alloc, one branch per frame; the traced note 113 is the same split.
-
-> **Settled (as-built, 2026-09-17 second kernel pass — dead frames, the fling tail, rebases, resume, held contact).**
-> Five more kernel rules, each gated in `ScrollKernelSuite`; the new `FrameStats` columns are `ScrollEdgePins`,
-> `ScrollStructuralDip`, `ScrollContactHeld` (stamped from `ScrollFrameSummary.EdgePins` / `MaxAbsStructuralDip` /
-> `AnyContactHeld` beside `ScrollDeltaDip`).
-> 1. **A pinned coast step keeps its travel.** When a Ballistic step crosses the clamp against last frame's geometry
->    the body pins at the bound but the velocity has already decayed for the whole step; `ScrollBody.EdgeOvershoot`
->    (signed `requested − clamped`) records the withheld travel, and `ScrollKernel.ResolveEdge` re-applies
->    `min(|overshoot|, room)` when fresh layout gives room — Reclamp runs after layout and before record, so it lands
->    the same frame instead of leaving a dead frame in the coast (`8.3 0.0 8.1`). If the room is smaller than the
->    overshoot the body is at the new edge and resolves there at once (bounce / chain / stop). Cleared with
->    `EdgeHitPending`. `ScrollFrameSummary.EdgePins` counts the bodies pinned this tick. `gate.kernel.edge-pin-no-lost-travel`.
-> 2. **A free fling lands, it does not settle — and never speeds up to do it.** The exponential coast's remaining
->    travel is always `1/(k·dt)` steps (~40 frames at 120 Hz at any speed), so the old `FlingSettleVel` (13 DIP/s) end
->    crawled from 1.5 to 0.5 DIP a frame for ~60 frames and stopped `v/k` short. Below `ScrollFeel.FlingLandVel`
->    (120 DIP/s) the body hands a SHORT horizon `clamp(pos + v·FlingLandHorizonS)` (0.075 s — the distance a linear
->    decel from `v` to 0 over 150 ms covers) to the Driven landing — `Programmatic`, `ScrollBody.LandFloorDipPerS =
->    min(WheelFloorDipPerS, |v|)` — and `ScrollPhysics.LandingStep` walks it in EQUAL steps at that speed: no step
->    larger than the hand-off frame's, none under 0.25 DIP, exact on the target, Idle in 9 frames at 120 Hz / 5 at
->    60 Hz. The wheel glide's 160 DIP/s floor is the wheel's: a fling handed off at 120 DIP/s must not rise to it, which
->    is why the landing is its own step and not `ProgrammaticStep` (whose ζ=1 chase accelerates toward a target closer
->    than `v/y`, and whose 1 DIP distance snap and 0.75-within-4 step snap would drop a 1–4 DIP step into a
->    1 DIP/frame tail). Consequence, on purpose: the fling rests `v·(1/k − 0.075)` ≈ 31 DIP short of the
->    exponential's asymptote at the 120 DIP/s hand-off — an imperceptible stop; landing on the full asymptote needs a
->    tug. The target is unrounded (the kernel does not know the device scale). Snap-armed flings are unchanged;
->    `FlingSettleVel` remains the floor for the snap-armed fling, the ζ/ω Driven chase and the bounce seed. A notch or
->    ScrollTo on a landing body clears `LandFloorDipPerS` (it becomes that glide). `ScrollState.UserScrollActive` /
->    `AnyUserActive` drop during the ~75 ms landing (Programmatic flavour); `AnyLiveMotion` stays true.
->    `gate.kernel.fling-lands-finite`.
-> 3. **A rebase is not motion.** `AnchorShift` and the clamp correction in `ClampToFrame` (after `SetFrame`/zoom)
->    move `SummaryMain` with the position (`ScrollKernel.NoteStructural`), so a rebase drained in Tick no longer prints
->    as that frame's shift (`70.6 52.8 88.2 90.5` after a window restore); the largest such rebase is reported as
->    `ScrollFrameSummary.MaxAbsStructuralDip`. `gate.kernel.anchor-shift-not-motion`.
-> 4. **A resumed precise stream restarts its history.** A packet reaching a stream released by inference re-bases
->    `DragRaw`/`DragAnchor` to the displayed position and resets `ContactCount`/`LastResampleX`, so the paced resample
->    cannot span the silent gap against a baseline that has the coast folded in (which could apply about minus the
->    coast travel); the resumed frame applies the packet's own travel. `gate.kernel.precise-resume-no-rewind`.
-> 5. **Held contact is named.** `ScrollFrameSummary.AnyContactHeld`: a Drag body that applied no delta this tick and
->    whose newest sample is older than `ResampleLatencyMs` + one frame (touch/pen, DragMode 1) or
->    `PacedLatencyS(interval)` + one frame (precise stream, DragMode 2). A precise stream is released by inference once
->    silent past `DragExtrapolateMaxMs` (16 ms), so for it the flag can only be true inside that window; the touch path
->    is what holds indefinitely and what the gate covers. Judged only by `Tick` (a `Reclamp` has no time step).
->    `gate.kernel.contact-held`.
-> 6. **The paced resampler redistributes; it never invents travel.** Packets stamped sub-ms apart (a producer burst,
->    a frame stamp beside an idle-pump stamp) made the least-squares fit and the last-segment extrapolation in the
->    paced path read tens of thousands of DIP/s — 8 DIP packets printed as 180–980 DIP frames (2026-09-17 traces).
->    `ScrollPhysics.ResamplePaced` now interpolates piecewise-linearly between the two samples bracketing the resample
->    instant (bounded by their values) and extrapolates past the newest sample on the WHOLE history's slope
->    (`PacedVelocity`, 0 under a 4 ms time base — mean packet travel over mean packet interval, so it is capped by the
->    packet rate by construction). `ScrollKernel.PaceStream` then bounds each frame's applied delta by
->    `min(2·largest packet in the history, |undisplayed backlog| + one mean packet)` and advances `LastResampleX` by
->    what was applied, so a capped frame's remainder stays in the backlog and the paced total equals the raw total (a
->    release below the seed gate still lands the residual exactly). `ResampleContact` (touch/pen) is unchanged.
->    `gate.kernel.precise-burst-bounded` (five 8 DIP packets inside 0.5 ms, then an 8 ms cadence: no frame over 16 DIP,
->    rest == raw total ± 0.5); `gate.kernel.precise-pacing-jitter` still holds.
-> 7. **A precise stream's release velocity is read from its raw packets.** `ScrollKernel.TryRawStreamVelocity`: the
->    slope of the cumulative packet positions over the newest samples spanning ≥ 24 ms, 0 when the stream was silent
->    for more than 40 ms before the release; a history shorter than 24 ms (a one- or two-packet flick) and every
->    touch/pen drag keep the IMPULSE estimator, which itself now folds any sample pair closer than 2 ms into the next
->    segment (`ImpulseEstimator.MinSegmentS`) instead of reading a 40 000 DIP/s finger from it — the source of the
->    65.8 DIP/frame `FlingMax` coasts.
-> 8. **Zero coast frames are named.** `ScrollFrameSummary.ZeroReason` / `FrameStats.ScrollZeroReason`
->    (`ScrollZeroReason { None, DtZero, NotAdvanced, Pinned, Parked, Other }`): set when a body that should have
->    coasted (Ballistic at ≥ `FlingLandVel`, or a fling landing) moved under 0.05 DIP this Tick. `DtZero` = the host's
->    `ScrollClock.DtSec` was ≤ 0 (an awake body treats dt = 0 as a no-op by kernel contract, so that frame's travel is
->    gone — the physics is per-frame dt, never absolute time); `NotAdvanced` = `Advance` did not run
->    (`ScrollBody.LastAdvanceStamp` ≠ the tick stamp). The `9.5 0.0 9.2` shape with no pin/hitch marker is consistent
->    with `DtZero`: `AppHost` derives `DtSec` as the Δ of `_palFrameClock.FrameQpc` between frames with negatives
->    clamped to 0, so two frames handed the same frame instant lose one coast step with no catch-up. Not proven from
->    the log; the column will name it. Neither a Reclamp nor the DirectManipulation status path is the cause: the host
->    copies the kernel summary right after `Tick` (before every `Reclamp` of the frame), and DM never enters INERTIA
->    on the primary configuration — its RUNNING→READY lift only posts `ScrollEnd`, which is a no-op on an already
->    released body.
+> **Superseded (2026-09 scroll rework): the 2026-09-17 scroll-kernel rule sets.** Two fix passes of rules for the
+> per-frame INTEGRATING kernel (`ScrollKernel` / `ScrollBody` / `ScrollPhysics` — park settling, the paced precise
+> stream, release inferred from silence, the programmatic chase landing, pinned-coast travel, the fling landing, rebases
+> that are not motion, resumed streams, held contacts, the burst-bounded resampler, raw-stream release velocity, named
+> zero-coast frames) were recorded here with their `gate.kernel.*` gates in `ScrollKernelSuite`. That kernel, its suite
+> and those gates are **deleted**; the closed-form plan model above replaced it, and each concern now lives here:
+> - **dt / frame-rate artefacts** (dead frames, zero-coast frames, paced resampling): a `MotionSeg` is a pure function of
+>   ABSOLUTE time evaluated at the predicted present (`ScrollMotionTests.Eval_*`), so there is no per-frame dt to lose.
+> - **Contact streams** (touch, pen, the DM and touchpad-wheel contacts): the plan's `ContactRing`, shown per the
+>   contact's `ContactClock` and predicted AT MOST ONCE. DirectManipulation composes each touchpad sample for the present
+>   the frame-info provider names (DM's own latency compensation), so its stream is `ScrollInputEvent.PresentTimed`,
+>   stamped with the present of the first render turn that sees it (`ContactStamp.ForFrame` = `PresentQpc +
+>   RefreshQpc`, the next tick's present — a stamp for the tick that reads it raced the UI's write against the render
+>   read, `scroll.md` §4.4), and runs on `ContactClock.Present`: a tick shows the previous tick's sample, between samples
+>   the ring interpolates two real samples, past the newest it HOLDS (no look-ahead —
+>   a second prediction with a velocity that moves between frames stepped the pose back by `ΔV·lead`). Device-timed
+>   streams (touch, pen, the touchpad wheel fallback) run on `ContactClock.Device`: Android's bounded resampling
+>   (`InputTransport` `RESAMPLE_*`) — extrapolate along the newest two samples by at most `min(8 ms, gap/2)`, only for a gap
+>   in [2 ms, 20 ms]. A report that moved nothing is never a sample (DM emits nothing for a frame without a content
+>   update; the dispatcher drops a zero delta on the locked axis). The least-squares velocity over `FlingImpulseWindowS`
+>   (must span `VelocityMinSpanS` — a coincident packet pair never reads as a 40 000 DIP/s finger) feeds the release and
+>   the reported speed only, never the shown position (`TouchpadDragMonotonicityTests`, `gate.touchpad.dm-stream-monotone`,
+>   `ScrollMotionTests.Follow_CoincidentPacketPair_*`, `ContactRing_Velocity_OfBunchedPairs_IsTheStreamRate`).
+> - **Release** (`PlanAuthor.FollowEnd(tLift, tNow)`): a lift more than `PlanAuthor.StoppedAfterS` after the newest
+>   sample — two of the stream's own report periods, within [20 ms, `FlingImpulseWindowS`] — carries no momentum (the
+>   fingers had stopped: a time rule, since a stationary frame is no sample); a present-timed lift stamped behind the
+>   newest sample is placed at it (never rewinds what was shown); a lift DETECTED late (`ScrollInputEvent.LiftDetectedLate`) is authored from what the plan
+>   shows at detection, so there is no forward jump (`ScrollRuntimeTests.Handle_LiftDetectedAfterSilence_FlingsWithoutAJump`);
+>   below `FlingMinVelocity` the contact settles in place; otherwise a `Decay` coast whose edge crossing is solved
+>   ANALYTICALLY at authoring and followed by a `Spring` (rubber band) or a firm `Hold` — never discovered after layout,
+>   so no coast travel is lost at an edge (`ScrollMotionTests.FlingCrossingAnEdge_*`).
+> - **Settling**: `ScrollHandle.SettleIfDue` replaces an open-ended arc that came within `SettleEpsilonDip` /
+>   `SettleVelocity` of its destination with an Idle hold, so motion signals fall quiet without a crawl.
+> - **Programmatic moves**: `PlanAuthor.Glide` — a critically damped spring (`GlideOmega`) velocity-continuous from
+>   the displayed position (`ScrollMotionTests.Glide_IsVelocityContinuousFromTheHandoff`).
+> - **Rebases**: `ScrollHandle.ShiftFrame` / `NoteFrameShift` shift the live plan's coordinate frame (`PlanSlots.Shift`)
+>   — an instant structural correction that moves with every in-flight arc, never a motion. The slot accumulates every
+>   shift (`PlanSlots.FrameShiftOf`) and each published coverage row records the sum it was laid out under
+>   (`ScrollCoverageRow.FrameShift`); the render poser poses a plan against an OLDER coverage in that coverage's frame
+>   (`p − drift`), so a mid-layout correction is atomic with the content it belongs to and never shows as a transient
+>   jump before the next publication is adopted (`gate.scroll.shift-coverage-atomic`,
+>   `ScrollRuntimeTests.Poser_PlanShiftNewerThanItsCoverage_*`).
+> - **Parked viewports** are not evaluated by the frame step (`ScrollParkedViewportTests`).
 
 > **Settled (as-built): the app-zoom wheel hook — `InputHooks.ZoomWheel` (owned here).** In
-> `InputDispatcher.Dispatch`'s `InputKind.Wheel` case the ordering is: (1) element-level `OnPointerWheel` handlers
+> `InputDispatcher.DispatchWheelNotch` (`Input/InputDispatcher.Scroll.cs`) the ordering is: (1) element-level `OnPointerWheel` handlers
 > (WinUI first-refusal — a NumberBox or lightbox under the pointer still wins, Ctrl or not); then (2) on Ctrl,
-> `InputHooks.ZoomWheel: Func<float, bool>?` invoked with the signed device `WheelNotch` (>0 = wheel rotated away
-> = zoom in — NOT `ScrollDelta`, which is re-oriented so positive means toward content end); returning true
-> consumes the notch so the viewport never scrolls it; then (3) the viewport scroll (`ScrollInputRouter.Wheel`).
+> `InputHooks.ZoomWheel: Func<float, bool>?` invoked with the signed device notch count (>0 = wheel rotated away
+> = zoom in) — `WheelClassifier.ZoomNotches`, the ONE conversion from the event's scroll convention (the vertical `Dy`
+> is positive toward the content end = rotated TOWARD the user, as built by `WheelClassifier.DetentNotch`, so the zoom
+> count is `−Dy`); only a vertical wheel zooms (a Ctrl tilt scrolls); returning true
+> consumes the notch so the viewport never scrolls it; then (3) the header→list `WheelTarget` routing and the viewport
+> scroll (`ScrollRouter.Decide` → `ScrollHandle.Wheel`). Pinned by `gate.input.ctrl-wheel-zoom-sign` and
+> `ScrollRuntimeTests.ZoomNotches_*`.
 > Unregistered (null, the default) the case is byte-identical to pre-zoom behavior. The Win32 backend consumes
 > Ctrl + hi-res/touchpad wheel as pinch synthesis BEFORE events reach the dispatcher, so the hook only ever sees
 > detented physical mouse wheels. The zoom VALUE itself is a window-scale concern owned by `pal-rhi.md` §1.2
@@ -1257,6 +1268,11 @@ internal struct EdgeAutoScroll {           // one active instance per tracking g
 - **Drives the dependent gesture forward:** after the autoscroll advances `ScrollOffset`, the tracking gesture re-evaluates against the now-scrolled content on the **next** frame's `PointerMove` (or a synthesized stationary re-eval, §5.4) so a selection keeps extending / a drag-reorder insertion line keeps tracking into the freshly-revealed rows.
 
 ### 12D.2 One scroll-offset writer; phase + thread
+
+> **As built (scroll rework, owner [`scroll.md`](./scroll.md) §3.2 / §5.4):** there is no integrating driver and no
+> `ScrollOffset` write. Drag-reorder edge auto-scroll is `ScrollHandle.AutoScroll(dipPerS)` → `PlanAuthor.Constant` (a
+> closed-form constant-velocity arc with its edge crossing solved at authoring; 0 stops in place), posed like every other
+> plan; the one mutation path is the handle's plan slot. The design text below is the pre-rework form.
 
 - **Single writer:** the edge-autoscroll driver, the inertia integrator (§7B), `ScrollToIndex`, and the §11.7 realization-on-navigate **all** write `ScrollOffset` through the same Input-owned path (`architecture-spec.md` §5.5: "Input owns `ScrollOffset`"). There is exactly one mutator of `ScrollOffset`, on the UI thread, in phase 2 (arm) / phase 7 (integrate). No contention with the render thread (transform-only, picked up by the batcher's cached-transform re-apply).
 - **Zero alloc:** the active-driver set is slab-backed; arming mutates in place.

@@ -1,4 +1,4 @@
-using FluentGpu.Dsl;
+﻿using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
@@ -26,15 +26,18 @@ namespace FluentGpu;
 /// </summary>
 static class VideoReal
 {
-    // A stable CLEAR progressive H.264 MP4 IMFMediaEngine can resolve by URL (NOT DASH/Smooth). Override via FG_VIDEO_URL.
+    // A stable CLEAR progressive H.264 MP4 IMFMediaEngine can resolve by URL (NOT DASH/Smooth). Override via --video-url.
     const string DefaultUrl = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4";
 
     static readonly ColorF TopBar = ColorF.FromRgba(0x18, 0x1B, 0x22);   // opaque chrome bar → proves UI-over-video composite
 
+    /// <summary>The source to play (<c>--video-url</c>); null plays <see cref="DefaultUrl"/>.</summary>
+    public static string? Url;
+
     public static int Run(string pngPath, int frames)
     {
         const int W = 1000, H = 700;
-        string url = Environment.GetEnvironmentVariable("FG_VIDEO_URL") is { Length: > 0 } e ? e : DefaultUrl;
+        string url = Url is { Length: > 0 } e ? e : DefaultUrl;
 
         var strings = new StringTable();
         using var app = new Win32App();

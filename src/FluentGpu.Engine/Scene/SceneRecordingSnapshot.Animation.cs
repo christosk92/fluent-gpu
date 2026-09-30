@@ -155,6 +155,7 @@ public sealed partial class SceneRecordingSnapshot
     /// the previous epoch bound is released in O(rows in use) — no per-node clear, no epoch sweep.</summary>
     internal void BeginCompositorOverlay()
     {
+        BeginPosedScroll();
         for (int i = 0; i < _overlayRowCount; i++) _overlayRow[_overlayRows[i].Node] = 0;
         _overlayRowCount = 0;
         _overlayOverflowCount = 0;
@@ -176,6 +177,29 @@ public sealed partial class SceneRecordingSnapshot
         // authored one, which gate.compositor-row-overflow pins as "not self-dirty"; the ancestor trail is still
         // marked, because the subtree must re-record either way.
         if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
+        if (slot < 0)
+        {
+            _overlaySpill = _paint[index];   // discarded; the node presents its authored pose for this tick
+            return ref _overlaySpill;
+        }
+        ref OverlayRow row = ref _overlayRows[slot];
+        if ((row.Have & HavePaint) == 0)
+        {
+            row.Paint = _paint[index];
+            row.Have |= HavePaint;
+        }
+        return ref row.Paint;
+    }
+
+    /// <summary>A scroll POSE write (content translate, a scroll effect's folded transform): the overlay row WITHOUT the
+    /// dirty trail or the self epoch. Since the retained-tile recorder partition a pose is a COMPOSITE parameter — a
+    /// translation slice records pose-free and the composite places it (<c>SliceRecorder</c>), and a pose recorded inline
+    /// is a BAKED pose the slice recorder checks itself — so posing re-records nothing and damages nothing by itself.
+    /// Same row pool and overflow fallback as <see cref="CompositorPaint"/>.</summary>
+    internal ref NodePaint CompositorPosePaint(NodeHandle node)
+    {
+        uint index = node.Raw.Index;
+        int slot = AcquireOverlayRow(index);
         if (slot < 0)
         {
             _overlaySpill = _paint[index];   // discarded; the node presents its authored pose for this tick

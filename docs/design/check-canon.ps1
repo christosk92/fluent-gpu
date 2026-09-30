@@ -69,6 +69,11 @@ $rules = @(
         Name    = 'path-earclip'
         Pattern = 'ear-?clipping'
         Why     = 'canon DELETED ear-clipping (gpu-renderer.md sec.5): one vetted O(n log n) monotone/trapezoidal sweep.'
+    },
+    @{
+        Name    = 'bind-mount-only'
+        Pattern = 'bind wiring is \**\s*mount-only|fresh thunk on (a )?re-render is ignored|bind\.mount-only\.stale'
+        Why     = 'A bound channel is wired at mount and RE-WIRED bound->bound when a re-render passes a new thunk/signal (reconciler-hooks.md sec.0bis, SPEC-INDEX sec.2 Prop<T> row; gate.bind.rewire-*). Only a static<->bound flip still loses.'
     }
 )
 

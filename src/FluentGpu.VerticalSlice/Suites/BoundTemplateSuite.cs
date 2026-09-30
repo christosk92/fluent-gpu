@@ -58,7 +58,7 @@ static class BoundTemplateSuite
     static readonly FormatCache<int> s_dateCache = FormatCache.Create<int>();
 
     /// <summary>~15 distinct bound channels per row (Text, Number, Color ×2, Opacity, Show ×2, Image, Spans,
-    /// Duration, Text&lt;TKey&gt;, Invoke (click), Invoke (pointer), InvokeSpan, ShowWhen+Signal) — the plan's
+    /// Duration, Text&lt;TKey&gt;, Invoke (click), Invoke (pointer), InvokeSpan, ShowWhen+Signal, Cells) — the plan's
     /// "≈30 channels/row" is an order-of-magnitude target for the zero-alloc gate, not a literal count; this probe
     /// covers every helper in <c>BoundItemScopeExtensions</c> at least once.</summary>
     sealed class BoundTemplateRowsProbe : Component
@@ -100,9 +100,15 @@ static class BoundTemplateSuite
                         new TextEl(item.Duration(t => t.DurationMs)) { Size = 11f },
                         new TextEl(item.Text(t => t.Number, s_dateCache, static n => "d" + n)) { Size = 11f },
                         item.ShowWhen(t => t.HasBadge, () => new TextEl(Prop.Bind(item.Signal(t => t.Title))) { Size = 10f }),
+                        // A flat ListRowEl cell strip bound through the same slot item (the two-tier row seam).
+                        new ListRowEl(item.Cells((t, b) =>
+                        {
+                            b.Add(new RowCell { Kind = RowCellKind.Rect, Rect = new RectF(0f, 2f, 6f, 12f), Color = t.Tint });
+                            b.Add(new RowCell { Kind = RowCellKind.Text, Rect = new RectF(8f, 0f, 40f, 16f), Text = t.Title, Color = ColorF.FromRgba(255, 255, 255), FontSize = 10f });
+                        })) { Width = 48f, Height = 16f },
                     ],
                 };
-            }, RepeatLayout.Stack(40f), new ListOptions<BoundItem> { Overscan = 3, Grow = 1f });
+            }, RepeatLayout.Stack(40f), new ListOptions<BoundItem> { Grow = 1f });
             return new BoxEl { Width = 360f, Height = 240f, Children = [list] };
         }
     }
@@ -129,7 +135,7 @@ static class BoundTemplateSuite
         int slotsAtMount = sc0.LastRealized - sc0.FirstRealized;
 
         // A 5-row shift (small — recycles a handful of slots without a structural template rebuild) then settle.
-        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 40f * 5f, immediate: true));
+        host.TryGetScrollHandle(vp)?.ScrollTo(40f * 5f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         var shiftFrame = host.RunFrame();
         host.Scene.TryGetScroll(vp, out var sc1);
         int reboundRows = Math.Max(1, sc1.LastRealized - sc1.FirstRealized);
@@ -231,7 +237,7 @@ static class BoundTemplateSuite
                         Enter = new EnterExit(Sx: 0.5f, Sy: 0.5f, Opacity: 0f, Active: true),
                     },
                 ],
-            }, RepeatLayout.Stack(40f), new ListOptions<TransitionRowItem> { Overscan = 3, Grow = 1f });
+            }, RepeatLayout.Stack(40f), new ListOptions<TransitionRowItem> { Grow = 1f });
             return new BoxEl { Width = 360f, Height = 240f, Children = [list] };
         }
     }
@@ -285,7 +291,7 @@ static class BoundTemplateSuite
         for (int i = 700; i < 760; i++) list2[i] = new TransitionRowItem { Badge = true };
         probe.Snapshot.Value = list2;
         host.RunFrame();   // absorb the republish while nothing realized in [700,760) — must seed nothing (off-screen)
-        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 700f * 40f, immediate: true));
+        host.TryGetScrollHandle(vp)?.ScrollTo(700f * 40f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         host.RunFrame();
         bool recycleSeeded = !liveBadge.IsNull && host.Scene.IsLive(liveBadge)
             && host.Animation.TryGetTrackValue(liveBadge, AnimChannel.Opacity, out _);
@@ -335,7 +341,7 @@ static class BoundTemplateSuite
         // Now recycle this SAME slot (scroll far) to a DIFFERENT logical item, then click the SAME screen position
         // again: the handler must resolve the CURRENT item (Peek at invocation time), not whatever item occupied the
         // slot when the template captured `item` at build time.
-        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 25000f, immediate: true));
+        host.TryGetScrollHandle(vp)?.ScrollTo(25000f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
         host.RunFrame();
         host.Scene.TryGetScroll(vp, out sc);
         NodeHandle slotRoot2 = NodeHandle.Null;

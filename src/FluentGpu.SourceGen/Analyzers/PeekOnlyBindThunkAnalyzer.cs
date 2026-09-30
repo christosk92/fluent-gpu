@@ -29,9 +29,9 @@ public sealed class PeekOnlyBindThunkAnalyzer : DiagnosticAnalyzer
         category: "FluentGpu.Reactivity",
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "A bound element channel is wired once at mount into a tracking effect. The effect only re-runs "
-                   + "when a signal it READ via .Value changes; .Peek() reads a value without subscribing, so a thunk "
-                   + "that only peeks never updates after the first render.",
+        description: "A bound element channel is wired at mount into a tracking effect (re-wired only when a re-render "
+                   + "passes a new thunk). The effect only re-runs when a signal it READ via .Value changes; .Peek() "
+                   + "reads a value without subscribing, so a thunk that only peeks never follows the signal.",
         helpLinkUri: "https://github.com/christosk92/fluent-gpu/blob/main/docs/guide/reactivity.md");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -7,7 +7,7 @@ using FluentGpu.Foundation;
 namespace FluentGpu.Hosting;
 
 /// <summary>
-/// A DEBUG-only render-time tripwire — the render-path twin of the allocation tripwire (<c>FG_ALLOC_DIAG</c>). It
+/// A DEBUG-only render-time tripwire — the render-path twin of the allocation tripwire (<c>--fg alloc</c>). It
 /// surfaces the two failure modes that freeze navigation when a component breaks the render-purity contract:
 /// <list type="number">
 /// <item><b>A slow <c>Render()</c></b> — blocking/expensive work on the synchronous UI-thread render path (the bug
@@ -19,7 +19,7 @@ namespace FluentGpu.Hosting;
 /// Cost discipline (matches <c>Diag</c> / validation.md §0): the entire facility is gated by the const
 /// <see cref="CompiledIn"/> (<c>false</c> unless <c>DEBUG</c> or <c>FLUENTGPU_DIAG</c> is defined), so every call site
 /// in the hot render path folds away in the shipping AOT binary — zero bytes, zero cost. When compiled in, it is
-/// further gated at runtime by <c>FG_RENDER_DIAG=1</c>. Output mirrors <c>FG_ALLOC_DIAG</c>: a once-per-second line on
+/// further gated at runtime by <c>--fg render</c>. Output mirrors <c>--fg alloc</c>: a once-per-second line on
 /// <c>Console.Error</c>. "Production safety == CI coverage": the value here is catching the regression in dev/CI, not
 /// in the customer's hands.
 /// </para>
@@ -35,8 +35,9 @@ public static class RenderBudget
         false;
 #endif
 
-    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): <c>FG_RENDER_DIAG=1</c> turns the tripwire on.</summary>
-    public static bool Enabled = CompiledIn && Diag.EnvFlag("FG_RENDER_DIAG");
+    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): set in code or by <c>--fg render</c>
+    /// (<see cref="EngineSwitches"/>).</summary>
+    public static bool Enabled;
 
     /// <summary>A single <c>Render()</c> slower than this (ms) is flagged as a render-path stall.</summary>
     public static double SlowRenderMs = 2.0;

@@ -2,7 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -277,9 +277,9 @@ public sealed class TabView : Component
             ref ScrollState sc = ref scene!.ScrollRef(vp);
             float clamped = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentW - sc.ViewportW));
             // Edge chevrons reflect the DESTINATION, not the live offset — the click already commits the intent, and
-            // nothing else re-polls edgeSig while the kernel's glide (below) is still in flight.
+            // nothing else re-polls edgeSig while the glide (below) is still in flight.
             UpdateEdges(clamped, sc.ContentW, sc.ViewportW);
-            ScrollIntoView.ScrollTo(Context, vp, clamped, animate: true);
+            scene!.ScrollHandleFor(vp)?.ScrollTo(clamped, ScrollMove.Glide);
         }
 
         // ±50px per repeat tick (OnScrollDecreaseClick/OnScrollIncreaseClick, TabView.cpp:1097-1117).

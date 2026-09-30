@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentGpu;
@@ -23,7 +23,8 @@ using static FluentGpu.Dsl.Ui;
 // the registry (were hand-tables on GalleryApp).
 sealed class GalleryShell : Component
 {
-    static readonly bool ShowDiagnosticsHud = Diag.EnvFlag("FG_HUD");
+    /// <summary>The diagnostics HUD overlay (<c>--hud</c>).</summary>
+    internal static bool ShowDiagnosticsHud;
 
     // Initial nav page (default = Home). Overridable so --page / --shot page:<key> can deep-link.
     public string InitialPage = "welcome";
@@ -37,7 +38,7 @@ sealed class GalleryShell : Component
     static readonly string[] SearchTitles = SearchIndex.Select(e => e.Label).Distinct().ToArray();
 
     // ── SoakProbe seam (moved from GalleryApp) ───────────────────────────────────────────────────────────────────
-    // A static lever so the longevity/leak harness (FG_SOAK / FG_STRESS_NAV) can cycle pages by key without simulating
+    // A static lever so the longevity/leak harness (--soak / --stress-nav) can cycle pages by key without simulating
     // clicks. Wired in Render under the env flag; invoked between RunFrames on the UI thread.
     internal static Action<string>? StressNavigate;
     internal static string[] StressNavKeys = Array.Empty<string>();
@@ -207,12 +208,11 @@ sealed class GalleryShell : Component
         _nav ??= new Navigator(new Route(InitialPage.Length > 0 ? InitialPage : "welcome"));
         if (_current.Length == 0) _current = _nav.Current.Name;
 
-        if (Diag.EnvFlag("FG_SOAK") || Diag.EnvFlag("FG_STRESS_NAV") || Diag.EnvFlag("FG_WAKE_AUDIT"))
-        {
-            StressNavigate = key => { _navigateReq.Value = ""; _navigateReq.Value = key; };
-            if (StressNavKeys.Length == 0)
-                StressNavKeys = SearchIndex.Select(e => e.Key).Distinct().ToArray();
-        }
+        // The probes' navigation seam (SoakProbe, DetachedStressProbe): always installed — it is a delegate the shell
+        // owns, inert until a probe calls it, so no probe depends on how the process was launched.
+        StressNavigate = key => { _navigateReq.Value = ""; _navigateReq.Value = key; };
+        if (StressNavKeys.Length == 0)
+            StressNavKeys = SearchIndex.Select(e => e.Key).Distinct().ToArray();
 
         var shell = VStack(0,
             Embed.Comp(() =>
@@ -281,7 +281,7 @@ sealed class GalleryShell : Component
     };
 }
 
-// FG_HUD on-screen fps/draw-count readout (moved from GalleryApp). FG_DIAG is engine diag OUTPUT only (stderr) and must
+// --hud on-screen fps/draw-count readout (moved from GalleryApp). --fg diag is engine diag OUTPUT only (stderr) and must
 // NOT mount the HUD — the HUD's per-frame dynamic-text refresh is itself a wake source (it records+presents forever).
 sealed class FrameDiagnosticsHud : Component
 {

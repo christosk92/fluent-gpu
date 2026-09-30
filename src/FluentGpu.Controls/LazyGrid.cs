@@ -4,7 +4,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -95,8 +95,8 @@ public static class LazyGridMath
     /// pin-to-top — the exact jump this replaces. Guaranteeing card + a fixed peek always has a solution, and the user
     /// scrolls on to see the rest.
     ///
-    /// No extent clamp here beyond a 0 floor: the scroll kernel owns the <c>[0, content − viewport]</c> clamp and
-    /// re-derives it as the drawer's reflow grows the content, so clamping against a stale contentH would fight it.
+    /// No extent clamp here beyond a 0 floor: the viewport's ScrollHandle owns the <c>[0, content − viewport]</c> clamp
+    /// and re-derives it as the drawer's reflow grows the content, so clamping against a stale contentH would fight it.
     /// A <paramref name="viewportH"/> of 0 means geometry is not resolved yet and returns
     /// <paramref name="currentOffset"/> — never 0, which would read as a jump to the top.</summary>
     public static float MinRevealTarget(float currentOffset, float viewportH,
@@ -109,7 +109,7 @@ public static class LazyGridMath
         float peek = MathF.Min(MathF.Max(0f, drawerPeek), MathF.Max(0f, drawerH));
         float maxOff = cardTop - inset;                 // past this the card slides under the sticky band
         float minOff = cardTop + h + peek - viewportH;  // this much must clear the viewport bottom
-        if (minOff > maxOff) return MathF.Max(0f, maxOff);   // no slack → card leading wins (ScrollIntoView.Bring rule)
+        if (minOff > maxOff) return MathF.Max(0f, maxOff);   // no slack → card leading wins (the ScrollHandle.BringIntoView rule)
         return MathF.Max(0f, Math.Clamp(currentOffset, minOff, maxOff));
     }
 
@@ -118,11 +118,9 @@ public static class LazyGridMath
     /// already visible), this always lands the row in the SAME place on every open, which is exactly what a caller
     /// opting into <see cref="ExpandedReveal.AlignTop"/> wants.
     ///
-    /// No extent clamp here beyond the 0 floor, same reasoning as <see cref="MinRevealTarget"/>: the scroll KERNEL
-    /// owns the <c>[0, content − viewport]</c> clamp and re-derives it as the drawer's own reflow grows the content
-    /// each tick — <see cref="FluentGpu.Scroll.ScrollIntoView.ScrollTo"/> posts this RAW target as
-    /// <c>ScrollBody.TargetRaw</c>, re-clamped on every <c>SetFrame</c>, so clamping against a stale contentH here
-    /// would fight the kernel instead of letting the drawer's real extent land later.
+    /// No extent clamp here beyond the 0 floor, same reasoning as <see cref="MinRevealTarget"/>: <c>ScrollHandle.ScrollTo</c>
+    /// lands a target past today's extent at today's max and keeps the RAW target latched until the drawer's own reflow
+    /// grows the content to hold it, so clamping against a stale contentH here would cut the move short.
     ///
     /// A <paramref name="viewportH"/> of ≤1 means geometry is not resolved yet — returns
     /// <paramref name="currentOffset"/> unchanged, never 0 (which would read as a jump to the top).</summary>
@@ -198,10 +196,9 @@ public sealed class LazyGrid : Component
     bool _didInitialScroll;
     int _lastCols;
     float _lastRowH, _lastSectionTop;
-    // The kernel-owned Restore latch (ScrollBody.RestoreX/Y) isn't a readable SceneStore column — Geometry() used to
-    // read ScrollState.RestorePending/RestoreY directly (synchronous) for the one/two frames between posting the
-    // restore and the kernel's Reclamp landing it. Mirror the same value locally instead: set on post, cleared once
-    // the live offset actually reaches it (kernel caught up).
+    // The restore target this grid posted (ScrollHandle.Restore holds it latched until the extent can hold it); Geometry()
+    // windows against it for the frames between the post and the shown offset reaching it. Set on post, cleared once the
+    // live offset actually reaches it.
     float? _pendingRestoreY;
 
     static long PackKey(in LazyGridMath.View v)
@@ -309,7 +306,7 @@ public sealed class LazyGrid : Component
         float rowH = widthKnown ? cellW + _rowExtra : 0f;
         int totalRows = count <= 0 ? 0 : (count + cols - 1) / cols;
 
-        (float sectionTop, float viewportH, float scrollOffset) = Geometry(publishedScrollOffset);
+        (float sectionTop, float viewportH, float scrollOffset, bool pageScrollLive) = Geometry(publishedScrollOffset);
         int expandedRow = expandedIndex >= 0 ? expandedIndex / cols : -1;
         float drawerH = expandedIndex >= 0 && _drawerHeight is { } dh ? dh(expandedIndex) : 0f;
         bool hasViewport = viewportH < 1e8f;
@@ -394,7 +391,7 @@ public sealed class LazyGrid : Component
         int totalRows = count <= 0 ? 0 : (count + cols - 1) / cols;
         int expanded = _expanded?.Peek() ?? -1;
         float drawerH = expanded >= 0 && _drawerHeight is { } height ? height(expanded) : 0f;
-        (float sectionTop, float viewportH, float sceneOffset) = Geometry(offset);
+        (float sectionTop, float viewportH, float sceneOffset, _) = Geometry(offset);
         offset = sceneOffset;
         float scrollInSection = offset - sectionTop;
         int expandedRow = expanded >= 0 ? expanded / cols : -1;
@@ -495,23 +492,25 @@ public sealed class LazyGrid : Component
         float target = sectionTop + (anchorIndex / Math.Max(1, cols)) * rowH + within * (rowH / oldRowH);
         float delta = target - sc.OffsetY;
         if (delta == 0f) return;
-        // A coordinate-frame rebase, not a motion — AnchorShift moves with every other live intent instead of
-        // restarting/interrupting one (the kernel clamps to [0, content − viewport] on its own Reclamp).
-        scene.ScrollPort!.Post(ScrollInput.AnchorShift((int)vp.Raw.Index, delta));
+        // A coordinate-frame rebase, not a motion — the plan shift moves with every other live arc instead of
+        // restarting/interrupting one (the plan clamps to [0, content − viewport]).
+        scene.ScrollHandleFor(vp)?.ShiftFrame(delta);
     }
 
     // This grid's top within the page scroll's CONTENT space (stable across scroll: my abs Y and the content's abs Y both
     // shift by the same -offset), plus the viewport height — read from the nearest ancestor scroll. Defaults before layout.
-    (float sectionTop, float viewportH, float offsetY) Geometry(float fallbackOffset = 0f)
+    // pageLive: true while the page scroller is in motion (wheel/fling/drag/glide — ScrollState.Motion), regardless of
+    // whether THIS render's offset happens to have moved.
+    (float sectionTop, float viewportH, float offsetY, bool pageLive) Geometry(float fallbackOffset = 0f)
     {
         var scene = Context.Scene;
-        if (scene is null || _node.IsNull || !scene.IsLive(_node)) return (0f, 1e9f, fallbackOffset);
+        if (scene is null || _node.IsNull || !scene.IsLive(_node)) return (0f, 1e9f, fallbackOffset, false);
         var vp = _node;
         for (vp = scene.Parent(vp); !vp.IsNull && !scene.HasScroll(vp); vp = scene.Parent(vp)) { }
-        if (vp.IsNull) return (0f, 1e9f, fallbackOffset);
+        if (vp.IsNull) return (0f, 1e9f, fallbackOffset, false);
         ref ScrollState sc = ref scene.ScrollRef(vp);
         var content = sc.ContentNode;
-        if (content.IsNull || !scene.IsLive(content)) return (0f, 1e9f, fallbackOffset);
+        if (content.IsNull || !scene.IsLive(content)) return (0f, 1e9f, fallbackOffset, false);
         // Layout-only geometry: sectionTop/content feed a scroll TARGET (content space == layout space), and
         // AbsoluteRect would fold in an ancestor's mid-FLIP paint transform (an Expander host's Reflow, this grid's own
         // inline-drawer reflow) on exactly the frame this runs — see SceneStore.AbsoluteLayoutRect.
@@ -519,21 +518,21 @@ public sealed class LazyGrid : Component
         float vh = sc.ViewportH > 1f ? sc.ViewportH : scene.AbsoluteRect(vp).H;
         // Scroll observers publish after layout/animation. During route restoration the scene therefore holds the
         // authoritative offset (or pending target) one frame before the throttled context signal catches up. Window
-        // against it so a restored viewport never paints only the old top-window spacers — the kernel's own
-        // ScrollBody.RestoreX/Y latch isn't a readable SceneStore column, so mirror the posted target locally
-        // (_pendingRestoreY, cleared once the live offset actually reaches it — see MaybeInitialScroll).
+        // against it so a restored viewport never paints only the old top-window spacers — the posted target is mirrored
+        // locally (_pendingRestoreY, cleared once the live offset actually reaches it — see MaybeInitialScroll).
         float effectiveOffset = sc.OffsetY;
         if (_pendingRestoreY is { } py)
         {
             if (MathF.Abs(sc.OffsetY - py) < 1f) _pendingRestoreY = null;
             else effectiveOffset = py;
         }
-        return (top, vh > 1f ? vh : 1e9f, effectiveOffset);
+        bool pageLive = sc.Motion.IsMoving;
+        return (top, vh > 1f ? vh : 1e9f, effectiveOffset, pageLive);
     }
 
     // One-time scroll so item _initialIndex sits at the page-scroll's top — its content-Y = this grid's top + its row * rowH,
-    // seeded via the kernel's Restore command (applied verbatim while geometry is still resolving, retried each Reclamp —
-    // the same path the engine's own scroll-restore uses). Runs once geometry is real.
+    // seeded via ScrollHandle.Restore (latched until the extent can hold it — the same path a ScrollKey restore uses).
+    // Runs once geometry is real.
     void MaybeInitialScroll(float sectionTop, float rowH, int cols)
     {
         var scene = Context.Scene;
@@ -545,7 +544,7 @@ public sealed class LazyGrid : Component
         float targetY = sectionTop + (_initialIndex / Math.Max(1, cols)) * rowH;
         float clamped = Math.Clamp(targetY, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
         _pendingRestoreY = clamped;
-        scene.ScrollPort!.Post(ScrollInput.Restore((int)vp.Raw.Index, sc.OffsetX, clamped));
+        scene.ScrollHandleFor(vp)?.Restore(clamped);
         scene.Mark(vp, NodeFlags.LayoutDirty);
         _didInitialScroll = true;
     }
@@ -565,7 +564,7 @@ public sealed class LazyGrid : Component
         float target = _reveal == ExpandedReveal.AlignTop
             ? LazyGridMath.AlignRowTarget(sc.OffsetY, sc.ViewportH, rowStart, _expandedTopInset)
             : LazyGridMath.MinRevealTarget(sc.OffsetY, sc.ViewportH, rowStart, rowH, drawerH, _expandedTopInset, _expandedRevealPeek);
-        // Posts a Driven glide through the kernel (ScrollIntoView already no-ops within 0.5 DIP and wakes the frame).
-        ScrollIntoView.ScrollTo(Context, vp, target, animate: true);
+        if (MathF.Abs(target - sc.OffsetY) < 0.5f) return;
+        scene.ScrollHandleFor(vp)?.ScrollTo(target, ScrollMove.Glide);
     }
 }

@@ -3,7 +3,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
-using FluentGpu.Scroll;
+using FluentGpu.Scroll.Runtime;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -113,26 +113,24 @@ public sealed class TabStrip : Component
     NodeHandle[] _tabNodes = [];
     NodeHandle _scrollViewport;
     readonly Signal<TabStripScrollMetrics> _scrollMetrics = new(default);
-    readonly (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) _scrollObserver;
+    readonly ScrollHandle _tabScroll = new();   // the strip viewport's handle (ScrollEl.Handle) — metrics + paging
+    readonly Action _syncScrollMetrics;
     bool _scrollSelectionSeeded;
 
     public TabStrip()
-        => _scrollObserver = (ProjectScrollGeometry, AcceptScrollGeometry);
+        => _syncScrollMetrics = SyncScrollMetrics;
 
-    static long ProjectScrollGeometry(ScrollGeometry g)
+    // Reads the handle's offset/viewport/extent signals (an effect: re-runs when any of them changes) and publishes
+    // the coarse strip metrics the edge pips + ScrollMetricsChanged consume.
+    void SyncScrollMetrics()
     {
-        int viewport = (int)MathF.Round(g.ViewportW / 4f);
-        int content = (int)MathF.Round(g.ContentW / 4f);
-        int edges = (g.OffsetX > 0.5f ? 1 : 0) | (g.OffsetX + g.ViewportW < g.ContentW - 0.5f ? 2 : 0);
-        return HashCode.Combine(viewport, content, edges);
-    }
-
-    void AcceptScrollGeometry(ScrollGeometry g)
-    {
+        float offsetX = (float)_tabScroll.Offset.Value;
+        float viewportW = (float)_tabScroll.ViewportSignal.Value;
+        float contentW = (float)_tabScroll.ExtentSignal.Value;
         var next = new TabStripScrollMetrics(
-            g.OffsetX, g.ViewportW, g.ContentW,
-            g.OffsetX > 0.5f,
-            g.OffsetX + g.ViewportW < g.ContentW - 0.5f);
+            offsetX, viewportW, contentW,
+            offsetX > 0.5f,
+            offsetX + viewportW < contentW - 0.5f);
         if (_scrollMetrics.Peek() == next) return;
         _scrollMetrics.Value = next;
         ScrollMetricsChanged?.Invoke(next);
@@ -233,9 +231,13 @@ public sealed class TabStrip : Component
             if (Appearance != TabStripAppearance.Text || OverflowMode != TabStripOverflowMode.Scroll
                 || (uint)selected >= (uint)_tabNodes.Length || _scrollViewport.IsNull) return;
             var node = _tabNodes[selected];
-            if (node.IsNull) return;
-            ScrollIntoView.BringInto(Context, _scrollViewport, node, Spacing.S,
-                animate: _scrollSelectionSeeded && !Motion.ReducedMotion);
+            var scene = Context.Scene;
+            if (node.IsNull || scene is null || !scene.IsLive(node) || !scene.HasScroll(_scrollViewport)) return;
+            var content = scene.ScrollRef(_scrollViewport).ContentNode;
+            if (content.IsNull || !scene.IsLive(content)) return;
+            float x = scene.AbsoluteLayoutRect(node).X - scene.AbsoluteLayoutRect(content).X;   // content-space position
+            _tabScroll.BringIntoView(x, scene.Bounds(node).W, float.NaN,
+                _scrollSelectionSeeded && !Motion.ReducedMotion ? ScrollMove.Glide : ScrollMove.Immediate, Spacing.S);
             _scrollSelectionSeeded = true;
         }, DepKey.From(HashCode.Combine(selected, count, OverflowMode)));
 
@@ -638,6 +640,8 @@ public sealed class TabStrip : Component
         }
 
         var metrics = _scrollMetrics.Value;
+
+        UseEffect(_syncScrollMetrics);
         var viewport = new ScrollEl
         {
             // ContentSized + Shrink is the whole trick: the lane MEASURES to the natural tab extent, so while the tabs
@@ -653,7 +657,7 @@ public sealed class TabStrip : Component
             SuppressScrollBar = true,
             AutoEdgeFade = true,
             Content = stack,
-            OnScrollGeometryChanged = _scrollObserver,
+            Handle = _tabScroll,
             OnRealized = h => _scrollViewport = h,
         };
 
@@ -711,12 +715,9 @@ public sealed class TabStrip : Component
 
     void ScrollPage(bool back)
     {
-        var scene = Context.Scene;
-        if (scene is null || _scrollViewport.IsNull || !scene.IsLive(_scrollViewport) || !scene.HasScroll(_scrollViewport)) return;
-        ref var sc = ref scene.ScrollRef(_scrollViewport);
-        float page = MathF.Max(MinTabWidth, sc.ViewportW - 40f);
-        ScrollIntoView.ScrollTo(Context, _scrollViewport, sc.OffsetX + (back ? -page : page),
-            animate: !Motion.ReducedMotion);
+        if (!_tabScroll.IsBound) return;
+        float page = MathF.Max(MinTabWidth, (float)_tabScroll.Viewport - 40f);
+        _tabScroll.ScrollBy(back ? -page : page, Motion.ReducedMotion ? ScrollMove.Immediate : ScrollMove.Glide);
     }
 
     Element TextTab(int index, TabViewItem item, bool selected, bool closable, bool closeVisible,

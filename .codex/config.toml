@@ -4,10 +4,9 @@
 # Windows path casing (C:\WAVEE vs C:\wavee) and caused workspace writes to fail
 # closed as "blocked by policy" even under Full Access / danger-full-access.
 #
-# Out-of-scope PlayPlay/native fencing remains via soft guards only:
-#   - AGENTS.md / CLAUDE.md steering
-#   - .codexignore (context exclusion)
-#   - .gitignore + .githooks/pre-commit + CI no-drm-material workflow
+# PlayPlay/native material is not fenced from agents; it is kept OUT OF COMMITS by
+# .gitignore + .githooks/pre-commit + the CI no-drm-material workflow. It is committed
+# only in the private wavee-playplay-private repo.
 #
 # Do NOT reintroduce default_permissions / [permissions.*] deny tables here unless
 # you have verified Windows path identity is stable for the session root. Prefer

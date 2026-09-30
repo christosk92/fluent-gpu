@@ -75,7 +75,24 @@ public sealed record CartesianChartOptions
     /// <summary>Value-axis overrides; null = the data extent, niced.</summary>
     public float? ValueMin { get; init; }
     public float? ValueMax { get; init; }
+    /// <summary>Category-range bands across the plot (Recharts <c>ReferenceArea x1/x2</c>), drawn over the grid and
+    /// under the series. Empty = none.</summary>
+    public ReadOnlyMemory<ChartBand> Bands { get; init; }
+    /// <summary>Marks across the plot at a category position (Recharts <c>ReferenceLine x</c>), drawn over the bands
+    /// and under the series. Empty = none.</summary>
+    public ReadOnlyMemory<ChartMark> Marks { get; init; }
 }
+
+/// <summary>A mark across the plot at category position <paramref name="At"/>, in CATEGORY units: 0 is the first
+/// category's slot centre, i the i-th, and fractional positions interpolate between centres (so a uniformly sampled
+/// time axis maps t to <c>t / Δ − ½</c>). Default <paramref name="Color"/> (A = 0) = <c>CartesianChart.Style.MarkInk</c>;
+/// <paramref name="Label"/> is captioned at the top of the mark.</summary>
+public readonly record struct ChartMark(float At, FluentGpu.Foundation.ColorF Color = default, string? Label = null);
+
+/// <summary>A band across the plot from category position <paramref name="From"/> to <paramref name="To"/> (the same
+/// units as <see cref="ChartMark.At"/>; order-free, clamped to the plot). Default <paramref name="Color"/> (A = 0) =
+/// <c>CartesianChart.Style.BandFill</c>; <paramref name="Label"/> is captioned at the band's leading top corner.</summary>
+public readonly record struct ChartBand(float From, float To, FluentGpu.Foundation.ColorF Color = default, string? Label = null);
 
 public sealed record LineChartOptions
 {

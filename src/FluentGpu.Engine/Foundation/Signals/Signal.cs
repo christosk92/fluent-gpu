@@ -105,8 +105,14 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
         // loop is safe; using the live list avoids an allocation on the hot write path.
         // DIRTY, not Check: a write is the one place we KNOW the value moved (the comparer above already said so), so a
         // direct subscriber must run. Memos further downstream get the cheap Check cascade instead (Memo.OnStale).
-        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty();
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty(this);
     }
+
+    /// <summary>DIAGNOSTIC name for report lines — the render census's <c>by=</c> prints it beside the kind
+    /// (<c>Signal&lt;Boolean&gt;:artist.compact</c>). Never read on a hot path; no cost when unset.</summary>
+    public string? DebugName { get; init; }
+
+    string ISignalSource.DiagKind => "Signal<" + typeof(T).Name + ">";
 
     void ISignalSource.Unsubscribe(Computation c) { if (_subs.Remove(c)) SubscriberSetVersion++; }
 
@@ -146,9 +152,14 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
         if (_value == value) return false;
         _value = value;
         // DIRTY (see Signal<T>.NotifySubscribers): the value demonstrably moved, so direct subscribers must run.
-        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty();
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty(this);
         return true;
     }
+
+    /// <inheritdoc cref="Signal{T}.DebugName"/>
+    public string? DebugName { get; init; }
+
+    string ISignalSource.DiagKind => "FloatSignal";
 
     public float Peek() => _value;
 

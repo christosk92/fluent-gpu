@@ -113,6 +113,22 @@ public static class MotionRecipes
         anim.Animate(node, AnimChannel.BlurSigma, Expressive.BlurSmall, 0f, Expressive.Slow, Easing.SmoothOut);
     }
 
+    /// <summary>A single scale "pop" — ScaleX/ScaleY <c>0:1 → .4:peak (SmoothOut) → 1:1 (SmoothOut)</c> over
+    /// <paramref name="ms"/>. E2 (<c>docs/plans/wavee/home-redesign-implementation.md</c> Workstream E,
+    /// <c>C:\wavee\waveemusic</c>): the checked-glyph pop for <c>FluentGpu.Controls.ToggleButton.Controlled</c>-style
+    /// controls (Follow's heart) — a USER-INITIATED false→true flip pulses the glyph once; a programmatic/data-driven
+    /// checked flip must never call this (see <c>docs/guide/motion-recipes.md</c> "Pulse"). No-op under reduced
+    /// motion (the glyph stays at its resting scale, never pops) — the standard <see cref="Motion.ReducedMotion"/>
+    /// value-not-branch guard every recipe here honours.</summary>
+    public static void Pulse(this AnimEngine anim, NodeHandle node, float peak, float ms)
+    {
+        if (Motion.ReducedMotion) return;
+        anim.Keyframes(node, AnimChannel.ScaleX,
+            [new Keyframe(0f, 1f), new Keyframe(0.4f, peak, Easing.SmoothOut), new Keyframe(1f, 1f, Easing.SmoothOut)], ms);
+        anim.Keyframes(node, AnimChannel.ScaleY,
+            [new Keyframe(0f, 1f), new Keyframe(0.4f, peak, Easing.SmoothOut), new Keyframe(1f, 1f, Easing.SmoothOut)], ms);
+    }
+
     /// <summary>transitions.dev "success check" (the container celebration): fade in + un-rotate from 80° + a Y-bob that
     /// settles with overshoot + un-blur from a large radius. Pair with a stroke-draw on the checkmark path itself — seed
     /// <c>AnimChannel.StrokeTrimEnd</c> 0→1 on a <c>PolylineStrokeEl</c> child (the engine's existing draw-on channel,

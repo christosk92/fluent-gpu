@@ -31,18 +31,22 @@ public sealed class FrameBankingTests
     {
         Assert.Equal(3u, D3D12Device.FRAME_COUNT);
         // NOT FRAME_COUNT - 1. The bank depth (3) is a memory/pipelining decision; the present-queue depth is a
-        // LATENCY decision and is 1 (see the D3D12Device header: depth 2 pre-paid a frame of input lag on EVERY frame
-        // because backpressure is permanent on a weak GPU). A literal, so the two cannot be re-coupled by accident.
-        Assert.Equal(1u, D3D12Device.MAX_FRAME_LATENCY);
+        // LATENCY decision: it starts at 1 and the host deepens it to at most 2 only while measured GPU execution
+        // approaches the refresh (PresentQueueDepthPolicy). Literals, so the two cannot be re-coupled by accident — and
+        // every queued frame plus the one being recorded needs its own CPU-written bank.
+        Assert.Equal(1u, D3D12Device.InitialPresentQueueDepth);
+        Assert.Equal(2u, D3D12Device.MaxPresentQueueDepth);
+        Assert.True(D3D12Device.FRAME_COUNT >= D3D12Device.MaxPresentQueueDepth + 1);
         Assert.Equal((int)D3D12Device.FRAME_COUNT, D3D12Device.FrameBankDepth);
-        Assert.Equal(D3D12Device.FrameBankDepth, new OpacityLayerCompositor().TimestampBankCount);
-        // AcrylicCompositor: slot 0 = canvas, then one bank of MaxPool (= 12) pool SRVs per frame-in-flight.
-        // The 12 is spelled out deliberately — MaxPool is private, and a change to EITHER factor should be a
-        // deliberate edit here, not a silently absorbed one.
-        Assert.Equal(1 + D3D12Device.FrameBankDepth * 12, AcrylicCompositor.SrvHeapDescriptorCount);
+        // Phase 1 (detached-window-render-isolation §3.6): the CPU-written submission ring's slot depth must track
+        // the same bank-depth decision as everything above — it replaced the frame-index-keyed banks 1:1, not a
+        // separately chosen constant that could silently drift from FrameBankDepth.
+        Assert.Equal(D3D12Device.FrameBankDepth, SubmissionRing.Depth);
+        // The image bake runs on its own compute queue: its scratch pyramids and timestamp pairs are banked per compute
+        // batch in flight (the side queue's allocator ring), not per frame.
         var baked = new BakedBlurCompositor();
-        Assert.Equal(D3D12Device.FrameBankDepth, baked.ScratchBankCount);
-        Assert.Equal(D3D12Device.FrameBankDepth, baked.TimestampBankCount);
+        Assert.Equal(UploadQueue.Depth, baked.ScratchBankCount);
+        Assert.Equal(UploadQueue.Depth, baked.TimestampBankCount);
         // Through the INTERFACE deliberately: IGpuDevice.MaxFrameLatency is a default member and
         // HeadlessGpuDevice does not re-declare it — taking the seam default is exactly what is under test.
         Assert.Equal(1, ((IGpuDevice)new HeadlessGpuDevice()).MaxFrameLatency);   // headless keeps the +2·refresh gate contract

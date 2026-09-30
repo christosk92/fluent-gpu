@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Foundation;
 
@@ -16,7 +16,7 @@ namespace FluentGpu.Signals;
 /// facility is gated by the const <see cref="CompiledIn"/> (<c>false</c> unless <c>DEBUG</c>/<c>FLUENTGPU_DIAG</c>), so
 /// the <c>if (BackwardsWriteGuard.CompiledIn &amp;&amp; BackwardsWriteGuard.Enabled) { … }</c> guard on the signal write
 /// path is dead-code-eliminated in the shipping AOT binary — zero bytes, zero probe cost. When compiled in it defaults
-/// ON (a kill-switch: <c>FG_BACKWARDS_WRITE=0</c> turns it off) and is report-only unless <c>FG_BACKWARDS_WRITE_THROW=1</c>.
+/// ON (a kill-switch: <c>--fg no-guards</c> turns it off) and is report-only unless <c>--fg guards-throw</c>.
 /// On the non-violating path it allocates nothing (a subscriber-list <c>Contains</c> + a reference compare), so the
 /// zero-alloc hot window is preserved even with the guard live.
 /// </para>
@@ -31,13 +31,13 @@ public static class BackwardsWriteGuard
         false;
 #endif
 
-    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): defaults ON, kill-switch
-    /// <c>FG_BACKWARDS_WRITE=0</c> disables it.</summary>
-    public static bool Enabled = CompiledIn && !Diag.EnvFlagDisabled("FG_BACKWARDS_WRITE");
+    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): defaults ON; a measurement run turns it
+    /// off in code or with the <c>--fg no-guards</c> switch (<see cref="FluentGpu.Hosting.EngineSwitches"/>).</summary>
+    public static bool Enabled = CompiledIn;
 
     /// <summary>When set, a detected read+write THROWS <see cref="BackwardsWriteException"/> instead of only reporting —
-    /// <c>FG_BACKWARDS_WRITE_THROW=1</c>, or a gate scoping the strict path. Default report-only.</summary>
-    public static bool ThrowOnViolation = CompiledIn && Diag.EnvFlag("FG_BACKWARDS_WRITE_THROW");
+    /// <c>--fg guards-throw</c>, or a gate scoping the strict path. Default report-only.</summary>
+    public static bool ThrowOnViolation;
 
     /// <summary>Count of violations since the last <see cref="Reset"/> (gate accessor).</summary>
     public static int Violations { get; private set; }
@@ -85,6 +85,6 @@ public static class BackwardsWriteGuard
     }
 }
 
-/// <summary>Thrown by <see cref="BackwardsWriteGuard"/> in strict mode (<c>FG_BACKWARDS_WRITE_THROW</c>) when a tracked
+/// <summary>Thrown by <see cref="BackwardsWriteGuard"/> in strict mode (<c>--fg guards-throw</c>) when a tracked
 /// computation wrote a signal it also read in the same run. Never thrown in release (the guard is compiled out).</summary>
 public sealed class BackwardsWriteException(string message) : InvalidOperationException(message);

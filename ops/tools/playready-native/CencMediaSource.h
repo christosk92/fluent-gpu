@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <cassert>    // IsAscending's debug-build tripwire after every splice (SpliceLocked)
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -26,6 +27,7 @@
 #include <mutex>
 #include <functional>
 #include <algorithm>
+#include <limits>     // std::numeric_limits<uint64_t>::max() — the hole-log rate-limit sentinel
 #include <map>        // per-stream ITA cache (a single slot thrashes once there are two streams)
 #include <set>        // announced / ended stream ids
 #include <iterator>   // make_move_iterator — appending fetched samples without copying them
@@ -795,6 +797,13 @@ static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, s
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 struct CencMediaSource;   // fwd
 
+/// The outcome of a representation-switch splice (SwitchVideoRepresentation). `StaleBoundary` is not an error: the
+/// feeder computed a boundary that the delivery cursor has since passed (a segment-0 boundary computed before a
+/// 200 ms GET, with the cursor already at sample 15 by the time the response lands, is the case that motivated
+/// this — see fgpr::SpliceSamples' TRUNCATING case in SegmentStore.h). The caller (PrSession.cpp) is expected to
+/// recompute a fresh boundary and retry rather than treat it like `Rejected`.
+enum class SwitchResult { Spliced, StaleBoundary, Rejected };
+
 struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 {
     winrt::com_ptr<IMFMediaEventQueue> m_queue;
@@ -826,6 +835,27 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // when it could not fetch — over its byte budget, or backing off a failed GET — so a playhead that keeps delivering
     // samples does not wake it for every single one of them while nothing can change.
     std::atomic<int64_t> m_demandBelowMs{ 0 };
+
+    // Bumped whenever a mutation CUTS already-buffered coverage out from under a reader — a truncating splice
+    // (SwitchVideoRepresentation), TakeSamples (the whole buffer is relocated for a re-attach), or a TrimBehindLocked
+    // that had to fall back on the byte budget (not the ordinary time window — see TrimBehindLocked). The feeder's
+    // progress guard (PrSession.cpp, thread-local) samples this WITHOUT the stream lock to tell "buffer shrank" apart
+    // from "buffer just isn't growing yet": a plain size/byte reading can't make that distinction, and reading it as
+    // "no growth" is what live-locked the feeder (see this file's task background). CutGen() below is the lock-free
+    // read; every writer goes through m_mx already, so a relaxed increment + acquire read is enough — there is no
+    // other data this counter needs to be ordered against.
+    std::atomic<uint32_t> m_cutGen{ 0 };
+
+    // Hole detection for DeliverSampleLocked. Samples are stored and delivered in DECODE order (see SegmentStore.h's
+    // SpliceSamples "ORDERING KEY DECISION"), so a B-frame's PRESENTATION time is not monotonic sample-to-sample
+    // within a GOP — comparing this sample against the PREVIOUS array element (what a naive check would do) would
+    // flag every reordered B-frame as a hole. Instead this tracks the running MAX presentation end actually
+    // delivered so far, mirroring SegmentStore.h ComputeBufferedPairs' `reach`, and compares the next sample's start
+    // against THAT. Reset on Start(reposition), Stop() and a representation switch, each of which can make the next
+    // delivered sample legitimately jump.
+    uint64_t m_deliveredReachTicks = 0;
+    bool m_haveDeliveredReach = false;          // false until the first sample is ever delivered
+    uint64_t m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();   // rate-limit: once per hole start
 
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
 
@@ -884,6 +914,14 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 if (m_starvedRequests.size() == 1)
                     LogLine(std::string("[cenc-src] ") + m_label + " starved at sample " + std::to_string(m_next) +
                             " — awaiting fetch (not EOS)");
+                // KICK THE FEEDER. A starved stream is the one caller that most needs a fetch, yet this branch never
+                // asked for one: the demand hook below only fires on a DELIVERED sample. With the buffer target
+                // already satisfied the feeder had gone Idle (cv.wait, no timer), so a track whose audio ran dry
+                // after the video ended sat here for 108 s (2026-09-22, "not auto advancing") until the next
+                // session tore it down. One kick per starvation (the size()==1 gate above): the feeder re-plans,
+                // finds the buffer at the duration, and marks the stream complete — which is the EOS this
+                // request is waiting for.
+                if (m_starvedRequests.size() == 1 && m_demand && m_store) m_demand();
                 return S_OK;
             }
             if (!m_eos) { m_eos = true; m_queue->QueueEventParamVar(MEEndOfStream, GUID_NULL, S_OK, nullptr); NotifySourceEnded(); }
@@ -914,6 +952,34 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         HRESULT hr = MakeSample(m_samples[m_next], sample.put());
         if (FAILED(hr)) return hr;
         if (pToken) sample->SetUnknown(MFSampleExtension_Token, pToken);
+
+        // Hole detection (see m_deliveredReachTicks' declaration for why the comparison is against a running max,
+        // not the previous array element). A splice can leave a genuine time gap between what MF already has and
+        // what lands next (the old feeder delivered t=8008 right after t=4003 with nothing flagging it); the decoder
+        // needs MFSampleExtension_Discontinuity on the far side of that gap exactly as it does for a seek.
+        {
+            auto const& cur = m_samples[m_next];
+            if (m_haveDeliveredReach && m_info.timescale > 0)
+            {
+                const uint64_t tolerance = fgpr::MsToTicks(fgpr::kContiguityToleranceMs, m_info.timescale);
+                if (cur.timeTicks > m_deliveredReachTicks + tolerance)
+                {
+                    sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
+                    if (m_lastLoggedHoleStartTicks != cur.timeTicks)   // one line per distinct hole start
+                    {
+                        m_lastLoggedHoleStartTicks = cur.timeTicks;
+                        const int64_t aMs = (int64_t)((m_deliveredReachTicks * 1000ULL) / m_info.timescale);
+                        const int64_t bMs = (int64_t)((cur.timeTicks * 1000ULL) / m_info.timescale);
+                        LogLine(std::string("[cenc-src] ") + m_label + " delivered across a hole [" +
+                                std::to_string((long long)aMs) + "," + std::to_string((long long)bMs) + ")ms");
+                    }
+                }
+            }
+            const uint64_t curEnd = cur.timeTicks + cur.durTicks;
+            if (!m_haveDeliveredReach || curEnd > m_deliveredReachTicks) m_deliveredReachTicks = curEnd;
+            m_haveDeliveredReach = true;
+        }
+
         if (m_discontinuity)
         {
             sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
@@ -927,7 +993,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         if (m_demand && !m_complete && m_store)
         {
             const int64_t below = m_demandBelowMs.load(std::memory_order_relaxed);
-            if (AheadDurationMsLocked() < (below > 0 ? below : m_store->bufferAheadMs)) m_demand();
+            // CONTIGUOUS ahead, not AheadDurationMsLocked()'s last.end - next.start: that span crosses a hole for
+            // free, so a forward seek (or a switch) that left one behind fresh segments made the hook believe the
+            // window was already full and it never asked the feeder for more — see this file's task background (3).
+            if (ContiguousAheadMsLocked() < (below > 0 ? below : m_store->bufferAheadMs)) m_demand();
         }
         return hr;
     }
@@ -968,6 +1037,11 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             }
             m_next = found ? best : 0;
             m_discontinuity = true;
+            // A reposition can legitimately jump the next delivered sample's presentation time in either direction;
+            // the hole detector must not compare it against history from before the seek.
+            m_haveDeliveredReach = false;
+            m_deliveredReachTicks = 0;
+            m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
             LogLine("[cenc-src] seek target100ns=" + std::to_string((long long)requested100ns) +
                     " -> sample=" + std::to_string(m_next) +
                     " keyframe100ns=" + std::to_string(m_info.timescale > 0
@@ -993,6 +1067,9 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         m_started = false; m_paused = false;
         m_next = 0; m_eos = false; m_discontinuity = true;
+        m_haveDeliveredReach = false;
+        m_deliveredReachTicks = 0;
+        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
         m_pausedRequests.clear();
         m_starvedRequests.clear();
         m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
@@ -1018,52 +1095,48 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// NEVER re-deliver what Media Foundation already has: a run that straddles the delivery point is spliced from
     /// m_next forward (the original rule); a run wholly behind it only refreshes history and m_next keeps pointing at the
     /// same logical sample. `truncateAfter` restores the cut-to-end for a representation switch, whose samples past the
-    /// splice are the OLD representation and must be refetched in the new one. Returns the index the run landed at.
-    size_t SpliceLocked(std::vector<cenc::Sample>&& incoming, bool truncateAfter = false)
+    /// splice are the OLD representation and must be refetched in the new one.
+    ///
+    /// The actual policy — the ordering key, the straddle filter, the truncating-splice staleness rule — now lives in
+    /// fgpr::SpliceSamples (SegmentStore.h), as a pure function over just the vector and the cursor, so it can be
+    /// exercised from a console test exe with no Media Foundation, no lock and no byte ledger in the way. This method
+    /// is the thin locked wrapper: it hands the byte delta to m_bytes/the store, bumps m_cutGen when coverage was cut
+    /// (StaleBoundary/no-op leaves it alone — nothing changed), and — because a splice bug here is exactly the kind of
+    /// thing that corrupts playback silently for minutes before anyone notices — verifies the ascending invariant
+    /// afterward: a hard assert in a debug build, a single `BUG` log line (never a crash) in release.
+    fgpr::SpliceOutcome SpliceLocked(std::vector<cenc::Sample>&& incoming, bool truncateAfter = false)
     {
-        const uint64_t startTicks = incoming.front().timeTicks;
-        uint64_t endTicks = startTicks;
-        uint64_t incomingBytes = 0;
-        for (auto const& s : incoming)
-        {
-            if (s.timeTicks + s.durTicks > endTicks) endTicks = s.timeTicks + s.durTicks;
-            incomingBytes += fgpr::SampleFootprint(s);
-        }
+        if (incoming.empty()) return fgpr::SpliceOutcome{};
+        fgpr::SpliceOutcome outcome = fgpr::SpliceSamples(m_samples, m_next, std::move(incoming), truncateAfter);
+        if (outcome.stale) return outcome;   // nothing mutated: no byte/generation/invariant bookkeeping needed
 
-        size_t lo = m_samples.size();
-        for (size_t i = 0; i < m_samples.size(); i++)
-            if (m_samples[i].timeTicks >= startTicks) { lo = i; break; }
-        size_t hi = lo;
-        while (hi < m_samples.size() && m_samples[hi].timeTicks < endTicks) hi++;
-
-        if (lo < m_next && hi > m_next)
-        {
-            lo = m_next;
-            while (lo < m_samples.size() && m_samples[lo].timeTicks < startTicks) lo++;
-            hi = lo;
-            while (hi < m_samples.size() && m_samples[hi].timeTicks < endTicks) hi++;
-        }
-        if (truncateAfter && lo >= m_next) hi = m_samples.size();
-
-        uint64_t freed = 0;
-        for (size_t i = lo; i < hi; i++) freed += fgpr::SampleFootprint(m_samples[i]);
-        const size_t removed = hi - lo;
-        const size_t added = incoming.size();
-        m_samples.erase(m_samples.begin() + (ptrdiff_t)lo, m_samples.begin() + (ptrdiff_t)hi);
-        m_samples.insert(m_samples.begin() + (ptrdiff_t)lo, std::make_move_iterator(incoming.begin()),
-                         std::make_move_iterator(incoming.end()));
-        if (lo < m_next) m_next = m_next - removed + added;   // wholly behind the playhead: same logical sample
-        m_bytes = (m_bytes > freed ? m_bytes - freed : 0) + incomingBytes;
+        m_bytes = (m_bytes > outcome.freedBytes ? m_bytes - outcome.freedBytes : 0) + outcome.addedBytes;
+        if (outcome.cutCoverage) m_cutGen.fetch_add(1, std::memory_order_release);
         PublishBytesLocked();
-        return lo;
+
+        if (!fgpr::IsAscending(m_samples))
+        {
+            LogLine("[cenc-src] BUG: sample buffer not ascending after splice at " + std::to_string(outcome.at));
+            assert(false && "CencMediaStream::SpliceLocked: m_samples not ascending after fgpr::SpliceSamples");
+        }
+        return outcome;
     }
 
     /// Drop history beyond the retention window (time, then bytes), keeping m_next pointing at the same sample.
-    void TrimBehindLocked()
+    ///
+    /// m_cutGen is bumped only when the BYTE BUDGET rule (TrimBehindByTime's rule 2) is what did the dropping. A
+    /// plain time-window trim behind the cursor runs on essentially every segment and drops only already-delivered
+    /// history MF no longer needs — normal operation, not a cut a reader could notice. Bumping the generation for
+    /// that would reset the feeder's progress guard every segment, defeating the whole point of having it; the byte
+    /// budget is the one that can (rarely) force out something a caller still cared about.
+    void TrimBehindLocked(uint64_t reserveBytes = 0)
     {
         if (!m_store) return;
         const uint64_t budget = m_streamId == 1 ? m_store->VideoBudget() : m_store->AudioBudget();
-        fgpr::TrimBehindByTime(m_samples, m_next, m_info.timescale, m_store->retainBehindMs, budget, m_bytes);
+        bool byteBudgetCut = false;
+        const size_t dropped = fgpr::TrimBehindByTime(m_samples, m_next, m_info.timescale, m_store->retainBehindMs,
+                                                       budget, m_bytes, &byteBudgetCut, reserveBytes);
+        if (dropped > 0 && byteBudgetCut) m_cutGen.fetch_add(1, std::memory_order_release);
         PublishBytesLocked();
     }
 
@@ -1087,16 +1160,21 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     }
 
     /// Trim history now (the feeder, before it weighs the byte budget): appends are not the only moment the playhead has
-    /// moved, and a session over its budget that only trimmed on append could never append again.
-    void TrimNow()
+    /// moved, and a session over its budget that only trimmed on append could never append again. `reserveBytes` is
+    /// the room the feeder needs for the segment it is about to fetch (TrimBehindByTime's reserve): history behind the
+    /// playhead yields to it even inside the retention window, or a 1080p store deadlocks against its own cap.
+    void TrimNow(uint64_t reserveBytes = 0)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        TrimBehindLocked();
+        TrimBehindLocked(reserveBytes);
     }
 
     void SetDemandBelowMs(int64_t ms) { m_demandBelowMs.store(ms > 0 ? ms : 0, std::memory_order_relaxed); }
 
-    /// Move the whole buffer out, with its byte cost, for the fresh source a re-attach builds.
+    /// Move the whole buffer out, with its byte cost, for the fresh source a re-attach builds. This IS a cut from the
+    /// point of view of anything still watching this stream object (a re-attach hands the samples to a DIFFERENT
+    /// CencMediaStream, so this one goes from "has coverage" to "has nothing" no matter how much was buffered) —
+    /// unconditionally bump the generation, and reset the hole-detection reach along with it.
     std::vector<cenc::Sample> TakeSamples(uint64_t& bytes)
     {
         std::lock_guard<std::mutex> g(m_mx);
@@ -1105,8 +1183,18 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_next = 0;
         bytes = m_bytes;
         m_bytes = 0;
+        m_cutGen.fetch_add(1, std::memory_order_release);
+        m_haveDeliveredReach = false;
+        m_deliveredReachTicks = 0;
+        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
         return out;
     }
+
+    /// Lock-free progress signal for the feeder's thread-local guard (PrSession.cpp): "did coverage just get cut out
+    /// from under you", distinct from "the buffer simply hasn't grown yet". Every writer (SpliceLocked, TakeSamples,
+    /// TrimBehindLocked) already holds m_mx and bumps with release; a relaxed-or-acquire read here is enough — the
+    /// guard only ever compares two snapshots of this counter for inequality, it never reads anything else through it.
+    uint32_t CutGen() const { return m_cutGen.load(std::memory_order_acquire); }
 
     /// FgPrSessionGetBuffered for this stream: ascending (startMs, endMs) pairs, a hole starts a new pair.
     int BufferedPairs(int64_t* out, int capPairs)
@@ -1135,18 +1223,42 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// m_next unconditionally — what this used to do — deleted every buffered sample under the playhead and refilled
     /// from the feeder's stale cursor, which is what punched a multi-second hole in the video while audio kept running:
     /// the frozen frame.) Already delivered samples remain owned by Media Foundation.
-    void SwitchVideoRepresentation(const cenc::InitInfo& nextInfo, std::vector<cenc::Sample>&& replacement)
+    ///
+    /// Returns `Rejected` for the pre-existing early-outs (shutdown, wrong kind, an empty replacement — none of these
+    /// are the feeder's fault, so there is nothing for it to retry against). Returns `StaleBoundary`, with NOTHING
+    /// changed (m_info, m_discontinuity, m_complete and the format-change event are all untouched) when the boundary
+    /// the feeder computed has since fallen behind the delivery cursor — the case proven live: a boundary computed at
+    /// segment 0 before a 200 ms GET, with the cursor at sample 15 by the time the response lands. Splicing the whole
+    /// replacement in at index 15 there would re-deliver 15 already-shown frames; refusing instead tells the feeder to
+    /// recompute a fresh boundary against where the cursor actually is now. Otherwise splices and returns `Spliced`.
+    SwitchResult SwitchVideoRepresentation(const cenc::InitInfo& nextInfo, std::vector<cenc::Sample>&& replacement)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return;
-        const uint64_t spliceTicks = replacement.front().timeTicks;
-        const size_t at = SpliceLocked(std::move(replacement), true);
+        if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return SwitchResult::Rejected;
+
+        const uint64_t spliceTicks = replacement.front().timeTicks;   // captured before the move below
+        const fgpr::SpliceOutcome outcome = SpliceLocked(std::move(replacement), true);
+        if (outcome.stale)
+        {
+            const int64_t boundaryMs = m_info.timescale ? (int64_t)((spliceTicks * 1000ULL) / m_info.timescale) : 0;
+            const int64_t cursorMs = (m_info.timescale && m_next < m_samples.size())
+                ? (int64_t)((m_samples[m_next].timeTicks * 1000ULL) / m_info.timescale) : 0;
+            LogLine("[cenc-src] video switch refused: boundary t=" + std::to_string((long long)boundaryMs) +
+                    "ms is behind the delivery cursor t=" + std::to_string((long long)cursorMs) + "ms");
+            return SwitchResult::StaleBoundary;
+        }
+        const size_t at = outcome.at;
         m_info = nextInfo;
         // Only the sample delivered NEXT may be flagged discontinuous. When the splice lands ahead of the playhead the
         // next sample is still old-representation continuous video; flagging it would make the decoder drop frames all
         // the way to the new keyframe.
         if (at <= m_next) m_discontinuity = true;
         m_complete = false;
+        // The new representation's timeline restarts at the splice; a reach computed against the OLD representation's
+        // samples must not be compared across it (see m_deliveredReachTicks' declaration).
+        m_haveDeliveredReach = false;
+        m_deliveredReachTicks = 0;
+        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
 
         // The protected wrapper remains the same stream type; update its display/config attributes and publish the
         // standard format-change event. The first replacement access unit also carries the new SPS/PPS, which is the
@@ -1170,6 +1282,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 std::to_string(m_next) + " (t=" + std::to_string((long long)playheadMs) + "ms), buffer=" +
                 std::to_string(m_samples.size()) + " sample(s)");
         ReleaseStarvedLocked();
+        return SwitchResult::Spliced;
     }
 
     /// No more samples are coming (the fetcher finished, or gave up). After this, running dry is a real end of stream —
@@ -1202,6 +1315,21 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         auto const& last = m_samples.back();
         uint64_t end = last.timeTicks + last.durTicks;
         return end > start ? (int64_t)(((end - start) * 1000ULL) / m_info.timescale) : 0;
+    }
+
+    /// The demand hook's real question: how much PLAYABLE (contiguous) window sits ahead of the cursor, stopping at
+    /// the first hole rather than spanning across one the way AheadDurationMs does. AheadDurationMs stays as-is for
+    /// the ledger/diagnostics (it answers "what is the outer span of what's buffered", which is what a status line
+    /// wants); this is what the feeder should actually gate fetching on. See fgpr::ContiguousAheadMs (SegmentStore.h)
+    /// for the algorithm.
+    int64_t ContiguousAheadMs()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return ContiguousAheadMsLocked();
+    }
+    int64_t ContiguousAheadMsLocked() const
+    {
+        return fgpr::ContiguousAheadMs(m_samples, m_next, m_info.timescale);
     }
     int64_t NextSampleTimeMs()
     {

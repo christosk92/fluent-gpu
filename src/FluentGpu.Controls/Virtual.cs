@@ -13,31 +13,31 @@ public static class Virtual
 {
     /// <summary>A vertically-virtualized uniform list (the WaveeMusic track-list shape).</summary>
     public static VirtualListEl List(int itemCount, float itemExtent, Func<int, Element> renderItem,
-                                     Func<int, string>? keyOf = null, int overscan = 4)
+                                     Func<int, string>? keyOf = null)
         => new()
         {
             ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RenderItem = renderItem,
-            KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            KeyOf = keyOf, Grow = 1f,
             ScrollLineDip = itemExtent,   // one wheel "line" = one row (ScrollState.LineDip, S6)
         };
 
     /// <summary>A vertically-virtualized uniform card GRID (album/artist shelves) — virtualizes by row.</summary>
     public static VirtualListEl Grid(int itemCount, int columns, float itemHeight, float gap, Func<int, Element> renderItem,
-                                     Func<int, string>? keyOf = null, int overscan = 2)
+                                     Func<int, string>? keyOf = null)
         => new()
         {
             ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RenderItem = renderItem,
-            KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            KeyOf = keyOf, Grow = 1f,
             ScrollLineDip = itemHeight + gap,   // one wheel "line" = one grid row pitch
         };
 
     /// <summary>A virtualized collection with ANY custom <see cref="IVirtualLayout"/> you supply.</summary>
     public static VirtualListEl Custom(int itemCount, IVirtualLayout layout, Func<int, Element> renderItem,
-                                       Func<int, string>? keyOf = null, int overscan = 4, bool horizontal = false)
+                                       Func<int, string>? keyOf = null, bool horizontal = false)
         => new()
         {
             ItemCount = itemCount, ItemLayout = layout, RenderItem = renderItem,
-            KeyOf = keyOf, Overscan = overscan, Horizontal = horizontal, Grow = 1f,
+            KeyOf = keyOf, Horizontal = horizontal, Grow = 1f,
         };
 
     /// <summary>A virtualized collection over ANY variable-extent <see cref="IMeasuredVirtualLayout"/> (E11-L0): rows
@@ -45,11 +45,11 @@ public static class Virtual
     /// scroll anchor across corrections. The layout is STATEFUL — create it once (hoist in a <c>UseMemo</c>) and
     /// reuse it across renders.</summary>
     public static VirtualListEl Measured(int itemCount, IMeasuredVirtualLayout layout, Func<int, Element> renderItem,
-                                         Func<int, string>? keyOf = null, int overscan = 4, bool horizontal = false)
+                                         Func<int, string>? keyOf = null, bool horizontal = false)
         => new()
         {
             ItemCount = itemCount, ItemLayout = layout, RenderItem = renderItem,
-            KeyOf = keyOf, Overscan = overscan, Horizontal = horizontal, Grow = 1f,
+            KeyOf = keyOf, Horizontal = horizontal, Grow = 1f,
         };
 
     /// <summary>The WinUI <c>LinedFlowLayout</c> photo-wall (ItemsView's signature layout): uniform-height lines,
@@ -57,12 +57,12 @@ public static class Virtual
     /// the returned element's <see cref="VirtualListEl.ItemLayout"/> or hoist your own <see cref="LinedFlowLayout"/>.</summary>
     public static VirtualListEl LinedFlow(int itemCount, float lineHeight, Func<int, Element> renderItem,
                                           Func<int, float>? aspectRatio = null, float lineSpacing = 0f, float minItemSpacing = 0f,
-                                          Func<int, string>? keyOf = null, int overscan = 8)
+                                          Func<int, string>? keyOf = null)
         => new()
         {
             ItemCount = itemCount,
             ItemLayout = new LinedFlowLayout(lineHeight, aspectRatio, lineSpacing, minItemSpacing),
-            RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            RenderItem = renderItem, KeyOf = keyOf, Grow = 1f,
             ScrollLineDip = lineHeight + lineSpacing,   // one wheel "line" = one flow line pitch
         };
 
@@ -72,37 +72,37 @@ public static class Virtual
     /// <see cref="GroupedListVirtualLayout"/> (via <paramref name="layout"/>) for <c>StickyHeaderIndexAt</c>.</summary>
     public static VirtualListEl GroupedList(int itemCount, int[] headerIndices, float headerExtent, float itemEstimate,
                                             Func<int, Element> renderItem, out GroupedListVirtualLayout layout,
-                                            Func<int, string>? keyOf = null, int overscan = 4)
+                                            Func<int, string>? keyOf = null)
     {
         layout = new GroupedListVirtualLayout(headerIndices, headerExtent, itemEstimate);
         return new VirtualListEl
         {
             ItemCount = itemCount, ItemLayout = layout, RenderItem = renderItem,
-            KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            KeyOf = keyOf, Grow = 1f,
         };
     }
 
     /// <summary>Uniform-row grid with ITEM SPANNING (hero-as-first-row): <paramref name="spanOf"/> returns each item's
     /// column span (clamped 1..columns); items pack row-major and wrap when a span doesn't fit.</summary>
     public static VirtualListEl SpanGrid(int itemCount, int columns, float rowHeight, float gap, Func<int, int> spanOf,
-                                         Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 2)
+                                         Func<int, Element> renderItem, Func<int, string>? keyOf = null)
         => new()
         {
             ItemCount = itemCount,
             ItemLayout = new SpanningGridVirtualLayout(columns, rowHeight, gap, spanOf),
-            RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Grow = 1f,
+            RenderItem = renderItem, KeyOf = keyOf, Grow = 1f,
             ScrollLineDip = rowHeight + gap,   // one wheel "line" = one row pitch
         };
 
     /// <summary>A HORIZONTALLY-scrolling uniform card grid (a shelf <paramref name="rows"/> cells tall) — the
     /// horizontal variant of <see cref="Grid"/>; virtualizes by column.</summary>
     public static VirtualListEl HorizontalGrid(int itemCount, int rows, float itemWidth, float gap, Func<int, Element> renderItem,
-                                               Func<int, string>? keyOf = null, int overscan = 2)
+                                               Func<int, string>? keyOf = null)
         => new()
         {
             ItemCount = itemCount,
             ItemLayout = new HorizontalGridVirtualLayout(rows, itemWidth, gap),
-            RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Horizontal = true, Grow = 1f,
+            RenderItem = renderItem, KeyOf = keyOf, Horizontal = true, Grow = 1f,
             ScrollLineDip = itemWidth + gap,   // one wheel "line" = one column pitch (main axis is X)
         };
 
@@ -111,10 +111,10 @@ public static class Virtual
     /// zero keys. Express anything that varies by index as a reactive bind (<c>TextBind</c>/<c>FillBind</c>/
     /// <c>SourceBind</c>/<c>PlaceholderBind</c>), never a captured value. The fastest path for huge uniform lists
     /// (the WaveeMusic 100k track list under a scrollbar thumb-drag).</summary>
-    public static VirtualListEl ListBound(int itemCount, float itemExtent, Func<IReadSignal<int>, Element> row, int overscan = 4)
-        => new() { ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RowBind = row, Overscan = overscan, Grow = 1f, ScrollLineDip = itemExtent };
+    public static VirtualListEl ListBound(int itemCount, float itemExtent, Func<IReadSignal<int>, Element> row)
+        => new() { ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RowBind = row, Grow = 1f, ScrollLineDip = itemExtent };
 
     /// <summary>Signals-first BOUND uniform card grid — <see cref="ListBound"/> semantics over <see cref="GridVirtualLayout"/>.</summary>
-    public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func<IReadSignal<int>, Element> row, int overscan = 2)
-        => new() { ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Overscan = overscan, Grow = 1f, ScrollLineDip = itemHeight + gap };
+    public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func<IReadSignal<int>, Element> row)
+        => new() { ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Grow = 1f, ScrollLineDip = itemHeight + gap };
 }

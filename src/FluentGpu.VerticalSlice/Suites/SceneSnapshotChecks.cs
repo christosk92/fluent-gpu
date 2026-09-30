@@ -14,7 +14,6 @@ static class SceneSnapshotChecks
         SteadyAllocation();
         ReferencedImageCapture();
         StringRetentionSteady();
-        ScrollBindCaptureGated();
         IncrementalCoast();
         IncrementalGapUnion();
         IncrementalAddRemoveParity();
@@ -51,16 +50,17 @@ static class SceneSnapshotChecks
         return parity;
     }
 
-    /// <summary>One kernel scroll write, wired exactly like <c>SceneScrollSink.Apply</c>: the offset through the
-    /// token-gated <c>ApplyMotion</c>, the content node's transform, and the TransformDirty/PaintDirty marks. This is
-    /// the whole of what a coast frame does to the store.</summary>
+    /// <summary>One bare-store scroll write, sized exactly like a coast frame: sets the viewport's RESULT columns
+    /// directly (scroll rework — there is no kernel/token gate any more; in the host the ONE writer is
+    /// <c>AppHost.RunScrollFrame</c> evaluating the closed-form plan) and re-poses the content node's transform, the
+    /// same shape as <c>AnimSuite.TestApplyScroll</c>. <paramref name="frame"/> is unused (no per-frame token to mint
+    /// any more) — kept so call sites did not need touching.</summary>
     static void ScrollTo(SceneStore scene, NodeHandle viewport, NodeHandle content, float offsetY, uint frame)
     {
-        ref var sc = ref scene.ScrollRefByIndex((int)viewport.Raw.Index);
-        sc.ApplyMotion(FluentGpu.Scroll.SceneScrollSink.ScrollWriteToken.Mint(frame),
-            new FluentGpu.Scroll.ScrollWrite(0f, offsetY, 0f, 0f, 1f, 0f, 0f,
-                FluentGpu.Scroll.ScrollActivity.Ballistic, default, FluentGpu.Scroll.ScrollWriteMask.OffsetY, 0f,
-                FluentGpu.Scroll.ScrollWriteSource.Tick));
+        ref ScrollState sc = ref scene.ScrollRef(viewport);
+        sc.Offset = offsetY;
+        sc.Motion = new FluentGpu.Scroll.Runtime.ScrollMotionState(FluentGpu.Scroll.Motion.MotionKind.Drag, 0f, UserDriven: true);
+        sc.Velocity = 0f;
         scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(0f, -offsetY);
         scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
@@ -581,25 +581,8 @@ static class SceneSnapshotChecks
         strings.Release(text); strings.Release(family);
     }
 
-    // perf plan item 3: ScrollBinds.CaptureChain is gated on NodeFlags.Scrollable — a chain head can only ever be
-    // keyed by a scroller's node index (ScrollBind.cs's Add() keys _headByVp by the enclosing viewport), so probing a
-    // non-scrollable node was always a guaranteed miss. Proven by an invocation counter, not a timing comparison.
-    static void ScrollBindCaptureGated()
-    {
-        var scene = new SceneStore();
-        var root = scene.CreateNode(1);
-        scene.Root = root;
-        scene.ScrollRef(root);   // marks root NodeFlags.Scrollable
-        for (int i = 0; i < 500; i++)
-        {
-            var child = scene.CreateNode(2);
-            scene.AppendChild(root, child);
-            scene.Paint(child).VisualKind = VisualKind.Box;
-        }
-        var snapshot = new SceneRecordingSnapshot();
-        snapshot.Capture(scene);
-        Check("gate.scene-snapshot-scrollbind-gated", snapshot.ScrollBinds.CaptureChainCalls == 1,
-            $"CaptureChain ran {snapshot.ScrollBinds.CaptureChainCalls} times for 1 scrollable node + 500 non-scrollable children; expected exactly 1.");
-        snapshot.ReleaseResources();
-    }
+    // gate.scene-snapshot-scrollbind-gated (DELETED, scroll rework) — asserted ScrollBinds.CaptureChainCalls, the
+    // invocation counter for the old chain-head capture gated on NodeFlags.Scrollable. SceneRecordingSnapshot.ScrollBinds
+    // is gone; the snapshot now carries ScrollCoverage (ScrollCoverageTable) instead, which has no equivalent
+    // per-call counter to probe. No replacement invariant to assert against the new API — deleted rather than ported.
 }

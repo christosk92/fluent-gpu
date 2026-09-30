@@ -42,6 +42,7 @@ internal static class FluentPacingTrace
         public uint DwmDroppedDelta;
         public uint DwmMissedDelta;
         public uint DwmLateDelta;
+        public uint DwmSampleSeq;   // the DWM sample the three deltas belong to: sum each sequence once
         public double LatencyWaitMs;
         public long PhaseGatedFramesDelta;
         public long PhaseGateCeilingEscapesDelta;
@@ -92,6 +93,7 @@ internal static class FluentPacingTrace
             DwmDroppedDelta = ps.DwmFramesDroppedDelta,
             DwmMissedDelta = ps.DwmFramesMissedDelta,
             DwmLateDelta = ps.DwmFramesLateDelta,
+            DwmSampleSeq = ps.DwmSampleSeq,
             LatencyWaitMs = ps.LatencyWaitMs,
             PhaseGatedFramesDelta = host.PhaseGatedFrames - _gatedAtBegin,
             PhaseGateCeilingEscapesDelta = host.PhaseGateCeilingEscapes - _escapesAtBegin,
@@ -148,6 +150,8 @@ internal static class FluentPacingTrace
             writer.Write(s.DwmMissedDelta.ToString(CultureInfo.InvariantCulture));
             writer.Write(",\"dwmLateDelta\":");
             writer.Write(s.DwmLateDelta.ToString(CultureInfo.InvariantCulture));
+            writer.Write(",\"dwmSampleSeq\":");
+            writer.Write(s.DwmSampleSeq.ToString(CultureInfo.InvariantCulture));
             writer.Write(",\"latencyWaitMs\":");
             writer.Write(s.LatencyWaitMs.ToString("0.####", CultureInfo.InvariantCulture));
             writer.Write(",\"phaseGatedFramesDelta\":");

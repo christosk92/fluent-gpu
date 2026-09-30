@@ -8,7 +8,8 @@ see until you name them.
 
 ## 1. Bind-shape flip on a reused node
 
-**Mechanism.** Bind wiring is **mount-only**. A component with two branches — an idle branch that set
+**Mechanism.** A binding is **created only at mount** (a re-render re-wires it bound→bound, but never binds a
+static channel or unbinds a bound one). A component with two branches — an idle branch that set
 `Transform` to a static value and an active branch that set it to a bound `Prop.Of(...)` — reused the same node, so
 whichever branch mounted first decided forever whether that channel was bound. The insertion preview mounted idle,
 never got its transform bind, and parked the gap card at viewport y = 0 while the line and the gap were elsewhere.

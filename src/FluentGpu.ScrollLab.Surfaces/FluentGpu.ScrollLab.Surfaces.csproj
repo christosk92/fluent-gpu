@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <!-- The Scroll Lab's measurement surfaces (docs/plans/scroll-lab-implementation.md §1): the lists the lab scrolls,
+       as a portable library so FluentGpu.VerticalSlice can mount the SAME surfaces headlessly. Engine + Controls only —
+       it MUST stay TerraFX-free (the VerticalSlice portability guard covers its transitive closure). -->
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+  </ItemGroup>
+</Project>

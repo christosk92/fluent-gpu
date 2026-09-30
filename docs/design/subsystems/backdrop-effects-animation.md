@@ -14,7 +14,8 @@ contract only where backdrop/animation must coexist with it (z-order, the same-C
 > fold-and-write-once compose pass + the declarative surface (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout`) +
 > reduced-motion-as-a-value. The old phase-7 **`AnimTrack`** model + sub-stepped Euler + `InteractionAnimator` + the
 > `AdvanceBrushAnims` ticker are **deleted** (hover/press/brush are now `HoverFade`/`PressFade`/`BrushFade` slab channels);
-> `ConnectedAnimation` → `DetachedAnimSlab` / `SceneRecorder.RecordDetached` is wired behind `FG_DETACHED_FLY`. **The
+> `ConnectedAnimation` → `DetachedAnimSlab` / `SceneRecorder.RecordDetached` is wired behind the runtime property
+> `ConnectedAnimation.DetachedFly` (set in code, default off). **The
 > implemented design — now the canonical as-built reference for §5's animation contract — is
 > [`docs/plans/animation-engine-rework-design.md`](../../docs/plans/animation-engine-rework-design.md)** (verified by 521
 > VerticalSlice gates). The `AnimTrack`/Euler detail in §5 below is retained for the backdrop/effects-coexistence context
@@ -30,9 +31,10 @@ contract only where backdrop/animation must coexist with it (z-order, the same-C
 - HOOKS/RECONCILE: `subsystems/reconciler-hooks.md` (the hook cell table, `DepKey`/`DepDeps`, effect
   timing, synchronous-on-unmount `RunCleanups`), `architecture-spec.md` §5.6 (structural enter/move/exit
   animations re-routed through this subsystem's handle-based API).
-- RENDERER: `subsystems/gpu-renderer.md` §7 (PushLayer/PopLayer + LayerPool offscreen RTs), §0/§5.2
-  (`IEffectRunner` = D2D1/FXC behind a seam, the optional `Effects.D2D1` leaf, premul-alpha trap),
-  `architecture-spec.md` §5.2 (`OQ-7` resolved to the engine-owned **persistent canvas RT**).
+- RENDERER: `subsystems/gpu-renderer.md` §7 (PushLayer/PopLayer + the surface pool), §13.1 (the retained tiled
+  composite — effect slices, the composite-time backdrop, retained self-blur surfaces), §0/§5.2 (`IEffectRunner` =
+  D2D1/FXC behind a seam, the optional `Effects.D2D1` leaf, premul-alpha trap), `architecture-spec.md` §5.2 (`OQ-7`,
+  resolved first to a persistent canvas RT and superseded 2026-09 by the retained tiled composite).
 - ZERO-ALLOC/AOT: `dotnet10-csharp14-zero-alloc.md` (`[InlineArray]`, `allows ref struct` sink walk,
   C#14 compound assignment, `[LibraryImport]` for flat C, `[GeneratedComInterface]` for cold/warm COM,
   hand-vtable only on the generated hot path).
@@ -49,9 +51,9 @@ reason. Open questions are flagged `OQ-n`. New cross-subsystem contract addition
 > *window* Mica/Acrylic is the OS compositor's pixels behind a transparent root — a pure PAL seam
 > (`IBackdropSource`), **zero renderer change**; (2) the *editorial* backdrop is a **persistent baked
 > texture** the app addresses as an ordinary `ImageHandle`, owned by a private cap-2 LRU and a separately-
-> keyed blurred-source cache, **not** the shared per-frame `LayerPool`; (3) *in-app* Acrylic is a live
-> two-pass FrameGraph step that snapshots the persistent **canvas RT** behind the overlay, blurs it, and
-> composites — gated on the `OQ-7` canvas-RT decision (resolved in favor of the canvas RT). All offscreen
+> keyed blurred-source cache, **not** the shared per-frame surface pool; (3) *in-app* Acrylic is a live
+> composite-time backdrop — a mini-composite of the retained tiles beneath the overlay, blurred and tinted, with no
+> back-buffer read (as built: `gpu-renderer.md` §13.1e; it superseded the canvas-RT snapshot). All offscreen
 > pixel work routes through one `IEffectRunner` seam (D2D1 on Windows, MPS later), so Metal is a leaf swap.
 > **Connected and implicit animation** are entirely phase-7 `AnimTrack` writes into `LocalTransform`,
 > `Opacity`, and a new cold `EffectAux` column — **always Transform/PaintDirty, never LayoutDirty** — with
@@ -263,19 +265,22 @@ a newly-`Ready` backdrop is the standard `ImageRealization.ContentEpoch`-bump �
 `BackdropRef` is a tiny cold side-table row `{BakeTicket ticket; ImageHandle baked; BackdropState state}`
 attached only to the handful of backdrop nodes (not a per-node column).
 
-### 2.3 In-app live Acrylic — an explicit two-pass FrameGraph step (IMPLEMENTED + retained-backdrop cache)
+### 2.3 In-app live Acrylic — a composite-time backdrop over the retained tiles (AS-BUILT 2026-09)
 
 Toast / add-to-playlist / overlay Acrylic samples **live content behind the overlay**. The losing option —
-"sample the live canvas RT under the overlay in the same pass" — has a read-after-write hazard (you cannot
-SRV-sample the RT you are simultaneously rendering into). MADE: an explicit two-pass step.
+"sample the render target under the overlay in the same pass" — has a read-after-write hazard (you cannot
+SRV-sample the RT you are simultaneously rendering into). As built (the retained tiled composite,
+`gpu-renderer.md` §13.1e) the hazard does not arise: an acrylic node is cut as an effect slice, and the composite
+paints a `CompositeKind.Backdrop` item before it — a **mini-composite of the clear colour and every item painted
+before it** (their retained tiles are SRVs) under the surface's rounded rect grown by the blur chain's reach, then the
+dual-Kawase chain below, then the AcrylicBrush tint / luminosity / noise recipe (`AcrylicRecipe`). **Zero back-buffer
+reads.** The earlier realization — pass A snapshotting a region of the persistent canvas RT at the `PushLayer`, then
+blurring and compositing (`AcrylicCompositor`) — is deleted with the canvas.
 
 ```
-PushLayer{Effect=AcrylicBlur, Bounds=behindRegion}
-   ── pass A: SNAPSHOT the behind-region of the persistent CANVAS RT into a small layer RT
-              (the existing child-into-layer-RT machinery from gpu-renderer §7)
-   ── BARRIER: layer RT  RTV → SRV
-   ── pass B: IEffectRunner.Blur(small sigma, cheap)  +  tint quad  → composite the overlay above
-PopLayer
+composite plan:  … items painted before the acrylic …  →  Backdrop(rect, radii, recipe)  →  the acrylic slice's tiles
+Backdrop:        mini-composite of everything beneath (rect ⊕ AcrylicKawaseMath.PadPx) → Kawase down × n → up × n
+                 → tint + luminosity + noise → composite under the rounded rect
 ```
 
 **Blur passes B/C — a dual-Kawase down/up chain (Wave B; ARM SIGGRAPH 2015 dual filter, shipped by KWin / picom /
@@ -292,17 +297,17 @@ The tap offsets are computed inline in HLSL from one cbuffer texel-size × offse
 indexing), and every sample is clamped to the level's used sub-rect. ~5% reads / 2% writes vs a full-res Gaussian at
 large σ, visually indistinguishable (49.78 dB PSNR vs 97×97 Gaussian).
 
-**Snapshot (pass A, down = 1) + pad.** Pass A snapshots at **full region resolution** (`down = 1`) and lets the chain
-do all the halving, so the pyramid levels are exactly ½, ¼, ⅛, 1/16 of the region and the pad/support math stays in
-clean full-resolution units; the finest ½ level also preserves the crisp near-edge gradient a pre-halved snapshot would
-soften. The snapshot pad (pass A inflation) is the chain's blur support `AcrylicKawaseMath.PadPx = ceil(2.5·offset·2^iterations)
-+ 2^iterations` on every side, clamped to the canvas — the actual geometric reach of the down+up passes, not a fixed
-constant. `AcrylicKawaseMath` owns the σ→chain + support + level-dim contract (headless-gated, VerticalSlice
-`gate.kawase.sigmaMapping` / `gate.kawase.padCoversSupport`). The retained-backdrop cache's tight damage region and
-quantized stamp (E7/E8/E9 below) are unchanged — only the miss-path blur work changed.
+**Source (full resolution) + pad.** The mini-composite is built at **full region resolution** and the chain does all
+the halving, so the pyramid levels are exactly ½, ¼, ⅛, 1/16 of the region and the pad/support math stays in clean
+full-resolution units; the finest ½ level also preserves the crisp near-edge gradient a pre-halved source would soften.
+The source pad is the chain's blur support `AcrylicKawaseMath.PadPx = ceil(2.5·offset·2^iterations) + 2^iterations` on
+every side, clamped to the window — the actual geometric reach of the down+up passes, not a fixed constant.
+`AcrylicKawaseMath` owns the σ→chain + support + level-dim contract (headless-gated, VerticalSlice
+`gate.kawase.sigmaMapping` / `gate.kawase.padCoversSupport`); the D3D12 leaf runs the chain as `SliceCompositor`'s
+`KawaseDown`/`KawaseUp` pixel-shader passes.
 
-**The self-blur (own-content) path stays separable.** `OpacityLayerCompositor.BlurInPlace` (a group blurring its OWN
-rendered content, not the live backdrop) keeps the Flutter-Impeller / Skia **downsample-then-separable-Gaussian**
+**The self-blur (own-content) path stays separable.** A self-blur (an effect slice or inline group blurring its OWN
+rendered content, not the live backdrop — `gpu-renderer.md` §7.1) keeps the Flutter-Impeller / Skia **downsample-then-separable-Gaussian**
 schedule owned by `AcrylicBackdropMath`: `down = pow2up(ceil(sigmaPhys / 4))` (clamped `[1,16]`) so the intermediate's
 effective texel sigma `= sigmaPhys / down ≤ 4`, then a separable Gaussian rebuilt for that texel sigma (≤ 7 bilinear taps)
 per `(sigma,down)` bucket from `AcrylicBackdropMath.BuildKernel` (headless-gated, VerticalSlice `64n`/`64n2`/`64n3`;
@@ -316,77 +321,17 @@ public readonly struct AcrylicParams        // packed into EffectChain payload (
   public readonly float LuminosityOpacity; public readonly float NoiseOpacity; }
 ```
 
-- **Dependency on `OQ-7` (resolved + LANDED):** this requires the **engine-owned persistent canvas RT** (`gpu-
-  renderer.md` §13/`architecture-spec.md` §5.2 ruled in favor of it) — now live in `Rhi.D3D12 AcrylicCompositor`
-  (the partial-present surface **and** the live-Acrylic snapshot source). `UseAcrylic` renders the real two-pass
-  blur; the flat-tint degrade is the headless / non-primary-swapchain path only.
-- **Cost / the retained-backdrop cache (LANDED):** per-frame re-blur is the heaviest of the three at scroll
-  velocity, so the snapshot+blur is now **cached per overlay** and reused across frames — `AcrylicCompositor`
-  pins the blurred RT keyed by `PushLayerCmd.LayerId` (the scene node handle, packed index|gen). A frame reuses
-  the cached blur (passes A/B/C skipped) unless **(a)** the layer's geometry changed (rect/sigma/scale/canvas —
-  the `AcrylicBackdropMath.BackdropStamp`) or **(b)** this frame's **damage region** intersects the layer's
-  damage-test region. The damage region (`SceneRecorder` → `FrameInfo.Damage`) is the union of the device bounds of
-  nodes whose **transform** moved this frame, EXCLUDING a scroll viewport's own content (it draws *over* the
-  backdrop) — so scrolling INSIDE a stationary overlay reuses its backdrop (the fix for low-FPS in-popup scroll),
-  while a top overlay correctly ignores the bottom player-bar's ambient motion (region-aware). The decision is
-  `AcrylicBackdropMath.BackdropReusable` (headless-gated, VerticalSlice 64n5).
-- **Region-aware reuse contract — three correctness refinements (LANDED, gates `gate.acrylic.*`):**
-  - **Quantized stamp (E7).** The `BackdropStamp` rect + scale are snapped to the integer **device grid** (the
-    biased `BlurPinKey.RoundGrid`, +1/512, whose 1-ULP-straddle rationale applies verbatim) and the scale bucketed
-    to 1/1024 in the **cache key only** — the composite still positions from the exact `L.DeviceRect`. Without this,
-    a presence-spring settle's sub-pixel jitter or a fractional-DPI 1-ULP wobble tripped the bit-exact stamp compare
-    and re-blurred **every** frame permanently. Any real ≥1-device-px move / resize / sigma / source / clip change
-    still trips it. Cached stamps are stored post-quantize so compares are homogeneous.
-  - **Tight damage-test region (E8).** Reuse tests damage against the **un-inflated** rect + `DamageTestMarginPx`
-    (`AcrylicBackdropMath.SnapshotRegionTight`), **not** the ±(`kernelRadiusTexels·down` ≈ 3·sigmaPhys) snapshot region
-    a MISS still snapshots/blurs. So a node animating anywhere in the ~80–192 px blur halo but outside rect+8 no longer
-    forces a re-blur. **Honest scope:** sub-halo motion *outside* rect+8 but *inside* the σ-support can leave invisible edge
-    staleness under σ≥14 (the blurred fringe samples last frame's backdrop) — imperceptible through frosted glass,
-    the same "v1 at rest" tradeoff as the paint-only case below.
-  - **Own-subtree damage carve-out (E9).** Damage emitted by an acrylic layer's **own subtree** (itself + every
-    descendant, i.e. everything between its `PushLayer` and `PopLayer`) is drawn *on top of* its snapshot — which was
-    captured *before* its `PushLayer` — so it can **never** invalidate that snapshot and is always ignorable for that
-    layer's reuse test. This fixes presence fades self-damaging (`AnimEngine.Compose` marks `TransformDirty` even for
-    opacity-only channels) and animating content inside an acrylic pill forcing a per-frame re-blur; genuine ≥1 px
-    moves/resizes of the layer are still caught by the quantized stamp. **Mechanism:** `SceneRecorder` augments the
-    single frame-damage union with a pooled, fixed-capacity ordered **damage-entry array** (append in Walk emission
-    order; overflow ⇒ fall back to the union, no carve-out — the safe prior behavior). A layer's own-subtree entries
-    are the contiguous range `[entryCountAtPush, entryCountAtPop)`, recorded per cached acrylic; post-walk the
-    recorder bakes that layer's **external** damage rect (`AcrylicBackdropMath.ExternalDamageUnion` — union of entries
-    *outside* the range) **plus a nonzero frame epoch** into its `PushLayerCmd` (`OwnDmg*` + `DamageEpoch`). The
-    compositor uses that per-layer rect only when the baked epoch matches `FrameInfo.FrameEpoch`; a **span-copied**
-    (reused-subtree) layer carries a stale epoch and safely falls back to the whole-frame `FrameInfo.Damage` union, so
-    a copied `PushLayerCmd` can never apply a stale carve-out. `pendingStructuralDamage` seeds land before any layer's
-    push ⇒ they are outside every own-range ⇒ never carved (global), as intended.
-  - **Scroll-cadence hold (E10).** E7–E9 make a *stationary* backdrop reusable; they cannot help a **scrolling**
-    one — a scrolling page emits damage every frame *and* that damage genuinely overlaps a chrome acrylic's tight
-    region, so the cache misses at frame rate and the whole A/B/C chain re-runs per frame (measured: the dominant
-    component of a ~5 ms composite pass on the Wavee scroll path). So while a user scroll is live, a layer that
-    **already has** a retained snapshot of the **same** geometry keeps compositing it despite damage, refreshing only
-    every `AcrylicScrollHold.ScrollRefreshCadence`-th frame (4 ⇒ 30 Hz at 120 Hz, ≤25 ms of backdrop lag). This is the
-    same lever the self-blur groups already pull (`SceneRecorder`'s `holdBlur`), and WinUI likewise decouples acrylic
-    refresh from frame rate: a heavily-blurred backdrop is low-frequency by construction, so the blur destroys exactly
-    the detail that would make ≤3 frames of lag legible under fast-moving content.
-    **Carrier:** the hold is frame-global (AppHost's ~0.12 s `SelfBlurHold` latch, `holdSelfBlurForScroll`) and rides
-    the RHI seam as **`FrameInfo.ScrollHold`** — decided on the UI thread as the frame is published, so it describes
-    the PUBLISHED frame rather than the UI thread's current instant, exactly like the `Damage`/`FrameEpoch` beside it.
-    Deliberately **not** a `PushLayerCmd` bit: the flag is not a per-node property, and putting it in the byte stream
-    would make it a span-reuse input (`ComputeSpanInputSig` keys on `userScrollActive`, not on the global hold), so a
-    span-copied acrylic could carry a stale flag or the hold flip would re-key every span.
-    **Never manufactures a backdrop:** no retained snapshot (first frame, post-resize, `LayerId == 0`) blurs
-    immediately, and a changed stamp blurs immediately — that snapshot belongs to a different rect/sigma/scale/source,
-    so reusing it would *misplace* the frost, not merely date it. The counter lives per retained entry (per `LayerId`,
-    beside its `BackdropStamp` — unique across the main tree and every popup stream, so no hold state leaks between
-    targets); a **nonzero** counter doubles as the "known stale" marker that forces a full refresh on the first frame
-    after the hold releases, even when that frame is damage-clean (the plain reuse test would otherwise report a HIT
-    and freeze the staleness). The decision is `AcrylicScrollHold.ShouldRefresh` (portable + headless-gated, VerticalSlice
-    `gate.acrylic.scrollHoldCadence`); a held frame takes the ordinary cache-hit composite, so it is `CatComposite` cost
-    with passes A/B/C skipped — nothing new to attribute in the GPU timing split.
-- **Honest limitation (paint stays "v1 at rest"):** paint-only / layout-only changes *directly behind* a stationary
-  overlay are NOT in the damage set (`PaintDirty` is sticky and `LayoutDirty` clears pre-record in the current
-  single-thread engine), so they refresh on the next motion / re-open — barely perceptible through frosted glass.
-  Scroll-velocity Acrylic over simultaneously-moving video still wants the render-thread seam (`hardened-v1-plan.md`
-  §6) — the named v2 item.
+- **Retention (AS-BUILT 2026-09).** The blurred backdrop is **retained across turns keyed by everything beneath it**
+  — the items before it (kind, placement, alpha, clip, feather, each tile's surface + raster serial), the clear
+  colour, the region and the Kawase chain (`gpu-renderer.md` §13.1e). A turn that moved or re-rastered nothing beneath
+  re-draws the retained result; a turn that did re-blurs it. Scrolling content INSIDE a stationary overlay is above the
+  backdrop and does not touch the key. The earlier `LayerId`-keyed cache and its region-aware reuse contract (the
+  quantized `BackdropStamp`, the tight damage-test region, the own-subtree damage carve-out baked into
+  `PushLayerCmd.OwnDmg*`/`DamageEpoch`, and the `AcrylicScrollHold` scroll-cadence hold riding `FrameInfo.ScrollHold`)
+  are **deleted** with `AcrylicCompositor`; the `PushLayerCmd` fields that fed them are no longer read by any backend.
+- **Honest cost.** Content scrolling BENEATH a backdrop changes the key every frame, so the backdrop re-blurs at frame
+  rate while it scrolls; the retained-tiles plan names this its acrylic-over-scroll risk and estimates ~0.1–0.2 ms for a
+  1700×100 bar — not measured.
 - `VisualKind.Backdrop` + `DrawBackdropCmd` (already stubs in `architecture-spec.md` §4.5) carry the live
   case; this subsystem fills in the two-pass schedule, not a new opcode.
 
@@ -474,9 +419,9 @@ realized today as a per-node **self-blur** (the element's OWN pixels, CSS `filte
 acrylic above): a dense `NodePaint.BlurSigma:float` column (default 0; owned by `scene-memory.md`), animated by
 `AnimChannel.BlurSigma` (PaintDirty only, never LayoutDirty). When σ > 0 the recorder wraps the node's subtree in a
 **`PushLayer{Blur}`** (a new `LayerKind.Blur`, registered with the DrawList opcodes in `gpu-renderer.md`): the subtree
-renders to a pooled offscreen RT, gets a separable **dynamic-σ** Gaussian (animating, so weights are computed per-frame,
-unlike the acrylic compositor's fixed 30-DIP kernel), and composites once at the group alpha — the same offscreen-layer
-machinery as `OpacityGroup`, run by `OpacityLayerCompositor`. The **Expressive Motion Kit** (`MotionRecipes.*`,
+gets a separable **dynamic-σ** Gaussian (animating, so weights are computed per-frame) and composites once at the group
+alpha — as built an effect slice composited with its σ (or an inline group inside a tile past the effect budget), the
+same machinery as an opacity group (`gpu-renderer.md` §7.1 / §13.1e). The **Expressive Motion Kit** (`MotionRecipes.*`,
 `docs/guide/motion-recipes.md`) adopts transitions.dev's vocabulary on this engine: the named curves `Easing.SmoothOut`
 (`cubic-bezier(0.22,1,0.36,1)`), `Overshoot`, `OvershootStrong`, `Pop` (added to the `Foundation.Easing` motion
 vocabulary this doc owns), the `Dsl.Expressive` token set (durations/distances/scales/blur — distinct from the WinUI
@@ -496,10 +441,11 @@ While the source or bake is pending, the node draws that crisp source as its fal
 publishes, the same node switches to the persistent derived texture. Steady paint is therefore one `DrawImageCmd` and
 scroll changes only its transform — no `PushLayer`, intermediate RT, subtree replay, or Gaussian work.
 
-The D3D12 lane records at most one bake per primary-swapchain submit and is paused while scroll is active. It runs a
-downsample + horizontal Gaussian + vertical Gaussian + upsample sequence through two **frame-banked** scratch pairs,
-then adopts the output into `ImageTextureStore` as an ordinary resident image. Readiness is published only after
-`ExecuteCommandLists`, so an async UI recorder cannot consume a producer that has not entered the direct queue. The
+The D3D12 lane (AS-BUILT 2026-09, `gpu-renderer.md` §13.1f) runs at most one bake per primary-swapchain submit on
+its own **COMPUTE queue**, never the frame's direct list: the source resampled to the output size, then the
+`AcrylicKawaseMath` dual-Kawase down/up chain as compute shaders, the last pass writing an RGBA8 UAV derivative that
+`ImageTextureStore` publishes behind the batch's fence. Readiness is a fence compare, never a wait — until the bake
+lands the node keeps drawing the crisp source. The
 image pipeline applies `ImageEl.ColorOverlay` and `ImageEl.Mask` in the same image shader; those visual treatments do
 not create effect layers and do not fork the baked-image cache key. Use dynamic `Element.Blur` only when the subtree
 pixels or sigma truly change over time; use `BakedBlurSpec` for immutable artwork/card frost.
@@ -513,80 +459,13 @@ swap) uses the Blur leg only on the ENTER half (`SoftReveal`); its exiting shimm
 alone**, because the shimmer is a page-sized subtree and a page-sized blur group is exactly the effect-layer cliff FA-1
 above warns about.
 
-**FA-2a (as-built — the cross-frame self-blur PIN cache + its position-independent key).** A self-blur whose subtree
-is byte-identical to a previous frame's reuses that frame's **retained, already-blurred pixels** (a "pin" — a small
-region-sized RT, the layer's device rect + the kernel's tap halo) instead of re-rendering + re-running the blur passes;
-a HIT is a single region composite. The halo is the ACTUAL support of the downsample schedule `BlurInPlace` runs —
-`SelfBlurRegion.TapRadius = KernelRadiusTexels(σ/down)·down` phys px (≈ 3σ; at σ ≤ 4 the un-capped `ceil(3σ) ≤ 12`),
-**not** the earlier hardcoded 32 px cap (which truncated a σ26 Gaussian to ~1.2σ — the self-blur now runs the full
-downsample-then-separable-Gaussian schedule of §2.3 rather than a full-res 32 px-capped kernel; VerticalSlice
-`gate.blur.selfBlurHaloCoversKernel` ties the halo to `AcrylicBackdropMath`, the schedule owner). The pin lives in `OpacityLayerCompositor`'s pool (render-thread-owned,
-`threading-render-seam.md`) and is keyed by a **position-INDEPENDENT content key** computed by the portable
-`FluentGpu.Render.BlurPinKey.TryCompute` (so the headless VerticalSlice can gate it).
-
-- **Key** = FNV-1a over `{ round(σ/0.5), round(DeviceRect.W), round(DeviceRect.H) }` (the absolute `DeviceRect.X/Y` is
-  **excluded**) **+** the subtree's op bytes with each op's `Transform.Dx/Dy` (and each `ClipCmd` rect origin) **rebased
-  to the layer origin and rounded to the integer grid** — `Dx → round(Dx − DeviceRect.X)`, `Dy → round(Dy − DeviceRect.Y)`.
-  Scale/rotation (`M11..M22`) fold bucketed at 1 % in the key; glyph text/color, the karaoke wipe `Split`, image id, …
-  fold **verbatim**. Rebasing is exact-under-translation because op `Rect`/`Bounds` are node-local (origin 0,0 — the
-  recorder emits `local` + a `world` transform) and all absolute position lives in `Transform.Dx/Dy`; the rounding is in
-  the recorder's DIP space and gates hit/miss granularity only (the compositor always places a HIT from the CURRENT
-  layer's `RegionBox`, so placement follows the true sub-pixel position — the key never yields a stale composite). A
-  **nested `PushLayer`** or any **unknown op** ⇒ `TryCompute` returns false ⇒ uncacheable ⇒ render normally (never a
-  stale pin). This replaced the old absolute-`DeviceRect` hash, which missed on every scroll.
-- **Key bucketing rationale.** Bucketed σ/scale in the identity stabilizes the key across consecutive animation frames
-  (lyrics DoF springs) so a pin mints once per bucket instead of every frame, without applied-radius stepping. Applied
-  σ/scale on a MISS stay exact; settle re-mint is pixel-exact at rest. Static σ/scale blurs round to a stable bucket.
-- **Invalidation contract.** A **HIT** (reuse the pin; no subtree render, no Gaussian) requires identical content bytes
-  **and** identical `round(device W/H)` **and** identical σ **and** identical rebased-rounded per-op positions — this
-  **includes** a pure scroll/translation and an opacity animation (opacity is applied at composite as `GroupAlpha`, not
-  in the key). A **CONTENT MISS** (render subtree + 2-pass Gaussian + re-mint) is any change to σ; to `round(device
-  W/H)` (an emphasis-scale step, DPI change, relayout, wrap); to glyph text/color/wipe-split/child structure; or a ≥1
-  device-unit change in any op's position **relative to the layer origin**. A **position-only move** that was a miss
-  under the old key is now a HIT. **`BlurCachePolicy` (`Normal`/`HoldIfCached`/`HoldOrSkipOnMiss`) documented miss
-  semantics apply to CONTENT misses only** — a position-only move is a HIT for every policy.
-- **Settle re-mint (exactness at rest).** On a would-be HIT where `PushLayerCmd.InMotion == 0` **and** the pin's
-  captured integer region origin differs from this frame's, one content-miss re-blur refreshes the pin at the exact rest
-  position; subsequent identical frames are byte-stable ⇒ skip-submit. (For a glyph-bearing subtree the glyph
-  `InMotion` field folds into the key and already forces this re-blur at the settle frame; `PushLayerCmd.InMotion` +
-  the origin check cover the non-glyph subtrees.)
-- **Edge-clamped region ⇒ cacheable at rest (size-exact).** The pin holds only the ON-CANVAS slice (`RegionBox` — now
-  the portable `SelfBlurRegion.RegionBox` — clamps the halo-inflated device rect to `[0,_w]×[0,_h]`, and a pin is copied
-  out of the canvas-sized scratch). The key is position-independent, so a partly-off-canvas strip *would* return a pin by
-  hash; the **size-exact `FindPin`** (the bullet below: `W==RegionBox.W && H==RegionBox.H`) makes that safe — a full
-  on-canvas pin (taller) can never be composited into the shorter clamped viewport, because the size mismatch is a MISS,
-  not a stretch. So a **STATIONARY edge-clamped row HITS its own clamped pin every frame** (identical key + identical
-  clamped `RegionBox` ⇒ no re-blur) — the fix for a dimmed lyrics row sitting at the window top/bottom re-running its
-  Gaussian every submit whenever anything else in the frame ticks. A clamped region hits **only at rest** (`InMotion==0`):
-  at rest the settle guard `PinOriginDiffers` (stored vs current captured origin) distinguishes clamp geometries — a
-  same-size top-edge vs bottom-edge pin has a different origin ⇒ no hit ⇒ one re-mint at the true position — but that
-  guard is skipped in motion, so a clamped strip **in motion** re-blurs rather than risk a same-size cross-clamp hit.
-  `OpacityLayerCompositor.RegionIsClamped` (`= SelfBlurRegion.IsClamped`) also gates **MINTING while in motion**: an
-  actively-scrolling clamped strip changes its clamp size ~1px/frame, so minting a fresh region-sized RT each frame is
-  churn for no hit (next frame's different size misses anyway) — the caller skips the mint there (`pinTag = 0` iff
-  `RegionIsClamped && InMotion`), falling back to a pixel-exact scissored render+blur (unchanged cost), and mints once
-  the row settles. **Honest scope:** a clamped strip *actively scrolling past an edge* still re-blurs per frame (its
-  size changes every frame); only the resting case caches. The full pin minted while fully on-canvas survives and serves
-  again once the row returns wholly on-canvas. Gated portably by `gate.blur.edgeClampedPinCaches` (the D3D12 pin lease
-  is a `--screenshot` golden).
-- **One pin per hash, size-exact hit.** At most one `BlurReady` pin ever carries a given `PinHash`: before (re)minting,
-  `RetainPinFromScratch` retires (fence-gated) any same-hash pin whose region size differs, and `FindPin` requires
-  `W == RegionBox.W && H == RegionBox.H` — a physical-size mismatch is a **MISS** (render + blur the exact region), never
-  a wrong-sized pin stretched onto the current viewport. This closes the mid-ease duplicate: because `RegionBox` depends
-  on the sub-pixel `frac(pos·scale)` floor/ceil, a pin minted 1px off in height could otherwise coexist as a second
-  same-hash pin that `FindPin` kept returning and `PinOriginDiffers` rejected every frame — a permanent per-row
-  re-Gaussian (and, being `FindPin`-hit, never trimmed). (A `HIT` therefore also requires the region SIZE to match, so a
-  sub-pixel move that shifts the floor/ceil region by 1px re-blurs rather than stretches.)
-- **Budget + eviction.** One physical 32-slot pool (`MaxPool = 32`) shared by canvas-sized transient scratch and
-  region pins: `PinBudget = 24` region pins (guarantees ≥ 8 slots for transient scratch — a new mint past the cap
-  evicts the coldest pin first); `PinTrimIdleFrames = 120` submitted frames for pins vs `TrimIdleFrames = 600` for
-  transient (a stationary pin is `FindPin`-hit every submitted frame, so only ORPHANS — a rect/σ a row left — climb to
-  120 and get reclaimed). LRU is **MRU-on-hit**: a `FindPin` hit refreshes `LastUseFence`, so a hot pin is never the
-  preferred victim (the fix for the rolling-eviction fps cliff where a stationary pin kept its creation fence forever).
-- **Honest scope.** A constant-size op that moves *relative to the layer origin* by ≥1 device unit is a content miss
-  (correct). **Scale reuse is a non-goal** — size is content; the app steps emphasis scale per integer distance so the
-  auto-scroll ease is position-only (`src/apps/Wavee/Features/Player/LyricsView.cs`). Distinct from the acrylic retained-
-  backdrop cache (§2.3, keyed by `PushLayerCmd.LayerId`); that contract is unchanged.
+**FA-2a (SUPERSEDED 2026-09 — the self-blur pin cache is deleted).** The cross-frame self-blur "pin" (a region-sized
+RT keyed by the position-independent `BlurPinKey`, its settle re-mint, edge-clamp and budget rules, in a separate
+region-pin pool) went with the persistent canvas. As built, a leaf self-blur's result is a **retained surface keyed by
+what it is made of** — σ, its source/output regions and placement, and every placed tile's surface + raster serial —
+so a stationary blurred surface whose tiles did not change re-draws its cached blur, while a move, a σ change or a
+re-rastered tile re-blurs (`gpu-renderer.md` §13.1e). The halo stays `SelfBlurRegion.TapRadius` (the exact support of
+the downsample schedule `AcrylicBackdropMath` owns).
 
 ---
 
@@ -1224,14 +1103,15 @@ the **RENDER thread** (the sole `ComPtr` owner). The PUBLISH(13a) seam sits betw
 | PUBLISH (13a) | UI | `EffectAux`/`LocalTransform`/`Opacity` columns + `DetachedAnim` snapshots value-copied into `SnapshotColumns` (spring `Position`/`Velocity` stay UI-side track state, never published) |
 | 8 record | RENDER | emit `DrawImageCmd`(baked backdrop) / `PushLayerCmd{Effect}` (acrylic/3D) / detached-node opcodes; clean-span memcpy for unchanged backdrop |
 | 9 batch | RENDER | apply animated `WorldTransform` to cached quads (TransformDirty fast path); write per-instance lyric glyph color; layer effect params from `EffectAux` |
-| 10–11 submit/present | RENDER | (acrylic two-pass barrier ordering; the window-backdrop transparent clear is part of the normal pass) |
+| 10–11 submit/present | RENDER | (the acrylic backdrop is a composite-time item — `gpu-renderer.md` §13.1e; the window-backdrop transparent clear is the composite pass's load op) |
 | **13 bake-drain** | RENDER | `BackdropBaker.Drain` (time-sliced `IEffectRunner` blur+composite, byte-budgeted vs the image-upload ring); `DetachedAnimSlab.Retire` for completed exit tracks (free + gen-bump + deferred-delete un-pin) |
 | 12 passive-effects | UI | `UseWindowBackdrop` `SetWindowBackdrop` PAL call (human-timescale) |
 
-**Co-existence with video (referenced, owned by media-pipeline):** the live-Acrylic snapshot must read the
-canvas RT *after* the video hole-punch has been resolved into it; the FrameGraph orders the acrylic
-snapshot pass **after** chrome-over-video composition. The window-backdrop transparent clear and the video
-hole-punch are different regions and do not conflict.
+**Co-existence with video (referenced, owned by media-pipeline):** the live-Acrylic backdrop mini-composites
+the items painted before it — including a video hole's `EraseVideoHole` item when the hole paints first — so it
+frosts what the UI tiles hold there, never the video pixels (the video must not bleed under the acrylic,
+`gpu-renderer.md` §7.3). The window-backdrop transparent clear and the video hole-punch are different regions and do
+not conflict.
 
 ---
 
@@ -1265,7 +1145,7 @@ hole-punch are different regions and do not conflict.
   slab free-list. All slab pushes (no GC array growth in steady state); the managed convenience hooks reuse the
   existing `List<HookCell>` edge.
 - **Thread confinement (the keystone):** **the render thread owns every `ComPtr`** — so all `IEffectRunner`
-  runs, all bake RT allocation/eviction, all `LayerPool` use, and all deferred-delete un-pins happen **on
+  runs, all bake RT allocation/eviction, all surface-pool use, and all deferred-delete un-pins happen **on
   the render thread**, phase 8/13. The UI thread (phase 4–7) only writes POD columns and POD cache keys; it
   **never** touches a texture, an effect, or a ComPtr. `BakeTicket`/`EffectChain`/`AnimTrack`/
   `DetachedNode` are POD that cross the PUBLISH seam by value-copy; an `ImageHandle` is moved (pin transfers
@@ -1295,8 +1175,9 @@ hole-punch are different regions and do not conflict.
 7. **`IEffectRunner.Supports(kind)` false (Metal MPS lacks Transform3D):** 3D lyrics fan degrades to flat
    2D; backdrop noise degrades to no-noise (the `Noise` recipe flag is ignored). No crash, documented
    downgrade.
-8. **Live-Acrylic before the canvas RT lands (`OQ-7` not yet implemented):** `UseAcrylic` returns a flat-
-   tint `DrawBackdropCmd`; BLOCKED status surfaced in DEBUG.
+8. **Live Acrylic on a secondary swapchain** (a windowed popup / detached pop-out — the direct `SubmitDrawList`
+   route, which composites NO layers): the acrylic paints its opaque `FallbackColor` (WinUI's no-transparency answer)
+   instead of a frost (`gpu-renderer.md` §13.1).
 9. **Device-lost during a bake:** the bake RTs are GPU realizations reconstructible from CPU state
    (`architecture-spec.md` §5.1 invariant) — recovery re-bakes from the retained `BackdropRecipe` + art
    `ImageHandle`; no managed-tree loss.
@@ -1362,10 +1243,9 @@ our loop. This subsystem's per-frame cost on a busy now-playing screen:
 - **`animateContentSize` / item-placement on a reorder:** one transform track per moved row, seeded once at the
   reorder frame from prev-frame `WorldBounds[]`; then pure phase-7 integration + the TransformDirty batcher
   re-apply. **No relayout** during the tween (layout ran once); seed budget bounds a mass shuffle.
-- **Live Acrylic:** the snapshot+blur is **cached per overlay** (`AcrylicCompositor` retained-backdrop RT keyed by
-  `LayerId`) and re-taken only on geometry change or transform-damage intersecting its snapshot region — so scrolling
-  inside a stationary overlay reuses the blur (no per-frame re-blur). Paint/layout-only behind-changes refresh on next
-  motion (§2.3); scroll-velocity Acrylic over moving video is the v2 render-thread item.
+- **Live Acrylic:** the blurred backdrop is **retained keyed by everything beneath it** (§2.3,
+  `gpu-renderer.md` §13.1e) — so scrolling inside a stationary overlay reuses the blur, and any change beneath
+  (including a paint-only one, which re-rasters a tile) refreshes it on that turn.
 
 No relayout (content-size is transform-only), no video pixel work, no per-tick gradient/atlas re-bake. The only
 render-thread GPU spend is the rate-limited backdrop blur and the at-rest acrylic snapshot.
@@ -1390,8 +1270,8 @@ render-thread GPU spend is the rate-limited backdrop blur and the at-rest acryli
   and the **`MotionTokenTable`/`MotionTokenId` motion-token family** riding theming's `Tok.*` machinery. All in
   `FluentGpu.Animation`; all phase-7 column writers; all pure portable C#. **AnimTrack grows 48B→64B** (still POD,
   one slab). Reference: scene-memory `WorldBounds`/`FrameCache` (§6.3), theming token table machinery.
-- `OQ-1` (inherited, resolved) — live-Acrylic depends on the **persistent canvas RT** (`gpu-renderer.md`
-  `OQ-7`), ruled in favor of the canvas RT. v1 ships acrylic at rest; scroll-velocity acrylic is v2.
+- `OQ-1` (inherited, resolved) — live-Acrylic's source: first the persistent canvas RT (`gpu-renderer.md` `OQ-7`),
+  superseded 2026-09 by the mini-composite of the retained tiles (§2.3).
 - `OQ-2` (RESOLVED) — connected/shared-element source-rect **and** `animateContentSize`/item-placement prev-rect
   provenance: prev-frame `WorldBounds[]` (double-buffered `FrameCache`, `architecture-spec.md` §5.4 /
   scene-memory §6.3) is the source. It is a UI-owned double buffer fully published from the *previous* frame, so
@@ -1447,8 +1327,8 @@ first-pass synthesis:
     deferred-delete) per `hardened-v1-plan.md` §2; the UI thread only writes POD. This makes the path safe-
     by-construction under the parallel seam, not audited — and is single-thread-correct first (UI thread
     produces+consumes, quarantine=0) per the build order.
-14. **Live Acrylic is explicitly BLOCKED on the canvas-RT (`OQ-7`) decision** (resolved in favor of the
-    canvas RT) and ships **at rest only** in v1; scroll-velocity Acrylic is a named v2 render-thread item.
+14. **Live Acrylic's source** was BLOCKED on the canvas-RT (`OQ-7`) decision; it shipped on the canvas RT and is
+    now (2026-09) a composite-time mini-composite of the retained tiles (§2.3, `gpu-renderer.md` §13.1e).
 15. **Spring is a second INTEGRATION MODE on `AnimTrack`, not an `Easing` enum entry** — the carried
     `Velocity` field + semi-implicit sub-stepped integrator give it state; an easing is a stateless `f(u)`. This
     is the precondition for retarget.

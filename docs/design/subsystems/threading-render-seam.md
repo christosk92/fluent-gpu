@@ -180,7 +180,7 @@ team maintained, not by the running app.
 > a `DrawListArenaRing`, and **record stays on the UI thread** (already sub-ms + zero-alloc; the measured stall is in
 > submit/present). The **Cut B** `SceneFrame`/`SnapshotColumns` design in §2.1/§3 — record-on-render — remains the
 > eventual target *only if* record ever shows on the UI-thread budget; the sections below describe it and are reconciled
-> to Cut A section-by-section as the seam lands. **Steps 1 (foundation) + 4 (force-sync render thread, default-off behind `FG_RENDER_THREAD`; `RenderThread` submits/presents while the UI blocks in `DrainSync` — the async flip is Step 5, soak-gated) are LANDED + gate-green**
+> to Cut A section-by-section as the seam lands. **Steps 1 (foundation) + 4 (force-sync render thread, then default-off behind `FG_RENDER_THREAD` — a flag since deleted, see above; `RenderThread` submits/presents while the UI blocks in `DrainSync` — the async flip is Step 5, soak-gated) are LANDED + gate-green**
 > (`SceneFramePublisher` + `DrawListArenaRing` + `QuarantineLedger` + `QuarantinePolicy`, wired as a UI-thread
 > pass-through in `AppHost.Paint`; `Quarantine` logically 0). The `ThreadGuard`, quarantine-derivation (§5.1), publisher
 > ordering (§2.2), 3-slot rule (§2.3) and arena-ring rationale (§6) apply to both cuts unchanged.
@@ -877,7 +877,8 @@ mode-transition handshake (pause/recover/resume), never on a per-frame path.
 The DComp present-tree is a **multi-visual** tree owned by the render thread (architecture-spec §4.7,
 WaveeMusic fold-in): the UI swapchain visual is z-above a child **video visual** supplied by the PAL
 `IVideoPresenter` seam. `DrawVideoCmd` (emitted at the video node's paint slot, before its chrome — painter
-order, no pass bucket) erases a **transparent premultiplied-0 hole** into the UI canvas so the video child
+order, no pass bucket) erases a **transparent premultiplied-0 hole** into the UI's pixels (re-punched in the back
+buffer by the retained-tile composite every presented frame) so the video child
 visual shows through (`gpu-renderer.md` §7.3).
 
 - The UI thread, at PUBLISH, records `PresentIntent` into the `SceneFrame`: video surface placements
@@ -949,14 +950,43 @@ not wait a vblank). Production therefore inherits the display's phase from the t
 frame is unpresented". Keying on the tick is the same ceiling in steady state and does not couple production
 to present latency, which matters now that the render loop reserves its present slot before acquiring.)*
 
-**The waitable is `SetMaximumFrameLatency(1)` and the render loop waits for its slot BEFORE it chooses a
-frame (AS-BUILT 2026-09; supersedes the depth-2 experiment below).** `RenderThread` calls
-`IGpuDevice.WaitForPresentSlot()` ahead of `SceneFramePublisher.TryAcquire`, so the frame that reaches the
-glass is the freshest one that existed when the slot opened. The waitable is a **semaphore**, so one wait is
-a credit exactly one `Present` spends: the backend tracks it (`D3D12Swapchain.LatencyCreditHeld`) and skips
-its own submit-time wait while it is held; a turn that presents nothing (a bare wake, a tick-only turn) is
-gated on `SceneFramePublisher.HasPendingFrame` and never reserves a slot at all. This is the order Windows
-Terminal's `AtlasEngine` and makepad both use.
+**The waitable is `SetMaximumFrameLatency(1)` by default and the render loop takes its slot BEFORE it
+chooses a frame (AS-BUILT 2026-09; supersedes the depth-2 experiment below).** `RenderThread.PresentTurn`
+calls `IGpuDevice.TryTakePresentSlot(timeoutMs)` ahead of `SceneFramePublisher.TryAcquire`, so the frame that
+reaches the glass is the freshest one that existed when the slot opened. The waitable is a **semaphore**, so
+one successful take is a credit exactly one `Present` spends: the backend tracks it
+(`D3D12Swapchain.LatencyCreditHeld`; a take while it is held returns true at once) and skips its own
+submit-time wait while it is held. `false` means the slot did not open within `timeoutMs` and no credit was
+taken — nothing to undo; `−1` is the backend's liveness-bounded wait (a lost device must not wedge the loop).
+Every present holds a credit — a fresh publication AND a motion re-present of the retained scene (a tick-only
+turn takes the credit exactly like a publish turn). Only a turn that presents nothing takes none: a bare
+wake (no pending publication, no motion — gated on `SceneFramePublisher.HasPendingFrame`) and a paced turn
+whose tick was already presented for (`skippedTicks`) return before the take. This is the order Windows
+Terminal's `AtlasEngine` and makepad both use. The depth is adaptive, 1..2: `PresentQueueDepthPolicy` moves
+it to 2 once the GPU-execution EMA reaches 0.8 of the refresh for 8 fresh samples and back to 1 below 0.6,
+and the present-time prediction follows the depth in force ([`scroll.md`](./scroll.md) §8).
+
+**A clock-paced turn catches up instead of queueing behind a late frame (`SlotCatchUp`, AS-BUILT
+2026-09-29).** A paced turn (motion live and a display clock ticking) takes the credit with a grace of
+`SlotCatchUp.GraceFraction` = 0.15 of a refresh (2 ms at 120 Hz). A slot still busy after the grace means
+the previous present missed its vblank: the latency semaphore re-signals only after the NEXT vblank
+(+0.2–0.7 ms, measured 2026-09-29), so waiting would present this tick's frame one vblank late, and every
+later turn would inherit that phase (runs of 55–86 consecutive turns measured with frames costing 1–3 ms).
+While the frames fit `SlotCatchUp.FitFraction` = 0.70 of the refresh (a cost EMA of render work + retired
+GPU ms — never the wake lag or slot wait, which in a late run ARE the lateness) the turn presents NOTHING — the queued frame owns this vblank; the tick is not marked presented, so
+`MotionTickRun` charges it at the next present — and the next tick presents on time. Never queue behind a
+late frame: Chromium viz's "swap throttled" (no draw while a swap is pending) and Gecko's "too many pending
+frames" (skip the composite, retry next vsync) are the same rule. Over-budget frames keep the unbounded wait
+and the depth policy owns them (its 0.8 engage sits above the 0.70 fit), so the half-rate cliff stays
+closed; a catch-up followed by a busy slot within `HoldTicks` = 2 backs off for `BackoffTicks` = 120.
+Unpaced turns (no motion, or no clock) keep the unbounded wait. A wake that re-runs the turn on the skipped
+tick (a UI publication landing mid-tick) skips again without a slot take or a policy call
+(`RenderThread._catchUpTickSeq`). The grace is bounded by a HIGH-RESOLUTION waitable timer waited beside the
+latency waitable (the waitable is index 0, so a tie goes to the slot; a timer win takes no credit): a plain
+2 ms timeout rounds to the process timer resolution (15.6 ms by default) and would swallow the ~8.5 ms retire.
+It is not a throttle: still one present per
+tick — it refuses to queue a frame that could only land late. Evidence: `RenderThread.CatchUpSkips`,
+`[render.pace] catchUp= costEma= backoff=` ([`scroll.md`](./scroll.md) §8, §10.6).
 
 **Why depth 2 was withdrawn.** `FRAME_COUNT - 1` = 2 (AS-BUILT 2026-08) was chosen to buy one frame of
 CPU/GPU run-ahead so a frame costing slightly over one refresh would not quantize to half rate at 144/165
