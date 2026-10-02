@@ -23,9 +23,13 @@ namespace FluentGpu.Rhi.D3D12;
 /// bank of a shader-visible heap (<see cref="D3D12Device.FrameBankDepth"/> banks), so a recreated surface never rewrites
 /// a descriptor an in-flight frame still samples.</item>
 /// <item><b>Lifetime:</b> a replaced or trimmed texture retires behind the frame fence (never released while a submit
-/// in flight references it). A tile slot unreferenced for <see cref="TileTrimTurns"/> composite turns — strictly longer
-/// than <see cref="SliceTable.IdleEvictFrames"/>, so the table has already evicted every tile that used it — trims its
-/// texture; idle scratch trims on <see cref="LayerTargetTrim"/>'s windows.</item>
+/// in flight references it). A tile slot's texture is trimmed ONLY when the <see cref="SliceTable"/> names the slot
+/// (<see cref="TrimTiles"/> ← <c>CompositeFrame.TrimSurfaces</c>: no tile has held it for
+/// <see cref="SliceTable.SurfaceTrimTurns"/> turns) — never on a clock of the pool's own. The pool cannot see every use of
+/// a tile: a group / self-blur / acrylic backdrop re-drawn from its RETAINED result samples none of the tiles it was made
+/// from, so a "last sampled" clock aged out tiles the table still placed as valid and the composite drew nothing there
+/// (content vanished at idle, back only where a hover re-rastered a tile). Idle scratch trims on
+/// <see cref="LayerTargetTrim"/>'s windows.</item>
 /// <item><b>Retained derived surfaces:</b> a scratch holding a content-keyed result — a self-blur of tiles that did not
 /// change, an acrylic backdrop over a frame beneath that did not change — is kept across turns under its key
 /// (<see cref="Retain"/> / <see cref="FindRetained"/>) instead of being recomputed, and returns to the scratch pool once
@@ -35,10 +39,6 @@ namespace FluentGpu.Rhi.D3D12;
 internal sealed unsafe class SurfacePool : IDisposable
 {
     public const int ScratchCap = 128;
-
-    /// <summary>A tile slot's texture trims after this many composite turns without a raster or a placement. MUST exceed
-    /// <see cref="SliceTable.IdleEvictFrames"/> (the table evicts first, so a trimmed slot never backs a valid tile).</summary>
-    public const int TileTrimTurns = SliceTable.IdleEvictFrames + 120;
 
     /// <summary>A retained derived surface unused for this many composite turns returns to the scratch pool.</summary>
     public const int RetainTurns = 30;
@@ -114,7 +114,8 @@ internal sealed unsafe class SurfacePool : IDisposable
 
     // ── frame ─────────────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Open composite turn <paramref name="turn"/> on SRV bank <paramref name="bank"/>: release every retired
-    /// texture whose last use the GPU has passed, and trim idle ones (retire behind the fence).</summary>
+    /// texture whose last use the GPU has passed, and trim idle SCRATCH (retire behind the fence). Tile textures trim only
+    /// through <see cref="TrimTiles"/>.</summary>
     public void BeginFrame(int bank, int turn, ulong completedFence, bool weak)
     {
         _bank = bank;
@@ -129,17 +130,26 @@ internal sealed unsafe class SurfacePool : IDisposable
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
         }
-        for (int i = 0; i < _tiles.Length; i++)
-        {
-            ref Entry e = ref _tiles[i];
-            if (e.Res != null && turn - e.LastTurn > TileTrimTurns) Retire(ref e);
-        }
         for (int i = 0; i < _scratch.Length; i++)
         {
             ref Entry e = ref _scratch[i];
             if (e.Retained && turn - e.LastTurn > RetainTurns) e.Retained = false;   // stale result: back to the pool
             if (e.Res == null || e.InUse || e.Retained) continue;
             if (LayerTargetTrim.Classify(false, turn - e.LastTurn, weak) == LayerTrimVerdict.Retire) Retire(ref e);
+        }
+    }
+
+    /// <summary>Retire (behind its last-use fence) the texture of every tile slot the <see cref="SliceTable"/> released this
+    /// turn (<c>CompositeFrame.TrimSurfaces</c>: slots no tile holds). The slot's next raster re-creates its texture
+    /// (<see cref="EnsureTile"/>). The ONLY way a tile texture is trimmed.</summary>
+    public void TrimTiles(ReadOnlySpan<int> slots)
+    {
+        for (int i = 0; i < slots.Length; i++)
+        {
+            int slot = slots[i];
+            if ((uint)slot >= (uint)_tiles.Length) continue;
+            ref Entry e = ref _tiles[slot];
+            if (e.Res != null) Retire(ref e);
         }
     }
 
@@ -192,8 +202,9 @@ internal sealed unsafe class SurfacePool : IDisposable
         return e.Res;
     }
 
-    /// <summary>A placed (sampled) tile slot: keep it alive this turn. False when the slot holds no texture (a placement
-    /// the backend cannot honour — the item skips it).</summary>
+    /// <summary>A placed tile slot the composite SAMPLES this turn: stamps its last-use fence (a later trim retires the
+    /// texture only once the GPU has passed it). False when the slot holds no texture — a placement the backend cannot
+    /// honour; the caller skips it and counts it (<c>IGpuDevice.LastLostPlacements</c>, must be 0).</summary>
     public bool TouchTile(int slot, ulong frameFence)
     {
         if ((uint)slot >= (uint)_tiles.Length) return false;

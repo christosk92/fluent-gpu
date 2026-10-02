@@ -263,12 +263,17 @@ public static class PagedShelf
         // value replaces it with max(leadSpan+1, leadMinColumns): Home's cover shelf passes 4 so a 4-column page
         // still gets its wide lead beside two ordinary cells. Frozen MOUNT CONFIGURATION like snap/rows/lift (it
         // configures the layout instance); see FillRowVirtualLayout.MinColsFor — the one place the rule lives.
-        int leadMinColumns = 0)
+        int leadMinColumns = 0,
+        // Row selection (WP1) — frozen MOUNT CONFIGURATION like snap/rows/lift: threaded onto the strip's ListOptions. None
+        // (the default) is byte-identical to a shelf built before this parameter existed. A non-null `selection` is the
+        // caller-owned model (the ItemsView then does NOT mint its own), so the page can read/clear it.
+        ItemsSelectionMode selectionMode = ItemsSelectionMode.None,
+        SelectionModel? selection = null)
         => Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange, leadSpan, onInvoke, leadCardAt),
                       () => new PagedShelfCore<T>(cardHeight, pager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
-                                               cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns))
+                                               cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -514,6 +519,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // it must never subscribe anything (the delegates are behaviour, not data). Every delegate invocation goes through
     // here so the shelf always calls the latest CardAt/KeyOf/CustomPager/OnVisibleRange even while the data gate holds.
     ShelfProps<T> _latest = null!;
+    /// <summary>E9's frozen answer — does this shelf's slot root invoke on a tap/Enter (an <c>onInvoke</c> was pushed by
+    /// the render that mounted the strip)? Decided once, beside <c>IsItemInvokedEnabled</c>, and read by
+    /// <see cref="BindCard"/>: only a slot that invokes announces itself through <see cref="ItemsView.SlotRow"/>.</summary>
+    bool? _invokes;
     bool _delegateDriftReported;
     readonly Signal<long> _contentRevision = new(0);
     readonly BoundItemsSource<T> _items;
@@ -590,7 +599,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // comment) and the owner toggles the CURRENT slot's scene focusability imperatively, no re-render. The card
     // template itself (cardAt) declares NEITHER Focusable NOR OnClick/OnPointerReleased — this root is the one and
     // only invoke/focus target; a template that also wired its own click would fight the roving tab stop (the F21
-    // bug this closes).
+    // bug this closes). A card HOST that is also used outside shelves learns which side it is on from the
+    // ItemsView.SlotRow context this root provides (E2) — see the Children note below.
     Element BindCard(BoundItemScope<T> scope) => new BoxEl
     {
         Direction = 1,
@@ -617,7 +627,21 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             scope.Row.OnFocusChanged(got);
             if (got) FollowFocusToPage(scope.Index.Peek());
         },
-        Children = [Embed.Comp(() => new ShelfCardSlot(this, scope))],
+        // E2 — the slot ANNOUNCES itself: the card template's output renders under ItemsView.SlotRow carrying this slot's
+        // RowScope, so a card host can tell it is slot-hosted (this root owns invoke + focus; the card renders click-less
+        // and focus-less) and read RowScope.IsFocused (E1) for its focus-within chrome — with no change to the
+        // cardAt(item, index, width) template signature, so every caller is untouched. Provided HERE, on the
+        // once-per-slot root, rather than inside ShelfCardSlot.Render around the template output: the scope is the slot's
+        // for its whole life (a recycle writes its index signal, never the scope), so one provider per slot boxes it once
+        // and never re-notifies, while a provider inside the per-item render would re-box it on every recycle AND would
+        // have to carry the card's key itself (a provider's content root is a single-child slot — its Key is inert, which
+        // would silently drop the E21 lead-template remount).
+        // ONLY a slot that invokes announces itself: a card told it is slot-hosted renders click-less, so a shelf built
+        // without onInvoke would otherwise hold cards nobody can open. Such a shelf's cards keep their own click (the
+        // pre-E2 behaviour, two tab stops and all) instead of going dead (Wavee #159).
+        Children = [_invokes == true
+            ? Ctx.Provide<RowScope?>(ItemsView.SlotRow, scope.Row, Embed.Comp(() => new ShelfCardSlot(this, scope)))
+            : Embed.Comp(() => new ShelfCardSlot(this, scope))],
     };
 
     // ── Keyboard PAGE-FOLLOW (E9). ItemsView's arrow navigation only minimal-scrolls the newly current card into view
@@ -718,6 +742,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     readonly bool _cardWidthAgnostic;
     readonly ShelfSnap _snap;
     readonly ShelfLift _lift;   // E10 — frozen mount config; see ShelfLift
+    readonly ItemsSelectionMode _selectionMode;   // WP1 — frozen mount config; see PagedShelf.Create's selectionMode
+    readonly SelectionModel? _selection;          // WP1 — caller-owned selection model (null ⇒ the strip owns one)
     readonly int _leadMinColumns;   // E22 — frozen mount config; see PagedShelf.Create's leadMinColumns
     // E21 — appended to the lead card's key while LeadCardAt is the mounted template (see ShelfCardSlot.Render): a
     // control character no caller's KeyOf can plausibly produce, so a plain card key never collides with a lead key.
@@ -834,9 +860,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           float headerGap, float edgeFade, string prevGlyph, string nextGlyph, TemplateParts? parts,
                           int overscan, bool measured, bool cardWidthAgnostic, int maxColumns = 0,
                           ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
-                          ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0)
+                          ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0,
+                          ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null)
     {
         _leadMinColumns = Math.Max(0, leadMinColumns);
+        _selectionMode = selectionMode;
+        _selection = selection;
         _items = BoundItems.Project(_props, static p => p is null ? 0 : Math.Min(p.Items.Count, Math.Max(0, p.MaxItems)),
             static (p, i) => p!.Items[i], default!);
         _cardHeight = cardHeight; _measured = measured;
@@ -1558,7 +1587,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             RepeatLayout.Custom(layout, horizontal: true),
             new ListOptions<T>
             {
-                SelectionMode = ItemsSelectionMode.None,
+                SelectionMode = _selectionMode,
+                Selection = _selection,
                 Controller = _ctl,
                 KeyOf = ItemKey,
                 OnVisibleRange = VisibleRange,
@@ -1567,7 +1597,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                 // field here): a caller that starts with none and pushes one later is a documented no-op, exactly
                 // like a CardAt/KeyOf method swap (see ReportDelegateDrift). OnInvokedTyped itself is a STABLE
                 // delegate (the method group), so it costs nothing whether or not it ever fires.
-                IsItemInvokedEnabled = _latest.OnInvoke is not null,
+                IsItemInvokedEnabled = _invokes ??= _latest.OnInvoke is not null,
                 OnInvokedTyped = InvokeItem,
                 Grow = 1f,
                 Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, AutoEdgeFadeBand = _edgeFade, Handle = _shelfHandle },
@@ -1677,13 +1707,14 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             RepeatLayout.Custom(layout, horizontal: true),
             new ListOptions<T>
             {
-                SelectionMode = ItemsSelectionMode.None,
+                SelectionMode = _selectionMode,
+                Selection = _selection,
                 Controller = _ctl,
                 KeyOf = ItemKey,
                 OnVisibleRange = VisibleRange,
                 // E9 — see MeasuredLiveStrip's note: frozen at this strip's mount, from whatever onInvoke the caller
                 // had pushed by then.
-                IsItemInvokedEnabled = _latest.OnInvoke is not null,
+                IsItemInvokedEnabled = _invokes ??= _latest.OnInvoke is not null,
                 OnInvokedTyped = InvokeItem,
                 Grow = 1f,
                 // paged: navigate by the chevron/pips pager, not a draggable scrollbar

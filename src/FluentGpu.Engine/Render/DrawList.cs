@@ -57,6 +57,11 @@ public enum DrawOp : int
                                // whose commands live in that child's own arena. Never reaches a backend decoder: the
                                // composite seam (IGpuDevice.SubmitComposite) consumes slices by descriptor — the
                                // marker splits a slice's stream into segments. See CompositeSliceCmd.
+    DrawSeries = 24,           // one CHUNK (≤ 32 inline samples) of a SeriesEl sample series (gpu-renderer.md §3.1): a baseline
+                               // / mirrored area or a stroke ribbon through BOUND samples with a ≤ 4-stop gradient by
+                               // amplitude. Fixed-size POD (nothing variable-length rides the stream, so clean-span reuse
+                               // and every TryBodySize walker stay valid) — a series of N samples is ⌈(N−1)/31⌉ chunks.
+                               // See DrawSeriesCmd.
 }
 
 /// <summary>What the composite applies around a <see cref="CompositeSliceCmd"/>'s child slice, and in which space its
@@ -108,6 +113,8 @@ public struct DrawListOpcodeStats
     public int DrawIconMask, DrawVideo, EraseRoundRect;
     public int FillPath, StrokePath;
     public int PushStencilClip, PopStencilClip;
+    /// <summary>Series chunks (<see cref="DrawOp.DrawSeries"/>) — a SeriesEl of N samples records ⌈(N−1)/31⌉ of these.</summary>
+    public int DrawSeries;
     /// <summary>Retained-tile slice markers (<see cref="DrawOp.CompositeSlice"/>) — a span whose stats carry any holds a
     /// child slice's paint position.</summary>
     public int CompositeSlice;
@@ -145,6 +152,7 @@ public struct DrawListOpcodeStats
             case DrawOp.PushStencilClip: PushStencilClip++; break;
             case DrawOp.PopStencilClip: PopStencilClip++; break;
             case DrawOp.CompositeSlice: CompositeSlice++; break;
+            case DrawOp.DrawSeries: DrawSeries++; break;
         }
     }
 
@@ -173,6 +181,7 @@ public struct DrawListOpcodeStats
         PushStencilClip += other.PushStencilClip;
         PopStencilClip += other.PopStencilClip;
         CompositeSlice += other.CompositeSlice;
+        DrawSeries += other.DrawSeries;
         Acrylic += other.Acrylic;
     }
 
@@ -201,11 +210,12 @@ public struct DrawListOpcodeStats
         PushStencilClip = PushStencilClip - other.PushStencilClip,
         PopStencilClip = PopStencilClip - other.PopStencilClip,
         CompositeSlice = CompositeSlice - other.CompositeSlice,
+        DrawSeries = DrawSeries - other.DrawSeries,
         Acrylic = Acrylic - other.Acrylic,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} stencil={PushStencilClip}/{PopStencilClip} slice={CompositeSlice} acrylic={Acrylic}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} stencil={PushStencilClip}/{PopStencilClip} slice={CompositeSlice} series={DrawSeries} acrylic={Acrylic}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -408,6 +418,32 @@ public readonly record struct StrokePathCmd(RectF Rect, ColorF Color, int Realiz
     int VtxStart, int VtxCount, int IdxStart, int IdxCount,
     float TrimStart, float TrimEnd, float DashOn, float DashOff, float ArcLenPx, byte TrimMode,
     Affine2D Transform, float Opacity);
+
+/// <summary>32 inline samples (C# inline array) — the chunk payload of <see cref="DrawSeriesCmd"/>.</summary>
+[InlineArray(32)]
+public struct Samples32 { private float _e0; }
+
+/// <summary>One CHUNK of a sample series (DrawOp.DrawSeries, gpu-renderer.md §3.1). A series of N samples is recorded as
+/// ⌈(N−1)/31⌉ chunks of ≤ 32 samples sharing one edge sample, so nothing variable-length rides the stream (every
+/// walker frames it through RepaintStreamSafety.TryBodySize) and clean-span reuse stays valid — the data IS the span.
+/// Sample x = X0 + i·Dx (node-local); heights are fractions of Rect.H (Mirrored: of Rect.H/2) about Baseline (a fraction
+/// of Rect.H) scaled by Amplitude, clamped to the Rect by the vertex shader; Shape 0 = baseline area, 1 = mirrored area,
+/// 2 = a Thickness-wide stroke ribbon. ≤ 4 gradient stops BY
+/// AMPLITUDE (C0..C3 at O0..O3; StopCount 1 = solid). <see cref="Rect"/> is THIS chunk's box (cull / slice bounds /
+/// damage): the chunk's X span and the FULL node box's Y/H. A plain struct, not a record: the inline array must not
+/// enter a generated Equals. Self-describing POD: a slice translation patches Transform only (Render/DrawOpTranslate).</summary>
+public struct DrawSeriesCmd
+{
+    public RectF Rect;            // THIS chunk's box (cull / slice bounds), node-local — the full node box's Y/H, the chunk's X span
+    public Affine2D Transform;
+    public float Opacity;
+    public int Shape, Count, Total, Index;
+    public float X0, Dx, Baseline, Amplitude, Thickness;
+    public ColorF C0, C1, C2, C3;
+    public float O0, O1, O2, O3;
+    public int StopCount;
+    public Samples32 S;
+}
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -803,6 +839,43 @@ public sealed class DrawList
             Math.Clamp(trimStart, 0f, 1f), Math.Clamp(trimEnd, 0f, 1f), MathF.Max(0f, dashOn), MathF.Max(0f, dashOff),
             pathRef.ArcLenPx, trimMode, transform, opacity));
         PushSort(sortKey);
+    }
+
+    /// <summary>Record a sample series as chunked <see cref="DrawSeriesCmd"/>s. <paramref name="rect"/> is the node box;
+    /// <paramref name="samples"/> beyond <see cref="SeriesSpec.MaxSamples"/> are dropped. Alloc-free.</summary>
+    public void Series(in RectF rect, in SeriesSpec spec, ReadOnlySpan<float> samples, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        int n = Math.Min(samples.Length, SeriesSpec.MaxSamples);
+        if (n < 2 || rect.W <= 0f || rect.H <= 0f) return;
+        float dx = rect.W / (n - 1);
+        int stops = 1;
+        ColorF c0 = spec.Color, c1 = spec.Color, c2 = spec.Color, c3 = spec.Color;
+        float o0 = 0f, o1 = 1f, o2 = 1f, o3 = 1f;
+        if (spec.Gradient is { } g && g.Stops is { Length: > 0 } st)
+        {
+            stops = Math.Min(st.Length, GradientSpec.MaxStops);
+            c0 = st[0].Color; o0 = st[0].Offset;
+            if (stops > 1) { c1 = st[1].Color; o1 = st[1].Offset; }
+            if (stops > 2) { c2 = st[2].Color; o2 = st[2].Offset; }
+            if (stops > 3) { c3 = st[3].Color; o3 = st[3].Offset; }
+        }
+        float baseline = float.IsNaN(spec.Baseline) ? (spec.Shape == SeriesShape.Mirrored ? 0.5f : 1f) : spec.Baseline;
+        for (int start = 0; start < n - 1; start += SeriesSpec.ChunkSamples - 1)
+        {
+            int count = Math.Min(SeriesSpec.ChunkSamples, n - start);
+            var cmd = new DrawSeriesCmd
+            {
+                Rect = new RectF(rect.X + start * dx, rect.Y, (count - 1) * dx, rect.H),
+                Transform = transform, Opacity = opacity,
+                Shape = (int)spec.Shape, Count = count, Total = n, Index = start,
+                X0 = rect.X + start * dx, Dx = dx, Baseline = baseline, Amplitude = spec.Amplitude, Thickness = spec.Thickness,
+                C0 = c0, C1 = c1, C2 = c2, C3 = c3, O0 = o0, O1 = o1, O2 = o2, O3 = o3, StopCount = stops,
+            };
+            for (int i = 0; i < count; i++) cmd.S[i] = samples[start + i];
+            WriteOp(DrawOp.DrawSeries);
+            WritePayload(in cmd);
+            PushSort(sortKey);
+        }
     }
 
     private void WriteOp(DrawOp op)

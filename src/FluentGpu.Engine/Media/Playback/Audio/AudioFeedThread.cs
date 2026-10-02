@@ -9,12 +9,20 @@ namespace FluentGpu.Media;
 /// The RT-thread characteristics seam (spec §7.9/§13) — registers the calling thread as a real-time audio thread. The
 /// Windows leaf implements it with MMCSS "Pro Audio" (<c>AvSetMmThreadCharacteristics</c>); the portable default is a
 /// no-op (headless / macOS supply their own). Kept in the portable engine so <see cref="AudioFeedThread"/> stays
-/// TerraFX-free. <see cref="Enter"/> returns a token whose disposal reverts the characteristics.
+/// TerraFX-free. <see cref="Enter"/> returns a token whose disposal reverts the characteristics. The seam is an INSTANCE
+/// handed through <see cref="AudioFeedThread"/>, <see cref="RingAudioSource"/> and the backend — never a static — so
+/// concurrent tests and multiple backends never share registration state.
 /// </summary>
 public interface IRtThreadCharacteristics
 {
     /// <summary>Register the CURRENT thread as a Pro-Audio RT thread; dispose the returned token to revert. May return null.</summary>
     IDisposable? Enter();
+
+    /// <summary>Register the CURRENT thread as an elevated AUDIO thread (decode-ahead producers, the clock thread): above every
+    /// normal-class thread, below the RT feed, exempt from power throttling. Default: no registration (headless, tests) — a
+    /// default interface member so an implementation written before this member existed keeps compiling. Callers invoke it
+    /// THROUGH the interface; dispose the returned token to revert. May return null.</summary>
+    IDisposable? EnterDecode() => null;
 }
 
 /// <summary>The portable no-op <see cref="IRtThreadCharacteristics"/> (headless / tests): the RT thread runs at normal
@@ -25,6 +33,28 @@ public sealed class NullRtThreadCharacteristics : IRtThreadCharacteristics
     public static NullRtThreadCharacteristics Instance { get; } = new();
     /// <inheritdoc/>
     public IDisposable? Enter() => null;
+}
+
+/// <summary>Time-domain ring sizing (spec §7.9, D8): the same four numbers for the live, prepared and seek voices, so a
+/// decode-ahead cushion holds in TIME at every device rate. Always build one through <see cref="Default"/> or the positional
+/// constructor with all four arguments: <c>new RingSizing()</c> on a record STRUCT is the all-zero value, not the parameter
+/// defaults below.</summary>
+/// <param name="BlockMs">The per-callback render block (≈ the device period).</param>
+/// <param name="AheadMs">How far ahead of the RT thread each producer keeps its ring filled.</param>
+/// <param name="RingMs">The ring capacity (raised to hold ahead + kept-behind + two blocks).</param>
+/// <param name="KeepBehindMs">Audio the producer leaves intact behind the consumer's head, for an instant backward seek.</param>
+public readonly record struct RingSizing(double BlockMs = 10.0, double AheadMs = 500.0, double RingMs = 1000.0, double KeepBehindMs = 0.0)
+{
+    /// <summary>Today's sizing: 10 ms blocks, 500 ms ahead, a 1 s ring, nothing kept behind.</summary>
+    public static RingSizing Default => new(10.0, 500.0, 1000.0, 0.0);
+    /// <summary>The render block in frames at <paramref name="rate"/> (≥ 1).</summary>
+    public int BlockFrames(int rate) => Math.Max(1, (int)Math.Round(BlockMs * rate / 1000.0));
+    /// <summary>The decode-ahead target in frames at <paramref name="rate"/> (≥ 1).</summary>
+    public int AheadFrames(int rate) => Math.Max(1, (int)Math.Round(AheadMs * rate / 1000.0));
+    /// <summary>The ring capacity in frames at <paramref name="rate"/>: never less than ahead + kept-behind + two blocks.</summary>
+    public int RingFrames(int rate) => Math.Max(AheadFrames(rate) + KeepBehindFrames(rate) + 2 * BlockFrames(rate), (int)Math.Round(RingMs * rate / 1000.0));
+    /// <summary>The protected kept-behind span in frames at <paramref name="rate"/> (≥ 0).</summary>
+    public int KeepBehindFrames(int rate) => Math.Max(0, (int)Math.Round(KeepBehindMs * rate / 1000.0));
 }
 
 /// <summary>
@@ -60,12 +90,13 @@ public sealed class AudioFeedThread : IDisposable
     private int _blockFrames;
     private int _ringFrames;
     private int _targetAheadFrames;
+    private int _keepBehindFrames;
     private int _blockPeriodMs;
     private readonly int _maxBlocksPerWake;
     // The ms-domain sizing this feed was configured with (back-derived from the frame counts at construction time for
-    // BOTH ctors — they are just different unit systems for the same four sizes). Resize re-applies these against a new
+    // ALL ctors — they are just different unit systems for the same five sizes). Resize re-applies these against a new
     // sample rate instead of leaving the frame counts pinned to the rate the feed happened to be built at.
-    private double _blockMs, _ringMs, _aheadMs;
+    private double _blockMs, _ringMs, _aheadMs, _keepBehindMs;
 
     // Management is event-driven: publish seek/retirement work BEFORE setting this event. AutoResetEvent retains a
     // signal delivered between drain and wait. Dedicated ring producers own their own refill wake and fallback;
@@ -122,7 +153,7 @@ public sealed class AudioFeedThread : IDisposable
     /// at 48 kHz but only 21 ms at a 192 kHz Realtek default), which is exactly the bug that ctor exists to close.</summary>
     public AudioFeedThread(PcmAudioSession session, int blockFrames = 480, IRtThreadCharacteristics? rt = null,
         int ringFrames = 8192, int targetAheadFrames = 4096)
-        : this(session, rt, blockFrames, ringFrames, targetAheadFrames, maxBlocksPerWake: 3)
+        : this(session, rt, blockFrames, ringFrames, targetAheadFrames, keepBehindFrames: 0, maxBlocksPerWake: 3)
     {
     }
 
@@ -136,24 +167,39 @@ public sealed class AudioFeedThread : IDisposable
     /// the ring gradually across wakes — leaving time for the worker's low-water wake to refill it — instead of instantly.</summary>
     public AudioFeedThread(PcmAudioSession session, int sampleRate, IRtThreadCharacteristics? rt = null,
         double blockMs = 10.0, double aheadMs = 500.0, double ringMs = 1000.0, int maxBlocksPerWake = 3)
+        : this(session, sampleRate, rt, new RingSizing(blockMs, aheadMs, ringMs, 0.0), maxBlocksPerWake)
+    {
+    }
+
+    /// <summary>Create a feed sized by one <see cref="RingSizing"/> record (spec §7.9, D8) — the SAME record the backend hands
+    /// to <see cref="PcmAudioPlayer"/> so the live feed and every prepared/seek voice hold the same time-domain cushion
+    /// (production: 2 s ahead, 1 s kept behind, a 4 s ring). Every size converts against <paramref name="sampleRate"/>.
+    /// <paramref name="rt"/> is the INSTANCE seam: the RT thread registers through <see cref="IRtThreadCharacteristics.Enter"/>
+    /// and the clock thread and every ring producer through <see cref="IRtThreadCharacteristics.EnterDecode"/>. Build
+    /// <paramref name="sizing"/> from <see cref="RingSizing.Default"/> or the full positional constructor — never
+    /// <c>new RingSizing()</c>, which is all zeros.</summary>
+    public AudioFeedThread(PcmAudioSession session, int sampleRate, IRtThreadCharacteristics? rt, RingSizing sizing,
+        int maxBlocksPerWake = 3)
         : this(session, rt,
-              blockFrames: FramesFromMs(blockMs, sampleRate),
-              ringFrames: FramesFromMs(ringMs, sampleRate),
-              targetAheadFrames: FramesFromMs(aheadMs, sampleRate),
+              blockFrames: sizing.BlockFrames(sampleRate),
+              ringFrames: sizing.RingFrames(sampleRate),
+              targetAheadFrames: sizing.AheadFrames(sampleRate),
+              keepBehindFrames: sizing.KeepBehindFrames(sampleRate),
               maxBlocksPerWake: maxBlocksPerWake)
     {
     }
 
-    // Shared init (both public ctors funnel here): both are just different unit systems for the same four sizes.
+    // Shared init (every public ctor funnels here): they are just different unit systems for the same five sizes.
     private AudioFeedThread(PcmAudioSession session, IRtThreadCharacteristics? rt, int blockFrames, int ringFrames,
-        int targetAheadFrames, int maxBlocksPerWake)
+        int targetAheadFrames, int keepBehindFrames, int maxBlocksPerWake)
     {
         _session = session;
         _rt = rt ?? NullRtThreadCharacteristics.Instance;
         int rate = session.Format.SampleRate;
         _blockFrames = Math.Clamp(blockFrames, 1, rate);
         _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / rate));
-        _ringFrames = Math.Max(ringFrames, targetAheadFrames + blockFrames);
+        _keepBehindFrames = Math.Max(0, keepBehindFrames);
+        _ringFrames = Math.Max(ringFrames, targetAheadFrames + _keepBehindFrames + blockFrames);
         _targetAheadFrames = targetAheadFrames;
         _maxBlocksPerWake = Math.Max(1, maxBlocksPerWake);
         // Back-derive the ms-domain sizing from the frame counts at the CONSTRUCTION rate (spec §7.9 Fix 3) — the
@@ -162,6 +208,7 @@ public sealed class AudioFeedThread : IDisposable
         _blockMs = _blockFrames * 1000.0 / rate;
         _ringMs = _ringFrames * 1000.0 / rate;
         _aheadMs = _targetAheadFrames * 1000.0 / rate;
+        _keepBehindMs = _keepBehindFrames * 1000.0 / rate;
         session.AttachFeed(this);
     }
 
@@ -169,11 +216,14 @@ public sealed class AudioFeedThread : IDisposable
     // device rate is the single source of truth, matching whatever it passes as sampleRate.
     private static int FramesFromMs(double ms, int sampleRate) => Math.Max(1, (int)Math.Round(ms * sampleRate / 1000.0));
 
+    // The kept-behind span may legitimately be 0 (no instant-backward-seek cushion), so it must not take FramesFromMs' ≥ 1 floor.
+    private static int KeepFramesFromMs(double ms, int sampleRate) => Math.Max(0, (int)Math.Round(ms * sampleRate / 1000.0));
+
     /// <summary>Re-derive the ms→frames sizing against <paramref name="newFormat"/>'s rate (spec §7.9 Fix 3): a device
     /// rebuild that also changes sample rate (e.g. 48000 → 44100) would otherwise leave the block/ring/decode-ahead
     /// sizing pinned to the OLD rate — the exact ms-vs-frames collapse the time-sized ctor exists to prevent, just
     /// re-introduced on a LATER rebuild instead of at construction. Call this from the rate-change site (the cold device
-    /// thread, around the same park/swap/resume the RT feed already gets) — it plain-writes four fields with no
+    /// thread, around the same park/swap/resume the RT feed already gets) — it plain-writes five fields with no
     /// Volatile/Interlocked, so it is NOT RT-safe while the feed's threads are live; callers must have the feed
     /// stopped first (the on-box cold loop already parks it around every rebuild).</summary>
     public void Resize(MixFormat newFormat)
@@ -182,11 +232,18 @@ public sealed class AudioFeedThread : IDisposable
         _blockFrames = Math.Clamp(FramesFromMs(_blockMs, rate), 1, rate);
         _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / rate));
         _targetAheadFrames = FramesFromMs(_aheadMs, rate);
-        _ringFrames = Math.Max(FramesFromMs(_ringMs, rate), _targetAheadFrames + _blockFrames);
+        _keepBehindFrames = KeepFramesFromMs(_keepBehindMs, rate);
+        _ringFrames = Math.Max(FramesFromMs(_ringMs, rate), _targetAheadFrames + _keepBehindFrames + _blockFrames);
     }
 
     /// <summary>The per-callback block size (frames).</summary>
     public int BlockFrames => _blockFrames;
+    /// <summary>The decode-ahead target every ring this feed wraps is kept filled to (frames at the current rate). The session
+    /// bounds its starvation resume cushion by it.</summary>
+    public int TargetAheadFrames => _targetAheadFrames;
+    /// <summary>The span (frames at the current rate) every ring this feed wraps leaves intact behind the RT read head, for an
+    /// instant backward seek (0 ⇒ none). Part of the same <see cref="RingSizing"/> as <see cref="TargetAheadFrames"/>.</summary>
+    public int KeepBehindFrames => _keepBehindFrames;
     /// <summary>The total underruns observed since start (spec §7.9). Bumped on the RT thread, read anywhere.</summary>
     public long XrunCount => Interlocked.Read(ref _xrunCount);
     /// <summary>The xrun count as a bindable signal, published from the NON-RT control tick.</summary>
@@ -213,7 +270,8 @@ public sealed class AudioFeedThread : IDisposable
     /// REFERENCE (ids would collide with the new primary). Control thread only.</summary>
     public IAudioSource Wrap(IAudioSource inner)
     {
-        var ring = inner as RingAudioSource ?? new RingAudioSource(inner, _session.Format.Channels, _ringFrames, _targetAheadFrames, _blockFrames * 2);
+        var ring = inner as RingAudioSource ?? new RingAudioSource(inner, _session.Format.Channels, _ringFrames, _targetAheadFrames,
+            _blockFrames * 2, _keepBehindFrames, rt: _rt);
         if (_run) ring.StartProducer();
         lock (_tableLock)
         {
@@ -229,7 +287,8 @@ public sealed class AudioFeedThread : IDisposable
     /// CONTROL thread only (called from <see cref="PcmAudioSession.AddCrossfadeVoice"/>).</summary>
     public IAudioSource WrapAdditional(IAudioSource inner, long voiceId)
     {
-        var ring = inner as RingAudioSource ?? new RingAudioSource(inner, _session.Format.Channels, _ringFrames, _targetAheadFrames, _blockFrames * 2);
+        var ring = inner as RingAudioSource ?? new RingAudioSource(inner, _session.Format.Channels, _ringFrames, _targetAheadFrames,
+            _blockFrames * 2, _keepBehindFrames, rt: _rt);
         if (_run) ring.StartProducer();
         lock (_tableLock)
         {
@@ -291,14 +350,24 @@ public sealed class AudioFeedThread : IDisposable
         bool suppress = _session.SuppressXrunAccounting;
         for (int i = 0; i < rings.Length; i++)
         {
-            if (rings[i].Ring.ConsumeStarve()) starved = true;
+            // The ring latches ONE edge per incident (spec V-PE30): the first short read of a starvation run sets it, the rest of
+            // the run only accrues frames. So `incidentEdge` is "a NEW incident began since the last block", and everything
+            // that must happen once per incident (the xrun record, the counter, GrowAhead) hangs off it.
+            bool incidentEdge = rings[i].Ring.ConsumeStarve();
+            if (incidentEdge) starved = true;
             // Severity + incident record. ConsumeStarveFrames must be read-and-cleared EVERY block whether or not we are
             // recording, otherwise a suppressed seek rebuffer would leak its shortfall into the next real incident.
             int gapFrames = rings[i].Ring.ConsumeStarveFrames();
             if (gapFrames > 0 && !suppress)
             {
-                Interlocked.Add(ref _xrunFramesLost, gapFrames);
-                RecordXrun(gapFrames, rings[i].Ring.BufferedFrames, rings[i].VoiceId);
+                Interlocked.Add(ref _xrunFramesLost, gapFrames);   // severity accrues every block of the incident
+                if (incidentEdge)
+                {
+                    RecordXrun(gapFrames, rings[i].Ring.BufferedFrames, rings[i].VoiceId);
+                    // A real underrun means the producer lost a race it was supposed to win: deepen its decode-ahead target (once
+                    // per incident, never for a suppressed seek rebuffer). A single Volatile write — RT-legal.
+                    rings[i].Ring.GrowAhead();
+                }
             }
             // Low-water worker wake (spec §7.9): edge-triggered (Volatile read only) so this fires the worker's event
             // ONCE per drop below half target-ahead, not on every block while it stays low — the AudioTripwire alloc/
@@ -484,7 +553,9 @@ public sealed class AudioFeedThread : IDisposable
         // work (UI/GC/other Normal threads) so its low-water refill actually lands promptly after a stall-triggered
         // catch-up burst, without contending with the RT thread itself.
         _workerThread = new Thread(WorkerLoop) { IsBackground = true, Name = "FluentGpu.AudioWorker", Priority = ThreadPriority.AboveNormal };
-        _clockThread = new Thread(ClockLoop) { IsBackground = true, Name = "FluentGpu.AudioClock" };
+        // The clock thread publishes Stalled/Playing/Position and the FFT window; a starved Normal-class clock freezes the UI position
+        // and the visualiser exactly when the machine is busy. AboveNormal + the MMCSS "Audio" registration (ClockLoop) — F1.
+        _clockThread = new Thread(ClockLoop) { IsBackground = true, Name = "FluentGpu.AudioClock", Priority = ThreadPriority.AboveNormal };
         _rtThread = new Thread(RtLoop) { IsBackground = true, Name = "FluentGpu.AudioRT", Priority = ThreadPriority.Highest };
         Volatile.Write(ref _liveLoops, 3);
         _workerThread.Start();
@@ -554,6 +625,7 @@ public sealed class AudioFeedThread : IDisposable
     {
         try
         {
+            using var rtToken = _rt.EnterDecode();   // MMCSS "Audio" for the lifetime of the clock thread (F1); reverted on exit
             while (_run)
             {
                 try { ControlTickOnce(); }

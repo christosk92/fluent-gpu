@@ -193,10 +193,12 @@ public sealed record GainSpec(float LinearGain) : EffectSpec;
 /// <summary>A channel effect — balance/mono/crossfeed (spec §7.3).</summary>
 public sealed record ChannelSpec(float Balance, bool Mono) : EffectSpec;
 
-/// <summary>The TERMINAL brickwall limiter (spec §7.3/§7.7): always present, ~-1.5 dBTP, after any gain/EQ boost.</summary>
-public sealed record LimiterSpec(float CeilingDbTp = -1.5f, float ReleaseMs = 50f) : EffectSpec
+/// <summary>The TERMINAL brickwall limiter (spec §7.3/§7.7): always present, ~-1.5 dBTP, after any gain/EQ boost. It looks
+/// <c>LookaheadMs</c> ahead (at least one frame), which DELAYS the audio by that much: the delay is the compiled stage's
+/// <see cref="IDspStage.LatencySamples"/> and so part of <c>CompiledAudioGraph.TotalLatencySamples</c>.</summary>
+public sealed record LimiterSpec(float CeilingDbTp = -1.5f, float ReleaseMs = 50f, float LookaheadMs = 2f) : EffectSpec
 {
-    /// <summary>The default terminal limiter (-1.5 dBTP).</summary>
+    /// <summary>The default terminal limiter (-1.5 dBTP, 2 ms lookahead).</summary>
     public static LimiterSpec Default { get; } = new();
 }
 

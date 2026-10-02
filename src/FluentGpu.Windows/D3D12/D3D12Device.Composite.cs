@@ -35,6 +35,10 @@ public sealed unsafe partial class D3D12Device
     /// only the strips outside each feather's unit interior (<see cref="FeatherQuadSplit"/>).</summary>
     private long _frameFeatherPx;
     private int _frameBlurCacheHits;
+    // Placements this turn skipped because their slot held no texture (TouchTile false) — a valid tile that composited
+    // nothing. Structurally 0 since the table owns tile texture lifetime (CompositeFrame.TrimSurfaces); always-on detector.
+    private int _frameLostPlacements;
+    private bool _lostPlacementsLogged;
     private int[] _rowOfSlice = NewRowMap(256);
     private int[] _rowPrepared = new int[256];
     private int[] _itemSurface = new int[64];
@@ -72,6 +76,9 @@ public sealed unsafe partial class D3D12Device
 
     /// <inheritdoc/>
     public CompositeCacheStats LastCompositeCache => new(_groupRenders, _offGroupHits, _surfaces?.RetainedBytes ?? 0L);
+
+    /// <inheritdoc/>
+    public int LastLostPlacements => _frameLostPlacements;
 
     private void ResetOffscreenSplit()
     {
@@ -112,10 +119,14 @@ public sealed unsafe partial class D3D12Device
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
         ResetFrameCounters();
         _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0;
+        _frameLostPlacements = 0;
         ResetOffscreenSplit();
         BeginPipesFrame(slot);
         _compositeTurn++;
         _surfaces!.BeginFrame(slot, _compositeTurn, Gen.ID3D12FenceVtbl.GetCompletedValue(_fence), GpuProfile.IsWeak);
+        // Tile textures trim ONLY where the table released the slot (no tile holds it) — never on the pool's own clock:
+        // a tile consumed through a retained group / self-blur result is valid and placed while nothing samples it.
+        _surfaces.TrimTiles(frame.TrimSurfaces);
         LogRenderPassesOnce();
         f.TextRepaintPending = false;
         EnsureItemScratch(frame.Items.Length);
@@ -144,6 +155,7 @@ public sealed unsafe partial class D3D12Device
 
         _surfaces.EndFrame();
         UnmapRows(in frame);
+        NoteLostPlacementsEdge(_frameLostPlacements);
         NoteFaithfulness(f);
         PublishDecodeDiagnostics();
         Diag.Set("d3d12", "tilesRastered", _frameTilesRastered);
@@ -152,6 +164,18 @@ public sealed unsafe partial class D3D12Device
         Diag.Set("d3d12", "directRegions", _frameDirectRegions);
         Diag.Set("d3d12", "blurCacheHits", _frameBlurCacheHits);
         EndRecording(sc, f, slot, RepaintRoute.Composite, _frameBackBufferTransitions);
+    }
+
+    /// <summary>Edge-gated, always-on: a composite that skipped a placement because its slot held no texture (a valid tile
+    /// that drew nothing — the "content disappears" class). One line per onset, re-armed by a clean turn.</summary>
+    private void NoteLostPlacementsEdge(int lost)
+    {
+        if (lost <= 0) { _lostPlacementsLogged = false; return; }
+        if (_lostPlacementsLogged) return;
+        _lostPlacementsLogged = true;
+        Diag.Line("[d3d12.tiles] lostPlacements=" + lost.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " turn=" + _compositeTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " (a placed tile's surface slot held no texture: that tile composited nothing this turn)");
     }
 
     private void LogRenderPassesOnce()
@@ -460,19 +484,12 @@ public sealed unsafe partial class D3D12Device
         if (_itemSurface[i] >= 0) _surfaces.Retain(_itemSurface[i], key, _itemDown[i], RetainedCap());
     }
 
+    /// <summary>The leaf self-blur's content key — engine-side (<see cref="GroupCacheKey.LeafBlur"/>) so the headless model
+    /// keys its modelled cache with the same number.</summary>
     private ulong LeafBlurKey(in CompositeItem it, ReadOnlySpan<TilePlacement> placed, in PixelRect src, in PixelRect region)
     {
-        ulong h = 0xB1B1_0000_0000_0001UL;
-        Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.BlurSigma));
-        Mix(ref h, (ulong)(uint)src.Left << 32 | (uint)src.Top); Mix(ref h, (ulong)(uint)src.Right << 32 | (uint)src.Bottom);
-        Mix(ref h, (ulong)(uint)region.Left << 32 | (uint)region.Top); Mix(ref h, (ulong)(uint)region.Right << 32 | (uint)region.Bottom);
-        Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
-        for (int p = 0; p < placed.Length; p++)
-        {
-            Mix(ref h, (ulong)(ushort)placed[p].Key.Tx << 48 | (ulong)(ushort)placed[p].Key.Ty << 32 | (uint)placed[p].Surface);
-            Mix(ref h, _surfaces!.TileSerial(placed[p].Surface));
-        }
-        return h;
+        var serials = new PoolSerials(_surfaces!);
+        return GroupCacheKey.LeafBlur(in it, placed, in src, in region, ref serials);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -505,7 +522,7 @@ public sealed unsafe partial class D3D12Device
         }
         for (int p = 0; p < placed.Length; p++)
         {
-            if (!_surfaces.TouchTile(placed[p].Surface, fence)) continue;
+            if (!_surfaces.TouchTile(placed[p].Surface, fence)) { _frameLostPlacements++; continue; }
             float x0 = tx + placed[p].Key.Tx * TileGrid.W - region.Left, y0 = ty + placed[p].Key.Ty * TileGrid.H - region.Top;
             _compositor.Begin(x0, y0, x0 + placed[p].W, y0 + placed[p].H);
             _compositor.Draw(_cmdList, SliceCompositor.Pso.Load, _surfaces.TileSrv(placed[p].Surface));
@@ -532,30 +549,7 @@ public sealed unsafe partial class D3D12Device
     /// kernel's reach — else its clip ∩ the window), <paramref name="region"/> = the scratch it blurs in (the source, or
     /// the clip grown by the reach), its top-left floored onto the slice's origin grid.</summary>
     private void BlurRegions(in CompositeItem it, out PixelRect src, out PixelRect region)
-    {
-        if (!it.SourceClip.IsEmpty)
-        {
-            src = new PixelRect((int)MathF.Floor(it.SourceClip.X), (int)MathF.Floor(it.SourceClip.Y),
-                (int)MathF.Ceiling(it.SourceClip.Right), (int)MathF.Ceiling(it.SourceClip.Bottom));
-            region = src;
-        }
-        else
-        {
-            int halo = SelfBlurRegion.TapRadius(it.BlurSigma);
-            src = ItemRegion(in it, 0);
-            region = new PixelRect(src.Left - halo, src.Top - halo, src.Right + halo, src.Bottom + halo);
-        }
-        region = OnSliceGrid(in it, region);
-    }
-
-    /// <summary><paramref name="r"/> with its top-left floored onto <see cref="TileGrid.OriginGrid"/> of the item's slice
-    /// space (the item's translation is its slice origin in window px).</summary>
-    private static PixelRect OnSliceGrid(in CompositeItem it, PixelRect r)
-    {
-        if (r.IsEmpty) return r;
-        int tx = (int)it.Transform.Dx, ty = (int)it.Transform.Dy;
-        return new PixelRect(tx + TileGrid.GridFloor(r.Left - tx), ty + TileGrid.GridFloor(r.Top - ty), r.Right, r.Bottom);
-    }
+        => GroupCacheKey.BlurRegions(in it, (int)_w, (int)_h, out src, out region);
 
     /// <summary>The retained-surface byte cap this turn: <c>TileBudget.RetainedShare</c> of the window's tile budget.</summary>
     private long RetainedCap() => TileBudget.RetainedBytesCap(TileBudget.Current((int)_w, (int)_h));
@@ -781,7 +775,7 @@ public sealed unsafe partial class D3D12Device
                     if (feathers && (!it.Feather.IsNone || !it.Feather2.IsNone)) _frameFeatherItems++;
                     for (int p = 0; p < placed.Length; p++)
                     {
-                        if (!_surfaces!.TouchTile(placed[p].Surface, fence)) continue;
+                        if (!_surfaces!.TouchTile(placed[p].Surface, fence)) { _frameLostPlacements++; continue; }
                         float x0 = it.Transform.Dx + placed[p].Key.Tx * TileGrid.W - ox, y0 = it.Transform.Dy + placed[p].Key.Ty * TileGrid.H - oy;
                         if (x0 >= tw || y0 >= th || x0 + placed[p].W <= 0f || y0 + placed[p].H <= 0f) continue;
                         DrawItemQuad(in it, x0, y0, x0 + placed[p].W, y0 + placed[p].H, ox, oy, feathers,

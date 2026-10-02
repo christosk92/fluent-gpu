@@ -761,6 +761,13 @@ serviced via the `HoverFade`/`PressFade`/`BrushFade` animation channels), geomet
 hand-rolled hover/press sites in Wavee; **framework controls keep their WinUI-exact hand ramps**. Value struct,
 cold-path expansion, zero-alloc. Gates: `gate.ctl.recipe.{expand,presets}`.
 
+**Cursor default (2026-10).** `Interactive` sets `Cursor = el.Cursor ?? Hand` when the box is clickable at the time of
+the call (`OnClick` or `ClickRequestsContext`); a caller-set cursor wins and a non-clickable box stays cursor-less. The
+element-level stance is unchanged — clickability alone never implies the hand on a plain `BoxEl` — only this
+app-authoring helper gains the default (Flutter `InkResponse` defaults its mouse cursor to `click` when `onTap` is set;
+Zed's `ListItem` adds `cursor_pointer()` only with an `on_click`). A click attached AFTER the call through `with` misses
+the default. Gate: `gate.ctl.recipe.cursor`.
+
 ---
 
 ## 7. Collection & container controls (over virtualization + UIA collection relations)

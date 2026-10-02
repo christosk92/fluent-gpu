@@ -266,5 +266,5 @@ public sealed class NullAudioSink : IBufferedAudioSink
     /// <inheritdoc/>
     public void Reset() { _frames = 0; }
     /// <inheritdoc/>
-    public void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs) => controlWake.WaitOne(timeoutMs);
+    public void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs) => controlWake.WaitOne(timeoutMs < 0 ? -1 : timeoutMs);   // negative ⇒ INFINITE (R-3)
 }

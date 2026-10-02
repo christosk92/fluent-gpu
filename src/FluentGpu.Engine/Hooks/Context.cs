@@ -291,6 +291,13 @@ public sealed class InputHooks
     /// <summary>Bumped by the host on WindowFocus/WindowBlur/WindowStateChanged: the TitleBar reads it (subscribes)
     /// and pulls <see cref="GetWindowState"/>/<see cref="IsWindowActive"/> for the current values on re-render.</summary>
     public Signal<int>? WindowChromeEpoch;
+    /// <summary>True while this window is not being shown — parked (minimized / hidden) or the primary swapchain's
+    /// <c>IsOccluded</c>: the cloaked / covered present stand-down, or the DXGI occlusion latch where the backend reports
+    /// one (not on composition swapchains). Not merely inactive: alt-tab keeps it false so a second-monitor ambient keeps
+    /// running. Published by the host on EVERY frame, painted or idle (<c>AppHost.RunFrame</c>, above the park and idle
+    /// gates); while it reads occluded on an un-parked window the host re-probes the target with a forced present every
+    /// 250 ms, so a consumer that pauses on it still hears it fall. Null in a host-less tree.</summary>
+    public Signal<bool>? WindowOccluded;
 
     // ── E4 windowed out-of-bounds popups (host-wired in the AppHost ctor; consumed by OverlayHost) ──────────────────
     /// <summary>Window-DIP point → the containing MONITOR's work area translated into window-DIP space (the container

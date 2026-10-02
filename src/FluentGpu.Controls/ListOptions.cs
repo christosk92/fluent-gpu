@@ -329,6 +329,9 @@ public record ListOptions
     public Func<int, string>? ItemText { get; init; }
     /// <summary>Per-item enabled gate (disabled items dim + don't interact / take focus).</summary>
     public Func<int, bool>? IsItemEnabled { get; init; }
+    /// <summary>Per-item selectable gate (null ⇒ all). Non-selectable items still focus/invoke but interaction never runs
+    /// the selector on them and Ctrl+A selects only the selectable runs (hero / header prefix rows).</summary>
+    public Func<int, bool>? IsItemSelectable { get; init; }
     /// <summary>Imperative handle (CurrentItemIndex / StartBringItemIntoView / ScrollBy / Selection).</summary>
     public ItemsViewController? Controller { get; init; }
     /// <summary>Flex participation of the view: 1 (default) = fill the parent (hard viewport); 0 = natural (measures to ContentExtent).</summary>

@@ -65,6 +65,10 @@ sealed class ShotScene : Component
         // pipeline has an EQUAL-tested clone, so both are clipped by the scope's SCISSOR only and spill past the
         // silhouette into the box's rectangle. That spill is EXPECTED here; `Diag "d3d12"/"stencilFallback"` counts it.
         "stencilclip-fallback" => CenterShot(StencilFallbackShot()),
+        // SeriesEl (DrawOp.DrawSeries, gpu-renderer.md §3.1 / §5.3): three series over #161414 — a mirrored cyan wave
+        // (Horizon), a baseline area with a 3-stop amplitude gradient (Aurora) and a white stroke ribbon (outlines).
+        // Run: --screenshot series.png --shot series. v1 has NO AA fringe — soft gradient edges are the expected look.
+        "series" => CenterShot(SeriesShot()),
         // Edge-fade subsystem: alpha feather (+ optional blur) following the rounded corners (the curve).
         "edgefade" => new BoxEl
         {
@@ -232,6 +236,24 @@ sealed class ShotScene : Component
         Justify = FlexJustify.Center,
         Padding = new Edges4(48, 48, 48, 48),
         Children = [child],
+    };
+
+    // ── SeriesEl (DrawOp.DrawSeries) ─────────────────────────────────────────────────────────────────────────────────
+    // Static samples (a plain SeriesSamples value, version 1): the shot proves the three shapes + the amplitude ramp on
+    // the real D3D12 pipeline. 181 samples = 6 chunks, 65 = 3, so chunk seams are in frame.
+    static readonly float[] s_wave = Wave(181), s_ribbon = Ribbon(65);
+    static float[] Wave(int n) { var a = new float[n]; for (int i = 0; i < n; i++) a[i] = 0.15f + 0.8f * MathF.Abs(MathF.Sin(i * 0.19f)) * (0.6f + 0.4f * MathF.Sin(i * 0.031f)); return a; }
+    static float[] Ribbon(int n) { var a = new float[n]; for (int i = 0; i < n; i++) a[i] = 0.5f + 0.35f * MathF.Sin(i * 0.21f) + 0.1f * MathF.Sin(i * 0.53f); return a; }
+    static Element SeriesShot() => new BoxEl
+    {
+        Width = 720f, Height = 360f, Direction = 1, Gap = 12f, Fill = ColorF.FromRgba(0x16, 0x14, 0x14),
+        Children =
+        [
+            new SeriesEl { Width = 720f, Height = 150f, Shape = SeriesShape.Mirrored, Samples = new SeriesSamples(s_wave, s_wave.Length, 1u), Color = ColorF.FromRgba(0x2f, 0xc6, 0xdd) },
+            new SeriesEl { Width = 720f, Height = 150f, Shape = SeriesShape.Baseline, Samples = new SeriesSamples(s_ribbon, s_ribbon.Length, 1u),
+                           Gradient = new GradientSpec(GradientShape.Linear, 0f, [new GradientStop(0f, ColorF.FromRgba(0x2f, 0x9a, 0x6d, 200)), new GradientStop(0.7f, ColorF.FromRgba(0xf0, 0xa9, 0x3b, 200)), new GradientStop(1f, ColorF.FromRgba(255, 255, 255))]) },
+            new SeriesEl { Width = 720f, Height = 36f, Shape = SeriesShape.Stroke, Thickness = 3f, Samples = new SeriesSamples(s_ribbon, s_ribbon.Length, 1u), Color = ColorF.FromRgba(255, 255, 255) },
+        ],
     };
 
     // ── Tier-3 stencil path clip (gpu-renderer.md §6) ────────────────────────────────────────────────────────────

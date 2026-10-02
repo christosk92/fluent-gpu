@@ -13,6 +13,9 @@ namespace FluentGpu.Controls;
 //      exact ramp the framework controls (CheckBox, Button, …) use — the recipe just packages it.
 //    • MOTION half → the declarative While* surface (WhileHover/WhilePressed MotionTargets + the Transition motion
 //      token): the press > focus > hover > rest priority resolver springs scale/opacity on the same input edge.
+//    • CURSOR default → the hand on a CLICKABLE box (OnClick / ClickRequestsContext) that declares no cursor of its own.
+//      The ONE place clickability implies the hand: the element itself keeps WinUI's arrow (Element.Cursor's doc), so
+//      the framework controls — which never call this helper — are untouched.
 //
 //  `.Interactive(recipe)` is a pure `with`-expansion at element construction (cold path, no closures, no per-frame
 //  alloc). It is an APP-AUTHORING surface: the framework controls keep their WinUI-exact hand ramps — do NOT restyle
@@ -79,10 +82,22 @@ public static class Interaction
     /// wins), as is a caller-set <see cref="Element.Transition"/>. Channels the recipe does not name are left untouched.</para>
     /// <para><paramref name="isEnabled"/> = false applies the Disabled fill/stroke legs and sets
     /// <see cref="Element.IsEnabled"/> = false, so the engine routes no hover/press progress (the Hover/Pressed legs are
-    /// never reached) — exactly how CheckBox/Button disable their ramps.</para></summary>
+    /// never reached) — exactly how CheckBox/Button disable their ramps.</para>
+    /// <para>Cursor (E3): a box that is CLICKABLE when it reaches this call — <see cref="BoxEl.OnClick"/> set or
+    /// <see cref="BoxEl.ClickRequestsContext"/> — and declares no <see cref="BoxEl.Cursor"/> gets
+    /// <see cref="CursorId.Hand"/>; a caller-set cursor (Arrow included) wins, and a non-clickable box stays cursor-less
+    /// (it inherits, else the arrow). The element-level stance is unchanged — clickability alone never implies the hand
+    /// (<see cref="BoxEl.Cursor"/>'s doc; the reconciler writes no default) — this app-authoring helper is the one place
+    /// that opts in. A disabled box keeps the stamp but shows nothing: the dispatcher's cursor walk skips a Disabled
+    /// node. Set <c>OnClick</c> BEFORE <c>.Interactive(…)</c>: a click added afterwards through <c>with</c> is not seen
+    /// here. Reference engines: Zed's <c>ListItem</c> applies <c>cursor_pointer()</c> exactly when an enabled
+    /// <c>on_click</c> exists (<c>crates/ui/src/components/list/list_item.rs:388-389</c>); egui's <c>Button</c> sets
+    /// <c>Visuals::interact_cursor</c> on hover only for an interactive widget (<c>crates/egui/src/widgets/button.rs:376-379</c>);
+    /// Flutter's <c>InkResponse</c> resolves its <c>mouseCursor</c> to <c>SystemMouseCursors.click</c> when <c>onTap</c>
+    /// is non-null (material package, not cloned locally).</para></summary>
     public static BoxEl Interactive(this BoxEl el, in InteractionRecipe r, bool isEnabled = true)
     {
-        // ── BRUSH half (always) ────────────────────────────────────────────────────────────────────────────────
+        // ── BRUSH half (always) + the clickable-hand cursor default (caller-set cursor wins) ────────────────────
         var box = el with
         {
             Fill = r.Fill.Resting(isEnabled),
@@ -90,6 +105,7 @@ public static class Interaction
             PressedFill = r.Fill.Pressed,
             BrushTransitionMs = r.BrushMs,
             IsEnabled = isEnabled,
+            Cursor = el.Cursor ?? ClickableCursor(el),
         };
         if (r.Stroke is { } stroke)
             box = box with
@@ -123,6 +139,10 @@ public static class Interaction
         }
         return box;
     }
+
+    /// <summary>The E3 default: the hand for a box that is clickable (a click target or a context-invoker), else none.</summary>
+    static CursorId? ClickableCursor(BoxEl el)
+        => el.OnClick is not null || el.ClickRequestsContext ? CursorId.Hand : (CursorId?)null;
 
     // ── Presets (APP-AUTHORING; theme-live — get-only, re-read Tok.* on every access, matching the Tok gradient
     //    precedent). Framework controls keep their own WinUI-exact ramps; never restyle a control with a preset. ──

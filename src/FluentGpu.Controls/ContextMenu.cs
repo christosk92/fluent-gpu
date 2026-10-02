@@ -254,8 +254,10 @@ public static class ContextMenu
         return result;
     }
 
-    // At least one enabled, non-separator entry anywhere (primary strip or rows) — else there is nothing to open.
-    private static bool HasAnyEnabled(ContextMenuModel m)
+    /// <summary>At least one enabled, non-separator entry anywhere (primary strip or rows) — else there is nothing to
+    /// open, and <c>Open</c> returns WITHOUT ever raising <see cref="ContextMenuOptions.OnClosed"/>. A caller that counts
+    /// an open menu inside its factory asks this first, so it never counts a menu that will not open.</summary>
+    public static bool HasAnyEnabled(ContextMenuModel m)
     {
         var primary = m.Primary;
         for (int i = 0; i < primary.Count; i++)

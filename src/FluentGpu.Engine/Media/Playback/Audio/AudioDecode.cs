@@ -128,7 +128,7 @@ public sealed class WavAudioDecoder : IAudioDecoder
     private long _srcFrameCursor;     // frames read from the source
     private bool _eof;
 
-    private LinearResampler? _resampler;
+    private PolyphaseResampler? _resampler;
     private byte[] _byteScratch = Array.Empty<byte>();
     private float[] _floatScratch = Array.Empty<float>();   // conformed to target channels, source rate; [0.._holdFrames) unread
     private int _holdFrames;                                // unconsumed conformed frames retained for the next Process
@@ -145,7 +145,7 @@ public sealed class WavAudioDecoder : IAudioDecoder
         if (!src.TryOpen(new DataSpec { Position = 0, Length = -1 })) return false;
         if (!ParseHeader()) return false;
 
-        _resampler = _srcRate != target.SampleRate ? new LinearResampler(_srcRate, target.SampleRate, target.Channels) : null;
+        _resampler = _srcRate != target.SampleRate ? new PolyphaseResampler(_srcRate, target.SampleRate, target.Channels) : null;
         _byteScratch = new byte[MaxSrcFramesPerRead * _blockAlign];
         _floatScratch = new float[MaxSrcFramesPerRead * target.Channels];
 
@@ -169,30 +169,37 @@ public sealed class WavAudioDecoder : IAudioDecoder
 
         if (_resampler is { IsActive: true } rs)
         {
-            // Top up retained unread input; Process returns Consumed so we keep src[Consumed..] for the next call.
-            int wantAvail = Math.Min(MaxSrcFramesPerRead, rs.SrcFramesForOutput(wantFrames));
-            int wantPull = Math.Min(MaxSrcFramesPerRead - _holdFrames, Math.Max(0, wantAvail - _holdFrames));
-            long remainingSrc = _srcFramesTotal - _srcFrameCursor;
-            wantPull = (int)Math.Min(wantPull, remainingSrc);
-            if (wantPull > 0)
+            while (true)
             {
-                int got = DecodeSourceFramesAt(_holdFrames, wantPull);
-                if (got > 0) { _holdFrames += got; _srcFrameCursor += got; }
-            }
-            if (_holdFrames <= 0) { _eof = true; return 0; }
+                // Top up retained unread input; Process returns Consumed so we keep src[Consumed..] for the next call.
+                int wantAvail = Math.Min(MaxSrcFramesPerRead, rs.SrcFramesForOutput(wantFrames));
+                int wantPull = Math.Min(MaxSrcFramesPerRead - _holdFrames, Math.Max(0, wantAvail - _holdFrames));
+                long remainingSrc = _srcFramesTotal - _srcFrameCursor;
+                wantPull = (int)Math.Min(wantPull, remainingSrc);
+                if (wantPull > 0)
+                {
+                    int got = DecodeSourceFramesAt(_holdFrames, wantPull);
+                    if (got > 0) { _holdFrames += got; _srcFrameCursor += got; }
+                }
+                if (_holdFrames <= 0)
+                {
+                    // The source is exhausted: the resampler still owes its trailing half kernel (V-PE21), handed out over as many
+                    // reads as `dst` needs. 0 from Flush is the end.
+                    int tail = rs.Flush(dst);
+                    if (tail > 0) return tail;
+                    _eof = true;
+                    return 0;
+                }
 
-            ResampleResult rr = rs.Process(_floatScratch.AsSpan(0, _holdFrames * ch), _holdFrames, dst);
-            int unread = _holdFrames - rr.Consumed;
-            if (unread > 0 && rr.Consumed > 0)
-                Array.Copy(_floatScratch, rr.Consumed * ch, _floatScratch, 0, unread * ch);
-            _holdFrames = Math.Max(0, unread);
+                ResampleResult rr = rs.Process(_floatScratch.AsSpan(0, _holdFrames * ch), _holdFrames, dst);
+                int unread = _holdFrames - rr.Consumed;
+                if (unread > 0 && rr.Consumed > 0)
+                    Array.Copy(_floatScratch, rr.Consumed * ch, _floatScratch, 0, unread * ch);
+                _holdFrames = Math.Max(0, unread);
 
-            if (rr.Produced <= 0)
-            {
-                if (_holdFrames <= 0 && _srcFrameCursor >= _srcFramesTotal) _eof = true;
-                return 0;
+                // A pull that went wholly into the filter's history (the group-delay pre-roll) produced nothing: that is not the end.
+                if (rr.Produced > 0 || rr.Consumed == 0) return rr.Produced;
             }
-            return rr.Produced;
         }
 
         int srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);

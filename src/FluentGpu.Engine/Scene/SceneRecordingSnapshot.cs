@@ -51,6 +51,10 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<ArcSpec> _arc = new();
     private readonly SnapshotColumn<PolylineStrokeSpec> _polyline = new();
     private readonly SnapshotColumn<PathSpec> _path = new();
+    // SeriesEl (VisualKind.Series): the static spec rides the SparsePaint block; the pooled sample copy is a
+    // VisualKind-gated capture-time copy like _rowCells (a SeriesEl has no other sparse paint of its own).
+    private readonly SnapshotColumn<SeriesSpec> _series = new();
+    private readonly SnapshotColumn<SeriesSamplesCapture> _seriesSamples = new();
     private readonly SnapshotColumn<ClipPathSpec> _clipPath = new();
     private readonly SnapshotColumn<Point2> _radialCenter = new();
     private readonly SnapshotColumn<AcrylicSpec> _acrylic = new();
@@ -271,6 +275,7 @@ public sealed partial class SceneRecordingSnapshot
             BeginSparseCapture();
             _spanDecorations.BeginCapture();
             _rowCells.BeginCapture();
+            _seriesSamples.BeginCapture();
         }
         // These three are rebuilt wholesale on EVERY capture: they are tiny (orphans are budget-capped, scroll rows
         // are a handful of viewports) and rebuilding is cheaper than tracking deltas through them.
@@ -335,6 +340,7 @@ public sealed partial class SceneRecordingSnapshot
             EndSparseCapture();
             _spanDecorations.EndCapture();
             _rowCells.EndCapture();
+            _seriesSamples.EndCapture();
         }
         _orphanChildren.EndCapture();
 
@@ -396,6 +402,8 @@ public sealed partial class SceneRecordingSnapshot
         _arc.Remove(index);
         _polyline.Remove(index);
         _path.Remove(index);
+        _series.Remove(index);
+        _seriesSamples.Remove(index);
         _clipPath.Remove(index);
         _radialCenter.Remove(index);
         _acrylic.Remove(index);
@@ -519,6 +527,7 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetArc(node, out ArcSpec arc)) _arc.Set(index) = arc;
             if (source.TryGetPolylineStroke(node, out PolylineStrokeSpec polyline)) _polyline.Set(index) = polyline;
             if (source.TryGetPath(node, out PathSpec path)) _path.Set(index) = path;
+            if (source.TryGetSeries(node, out SeriesSpec series)) CopySeries(ref _series.Set(index), in series);
             if (source.TryGetClipPath(node, out ClipPathSpec clipPath)) _clipPath.Set(index) = clipPath;
             if (source.TryGetRadialGradientCenter(node, out Point2 radialCenter)) _radialCenter.Set(index) = radialCenter;
             if (source.TryGetAcrylic(node, out AcrylicSpec acrylic)) _acrylic.Set(index) = acrylic;
@@ -549,6 +558,13 @@ public sealed partial class SceneRecordingSnapshot
             rc.Count = rowCells.Length;
             rc.Placeholder = rowPlaceholder;
             rc.PlaceholderColor = rowPlaceholderColor;
+        }
+        if (_paint[index].VisualKind == VisualKind.Series && source.TryGetSeriesSamples(node, out var seriesSamples))
+        {
+            ref var sc = ref _seriesSamples.Set(index);
+            if (sc.Samples is null || sc.Samples.Length < seriesSamples.Length) sc.Samples = new float[Math.Max(64, seriesSamples.Length)];
+            seriesSamples.CopyTo(sc.Samples);
+            sc.Count = seriesSamples.Length;
         }
         if (!_resourceReferencesDirty && previousReferences != ResourceReferencesAt(index))
             _resourceReferencesDirty = true;
@@ -821,6 +837,14 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetArc(NodeHandle node, out ArcSpec value) => _arc.TryGet((int)node.Raw.Index, out value);
     public bool TryGetPolylineStroke(NodeHandle node, out PolylineStrokeSpec value) => _polyline.TryGet((int)node.Raw.Index, out value);
     public bool TryGetPath(NodeHandle node, out PathSpec value) => _path.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetSeries(NodeHandle node, out SeriesSpec value) => _series.TryGet((int)node.Raw.Index, out value);
+    /// <summary>The recorder's read of a captured series (the render-thread twin of <c>SceneStore.TryGetSeriesSamples</c>).</summary>
+    public bool TryGetSeriesSamples(NodeHandle node, out ReadOnlySpan<float> samples)
+    {
+        if (_seriesSamples.TryGet((int)node.Raw.Index, out var c) && c.Samples is not null) { samples = c.Samples.AsSpan(0, c.Count); return true; }
+        samples = default;
+        return false;
+    }
     public bool TryGetClipPath(NodeHandle node, out ClipPathSpec value) => _clipPath.TryGet((int)node.Raw.Index, out value);
     public bool TryGetRadialGradientCenter(NodeHandle node, out Point2 value) => _radialCenter.TryGet((int)node.Raw.Index, out value);
     public bool TryGetAcrylic(NodeHandle node, out AcrylicSpec value) => _acrylic.TryGet((int)node.Raw.Index, out value);
@@ -921,6 +945,17 @@ public sealed partial class SceneRecordingSnapshot
         target = source with { Stops = stops };
     }
 
+    private static void CopySeries(ref SeriesSpec target, in SeriesSpec source)
+    {
+        if (source.Gradient is { } g)
+        {
+            GradientSpec copy = target.Gradient ?? default;
+            CopyGradient(ref copy, in g);           // pools the stops array exactly as the BoxEl gradient columns do
+            target = source with { Gradient = copy };
+        }
+        else target = source;
+    }
+
     private void BeginSparseCapture()
     {
         _textStyle.BeginCapture();
@@ -931,6 +966,7 @@ public sealed partial class SceneRecordingSnapshot
         _arc.BeginCapture();
         _polyline.BeginCapture();
         _path.BeginCapture();
+        _series.BeginCapture();
         _clipPath.BeginCapture();
         _radialCenter.BeginCapture();
         _acrylic.BeginCapture();
@@ -958,6 +994,7 @@ public sealed partial class SceneRecordingSnapshot
         _arc.EndCapture();
         _polyline.EndCapture();
         _path.EndCapture();
+        _series.EndCapture();
         _clipPath.EndCapture();
         _radialCenter.EndCapture();
         _acrylic.EndCapture();
@@ -980,6 +1017,7 @@ public sealed partial class SceneRecordingSnapshot
     private struct OrphanChildren { public List<NodeHandle>? Items; }
     private struct SpanDecoration { public SpanStyle[] Styles; public SpanRect[] Rects; }
     private struct RowCellsCapture { public RowCellRecorded[]? Cells; public int Count; public bool Placeholder; public ColorF PlaceholderColor; }
+    private struct SeriesSamplesCapture { public float[]? Samples; public int Count; }
 }
 
 /// <summary>Reusable dense visual rows indexed by sparse scene slots. Mutation is confined to exclusive capture.</summary>

@@ -38,6 +38,30 @@ public sealed class AudioEffectsLiveTests
         Assert.Equal(pendingBefore, session.Graph.PendingRetire); // no topology republish for a gain change
     }
 
+    /// <summary>The PRODUCTION open path: a session the BACKEND builds (<see cref="PcmAudioPlayer.OpenAsync"/>, not the hand-built
+    /// <c>Build</c> that calls <c>BindEffects</c> itself) follows the backend's effects surface LIVE — a gain-only EQ edit
+    /// reaches the playing voice without a reopen. Before the backend bound its surface (Wavee #166), ReconcileEffects on such a
+    /// session was a no-op: the edit waited for the next track, and the level tap and the spectrum ring never ran.</summary>
+    [Fact]
+    public async Task BackendOpenedSession_FollowsALiveEqEdit()
+    {
+        var fx = new AudioEffects();
+        fx.Equalizer.Apply(EqPreset.FiveBand());
+        var player = new PcmAudioPlayer(new MixFormat(48000, 2), effects: fx, maxBlock: 512);
+        byte[] wav = M3TestSupport.MakeWavPcm16(48000, 2, M3TestSupport.ToneStereo(48000, 0.5, 440, amp: 0.3f));
+        var opened = await player.OpenAsync(MediaSource.FromBytes(wav).WithKind(MediaKind.PcmAudio), new MediaOpenOptions(),
+            TestContext.Current.CancellationToken);
+        await using var session = Assert.IsType<PcmAudioSession>(opened);
+        var eq = session.PrimaryVoiceEq;
+        Assert.NotNull(eq);
+        Assert.False(eq.IsRamping);                               // seeded from the bound design: no ramp yet
+
+        fx.Equalizer.Bands[2].GainDb.Value = 9f;                  // a gain-only edit on the shared surface
+        session.ReconcileEffects();
+
+        Assert.True(eq.IsRamping);                                // reached the live voice as a CmdSetEq — no reopen
+    }
+
     [Fact]
     public void EqFreqChange_RepublishesGraph_NewCoeffsLiveAfterQuarantine()
     {

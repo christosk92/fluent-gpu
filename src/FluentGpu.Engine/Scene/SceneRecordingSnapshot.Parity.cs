@@ -175,6 +175,7 @@ public sealed partial class SceneRecordingSnapshot
         if (!SparseEqual(_arc, other._arc, i, (in ArcSpec a, in ArcSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ArcSpec ({which})");
         if (!SparseEqual(_polyline, other._polyline, i, (in PolylineStrokeSpec a, in PolylineStrokeSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} PolylineStrokeSpec ({which})");
         if (!SparseEqual(_path, other._path, i, (in PathSpec a, in PathSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} PathSpec ({which})");
+        if (!SparseEqual(_series, other._series, i, SeriesEqual, out which)) return Fail(out mismatch, $"n#{i} SeriesSpec ({which})");
         if (!SparseEqual(_clipPath, other._clipPath, i, (in ClipPathSpec a, in ClipPathSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ClipPathSpec ({which})");
         if (!SparseEqual(_radialCenter, other._radialCenter, i, (in Point2 a, in Point2 b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} RadialCenter ({which})");
         if (!SparseEqual(_acrylic, other._acrylic, i, (in AcrylicSpec a, in AcrylicSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} AcrylicSpec ({which})");
@@ -214,6 +215,11 @@ public sealed partial class SceneRecordingSnapshot
         if (hasRow && !RowCellsEqual(mineCells, minePh, minePhColor, theirCells, theirPh, theirPhColor))
             return Fail(out mismatch, $"n#{i} row cells");
 
+        bool hasSeries = TryGetSeriesSamples(node, out var mineSeries);
+        bool otherSeries = other.TryGetSeriesSamples(node, out var theirSeries);
+        if (hasSeries != otherSeries) return Fail(out mismatch, $"n#{i} series samples presence");
+        if (hasSeries && !mineSeries.SequenceEqual(theirSeries)) return Fail(out mismatch, $"n#{i} series samples");
+
         if (!ScrollChrome.Get(i).Equals(other.ScrollChrome.Get(i))) return Fail(out mismatch, $"n#{i} scroll chrome");
         return true;
     }
@@ -241,6 +247,14 @@ public sealed partial class SceneRecordingSnapshot
         if (an != bn || a.Shape != b.Shape || a.AngleDeg != b.AngleDeg) return false;
         for (int i = 0; i < an; i++) if (!a.Stops![i].Equals(b.Stops![i])) return false;
         return true;
+    }
+
+    private static bool SeriesEqual(in SeriesSpec a, in SeriesSpec b)
+    {
+        if (a.Shape != b.Shape || !a.Color.Equals(b.Color) || a.Thickness != b.Thickness || !a.Baseline.Equals(b.Baseline)
+            || a.Amplitude != b.Amplitude || a.Opacity != b.Opacity || (a.Gradient is null) != (b.Gradient is null)) return false;
+        if (a.Gradient is not { } ga || b.Gradient is not { } gb) return true;
+        return GradientEqual(in ga, in gb);
     }
 
     private static bool PaintEqual(in NodePaint a, in NodePaint b) => a.Equals(b);

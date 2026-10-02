@@ -20,6 +20,13 @@ public readonly record struct VisualizerFrame(ReadOnlyMemory<float> Magnitudes, 
     public static VisualizerFrame Silence { get; } = new(ReadOnlyMemory<float>.Empty, 0f, 0f);
 }
 
+/// <summary>What accompanied the last published spectrum: a monotonic <paramref name="Sequence"/> (0 = nothing yet),
+/// the band count, whether the session was muted/silenced (the UI shows its idle breath), the PRE-gain RMS of the
+/// analysed window (what Tape's meter and Field's breath use — the level tap's RMS is post-volume), how far behind the
+/// newest rendered sample the window ended (frames — a diagnostic of the alignment actually applied), the analysis
+/// cost, and whether a spectrum lease is live at all.</summary>
+public readonly record struct SpectrumInfo(long Sequence, int BandCount, bool Muted, float WindowRms, long AlignFrames, float FftMs, bool Live);
+
 /// <summary>One EQ band (spec §7.10). Each parameter is a signal — a slider write ramps smoothly (set-vs-ramp is a
 /// value, not a topology edit — no zipper noise).</summary>
 public sealed class EqBand
@@ -87,10 +94,22 @@ public interface IAudioEffects
     FloatSignal Balance { get; }
     /// <summary>Whether rate changes preserve pitch.</summary>
     Signal<bool> PreservePitchOnRate { get; }
-    /// <summary>The published visualizer frame.</summary>
+    /// <summary>The published LEVEL frame (RMS/peak every control tick). <see cref="VisualizerFrame.Magnitudes"/> stays
+    /// EMPTY (reserved): the spectrum is read ONLY through <see cref="CopySpectrum"/>, so a bound frame never tears.</summary>
     IReadSignal<VisualizerFrame> Visualizer { get; }
-    /// <summary>Keep level analysis active while a visible consumer needs it. Dispose when hidden or inactive.</summary>
+    /// <summary>Keep LEVEL analysis (RMS/peak) active while a visible consumer needs it. Dispose when hidden or inactive.</summary>
     IDisposable AcquireVisualizer();
+    /// <summary>Keep SPECTRUM analysis (the FFT tier) active while a visible consumer needs it; implies the level tap.
+    /// Dispose when hidden, paused-for-good, occluded or under reduced motion.</summary>
+    IDisposable AcquireSpectrum();
+    /// <summary>Copy the latest band magnitudes (dB, <see cref="SpectrumAnalyzer.FloorDb"/>..<see cref="SpectrumAnalyzer.CeilingDb"/>)
+    /// into <paramref name="destination"/> without tearing (one lock, one memcpy of the FRONT buffer). Returns the count
+    /// copied — 0 before the first publish or without a lease. THE ONLY spectrum read path; the UI PULLS it on its own
+    /// cadence, nothing pushes.</summary>
+    int CopySpectrum(Span<float> destination, out SpectrumInfo info);
+    /// <summary>The user's playback-sync offset in milliseconds (positive reads the window EARLIER, for a device that
+    /// adds latency the clock cannot see, e.g. Bluetooth). Clamped to ±500. Cross-thread safe.</summary>
+    float SpectrumOffsetMs { get; set; }
 }
 
 /// <summary>The live effects surface backing the PCM audio player (spec §7.10). In M0 these are the signal-plane values
@@ -100,6 +119,19 @@ public sealed class AudioEffects : IAudioEffects
     private readonly object _visualizerGate = new(); // never acquired on the audio render thread
     private int _visualizerConsumers;
     private long _nextVisualizerEpoch, _visualizerEpoch, _visualizerSource;
+
+    // ── the SPECTRUM tier: a second demand count over the SAME source token; magnitudes are double-buffered ───────────
+    private int _spectrumConsumers;
+    private long _spectrumEpoch;                        // 0 = no spectrum demand; rotates with the source like _visualizerEpoch
+    private readonly float[][] _magnitudes = [new float[SpectrumAnalyzer.DefaultBandCount], new float[SpectrumAnalyzer.DefaultBandCount]];
+    private int _magnitudeFront;                        // the readable buffer (under _visualizerGate)
+    private int _magnitudeCount;                        // 0 = nothing published since the lease began
+    private long _spectrumSequence;
+    private bool _spectrumMuted;
+    private float _spectrumWindowRms, _spectrumFftMs;
+    private long _spectrumAlignFrames;
+    private int _spectrumOffsetMsBits;                  // float bits, Volatile: written by the UI, read on the clock thread
+
     private readonly IReadSignal<VisualizerFrame> _visualizerView;
     /// <summary>Create an effects surface with no level-analysis demand.</summary>
     public AudioEffects() => _visualizerView = new VisualizerView(this);
@@ -133,8 +165,10 @@ public sealed class AudioEffects : IAudioEffects
         lock (_visualizerGate)
         {
             long source = ++_visualizerSource;
+            _magnitudeCount = 0;
             _visualizer.Value = VisualizerFrame.Silence;
             Volatile.Write(ref _visualizerEpoch, _visualizerConsumers == 0 ? 0 : ++_nextVisualizerEpoch);
+            Volatile.Write(ref _spectrumEpoch, _spectrumConsumers == 0 ? 0 : ++_nextVisualizerEpoch);
             return source;
         }
     }
@@ -149,6 +183,86 @@ public sealed class AudioEffects : IAudioEffects
             if (epoch == 0 || epoch != _visualizerEpoch || source != _visualizerSource) return false;
             _visualizer.Value = new VisualizerFrame(ReadOnlyMemory<float>.Empty, rms, peak);
             return true;
+        }
+    }
+
+    /// <inheritdoc/>
+    public float SpectrumOffsetMs
+    {
+        get => BitConverter.Int32BitsToSingle(Volatile.Read(ref _spectrumOffsetMsBits));
+        set => Volatile.Write(ref _spectrumOffsetMsBits, BitConverter.SingleToInt32Bits(Math.Clamp(value, -500f, 500f)));
+    }
+
+    /// <inheritdoc/>
+    public IDisposable AcquireSpectrum()
+    {
+        IDisposable level = AcquireVisualizer();          // the FFT tier implies the level tap (Tape's meter, Field's breath)
+        lock (_visualizerGate)
+        {
+            if (_spectrumConsumers++ == 0)
+            {
+                _magnitudeCount = 0;
+                Volatile.Write(ref _spectrumEpoch, ++_nextVisualizerEpoch);
+            }
+        }
+        return new SpectrumLease(this, level);
+    }
+
+    private void ReleaseSpectrum()
+    {
+        lock (_visualizerGate)
+        {
+            if (--_spectrumConsumers != 0) return;
+            Volatile.Write(ref _spectrumEpoch, 0);
+            _magnitudeCount = 0;                            // CopySpectrum returns 0 from here on; the level frame is untouched
+        }
+    }
+
+    /// <summary>The RT thread's gate for the spectrum ring: the current spectrum epoch iff <paramref name="source"/> is the
+    /// bound session, else 0. Two volatile reads, no lock.</summary>
+    internal long SpectrumDemand(long source)
+        => source == Volatile.Read(ref _visualizerSource) ? Volatile.Read(ref _spectrumEpoch) : 0;
+
+    /// <summary>Control-thread publish of one analysed window (never RT). Writes the BACK buffer, swaps, bumps the
+    /// sequence; false when the lease or the source has moved on. Never touches <see cref="_visualizer"/> (O2).</summary>
+    internal bool PublishSpectrum(long source, long epoch, ReadOnlySpan<float> bandsDb, bool muted, float windowRms, long alignFrames, float fftMs)
+    {
+        lock (_visualizerGate)
+        {
+            if (epoch == 0 || epoch != _spectrumEpoch || source != _visualizerSource) return false;
+            int back = _magnitudeFront ^ 1;
+            int n = Math.Min(bandsDb.Length, _magnitudes[back].Length);
+            bandsDb[..n].CopyTo(_magnitudes[back]);
+            _magnitudeFront = back;
+            _magnitudeCount = n;
+            _spectrumSequence++;
+            _spectrumMuted = muted;
+            _spectrumWindowRms = windowRms;
+            _spectrumAlignFrames = alignFrames;
+            _spectrumFftMs = fftMs;
+            return true;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int CopySpectrum(Span<float> destination, out SpectrumInfo info)
+    {
+        lock (_visualizerGate)
+        {
+            int n = Math.Min(_magnitudeCount, destination.Length);
+            if (n > 0) _magnitudes[_magnitudeFront].AsSpan(0, n).CopyTo(destination);
+            info = new SpectrumInfo(_spectrumSequence, n, _spectrumMuted, _spectrumWindowRms, _spectrumAlignFrames, _spectrumFftMs, _spectrumEpoch != 0);
+            return n;
+        }
+    }
+
+    private sealed class SpectrumLease(AudioEffects owner, IDisposable level) : IDisposable
+    {
+        private AudioEffects? _owner = owner;
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref _owner, null)?.ReleaseSpectrum();
+            level.Dispose();   // idempotent (VisualizerLease)
         }
     }
 
@@ -192,6 +306,12 @@ public sealed class NullAudioEffects : IAudioEffects
     private static readonly IDisposable NoVisualizer = new EmptyLease();
     /// <inheritdoc/>
     public IDisposable AcquireVisualizer() => NoVisualizer;
+    /// <inheritdoc/>
+    public IDisposable AcquireSpectrum() => NoVisualizer;
+    /// <inheritdoc/>
+    public int CopySpectrum(Span<float> destination, out SpectrumInfo info) { info = default; return 0; }
+    /// <inheritdoc/>
+    public float SpectrumOffsetMs { get; set; }
     /// <summary>The shared inert instance.</summary>
     public static NullAudioEffects Instance { get; } = new();
 

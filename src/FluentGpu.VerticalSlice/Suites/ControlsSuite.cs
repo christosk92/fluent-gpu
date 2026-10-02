@@ -101,6 +101,7 @@ static partial class ControlsSuite
         ShelfLeadChecks(strings);
         ShelfKeyboardInvokeChecks(strings);
         ShelfLiftChecks(strings);
+        BoundRowFocusChecks(strings);
         PipsControlledChecks(strings);
         IconButtonBoundEnabledChecks(strings);
         InfoBarClosePlateChecks(strings);
@@ -967,6 +968,63 @@ static partial class ControlsSuite
         Check("gate.ctl.recipe.expand bound Transform suppresses the While* motion half (one transform owner)",
             bound.WhileHover is null && bound.WhilePressed is null && bound.Fill.Value == fillRamp.Rest,
             $"hover={bound.WhileHover is null} press={bound.WhilePressed is null} brushStillApplied={bound.Fill.Value == fillRamp.Rest}");
+
+        // gate.ctl.recipe.cursor (E3, shared-media-surface-implementation.md §6, Wavee repo) — the app-authoring helper is
+        // the ONE place clickability implies the hand: a box that is clickable when it reaches .Interactive (OnClick, or a
+        // ClickRequestsContext invoker) and declares no cursor gets Hand; a caller-set cursor (Arrow included) wins; a
+        // non-clickable box stays cursor-less. Then the dispatcher half: hovering resolves exactly that, and a DISABLED
+        // clickable box shows the arrow (the cursor walk skips a Disabled node), while a plain clickable box that never
+        // went through .Interactive keeps the element-level WinUI stance — no hand (E2.l pins that half on its own).
+        {
+            Action click = static () => { };
+            var clickable = new BoxEl { OnClick = click }.Interactive(Interaction.Subtle);
+            var invoker = new BoxEl { ClickRequestsContext = true }.Interactive(Interaction.Subtle);
+            var callerArrow = new BoxEl { OnClick = click, Cursor = CursorId.Arrow }.Interactive(Interaction.Subtle);
+            var callerBeam = new BoxEl { OnClick = click, Cursor = CursorId.IBeam }.Interactive(Interaction.Card);
+            var inert = new BoxEl().Interactive(Interaction.Subtle);
+            var lateClick = new BoxEl().Interactive(Interaction.Subtle) with { OnClick = click };   // the documented miss
+            bool elem = clickable.Cursor == CursorId.Hand && invoker.Cursor == CursorId.Hand
+                        && callerArrow.Cursor == CursorId.Arrow && callerBeam.Cursor == CursorId.IBeam
+                        && inert.Cursor is null && lateClick.Cursor is null;
+
+            var fonts = new HeadlessFontSystem(strings);
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Gap = 10, Padding = Edges4.All(0),
+                Children =
+                [
+                    new BoxEl { Key = "hand", Width = 20, Height = 20, OnClick = click }.Interactive(Interaction.Subtle),         // 0–20
+                    new BoxEl { Key = "inert", Width = 20, Height = 20 }.Interactive(Interaction.Subtle),                        // 30–50
+                    new BoxEl { Key = "arrow", Width = 20, Height = 20, OnClick = click, Cursor = CursorId.Arrow }
+                        .Interactive(Interaction.Subtle),                                                                         // 60–80
+                    new BoxEl { Key = "off", Width = 20, Height = 20, OnClick = click }.Interactive(Interaction.Subtle, isEnabled: false), // 90–110
+                    new BoxEl { Key = "plain", Width = 20, Height = 20, OnClick = click },                                       // 120–140
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            CursorId last = CursorId.Arrow;
+            disp.OnCursorChanged = c => last = c;
+            CursorId HoverAt(float x)
+            {
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(x, 10), 0, 0) });
+                return last;
+            }
+            // Every probe point is entered FROM the hand box, so each expected Arrow is a real Hand→Arrow transition.
+            bool hand = HoverAt(10) == CursorId.Hand;
+            bool inertArrow = HoverAt(40) == CursorId.Arrow;
+            bool handAgain = HoverAt(10) == CursorId.Hand;
+            bool callerWins = HoverAt(70) == CursorId.Arrow;
+            HoverAt(10);
+            bool disabledArrow = HoverAt(100) == CursorId.Arrow;
+            HoverAt(10);
+            bool plainArrow = HoverAt(130) == CursorId.Arrow;
+            Check("gate.ctl.recipe.cursor .Interactive defaults a CLICKABLE box (OnClick / ClickRequestsContext) to the hand, a caller-set cursor wins (Arrow/I-beam), a non-clickable box stays cursor-less (as does a click added AFTER the call); hover resolves Hand on it, Arrow on the inert/caller-Arrow/disabled boxes and on a plain clickable box (element-level stance unchanged)",
+                elem && hand && inertArrow && handAgain && callerWins && disabledArrow && plainArrow,
+                $"elem={elem} (click={clickable.Cursor} invoker={invoker.Cursor} arrow={callerArrow.Cursor} beam={callerBeam.Cursor} inert={inert.Cursor?.ToString() ?? "null"} late={lateClick.Cursor?.ToString() ?? "null"}) " +
+                $"hover: hand={hand} inert={inertArrow} again={handAgain} callerWins={callerWins} disabled={disabledArrow} plain={plainArrow}");
+        }
 
         // gate.ctl.recipe.presets — the four presets resolve the expected Tok values, and a theme swap re-resolves them.
         var kind0 = Tok.Theme;
@@ -2507,6 +2565,42 @@ static partial class ControlsSuite
             Check("E2.n one release, one owner: a nested click-only child takes the release, the row's own double-click still lands",
                 childOwned && rowUnaffected,
                 $"childClicks={childClicks} rowReleases=[{string.Join(",", rowReleases)}]");
+        }
+
+        // E2.p — a pointer LISTENER is not a gesture owner. The ToolTip wrapper (HoverScopeTransparent) carries an
+        // OnPointerPressed that only dismisses its bubble; when it owned the gesture, a click on a tool-tipped, trimmed card
+        // title inside a bound ItemsView slot never reached the slot root's OnPointerReleased (Wavee #157). The listener
+        // must still hear its press, and the owner above it must get the release with its click count chained.
+        {
+            var scene = new SceneStore();
+            int listenerPresses = 0;
+            var rootReleases = new List<byte>();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1, Width = 200f, Height = 100f,
+                OnPointerReleased = e => rootReleases.Add(e.ClickCount),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 120f, Height = 40f, HoverScopeTransparent = true,
+                        OnPointerPressed = _ => listenerPresses++,
+                        Children = [new BoxEl { Width = 120f, Height = 40f }],
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            void Click(Point2 at, uint ms)
+            {
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, at, 0, 0, TimestampMs: ms) });
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, at, 0, 0, TimestampMs: ms + 40) });
+            }
+            var onListener = new Point2(20f, 20f);
+            Click(onListener, 1000); Click(onListener, 1100);
+            Check("E2.p a hover-scope-transparent pointer listener (the ToolTip wrapper) hears its press but never owns the gesture: the release reaches the owner above it, click count chained",
+                listenerPresses == 2 && rootReleases.Count == 2 && rootReleases[0] == 1 && rootReleases[1] == 2,
+                $"listenerPresses={listenerPresses} rootReleases=[{string.Join(",", rootReleases)}]");
         }
 
         // E2.o — the click-count chain is per-OWNER, not per-position. Two presses inside DoubleClickMs *and* inside the
@@ -10567,6 +10661,7 @@ static partial class ControlsSuite
                 case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
                 case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
                 case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
+                case DrawOp.DrawSeries: pos += Unsafe.SizeOf<DrawSeriesCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); layerBalance++; break;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); layerBalance--; break;
                 case DrawOp.DrawVideo:

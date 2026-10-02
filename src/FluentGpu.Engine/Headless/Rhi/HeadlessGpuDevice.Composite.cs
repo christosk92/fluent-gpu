@@ -89,6 +89,11 @@ public sealed partial class HeadlessGpuDevice
         if (_renderConfined) ThreadGuard.AssertRenderOwner();
         _compositeRecords.Clear();
         LastCompositeInfo = frame.Info;
+        _groupTurn++;
+        LastLostPlacements = 0;
+
+        // The table's trims FIRST (the backend applies them at turn start): the only way a tile texture goes away.
+        ApplyTrims(in frame);
 
         ReadOnlySpan<TileRaster> rasters = frame.Rasters;
         for (int i = 0; i < rasters.Length; i++)
@@ -98,13 +103,18 @@ public sealed partial class HeadlessGpuDevice
             _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.RasterTile, CompositePassTarget.TileSurface, CompositePassLoad.Clear, r.Surface, r.Key, r.Reason));
             _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.EndPass, CompositePassTarget.TileSurface, CompositePassLoad.Clear, r.Surface, r.Key));
             _serials.Bump(r.Surface);
+            TexRastered(r.Surface);
         }
+        NotePlacedUnsampled(in frame);
 
-        // The offscreen phase's GROUP surfaces, nested first (as a backend prepares them): each keyed by GroupCacheKey and
-        // looked up in the modelled retained set — a hit re-draws the retained surface, a miss renders and retains it.
-        _groupTurn++;
-        PrepareGroups(in frame, 0, frame.Items.Length);
+        // The offscreen phase, as a backend prepares it: GROUP surfaces nested first and LEAF self-blurs, each keyed
+        // (GroupCacheKey.Compute / GroupCacheKey.LeafBlur) and looked up in the modelled retained set — a hit re-draws the
+        // retained surface and SAMPLES NO TILE, a miss renders it from its tiles and retains it.
+        PrepareOffscreen(in frame);
         _groupRetained.RemoveAll(static g => g.Turn < 0);
+
+        // The composite pass samples every top-level plain (unblurred) Tiles/Region item's placements.
+        SampleRange(in frame, 0, frame.Items.Length);
 
         ReadOnlySpan<CompositeItem> items = frame.Items;
         _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.BeginPass, CompositePassTarget.BackBuffer, CompositePassLoad.Clear));
@@ -143,7 +153,7 @@ public sealed partial class HeadlessGpuDevice
     /// capacity kept.</summary>
     public IReadOnlyList<CompositeHoleErase> LastHoleErases => _holeErases;
 
-    // ── the modelled group-surface cache (GroupCacheKey) ──
+    // ── the modelled group-surface / leaf self-blur cache (GroupCacheKey) ──
     /// <summary>A retained group surface unused for this many composites is dropped (the backend's RetainTurns).</summary>
     private const int GroupRetainTurns = 30;
     private struct Serials : ITileSerials
@@ -155,65 +165,224 @@ public sealed partial class HeadlessGpuDevice
             if (S is null || surface >= S.Length) Array.Resize(ref S, Math.Max(64, Math.Max(surface + 1, (S?.Length ?? 0) * 2)));
             S[surface]++;
         }
+        /// <summary>A trimmed slot's texture is gone: its serial restarts (the backend's retired entry is reset whole).</summary>
+        public readonly void Reset(int surface) { if (S is not null && (uint)surface < (uint)S.Length) S[surface] = 0u; }
         public readonly uint Serial(int surface) => S is not null && (uint)surface < (uint)S.Length ? S[surface] : 0u;
     }
     private Serials _serials;
     private ulong[] _groupKeys = new ulong[64];
-    /// <summary>At most this many retained group surfaces are modelled; past it a miss replaces the least recently used
-    /// one — fixed storage, like the backend's pool bounded by <c>TileBudget.RetainedShare</c> (a scroll that misses every
-    /// turn must not grow the model's list inside a measured frame).</summary>
+    /// <summary>At most this many retained group / leaf-blur surfaces are modelled; past it a miss replaces the least
+    /// recently used one — fixed storage, like the backend's pool bounded by <c>TileBudget.RetainedShare</c> (a scroll that
+    /// misses every turn must not grow the model's list inside a measured frame).</summary>
     private const int GroupRetainedCap = 64;
     private readonly List<(ulong Key, int Turn)> _groupRetained = new(GroupRetainedCap);
     private int _groupTurn;
     private int _groupRenders, _groupHits;
 
-    private void PrepareGroups(in CompositeFrame frame, int a, int b)
+    // ── the modelled tile-surface TEXTURES (what a backend holds per tile slot) ──
+    // A slot is BACKED once a raster lands in it and stays backed until the table names it in CompositeFrame.TrimSurfaces —
+    // exactly the D3D12 SurfacePool. "Last sampled" = the composite turn the slot was last rastered or drawn FROM (a plain
+    // Tiles/Region item, a group or leaf self-blur rendered from its tiles); a retained group / blur re-drawn on a key hit
+    // samples none of its tiles. That clock is what the pre-fix pool trimmed by, so it is kept as the gate's precondition.
+    private bool[] _texBacked = new bool[64];
+    private int[] _texLastSample = new int[64];
+    private int[] _texRasterTurn = new int[64];
+
+    /// <summary>Placements the most recent composite drew from a slot that held NO texture (a valid tile that composited
+    /// nothing — the idle "content disappears" defect). Must be 0.</summary>
+    public int LastLostPlacements { get; private set; }
+    /// <summary><see cref="LastLostPlacements"/> summed over every composite of this device.</summary>
+    public long LostPlacementsTotal { get; private set; }
+    /// <summary>The longest any PLACED (valid, not re-rastered) tile went — in composite turns — without the composite
+    /// sampling it: a tile consumed only through a retained group / leaf self-blur result. The pre-fix D3D12 pool retired a
+    /// tile texture unsampled for more than <c>SliceTable.IdleEvictFrames + 120</c> turns, so a value past that is this
+    /// run reaching the defect's trigger.</summary>
+    public int MaxPlacedUnsampledTurns { get; private set; }
+    /// <summary>Tile textures released because the table named the slot (<see cref="CompositeFrame.TrimSurfaces"/>).</summary>
+    public long TrimmedTextures { get; private set; }
+    /// <summary>Trims naming a slot that a placement of the SAME frame samples (must be 0: the table never trims a held slot).</summary>
+    public long TrimmedWhilePlaced { get; private set; }
+    /// <summary>Leaf self-blurs re-drawn from their retained result (no tile sampled) / rendered from their tiles.</summary>
+    public long LeafBlurHits { get; private set; }
+    public long LeafBlurRenders { get; private set; }
+    /// <summary>Group surfaces re-drawn from their retained result, summed over every composite.</summary>
+    public long GroupHitsTotal { get; private set; }
+
+    private void TexEnsure(int slot)
+    {
+        if (slot < _texBacked.Length) return;
+        int n = Math.Max(slot + 1, _texBacked.Length * 2);
+        Array.Resize(ref _texBacked, n);
+        Array.Resize(ref _texLastSample, n);
+        Array.Resize(ref _texRasterTurn, n);
+    }
+
+    private void TexRastered(int slot)
+    {
+        if (slot < 0) return;
+        TexEnsure(slot);
+        _texBacked[slot] = true;
+        _texLastSample[slot] = _groupTurn;
+        _texRasterTurn[slot] = _groupTurn;
+    }
+
+    /// <summary>The composite samples placement slot <paramref name="slot"/>: a slot with no texture is a LOST placement
+    /// (the backend skips it — nothing composites where the table believes current pixels are).</summary>
+    private void Sample(int slot)
+    {
+        if (slot < 0) return;
+        if (slot >= _texBacked.Length || !_texBacked[slot])
+        {
+            LastLostPlacements++;
+            LostPlacementsTotal++;
+            return;
+        }
+        _texLastSample[slot] = _groupTurn;
+    }
+
+    private void ApplyTrims(in CompositeFrame frame)
+    {
+        ReadOnlySpan<int> trims = frame.TrimSurfaces;
+        ReadOnlySpan<TilePlacement> placed = frame.Placements;
+        for (int i = 0; i < trims.Length; i++)
+        {
+            int s = trims[i];
+            if (s < 0) continue;
+            for (int p = 0; p < placed.Length; p++)
+                if (placed[p].Surface == s) { TrimmedWhilePlaced++; break; }
+            if (s < _texBacked.Length && _texBacked[s])
+            {
+                _texBacked[s] = false;
+                _serials.Reset(s);
+                TrimmedTextures++;
+            }
+        }
+    }
+
+    /// <summary>The defect's trigger, measured: how long each tile placed this turn (and not re-rastered in it) has gone
+    /// without the composite sampling its texture.</summary>
+    private void NotePlacedUnsampled(in CompositeFrame frame)
+    {
+        ReadOnlySpan<TilePlacement> placed = frame.Placements;
+        for (int p = 0; p < placed.Length; p++)
+        {
+            int s = placed[p].Surface;
+            if ((uint)s >= (uint)_texBacked.Length || !_texBacked[s] || _texRasterTurn[s] == _groupTurn) continue;
+            int age = _groupTurn - _texLastSample[s];
+            if (age > MaxPlacedUnsampledTurns) MaxPlacedUnsampledTurns = age;
+        }
+    }
+
+    // The modelled retained leaf self-blurs (keyed by GroupCacheKey.LeafBlur), kept apart from the groups so neither
+    // evicts the other's entries in the model.
+    private readonly List<(ulong Key, int Turn)> _leafRetained = new(GroupRetainedCap);
+
+    /// <summary>Retained-surface lookup in <paramref name="set"/>: true on a hit (refreshes its turn); on a miss the key is
+    /// retained (LRU past the cap — fixed storage).</summary>
+    private bool LookupOrRetain(List<(ulong Key, int Turn)> set, ulong key)
+    {
+        for (int g = 0; g < set.Count; g++)
+            if (set[g].Key == key) { set[g] = (key, _groupTurn); return true; }
+        if (set.Count < GroupRetainedCap) set.Add((key, _groupTurn));
+        else
+        {
+            int lru = 0;
+            for (int g = 1; g < set.Count; g++) if (set[g].Turn < set[lru].Turn) lru = g;
+            set[lru] = (key, _groupTurn);
+        }
+        return false;
+    }
+
+    private void PrepareOffscreen(in CompositeFrame frame)
     {
         ReadOnlySpan<CompositeItem> items = frame.Items;
-        if (a == 0)
-        {
-            if (_groupKeys.Length < items.Length) _groupKeys = new ulong[Math.Max(items.Length, _groupKeys.Length * 2)];
-            Array.Clear(_groupKeys, 0, items.Length);
-            _groupRenders = _groupHits = 0;
-        }
+        if (_groupKeys.Length < items.Length) _groupKeys = new ulong[Math.Max(items.Length, _groupKeys.Length * 2)];
+        Array.Clear(_groupKeys, 0, items.Length);
+        _groupRenders = _groupHits = 0;
+        PrepareRange(in frame, 0, items.Length);
+        for (int g = 0; g < _groupRetained.Count; g++)
+            if (_groupTurn - _groupRetained[g].Turn > GroupRetainTurns) _groupRetained[g] = (_groupRetained[g].Key, -1);
+        for (int g = 0; g < _leafRetained.Count; g++)
+            if (_groupTurn - _leafRetained[g].Turn > GroupRetainTurns) _leafRetained[g] = (_leafRetained[g].Key, -1);
+        _leafRetained.RemoveAll(static g => g.Turn < 0);
+        GroupHitsTotal += _groupHits;
+        LastCompositeCache = new CompositeCacheStats(_groupRenders, _groupHits, 0L);
+    }
+
+    /// <summary>The backend's offscreen phase over items [<paramref name="a"/>, <paramref name="b"/>): a group's enclosed items
+    /// first (nested groups, leaf self-blurs), then the group itself; a leaf self-blur on its own.</summary>
+    private void PrepareRange(in CompositeFrame frame, int a, int b)
+    {
+        ReadOnlySpan<CompositeItem> items = frame.Items;
         for (int i = a; i < b && i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
-            if (it.Kind != CompositeKind.Group) continue;
-            int end = Math.Min(items.Length, i + 1 + it.GroupCount);
-            PrepareGroups(in frame, i + 1, end);
-            int halo = it.BlurSigma > 0f ? SelfBlurRegion.TapRadius(it.BlurSigma) : 0;
-            PixelRect region = GroupCacheKey.Region(in it, halo, (int)frame.Info.SizePx.Width, (int)frame.Info.SizePx.Height);
-            if (!region.IsEmpty)
+            if (it.Kind == CompositeKind.Group)
             {
-                ulong key = GroupCacheKey.Compute(in frame, i, in region, ref _serials, _groupKeys, out bool cacheable);
-                bool hit = false;
-                if (cacheable)
-                {
-                    _groupKeys[i] = key;
-                    for (int g = 0; g < _groupRetained.Count; g++)
-                        if (_groupRetained[g].Key == key) { _groupRetained[g] = (key, _groupTurn); hit = true; break; }
-                    if (!hit && _groupRetained.Count < GroupRetainedCap) _groupRetained.Add((key, _groupTurn));
-                    else if (!hit)
-                    {
-                        int lru = 0;
-                        for (int g = 1; g < _groupRetained.Count; g++) if (_groupRetained[g].Turn < _groupRetained[lru].Turn) lru = g;
-                        _groupRetained[lru] = (key, _groupTurn);
-                    }
-                }
-                if (hit) _groupHits++; else _groupRenders++;
-                // evidence (the composite item record): which groups re-drew from a retained surface, which rendered
-                if (i < frame.ItemFlags.Length) frame.ItemFlags[i] |= hit ? CompositeFrameFlags.ItemGroupHit : CompositeFrameFlags.ItemGroupRendered;
-                _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.PrepareGroup, ItemIndex: i, Item: it,
-                    Key: cacheable ? key : 0UL, Hit: hit));
+                int end = Math.Min(items.Length, i + 1 + it.GroupCount);
+                PrepareRange(in frame, i + 1, end);
+                PrepareGroup(in frame, i, end);
+                i = end - 1;
             }
-            i = end - 1;
+            else if (it.Kind is (CompositeKind.Tiles or CompositeKind.Region) && it.BlurSigma > 0f)
+                PrepareLeafBlur(in frame, i);
         }
-        if (a == 0)
+    }
+
+    private void PrepareGroup(in CompositeFrame frame, int i, int end)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        int halo = it.BlurSigma > 0f ? SelfBlurRegion.TapRadius(it.BlurSigma) : 0;
+        PixelRect region = GroupCacheKey.Region(in it, halo, (int)frame.Info.SizePx.Width, (int)frame.Info.SizePx.Height);
+        if (region.IsEmpty) return;
+        ulong key = GroupCacheKey.Compute(in frame, i, in region, ref _serials, _groupKeys, out bool cacheable);
+        bool hit = false;
+        if (cacheable)
         {
-            for (int g = 0; g < _groupRetained.Count; g++)
-                if (_groupTurn - _groupRetained[g].Turn > GroupRetainTurns) _groupRetained[g] = (_groupRetained[g].Key, -1);
-            LastCompositeCache = new CompositeCacheStats(_groupRenders, _groupHits, 0L);
+            _groupKeys[i] = key;
+            hit = LookupOrRetain(_groupRetained, key);
+        }
+        if (hit) _groupHits++;
+        else
+        {
+            _groupRenders++;
+            SampleRange(in frame, i + 1, end);   // rendered: its enclosed items draw from their tiles / prepared surfaces
+        }
+        // evidence (the composite item record): which groups re-drew from a retained surface, which rendered
+        if (i < frame.ItemFlags.Length) frame.ItemFlags[i] |= hit ? CompositeFrameFlags.ItemGroupHit : CompositeFrameFlags.ItemGroupRendered;
+        _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.PrepareGroup, ItemIndex: i, Item: it,
+            Key: cacheable ? key : 0UL, Hit: hit));
+    }
+
+    /// <summary>A LEAF self-blur (a Tiles/Region item with σ &gt; 0): keyed like the backend's retained blur
+    /// (<see cref="GroupCacheKey.LeafBlur"/>); a hit samples no tile, a miss assembles its source from every placed tile.</summary>
+    private void PrepareLeafBlur(in CompositeFrame frame, int i)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
+        if (placed.IsEmpty) return;
+        GroupCacheKey.BlurRegions(in it, (int)frame.Info.SizePx.Width, (int)frame.Info.SizePx.Height, out PixelRect src, out PixelRect region);
+        if (src.IsEmpty || region.IsEmpty) return;
+        ulong key = GroupCacheKey.LeafBlur(in it, placed, in src, in region, ref _serials);
+        if (LookupOrRetain(_leafRetained, key)) { LeafBlurHits++; return; }
+        LeafBlurRenders++;
+        for (int p = 0; p < placed.Length; p++) Sample(placed[p].Surface);
+    }
+
+    /// <summary>What the backend's DrawRange samples over items [<paramref name="a"/>, <paramref name="b"/>): every plain
+    /// (σ = 0) Tiles/Region item's placements. A group draws its prepared surface (its enclosed items were sampled — or
+    /// not, on a hit — when it was prepared); a leaf self-blur draws its prepared blur; a degraded Direct item draws its
+    /// transient chunks.</summary>
+    private void SampleRange(in CompositeFrame frame, int a, int b)
+    {
+        ReadOnlySpan<CompositeItem> items = frame.Items;
+        for (int i = a; i < b && i < items.Length; i++)
+        {
+            ref readonly CompositeItem it = ref items[i];
+            if (it.Kind == CompositeKind.Group) { i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1; continue; }
+            if (it.Kind is not (CompositeKind.Tiles or CompositeKind.Region) || it.BlurSigma > 0f) continue;
+            ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
+            for (int p = 0; p < placed.Length; p++) Sample(placed[p].Surface);
         }
     }
 

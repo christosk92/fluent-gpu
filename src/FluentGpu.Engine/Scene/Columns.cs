@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7, Path = 8, ListRow = 9 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7, Path = 8, ListRow = 9, Series = 10 }
 
 /// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
@@ -587,7 +587,9 @@ public struct InteractionInfo
                                                     // the lazy-mount hover seed and the un-hover re-resolve skip it and
                                                     // resolve the next interactive ancestor. Discriminator only: never
                                                     // a hit/press/focus target, deliberately outside AnyInteractiveMask;
-                                                    // hit-test and handler delivery are unchanged. Clear as
+                                                    // hit-test and handler delivery are unchanged. Gesture ownership
+                                                    // (InputDispatcher.NearestGestureOwner) skips it too, so its press
+                                                    // listener never takes a release from the owner above it. Clear as
                                                     // `~HoverScopeTransparentBit`.
     public const uint ClickRequestsContextBit = 1u << 16;  // BoxEl.ClickRequestsContext (input-a11y §6.5.1): a
                                                     // commit-time DISCRIMINATOR only — a left-click / touch-tap /

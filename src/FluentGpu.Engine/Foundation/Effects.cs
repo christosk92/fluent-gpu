@@ -62,6 +62,32 @@ public readonly record struct PathSpec(
     }
 }
 
+/// <summary>How a <c>SeriesEl</c> turns its samples into geometry (gpu-renderer.md §3.1 <c>DrawSeriesCmd</c>).</summary>
+public enum SeriesShape : byte
+{
+    /// <summary>An area from the baseline up to each sample (bars-as-one-ribbon; Aurora).</summary>
+    Baseline = 0,
+    /// <summary>An area ± each sample about the baseline (a waveform; Horizon).</summary>
+    Mirrored = 1,
+    /// <summary>A constant-width ribbon through the sample polyline (outlines, Charts/Waveform later).</summary>
+    Stroke = 2,
+}
+
+/// <summary>The STATIC half of a <c>SeriesEl</c>: shape, colour or ≤ 4-stop gradient by amplitude, stroke thickness,
+/// the baseline (a fraction of the box height; NaN = the shape's default — 1 for Baseline/Stroke, 0.5 for Mirrored)
+/// and the amplitude (the box-height fraction a sample of 1.0 reaches; for <see cref="SeriesShape.Mirrored"/> it is
+/// measured against HALF the height, so a sample of 1.0 reaches the top/bottom edge from the 0.5 baseline). The SAMPLES
+/// live in their own pooled side table (<c>SceneStore.Series.cs</c>), never in this struct. POD; the gradient's stops
+/// array is copied by the snapshot.</summary>
+public readonly record struct SeriesSpec(SeriesShape Shape, ColorF Color, GradientSpec? Gradient, float Thickness,
+                                         float Baseline, float Amplitude, float Opacity)
+{
+    /// <summary>The most samples one node carries; extras are dropped at write time.</summary>
+    public const int MaxSamples = 512;
+    /// <summary>Samples per recorded chunk (31 new + 1 shared edge sample).</summary>
+    public const int ChunkSamples = 32;
+}
+
 /// <summary>
 /// An arbitrary-path CLIP applied to a node and its whole subtree (gpu-renderer.md §6's tier-3 stencil clip). Carried
 /// by a <c>BoxEl</c> whose <c>ClipPath</c> is set — which also implies <c>NodeFlags.ClipsToBounds</c>, so the node's

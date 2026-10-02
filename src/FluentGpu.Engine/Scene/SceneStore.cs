@@ -156,6 +156,7 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
     private readonly ColdSlab<PathSpec> _paths = new();   // GEN-17 (wired) — VisualKind.Path's geometry/fill/stroke
+    private readonly ColdSlab<SeriesSpec> _series = new();   // VisualKind.Series' static half; the samples ride SceneStore.Series.cs
     private readonly ColdSlab<ClipPathSpec> _clipPaths = new();   // tier-3 stencil path clip (gpu-renderer.md §6) — implies ClipsToBounds
     private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
@@ -499,6 +500,7 @@ public sealed partial class SceneStore : ISceneBackend
             _arcs.Remove(idx);
             _polylines.Remove(idx);
             _paths.Remove(idx);
+            _series.Remove(idx);
             _clipPaths.Remove(idx);
             _gradients.Remove(idx);
             _radialGradientCenters.Remove(idx);
@@ -526,6 +528,7 @@ public sealed partial class SceneStore : ISceneBackend
         }
         if (_paint[idx].VisualKind == VisualKind.ListRow && (_rowCells.Count != 0 || _rowCellClickHandlers.Count != 0))
             ReleaseRowCells(idx);
+        if (_paint[idx].VisualKind == VisualKind.Series && _seriesSamples.Count != 0) _seriesSamples.Remove(idx);
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
@@ -1828,6 +1831,16 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool TryGetPath(NodeHandle h, out PathSpec ps) => _paths.TryGet((int)h.Raw.Index, out ps);
     public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; _paths.Remove(idx); MarkRecordDirty(idx); }
+
+    public void SetSeries(NodeHandle h, in SeriesSpec spec)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _series.GetOrAdd(idx) = spec;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetSeries(NodeHandle h, out SeriesSpec spec) => _series.TryGet((int)h.Raw.Index, out spec);
+    public void ClearSeries(NodeHandle h) { int idx = (int)h.Raw.Index; _series.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>The tier-3 STENCIL path clip for this node (gpu-renderer.md §6). Setting it marks SparsePaint and
     /// dirties the record exactly like <see cref="SetPath"/> does for the FillPath lane, so a changed silhouette

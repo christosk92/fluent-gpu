@@ -332,6 +332,12 @@ public interface ISwapchain : IDisposable
     /// still occluded) without a real present. The host treats this like skip-submit for the sync-path pacing floor.</summary>
     bool LastPresentStoodDown => false;
 
+    /// <summary>True while THIS target is not being shown: the backend's DXGI occlusion latch is set (DXGI_STATUS_OCCLUDED —
+    /// a fully covered HWND swapchain; NOT reliably reported for composition swapchains) OR its last present stood down
+    /// (minimized / cloaked / hidden). A pure read for the host's per-frame publication (<c>InputHooks.WindowOccluded</c>).
+    /// Window deactivation (alt-tab) is NOT folded in. Default false (synchronous backends).</summary>
+    bool IsOccluded => false;
+
     /// <summary>Diagnostic: the OS-attested present/compositor statistics sampled at THIS target's last present, or
     /// <c>default</c> on a backend that has none (headless — the struct's <c>Valid</c> bit reads false, which every
     /// consumer must treat as NOT MEASURED rather than as zeroes). ALWAYS-ON: two OS calls per present and one per

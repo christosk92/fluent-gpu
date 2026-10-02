@@ -51,6 +51,11 @@ public interface IPreparedItem : IAsyncDisposable
     MediaKind Kind { get; }
     /// <summary>True once the preroll has covered worst-case decode+decrypt+seek latency (safe to consume at the join).</summary>
     bool IsReady { get; }
+    /// <summary>True when the prepared voice already holds at least <paramref name="minFrames"/> frames of post-seek PCM (or its producer
+    /// has finished with some PCM buffered), so a swap that needs only that much — a seek replacing the playing voice needs ONE block —
+    /// can proceed without waiting for the full <see cref="IsReady"/> cushion. A backend with no PCM depth to speak of answers
+    /// <see cref="IsReady"/>.</summary>
+    bool IsReadyFor(int minFrames) => IsReady;
     /// <summary>The prepared audio voice in the active mix format (null for a non-audio backend).</summary>
     IAudioSource? AudioVoice { get; }
     /// <summary>The prepared voice's sample-accurate trim (spec §8.3); default for non-audio.</summary>
@@ -100,6 +105,11 @@ public sealed class AudioPreparedItem : IPreparedItem
     /// <inheritdoc/>
     public bool IsReady => AudioVoice is RingAudioSource ring
         ? ring.ProducerFault is null && (ring.BufferedFrames >= (ReadinessFrames > 0 ? ReadinessFrames : ring.TargetFrames) || ring.ProducerDone && ring.BufferedFrames > 0)
+        : AudioVoice is not null && !AudioVoice.Exhausted;
+    /// <inheritdoc/>
+    public bool IsReadyFor(int minFrames) => AudioVoice is RingAudioSource ring
+        ? ring.ProducerFault is null && !ring.HasPendingFlush
+            && (ring.BufferedFrames >= Math.Max(1, minFrames) || ring.ProducerDone && ring.BufferedFrames > 0)
         : AudioVoice is not null && !AudioVoice.Exhausted;
     /// <inheritdoc/>
     public IAudioSource? AudioVoice { get; }

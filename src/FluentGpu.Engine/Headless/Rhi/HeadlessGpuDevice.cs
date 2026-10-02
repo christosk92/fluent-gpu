@@ -32,6 +32,7 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     private readonly List<EraseRoundRectCmd> _erases = new(4);
     private readonly List<FillPathCmd> _fillPaths = new(16);
     private readonly List<StrokePathCmd> _strokePaths = new(16);
+    private readonly List<DrawSeriesCmd> _series = new(16);
     private readonly List<int> _videoClipDepth = new(4);
     private readonly List<PushStencilClipCmd> _stencilClips = new(4);
     private readonly List<PopStencilClipCmd> _stencilPops = new(4);
@@ -100,6 +101,8 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     /// <summary>Tessellated path strokes recorded this frame (DrawOp.StrokePath). TrimStart/TrimEnd/DashOn/DashOff/
     /// TrimMode are payload-only (never part of the realization key) — see <see cref="StrokePathCmd"/>.</summary>
     public IReadOnlyList<StrokePathCmd> LastStrokePaths => _strokePaths;
+    /// <summary>Series chunks (DrawOp.DrawSeries) recorded this frame, in emission order.</summary>
+    public IReadOnlyList<DrawSeriesCmd> LastSeries => _series;
     /// <summary>Sum of <see cref="FillPathCmd.VtxCount"/>/<see cref="StrokePathCmd.VtxCount"/> across this frame's path
     /// draws — a cheap "did anything actually tessellate/draw" probe for gates, without re-decoding the stream.</summary>
     public int LastPathVertexCount
@@ -172,6 +175,9 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     // per-target state (detached-window-render-isolation-implementation.md §3.3) and have not been migrated to a
     // per-call target parameter — today only HintSettlePresentCount below.
     private HeadlessSwapchain? _primarySwapchain;
+
+    /// <summary>The first swapchain created (the window's) — the gates' door to its occlusion / stand-down seams.</summary>
+    public HeadlessSwapchain? PrimarySwapchain => _primarySwapchain;
 
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {
@@ -247,6 +253,7 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
         _erases.Clear();
         _fillPaths.Clear();
         _strokePaths.Clear();
+        _series.Clear();
         _videoClipDepth.Clear();
         _stencilClips.Clear();
         _stencilPops.Clear();
@@ -403,6 +410,10 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
                     _strokePaths.Add(MemoryMarshal.Read<StrokePathCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<StrokePathCmd>();
                     break;
+                case DrawOp.DrawSeries:
+                    _series.Add(MemoryMarshal.Read<DrawSeriesCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawSeriesCmd>();
+                    break;
                 // A stencil clip IS a clip level (its DeviceRect is the scope's scissor), so it moves `balance` too —
                 // that keeps ClipBalance honest for every existing gate that asserts on it.
                 case DrawOp.PushStencilClip:
@@ -492,6 +503,12 @@ public sealed class HeadlessSwapchain : ISwapchain
     /// <summary>THIS target's last-present stand-down (Phase 1: per-target, not device-global). Mirrors
     /// <see cref="PresentStandDown"/> — when the configured stand-down suppresses a present, it stood down.</summary>
     public bool LastPresentStoodDown => PresentStandDown;
+
+    /// <summary>Test seam: a modelled DXGI occlusion latch.</summary>
+    public bool Occluded { get; set; }
+
+    /// <inheritdoc/>
+    public bool IsOccluded => Occluded || PresentStandDown;
 
     /// <summary>Phase 1 (detached-window-render-isolation-implementation.md §3.3): moved off IGpuDevice onto the
     /// target it actually describes. `HeadlessGpuDevice.HintSettlePresentCount` delegates to the primary swapchain's

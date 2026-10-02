@@ -1562,11 +1562,21 @@ public sealed partial class FlexLayout
     // including the last), so a wrapped row fills edge-to-edge instead of leaving a ragged gap. A line with no grow child
     // (pill/chip rows, FlexGrow 0) yields growUnit 0 and is placed at base size byte-for-byte as before. Allocation-free:
     // two linked-list walks per line, no per-line buffer.
+    // BASE SIZES COME FROM Measure, NEVER FROM scene.Bounds. A wrap container that hits the cross-pass measure ring (or the
+    // within-pass memo) returns its size WITHOUT visiting its children (Measure, P4), so each child's Bounds still hold its
+    // LAST ARRANGED rect — a Grow child stretched to fill the previous, wider line. Breaking lines on those stretched widths
+    // overflows the line (730 → 700 with nothing dirty: the third Grow tile dropped to an extra line the cached cross size
+    // never counted and painted over the next sibling). Measure(c, lineWidth) is exactly the call MeasureWrap counts lines
+    // with — a memo/ring hit when the child is clean, a real solve only when it is not — so measure and arrange can never
+    // disagree about where a line ends, whatever the caches hold. (FlexBasis plays no part in wrap line breaking — neither
+    // here nor in MeasureWrap; both read the measured size, and Grow only distributes each line's leftover.)
     private void ArrangeWrap(NodeHandle node, float finalW, float finalH, in LayoutInput li, bool row)
     {
         float padMainStart = row ? li.Padding.Left : li.Padding.Top;
         float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
+        // MeasureWrap's childAvailW: the line width on a row (text MaxLines=1 + Trim ellipsizes against it), unbounded on a column.
+        float childAvailW = row ? MathF.Max(0f, availMain) : float.PositiveInfinity;
         float lineTop = padCrossStart;
 
         for (var lineStart = FirstVisibleChild(node); !lineStart.IsNull;)
@@ -1577,9 +1587,9 @@ public sealed partial class FlexLayout
             int count = 0;
             for (var c = lineStart; !c.IsNull; c = NextVisibleSibling(c))
             {
+                var cs = Measure(c, childAvailW);
                 ref LayoutInput cli = ref _scene.Layout(c);
-                ref RectF cb = ref _scene.Bounds(c);
-                float oMain = (row ? cb.W : cb.H) + MarginMain(cli, row);
+                float oMain = (row ? cs.Width : cs.Height) + MarginMain(cli, row);
                 float next = usedMain + (count > 0 ? li.Gap : 0f) + oMain;
                 if (count > 0 && next > availMain + 0.01f) break;   // CSS: always ≥1 item per line
                 usedMain = next; totalGrow += cli.FlexGrow; count++;
@@ -1591,9 +1601,9 @@ public sealed partial class FlexLayout
             var cc = lineStart;
             for (int i = 0; i < count; i++, cc = NextVisibleSibling(cc))
             {
+                var cs = Measure(cc, childAvailW);   // a memo hit after pass 1 — the same base size that decided this line
                 ref LayoutInput cli = ref _scene.Layout(cc);
-                ref RectF cb = ref _scene.Bounds(cc);
-                float baseMain = row ? cb.W : cb.H, baseCross = row ? cb.H : cb.W;
+                float baseMain = row ? cs.Width : cs.Height, baseCross = row ? cs.Height : cs.Width;
                 float mainSize = baseMain + cli.FlexGrow * growUnit;
                 if (i > 0) cursor += li.Gap;
                 float childMainPos = cursor + MarginMainStart(cli, row);

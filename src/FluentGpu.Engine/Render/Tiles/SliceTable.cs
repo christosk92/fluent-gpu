@@ -31,8 +31,15 @@ public readonly record struct TilePlacement(TileKey Key, int Surface, int W = Ti
 /// is LRU weighted by distance from the slice's viewport, tiles not needed this frame first (off-coverage/out-of-window),
 /// then the behind row, then the ahead band. A slice whose visible tiles cannot all be made resident within the budget
 /// is <see cref="IsDegraded">Degraded</see> for the frame: none of its tiles are rastered and the backend draws it directly
-/// (today's cost, never blank). A tile idle for <see cref="IdleEvictFrames"/> turns is evicted so the backend may trim
-/// its texture (<see cref="IdleEvictFrames"/> &lt; the backend's own trim age).</para>
+/// (today's cost, never blank). A tile idle for <see cref="IdleEvictFrames"/> turns is evicted (its surface returns to the
+/// pool).</para>
+/// <para><b>Texture lifetime (the table owns it):</b> a surface slot that has held NO tile for <see cref="SurfaceTrimTurns"/>
+/// turns is named in <see cref="TrimmedSurfaces"/> (carried on <c>CompositeFrame.TrimSurfaces</c>) and the backend
+/// releases its texture — the backend never trims a tile texture on a clock of its own. Only the table knows which slots
+/// back a VALID tile: a tile can stay valid and placed for any number of turns while the backend never samples its pixels
+/// (a group / self-blur / acrylic backdrop re-drawn from a retained result), and a texture trimmed under such a tile
+/// composited NOTHING while the table still believed it valid — content vanished at idle and came back only where damage
+/// re-rastered it. A held slot is never trimmed (gpu-renderer.md §13.1g).</para>
 /// </summary>
 public sealed partial class SliceTable
 {
@@ -41,9 +48,14 @@ public sealed partial class SliceTable
     /// <summary>Eviction weight of one tile of distance from the viewport, in frames of LRU age.</summary>
     public const int DistanceWeightFrames = 8;
 
-    /// <summary>A resident tile not requested for this many turns is evicted (its surface returns to the pool, where the
-    /// backend's trim ages the texture out). The backend's texture trim age MUST exceed this.</summary>
+    /// <summary>A resident tile not requested for this many turns is evicted (its surface returns to the pool; once it has
+    /// held no tile for <see cref="SurfaceTrimTurns"/> more turns its texture is trimmed).</summary>
     public const int IdleEvictFrames = 240;
+
+    /// <summary>A surface slot that has held no tile for this many turns (and may still hold a texture) is named in
+    /// <see cref="TrimmedSurfaces"/>: the backend releases its texture. A slot a tile holds is never named, however long the
+    /// backend went without sampling it.</summary>
+    public const int SurfaceTrimTurns = 120;
 
     public const int ReasonCount = (int)InvalidationReason.Degraded + 1;
 
@@ -72,6 +84,14 @@ public sealed partial class SliceTable
     private int _freeCount;
     private int _resident;
     private long _residentBytes;
+    // Texture lifetime per surface slot: whether the backend may hold a texture for it (set when the slot is acquired —
+    // an acquired tile is invalid, so it is rastered into the slot that turn — cleared when the slot is trimmed), the turn
+    // it last returned to the free list, and this turn's trim list.
+    private readonly bool[] _surfBacked;
+    private readonly int[] _surfFreeSince;
+    private readonly int[] _trimList;
+    private int _trimCount;
+    private long _trimmedTotal;
 
     // ── per-frame work lists ──────────────────────────────────────────────────────────────────────────────────
     private readonly int[] _pend0, _pend1, _pend2;
@@ -109,6 +129,9 @@ public sealed partial class SliceTable
         _freeSurfaces = new int[surfaceCap];
         for (int i = 0; i < surfaceCap; i++) _freeSurfaces[i] = surfaceCap - 1 - i;   // pop order 0, 1, 2, …
         _freeCount = surfaceCap;
+        _surfBacked = new bool[surfaceCap];
+        _surfFreeSince = new int[surfaceCap];
+        _trimList = new int[surfaceCap];
         for (int t = 0; t < slab; t++) { _tiles[t].Surface = -1; _scheduledFrame[t] = int.MinValue; }
         InitLedger();
     }
@@ -123,6 +146,21 @@ public sealed partial class SliceTable
     /// <summary>Tiles <see cref="Resolve"/> put on the raster list this frame.</summary>
     public int ScheduledThisFrame => _scheduled;
     public int DegradedSlicesThisFrame => _degradedSlices;
+
+    /// <summary>The surface slots whose textures the backend must release this turn (written by <see cref="Resolve"/>,
+    /// cleared by <see cref="BeginFrame"/>): free — held by no tile — for at least <see cref="SurfaceTrimTurns"/> turns.
+    /// Never a slot a tile holds, and never a slot acquired this turn.</summary>
+    public ReadOnlySpan<int> TrimmedSurfaces => _trimList.AsSpan(0, _trimCount);
+
+    /// <summary>Surface slots trimmed since construction (diagnostics / gates).</summary>
+    public long TrimmedTotal => _trimmedTotal;
+
+    /// <summary>True when a tile holds <paramref name="surface"/> (its pixels back that tile).</summary>
+    public bool IsSurfaceHeld(int surface) => (uint)surface < (uint)_surfTile.Length && _surfTile[surface] >= 0;
+
+    /// <summary>True when the backend may still hold a texture for <paramref name="surface"/> (acquired since its last trim).</summary>
+    public bool IsSurfaceBacked(int surface) => (uint)surface < (uint)_surfBacked.Length && _surfBacked[surface];
+
     /// <summary>Tiles that went from valid to <paramref name="reason"/> this frame (plus <see cref="InvalidationReason.NoTexture"/>
     /// for first requests).</summary>
     public int InvalidationCount(InvalidationReason reason) => _reasonCounts[(int)reason];
@@ -176,6 +214,7 @@ public sealed partial class SliceTable
     {
         _frame = frame;
         _n0 = _n1 = _n2 = 0;
+        _trimCount = 0;
         Array.Clear(_degraded);
         Array.Clear(_hasVp);
         if ((frame & 15) == 0)
@@ -414,7 +453,8 @@ public sealed partial class SliceTable
     /// <paramref name="raster"/>: all VISIBLE tiles of all slices first (each slice atomically — it gets every visible
     /// surface it lacks, evicting non-visible tiles as needed, or it degrades), then the ahead band, then the behind rows
     /// (these two only take free budget or tiles not needed this frame). A too-small <paramref name="raster"/> span
-    /// degrades the slice whose visible tile did not fit. Zero allocation.</summary>
+    /// degrades the slice whose visible tile did not fit. Last, the turn's <see cref="TrimmedSurfaces"/>: the free slots
+    /// (none acquired this turn) idle past <see cref="SurfaceTrimTurns"/>. Zero allocation.</summary>
     public void Resolve(long budgetBytes, Span<TileRaster> raster, out int count)
     {
         count = 0;
@@ -442,6 +482,23 @@ public sealed partial class SliceTable
         ResolveBand(_pend1, _n1, budgetBytes, raster, ref count);
         ResolveBand(_pend2, _n2, budgetBytes, raster, ref count);
         _scheduled = count;
+        CollectTrims();
+    }
+
+    /// <summary>Name every FREE surface slot that may still hold a texture and has held no tile for
+    /// <see cref="SurfaceTrimTurns"/> turns (<see cref="TrimmedSurfaces"/>). Runs after every acquisition of the turn, so a
+    /// slot this turn rasters into is never trimmed under it; a slot a tile holds is not on the free list at all.</summary>
+    private void CollectTrims()
+    {
+        for (int i = 0; i < _freeCount; i++)
+        {
+            int s = _freeSurfaces[i];
+            if (!_surfBacked[s] || (long)_frame - _surfFreeSince[s] < SurfaceTrimTurns) continue;
+            if (_trimCount == _trimList.Length) break;   // unreachable: a slot is listed at most once (it is unbacked here)
+            _surfBacked[s] = false;
+            _trimList[_trimCount++] = s;
+            _trimmedTotal++;
+        }
     }
 
     private void ResolveVisibleRun(int a, int b, int s, long budgetBytes, Span<TileRaster> raster, ref int count)
@@ -688,6 +745,7 @@ public sealed partial class SliceTable
             Evict(v);
         }
         _tiles[t].Surface = _freeSurfaces[--_freeCount];
+        _surfBacked[_tiles[t].Surface] = true;   // the tile is invalid: it rasters into the slot this turn (the backend creates its texture)
         LedgerAcquired(t, _tiles[t].Surface);
         _resident++;
         _residentBytes += bytes;
@@ -707,6 +765,7 @@ public sealed partial class SliceTable
     {
         ref TileState ts = ref _tiles[t];
         _freeSurfaces[_freeCount++] = ts.Surface;
+        _surfFreeSince[ts.Surface] = _frame;   // the texture-trim clock starts now (CollectTrims)
         LedgerReleased(ts.Surface);
         ts.Surface = -1;
         _resident--;

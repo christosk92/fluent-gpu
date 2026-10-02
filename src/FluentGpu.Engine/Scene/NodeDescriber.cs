@@ -71,6 +71,7 @@ public static class NodeDescriber
         15 => "IconLayer",
         16 => "Path",
         17 => "ListRow",
+        18 => "Series",
         _ => "T" + id.ToString(CultureInfo.InvariantCulture),
     };
 

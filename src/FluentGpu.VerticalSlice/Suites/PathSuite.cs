@@ -877,6 +877,7 @@ static class PathSuite
         dl.EraseRoundRect(rect, radii, 1f, identity, 1f);
         dl.FillPath(rect, color, pathRef, (byte)FillRule.NonZero, identity, 1f);
         dl.StrokePath(rect, color, pathRef, 0f, 1f, 0f, 0f, 0, identity, 1f);
+        dl.Series(rect, new SeriesSpec(SeriesShape.Baseline, color, null, 2f, float.NaN, 1f, 1f), [0f, 0.5f, 1f], identity, 1f);
         dl.PushStencilClip(rect, pathRef, (byte)FillRule.NonZero, identity);
         dl.PopStencilClip(rect, pathRef, identity);
         dl.PopLayer(rect);
@@ -913,6 +914,7 @@ static class PathSuite
             && dev.LastArcs.Count == 1 && dev.LastPolylines.Count == 1 && dev.LastTabShapes.Count == 1
             && dev.LastGlyphGradients.Count == 1 && dev.LastIconMasks.Count == 1 && dev.LastVideos.Count == 1
             && dev.LastErases.Count == 1 && dev.LastFillPaths.Count == 1 && dev.LastStrokePaths.Count == 1
+            && dev.LastSeries.Count == 1
             && dev.LastStencilClips.Count == 1 && dev.LastStencilPops.Count == 1
             && dev.ClipBalance == 0 && dev.LayerBalance == 0 && dev.StencilClipBalance == 0;
         Check("gate.path.stream.sizes [headless-decode]", decodedAll,
@@ -922,6 +924,7 @@ static class PathSuite
             + $"polylines={dev.LastPolylines.Count} tabs={dev.LastTabShapes.Count} glyphGrad={dev.LastGlyphGradients.Count} "
             + $"icons={dev.LastIconMasks.Count} videos={dev.LastVideos.Count} erases={dev.LastErases.Count} "
             + $"fillPaths={dev.LastFillPaths.Count} strokePaths={dev.LastStrokePaths.Count} "
+            + $"series={dev.LastSeries.Count} "
             + $"stencil={dev.LastStencilClips.Count}/{dev.LastStencilPops.Count} "
             + $"clipBal={dev.ClipBalance} layerBal={dev.LayerBalance} stencilBal={dev.StencilClipBalance}");
     }

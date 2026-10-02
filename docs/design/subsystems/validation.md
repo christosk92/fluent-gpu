@@ -568,6 +568,9 @@ the retired canvas-route `gate.repaint.*` policy/stream-safety gates, `gate.edge
 | `gate.tiles.scroll-no-copy` | a pure scroll inside the retained rows rasters nothing, recomposes the back buffer in one pass per frame, and never reads or copies a render target |
 | `gate.tiles.no-blank-8000` | an 8000 DIP/s scroll over a 100k-row list: 0 exposed-missing tiles, 0 coverage clamps, never degrading |
 | `gate.tiles.alloc-zero` / `gate.tiles.render-alloc-zero` | 1000 turns of the table flow + headless `SubmitComposite`, and 300 warm frames of a 3000 DIP/s scroll through record → partition → schedule → composite → submit, allocate 0 managed bytes |
+| `gate.tiles.idle-keeps-placed-textures` (`TileLifetimeChecks`) | a list inside an opacity group (consumed only through the group's RETAINED surface) and AutoEdgeFade rows with a self-blur (leaf self-blurs, consumed only through their retained results) idle past the pre-fix tile trim age (`IdleEvictFrames` + 120) while a playhead composites every turn: the run reaches the trigger (a placed tile unsampled past that age) and no composite samples a slot without a texture (`HeadlessGpuDevice.LostPlacementsTotal` and `TileCensus.LostPlacements` 0), 0 exposed-missing, 0 stale — the Wavee "content disappears at idle" regression pin ([gpu-renderer.md §13.1g](./gpu-renderer.md)) |
+| `gate.tiles.self-scroll-idle-keeps-textures` (`TileLifetimeChecks`) | the same rows follow-scroll on their own (`ScrollMove.Follow`, no input) after resting past the trim age: the moved rows re-render their blurs from tiles that all still hold textures, then rest past the age again with 0 lost placements (the lyrics rail) |
+| `gate.tiles.trim-only-free-slots` (`TileLifetimeChecks`) | tile textures are still trimmed — a removed effect slice's released slot, `SliceTable.SurfaceTrimTurns` after it was freed — and no trim names a slot a placement of the same frame samples |
 
 ### 3.7 Data-race gate
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace FluentGpu.Media;
@@ -51,26 +52,54 @@ public enum FadeKind : byte
 public sealed class GainEnvelope
 {
     private readonly float[] _lut;   // gain per fade-frame offset (empty for None)
+    private long _fadeStartFrame;    // mutable ONLY through StampStart (the render thread, before the envelope is installed)
     /// <summary>Optional atomic commit/cancel decision shared by scheduled incoming/outgoing voices.</summary>
     public AudioTransitionGate? TransitionGate { get; private init; }
     /// <summary>Attach a shared transition decision without recomputing its off-thread lookup table.</summary>
     public GainEnvelope WithTransition(AudioTransitionGate gate)
-        => new(Kind, FadeStartFrame, FadeFrames, _lut) { TransitionGate = gate };
+        => new(Kind, _fadeStartFrame, FadeFrames, _lut) { TransitionGate = gate };
 
     private GainEnvelope(FadeKind kind, long fadeStartFrame, int fadeFrames, float[] lut)
     {
         Kind = kind;
-        FadeStartFrame = fadeStartFrame;
+        _fadeStartFrame = fadeStartFrame;
         FadeFrames = fadeFrames;
         _lut = lut;
     }
 
     /// <summary>The fade direction.</summary>
     public FadeKind Kind { get; }
-    /// <summary>The mixer-domain frame where the fade begins.</summary>
-    public long FadeStartFrame { get; }
+    /// <summary>The mixer-domain frame where the fade begins (<see cref="Unstamped"/> until the render thread stamps it).</summary>
+    public long FadeStartFrame => _fadeStartFrame;
     /// <summary>The fade length in frames (0 for a gapless / constant envelope).</summary>
     public int FadeFrames { get; }
+
+    /// <summary>The start frame of an envelope whose start the RENDER thread has not stamped yet (see <see cref="StampStart"/>).</summary>
+    public const long Unstamped = -1;
+
+    /// <summary>A fade whose start frame is decided on the RENDER thread (seek swap / jump / silence fades): the control side
+    /// builds it with <see cref="Unstamped"/> and hands it to the render thread inside a mixer command, which stamps the block
+    /// start with <see cref="StampStart"/> before installing it. Allocates its lookup table — build it OFF the render thread, or
+    /// derive further shells from one built-once template with <see cref="NewUnstamped"/>.</summary>
+    public static GainEnvelope FadeUnstamped(FadeKind kind, int fadeFrames, CrossCurve curve)
+        => Fade(kind, Unstamped, fadeFrames, curve);
+
+    /// <summary>A new unstamped shell that SHARES this envelope's lookup table (control side; one small object, no table copy):
+    /// every per-command envelope derives from a template built once, so a seek storm never rebuilds a table. A constant
+    /// envelope has no start and is returned as is.</summary>
+    public GainEnvelope NewUnstamped() => Kind == FadeKind.None ? this : new GainEnvelope(Kind, Unstamped, FadeFrames, _lut);
+
+    /// <summary>RENDER thread only, exactly once, BEFORE the envelope is installed on a voice: fix the start frame to the first
+    /// frame of the block the command lands in, so the fade is block-exact however long the command sat in the queue. Alloc-free.
+    /// Never stamp an installed or shared envelope (the constant envelope ignores it).</summary>
+    public GainEnvelope StampStart(long frame)
+    {
+        if (Kind != FadeKind.None) _fadeStartFrame = frame;
+        return this;
+    }
+
+    /// <summary>The fade's lookup table (the shared immutable gain per fade-frame offset) — for tests that pin the curve.</summary>
+    internal ReadOnlySpan<float> Lut => _lut;
 
     /// <summary>The constant-unity (gapless) envelope.</summary>
     public static GainEnvelope Constant { get; } = new(FadeKind.None, 0, 0, Array.Empty<float>());
@@ -123,15 +152,27 @@ public struct MixVoice
     public float ReplayGainScalar;
     /// <summary>The per-voice DSP chain (EQ/gain), applied in-place pre-mix; may be null.</summary>
     public IDspStage[]? Chain;
+    /// <summary>A HOLD: from <see cref="HoldAtFrame"/> on the voice is parked — never read, never retired, never waited for — until
+    /// a new envelope is installed on it (<see cref="CrossfadeMixer.TrySetVoiceEnvelope"/> clears the hold). The hold's own fade-out
+    /// envelope (installed with it) carries the voice to silence BEFORE <see cref="HoldAtFrame"/>, so parking it is inaudible. The
+    /// seek stale-fade and the scrub hold both use it: the voice keeps its ring, its decoder, its byte source.</summary>
+    public bool Held;
+    /// <summary>The mixer-domain frame the hold takes effect at (the end of the hold's fade-out). Meaningful only while <see cref="Held"/>.</summary>
+    public long HoldAtFrame;
+    /// <summary>The 5 ms blend a seek jump inside the ring leaves in the voice's slot (the state is written while mixing, so it lives
+    /// in the slot the mixer iterates by reference, never in a copy). Empty when no jump blend is pending.</summary>
+    public JumpBlend Blend;
 
     /// <summary>Pull this voice's active frames for the block, apply its DSP + ReplayGain + envelope, and ADD into
     /// <paramref name="dst"/>. <paramref name="scratch"/> is the shared per-voice work buffer (mixer-owned, reused —
-    /// zero-alloc). Returns true if the voice produced any samples this block.</summary>
+    /// zero-alloc). Returns true if the voice produced any samples this block. Mutates <see cref="Blend"/>: call it on the
+    /// voice's slot, never on a copy.</summary>
     public bool MixInto(Span<float> dst, int frames, in BlockCtx ctx, Span<float> scratch)
     {
         int ch = ctx.Channels;
         long blockStart = ctx.StartFrame;
 
+        if (Held && blockStart >= HoldAtFrame) return false;   // parked: the fade-out that preceded the hold has completed
         int firstActive = (int)Math.Max(0L, StartFrame - blockStart);
         if (firstActive >= frames) return false;   // this voice hasn't started yet in this block
         if (Env.TransitionGate is { } gate && Env.Kind != FadeKind.Out && !gate.TryCommit()) return false;
@@ -147,6 +188,10 @@ public struct MixVoice
             if (Src.Exhausted) break;
         }
         if (got <= 0) return false;
+
+        // A seek jump inside the ring: the first `Blend.Frames` fresh frames are an equal-power cross with the audio the old
+        // position would have played next. Applied BEFORE the voice chain so the EQ/gain state sees one continuous signal.
+        if (Blend.Remaining > 0) Blend.Apply(work[..(got * ch)], got);
 
         // Per-voice DSP chain (EQ + gain) in place, pre-mix.
         if (Chain is { Length: > 0 } chain)
@@ -168,12 +213,58 @@ public struct MixVoice
         return true;
     }
 
-    /// <summary>True when the source is exhausted AND the envelope has faded out — the voice can be retired.</summary>
+    /// <summary>True when the source is exhausted AND the envelope has faded out — the voice can be retired. A HELD voice is never
+    /// finished: its fade-out completing is the hold taking effect, not the voice ending (its ring and byte source stay alive).</summary>
     public readonly bool IsFinished(long mixerFrameAtBlockEnd)
-        => Env.TransitionGate is { IsCancelled: true } && Env.Kind != FadeKind.Out
+        => !Held && (Env.TransitionGate is { IsCancelled: true } && Env.Kind != FadeKind.Out
             || Src.Exhausted && (Env.Kind != FadeKind.Out || mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames)
             || Env.Kind == FadeKind.Out && Env.TransitionGate is not { IsCancelled: true }
-                && mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames;
+                && mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames);
+}
+
+/// <summary>
+/// The 5 ms equal-power blend a seek jump inside the decode ring leaves in its voice's slot (seek design B). The tail is the audio
+/// the voice would have played next at the OLD position (read from the voice itself, so a stretched voice's own lookahead and
+/// rate are honoured); the fresh audio is what the voice reads at the NEW one. Frame <c>i</c> of the blend is
+/// <c>fresh·sin(p·π/2) + tail·cos(p·π/2)</c>, <c>p = i/Frames</c> — power-complementary (sin² + cos² = 1) and continuous with the
+/// old signal at <c>i = 0</c>. The tail buffer is session-owned and preallocated: starting and applying a blend never allocates.
+/// </summary>
+public struct JumpBlend
+{
+    /// <summary>The interleaved tail (≥ <see cref="Frames"/> × <see cref="Channels"/> floats); null when no blend is pending.</summary>
+    public float[]? Tail;
+    /// <summary>The blend length in frames.</summary>
+    public int Frames;
+    /// <summary>Frames already blended.</summary>
+    public int Done;
+    /// <summary>The channel count of <see cref="Tail"/>.</summary>
+    public int Channels;
+
+    /// <summary>Frames still to blend (0 when empty).</summary>
+    public readonly int Remaining => Tail is null ? 0 : Frames - Done;
+
+    /// <summary>Begin a blend over <paramref name="frames"/> frames of <paramref name="tail"/>.</summary>
+    public static JumpBlend Start(float[] tail, int frames, int channels)
+        => new() { Tail = tail, Frames = frames, Done = 0, Channels = channels };
+
+    /// <summary>Blend the next <paramref name="frames"/> frames of the voice's fresh audio in place (at most <see cref="Remaining"/>
+    /// are touched). Alloc-free; the render thread only.</summary>
+    public void Apply(Span<float> fresh, int frames)
+    {
+        if (Tail is not { } tail) return;
+        int n = Math.Min(frames, Frames - Done);
+        int ch = Channels;
+        for (int f = 0; f < n; f++)
+        {
+            float p = (float)(Done + f) / Frames;
+            float gainIn = CrossfadeCurves.In(CrossCurve.EqualPower, p);
+            float gainOut = CrossfadeCurves.Out(CrossCurve.EqualPower, p);
+            int fb = f * ch, tb = (Done + f) * ch;
+            for (int c = 0; c < ch; c++) fresh[fb + c] = fresh[fb + c] * gainIn + tail[tb + c] * gainOut;
+        }
+        Done += n;
+        if (Done >= Frames) this = default;
+    }
 }
 
 /// <summary>
@@ -224,6 +315,7 @@ public sealed class CrossfadeMixer
         foreach (var voice in CollectionsMarshal.AsSpan(_voices))
         {
             if (voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
+            if (voice.Held && ConsumeSeq >= voice.HoldAtFrame) continue;   // parked: nothing is read from it, so it can never stall the mixer
             // A confirmed tail may finish inside this block while another voice continues across the join.
             // Only an unfinished producer can make the content timeline wait for unavailable PCM.
             var stretched = voice.Src as WsolaAudioSource;
@@ -248,11 +340,16 @@ public sealed class CrossfadeMixer
         foreach (var voice in CollectionsMarshal.AsSpan(_voices))
         {
             if (voice.StartFrame > ConsumeSeq || voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
+            if (voice.Held && ConsumeSeq >= voice.HoldAtFrame) continue;   // parked: not audible, so it needs no cushion
             var stretched = voice.Src as WsolaAudioSource;
             var ring = stretched?.Ring ?? voice.Src as RingAudioSource;
-            int recovery = stretched?.RecoveryFrames(thresholdFrames) ?? thresholdFrames;
-            if (ring is not null && (ring.HasPendingFlush || !ring.ProducerDone &&
-                (stretched?.ReadableFrames(recovery) ?? ring.BufferedFrames) < Math.Min(recovery, ring.TargetFrames))) return false;
+            if (ring is null) continue;
+            // H-2: the requested cushion applies to a stretched (WSOLA) voice too — the former one-hop clamp let a starved
+            // podcast voice resume on 20 ms of audio and starve again at once (the stutter loop). The only bound left is what a
+            // FULL ring can supply at the current rate, so a cushion that has grown past it can never wedge the gate.
+            int cushion = stretched is null ? thresholdFrames : Math.Min(thresholdFrames, stretched.ReachableFrames(ring.TargetFrames));
+            if (ring.HasPendingFlush || !ring.ProducerDone &&
+                (stretched?.ReadableFrames(cushion) ?? ring.BufferedFrames) < Math.Min(cushion, ring.TargetFrames)) return false;
         }
         return true;
     }
@@ -263,14 +360,31 @@ public sealed class CrossfadeMixer
     public Span<MixVoice> VoicesSpan => CollectionsMarshal.AsSpan(_voices);
 
     /// <summary>Retarget the envelope of the voice with <paramref name="id"/> (RENDER thread — via the session command SPSC,
-    /// or inline on the single-thread pull path) — the outgoing-voice fade-out a crossfade commit installs. Returns false
-    /// when no such voice is live.</summary>
+    /// or inline on the single-thread pull path) — the outgoing-voice fade-out a crossfade commit installs. Installing an
+    /// envelope also ENDS a hold on the voice (<see cref="MixVoice.Held"/>): a parked voice is restored by giving it a fade-in.
+    /// Returns false when no such voice is live.</summary>
     public bool TrySetVoiceEnvelope(long id, GainEnvelope env)
     {
         var span = CollectionsMarshal.AsSpan(_voices);
         for (int i = 0; i < span.Length; i++)
-            if (span[i].Id == id) { span[i].Env = env; return true; }
+            if (span[i].Id == id)
+            {
+                span[i].Env = env;
+                span[i].Held = false;   // installing an envelope ENDS a hold: the voice is mixed again, under the new envelope
+                return true;
+            }
         return false;
+    }
+
+    /// <summary>The slot of the voice with <paramref name="id"/>, BY REFERENCE (RENDER thread only): writes persist, unlike the
+    /// struct copies <c>foreach</c> hands out. Valid until the next <see cref="AddVoice"/>/<see cref="RemoveVoice"/>/<see cref="Clear"/>/<see cref="Render"/>.
+    /// Returns a null reference when no such voice is live — test it with <see cref="Unsafe.IsNullRef{T}"/>.</summary>
+    public ref MixVoice VoiceRef(long id)
+    {
+        var span = CollectionsMarshal.AsSpan(_voices);
+        for (int i = 0; i < span.Length; i++)
+            if (span[i].Id == id) return ref span[i];
+        return ref Unsafe.NullRef<MixVoice>();
     }
 
     /// <summary>True when a voice with <paramref name="id"/> is currently live.</summary>
@@ -307,11 +421,10 @@ public sealed class CrossfadeMixer
         dst[..n].Clear();
 
         var scratch = _scratch.AsSpan();
-        for (int i = 0; i < _voices.Count; i++)
-        {
-            var v = _voices[i];
-            v.MixInto(dst, frames, in ctx, scratch);
-        }
+        // BY REFERENCE: MixInto advances per-voice state (the jump blend) that a struct copy would silently lose.
+        var voices = CollectionsMarshal.AsSpan(_voices);
+        for (int i = 0; i < voices.Length; i++)
+            voices[i].MixInto(dst, frames, in ctx, scratch);
 
         ConsumeSeq += frames;
         long blockEnd = ctx.StartFrame + frames;

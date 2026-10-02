@@ -595,6 +595,14 @@ seek-rail bug). A per-pass `_measuredPass` stamp on every Measure Bounds scribbl
 `FirstChild`/`NextSibling` and copy `_arranged` back onto each stamped, `ArrangedValid` descendant. A ring-hit
 parent never visits children, so their stamp is stale and their `Bounds` still hold the arranged rect.
 
+**An arrange that needs a child's BASE size must not read that `Bounds`.** After a ring hit it holds the child's last
+ARRANGED size (a `Grow` child stretched to fill a previous, wider line), not its base. `ArrangeWrap` therefore takes
+every child's base main/cross from `Measure(child, lineWidth)` — the very call `MeasureWrap` counts lines with, a
+within-pass memo or ring hit when the child is clean — so a wrap container's line breaks always agree with its (possibly
+cached) measured cross size. Reading the stretched `Bounds` instead dropped the last tile of a clean 730 → 700 → 730 → 700
+wrap row onto a line the cached height never counted, painting it over the next sibling
+(`WrapMeasureRingTests`).
+
 **`HasScrollInSubtree` — the correctness fix a live regression surfaced.** A scroll/virtual viewport's
 `ArrangeViewport` has continuous PER-FRAME obligations — posting `ScrollInput.SetFrame`, checking
 `VirtualWindowing.NeedsRealize`, flagging `NodeFlags.VirtualRangeDirty` for the reconciler's realize catch-up — that

@@ -57,6 +57,7 @@ public static class SuiteRegistry
         new("tiles", "tiles", FluentGpu.VerticalSlice.Suites.TileSuite.Run),   // scroll-GPU plan P0: retained-tile needed set, slice table, budget, feather, composite seam
         new("slices", "tiles", FluentGpu.VerticalSlice.Suites.SliceSuite.Run),   // scroll-GPU plan P1: the recorder partition — paint order, zero-byte scroll tick, tile invalidation reasons
         new("evidence", "tiles", FluentGpu.VerticalSlice.Suites.EvidenceSuite.Run),   // evidence ledgers: #1 failing-first (open), ledger alloc-zero, capture alignment, item record == model
+        new("tile-lifetime", "tiles", FluentGpu.VerticalSlice.Suites.TileLifetimeChecks.Run),   // tile texture lifetime at idle: retained group / leaf-blur tiles keep their textures (Wavee idle blanking)
         new("controls", "controls", ControlsSuite.Run),
         new("zone-list-spikes", "controls", FluentGpu.VerticalSlice.Suites.ZoneListSpikeChecks.Run),   // Wave-0 spikes for Wavee's Home zone list: E17 sticky-in-realized-row, E18 controller rebind, KeepAlive same-key view, nested-shelf alloc
         new("component-anchor", "controls", FluentGpu.VerticalSlice.Suites.ComponentAnchorChecks.Run),   // E14: WriteAnchorColumns applies a ComponentEl's base-Element props to its own anchor (sticky/visible/exit/alloc)
@@ -66,6 +67,7 @@ public static class SuiteRegistry
         new("layerpool", "layerpool", LayerPoolSuite.Run),
         new("damage", "damage", DamageSuite.Run),
         new("path", "path", PathSuite.Run),
+        new("series", "series", SeriesSuite.Run),   // SeriesEl: chunked DrawSeriesCmd arithmetic + headless decode + the bound sample source's zero-alloc steady state; also the WindowOccluded hook gate
         new("lottie", "lottie", LottieSuite.Run),
         new("text", "text", TextSuite.Run),
         new("span-links", "text", SpanLinkDispatchChecks.Run),   // inline-hyperlink dispatch ownership; runs with --suite text

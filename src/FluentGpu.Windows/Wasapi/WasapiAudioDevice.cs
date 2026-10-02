@@ -216,6 +216,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         Interlocked.Exchange(ref _written, 0);
     }
     /// <inheritdoc/>
+    /// <remarks>A NEGATIVE <paramref name="timeoutMs"/> means INFINITE (R-3): the session passes -1 while a pause fade has finished
+    /// and the device is stopped, so the RT thread sleeps until a control wake instead of spinning a 0 ms poll or ticking at 1 ms.</remarks>
     public void WaitForWritable(WaitHandle controlWake, int timeoutMs)
     {
         // A never-opened (Open failed before CreateEventW) or invalidated device has no period event to wait on:
@@ -223,13 +225,13 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         // at 100 % re-reporting the dead sink (Wavee #112). Wait on the control wake for the period instead.
         if (!IsReady || _event == HANDLE.NULL)
         {
-            controlWake.WaitOne(Math.Max(1, timeoutMs));
+            controlWake.WaitOne(timeoutMs < 0 ? -1 : Math.Max(1, timeoutMs));
             return;
         }
         HANDLE* handles = stackalloc HANDLE[2];
         handles[0] = _event;
         handles[1] = (HANDLE)controlWake.SafeWaitHandle.DangerousGetHandle();
-        WaitForMultipleObjects(2, handles, false, (uint)Math.Max(0, timeoutMs));
+        WaitForMultipleObjects(2, handles, false, timeoutMs < 0 ? 0xFFFFFFFFu /* INFINITE */ : (uint)timeoutMs);
     }
 
     /// <inheritdoc/>

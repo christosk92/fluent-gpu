@@ -782,6 +782,38 @@ BEFORE the mix**, not globally after — you are mixing two tracks at *different
   while applying the source-time correction. The facade reapplies its desired rate to replacement sessions.
 - **Visualizer** — the `Tap` node's lock-free ring; a non-RT tick runs the FFT and publishes
   `IReadSignal<VisualizerFrame>`, bound like any other signal.
+  **AS-BUILT (2026-10, Wavee fullscreen flagship, #166) — two demand tiers over one source token.**
+  - **Level tier** (`AcquireVisualizer`): the post-everything RMS/peak tap into the `AudioLevelMailbox`, published as
+    `Visualizer` (§7.10). `VisualizerFrame.Magnitudes` stays EMPTY (reserved) — a bound frame never carries the
+    spectrum, so it can never tear.
+  - **Spectrum tier** (`AcquireSpectrum`, reference-counted, implies the level tap): the RT render thread feeds a
+    mono SPSC `SpectrumRing` from `PcmAudioSession.TapSpectrumBlock`, anchored IMMEDIATELY BEFORE `_masterGain.Process`
+    — pre-volume and pre-mute, so the picture does not follow the volume slider (mute rides `SpectrumInfo.Muted`);
+    whatever the graph places ahead of the gain stage is in the picture (the tap stays glued to `_masterGain`, so a
+    later move of the limiter/EQ ahead of it puts them in the picture by design). The tap is demand-gated by two
+    volatile reads (`AudioEffects.SpectrumDemand(source)`), allocates nothing, takes no lock and never blocks — it
+    runs inside the `AudioTripwire` window; the ring itself is created by the control thread on the first lease.
+  - **Content-domain alignment.** The ring is indexed by CONTENT frame: `BlockCtx.StartFrame` (the mixer's
+    `ConsumeSeq` at the block start). It is (re-)ARMED (`SpectrumRing.Arm(contentBase)`) on a demand edge, on a
+    `RenderEpoch` change (`CmdReset`, `RecoverStarvation`, `RebuildSink`) and on any block discontinuity; the write index
+    is monotonic, and the reader rejects a window that starts before the current arm, straddles a re-arm, lies inside
+    the producer's next block (one `maxBlock` guard band), was overwritten, or was torn during the copy.
+  - **The clock-thread tick** (`Advance` → `PublishVisualizer` → `PublishSpectrum`, ~60 Hz, `Playing` only) analyses the
+    2048-sample window (`SpectrumAnalyzer`: Hann, radix-2 FFT, 48 log bands 40 Hz..min(16 kHz, 0.45·rate), dB with a
+    +3 dB/octave tilt, clamped to −80..+6) that ENDS at
+    `PlayedFrames + (ConsumeSeqFrames − SubmittedFrames − pending) − StreamLatencyFrames − graph TotalLatencySamples
+    − SpectrumOffsetMs·rate + FftSize/2`, clamped to the newest written content: centred on the audible instant; the
+    bracketed term is the submitted→content domain shift (0 except after `RebuildSink`); a negative offset SATURATES at
+    the newest rendered sample instead of blanking. `PcmAudioSession.OutputDelayFrames`
+    (`max(0, Submitted − Played + StreamLatencyFrames)`) is a diagnostic only and does not align the window.
+  - **Publish / read.** `AudioEffects.PublishSpectrum` (internal, control thread) writes the BACK of two magnitude
+    buffers under the visualizer gate, swaps, and bumps a monotonic `Sequence`; it never touches the level frame.
+    `IAudioEffects.CopySpectrum(Span<float>, out SpectrumInfo)` is the ONLY spectrum read path — one lock, one memcpy of
+    the FRONT buffer, 0 before the first publish or without a lease; the consumer pulls on its own cadence, nothing
+    pushes. `SpectrumInfo(Sequence, BandCount, Muted, WindowRms, AlignFrames, FftMs, Live)`: `WindowRms` is the PRE-gain
+    RMS of the analysed window, `AlignFrames` how far behind the newest rendered sample the window ended.
+    `IAudioEffects.SpectrumOffsetMs` (±500 ms, positive = earlier, cross-thread safe) is the user's sync offset;
+    `NullAudioEffects` returns inert leases and an empty copy.
 
 ### 7.9 Output ownership, buffering and transport (2026-09 playback-quality revision)
 
@@ -901,6 +933,9 @@ public interface IAudioEffects            // MF video backend returns an inert n
     Signal<bool>       PreservePitchOnRate { get; }
     IReadSignal<VisualizerFrame> Visualizer { get; }
     IDisposable AcquireVisualizer();        // explicit demand while a visible consumer needs level analysis
+    IDisposable AcquireSpectrum();          // the FFT tier (implies the level tap) — see §7.8 AS-BUILT
+    int  CopySpectrum(Span<float> destination, out SpectrumInfo info);   // the ONLY spectrum read path (Magnitudes stays empty)
+    float SpectrumOffsetMs { get; set; }    // user sync offset, ±500 ms, positive = reads the window earlier
 }
 public sealed class Equalizer
 {
@@ -927,8 +962,9 @@ mailbox version.
 `AudioEffects` serializes non-RT publication and reads of its visualizer view. Both **source identity** and **demand
 epoch** must still match when the control publication commits. Last-consumer release, reacquisition and binding a
 new source invalidate old mailbox data and clear the visible levels, preventing a delayed old block from restoring
-meters after hiding or showing the prior track's levels on a new source. The shipped tap exposes RMS/peak with an
-empty spectrum; acquiring demand does not imply an FFT implementation.
+meters after hiding or showing the prior track's levels on a new source. The level tap exposes RMS/peak with an
+empty `Magnitudes`; acquiring LEVEL demand does not imply an FFT — the spectrum is a separate lease
+(`AcquireSpectrum`, §7.8 AS-BUILT) read through `CopySpectrum`.
 
 If replacement is abandoned, the host calls `PcmAudioSession.ActivateVisualizerSource()` after restoring the old
 session. This rotates publication ownership without touching EQ bindings or the live audio graph; unread frames

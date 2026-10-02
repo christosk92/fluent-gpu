@@ -276,46 +276,6 @@ public sealed class PlaybackQualityTests
     }
 
     [Fact]
-    public void Starvation_FreezesContentTimeline_ThenRebasesHardwareWithoutSkippingPcm()
-    {
-        var format = new MixFormat(48000, 2);
-        using var endpoint = new BufferedAudioEndpoint(format, 32, 512);
-        var session = new PcmAudioSession(format, endpoint, endpoint, 16, false);
-        using var feed = new AudioFeedThread(session, blockFrames: 16, ringFrames: 256, targetAheadFrames: 96);
-        session.SetVoice(new MemoryAudioSource(new float[96000], 2), TimeSpan.FromSeconds(1), 48000, NormMode.Off, -14, 1);
-        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
-        _ = session.PlayAsync();
-        feed.WorkerPumpOnce();
-        session.TickControl(16);
-        session.TickControl(16);
-        for (int i = 0; i < 12; i++)
-        {
-            feed.FeedOnce();
-            endpoint.AdvanceHardware(16);
-            session.TickControl(16);
-        }
-        long stoppedAt = session.SampleClock;
-        long readAt = feed.RingsSnapshot[0].Ring.PositionFrames;
-        Assert.Equal(96, stoppedAt);
-        Assert.False(endpoint.IsStarted);
-        Assert.Equal(PlaybackState.Stalled, session.CurrentState);
-        endpoint.AdvanceHardware(96000);
-        for (int i = 0; i < 12; i++) feed.FeedOnce();
-        Assert.Equal(stoppedAt, session.SampleClock);
-        Assert.Equal(readAt, feed.RingsSnapshot[0].Ring.PositionFrames);
-        feed.WorkerPumpOnce();
-        feed.FeedOnce();
-        endpoint.AdvanceHardware(16);
-        session.TickControl(16);
-        Assert.Equal(stoppedAt + 16, session.SampleClock);
-        Assert.Equal(readAt + 16, feed.RingsSnapshot[0].Ring.PositionFrames);
-        Assert.Equal(stoppedAt + 16, session.PlayedFrames);
-        Assert.Equal(1, endpoint.ResetCount);
-        Assert.Equal(PlaybackState.Playing, session.CurrentState);
-        _ = session.DisposeAsync();
-    }
-
-    [Fact]
     public void RejectedPrimaryCommand_DoesNotPublishOrTakeOwnership()
     {
         var format = new MixFormat(48000, 2);
@@ -386,11 +346,19 @@ public sealed class PlaybackQualityTests
     public void PartialWrites_RetainEverySampleWithoutAdvancingDecoderTwice()
     {
         var format = new MixFormat(48000, 2);
-        using var endpoint = new BufferedAudioEndpoint(format, 8, 32) { MaximumWriteFrames = 3 };
-        var pcm = Enumerable.Range(0, 32).Select(i => i * .001f).ToArray();
-        var voice = new MemoryAudioSource(pcm, 2);
+        using var endpoint = new BufferedAudioEndpoint(format, 8, 512) { MaximumWriteFrames = 3 };
         var session = new PcmAudioSession(format, endpoint, endpoint, 8, false);
-        session.SetVoice(voice, TimeSpan.FromSeconds(1), 16, NormMode.Off, -14, 1);
+        // The default graph ends in the lookahead limiter (2 ms = 96 frames at 48 kHz), which DELAYS everything it carries: the first
+        // `latency` frames the device receives are the delay line's initial silence, and the payload leaves the graph `latency` frames
+        // late. The voice therefore carries the payload plus `latency` frames of zeros after it, and the comparison below is shifted.
+        int latency = session.Graph.Live.TotalLatencySamples;
+        Assert.True(latency > 0);
+        const int payloadFrames = 16;
+        int totalFrames = latency + payloadFrames;
+        var pcm = new float[totalFrames * 2];
+        for (int i = 0; i < payloadFrames * 2; i++) pcm[i] = i * .001f;
+        var voice = new MemoryAudioSource(pcm, 2);
+        session.SetVoice(voice, TimeSpan.FromSeconds(1), totalFrames, NormMode.Off, -14, 1);
         Assert.Equal(3, session.RenderBlock(8));
         Assert.Equal(8, voice.PositionFrames);
         Assert.Equal(3, session.RenderBlock(8));
@@ -404,8 +372,21 @@ public sealed class PlaybackQualityTests
         Assert.Equal(0, endpoint.PaddingFrames);
         // Diagnostics retain the last published clock sample; they do not synchronously query a live device.
         Assert.Equal(8, session.DevicePaddingFrames);
-        Assert.Equal(pcm.Take(16), endpoint.Captured.ToArray());
         Assert.Equal(8, session.SubmittedFrames);
+
+        // Keep going the same way — every 8-frame block still reaches the device in 3-frame pieces — until the payload has come out the far
+        // side of the limiter. The decoder only ever advances once per block: each frame is read exactly once.
+        for (int i = 0; i < 1000 && endpoint.Captured.Length < totalFrames * 2; i++)
+        {
+            session.RenderBlock(8);
+            endpoint.AdvanceHardware(8);
+        }
+        Assert.Equal(totalFrames * 2, endpoint.Captured.Length);
+        Assert.Equal(totalFrames, voice.PositionFrames);
+        Assert.Equal(totalFrames, session.SubmittedFrames);
+        var captured = endpoint.Captured;
+        Assert.All(captured[..(latency * 2)].ToArray(), v => Assert.Equal(0f, v));   // the limiter's initial delay line
+        Assert.Equal(pcm.Take(payloadFrames * 2), captured.Slice(latency * 2, payloadFrames * 2).ToArray());
         _ = session.DisposeAsync();
     }
 

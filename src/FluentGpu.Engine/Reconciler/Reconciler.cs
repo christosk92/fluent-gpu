@@ -1022,6 +1022,7 @@ public sealed partial class TreeReconciler
         ListRowEl x => b is ListRowEl y ? ListRowElDiff.FirstBoundFlip(x, y) : null,
         PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
         PathEl x => b is PathEl y ? PathElDiff.FirstBoundFlip(x, y) : null,
+        SeriesEl x => b is SeriesEl y ? SeriesElDiff.FirstBoundFlip(x, y) : null,
         _ => null,
     };
 
@@ -1039,6 +1040,7 @@ public sealed partial class TreeReconciler
         ListRowEl x => b is not ListRowEl y || ListRowElDiff.AnyChanged(x, y),
         PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
         PathEl x => b is not PathEl y || PathElDiff.AnyChanged(x, y),
+        SeriesEl x => b is not SeriesEl y || SeriesElDiff.AnyChanged(x, y),
         _ => true,
     };
 
@@ -2779,6 +2781,10 @@ public sealed partial class TreeReconciler
             // to target (PathEl carries no bindable channels of its own today, so this is BindNode's only PathEl work).
             pe.OnRealized?.Invoke(node);
         }
+        else if (el is SeriesEl se)
+        {
+            BindSeriesSamples(node, se);   // Reconciler.Series.cs — the bound sample-source channel
+        }
         else if (el is ListRowEl lr)
         {
             BindListRowCells(node, lr);   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
@@ -3837,6 +3843,8 @@ public sealed partial class TreeReconciler
                 return !il.Tint.IsBound;   // ThemedIcon always binds Tint (theme-live), so an icon layer mounts fresh (like a bound image)
             case PolylineStrokeEl:
                 return true;
+            case SeriesEl se:
+                return !se.Samples.IsBound;   // a bound sample source is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
             case PathEl pe:
                 // Mirrors the BoxEl rule just below: a path with an OnRealized capture (the hero-art draw-on timelines)
                 // must mount fresh every time so the callback fires and the caller's ref stays pointed at a live node.
@@ -5381,6 +5389,22 @@ public sealed partial class TreeReconciler
                 lip.MinW = pe.MinWidth; lip.MinH = pe.MinHeight; lip.MaxW = pe.MaxWidth; lip.MaxH = pe.MaxHeight;
                 lip.FlexGrow = pe.Grow; lip.FlexShrink = pe.Shrink; lip.FlexBasis = pe.Basis;
                 lip.AlignSelf = pe.AlignSelf; lip.JustifySelf = pe.JustifySelf;
+                break;
+            }
+            case SeriesEl se:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.Series;
+                paint.Opacity = se.Opacity;
+                _scene.SetSeries(node, new SeriesSpec(se.Shape, se.Color, se.Gradient, se.Thickness, se.Baseline, se.Amplitude, se.Opacity));
+                if (!se.Samples.IsBound) _scene.SetSeriesSamples(node, se.Samples.Value.AsSpan());
+                // else: the bound path defers to BindSeriesSamples' mount-time effect (the ListRowEl.Cells deferral).
+                ref LayoutInput li = ref _scene.Layout(node);
+                li.Margin = se.Margin;
+                li.Width = se.Width; li.Height = se.Height;
+                li.MinW = se.MinWidth; li.MinH = se.MinHeight; li.MaxW = se.MaxWidth; li.MaxH = se.MaxHeight;
+                li.FlexGrow = se.Grow; li.FlexShrink = se.Shrink; li.FlexBasis = se.Basis;
+                li.AlignSelf = se.AlignSelf; li.JustifySelf = se.JustifySelf;
                 break;
             }
             case ListRowEl lr:

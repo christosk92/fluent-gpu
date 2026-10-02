@@ -2627,14 +2627,20 @@ public sealed partial class InputDispatcher
     /// shared by <see cref="DispatchPointerReleased"/> and <see cref="TrackClickCount"/> so a release and the click-count
     /// chaining that feeds it can never disagree about who is acting. Broader than
     /// <see cref="NearestClickOwner"/> (which answers "who ACTIVATES") because a node may own a gesture through
-    /// <c>OnPointerPressed</c>/<c>OnPointerReleased</c> alone — a selection row does exactly that.</summary>
+    /// <c>OnPointerPressed</c>/<c>OnPointerReleased</c> alone — a selection row does exactly that.
+    /// <para>A <see cref="InteractionInfo.HoverScopeTransparentBit"/> node (the ToolTip wrapper) is a pointer LISTENER,
+    /// not an owner: its <c>OnPointerPressed</c> only dismisses the bubble, and still fires because the press is delivered
+    /// to the hit node itself. Letting it own the gesture would swallow the release a bound slot root is waiting for — a
+    /// click on a card's trimmed, tool-tipped title inside an ItemsView slot invoked nothing (Wavee #157).</para></summary>
     private NodeHandle NearestGestureOwner(NodeHandle node)
     {
         const uint owns = InteractionInfo.PressedBit | InteractionInfo.ClickBit;
         for (var n = node; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
-            if ((_scene.Interaction(n).HandlerMask & owns) != 0) return n;
+            uint mask = _scene.Interaction(n).HandlerMask;
+            if ((mask & InteractionInfo.HoverScopeTransparentBit) != 0) continue;
+            if ((mask & owns) != 0) return n;
         }
         return NodeHandle.Null;
     }

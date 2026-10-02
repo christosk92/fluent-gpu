@@ -289,7 +289,7 @@ public sealed class AudioFeedRaceTests
 
         try { await Task.WhenAll(a, b, c).WaitAsync(TimeSpan.FromSeconds(15)); }
         finally { stop.Set(); }
-        Assert.Null(err);   // a control-thread inner seek mid-decode is the LinearResampler torn-Reset crash — routed away
+        Assert.Null(err);   // a control-thread inner seek mid-decode would tear the resampler's Reset — routed away
 
         // The inner decoder was touched ONLY by the worker pump thread (never the control seek task or the RT feed).
         lock (decoder.Gate)

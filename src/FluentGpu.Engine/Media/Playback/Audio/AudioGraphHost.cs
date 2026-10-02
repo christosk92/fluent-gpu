@@ -17,15 +17,25 @@ public sealed class CompiledAudioGraph
     public readonly IDspStage[] Master;
     /// <summary>The per-voice chain spec (each voice builds its own stateful stages from it).</summary>
     public readonly ImmutableArray<EffectSpec> PerVoiceChain;
-    /// <summary>The summed stage latency (samples) for the §7.6 position compensation.</summary>
+    /// <summary>The summed master-chain stage latency (samples) for the §7.6 position compensation — the terminal limiter's lookahead
+    /// (<c>LimiterSpec.LookaheadMs</c>) is in it. Everything downstream of <see cref="RenderMaster"/> (the spectrum tap, master gain,
+    /// pan, transport ramp) sees audio that is ALREADY delayed by this much; the position clock subtracts it
+    /// (<c>AudioClockPosition.ExtraLatencySamples</c>) because the media position is the content currently audible.</summary>
     public readonly int TotalLatencySamples;
+    /// <summary>The terminal limiter (the last <see cref="Master"/> stage) and the spec it was built from. A republish with an
+    /// EQUAL spec adopts this instance, so its lookahead delay line and gain state survive the graph swap (no 2 ms hole).</summary>
+    internal readonly LimiterStage TerminalLimiter;
+    internal readonly LimiterSpec TerminalLimiterSpec;
     private readonly int _channels;
     private readonly int _mixRate;
 
-    internal CompiledAudioGraph(IDspStage[] master, ImmutableArray<EffectSpec> perVoice, int channels, int mixRate)
+    internal CompiledAudioGraph(IDspStage[] master, ImmutableArray<EffectSpec> perVoice, int channels, int mixRate,
+        LimiterStage terminalLimiter, LimiterSpec terminalLimiterSpec)
     {
         Master = master;
         PerVoiceChain = perVoice;
+        TerminalLimiter = terminalLimiter;
+        TerminalLimiterSpec = terminalLimiterSpec;
         _channels = channels;
         _mixRate = mixRate;
         int lat = 0;
@@ -42,19 +52,28 @@ public sealed class CompiledAudioGraph
     }
 
     /// <summary>Build a fresh per-voice DSP chain from <see cref="PerVoiceChain"/> (own state per voice). Control-thread
-    /// / prepare only. Returns null when the voice needs no chain.</summary>
-    public IDspStage[]? BuildVoiceChain()
+    /// / prepare only. The chain is ALWAYS <c>[GainStage, EqStage, …any further specs]</c> (H-4): the gain stage is the voice's
+    /// gain SLOT (EQ preamp × normalization delta, written through mixer commands) and the EQ stage exists even when the spec
+    /// carries no bands — an identity cascade — so enabling the EQ later ramps in on a voice that is already playing (E-6).
+    /// A <see cref="GainSpec"/> / <see cref="EqSpec"/> in the spec seeds the slot / the cascade; the first of each wins.</summary>
+    public IDspStage[] BuildVoiceChain()
     {
-        if (PerVoiceChain.IsDefaultOrEmpty) return null;
-        var stages = new IDspStage[PerVoiceChain.Length];
-        int k = 0;
-        for (int i = 0; i < PerVoiceChain.Length; i++)
-        {
-            var st = AudioGraphHost.BuildStage(PerVoiceChain[i], _channels, _mixRate);
-            if (st is not null) stages[k++] = st;
-        }
-        if (k == 0) return null;
-        if (k != stages.Length) Array.Resize(ref stages, k);
+        IDspStage? gain = null, eq = null;
+        var rest = new System.Collections.Generic.List<IDspStage>(2);
+        if (!PerVoiceChain.IsDefaultOrEmpty)
+            for (int i = 0; i < PerVoiceChain.Length; i++)
+            {
+                var st = AudioGraphHost.BuildStage(PerVoiceChain[i], _channels, _mixRate);
+                if (st is null) continue;
+                if (st is GainStage && gain is null) gain = st;
+                else if (st is EqStage && eq is null) eq = st;
+                else rest.Add(st);
+            }
+        // An identity EQ stage is not Bypassed: it passes through while it has no bands and AdoptPending ramps it in later.
+        var stages = new IDspStage[2 + rest.Count];
+        stages[0] = gain ?? new GainStage(1f);
+        stages[1] = eq ?? new EqStage(_channels);
+        for (int i = 0; i < rest.Count; i++) stages[2 + i] = rest[i];
         return stages;
     }
 }
@@ -153,9 +172,17 @@ public sealed class AudioGraphHost
                 var st = BuildStage(spec.MasterChain[i], _channels, _mixRate);
                 if (st is not null) master[k++] = st;
             }
-        master[k++] = new LimiterStage(spec.Limiter.CeilingDbTp, spec.Limiter.ReleaseMs, _mixRate);
+        // The limiter carries a lookahead delay line (plan §4.7): a republish with an unchanged limiter spec ADOPTS the live instance
+        // instead of building a fresh one, or every EQ-topology republish would drop ~2 ms of audio and replay silence in its place.
+        // Sharing is safe: only the RT thread ever Process()es a stage, and it renders one graph at a time (the old graph is
+        // quarantined, never rendered after the swap). Compile runs on the control thread, the only writer of _live.
+        var live = _live;   // null only during the constructor's first Compile
+        var limiter = live is not null && live.TerminalLimiterSpec == spec.Limiter
+            ? live.TerminalLimiter
+            : new LimiterStage(spec.Limiter.CeilingDbTp, spec.Limiter.ReleaseMs, _mixRate, spec.Limiter.LookaheadMs, _channels);
+        master[k++] = limiter;
         if (k != master.Length) Array.Resize(ref master, k);
-        return new CompiledAudioGraph(master, spec.PerVoiceChain, _channels, _mixRate);
+        return new CompiledAudioGraph(master, spec.PerVoiceChain, _channels, _mixRate, limiter, spec.Limiter);
     }
 
     /// <summary>Build one stateful stage from an <see cref="EffectSpec"/> (control-thread / compile only).</summary>
@@ -174,7 +201,7 @@ public sealed class AudioGraphHost
             case ChannelSpec c:
                 return new ChannelStage(c.Balance, c.Mono) { Bypassed = c.Bypassed };
             case LimiterSpec lim:
-                return new LimiterStage(lim.CeilingDbTp, lim.ReleaseMs, mixRate) { Bypassed = lim.Bypassed };
+                return new LimiterStage(lim.CeilingDbTp, lim.ReleaseMs, mixRate, lim.LookaheadMs, channels) { Bypassed = lim.Bypassed };
             default:
                 return null;   // ResampleSpec is handled at the SRC edge, not as an in-place master node
         }

@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Media;
 using Xunit;
 
@@ -234,5 +236,357 @@ public sealed class AudioBufferSizingTests
 
         ring.PumpAhead();
         Assert.True(ring.Exhausted);
+    }
+
+    // ── (5) D8: one RingSizing — 2 s ahead + 1 s kept behind — for the feed and every ring it wraps ───────────────────────
+
+    private static readonly RingSizing ProductionSizing = new(BlockMs: 10.0, AheadMs: 2000.0, RingMs: 4000.0, KeepBehindMs: 1000.0);
+
+    private static PcmAudioSession NewSession(MixFormat fmt)
+    {
+        var endpoint = new HeadlessAudioEndpoint(fmt);
+        return new PcmAudioSession(fmt, endpoint.Sink, endpoint.Clock, maxBlock: 8192, driveWithOwnThread: false);
+    }
+
+    private static MemoryAudioSource Seconds(int seconds, int rate = 48000) => new(new float[rate * 2 * seconds], 2);
+
+    /// <summary>An endless stereo source whose every sample equals its frame index, so a ring read can be checked for
+    /// exactness. <see cref="BeforeRead"/> runs inside <see cref="Read"/> — i.e. AFTER the producer measured the ring's free
+    /// space and BEFORE it writes — which is exactly where a consumer-side rewind lands in the race the carry exists for.</summary>
+    private sealed class FrameIndexSource : IAudioSource
+    {
+        private long _pos;
+        private int _readsUntilHook;
+        private Action? _hook;
+        public void RunOnReadNumber(int readNumber, Action hook) { _readsUntilHook = readNumber; _hook = hook; }
+
+        public int Read(Span<float> dst, int channels)
+        {
+            if (_readsUntilHook > 0 && --_readsUntilHook == 0) { var hook = _hook; _hook = null; hook?.Invoke(); }
+            int frames = dst.Length / channels;
+            for (int i = 0; i < frames; i++)
+                for (int c = 0; c < channels; c++) dst[i * channels + c] = _pos + i;
+            _pos += frames;
+            return frames;
+        }
+
+        public long PositionFrames => _pos;
+        public bool Exhausted => false;
+        public GaplessInfo Gapless => GaplessInfo.None;
+        public ReplayGainInfo Loudness => default;
+    }
+
+    [Fact]
+    public void RingSizingCtor_D8_SizesTheFeedAndEveryRingItWraps()
+    {
+        var session = NewSession(new MixFormat(48000, 2));
+        var feed = new AudioFeedThread(session, sampleRate: 48000, rt: null, sizing: ProductionSizing);
+
+        Assert.Equal(480, feed.BlockFrames);
+        Assert.Equal(96000, feed.TargetAheadFrames);           // 2 s
+        Assert.Equal(48000, feed.KeepBehindFrames);            // 1 s
+
+        var ring = (RingAudioSource)feed.Wrap(Seconds(10));
+        Assert.Equal(96000, ring.TargetFrames);                // the ring is held 2 s ahead …
+        Assert.Equal(0, ring.KeptBehindFrames);                // … and has played nothing yet
+        for (int i = 0; i < 4; i++) feed.WorkerPumpOnce();
+        Assert.True(ring.BufferedFrames >= 96000, $"the 2 s decode-ahead was not reached: {ring.BufferedFrames} frames");
+
+        var chunk = new float[500 * 2];
+        for (int i = 0; i < 60; i++) Assert.Equal(500, ring.Read(chunk, 2));   // 30 000 frames played
+        Assert.Equal(30000, ring.KeptBehindFrames);            // all of it is still kept …
+        for (int i = 0; i < 60; i++) Assert.Equal(500, ring.Read(chunk, 2));   // 60 000 frames played
+        Assert.Equal(48000, ring.KeptBehindFrames);            // … up to the 1 s protected span
+
+        var second = (RingAudioSource)feed.WrapAdditional(Seconds(10), voiceId: 99);
+        Assert.Equal(96000, second.TargetFrames);              // a crossfade/prepared voice gets the same cushion
+        feed.Dispose();
+        _ = session.DisposeAsync();
+    }
+
+    [Fact]
+    public void MsSizedCtor_KeepsNothingBehind_AndForwardsToTheSameRingSizingPath()
+    {
+        var session = NewSession(new MixFormat(48000, 2));
+        var feed = new AudioFeedThread(session, sampleRate: 48000);
+        Assert.Equal(0, feed.KeepBehindFrames);
+        Assert.Equal(24000, feed.TargetAheadFrames);           // 500 ms, as before
+
+        var ring = (RingAudioSource)feed.Wrap(Seconds(5));
+        feed.WorkerPumpOnce();
+        var chunk = new float[480 * 2];
+        for (int i = 0; i < 10; i++) ring.Read(chunk, 2);
+        Assert.Equal(0, ring.KeptBehindFrames);                // nothing is protected, so nothing is rewindable
+        Assert.False(ring.RtTryJump(-1));
+        feed.Dispose();
+        _ = session.DisposeAsync();
+    }
+
+    [Fact]
+    public void Resize_RederivesTheKeptBehindSpanAgainstTheNewRate()
+    {
+        var session = NewSession(new MixFormat(48000, 2));
+        var feed = new AudioFeedThread(session, sampleRate: 48000, rt: null, sizing: ProductionSizing);
+        feed.Resize(new MixFormat(96000, 2));
+        Assert.Equal(960, feed.BlockFrames);
+        Assert.Equal(192000, feed.TargetAheadFrames);          // still 2 s
+        Assert.Equal(96000, feed.KeepBehindFrames);            // still 1 s
+        feed.Dispose();
+        _ = session.DisposeAsync();
+    }
+
+    [Fact]
+    public void Ring_StartsItsContentCursorWhereTheAlreadySoughtDecoderIs()
+    {
+        var inner = Seconds(1);
+        inner.SeekFrame(1000);
+        Assert.Equal(1000, new RingAudioSource(inner, 2, 2048, 1024, 256).PositionFrames);                       // V-PE3: not 0
+        Assert.Equal(5000, new RingAudioSource(inner, 2, 2048, 1024, 256, startFrames: 5000).PositionFrames);    // the larger wins
+        Assert.Equal(1000, new RingAudioSource(inner, 2, 2048, 1024, 256, startFrames: 10).PositionFrames);
+    }
+
+    [Fact]
+    public void RtTryJump_RewindsIntoTheKeptSpan_AndSkipsInsidePublishedData_MovingTheContentCursor()
+    {
+        var ring = new RingAudioSource(Seconds(10), 2, ringFrames: 8192, targetAheadFrames: 2048, pumpFrames: 256, keepBehindFrames: 1024);
+        ring.PumpAhead();
+        Assert.True(ring.BufferedFrames >= 2048);
+        var chunk = new float[512 * 2];
+        for (int i = 0; i < 4; i++) Assert.Equal(512, ring.Read(chunk, 2));   // 2048 frames played
+        Assert.Equal(2048, ring.PositionFrames);
+        Assert.Equal(1024, ring.KeptBehindFrames);
+
+        Assert.False(ring.RtTryJump(-1025));                   // beyond the kept span: refused, nothing moves
+        Assert.Equal(2048, ring.PositionFrames);
+        Assert.True(ring.RtTryJump(-1024));
+        Assert.Equal(1024, ring.PositionFrames);               // the content cursor moves with the head
+        Assert.Equal(0, ring.KeptBehindFrames);
+        Assert.False(ring.RtTryJump(-1));
+
+        int buffered = ring.BufferedFrames;
+        Assert.True(ring.RtTryJump(100));
+        Assert.Equal(1124, ring.PositionFrames);
+        Assert.Equal(buffered - 100, ring.BufferedFrames);
+        Assert.False(ring.RtTryJump(1_000_000));               // past the published data
+        Assert.Equal(1124, ring.PositionFrames);
+    }
+
+    [Fact]
+    public void RtTryJumpReadAndGrowAhead_AllocateNothing()
+    {
+        var ring = new RingAudioSource(Seconds(10), 2, ringFrames: 8192, targetAheadFrames: 2048, pumpFrames: 256, keepBehindFrames: 1024);
+        ring.PumpAhead();
+        var chunk = new float[64 * 2];
+
+        void Cycle()
+        {
+            ring.Read(chunk, 2);
+            ring.RtTryJump(-64);                               // re-read the same 64 frames forever: the ring never drains
+            _ = ring.KeptBehindFrames;
+            ring.GrowAhead();
+        }
+
+        for (int i = 0; i < 200; i++) Cycle();                 // warm the JIT
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10_000; i++) Cycle();
+        Assert.Equal(0L, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    // ── (6) one xrun per incident (V-PE30), GrowAhead once per incident ──────────────────────────────────────────────────
+
+    [Fact]
+    public void Starvation_IsOneIncident_UntilAFullReadClosesIt()
+    {
+        var ring = new RingAudioSource(Seconds(1), 2, ringFrames: 2048, targetAheadFrames: 1024, pumpFrames: 256);
+        var dst = new float[256 * 2];
+
+        for (int i = 0; i < 3; i++) Assert.Equal(0, ring.Read(dst, 2));   // an empty ring, the source not exhausted: three starved blocks
+        Assert.True(ring.ConsumeStarve());                      // ONE incident edge …
+        Assert.Equal(3 * 256, ring.ConsumeStarveFrames());      // … carrying the whole shortfall
+
+        Assert.Equal(0, ring.Read(dst, 2));
+        Assert.False(ring.ConsumeStarve());                     // the incident is still open: no second edge
+        Assert.Equal(256, ring.ConsumeStarveFrames());          // but its frames keep accruing
+
+        ring.PumpAhead();                                       // the producer catches up
+        Assert.Equal(1024, ring.BufferedFrames);
+        for (int i = 0; i < 4; i++) Assert.Equal(256, ring.Read(dst, 2));   // full reads close the incident
+        Assert.False(ring.ConsumeStarve());
+        Assert.Equal(0, ring.ConsumeStarveFrames());
+
+        Assert.Equal(0, ring.Read(dst, 2));                     // drained again: a NEW incident
+        Assert.True(ring.ConsumeStarve());
+    }
+
+    [Fact]
+    public void RecordStarvedFrames_SharesTheIncidentLatch_WithTheRead()
+    {
+        var ring = new RingAudioSource(Seconds(1), 2, ringFrames: 2048, targetAheadFrames: 1024, pumpFrames: 256);
+        for (int i = 0; i < 3; i++) ring.RecordStarvedFrames(480);   // three silence blocks the session submitted
+        Assert.True(ring.ConsumeStarve());                      // one incident …
+        Assert.Equal(3 * 480, ring.ConsumeStarveFrames());      // … with the severity of all three
+
+        ring.RecordStarvedFrames(480);
+        Assert.False(ring.ConsumeStarve());                     // still the same incident
+        Assert.Equal(480, ring.ConsumeStarveFrames());
+
+        ring.PumpAhead();
+        Assert.Equal(256, ring.Read(new float[256 * 2], 2));    // a full read closes it
+        ring.RecordStarvedFrames(10);
+        Assert.True(ring.ConsumeStarve());                      // the next starve is a new incident
+    }
+
+    [Fact]
+    public void GrowAhead_DoublesTheTarget_CappedAboveTheKeptBehindSpan()
+    {
+        var plain = new RingAudioSource(Seconds(1), 2, ringFrames: 4096, targetAheadFrames: 1024, pumpFrames: 256);
+        Assert.Equal(1024, plain.TargetFrames);
+        plain.GrowAhead();
+        Assert.Equal(2048, plain.TargetFrames);
+        plain.GrowAhead();
+        Assert.Equal(4096, plain.TargetFrames);                 // the whole 8192-float ring
+        plain.GrowAhead();
+        Assert.Equal(4096, plain.TargetFrames);                 // capped
+
+        var kept = new RingAudioSource(Seconds(1), 2, ringFrames: 4096, targetAheadFrames: 1024, pumpFrames: 256, keepBehindFrames: 1024);
+        Assert.Equal(1024, kept.TargetFrames);
+        kept.GrowAhead();
+        Assert.Equal(2048, kept.TargetFrames);
+        kept.GrowAhead();
+        Assert.Equal(3072, kept.TargetFrames);                  // 4096 − the 1024 frames that stay protected behind the head
+        kept.GrowAhead();
+        Assert.Equal(3072, kept.TargetFrames);
+    }
+
+    [Fact]
+    public async Task FeedOnce_GrowsAStarvedRingsDecodeAheadOnTheIncidentEdge()
+    {
+        var fmt = new MixFormat(48000, 2);
+        var endpoint = new HeadlessAudioEndpoint(fmt);
+        var session = new PcmAudioSession(fmt, endpoint.Sink, endpoint.Clock, maxBlock: 512, driveWithOwnThread: false);
+        var feed = new AudioFeedThread(session, blockFrames: 256);   // 8192-frame ring, 4096 frames ahead
+        session.Configure(AudioGraphSpec.Passthrough);
+        long frames = 5L * fmt.SampleRate;
+        session.SetVoice(new SignalGeneratorSource(2, fmt.SampleRate, 220, 0.5f, frames), TimeSpan.FromSeconds(5), frames, NormMode.Off, -14f, initialVolume: 1f);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+        _ = session.PlayAsync();
+        feed.ControlTickOnce();
+        feed.ControlTickOnce();
+        feed.FeedOnce();
+        feed.WorkerPumpOnce();
+        feed.ControlTickOnce();
+        Assert.Equal(PlaybackState.Playing, session.CurrentState);
+
+        var ring = feed.RingsSnapshot[0].Ring;
+        Assert.Equal(4096, ring.TargetFrames);
+        for (int i = 0; i < 128; i++) feed.FeedOnce();          // nobody pumps: the ring drains and starves
+        feed.WorkerPumpOnce();
+        for (int i = 0; i < 16; i++) feed.FeedOnce();
+        Assert.True(feed.XrunCount >= 1);
+        Assert.Equal(8192, ring.TargetFrames);                  // grown on the incident edge, capped by the 16384-float ring
+
+        feed.Dispose();
+        await session.DisposeAsync();
+    }
+
+    // ── (7) PumpAhead never drops decoded audio when the consumer rewinds mid-decode ─────────────────────────────────────
+
+    [Fact]
+    public void PumpAhead_KeepsDecodedAudio_WhenTheConsumerRewindsBetweenTheFreeSpaceReadAndTheWrite()
+    {
+        // ch = 2, ring 256 floats, keep-behind 32 floats, target 192 floats, pump block 32 floats.
+        var source = new FrameIndexSource();
+        var ring = new RingAudioSource(source, 2, ringFrames: 128, targetAheadFrames: 96, pumpFrames: 16, keepBehindFrames: 16);
+
+        ring.PumpAhead();                                       // frames 0..95 buffered (192 floats)
+        Assert.Equal(96, ring.BufferedFrames);
+        var chunk = new float[20 * 2];
+        Assert.Equal(20, ring.Read(chunk, 2));                  // play frames 0..19 → head at float 40
+        for (int i = 0; i < 20; i++) Assert.Equal((float)i, chunk[i * 2]);
+
+        // The 2nd decode read of the next pass sees 40 free floats, then the RT rewinds 6 frames (12 floats): only 28 floats fit.
+        source.RunOnReadNumber(2, () => Assert.True(ring.RtTryJump(-6)));
+        int decoded = ring.PumpAhead();
+        Assert.Equal(16 + 14, decoded);                         // 16 frames, then 14 of the next 16 — the last 2 are carried
+        Assert.Equal(14, ring.PositionFrames);                  // 20 played − the 6-frame rewind
+
+        var played = new float[112 * 2];
+        Assert.Equal(112, ring.Read(played, 2));
+        for (int i = 0; i < 112; i++)
+        {
+            Assert.Equal((float)(14 + i), played[i * 2]);       // frames 14..125: the rewound span re-read, then the new audio
+            Assert.Equal((float)(14 + i), played[i * 2 + 1]);
+        }
+        Assert.Equal(126, ring.PositionFrames);
+
+        ring.PumpAhead();                                       // the carry (frames 126, 127) goes in BEFORE anything newer
+        var next = new float[30 * 2];
+        Assert.Equal(30, ring.Read(next, 2));
+        for (int i = 0; i < 30; i++) Assert.Equal((float)(126 + i), next[i * 2]);   // no gap at 126/127, no repeat
+    }
+
+    // ── (8) ReadyWake / IsReady: event-driven readiness (V-PE10) ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void IsReady_NeedsBufferedFramesOrAFinishedProducer_AndNeverWithAPendingFlush()
+    {
+        var ring = new RingAudioSource(Seconds(5), 2, ringFrames: 4096, targetAheadFrames: 1024, pumpFrames: 256);
+        Assert.False(ring.IsReady(1));                          // empty, producer running
+        ring.PumpAhead();
+        Assert.True(ring.IsReady(1024));
+        Assert.False(ring.IsReady(2000));                       // not enough yet, and the producer is not done
+
+        var tiny = new RingAudioSource(new MemoryAudioSource(new float[1000 * 2], 2), 2, ringFrames: 4096, targetAheadFrames: 4096, pumpFrames: 256);
+        tiny.PumpAhead();                                       // a 1000-frame source shorter than the 4096-frame target: exhausted
+        Assert.True(tiny.ProducerDone);
+        Assert.True(tiny.IsReady(1_000_000));                   // waiting longer cannot help: ready
+
+        ring.WorkerApplySeek(500);                              // a seek flush is now pending
+        Assert.True(ring.HasPendingFlush);
+        Assert.False(ring.IsReady(0));                          // what it holds is pre-seek audio the RT is about to discard
+        ring.RtConsumeFlush();
+        Assert.True(ring.IsReady(0));
+    }
+
+    [Fact]
+    public void Producer_SetsReadyWake_OnceTheMinimumIsMet()
+    {
+        var ring = new RingAudioSource(Seconds(10), 2, ringFrames: 8192, targetAheadFrames: 4096, pumpFrames: 512);
+        Volatile.Write(ref ring.ReadyMinimum, 2000);
+        ring.ReadyWake.Reset();
+        ring.StartProducer();
+        Assert.True(ring.ReadyWake.WaitOne(3000), "the producer never signalled readiness");
+        Assert.True(ring.IsReady(2000));
+        ring.Dispose();
+        Assert.True(ring.JoinProducer(3000));
+    }
+
+    [Fact]
+    public async Task WaitUntilReadyAsync_CompletesFromTheProducersSignal()
+    {
+        var ring = new RingAudioSource(Seconds(10), 2, ringFrames: 8192, targetAheadFrames: 4096, pumpFrames: 512);
+        ring.StartProducer();
+        await ring.WaitUntilReadyAsync(3000, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(ring.BufferedFrames >= 3000);
+        ring.Dispose();
+        Assert.True(ring.JoinProducer(3000));
+    }
+
+    [Fact]
+    public async Task WaitUntilReadyAsync_ObservesCancellation_WithoutAProducer()
+    {
+        var ring = new RingAudioSource(Seconds(10), 2, ringFrames: 8192, targetAheadFrames: 4096, pumpFrames: 512);
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(100);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ring.WaitUntilReadyAsync(1000, cts.Token));
+        ring.Dispose();
+    }
+
+    [Fact]
+    public void Dispose_ReleasesReadyWakeWithTheRing()
+    {
+        var ring = new RingAudioSource(Seconds(1), 2, ringFrames: 2048, targetAheadFrames: 1024, pumpFrames: 256);
+        ring.Dispose();                                         // no producer was ever started: the ring owns the event's disposal
+        Assert.ThrowsAny<ObjectDisposedException>(() => ring.ReadyWake.Reset());
     }
 }

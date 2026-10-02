@@ -21,6 +21,9 @@ namespace FluentGpu.Controls;
 ///   with NO list re-render and NO row rebuild.</item>
 /// <item><see cref="OnInteraction"/>/<see cref="OnFocusChanged"/> — wire these onto the slot root (press/Enter/Space →
 ///   the selector; focus → keyboard-current tracking), exactly like the <see cref="ItemContainerFactory"/> seam.</item>
+/// <item><see cref="IsFocused"/> — the slot's focus fact as a read-signal, written from the slot root's own focus edge
+///   (the <see cref="OnFocusChanged"/> above), so passive CONTENT inside the slot can light its focus-within chrome
+///   without a scene walk. Content discovers the scope through the <see cref="ItemsView.SlotRow"/> context.</item>
 /// </list>
 /// The slot root should be <c>Focusable = false</c>: the ItemsView owns the single roving tab stop and toggles the
 /// current slot's focusability imperatively (no re-render). <see cref="SelectorVisualsBound"/> builds standard chrome
@@ -39,6 +42,63 @@ public readonly record struct RowScope(
     /// equality-gated <see cref="BoundItemsSource{T}.BindItem(IReadSignal{int}, ReactiveRuntime, int, IEqualityComparer{T}?)"/>
     /// memo — app code should not need to read this directly.</summary>
     public ReactiveRuntime? Runtime { get; init; }
+
+    /// <summary>The slot's FOCUS fact (E1): exactly the edge the slot root's <see cref="OnFocusChanged"/> hears — <c>true</c>
+    /// once focus lands ON the root or ENTERS its subtree from outside (the dispatcher's routed edge), <c>false</c> at the
+    /// matching loss — and <c>true</c> only while the slot still shows the item that focus arrived on. Read <c>.Value</c>
+    /// inside a render or a bind thunk to subscribe: the passive content of a slot — a card host that renders click-less
+    /// and focus-less because the slot root owns invoke and focus — learns that the roving tab stop reached its slot
+    /// without a scene walk. A move from the root onto a control INSIDE it is a loss for the root (its self semantics:
+    /// the routed edge only fires on subtree-boundary crossings), so content that must stay lit then ORs this with its
+    /// own focus-within wrapper (a non-focusable box carrying <c>OnFocusChanged</c>). Null ⇒ not focused (a
+    /// <c>RowScope</c> not built by <see cref="ItemsView"/>'s bound realize path). Meaningful only when the slot root wires
+    /// <see cref="OnFocusChanged"/> (every <see cref="SelectorVisualsBound"/> builder and the <c>PagedShelf</c> slot root
+    /// do).
+    /// <para>One per persistent slot, allocated with it — a recycle or a selection change allocates nothing here. Keyed on
+    /// the ITEM INDEX the focus edge arrived on, not a bare bool, because a bound slot recycles while focused: the
+    /// reconciler's rebind clears the root's Focused/FocusVisual flags but fires no focus edge (the dispatcher keeps its
+    /// focus handle on the node, so the arrow keys keep working from the list's current item), and the recycled slot
+    /// must not keep reading focused while it shows a different item. WinUI never recycles a focused container (the
+    /// repeater pins it — <c>Repeater/ViewManager.cpp:54, :210-244</c>) and carries the container's focus visuals for a
+    /// passive template (<c>ListViewItemPresenter</c>, <c>ListViewItem_themeresources.xaml:247-256</c>); Slint derives
+    /// the same index-keyed fact for its passive <c>ListItem</c>: <c>has-focus: root.has-focus &amp;&amp; index ==
+    /// root.focus-item</c> (<c>internal/compiler/widgets/common/listview.slint:139</c>).</para></summary>
+    public IReadSignal<bool>? IsFocused { get; init; }
+}
+
+/// <summary>
+/// <see cref="RowScope.IsFocused"/>'s implementation — built by <see cref="ItemsView"/>'s bound realize path WITH the
+/// slot (once per persistent slot, never per rebind) and fed by the slot root's focus edge. The whole state is ONE
+/// <see cref="Signal{T}"/> holding the item index the focus arrived on (−1 = not focused); the read is
+/// <c>at ≥ 0 ∧ at == Index</c>. An edge is one equality-gated int write (allocation-free); a read subscribes the
+/// slot's index only while focused, so an unfocused card never wakes on its slot's recycle through this channel, and a
+/// focused one re-reads <c>false</c> the moment the slot is rebound to another item.
+/// </summary>
+internal sealed class SlotFocus(IReadSignal<int> index) : IReadSignal<bool>
+{
+    readonly Signal<int> _at = new(-1);
+
+    /// <summary>The slot's persistent index signal (ItemsView's re-stamp checks it names the item being focused).</summary>
+    internal IReadSignal<int> Index => index;
+
+    public bool Value
+    {
+        get
+        {
+            int at = _at.Value;                    // subscribe the focus edge…
+            return at >= 0 && at == index.Value;   // …and, only while focused, the slot's recycle
+        }
+    }
+
+    public bool Peek()
+    {
+        int at = _at.Peek();
+        return at >= 0 && at == index.Peek();
+    }
+
+    /// <summary>The slot root's focus edge: <paramref name="got"/> stamps the item the slot shows NOW; a loss clears it.
+    /// Also the re-stamp ItemsView applies when it lands focus on a slot root that already holds it (no edge fires then).</summary>
+    internal void Edge(bool got) => _at.Value = got ? index.Peek() : -1;
 }
 
 /// <summary>

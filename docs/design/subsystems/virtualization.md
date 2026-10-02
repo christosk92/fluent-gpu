@@ -355,6 +355,19 @@ channel (alongside `CardAt`/`KeyOf`/`OnVisibleRange`, per component-props-contra
 `OnClick`/`OnPointerReleased` — the slot root is the one and only invoke/focus target; a template that also wires its
 own click fights the roving tab stop.
 
+**Slot focus and slot discovery (2026-10, Wavee #157/#159).** `RowScope.IsFocused` (`IReadSignal<bool>?`, an `init`
+property stamped beside `Runtime`) tells content INSIDE a slot that the roving tab stop sits on its slot root — the
+WinUI `ListViewItemPresenter`-receives-container-state / Slint `has-focus` split: the container owns focus, a passive
+item reads it. One per persistent slot, never minted on a rebind; it records the item index focus arrived on and reads
+`at == Index`, because a rebind fires no focus edge (the dispatcher keeps its handle on the node) — a recycled slot
+therefore reads false, and `ItemsView.FocusIndex` re-stamps it when focus lands again on the same node. It mirrors the
+slot root's OWN edge: focus moving onto a control inside the slot counts as a loss, so content that wants focus-within
+ORs in a routed `OnFocusChanged` wrapper of its own. `ItemsView.SlotRow` (`Context<RowScope?>`) lets a card discover
+that it is inside a bound slot at all, so ONE card component can render click-less and focus-less there and own its
+click everywhere else; `PagedShelf.BindCard` provides it on the once-per-slot root (cards built outside a slot — the
+measured-mode probe cells, the skeleton proxy — read null). Gates: `gate.shelf.keyboard.slotrow`,
+`gate.virt.rowFocus.{follows,recycle,perSlot}`.
+
 `FluentGpu.Engine/Foundation/FormatCache.cs`: `FormatCache<TKey>` is a bounded `Dictionary<TKey,string>` (cap
 `FormatCache<TKey>.Capacity` = 4096; a miss past the cap **clears the whole table** rather than evicting
 piecemeal — no per-entry LRU bookkeeping on the hot path). `FormatCache.Int` is a separate, dense, **never

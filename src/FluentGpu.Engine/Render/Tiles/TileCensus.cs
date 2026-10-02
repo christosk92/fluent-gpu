@@ -65,13 +65,21 @@ public readonly record struct TileCensus
     /// <summary>Bytes held by retained derived surfaces (groups, self-blurs, backdrops) — ≤ BudgetBytes ×
     /// <c>TileBudget.RetainedShare</c>.</summary>
     public long RetainedBytes { get; init; }
+    /// <summary>Tile placements the backend SKIPPED this turn because their surface slot held no texture
+    /// (<c>IGpuDevice.LastLostPlacements</c>) — a valid tile that composited nothing. Must be 0.</summary>
+    public int LostPlacements { get; init; }
+    /// <summary>Tile surface slots whose textures the table released this turn (<c>SliceTable.TrimmedSurfaces</c>).</summary>
+    public int TrimmedSurfaces { get; init; }
 
     /// <summary>The census of the turn <paramref name="table"/> just closed (read after the submit, before the next
     /// turn opens). <paramref name="record"/> = the slice recorder's last pass (<c>SliceRecorder.LastStats</c>),
-    /// <paramref name="cache"/> = the backend's group-cache census (<c>IGpuDevice.LastCompositeCache</c>).</summary>
+    /// <paramref name="cache"/> = the backend's group-cache census (<c>IGpuDevice.LastCompositeCache</c>),
+    /// <paramref name="lostPlacements"/> = <c>IGpuDevice.LastLostPlacements</c>.</summary>
     public static TileCensus Capture(SliceTable table, int items, int rastered, int exposedMissing, int coverageClamps, long budgetBytes,
-        SliceRecordStats record = default, FluentGpu.Rhi.CompositeCacheStats cache = default) => new()
+        SliceRecordStats record = default, FluentGpu.Rhi.CompositeCacheStats cache = default, int lostPlacements = 0) => new()
     {
+        LostPlacements = lostPlacements,
+        TrimmedSurfaces = table.TrimmedSurfaces.Length,
         EffectSlices = record.EffectSlices,
         Folded = record.Folded,
         AcrylicSlices = record.AcrylicSlices,

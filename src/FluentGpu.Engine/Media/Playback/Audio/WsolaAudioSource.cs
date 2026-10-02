@@ -69,7 +69,12 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         _hasTail = false;
     }
 
-    internal int RecoveryFrames(int requested) => Math.Min(requested, _hop);
+    /// <summary>The most OUTPUT frames a ring holding <paramref name="ringTargetFrames"/> input frames can ever let this voice
+    /// preflight at the current rate. A stretched voice eats <c>rate</c> input frames per output frame and needs two hops plus
+    /// the search margin in hand, so a resume cushion beyond this could never be met by a full ring and the mixer's
+    /// <see cref="CrossfadeMixer.PcmReady"/> would wait forever (silence) at, say, 3× once the cushion has grown.</summary>
+    internal int ReachableFrames(int ringTargetFrames)
+        => _rate == 1 ? ringTargetFrames : Math.Max(_hop, (int)((ringTargetFrames - _hop * 2 - _search) / _rate));
 
     /// <summary>Conservative non-consuming output preflight. A producer shortfall must stall the mixer, not add silence.</summary>
     public int ReadableFrames(int requested)
@@ -91,7 +96,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
     {
         if (channels != _channels) throw new ArgumentException("Channel count differs from the voice format.", nameof(channels));
         int wanted = dst.Length / channels, written = 0;
-        if (_rate == 1 && _ready == 0 && !_hasTail && _inputFrames == 0)
+        if (TryEnterPassThrough())
         {
             int got = _inner.Read(dst, channels);
             if (got > 0)
@@ -119,11 +124,31 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         return written;
     }
 
+    /// <summary>R-9: true when the byte-exact unity pass-through may serve this read. Fresh after <see cref="Reset"/> that is
+    /// trivially so (nothing buffered); after a stretched run it re-opens as soon as the lookahead is DRAINED — every
+    /// buffered input frame has been emitted, so the next frame out is exactly the next frame the inner source delivers. The
+    /// retained history is dropped and the content cursor pinned to that integral inner position (the sub-sample fraction a
+    /// fractional rate left behind is discarded: &lt; 1 frame).</summary>
+    private bool TryEnterPassThrough()
+    {
+        if (_rate != 1 || _ready != 0 || _hasTail) return false;
+        if (_inputFrames == 0) return true;
+        long next = _inputStart + _inputFrames;
+        if ((long)Math.Floor(_contentFrame) != next) return false;
+        _inputStart = next;
+        _inputFrames = 0;
+        _contentFrame = next;
+        return true;
+    }
+
     private bool ProduceHop()
     {
         Compact();
         long ideal = (long)Math.Floor(_contentFrame);
         bool unity = _rate == 1;
+        // Q-2: the first unity hop after a stretched one still holds the overlap tail of the hop before it. Dropping it left
+        // a step at the speed toggle, so the tail is blended out instead. No waveform search: unity carries no lookahead margin.
+        bool returnBlend = unity && _hasTail;
         long wantedEnd = ideal + (unity ? _hop : _hop * 2 + _search);
         FillUntil(wantedEnd);
         long end = _inputStart + _inputFrames;
@@ -139,13 +164,15 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         if (unity) count = (int)Math.Min(count, end - ideal);
         if (count <= 0) return false;
         long chosen = unity || !_hasTail ? ideal : FindMatch(ideal, end);
+        // A short unity read (EOF / producer shortfall) must still finish the return blend inside the frames it emits.
+        int ramp = returnBlend ? count : _hop;
         for (int f = 0; f < count; f++)
         {
-            float blend = (float)f / _hop;
+            float blend = (float)f / ramp;
             for (int c = 0; c < _channels; c++)
             {
                 float next = Sample(chosen + f, c);
-                _output[f * _channels + c] = unity || !_hasTail ? next
+                _output[f * _channels + c] = !_hasTail ? next
                     : _tail[f * _channels + c] * (1 - blend) + next * blend;
             }
         }

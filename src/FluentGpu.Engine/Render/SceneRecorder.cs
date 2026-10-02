@@ -2592,6 +2592,15 @@ internal sealed class SceneRecordingContext
                 }
                 break;
             }
+            case VisualKind.Series:
+            {
+                if (!maybeSparsePaint || !overlapsRecordClip) break;
+                if (!scene.TryGetSeries(node, out var ss) || !scene.TryGetSeriesSamples(node, out var seriesSamples) || seriesSamples.Length < 2) break;
+                dl.Series(local, in ss, seriesSamples, world, opacity, key);
+                float seriesHalo = ss.Shape == SeriesShape.Stroke ? ss.Thickness : 0f;
+                result.Include(world.TransformBounds(new RectF(local.X - seriesHalo, local.Y - seriesHalo, local.W + 2f * seriesHalo, local.H + 2f * seriesHalo)));
+                break;
+            }
             case VisualKind.Path:
             {
                 if (!maybeSparsePaint || !overlapsRecordClip) break;

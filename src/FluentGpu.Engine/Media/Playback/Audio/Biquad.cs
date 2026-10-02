@@ -4,13 +4,14 @@ namespace FluentGpu.Media;
 
 /// <summary>
 /// Normalized (a0 == 1) RBJ-cookbook biquad coefficients (spec §7.8). Computed OFF the RT path (a freq/Q/gain change
-/// recompiles the coefficients and cross-ramps; §7.8) — the per-sample <see cref="BiquadState.ProcessInPlace"/> only
-/// multiplies+adds. A POD struct: copy only, zero-alloc.
+/// recompiles the coefficients and cross-ramps; §7.8) — the per-sample <see cref="BiquadState.Process"/> only
+/// multiplies+adds. A POD struct: copy only, zero-alloc. Held in <c>double</c> (E-1): a 31/62 Hz pole sits at r ≈ 0.999,
+/// where float coefficients quantise the pole radius and float state amplifies the recursion's round-off.
 /// </summary>
-public readonly record struct BiquadCoeffs(float B0, float B1, float B2, float A1, float A2)
+public readonly record struct BiquadCoeffs(double B0, double B1, double B2, double A1, double A2)
 {
     /// <summary>The identity (pass-through) filter.</summary>
-    public static BiquadCoeffs Identity => new(1f, 0f, 0f, 0f, 0f);
+    public static BiquadCoeffs Identity => new(1.0, 0.0, 0.0, 0.0, 0.0);
 
     /// <summary>Compute normalized RBJ coefficients (Audio EQ Cookbook, Robert Bristow-Johnson) for
     /// <paramref name="band"/> at sample rate <paramref name="sampleRate"/>. Deterministic and alloc-free.</summary>
@@ -99,27 +100,32 @@ public readonly record struct BiquadCoeffs(float B0, float B1, float B2, float A
         }
 
         double inv = 1.0 / a0;
-        return new BiquadCoeffs((float)(b0 * inv), (float)(b1 * inv), (float)(b2 * inv), (float)(a1 * inv), (float)(a2 * inv));
+        return new BiquadCoeffs(b0 * inv, b1 * inv, b2 * inv, a1 * inv, a2 * inv);
     }
 }
 
 /// <summary>
 /// A single biquad's per-channel Direct-Form-I delay state (spec §7.8) — <c>x[n-1]/x[n-2]/y[n-1]/y[n-2]</c>. Held
-/// per (band × channel) so a stereo cascade keeps independent state. POD; the RT path only reads/writes these four floats.
+/// per (band × channel) so a stereo cascade keeps independent state. POD; the RT path only reads/writes these four doubles
+/// (E-1: the recursion runs in double; the float in/out boundary is the stage's sample buffer).
 /// </summary>
 public struct BiquadState
 {
-    private float _x1, _x2, _y1, _y2;
+    private double _x1, _x2, _y1, _y2;
 
     /// <summary>Reset the delay line (a discontinuity/seek — declick handled by the caller).</summary>
-    public void Reset() { _x1 = _x2 = _y1 = _y2 = 0f; }
+    public void Reset() { _x1 = _x2 = _y1 = _y2 = 0.0; }
 
-    /// <summary>Filter one sample through <paramref name="c"/> (Direct Form I). Branch-free, alloc-free.</summary>
+    /// <summary>Filter one sample through <paramref name="c"/> (Direct Form I, double precision). Alloc-free.</summary>
     public float Process(float x, in BiquadCoeffs c)
     {
-        float y = c.B0 * x + c.B1 * _x1 + c.B2 * _x2 - c.A1 * _y1 - c.A2 * _y2;
+        double y = c.B0 * x + c.B1 * _x1 + c.B2 * _x2 - c.A1 * _y1 - c.A2 * _y2;
+        // E-2 / V-PE31: flush the decaying tail BEFORE it is stored as state. .NET sets no FTZ/DAZ, so a recursion that
+        // decays into the subnormal range on digital silence costs the RT thread dearly; flushing only the returned
+        // sample would leave the stored _y1 subnormal and the next block's recursion would stay in that range.
+        if (Math.Abs(y) < 1e-25) y = 0.0;
         _x2 = _x1; _x1 = x;
         _y2 = _y1; _y1 = y;
-        return y;
+        return (float)y;
     }
 }

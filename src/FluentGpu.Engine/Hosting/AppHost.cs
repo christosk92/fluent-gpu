@@ -805,6 +805,14 @@ public sealed partial class AppHost : IDisposable
     // start+expiry): the chip FOLLOWS through the DragPosX/Y binds below, so bumping this per frame — as it used to —
     // re-rendered the whole preview subtree at pointer rate for a value nothing read.
     private readonly Signal<int> _dragEpoch = new(0);
+    // InputHooks.WindowOccluded: PARKED (minimized / hidden) OR the primary swapchain's IsOccluded (cloaked / covered
+    // stand-down, or the DXGI occlusion latch where the backend reports one). Written once per RunFrame ABOVE the park and
+    // idle gates (PublishWindowOccluded), value-eq-gated.
+    private readonly Signal<bool> _windowOccluded = new(false);
+    // The occlusion probe (PublishWindowOccluded): the next forced present while the swapchain reports occluded and the
+    // window is not parked, on the host timer clock (_timers.NowMs). NaN = disarmed.
+    private double _occlusionProbeDueMs = double.NaN;
+    private const double OcclusionProbeIntervalMs = 250.0;
     private readonly FloatSignal _dragPosX = new(0f);    // live drag pointer, window DIP — bound, never re-rendered
     private readonly FloatSignal _dragPosY = new(0f);
     private bool _dragWasActive;
@@ -1172,7 +1180,8 @@ public sealed partial class AppHost : IDisposable
     private void NoteTileCensus(SliceRecorder slices, FluentGpu.Render.Tiles.SliceTable tiles)
     {
         var c = FluentGpu.Render.Tiles.TileCensus.Capture(tiles, slices.LastItems.Length, slices.LastRasteredTiles,
-            slices.LastExposedTileMissing, slices.LastCoverageClamps, slices.LastBudgetBytes, slices.LastStats, _device.LastCompositeCache);
+            slices.LastExposedTileMissing, slices.LastCoverageClamps, slices.LastBudgetBytes, slices.LastStats, _device.LastCompositeCache,
+            _device.LastLostPlacements);   // a placed tile whose slot held no texture composited nothing (must be 0)
         lock (_tileCensusLock) _tileCensus = c;
         NoteStaleTiles(tiles, c.StaleTiles);   // the stale-tile invariant: TileInvariants tally + the edge-gated [tiles.stale] line
     }
@@ -2311,6 +2320,7 @@ public sealed partial class AppHost : IDisposable
     {
         int raw = RecommendedWaitMsCore();          // sets _lastWaitKind
         int w = ClampWaitToTimers(raw, _lastWaitKind);
+        w = ClampWaitToOcclusionProbe(w, _lastWaitKind);   // an occluded (not parked) window still wakes to re-probe its target
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -2365,6 +2375,46 @@ public sealed partial class AppHost : IDisposable
         int dueIn = (int)Math.Ceiling(Math.Max(0.0, due - _timers.NowMs));
         // The drain is on the NEXT frame, which may be skipped — never return 0 (that is a spin, not a wait).
         if (dueIn < 1) dueIn = 1;
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
+    }
+
+    /// <summary>Publish <see cref="InputHooks.WindowOccluded"/> for THIS frame: <paramref name="parked"/> (minimized or
+    /// hidden — the host's own sample) OR the primary swapchain's <see cref="ISwapchain.IsOccluded"/>. Called from
+    /// <see cref="RunFrame"/> above the park and idle gates, so every frame publishes, painted or not.
+    /// <para>
+    /// Parked is folded in because a parked host never reaches Paint, so it never presents: a backend whose occlusion
+    /// read is a by-product of its last present (D3D12 <c>LastPresentStoodDown</c>) would otherwise keep reporting the
+    /// last VISIBLE present for the whole minimize.
+    /// </para>
+    /// <para>
+    /// The probe keeps the un-occlusion observable. A backend clears its flags only inside a real present (D3D12 resets
+    /// <c>LastPresentStoodDown</c> at the top of every <c>Present</c> and clears <c>OccludedLatched</c> on a successful
+    /// <c>DXGI_PRESENT_TEST</c>), and a consumer that pauses on this hook lets the app go idle — nothing would present
+    /// again, so a window that was un-cloaked or uncovered would stay "occluded" until some unrelated change painted. So
+    /// while the swapchain reports occluded and the window is NOT parked (a parked window's restore/show is a message, and
+    /// its un-park edge forces a frame), force one full repaint every <see cref="OcclusionProbeIntervalMs"/>: the present
+    /// it owes re-probes the target, and the next frame publishes the cleared value. Disarmed the moment it reads clear.
+    /// Allocation-free: two field reads, one clock read and a value-gated signal write.
+    /// </para></summary>
+    private void PublishWindowOccluded(bool parked)
+    {
+        bool targetOccluded = _swapchain.IsOccluded;
+        _windowOccluded.SetIfChanged(parked || targetOccluded);
+        if (parked || !targetOccluded) { _occlusionProbeDueMs = double.NaN; return; }
+        double now = _timers.NowMs;
+        if (double.IsNaN(_occlusionProbeDueMs)) { _occlusionProbeDueMs = now + OcclusionProbeIntervalMs; return; }
+        if (now < _occlusionProbeDueMs) return;
+        _occlusionProbeDueMs = now + OcclusionProbeIntervalMs;
+        RequestFullRepaintOnce();   // defeats both skip-submit gates (UI hash + render-side empty damage) and asks for the frame
+    }
+
+    /// <summary>Shorten an idle/throttled wait so the loop wakes for the armed occlusion probe
+    /// (<see cref="PublishWindowOccluded"/>). Same guards as <see cref="ClampWaitToTimers"/>: a display-rate wait already
+    /// runs the next frame, a parked window has no probe, and the clamp floors at 1 ms (never a spin).</summary>
+    private int ClampWaitToOcclusionProbe(int w, HostWaitKind kind)
+    {
+        if (double.IsNaN(_occlusionProbeDueMs) || IsDisplayRateWait(kind, w) || IsParked) return w;
+        int dueIn = (int)Math.Ceiling(Math.Max(1.0, _occlusionProbeDueMs - _timers.NowMs));
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
@@ -2954,6 +3004,7 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
         _inputHooks.WindowChromeEpoch = chromeEpoch;
+        _inputHooks.WindowOccluded = _windowOccluded;
         // Mica deactivation parity (WinUI): a Mica window paints a flat SOLID fallback when INACTIVE — DWM stops the live
         // blur, so without this the transparent client lets the desktop wallpaper bleed through, giving a too-light,
         // wallpaper-tinted chrome whenever the window isn't focused. Active → Transparent (the real Mica shows); inactive →
@@ -3496,6 +3547,10 @@ public sealed partial class AppHost : IDisposable
             windowStatus = new(_window.State, _window.IsVisible);
         }
         bool minimized = windowStatus.Parked;   // "minimized" below means PARKED: minimized OR hidden (E2 — identical cost)
+        // InputHooks.WindowOccluded — HERE, above the park and idle gates, so it is published on EVERY frame and not only
+        // the ones that reach Paint (an occlusion edge on an idle host would otherwise never be heard). A change schedules
+        // its readers, which is RuntimePending: the idle gate below falls through to Paint (or the park branch flushes).
+        PublishWindowOccluded(minimized);
         bool restoreEdge = _wasParked && !minimized;
         int restorePosts = 0, restoreTimers = 0;
         long restoreDrainT0 = 0;

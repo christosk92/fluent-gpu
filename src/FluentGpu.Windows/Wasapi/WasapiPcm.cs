@@ -37,9 +37,17 @@ public static class WasapiPcm
         Func<MixFormat, IAudioDecoder>? decoderFactory = null)
     {
         var format = ProbeFormat();
+        PowerThrottling.OptOut();   // F4 — before any producer/clock thread exists; covers the !useRtFeed path too. Idempotent, once per process
+
+        // ONE characteristics INSTANCE and ONE RingSizing for the whole backend (no statics — V-PE34): the feed registers its RT
+        // thread (Pro Audio) and its clock/producer threads (Audio) through `rt`, and PcmAudioPlayer hands the same two objects to
+        // every prepared/seek ring it builds, so the live voice and a prepared voice hold the same time-domain cushion (D8).
+        var rt = new MmcssProAudio();
+        var sizing = new RingSizing(BlockMs: 10.0, AheadMs: 2000.0, RingMs: 4000.0, KeepBehindMs: 1000.0);   // D8: 2 s ahead + 1 s kept behind
+
         if (!useRtFeed)
             return new PcmAudioPlayer(format, fmt => new WasapiAudioDevice(fmt), effects, maxBlock, driveWithOwnThread: true,
-                decoderFactory: decoderFactory);
+                decoderFactory: decoderFactory, rt: rt, ringSizing: sizing);
 
         return new PcmAudioPlayer(
             format,
@@ -48,14 +56,16 @@ public static class WasapiPcm
             maxBlock: maxBlock,
             driveWithOwnThread: false,              // the RT feed drives — NOT the M2 single feeder
             decoderFactory: decoderFactory,
+            rt: rt,
+            ringSizing: sizing,
             onSessionCreated: session =>
             {
                 // Attach the RT feed (MMCSS Pro-Audio) BEFORE SetVoice so the voice is decode↔RT ring-wrapped (spec §7.9).
                 // Sized in TIME, not frames, against the OPENED endpoint rate: a fixed frame count silently shrinks the
                 // decode-ahead cushion at higher rates (4096 frames is 85 ms at 48 kHz but only 21 ms at 192 kHz — well
-                // under the ~100 ms WASAPI device buffer a stall relies on). Named `sampleRate:` to pick the ms-sized
-                // ctor unambiguously (both overloads accept a bare (session, int) call).
-                var feed = new AudioFeedThread(session, sampleRate: session.Format.SampleRate, rt: new MmcssProAudio());
+                // under the ~100 ms WASAPI device buffer a stall relies on). Named `sampleRate:`/`sizing:` to pick the
+                // RingSizing ctor unambiguously (the ms-sized and frame-sized overloads also accept a bare (session, int) call).
+                var feed = new AudioFeedThread(session, sampleRate: session.Format.SampleRate, rt: rt, sizing: sizing);
                 var watcher = new MmDeviceWatcher();
                 // The endpoint factory reads session.Format at EACH rebuild, not the probe format captured once above
                 // (spec §7.9 Fix 3): after a soft reload/RebuildSink the session's live rate can differ from the format

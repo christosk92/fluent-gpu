@@ -262,6 +262,8 @@ blocks as cheap insurance.
 | **`_borderBrushes`** (sparse side-table; SHIPPED) | — | sparse map MIRRORING the gradient side-table (`Set`/`TryGet`/`Clear` + `FreeSubtree` removal); holds the per-node `GradientSpec` for the gradient elevation border; `BorderWidth` stays in the dense `NodePaint` column | record (resolve→`DrawGradientStroke`) | this doc (placement) / **`gpu-renderer.md`** (`DrawGradientStrokeCmd` shape + raster) |
 | **`_paths`** (`ColdSlab<PathSpec>`; AS-BUILT 2026-08) | — | `ColdSlab<PathSpec>` indexed directly by the node's slot index (`SetPath`/`TryGetPath`/`ClearPath`, same shape as `_polylines`); sets `NodeFlags.SparsePaint`; **NOT a NodePaint field** (a `PathSpec`'s `PathData?`/`StrokeStyle`/trim/dash/viewbox fields do not fit the 64B cache line) | record (resolve→`DrawOp.FillPath`/`StrokePath`) | this doc (placement) / **`gpu-renderer.md`** §5 (`PathSpec` field semantics, `PathData`/`PathContentEpoch`, tessellation+realization) |
 | **`_clipPaths`** (`ColdSlab<ClipPathSpec>`; AS-BUILT 2026-08) | — | `ColdSlab<ClipPathSpec>` indexed directly by the node's slot index (`SetClipPath`/`TryGetClipPath`/`ClearClipPath`, the `_paths` row's shape exactly); sets `NodeFlags.SparsePaint`, and the reconciler additionally marks `NodeFlags.ClipsToBounds` (setting a clip path IMPLIES it — all 32 flag bits are taken, so the tier is discriminated by this column, not a flag); **NOT a NodePaint field** (a `PathData?` + rule + viewbox do not fit the 64B cache line) | record (resolve→`DrawOp.PushStencilClip`/`PopStencilClip`), input (hit-test rejects outside the geometry) | this doc (placement) / **`gpu-renderer.md`** §6.1 (`ClipPathSpec` field semantics, the stencil tier, hard-edge contract) |
+| **`_series`** (`ColdSlab<SeriesSpec>`; AS-BUILT 2026-10) | — | `ColdSlab<SeriesSpec>` indexed directly by the node's slot index (`SetSeries`/`TryGetSeries`/`ClearSeries`, the `_paths` row's shape exactly); sets `NodeFlags.SparsePaint`; the STATIC half of a `SeriesEl` (shape, colour or ≤ 4-stop gradient by amplitude, thickness, baseline, amplitude, opacity); **NOT a NodePaint field**; the snapshot copies the gradient's stops array into a pooled one | record (resolve→`DrawOp.DrawSeries`) | this doc (placement) / **`gpu-renderer.md`** §3.1 (`SeriesSpec` semantics + `DrawSeriesCmd`) + §5.3 (the raster) |
+| **`_seriesSamples`** (sparse; AS-BUILT 2026-10) | — | `Dictionary<int, (float[]? Arr, int Count)>` keyed by node INDEX (`SceneStore.Series.cs`: `SetSeriesSamples`/`TryGetSeriesSamples`): a grow-only pooled `float[]` of ≤ `SeriesSpec.MaxSamples` (512) per series node, never shrinking, released when a node is freed or written empty. The same discipline as the `ListRowEl` row-cells side table (`SceneStore.RowCells.cs`): a write is a CAPTURED side-table write — `NoteCaptureChanged` first, then `MarkRecordDirty` so the recorder re-emits this node's span; the snapshot captures it only for `VisualKind.Series` nodes | record (resolve→the chunked `DrawSeriesCmd`s, `DrawList.Series`) | this doc (placement) / **`gpu-renderer.md`** §3.1 (chunking) |
 | **FlowState** | 4 | flat POD column on the spine: `{Inherited:byte, Resolved:byte, _pad:ushort}`; written at `WriteLayout` | layout (logical→physical mirror), record (RTL overlay placement) | this doc (placement) / **`layout.md`** (resolution, L5) |
 | **A11yRel** (cold slab) | 24 | `SlabAllocator<A11yRel>`; `A11yRelRef:int` in `A11yInfo` (0 = shared none-row); `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo` | UIA only (when `UiaClientsAreListening`) | this doc (placement) / **`input-a11y.md`** (semantics, L6) |
 | **UpdateQueueSlab** (slab) | per-record 24 | `SlabAllocator<UpdateRecord>` + per-component `UpdateQueueHead:int` head-index; intrusive `NextInQueue` link; lane byte carried | phase 3 hook-flush (drain), phase 5 reconcile (consume) | this doc (placement) / **`reconciler-hooks.md`** (lane semantics, P1/P2a) |
@@ -395,6 +397,10 @@ public enum VisualKind : byte {
                        //   REUSES the Image payload slot as the interned `IconGeometryTable.Shared` pathId, and `Fill`
                        //   as the theme-live layer tint — no new NodePaint field (the 64B cache line holds). Recorded
                        //   as DrawIconMask (payload: gpu-renderer.md). Framework-owned column doubling; see the note below.
+    Series,            // = 10 (AS-BUILT 2026-10): a bound sample series (`SeriesEl`, ElementTypeId 18). Static half in the
+                       //   `_series` ColdSlab<SeriesSpec>, samples in the pooled `_seriesSamples` side table (both §2.2),
+                       //   NOT NodePaint fields. Recorded as DrawSeries chunks (payload + raster: gpu-renderer.md §3.1/§5.3).
+                       //   (The as-built enum also carries members this printed sketch omits, e.g. ListRow = 9.)
 }
 ```
 
@@ -789,6 +795,11 @@ public enum DrawOp : byte {
                           //   own arena (§4.3b). It splits the slice into segments; a tile replay skips it and the
                           //   child composites as its own item (gpu-renderer.md §13.1). Payload
                           //   shape (CompositeSliceCmd): gpu-renderer.md §3.1.
+    DrawSeries,           // = 24 (AS-BUILT 2026-10): one CHUNK of a bound sample series (DrawSeriesCmd, gpu-renderer.md §3.1) —
+                          //   a series of N samples is ⌈(N−1)/31⌉ of these (≤ 32 inline samples each, one shared edge
+                          //   sample), so the stream stays fixed-POD and clean-span reuse stays valid (the data IS the
+                          //   span). Scene-side: VisualKind.Series (§2.4) + the `_series`/`_seriesSamples` columns (§2.2).
+                          //   Raster: gpu-renderer.md §5.3. Same POD-registration contract.
     // overlays (payloads: input-a11y.md / text.md)
     DrawFocusRect, DrawAccessKeyBadge,
     DrawFocusRing,        // FOLDED (L6/L4): the real two-tone Fluent focus ring (shape+raster: gpu-renderer.md

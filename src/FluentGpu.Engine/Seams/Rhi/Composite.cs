@@ -138,6 +138,12 @@ public readonly ref struct CompositeFrame
     /// <summary>Parallel to <see cref="Items"/>, cleared by the recorder: evidence bits the backend ORs in per item
     /// (<see cref="CompositeFrameFlags"/> — a group re-drawn from its retained surface, or rendered anew).</summary>
     public readonly Span<byte> ItemFlags;
+    /// <summary>The tile surface slots whose textures the backend releases this turn (<see cref="SliceTable.TrimmedSurfaces"/>:
+    /// slots NO tile holds, idle past <see cref="SliceTable.SurfaceTrimTurns"/>). The table owns tile texture lifetime — a
+    /// backend never trims a tile texture on a clock of its own: a tile it has not sampled for many turns may still be valid
+    /// and placed (consumed only through a retained group / self-blur / backdrop result), and trimming it would composite
+    /// nothing where the table believes current pixels are (gpu-renderer.md §13.1g).</summary>
+    public readonly ReadOnlySpan<int> TrimSurfaces;
 
     public CompositeFrame(in FrameInfo info, ReadOnlySpan<SliceRow> slices, ReadOnlySpan<byte> sliceStreams,
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
@@ -148,12 +154,12 @@ public readonly ref struct CompositeFrame
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
         PresentParams present, ReadOnlySpan<SliceSpan> sliceSpans,
         ReadOnlySpan<PushLayerCmd> itemLayers, Span<byte> rasterDone, ReadOnlySpan<PushLayerCmd> itemInherited = default,
-        Span<byte> rasterFlags = default, Span<byte> itemFlags = default)
+        Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default)
     {
         Info = info; Slices = slices; SliceStreams = sliceStreams; Rasters = rasters; Placements = placements;
         Items = items; Present = present; SliceSpans = sliceSpans;
         ItemLayers = itemLayers; RasterDone = rasterDone; ItemInherited = itemInherited;
-        RasterFlags = rasterFlags; ItemFlags = itemFlags;
+        RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces;
     }
 
     /// <summary>The <paramref name="k"/>-th (0 or 1) distributed ancestor fade of item <paramref name="i"/> (default when
@@ -228,4 +234,10 @@ public partial interface IGpuDevice
     /// <summary>The group-surface cache of the most recent <see cref="SubmitComposite"/> (render thread; read right after
     /// the submit for the <c>TileCensus</c>). Default: nothing cached.</summary>
     CompositeCacheStats LastCompositeCache => default;
+
+    /// <summary>Tile placements the most recent <see cref="SubmitComposite"/> had to SKIP because their surface slot held
+    /// no texture — a tile the table believes valid that composited nothing (a blank the user sees). Must be 0: the table
+    /// owns tile texture lifetime (<see cref="CompositeFrame.TrimSurfaces"/>), so a placed slot always holds its texture.
+    /// The census carries it (<c>TileCensus.LostPlacements</c>). Default: 0.</summary>
+    int LastLostPlacements => 0;
 }

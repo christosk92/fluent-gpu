@@ -130,6 +130,59 @@ public static class GroupCacheKey
         return h == 0UL ? 1UL : h;   // 0 is "not cacheable"
     }
 
+    /// <summary>
+    /// A LEAF self-blur item's two window-px rects (the backend's blur preparation and the headless model share them):
+    /// <paramref name="src"/> = the crisp content the blur reads — its recorded <see cref="CompositeItem.SourceClip"/> (the
+    /// visible output grown by the kernel's reach), else its clip ∩ the <paramref name="windowW"/>×<paramref name="windowH"/>
+    /// window — and <paramref name="region"/> = the scratch it blurs in (the source, or the clip grown by
+    /// <see cref="SelfBlurRegion.TapRadius"/>), its top-left floored onto the item's slice origin grid.
+    /// </summary>
+    public static void BlurRegions(in CompositeItem it, int windowW, int windowH, out PixelRect src, out PixelRect region)
+    {
+        if (!it.SourceClip.IsEmpty)
+        {
+            src = new PixelRect((int)MathF.Floor(it.SourceClip.X), (int)MathF.Floor(it.SourceClip.Y),
+                (int)MathF.Ceiling(it.SourceClip.Right), (int)MathF.Ceiling(it.SourceClip.Bottom));
+            region = src;
+        }
+        else
+        {
+            int halo = SelfBlurRegion.TapRadius(it.BlurSigma);
+            int l = 0, t = 0, r = windowW, b = windowH;
+            if (!IsUnbounded(it.Clip))
+            {
+                l = Math.Max(l, (int)MathF.Floor(it.Clip.X)); t = Math.Max(t, (int)MathF.Floor(it.Clip.Y));
+                r = Math.Min(r, (int)MathF.Ceiling(it.Clip.Right)); b = Math.Min(b, (int)MathF.Ceiling(it.Clip.Bottom));
+            }
+            src = r > l && b > t ? new PixelRect(l, t, r, b) : default;
+            region = new PixelRect(src.Left - halo, src.Top - halo, src.Right + halo, src.Bottom + halo);
+        }
+        region = OnSliceGrid(in it, region);
+    }
+
+    /// <summary>
+    /// The content key of a LEAF self-blur's retained result (gpu-renderer.md §13.1e "Retained self-blur"): σ, the source
+    /// and blur regions (<see cref="BlurRegions"/>), the item's whole-px placement and every placed tile (column, row,
+    /// surface, content serial). A turn that changed none of it re-draws the retained blur and samples NONE of the tiles —
+    /// which is why a backend must never age a tile texture out on "last sampled": the table owns tile texture lifetime
+    /// (<see cref="CompositeFrame.TrimSurfaces"/>). Zero allocation.
+    /// </summary>
+    public static ulong LeafBlur<TSerials>(in CompositeItem it, ReadOnlySpan<TilePlacement> placed, in PixelRect src, in PixelRect region,
+        ref TSerials serials) where TSerials : struct, ITileSerials
+    {
+        ulong h = 0xB1B1_0000_0000_0001UL;
+        Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.BlurSigma));
+        Mix(ref h, (ulong)(uint)src.Left << 32 | (uint)src.Top); Mix(ref h, (ulong)(uint)src.Right << 32 | (uint)src.Bottom);
+        Mix(ref h, (ulong)(uint)region.Left << 32 | (uint)region.Top); Mix(ref h, (ulong)(uint)region.Right << 32 | (uint)region.Bottom);
+        Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
+        for (int p = 0; p < placed.Length; p++)
+        {
+            Mix(ref h, (ulong)(ushort)placed[p].Key.Tx << 48 | (ulong)(ushort)placed[p].Key.Ty << 32 | (uint)placed[p].Surface);
+            Mix(ref h, serials.Serial(placed[p].Surface));
+        }
+        return h;
+    }
+
     /// <summary>An item's device-px scissor (empty = unbounded) cut to the surface region — what of it can matter.</summary>
     private static RectF ClipInRegion(in RectF clip, in PixelRect region)
     {

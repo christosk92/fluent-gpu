@@ -1994,7 +1994,7 @@ public sealed partial class SliceRecorder
             _rasters.AsSpan(0, _rasterCount), _placements.AsSpan(0, _placementCount), _items.AsSpan(0, _itemCount), present,
             _frameSpans.AsSpan(0, _frameSpanCount), _itemLayers.AsSpan(0, _itemCount),
             _rasterDone.AsSpan(0, _rasterCount), _itemInherited.AsSpan(0, 2 * _itemCount),
-            EvRasterFlags(_rasterCount), EvItemFlags(_itemCount));
+            EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces);   // the textures the table released (§13.1g)
     }
 
     private void AddItem(in CompositeItem item, in PushLayerCmd layer, in Inherit dist, in Plan e)

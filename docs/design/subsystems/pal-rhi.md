@@ -438,7 +438,11 @@ raster order, the render-pass discipline, what each `CompositeKind` draws, the p
 - `CompositeFrame` (a `ref struct`): the `FrameInfo`, the slice rows (`SliceRow`) and their concatenated streams, the
   tile raster list (`TileRaster`, visible first), the resident tile placements grouped by slice (`TilePlacement`), the
   painter-ordered `CompositeItem`s + their marker layers, the slices' damage and span indices, the staged
-  `PresentParams`, and `RasterDone` — the ONE span the backend writes (1 per raster it actually completed).
+  `PresentParams`, `TrimSurfaces` — the tile surface slots whose textures the backend releases this turn (the table owns
+  tile texture lifetime: a backend never trims a tile texture on a clock of its own, `gpu-renderer.md` §13.1g) — and
+  `RasterDone` — the ONE span the backend writes (1 per raster it actually completed).
+- `int LastLostPlacements` (default 0) — placements the last `SubmitComposite` skipped because their slot held no
+  texture (a valid tile that composited nothing). Must be 0; carried on `TileCensus.LostPlacements`.
 - `CompositeItem` / `CompositeKind` / `AcrylicRecipe` — one painter-ordered composite draw and its kind.
 - `PresentParams` (as built a `ref struct` of device-px `PixelRect` dirty rects + an optional scroll rect/offset,
   `IsFull` when empty) — the composite frame's present CENSUS. It is **not** the §2.1 design sketch of the same name
@@ -446,6 +450,23 @@ raster order, the render-pass discipline, what each `CompositeKind` draws, the p
   target presents whole frames (`gpu-renderer.md` §13.1h).
 
 Secondary swapchains (windowed popups, detached pop-outs) keep `SubmitDrawList` (`RepaintRoute.FullDirect`).
+
+### 2.4 `ISwapchain.IsOccluded` and `InputHooks.WindowOccluded` (AS-BUILT 2026-10)
+
+A per-target "is this target being shown?" read, and the host's one-per-frame publication of it. As-built members:
+`Seams/Rhi/Rhi.cs` (`ISwapchain`), `Hooks/Context.cs` (`InputHooks`), `Hosting/AppHost.cs` (the publication: `RunFrame` → `PublishWindowOccluded`).
+
+| Member | Contract |
+|---|---|
+| `ISwapchain.IsOccluded : bool` (default `false` — a synchronous backend never occludes) | **Per target.** `D3D12Swapchain`: `Frame.OccludedLatched \|\| Frame.LastPresentStoodDown` — the DXGI occlusion latch (`DXGI_STATUS_OCCLUDED` returned by a present) OR the present stand-down for a minimized / cloaked / hidden HWND (`IsHwndCovered` → `StandDownPresent`). `HeadlessSwapchain`: `Occluded \|\| PresentStandDown` (`Occluded` is the test seam modelling the latch; `HeadlessGpuDevice.PrimarySwapchain` is the first swapchain created, the window's). A pure read of two booleans the render thread writes; a one-frame-stale value is the intended semantics. Window DEACTIVATION (alt-tab) is **not** folded in — an inactive, uncovered window presents normally. |
+| `InputHooks.WindowOccluded : Signal<bool>?` (null in a host-less tree) | Published by `AppHost.RunFrame` (`PublishWindowOccluded`) on **every** frame, ABOVE the park and idle gates — painted or not — as `parked \|\| primary.IsOccluded` with `SetIfChanged` (an unchanged value notifies nobody; a change schedules its readers, which is itself the wake that runs the frame's flush). `parked` (minimized / hidden) is the host's own sample: a parked host never presents, so a present-derived backend flag cannot report it. **Occlusion probe:** a backend clears its flags only inside a real present (D3D12 resets `LastPresentStoodDown` at the top of every `Present` and clears `OccludedLatched` on a successful `DXGI_PRESENT_TEST`), and a consumer that pauses on this hook lets the app idle — so while the swapchain reports occluded and the window is NOT parked, the host forces one full repaint (`RequestFullRepaintOnce`) every 250 ms of host-timer time (`RecommendedWaitMs` clamps the idle wait to it); the next frame publishes the cleared value. A component reads `.Value` to subscribe. Use it to stop a clock or a visualizer while nothing is shown; deliberately NOT `Activation.IsActive` (which also folds the app-side power gate) and NOT window activation. |
+
+**Composition-swapchain caveat (a limit, not a gap).** A window on a COMPOSITION swapchain (`CreateSwapchainForComposition` —
+every `Mica = true` host, which is the Wavee app) does NOT reliably receive `DXGI_STATUS_OCCLUDED`, so "covered by another
+window" is not observable there: only the stand-down (minimized / cloaked / hidden) and the latch where a backend does return
+it are. `WindowOccluded` therefore reads `false` under an opaque window parked on top of a composited one, and consumers must not
+promise otherwise. Gate: `gate.occlusion.hook-follows-swapchain` (`SeriesSuite`); unit test
+`HeadlessSwapchain_IsOccluded_FoldsTheLatchAndTheStandDown`.
 
 ---
 

@@ -16,6 +16,7 @@ them in `Render()` and return the root. Build them with the `Ui.*` helpers (ters
 | `TextEl` | `Text`/`Heading`/`Icon` | a text/glyph run |
 | `ImageEl` | `Image` | async, cached, residency-pinned bitmap (album art) |
 | `ScrollEl` | `ScrollView` | clipping, scrolling viewport over one (oversized) child |
+| `SeriesEl` | `new SeriesEl { … }` (see [SeriesEl](#seriesel-a-bound-sample-series)) | a baseline area, a mirrored area or a stroke ribbon through ≤ 512 BOUND samples — per-frame geometry with no `PathData` |
 | `GridEl` | `Grid`/`UniformGrid`/`AutoGrid` | CSS-grid container (Pixel/Star/Auto tracks) |
 | `VirtualListEl` | `Virtual.List/Grid/VariableList/Custom`, `Repeater.ItemsRepeater` | virtualized collection (10k+ rows) |
 | `ComponentEl` | `Embed.Comp(() => new C())`, `Embed.Comp(props, () => new C())` | embeds a child `Component` (2nd form re-pushes live props → `UseProps<T>()`; see [reactivity.md](./reactivity.md#props--re-pushed-to-the-child-embedcompprops-factory)) |
@@ -276,6 +277,43 @@ its first-key value). **Dropped entirely** (`LottiePlan.DroppedLayers`): hidden 
 layers, layers with a Gaussian-blur/fill effect, and layers whose name matches `_emb|_shdw|shdw|emb_msk|Emboss|Shadow`
 (ordinal, case-insensitive) — the decorative emboss/shadow convention Bodymovin exporters use. Not supported at all:
 images, text layers, masks, expressions.
+
+### SeriesEl (a bound sample series)
+```csharp
+sealed class Spectrum                                   // the producer: ONE reused buffer + ONE version signal
+{
+    public readonly float[] Buffer = new float[181];
+    public readonly Signal<uint> Version = new(0u);
+    public void Publish(ReadOnlySpan<float> v) { v.CopyTo(Buffer); Version.Value = Version.Peek() + 1; }   // rewrite, then bump
+}
+
+new SeriesEl
+{
+    Width = 720f, Height = 150f, Shape = SeriesShape.Mirrored,
+    Samples = Prop.Of(() => new SeriesSamples(spectrum.Buffer, spectrum.Buffer.Length, spectrum.Version.Value)),   // .Value subscribes
+    Gradient = new GradientSpec(GradientShape.Linear, 0f,                       // ≤ 4 stops BY AMPLITUDE (see below)
+        [new GradientStop(0f, low), new GradientStop(0.7f, mid), new GradientStop(1f, peak)]),
+}
+```
+`SeriesEl` is dynamic geometry from a **bound sample source** for the case `PathEl` cannot serve: a shape that changes
+every frame (a spectrum, a waveform). A `PathData` per frame would mint a new content epoch and miss the realization
+cache every time; `SeriesEl` has no `PathData` and no tessellation — the samples (0..1 heights, **at most 512**; extras are
+dropped) travel with the draw command and the GPU expands them (`gpu-renderer.md` §5.3). `Samples : Prop<SeriesSamples>` is the
+ordinary bound channel (a value, a `Prop.Of` thunk or a signal): `SeriesSamples(float[] array, int count, uint version)` is a view
+over YOUR buffer, equal by array **identity + count + version**, so a producer rewrites the buffer and bumps `version` — the bind
+re-fires once, copies the view into a scene-owned pooled array (so refilling the buffer for the next tick never mutates what a
+frame already committed) and re-records just this node. Steady state allocates nothing (`gate.series.bound.zero-alloc`). Fewer
+than 2 samples (or an empty view) paints nothing and releases the pooled copy.
+
+Three `Shape`s: **`Baseline`** (an area from the baseline up to each sample — the default baseline is the bottom edge),
+**`Mirrored`** (an area ± each sample about the baseline — the default is the middle; the amplitude is measured against
+HALF the height, so a sample of 1.0 reaches the top/bottom edge), **`Stroke`** (a `Thickness`-wide ribbon through the
+polyline). `Baseline` (a fraction of the box height; `NaN` = the shape's default) and `Amplitude` (the height fraction a
+sample of 1.0 reaches) tune the geometry; `Color` is the solid fill, and `Gradient` (≤ 4 stops, **offset 0 = the baseline, 1 = a sample
+of 1.0**; its `Shape`/`AngleDeg` are ignored) replaces it with a ramp evaluated per pixel by amplitude. `Opacity` composes with
+the ancestors'. `SeriesEl` is a leaf — no children, no pointer handlers, no declarative motion of its own (wrap it in a `BoxEl`
+for `Enter`/`Exit`/`Layout`, exactly like `PathEl`). **No anti-aliased fringe in v1**: the fills are soft gradients and the
+silhouette edge is hard. Preview it with `dotnet run --project src/FluentGpu.WindowsApp -- --screenshot series.png --shot series`.
 
 ## Controls (`src/FluentGpu.Controls/`)
 

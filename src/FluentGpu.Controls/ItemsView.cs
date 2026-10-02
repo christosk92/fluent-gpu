@@ -424,6 +424,23 @@ public sealed class ItemsView : Component
     private static MotionTokenDef DisplacementMotion => MotionTok.ItemPlacement;
     private const float DisplacementEpsilon = 0.5f;   // sub-pixel: don't re-seed a track that is already at target
 
+    /// <summary>The ambient BOUND-SLOT channel (E2): a slot root provides its own <see cref="RowScope"/> here —
+    /// <c>Ctx.Provide&lt;RowScope?&gt;(ItemsView.SlotRow, scope.Row, content)</c> — so content INSIDE the slot learns it is
+    /// slot-hosted without any template-signature change. A slot root owns invoke and focus (the roving tab stop,
+    /// press/Enter/Space → <see cref="RowScope.OnInteraction"/>), and ONE RELEASE resolves ONE gesture owner
+    /// (<c>docs/design/subsystems/input-a11y.md</c> "ONE RELEASE, ONE OWNER"), so hosted content must render click-less
+    /// and focus-less; it reads the slot's <see cref="RowScope.IsFocused"/> (E1) for its focus-within chrome instead.
+    /// Null (the default) ⇒ not inside a slot: the content owns its own click and focus.
+    /// <para><c>PagedShelf</c> provides it on every card slot; a custom slot root over <see cref="CreateBound{T}"/>
+    /// provides it itself. Provide it on the once-per-slot ROOT: the scope is the slot's for its whole life (a recycle
+    /// writes its index signal, never the scope), so the provider boxes it once and never re-notifies — focus, selection
+    /// and the item reach consumers through the scope's own signals. WinUI keeps the same split: an
+    /// <c>ItemContainer</c> is the one invoke/select owner around a passive template
+    /// (<c>ItemContainer.cpp:571-578</c> CanRaiseItemInvoked); Slint's <c>StandardListViewBase</c> owns current/focus and
+    /// passes <c>is-selected</c>/<c>has-focus</c> into the passive <c>ListItem</c>
+    /// (<c>internal/compiler/widgets/common/listview.slint:134-158</c>).</para></summary>
+    public static readonly Context<RowScope?> SlotRow = new(null);
+
     /// <summary>Default list slot stride: ListViewItemMinHeight 40 + the 2+2 backplate margins {4,2,4,2}; cp1.a pins 8×44.
     /// (The default main-axis extent for <see cref="List(int, Func{int, Element}, ItemsSelectionMode, SelectionModel, Action{int}, Action{int}, Action{int}, bool, Action{int, int}, Func{int, string}, Func{int, bool}, ItemsViewController, Func{int, string}, float, float, float, float)"/>;
     /// the uniform virtualization stride for the List preset.)</summary>
@@ -451,6 +468,9 @@ public sealed class ItemsView : Component
     public Func<int, string>? ItemText;
     /// <summary>Per-item enabled gate (disabled items dim to 0.3 and don't interact).</summary>
     public Func<int, bool>? IsItemEnabled;
+    /// <summary>Per-item SELECTABLE gate (null ⇒ every item). A non-selectable item still takes focus and invokes, but
+    /// interaction never runs the selector on it and Ctrl+A skips it (hero / header prefix rows of a mixed list).</summary>
+    public Func<int, bool>? IsItemSelectable;
     /// <summary>L4 skin seam: replaces the default <see cref="ItemContainer"/> chrome (the List/Grid presets + TreeView).</summary>
     // Per-item chrome SKIN goes through the ContainerFactory/SelectorVisual seam; per-item VARIATION goes through the
     // PartDelta value seam (fill/fg/opacity/corner/padding/glyph as values, applied during construction — shape-stable,
@@ -602,6 +622,7 @@ public sealed class ItemsView : Component
             SelectionChanged = o.OnChange,
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
+            IsItemSelectable = o.IsItemSelectable,
             Controller = o.Controller,
             Handle = o.Scroll?.Handle,
             ContainerFactory = o.ContainerFactory,
@@ -660,6 +681,7 @@ public sealed class ItemsView : Component
             SelectionChanged = o.OnChange,
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
+            IsItemSelectable = o.IsItemSelectable,
             Controller = o.Controller,
             Handle = o.Scroll?.Handle,
             Grow = o.Grow,
@@ -726,6 +748,7 @@ public sealed class ItemsView : Component
             OnChange = o.OnChange,
             ItemText = text,
             IsItemEnabled = enabled,
+            IsItemSelectable = o.IsItemSelectable,
             Controller = o.Controller,
             Grow = o.Grow,
             Selector = o.Selector,
@@ -836,6 +859,7 @@ public sealed class ItemsView : Component
         var typeLastMs = UseRef(0L);
         var pendingFocus = UseRef(-1);
         var lastTabStop = UseRef(-1);                      // bound mode: the index currently holding the roving tab stop
+        var focusedSlot = UseRef<SlotFocus?>(null);        // bound mode: the slot whose root last took a focus edge (E1)
         // Bound mode: bumped only when a `current` move could not be serviced IN PLACE (its slot is not realized yet) —
         // the one wake that re-renders a bound list for a current move (see the `cur` read below + FollowTabStop).
         var focusTick = UseSignal(0);
@@ -1087,7 +1111,16 @@ public sealed class ItemsView : Component
             var focusNode = hooks.FocusNode;
             if (focusNode is null) return;
             var n = SlotRootForIndex(index);
-            if (!n.IsNull) focusNode(n, visual);
+            if (n.IsNull) return;
+            focusNode(n, visual);
+            // E1 re-stamp (RowScope.IsFocused). Landing focus on the node that ALREADY holds it fires no focus edge
+            // (SetFocus: prev == node) — yet a bound slot can hold focus while showing another item than the one focus
+            // arrived on: it recycled while focused (the rebind clears its Focused flag but keeps the dispatcher's handle;
+            // a pointer press then re-asserts focus on it, again edge-free). Focusing it for `index` IS focus arriving on
+            // a new item, so stamp it. The index check keeps a stale reference from stamping any slot but the one now
+            // showing `index`; an unchanged stamp is an equality-gated no-op (allocation-free either way).
+            if (focusedSlot.Value is { } slot && slot.Index.Peek() == index && hooks.GetFocus?.Invoke() == n)
+                slot.Edge(true);
         }
 
         // Bound mode roving SINGLE tab stop (TabNavigation="Once"): the slot roots are built Focusable=false, so the tab
@@ -1308,8 +1341,38 @@ public sealed class ItemsView : Component
                     // when everything is already selected CLEARS it (toggle), giving a keyboard path back to no-selection.
                     if (SelectionMode is ItemsSelectionMode.Multiple or ItemsSelectionMode.Extended)
                     {
-                        if (model.SelectedCount >= count) model.DeselectAll();
-                        else model.SelectAll();
+                        var selectable = IsItemSelectable;
+                        if (selectable is null)
+                        {
+                            if (model.SelectedCount >= count) model.DeselectAll();
+                            else model.SelectAll();
+                        }
+                        else
+                        {
+                            // Only the selectable runs: a hero/header prefix is never swept in. Cold key path; the
+                            // predicate walk is O(count) with no allocation. All selectable rows already selected ⇒ clear.
+                            bool any = false, allSelected = true;
+                            for (int k = 0; k < count; k++)
+                            {
+                                if (!selectable(k)) continue;
+                                any = true;
+                                if (!model.IsSelected(k)) { allSelected = false; break; }
+                            }
+                            if (any)
+                            {
+                                if (allSelected) model.DeselectAll();
+                                else
+                                {
+                                    int runStart = -1;
+                                    for (int k = 0; k <= count; k++)
+                                    {
+                                        bool ok = k < count && selectable(k);
+                                        if (ok) { if (runStart < 0) runStart = k; }
+                                        else if (runStart >= 0) { model.SelectRange(runStart, k - 1); runStart = -1; }
+                                    }
+                                }
+                            }
+                        }
                         e.Handled = true;
                     }
                     return;
@@ -1425,6 +1488,10 @@ public sealed class ItemsView : Component
         void OnItemInteraction(int i, ItemContainerTrigger trigger, KeyModifiers mods)
         {
             bool ctrl = (mods & KeyModifiers.Ctrl) != 0, shift = (mods & KeyModifiers.Shift) != 0;
+            // Deliberate deviation from WinUI: a Ctrl/Shift double-click is a SELECTION gesture (the second click of a
+            // rapid toggle/extend pair), never an invoke. WinUI would raise ItemInvoked on the DoubleTap regardless of
+            // modifiers, which plays a track while the user is multi-selecting.
+            if (trigger == ItemContainerTrigger.DoubleTap && (ctrl || shift)) trigger = ItemContainerTrigger.Tap;
             bool pointer = trigger is ItemContainerTrigger.Tap or ItemContainerTrigger.DoubleTap;
             // Pointer interactions bring a partially-visible item fully into view: ProcessInteraction passes
             // startBringIntoView = (focusState == FocusState::Pointer) into SetCurrentElementIndex →
@@ -1441,7 +1508,7 @@ public sealed class ItemsView : Component
             // Every interaction runs the selector — WinUI raises ProcessInteraction per PointerReleased
             // (ItemsViewInteractions.cpp:831-834), so a double-click's SECOND release toggles AGAIN in Multiple
             // mode (net unchanged, MultipleSelector.cpp:55-62) and re-selects idempotently in Single/Extended.
-            model.OnInteractedAction(i, ctrl, shift);
+            if (IsItemSelectable?.Invoke(i) != false) model.OnInteractedAction(i, ctrl, shift);
             if (IsItemInvokedEnabled && ItemInvoked is not null)
             {
                 bool cannotInvoke =
@@ -1811,8 +1878,20 @@ public sealed class ItemsView : Component
                 Func<bool> isCurrent = () => current.Value == index.Value;
                 Func<bool> isEnabled = IsItemEnabled is null ? static () => true : () => IsItemEnabled(index.Value);
                 Action<ItemContainerTrigger, KeyModifiers> interact = (t, m) => OnItemInteraction(index.Value, t, m);
-                Action<bool> focusChanged = got => { if (got && current.Peek() != index.Value) current.Value = index.Value; };
-                return rowTpl(new RowScope(index, isSelected, isCurrent, isEnabled, interact, focusChanged) { Runtime = Context.Runtime });
+                // E1 — the slot's focus fact (RowScope.IsFocused), born WITH the slot: one signal per persistent slot,
+                // nothing per rebind. Written from the slot root's own focus edge, beside the keyboard-current update;
+                // `focusedSlot` remembers which slot took the last edge so FocusIndex can re-stamp a slot that recycled
+                // while focused (see SlotFocus / FocusIndex).
+                var focus = new SlotFocus(index);
+                Action<bool> focusChanged = got =>
+                {
+                    focus.Edge(got);
+                    if (got) focusedSlot.Value = focus;
+                    else if (ReferenceEquals(focusedSlot.Value, focus)) focusedSlot.Value = null;
+                    if (got && current.Peek() != index.Value) current.Value = index.Value;
+                };
+                return rowTpl(new RowScope(index, isSelected, isCurrent, isEnabled, interact, focusChanged)
+                    { Runtime = Context.Runtime, IsFocused = focus });
             };
         }
 

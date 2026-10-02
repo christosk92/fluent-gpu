@@ -28,7 +28,7 @@ Decisions are stated as **MADE** with the losing option and reason. Residual unk
 
 | Category | This doc is authoritative for |
 |---|---|
-| **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the as-built 6-field hole-punch shape: `Dst` + `Radii` + `SurfaceId` + `VideoReady` + `Transform` + `Opacity`; §3.1 authority, raster/ordering §7.3), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, **`DrawSelectionRectCmd`** (text-selection highlight; the UNION shape: `Rect` + `Radii` + `SelectionBrush` + `Affinity` + `Clip` + `Flags`; §3.6 authority — `text.md` owns the geometry source, `input-a11y.md` owns the `SelectionState` semantics), **`DrawScrimCmd`** (overlay dismiss-layer fill; §3.6 authority — `input-a11y.md` owns the light-dismiss FSM), `DrawAccessKeyBadgeCmd`. **`DrawFocusRingCmd`:** the *struct shape* AND its **rasterization** are owned here (§3.6 + §4.4 — the focus-ring SDF + overlay/portal composition); `input-a11y.md` §8.4 only EMITS it. It is the single production focus-visual opcode (the rounded, clip-chain-anchored Fluent focus ring); the rectangular `DrawFocusRect(Cmd)` is a superseded debug placeholder. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`); `SelectionState`/`GetSelectionRects` geometry (→ `text.md`); overlay light-dismiss FSM + placement-flip (→ `input-a11y.md`/`layout.md`). |
+| **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawSeriesCmd`** (the chunked sample-series lane, AS-BUILT 2026-10 — shape §3.1, raster §5.3), **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the as-built 6-field hole-punch shape: `Dst` + `Radii` + `SurfaceId` + `VideoReady` + `Transform` + `Opacity`; §3.1 authority, raster/ordering §7.3), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, **`DrawSelectionRectCmd`** (text-selection highlight; the UNION shape: `Rect` + `Radii` + `SelectionBrush` + `Affinity` + `Clip` + `Flags`; §3.6 authority — `text.md` owns the geometry source, `input-a11y.md` owns the `SelectionState` semantics), **`DrawScrimCmd`** (overlay dismiss-layer fill; §3.6 authority — `input-a11y.md` owns the light-dismiss FSM), `DrawAccessKeyBadgeCmd`. **`DrawFocusRingCmd`:** the *struct shape* AND its **rasterization** are owned here (§3.6 + §4.4 — the focus-ring SDF + overlay/portal composition); `input-a11y.md` §8.4 only EMITS it. It is the single production focus-visual opcode (the rounded, clip-chain-anchored Fluent focus ring); the rectangular `DrawFocusRect(Cmd)` is a superseded debug placeholder. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`); `SelectionState`/`GetSelectionRects` geometry (→ `text.md`); overlay light-dismiss FSM + placement-flip (→ `input-a11y.md`/`layout.md`). |
 | **GPU instance structs** | `QuadInstance` (80B; rect/shadow/border/image), `GlyphInstance` (48B) |
 | **Render-thread algorithms** | `DrawListRecorder` (clean-span memcpy), `RenderLane` classifier, `Batcher` (LSD radix over `ulong[]`), `OverlapGrid` painter-order break, `PathTessellator` (monotone/trapezoidal sweep), `DamageAccumulator`, `UploadRing`, `TextureStagingRing`; **the retained tiled composite (§13.1)** — the composite plan (`SliceRecorder.Place`/`BuildComposite`), `SliceTable`, `TileGrid`, `TileBudget`, `EdgeFeatherMask`, `SliceOpBounds`, `TileCensus`, and the D3D12 leaf's tile rasterizer / `SurfacePool` / `SliceCompositor` |
 | **RHI methods I drive** | **`SubmitComposite`** (the primary window — §13.1; seam registered in `pal-rhi.md` §2.3), `SubmitDrawList` (secondary swapchains; the same streaming decoder rasters tiles), `ICommandEncoder.*` (incl. **`CopyBufferToTexture`**), `CreateGraphicsPipeline`/`CreatePipeline`, the multi-visual present tree |
@@ -205,6 +205,7 @@ public enum DrawOp : byte {
 //   (OuterClip / Layer / InnerClip / ParamsUp), Clip, OuterClip : ClipCmd, Layer : PushLayerCmd, InnerClip : ClipCmd,
 //   PopRect, SortKey, LayerSortKey }. Recorder-internal: framed by RepaintStreamSafety.TryBodySize; it splits its
 //   slice into segments and a tile replay SKIPS it — the child slice composites as its own item (§13.1a).
+// AS-BUILT: DrawSeries = 24 — one CHUNK of a bound sample series (`SeriesEl`); payload DrawSeriesCmd below, raster §5.3.
 ```
 
 Representative payloads (POD; handle/index refs only; never GC pointers):
@@ -280,6 +281,27 @@ public struct DrawGradientStrokeCmd {      // = DrawGradientRectCmd + StrokeWidt
     public RectF Rect; public CornerRadius4 Radii; public GradientRef Brush; public ClipHandle Clip;
     public float StrokeWidth;               // >0 ⇒ draw the gradient as a band centered on the edge (bw*0.5 inset)
 }
+// AUTHORITY (this doc owns the SHAPE + raster, §5.3; AS-BUILT 2026-10). `DrawSeries` = ONE CHUNK of a bound sample series
+// (`SeriesEl`). A series of N ≤ 512 samples records ⌈(N−1)/31⌉ chunks of ≤ 32 inline samples, adjacent chunks sharing ONE
+// edge sample (chunk c starts at sample c·31), each its own op + payload + sort key — so nothing variable-length rides
+// the stream, every walker frames it through `RepaintStreamSafety.TryBodySize`, and clean-span reuse stays valid (the
+// data IS the span). A plain struct, NOT a record: the inline array must not enter a generated Equals. Self-describing
+// POD — a slice translation patches `Transform` only (`DrawOpTranslate`). 292 B (the headless translate buffer caps a
+// body at 1024 B).
+[InlineArray(32)] public struct Samples32 { private float _e0; }
+public struct DrawSeriesCmd {
+    public RectF Rect;                      // THIS chunk's box (cull / slice bounds / damage), node-local: the chunk's X span, the node box's FULL Y/H
+    public Affine2D Transform;              // baked world affine
+    public float Opacity;                   // the recorder's composed node opacity — applied ONCE (SeriesSpec.Opacity is already folded into it)
+    public int Shape, Count, Total, Index;  // Shape: 0 = baseline area, 1 = mirrored area, 2 = a Thickness-wide stroke ribbon; Count: samples in THIS chunk (2..32);
+                                            //   Total: N; Index: the chunk's first sample (c·31)
+    public float X0, Dx, Baseline, Amplitude, Thickness;   // sample i sits at x = X0 + i·Dx (node-local); Baseline: a fraction of Rect.H, ALREADY resolved
+                                            //   (NaN → 0.5 Mirrored, else 1); heights are fractions of Rect.H (Mirrored: of Rect.H/2) scaled by Amplitude
+    public ColorF C0, C1, C2, C3;           // ≤ 4 gradient stops BY AMPLITUDE (0 = baseline, 1 = a sample of 1.0); StopCount 1 ⇒ solid C0; unused colours are padded
+    public float O0, O1, O2, O3;            // the stop offsets (unused: O0 = 0, O1..O3 = 1)
+    public int StopCount;
+    public Samples32 S;                     // the chunk's samples, 0..1
+}
 ```
 
 > **`DrawGradientStroke` raster (reuses the GradientPipeline; stride/root-sig UNCHANGED).** The 160-byte
@@ -306,7 +328,7 @@ public struct DrawGradientStrokeCmd {      // = DrawGradientRectCmd + StrokeWidt
 > - **The leaf replays the DrawList in STREAM (painter) order, with run coalescing.**
 >   `D3D12Device.Decode` walks the opcodes in order, appending each primitive to its per-kind instance
 >   list, while `PushRun(PrimKind)` merges **consecutive same-kind** primitives into a run
->   (`Rect | Shadow | Gradient | Image | Arc | Polyline | VideoHole`). `FlushSegment` then replays
+>   (`Rect | Shadow | Gradient | Image | Arc | Polyline | VideoHole | Path | Series`). `FlushSegment` then replays
 >   `_runs` **in that order**, so a shadow recorded before a plate still paints under it. Glyphs are
 >   accumulated separately and drawn **last within each segment**. Clip ops update desired scissor
 >   state and flush only when pending draws need the old rect; **layer ops are hard segment breaks**.
@@ -818,6 +840,41 @@ discipline forbids it.
 fix) — `PathData.Rule` is the same `FillRule` the tessellator honors, exposed to `FluentGpu.Input` so a
 click inside a complex path's hole behaves consistently with what's painted.
 
+### 5.3 The series lane — an instanced strip, no tessellation (AS-BUILT 2026-10)
+
+`DrawSeries` (§3.1 `DrawSeriesCmd`) is the exception to §5's "geometry is CPU-tessellated and cached": a bound sample
+series (a visualizer's spectrum, a waveform) changes EVERY frame, so a `PathData` per frame would mint a fresh content
+epoch and miss the realization cache every time. The lane therefore tessellates nothing and caches nothing — the samples
+ride the command and the GPU expands them.
+
+- **One pass, one draw per run.** `SeriesPipeline` (`FluentGpu.Windows/D3D12/SeriesPipeline.cs`) takes one 72-float
+  (288 B) `SeriesInstance` per chunk — the HLSL `Inst` it mirrors, `float4 s[8]` at byte offset 160 — and issues
+  `DrawInstanced(64, chunks)` over a TRIANGLESTRIP: the vertex shader expands `SV_VertexID` into (sample = `vid >> 1`,
+  side = `vid & 1`) pairs, and a chunk shorter than 32 samples repeats its last sample so the surplus vertices are
+  degenerate. There is no vertex buffer, no input layout and no realization slab.
+- **Three shapes.** Baseline: side 0 at `baseY − amp·s`, side 1 at `baseY` (an area up from the baseline). Mirrored: `baseY ∓ amp·s`
+  (Horizon's waveform) with the amplitude measured against HALF the height, so a sample of 1.0 reaches the top/bottom edge
+  from the 0.5 baseline. Stroke: a `Thickness`-wide ribbon along the polyline, offset by the local normal. **Every vertex's y
+  is clamped to the chunk rect**, so the geometry can never escape the `Rect` that the decode-time cull, `SliceOpBounds`
+  and damage are computed from (a Stroke ribbon's normal may still reach `Thickness/2` past it in x; the halo `RepaintCull.StrokeHalo`
+  covers it).
+- **Colour = the ≤ 4-stop amplitude ramp, evaluated per pixel.** The VS passes a SIGNED amplitude coordinate that interpolates
+  linearly through 0 at the baseline (+s at the top, −s at the bottom of a Mirrored column), and the PS takes `|amp|`
+  through the ramp — so interior stops survive and a Mirrored column is not flat. Output is premultiplied SrcOver.
+  **The PS never reads the instance buffer:** the shared SDF root signature's instance SRV is `VERTEX`-visible only
+  (`SdfSharedResources.BuildRootSignature`), so the ramp colours/offsets, the stop count and the opacity ride
+  `nointerpolation` VS outputs (the `GradientPipeline` shape).
+- **Shared state.** It rides the shared SDF root signature (viewport constants b0, instance SRV) and the shared
+  TRIANGLESTRIP topology, so it participates in the shared-state dedup (`_sharedSdfStateBound`, `BoundPipe.Series`) like Rect /
+  Arc / Polyline; unlike Path it needs no explicit `Begin`. Instances come from the shared per-frame `UploadArena`;
+  `MaxInstances = 2048` per frame is a policy cap (a 512-sample series is 17 chunks), and a dropped run counts on
+  `DroppedInstanceCount()` and `Diag.Set("series", "dropped", …)` — it never draws a partial series silently.
+- **Honest scope.** v1 has **no anti-aliased fringe**: the fills are soft gradients and the strip's silhouette edge is
+  hard (a 2 px outline-quality stroke wants MSAA or a feather — not built). Inside a stencil clip scope (§6.1) the lane is
+  SCISSOR-only, like Shadow / Arc / Polyline (`stencilFallback` counts it). A Stroke ribbon's tangent at a chunk's first / last
+  sample is one-sided (the neighbouring chunk's sample is not in the payload), so a very steep series can show a faint kink at a
+  chunk seam.
+
 ---
 
 ## 6. Clip stack — 3-tier, chosen per `PushClip*`
@@ -1000,9 +1057,9 @@ PopLayer  → (blur) → composite the scratch back into the tile at alpha × fe
   **IDLE TRIM (`FluentGpu.Render.LayerTargetTrim`).** A scratch slot is created lazily on lease and aged once per
   submitted frame it is not leased; `Classify(inUse, idleFrames, weak)` returns Keep/Retire on the fenced frame
   boundary: in use — never; idle — retired past `IdleFramesWeak` = 120 (UMA / iGPU / WARP, where every byte is
-  resident host memory) or `IdleFramesStrong` = 600 (discrete). Tile slots follow the tile table's own lifetime
-  (`SurfacePool.TileTrimTurns`, §13.1g) and a retained blur / backdrop result returns to the scratch pool after
-  `SurfacePool.RetainTurns`.
+  resident host memory) or `IdleFramesStrong` = 600 (discrete). Tile slot textures are trimmed ONLY when the tile table
+  releases the slot (`CompositeFrame.TrimSurfaces`, `SliceTable.SurfaceTrimTurns`, §13.1g) — never by an idle clock of
+  the pool's own — and a retained blur / backdrop result returns to the scratch pool after `SurfacePool.RetainTurns`.
 
   **"Retire" is not "release".** Retiring moves the resource to the fence-gated queue; the release itself is gated on
   `LayerTargetTrim.CanRelease(lastUseFence, completedFence)` — the deferred-reclaim convention of
@@ -1537,7 +1594,7 @@ forced-full repaint, eviction, coverage.
 | `ScaleChanged` | the slice's raster scale changed (DPI hop, zoom step, pinch settle) | whole slice |
 | `SliceGeometry` | the slice's device origin, residual, kind or segment identity changed; an effect tile's region extent changed | whole slice / that tile |
 | `BackgroundOrTheme` | a theme epoch or clear-colour change, or a FORCED-FULL repaint set (`RepaintDamageRegion.IsFull`: first frame, resize, DPI, device recovery, an undescribable change) → `SliceTable.InvalidateAll` | every tile |
-| `Evicted` | the budget or the idle sweep took the tile's surface; re-rastered when next needed | that tile |
+| `Evicted` | the budget or the idle sweep took the tile's surface; re-rastered when next needed (its slot's texture is trimmed only once no tile has held it for `SliceTable.SurfaceTrimTurns`, §13.1g) | that tile |
 | `Degraded` | the slice could not fit its visible tiles this frame and draws direct (§13.1d) | that frame |
 
 **Layout re-windows re-raster only what they changed:** a re-window that re-appends rows at the positions they held
@@ -1704,10 +1761,23 @@ in a separate region-pin pool) is deleted; `backdrop-effects-animation.md` §FA-
   `SurfacePool.ScratchCap` = 128 scratch surfaces (group, degraded direct, blur levels, acrylic, inline groups), leased
   best-fit at `LayerTargetBucket.Dim`. Every surface RESTS in `PIXEL_SHADER_RESOURCE`, is a render target only inside
   its own raster pass, and is **never a copy source or destination**. SRVs live in a per-frame-in-flight bank, so a
-  recreated surface never rewrites a descriptor an in-flight frame samples. A tile slot's texture trims after
-  `SurfacePool.TileTrimTurns` = `IdleEvictFrames` + 120 turns (strictly after the table evicted it); idle scratch trims
-  on `LayerTargetTrim`'s windows (§7.1). **Retire ≠ release:** a trimmed or replaced texture retires behind the frame
-  fence and is released only when `LayerTargetTrim.CanRelease` allows.
+  recreated surface never rewrites a descriptor an in-flight frame samples. Idle scratch trims on `LayerTargetTrim`'s
+  windows (§7.1). **Retire ≠ release:** a trimmed or replaced texture retires behind the frame fence and is released only
+  when `LayerTargetTrim.CanRelease` allows.
+- **Tile texture lifetime is the TABLE's (as built 2026-10-02).** A tile slot's texture is trimmed only when the
+  `SliceTable` names the slot in `TrimmedSurfaces` → `CompositeFrame.TrimSurfaces` (`SurfacePool.TrimTiles`): a slot
+  that NO tile has held for `SliceTable.SurfaceTrimTurns` = 120 turns (computed at the end of `Resolve`, after every
+  acquisition of the turn, so a slot rastered this turn is never trimmed under it). A slot a tile holds is never
+  trimmed, however long the backend goes without sampling it. The superseded rule — the pool trimming a slot unsampled
+  for `IdleEvictFrames` + 120 turns, on the assumption the table had evicted it first — was the idle "content
+  disappears" defect: a tile consumed only through a RETAINED group surface or leaf self-blur (a key hit re-draws the
+  cached result and samples none of its tiles) stays valid and placed every turn, so under a playhead or lyric animation
+  its texture was retired after ~360 turns; the retire reset the slot's serial, the next group / blur key missed, and
+  the re-render sampled a slot with no texture — that region composited nothing while the table still believed it
+  valid, until damage (a hover) re-rastered a tile. A placement whose slot holds no texture is counted
+  (`IGpuDevice.LastLostPlacements` → `TileCensus.LostPlacements`, must be 0; the D3D12 edge-gated `[d3d12.tiles]` line).
+  Gates: `gate.tiles.idle-keeps-placed-textures`, `gate.tiles.self-scroll-idle-keeps-textures`,
+  `gate.tiles.trim-only-free-slots` (`TileLifetimeChecks`, `--suite tiles`); unit `SliceTableTextureLifetimeTests`.
 
 #### 13.1h Present
 
@@ -1750,8 +1820,10 @@ discontinuous path that needs the repaint band — natural settles do not, and m
   (scroll segments whose visible content reached past their realized rows — both must be 0), composite items, every
   `InvalidationReason`'s count, the slice partition (`EffectSlices`, `Folded`, `AcrylicSlices`, `AcrylicFallbacks` —
   an acrylic fallback means a surface lost its frost — and `FreeFades`), `VisibleNeedBytes` (Σ surface bytes of every
-  visible tile requested, resident or not — compare with the budget) and the group cache (`GroupSurfaces` rendered,
-  `GroupCacheHits`, `RetainedBytes`; `IGpuDevice.LastCompositeCache`). The gallery's census line prints them
+  visible tile requested, resident or not — compare with the budget), the group cache (`GroupSurfaces` rendered,
+  `GroupCacheHits`, `RetainedBytes`; `IGpuDevice.LastCompositeCache`), `LostPlacements` (placements the backend skipped
+  because their slot held no texture — `IGpuDevice.LastLostPlacements`, must be 0) and `TrimmedSurfaces` (the slots
+  whose textures the table released this turn, §13.1g). The gallery's census line prints all but the last two
   (`need… fx…/f… ac…/fb… grp…/h…`); the D3D12 device adds `LastOffscreenSplit` (per-kind offscreen surfaces / px / hits).
 - **GPU pass timeline** (`AppHost.GpuPassTimingEnabled` — a runtime toggle, not a setting; `CopyGpuPassTimeline`
   zero-alloc): the composite submit's intervals are `GpuPassKind.TileRaster`, `Offscreen` and `Composite`, alongside

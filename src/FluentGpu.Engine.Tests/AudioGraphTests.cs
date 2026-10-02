@@ -143,12 +143,14 @@ public sealed class AudioGraphTests
     public void BiquadCoeffs_LowPassPassesDc_HighPassBlocksDc()
     {
         var lp = BiquadCoeffs.Design(new BiquadBand(BiquadType.LowPass, 1000f, 0.7071f, 0f), 48000);
-        float lpDc = (lp.B0 + lp.B1 + lp.B2) / (1f + lp.A1 + lp.A2);
-        Assert.Equal(1f, lpDc, 3);
+        // E-1: BiquadCoeffs is (double B0, B1, B2, A1, A2) — the DC gain is computed in double and the pin tightens from 1e-3 to
+        // 1e-9 (full-precision coefficients: a float record could only hold ~1e-7 of them).
+        double lpDc = (lp.B0 + lp.B1 + lp.B2) / (1.0 + lp.A1 + lp.A2);
+        Assert.Equal(1.0, lpDc, 9);
 
         var hp = BiquadCoeffs.Design(new BiquadBand(BiquadType.HighPass, 1000f, 0.7071f, 0f), 48000);
-        float hpDc = (hp.B0 + hp.B1 + hp.B2) / (1f + hp.A1 + hp.A2);
-        Assert.Equal(0f, hpDc, 3);
+        double hpDc = (hp.B0 + hp.B1 + hp.B2) / (1.0 + hp.A1 + hp.A2);
+        Assert.Equal(0.0, hpDc, 9);
     }
 
     [Fact]
@@ -156,9 +158,9 @@ public sealed class AudioGraphTests
     {
         var c = BiquadCoeffs.Design(new BiquadBand(BiquadType.Peaking, 1000f, 1f, 0f), 48000);
         // A 0 dB peaking filter is a pass-through: b == a (b0=1, b1=a1, b2=a2 after normalization).
-        Assert.Equal(1f, c.B0, 4);
-        Assert.Equal(c.A1, c.B1, 4);
-        Assert.Equal(c.A2, c.B2, 4);
+        Assert.Equal(1.0, c.B0, 9);       // E-1: held as doubles, the identity is exact to 1e-9 (a = 1 ⇒ b0 = a0 exactly)
+        Assert.Equal(c.A1, c.B1, 9);
+        Assert.Equal(c.A2, c.B2, 9);
     }
 
     [Fact]

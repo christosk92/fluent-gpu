@@ -52,6 +52,8 @@ static partial class ControlsSuite
         ShelfKeyboardTabStopChecks(strings);
         ShelfKeyboardPageFollowChecks(strings);
         ShelfKeyboardAllocChecks(strings);
+        ShelfKeyboardSlotRowChecks(strings);
+        ShelfSelectionChecks(strings);
     }
 
     static void ShelfLiftChecks(StringTable strings)
@@ -94,6 +96,60 @@ static partial class ControlsSuite
         var probe = new KeyboardProbe();
         var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
         return (host, window, probe);
+    }
+
+    // ── WP1: PagedShelf.Create(selectionMode, selection) threads onto the strip ListOptions ──────────────────────────
+    sealed class SelectionProbe(SelectionModel model) : Component
+    {
+        public readonly IReadOnlyList<CtlItem> Items = CtlItems(ItemCount);
+
+        public override Element Render() => new BoxEl
+        {
+            Direction = 1, Width = StartWidth,
+            Children =
+            [
+                PagedShelf.Create(Items,
+                    (item, _, width) => new BoxEl { Width = width, Height = 44f, Children = [Text(item.Title)] },
+                    cardHeight: static _ => 44f,
+                    pager: ShelfPager.None,
+                    minCardW: CardW, maxCardW: CardW, fixedCardW: CardW, gap: Gap,
+                    headerGap: 0f, edgeFade: 0f,
+                    keyOf: static (item, _) => item.Id.ToString(),
+                    selectionMode: ItemsSelectionMode.Extended, selection: model) with { Key = "shelf" },
+            ],
+        };
+    }
+
+    static void ShelfSelectionChecks(StringTable strings)
+    {
+        var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("shelf-selection", new Size2(640, 200), 1f));
+        window.Show();
+        var model = new SelectionModel();
+        var probe = new SelectionProbe(model);
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+        Settle(host);
+        var scene = host.Scene;
+        var buttons = Roles(scene, AutomationRole.Button);
+        bool hasButtons = buttons.Count >= 3;
+
+        if (hasButtons) ClickNode(host, window, buttons[1]);
+        Settle(host);
+        bool plain = hasButtons && model.SelectedCount == 1 && model.IsSelected(1);
+
+        if (hasButtons)
+        {
+            var c = CenterOf(scene, buttons[2]);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0, KeyModifiers.Ctrl, TimestampMs: 50_000));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0, KeyModifiers.Ctrl, TimestampMs: 50_040));
+            host.RunFrame();
+        }
+        Settle(host);
+        bool ctrlAdds = hasButtons && model.SelectedCount == 2 && model.IsSelected(1) && model.IsSelected(2);
+
+        Check("gate.shelf.selection PagedShelf.Create(selectionMode: Extended, selection: model) selects on click and extends on Ctrl+click through the caller-owned SelectionModel (default None shelves are unchanged)",
+            hasButtons && plain && ctrlAdds,
+            $"buttons={buttons.Count} plain={plain} ctrlAdds={ctrlAdds} count={model.SelectedCount}");
     }
 
     // ── (1) Right from card 0's focused slot root moves focus to card 1's slot root ─────────────────────────────────
@@ -275,6 +331,115 @@ static partial class ControlsSuite
         Check("gate.shelf.keyboard.alloc arrowing between two already-realized, same-page shelf cards (no scroll/page-follow needed — pure focus move + roving-stop toggle) adds zero hot-phase allocation",
             hasButtons && arrowFrame.HotPhaseAllocBytes == 0,
             $"buttons={buttons.Count} arrowFrameBytes={arrowFrame.HotPhaseAllocBytes}");
+    }
+
+    // ── (6) E1 + E2: the card INSIDE a slot sees the slot (ItemsView.SlotRow) and its focus (RowScope.IsFocused) ──────
+    //
+    // shared-media-surface-implementation.md §6 (Wavee repo): one card host must learn, from inside PagedShelf.BindCard,
+    // that the slot root owns invoke + focus (so it renders click-less/focus-less — no double tab stop) and when the
+    // roving tab stop sits on its slot (so its chrome lights). BindCard provides ItemsView.SlotRow; the card template's
+    // signature (item, index, width) is unchanged. The card below is a plain propless component that only READS the
+    // context and the focus fact in its render — what it recorded is what a real card host would have rendered.
+    sealed class SlotRowProbe : Component
+    {
+        public readonly IReadOnlyList<CtlItem> Items = CtlItems(ItemCount);
+        // Per item id: did the card's render see a slot, which index did that scope carry, and the focus it rendered.
+        public readonly Dictionary<int, (bool HasRow, int RowIndex, bool Focused)> Seen = new();
+        // The scope each card saw (the live object the gate peeks, independent of render timing).
+        public readonly Dictionary<int, RowScope> Rows = new();
+
+        public override Element Render() => new BoxEl
+        {
+            Direction = 1, Width = StartWidth,
+            Children =
+            [
+                // A card OUTSIDE any slot (id −1): the context's default — free mode.
+                Embed.Comp(() => new SlotRowCard(this, -1)),
+                PagedShelf.Create(Items,
+                    (item, _, width) => new BoxEl { Width = width, Height = 44f, Children = [Embed.Comp(() => new SlotRowCard(this, item.Id))] },
+                    cardHeight: static _ => 44f,
+                    pager: ShelfPager.None,
+                    minCardW: CardW, maxCardW: CardW, fixedCardW: CardW, gap: Gap,
+                    headerGap: 0f, edgeFade: 0f,
+                    keyOf: static (item, _) => item.Id.ToString(),
+                    onInvoke: static (_, _) => { }) with { Key = "shelf" },
+                // A shelf WITHOUT onInvoke (ids 1000+): its slots do not invoke, so they must NOT announce themselves —
+                // a card told it is slot-hosted renders click-less, and nobody would open it (Wavee #159).
+                PagedShelf.Create(Items,
+                    (item, _, width) => new BoxEl { Width = width, Height = 44f, Children = [Embed.Comp(() => new SlotRowCard(this, NoInvokeBase + item.Id))] },
+                    cardHeight: static _ => 44f,
+                    pager: ShelfPager.None,
+                    minCardW: CardW, maxCardW: CardW, fixedCardW: CardW, gap: Gap,
+                    headerGap: 0f, edgeFade: 0f,
+                    keyOf: static (item, _) => item.Id.ToString()) with { Key = "shelf-noinvoke" },
+            ],
+        };
+
+        public const int NoInvokeBase = 1000;
+    }
+
+    sealed class SlotRowCard(SlotRowProbe probe, int id) : Component
+    {
+        public override Element Render()
+        {
+            RowScope? row = UseContext(ItemsView.SlotRow);
+            bool focused = row is { IsFocused: { } f } && f.Value;   // .Value subscribes — a focus edge re-renders THIS card
+            probe.Seen[id] = (row is not null, row is { } r ? r.Index.Peek() : -1, focused);
+            if (row is { } scope) probe.Rows[id] = scope;
+            return new BoxEl { Width = 4f, Height = 4f };
+        }
+    }
+
+    static void ShelfKeyboardSlotRowChecks(StringTable strings)
+    {
+        var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("shelf-keyboard-slotrow", new Size2(640, 200), 1f));
+        window.Show();
+        var probe = new SlotRowProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+        Settle(host);
+        var scene = host.Scene;
+        var buttons = Roles(scene, AutomationRole.Button);   // the slot roots (BindCard) in realized order: item 0, 1, …
+        bool hasSlots = buttons.Count >= 3;
+
+        // (a) at rest: every realized card saw a NON-null scope naming its own item; nothing focused; the card outside the
+        // shelf reads the default (null) — it is in free mode.
+        bool everyCardSlotted = true, restUnfocused = true;
+        int slottedCards = 0;
+        int freeCards = 0;
+        bool noInvokeFree = true;
+        foreach (var (id, seen) in probe.Seen)
+        {
+            if (id < 0) continue;
+            if (id >= SlotRowProbe.NoInvokeBase) { freeCards++; noInvokeFree &= !seen.HasRow; continue; }
+            slottedCards++;
+            everyCardSlotted &= seen.HasRow && seen.RowIndex == id && probe.Rows.TryGetValue(id, out var sc) && sc.IsFocused is not null;
+            restUnfocused &= !seen.Focused;
+        }
+        bool outsideFree = probe.Seen.TryGetValue(-1, out var outside) && !outside.HasRow;
+        bool atRest = slottedCards >= 3 && everyCardSlotted && restUnfocused && outsideFree && freeCards >= 3 && noInvokeFree;
+
+        bool Rendered(int id) => probe.Seen.TryGetValue(id, out var s) && s.Focused;
+        bool Live(int id) => probe.Rows.TryGetValue(id, out var r) && r.IsFocused is { } f && f.Peek();
+        void Key(int key) { window.QueueInput(new InputEvent(InputKind.Key, default, 0, key)); for (int i = 0; i < 3; i++) host.RunFrame(); }
+
+        // (b) a click lands the roving stop (FocusIndex, pointer) on card 0's slot: its card renders focused.
+        if (hasSlots) ClickNode(host, window, buttons[0]);
+        Settle(host);
+        bool clickOn0 = FocusedNode(scene, scene.Root) == buttons[0] && Live(0) && Rendered(0) && !Live(1) && !Rendered(1);
+
+        // (c) Right moves the stop (MoveCurrent → FocusIndex) onto card 1's slot and OFF card 0's: both cards re-render.
+        Key(Keys.Right);
+        bool rightTo1 = FocusedNode(scene, scene.Root) == buttons[1] && Live(1) && Rendered(1) && !Live(0) && !Rendered(0);
+
+        // (d) and back.
+        Key(Keys.Left);
+        bool leftTo0 = FocusedNode(scene, scene.Root) == buttons[0] && Live(0) && Rendered(0) && !Live(1) && !Rendered(1);
+
+        Check("gate.shelf.keyboard.slotrow a card inside PagedShelf.BindCard reads ItemsView.SlotRow as a non-null RowScope naming its own item (a card outside any slot, or in a shelf without onInvoke, reads null), and RowScope.IsFocused flips true/false — re-rendering the card — as FocusIndex moves the roving tab stop onto and off its slot (click, Right, Left)",
+            hasSlots && atRest && clickOn0 && rightTo1 && leftTo0,
+            $"slots={buttons.Count} slottedCards={slottedCards} everySlotted={everyCardSlotted} restUnfocused={restUnfocused} outsideFree={outsideFree} noInvokeFree={noInvokeFree}({freeCards}) click0={clickOn0} right1={rightTo1} left0={leftTo0} " +
+            $"live0={Live(0)} live1={Live(1)} rendered0={Rendered(0)} rendered1={Rendered(1)}");
     }
 
     // ══ E10 — ShelfLift ══════════════════════════════════════════════════════════════════════════════════════════
