@@ -23,7 +23,10 @@
 
   <PropertyGroup>
     <!-- Analyzers/generators MUST target netstandard2.0 (override the net10.0 solution baseline). -->
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- An analyzer loads into WHATEVER compiler host runs the build: an arm64 csc for an x64 cross-pack, so it must stay
+         AnyCPU even when a consumer passes Platform=x64 down the reference (a PE32+ AMD64 analyzer is CS8034 on arm64). -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
