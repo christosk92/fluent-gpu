@@ -125,7 +125,7 @@ public sealed class RenderCompositorSnapTests
         var renderer = new RenderCompositorAnimations();
         renderer.Adopt(desired, snapshot, 0);
         bool offGrid = false;
-        for (double t = 10; t <= 200; t += 10)
+        for (double t = 7; t <= 203; t += 7)   // 7 ms apart: a 10 ms step lands every sample on a whole pixel and proves nothing
         {
             renderer.Tick(snapshot, t);
             float dx = snapshot.Paint(node).LocalTransform.Dx;

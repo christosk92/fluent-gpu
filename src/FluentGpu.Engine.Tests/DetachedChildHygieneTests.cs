@@ -149,7 +149,7 @@ public sealed class DetachedChildHygieneTests
         int pumpsBeforeChild = rig.Decoder.Pumps;
         rig.Child.RunFrame();
         Assert.Equal(pumpsBeforeChild, rig.Decoder.Pumps);   // the pop-out did not pump to find out
-        Assert.True(rig.Child.LastStats.Rendered);           // it was woken by the per-id completion and painted the landing
+        Assert.True(rig.Child.LastStats.SpansReRecorded > 0); // it was woken by the per-id completion and painted the landing
     }
 
     [Fact]

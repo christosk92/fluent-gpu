@@ -79,7 +79,7 @@ public sealed class DetachedDeviceRecoveryTests
         rig.Child.RunFrame();
 
         Assert.True(rig.Device.DirectSubmitCount > settled);   // the rebuilt (empty) target is repainted in full, not elided as identical
-        Assert.True(rig.Child.LastStats.Rendered);
+        Assert.True(rig.Child.LastStats.SpansReRecorded > 0);   // FrameStats.Rendered is "reconciled or laid out", false for a repaint-only frame
     }
 
     [Fact]

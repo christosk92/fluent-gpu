@@ -530,7 +530,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     {
         if (Interlocked.Exchange(ref _deviceProbePending, 0) != 0) CheckDeviceRemoved("engine event");
         _handles.Sweep(Environment.TickCount64);
-        uint readyState = _engine != null ? _engine->GetReadyState() : 0;
+        uint readyState = _engine != null ? (uint)_engine->GetReadyState() : 0u;
         // LOADEDMETADATA is trusted only once the engine itself reports HAVE_METADATA (see _metadataTrusted).
         bool metadata = _metadataLoaded && readyState >= EngineLivenessRule.HaveMetadata;
         if (metadata && !_metadataTrusted)

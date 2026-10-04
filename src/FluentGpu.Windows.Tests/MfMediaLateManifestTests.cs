@@ -9,6 +9,7 @@ using FluentGpu.Media;
 using FluentGpu.Media.Adaptive;
 using FluentGpu.Media.Windows;
 using Xunit;
+using MediaTrackKind = FluentGpu.Media.TrackKind;
 
 namespace FluentGpu.Windows.Tests;
 
@@ -175,8 +176,8 @@ public sealed class MfMediaLateManifestTests
     public void ConnectSignals_ClearsThePreviousSourcesTracks_EvenWithoutAManifest()
     {
         var core = new MediaPlayerCore();
-        core.Tracks.Register(1, TrackKind.Video, null, "old video", TrackRole.Main, default, selected: true);
-        core.Tracks.Register(2, TrackKind.Audio, "en", "old audio", TrackRole.Main, default, selected: true);
+        core.Tracks.Register(1, MediaTrackKind.Video, null, "old video", TrackRole.Main, default, selected: true);
+        core.Tracks.Register(2, MediaTrackKind.Audio, "en", "old audio", TrackRole.Main, default, selected: true);
         core.Tracks.AddExternalSubtitle(SubtitleSource.FromUri("https://fixture.test/old.vtt"), "en", "Old");
         var session = new MfMediaSession(new FakeVideoEngine(), 0, new MediaOpenOptions());
 

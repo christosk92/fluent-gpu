@@ -299,6 +299,7 @@ static class ScrollMotionSuite
         host.RunFrame();
         var vp = host.Scene.Root;
         host.TryGetScrollHandle(vp)!.ScrollTo(16_000f, ScrollMove.Immediate);
+        host.ScrollChrome.NotifyMoved((int)vp.Raw.Index);   // the user's scroll: a programmatic move alone no longer arms the bar, and the live chrome is what keeps these frames running
         for (int i = 0; i < 12; i++) host.RunFrame();
 
         // Track one visible row by INDEX (rows recycle, so node identity is not stable): its on-screen Y must move
@@ -1172,6 +1173,7 @@ static class ScrollMotionSuite
         var handle = host.TryGetScrollHandle(vp)!;
         Settle(host, vp, 16);
         handle.ScrollTo(3107.0, ScrollMove.Immediate);
+        host.ScrollChrome.NotifyMoved((int)vp.Raw.Index);          // the user's scroll: a programmatic move alone no longer arms the bar, and the live chrome is what keeps these frames running
         for (int i = 0; i < 30; i++) host.RunFrame();              // at rest (well past the detector's at-rest window)
         var before = PoseOf(host, vp);
         host.Scene.TryGetScroll(vp, out var sc0);

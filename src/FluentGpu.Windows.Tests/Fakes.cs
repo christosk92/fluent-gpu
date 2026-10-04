@@ -198,7 +198,7 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public int Commits;
     public int Applies;              // ApplyPending calls: a deferred-commit drain applies here and leaves the ONE device commit to the host
     public bool CanAttach = true;    // false models a target whose first Present has not bound its composition graph yet
-    public bool OverlaySupported;    // models an output whose overlay probe reported a plane (IVideoPresenter.SupportsOverlay, F087)
+    public bool OverlaySupported { get; set; } // models an output whose overlay probe reported a plane (IVideoPresenter.SupportsOverlay, F087)
     public bool? LastOverlay;        // the last SetOverlay argument (null = never called): true = the visual was inserted ABOVE the UI visual
 
     public VideoSurfaceId CreateSurface()

@@ -13,6 +13,8 @@ using static FluentGpu.VerticalSlice.Harness.Gate;
 // The same holds for a LAYOUT-driven rect change (a PiP edge resize, a pop-out live resize, a reflow): the area's
 // OnBoundsChanged raises the geometry-class request, so a resize that leaves the downscale cap untouched is placement-only
 // too (gate.media.el.geometry-only-pump.layout-resize).
+// Frames are driven with Paint(0), not RunFrame: a poked transform raises no wake and a pending settle timer is a future deadline, so RunFrame takes
+// its idle early-out before the pump and the headless frame clock (which only Paint advances) never reaches the 200 ms settle.
 static partial class ControlsSuite
 {
     static void GeometryOnlyPumpChecks(StringTable strings)
@@ -39,7 +41,7 @@ static partial class ControlsSuite
             SizeI natural = player.NaturalSize.Peek();
             SizeI content = VideoStreamSizing.ContentSizeFor(natural, host.Scene.AbsoluteRect(hole), 1f);
             reg.SetContentSize(token, (uint)content.Width, (uint)content.Height);   // the session's cached size, as after a full pump
-            for (int i = 0; i < 30; i++) host.RunFrame();                            // let any adoption turn and its settle timer finish
+            for (int i = 0; i < 30; i++) host.Paint(0);                            // let any adoption turn and its settle timer finish
 
             int calls0 = player.PumpVideoCalls;
             long runs0 = reg.PumpInvocationCount;
@@ -48,12 +50,12 @@ static partial class ControlsSuite
             for (int i = 1; i <= 8; i++)
             {
                 host.Scene.Paint(host.Scene.Root).LocalTransform = Affine2D.Translation(10f * i, 0f);
-                host.RunFrame();
+                host.Paint(0);
             }
             long motionRuns = reg.PumpInvocationCount - runs0;
             int motionCalls = player.PumpVideoCalls - calls0;
 
-            for (int i = 0; i < 30; i++) host.RunFrame();                            // > the 200 ms settle window at any frame time
+            for (int i = 0; i < 30; i++) host.Paint(0);                            // > the 200 ms settle window at any frame time
             int settledCalls = player.PumpVideoCalls - calls0 - motionCalls;
 
             Check("gate.media.el.geometry-only-pump", motionRuns > 0 && motionCalls == 0 && settledCalls >= 1,
@@ -72,7 +74,7 @@ static partial class ControlsSuite
             // Grow the window past the 640x360 natural size: the downscale cap stays off (the content size is the natural
             // size) for every window size this check resizes to, so only the rect, never the stream size, changes.
             window.ClientSizePx = new Size2(800, 500);
-            for (int i = 0; i < 30; i++) host.RunFrame();
+            for (int i = 0; i < 30; i++) host.Paint(0);
             var hole = FindVisual(host.Scene, host.Scene.Root, VisualKind.Video);
             if (token == 0 || hole.IsNull)
             {
@@ -83,20 +85,20 @@ static partial class ControlsSuite
             SizeI natural = player.NaturalSize.Peek();
             SizeI content = VideoStreamSizing.ContentSizeFor(natural, host.Scene.AbsoluteRect(hole), 1f);
             reg.SetContentSize(token, (uint)content.Width, (uint)content.Height);   // the session's cached size, as after a full pump
-            for (int i = 0; i < 30; i++) host.RunFrame();                            // let the seeding turn and any settle timer finish
+            for (int i = 0; i < 30; i++) host.Paint(0);                            // let the seeding turn and any settle timer finish
 
             int calls0 = player.PumpVideoCalls;
             long runs0 = reg.PumpInvocationCount;
             window.ClientSizePx = new Size2(900, 520);
-            for (int i = 0; i < 2; i++) host.RunFrame();
+            for (int i = 0; i < 2; i++) host.Paint(0);
             window.ClientSizePx = new Size2(1000, 560);
-            for (int i = 0; i < 2; i++) host.RunFrame();
+            for (int i = 0; i < 2; i++) host.Paint(0);
             window.ClientSizePx = new Size2(860, 500);
-            for (int i = 0; i < 2; i++) host.RunFrame();
+            for (int i = 0; i < 2; i++) host.Paint(0);
             long motionRuns = reg.PumpInvocationCount - runs0;
             int motionCalls = player.PumpVideoCalls - calls0;
 
-            for (int i = 0; i < 30; i++) host.RunFrame();                            // > the 200 ms settle window at any frame time
+            for (int i = 0; i < 30; i++) host.Paint(0);                            // > the 200 ms settle window at any frame time
             int settledCalls = player.PumpVideoCalls - calls0 - motionCalls;
 
             Check("gate.media.el.geometry-only-pump.layout-resize",
