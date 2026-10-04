@@ -606,29 +606,29 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <h3>Measured on the fullscreen stage</h3>
 <div class="tbl">
 <table>
-<thead><tr><th>Build</th><th>GPU per frame</th><th>CPU per 10 s</th><th>Render presents/s</th></tr></thead>
+<thead><tr><th>Build</th><th>GPU per frame</th><th>CPU per 10 s</th><th>Render presents/s</th><th>Runs</th></tr></thead>
 <tbody>
-<tr><td>Before (the build of the owner)</td><td class="num">4.11 ms</td><td class="num">11.3 s</td><td class="num">120</td></tr>
-<tr><td>#33 + #34</td><td class="num">2.60 ms</td><td class="num">11.7 s</td><td class="num">120</td></tr>
-<tr><td>#33 + #34 + #35</td><td class="num">2.60 ms</td><td class="num">0.81 s</td><td class="num">120</td></tr>
-<tr><td>+ WaveeMusic#177 quarter-scale backdrop art (commit <code>b2b4cee3</code>)</td><td class="num">1.64 ms</td><td class="num">1.19 s</td><td class="num">120</td></tr>
+<tr><td>Before (the build of the owner)</td><td class="num">4.11 ms</td><td class="num">11.3 s</td><td class="num">120</td><td class="num">1</td></tr>
+<tr><td>#33 + #34</td><td class="num">2.60 ms</td><td class="num">11.7 s</td><td class="num">120</td><td class="num">1</td></tr>
+<tr><td>#33 + #34 + #35</td><td class="num">2.60 ms</td><td class="num">0.81 – 1.19 s</td><td class="num">120</td><td class="num">3 (GPU 2.60, 2.61, 2.60)</td></tr>
+<tr><td>+ WaveeMusic#177 quarter-scale backdrop art (commit <code>b2b4cee3</code>)</td><td class="num">1.64 ms (run 1), 2.95 ms (run 2)</td><td class="num">1.19 s, 1.25 s</td><td class="num">120</td><td class="num">2, conflicting</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">These numbers come from a separate <code>--fake</code> instance with a scratch profile, on the same 3440 × 1440, 120 Hz display. The GPU value is the 20 s average of <code>[render.pace] gpuMs</code>. The live instance of the owner is not measured yet.</p>
+<p class="prose">These numbers come from a separate <code>--fake</code> instance with a scratch profile, on the same 3440 × 1440, 120 Hz display. The GPU value is the 20 s average of <code>[render.pace] gpuMs</code>. The repeated result is 4.11 ms → 2.60 ms of GPU per frame. The two runs of the backdrop-art change do not agree. Run 2 was a NativeAOT build of the same code. Thus the effect of the art change is not established. It needs repeated runs. The live instance of the owner is not measured yet.</p>
 
 <h3>Memory on the fullscreen stage</h3>
 <div class="tbl">
 <table>
-<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art</th></tr></thead>
+<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art, run 1</th><th>+ low-res art, run 2 (NativeAOT)</th></tr></thead>
 <tbody>
-<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50)</td><td class="num">47.5 MB (33)</td></tr>
-<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.2 MB</td><td class="num">123.9 MB</td></tr>
-<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">311.5 MB</td><td class="num">268.1 MB</td></tr>
+<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50), 2 runs</td><td class="num">47.5 MB (33)</td><td class="num">82.9 MB (51)</td></tr>
+<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.2 MB</td><td class="num">123.9 MB</td><td class="num">158.2 MB</td></tr>
+<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">311.5 MB</td><td class="num">268.1 MB</td><td class="num">326.5 MB</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">The repaint boundaries cut the root into more segments, and the art held a second window of tiles. The quarter-scale art boundary removes that second window. The live instance of the owner is not measured yet.</p>
+<p class="prose">The repaint boundaries cut the root into more segments. On the stage, this costs about 20 MB more tile memory (61.8 MB → 81.8 MB in 2 runs). This is the memory price of the GPU saving. The quarter-scale art boundary is meant to remove one window of these tiles. Run 1 showed this (47.5 MB). Run 2 did not (82.9 MB). Thus its effect is not established. It needs repeated runs. The live instance of the owner is not measured yet.</p>
 
 <h3>Verification</h3>
 <div class="tbl">
