@@ -103,6 +103,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private readonly string? _openingRepresentationId;
     private bool _leftOpeningRepresentation;
     private int _streamW = -1, _streamH = -1;
+    // The stream size native reports as applied, from the last pump's snapshot (UI thread; empty while detached).
+    private SizeI _appliedStream;
     // The OPM window placement native last ACCEPTED (host 0 = none): value-gates PlaceOutputProtectionWindow, and is cleared at
     // every attach because another session (the other window's) may have moved the one shared window since.
     private nuint _opmHost;
@@ -491,6 +493,9 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     }
 
     /// <inheritdoc/>
+    public SizeI AppliedStreamSize => _appliedStream;
+
+    /// <inheritdoc/>
     public void PlaceOutputProtectionWindow(nuint hostWindow, int left, int top, int right, int bottom)
     {
         if (_disposed || _s == 0 || hostWindow == 0 || Volatile.Read(ref _attached) == 0) return;
@@ -613,6 +618,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
                 _streamW = -1; _streamH = -1;
             }
         }
+        _appliedStream = n.StreamWidth > 0 && n.StreamHeight > 0 ? new SizeI(n.StreamWidth, n.StreamHeight) : SizeI.Zero;
         Volatile.Write(ref _forwardBufferedMs, Math.Max(0, n.BufferedAheadMs));
         Volatile.Write(ref _retainedBehindMs, Math.Max(0, n.RetainedBehindMs));
         if (n.ActiveRepresentation >= 0 && _videoTrack is { } track && n.ActiveRepresentation < track.Representations.Count)
@@ -716,6 +722,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             ErrorHr = n.ErrorHr,
             FirstFrameTimestamp = firstFrame ? n.FirstFrameQpc : 0,
             BufferedAheadMs = n.BufferedAheadMs,
+            StreamW = (uint)Math.Max(0, n.StreamWidth),
+            StreamH = (uint)Math.Max(0, n.StreamHeight),
         };
     }
 

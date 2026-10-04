@@ -124,6 +124,12 @@ internal sealed class FakeVideoEngine : IVideoEngine
     /// <summary>The engine's SEEKED counter (see <see cref="VideoEngineSnapshot.SeekedCount"/>). Setting it publishes a
     /// fresh snapshot but does NOT wake the session: pair it with <see cref="RaiseStateChanged"/>.</summary>
     public int SeekedCount { get => _s.SeekedCount; set { _s.SeekedCount = value; Publish(); } }
+    /// <summary>The stream size the engine reports as APPLIED (see <see cref="VideoEngineSnapshot.StreamW"/>). Nothing drains
+    /// the command queue here, so a test models the engine's echo of a <see cref="VideoCommandKind.StreamRect"/> itself with
+    /// <see cref="EchoStreamRect"/>.</summary>
+    public (uint W, uint H) AppliedStream { get => (_s.StreamW, _s.StreamH); set { _s.StreamW = value.W; _s.StreamH = value.H; Publish(); } }
+    /// <summary>Echo a stream size as applied and wake the session, as the engine's refresh does after a StreamRect.</summary>
+    public void EchoStreamRect(int w, int h) { AppliedStream = ((uint)w, (uint)h); RaiseStateChanged(); }
 
     /// <summary>Model a mid-stream variant switch: bump the presentation epoch and wake the session exactly as a real
     /// FORMATCHANGE/RESOURCELOST would. Does NOT auto-clear <see cref="NaturalSizeKnown"/> — a test modeling "the new
@@ -407,6 +413,12 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public void SetVolume(float volume) => LastVolume = volume;
     public void SetRate(float rate) => LastRate = rate;
     public void SetStreamSize(SizeI size) { SetStreamSizeCalls++; LastStreamSize = size; }
+    /// <summary>True (the default): the native echo follows <see cref="SetStreamSize"/> at once, as the real runtime's snapshot
+    /// does after a pump. False: <see cref="ScriptedAppliedStreamSize"/> is what the snapshot reports, so a test holds an echo back.</summary>
+    public bool EchoesStreamSize = true;
+    /// <summary>The applied stream size reported while <see cref="EchoesStreamSize"/> is false.</summary>
+    public SizeI ScriptedAppliedStreamSize;
+    public SizeI AppliedStreamSize => EchoesStreamSize ? LastStreamSize : ScriptedAppliedStreamSize;
     /// <summary>Every OPM window placement the session asked for, in order (host window, then the rect in device px).</summary>
     public readonly List<(nuint Host, int Left, int Top, int Right, int Bottom)> OutputProtectionPlacements = new();
     public void PlaceOutputProtectionWindow(nuint hostWindow, int left, int top, int right, int bottom)

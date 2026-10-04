@@ -1415,15 +1415,17 @@ public sealed class MediaPlayerElement : Component
         // rect and the ABR bookkeeping are all driven by native events and transport commands, which request a FULL pump.
         // Place the surface and stop — no PumpVideo, no per-frame Position write fanning out to every subscriber. The
         // cached content size is only valid while it is still the size this rect needs (a pure translation never changes
-        // it; a resize that moves the downscale cap does), otherwise the turn falls through to the full pump so the stream
-        // is never left sized for a stale rect. The settle timer then runs the full pump once the motion has ended.
+        // it; a resize inside the stream-size bucket does not either; a resize that crosses into another bucket does),
+        // otherwise the turn falls through to the full pump so the stream is never left sized for a stale rect (the session's
+        // size gate then holds the stream until the rect is stable). The settle timer then runs the full pump once the motion
+        // has ended.
         // A surface with no content size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
         SizeI cached = b.IsGeometryOnlyPump ? b.ContentSize : SizeI.Zero;
         bool motion = !cached.IsEmpty;
         if (motion)
         {
             NoteGeometryMotion();
-            if (!audioOnly && cached == VideoStreamSizing.ContentSizeFor(natural, videoRect, s))
+            if (!audioOnly && VideoStreamSizing.Serves(cached, natural, videoRect, s))
             {
                 b.Place(videoRect);
                 b.SetVisible(active && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty and the frame has video here (checked above); AND the session's per-attach readiness

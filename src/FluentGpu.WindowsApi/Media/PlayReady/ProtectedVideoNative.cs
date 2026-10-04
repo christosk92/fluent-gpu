@@ -150,6 +150,8 @@ internal static unsafe partial class PrNative
         public ulong BytesDownloaded;
         public ulong DownloadElapsedMs;
         public ulong StoreBytes;
+        public int StreamWidth;
+        public int StreamHeight;
     }
 
     /// <summary>Blittable mirror of <c>FgPrProbeResult</c> — what the demuxer found in a local fragmented MP4.</summary>

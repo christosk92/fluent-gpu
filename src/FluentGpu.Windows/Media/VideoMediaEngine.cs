@@ -179,6 +179,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // SEEKED events of the current source (Interlocked: MF workers). Counted, not a flag, so a paused seek whose SEEKING and
     // SEEKED coalesce into one refresh still moves a published value — see VideoEngineSnapshot.SeekedCount.
     private int _seekedCount;
+    // Engine thread only: the stream size the last StreamRect actually applied (UpdateVideoStream(dst) succeeded) — published
+    // as VideoEngineSnapshot.StreamW/H, the echo a session keeps its compositor content size behind. Per source.
+    private uint _appliedStreamW, _appliedStreamH;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
 
@@ -437,6 +440,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                 MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
                 int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
                 if (hr < 0) Log("UpdateVideoStream(dst)", hr);
+                else if (w > 0 && h > 0) { _appliedStreamW = (uint)w; _appliedStreamH = (uint)h; }
             }
         }
 
@@ -471,6 +475,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         Interlocked.Exchange(ref _firstFrameTicks, 0);
         Interlocked.Exchange(ref _seekedCount, 0);
         _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
+        _appliedStreamW = 0; _appliedStreamH = 0;
         _cachedHandle = 0; _handleQueriedForEpoch = -1;
         _cachedDuration = 0;
         // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
@@ -629,6 +634,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             ErrorHr = _errorHr,
             FirstFrameTimestamp = firstFrame,
             SeekedCount = Volatile.Read(ref _seekedCount),
+            StreamW = _appliedStreamW,
+            StreamH = _appliedStreamH,
         };
         _snapshot.Publish(snap);
 
@@ -644,6 +651,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             snap.SwapchainHandle != _lastPublished.SwapchainHandle ||
             snap.FirstFrameTimestamp != _lastPublished.FirstFrameTimestamp ||
             snap.SeekedCount != _lastPublished.SeekedCount ||
+            snap.StreamW != _lastPublished.StreamW || snap.StreamH != _lastPublished.StreamH ||
             snap.ErrorCode != _lastPublished.ErrorCode;
 
         long now = snap.PositionTimestamp;

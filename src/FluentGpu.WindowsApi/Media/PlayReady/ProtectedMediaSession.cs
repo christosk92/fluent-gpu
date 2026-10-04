@@ -56,6 +56,13 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private bool _seekPublished;
     private long _seekTargetMs;
 
+    // Decides the stream size (a bucket of the natural frame, settled, and echoed by the native snapshot before the
+    // compositor is told) — shared with the clear session. _sizeRetry re-pumps once a settle window or an echo wait ends.
+    private readonly VideoStreamSizeGate _sizeGate = new();
+    private Timer? _sizeRetry;
+    // The clock the size gate reads; a test replaces it to step time.
+    internal Func<long> ClockMs { get; set; } = static () => Environment.TickCount64;
+
     // The CANPLAY deadline (a single one-shot timer; fires one pump).
     private Timer? _startDeadline;
     private long _startTicks;
@@ -234,6 +241,16 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     {
         Volatile.Write(ref _deadlinePassed, 1);
         RequestPump();
+    }
+
+    // Asks for one more pump after `ms` (a settle window or an echo wait is pending): the native runtime raises no event for
+    // an applied stream size, and a deferred size decision must not wait for an unrelated one. Any thread.
+    private void ArmSizeRetry(int ms)
+    {
+        if (ms <= 0 || _disposed) return;
+        _sizeRetry ??= new Timer(static s => ((ProtectedMediaSession)s!).RequestPump(), this, Timeout.Infinite, Timeout.Infinite);
+        try { _sizeRetry.Change(ms, Timeout.Infinite); }
+        catch (ObjectDisposedException) { }   // disposed from another thread between the check and here
     }
 
     private void DisarmStartDeadline()
@@ -545,19 +562,32 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         }
 
         // 4. The composited surface (already bound by the player's pump): size the STREAM to what the destination can
-        //    show — the same rule as the clear path, so a 4K rung in a 640-px card allocates 640-px buffers — and place it.
+        //    show — the same rule as the clear path, so a 4K rung in a 640-px card allocates a third-size buffer — and place it.
         //    It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
         //    previous source's last frame until the new one decodes, and a detached slot would show another session's.
+        //    The stream is a BUCKET of the natural frame (never the raw destination), requested once the destination has held
+        //    still, and the compositor keeps the previous content size until the native snapshot echoes the new one as
+        //    applied. A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
         if (binding.IsValid && _player.HasSurface)
         {
-            SizeI content = VideoStreamSizing.ContentSizeFor(_naturalSize, videoRect, scale);
-            _player.SetStreamSize(content);
-            binding.SetContentSize(content);
-            binding.Place(videoRect);
-            PlaceOutputProtection(binding, videoRect, scale);
-            binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
-            sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
-                { Token = binding.Token });
+            if (VideoStreamSizing.IsLaidOut(videoRect))
+            {
+                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
+                    pv == ProtectedVideoState.Playing, ClockMs());
+                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request);
+                ArmSizeRetry(step.RetryInMs);
+                SizeI content = step.Content;
+                binding.SetContentSize(content);
+                binding.Place(videoRect);
+                PlaceOutputProtection(binding, videoRect, scale);
+                binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
+                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
+                    { Token = binding.Token });
+            }
+            else
+            {
+                binding.SetVisible(false);
+            }
         }
         else if (binding.IsValid)
         {
@@ -872,6 +902,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _disposed = true;
         _sink = null;
         DisarmStartDeadline();
+        _sizeRetry?.Dispose();
         PumpRequested = null;
         _player.PumpRequested -= OnPlayerPumpRequested;
         // Detach + destroy are posted native work items (non-blocking); the runtime and its engine stay warm.

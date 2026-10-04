@@ -1020,7 +1020,7 @@ above it. It is now a runtime with handles, spine unchanged:
   (the splice's new frame size reaching the decoder) re-reads `GetNativeVideoSize`, stores it in the snapshot and raises
   `FgPrEvent_SizeChanged`; it calls no `UpdateVideoStream` and re-raises no handle (RESOURCELOST keeps that), so the
   destination is never changed behind the compositor. The managed pump takes the new natural size, re-asserts its stream
-  size from it (`ContentSizeFor`) and so a larger rung is no longer rendered into the opening rung's swap chain.
+  size from it (the size gate, below) and so a larger rung is no longer rendered into the opening rung's swap chain.
   Visibility: `ProtectedMediaSession` shows the slot and publishes `VideoSurface` only on
   `HasFirstFrame && HasSurface` (first frame of THIS attach and a live handle); before that the swap chain still holds the
   previous source's last frame, and after a native detach (another session's attach: native zeroes the handle) the slot is
@@ -1061,8 +1061,20 @@ above it. It is now a runtime with handles, spine unchanged:
 - **Event-driven presentation.** `FIRSTFRAMEREADY` / CANPLAY / SEEKED / errors are native events → one coalesced
   `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpVideo` reads ONE snapshot and binds the handle —
   no poll timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
-  `VideoStreamSizing.ContentSizeFor` rule as the clear path. `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
+  `VideoStreamSizeGate` as the clear path (next bullet). `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
   `BufferedAheadMs`, and the protected session publishes that same POD.
+- **Stream size: buckets, settle, echo (F071, F051, F260).** Layout never drives the decoder's swap chain. Both sessions
+  size the stream through one `VideoStreamSizeGate`: a bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the
+  smallest that covers the destination, with a 10 % shrink hysteresis), the first size and a changed natural size at once,
+  any other change only after the destination held still 250 ms (DirectComposition's LINEAR scale covers the gap). The
+  compositor's content size moves to a requested size only when the backend ECHOES it as applied
+  (`VideoEngineSnapshot.StreamW/StreamH`; the protected runtime fills them from `FgPrSnapshot.streamWidth/streamHeight`
+  after `UpdateVideoStream(dst)` and zeroes them at detach): until then DComp keeps scaling the old buffer by the old
+  size. A paused or non-echoing backend is trusted after 500 ms; a settle window or echo wait re-pumps the session through
+  a timer (the protected runtime raises no event for an applied size). A rect that is not laid out (the element pumps
+  `default` before its area exists) sizes and places nothing. Native: `FgPrSessionSetStreamSize` repaints
+  (`UpdateVideoStream(null, null, null)`) while the source is not playing, as the clear path's `Repaint` does, and its
+  `[cenc] stream size` log line is rate-limited to one a second (a failure always logs).
 - **Always-on log lines, one file.** `ProtectedVideoRuntime.LogSink` receives `[video]` (attach → metadata →
   canplay → first.frame `sinceAttachMs`, seek.done `ms`, prefetch.ok) and `[video.native]` lifecycle lines; the old
   `desktop-playready.log` is gone. `DesktopProtectedVideoPlayer`, its ack waits and `DrmLicenseBridge` are deleted.

@@ -92,9 +92,9 @@ public sealed class VideoSurfaceGeometryTests
 
         VideoSurfaceGeometry geo = core.SurfaceGeometry.Peek();
         Assert.Equal(1.5f, geo.Scale, P);
-        // 326×160 DIP at 1.5 ⇒ 489×240 device px; the cap follows the MOST magnified axis (240/1080), so the frame is
-        // rendered at 489×275 — still exactly 16:9.
-        Assert.Equal(new SizeI(489, 275), geo.Content);
+        // 326×160 DIP at 1.5 ⇒ 489×240 device px; the most magnified axis needs 489/1920 = 0.255 of the frame, so the
+        // stream takes the smallest bucket that covers it (1/3) — 640×360, still exactly 16:9.
+        Assert.Equal(new SizeI(640, 360), geo.Content);
         Assert.Equal(1920.0 / 1080.0, (double)geo.Content.Width / geo.Content.Height, 2);
     }
 

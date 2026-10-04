@@ -338,6 +338,8 @@ public sealed class MfMediaSessionTests
     public void Repaint_IsInvalidationDriven_AndNativeEventsRequestOneFollowingPump()
     {
         var (s, _, eng) = NewSession();
+        long now = 0;
+        s.ClockMs = () => now;
         var binding = NewBinding(out _);
         eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
         int requested = 0;
@@ -345,6 +347,7 @@ public sealed class MfMediaSessionTests
 
         s.PumpVideo(binding, Rect, 1f);       // initial metadata/handle/geometry hand-off
         Assert.True(eng.Commands.TryTakeRepaint());
+        Assert.True(eng.Commands.TryTakeStreamRect(out _, out _));   // the hand-off's stream size
 
         s.PumpVideo(binding, Rect, 1f);       // identical host work is not a repaint
         Assert.False(eng.Commands.TryTakeRepaint());
@@ -354,8 +357,78 @@ public sealed class MfMediaSessionTests
         s.PumpVideo(binding, Rect, 1f);
         Assert.False(eng.Commands.TryTakeRepaint());
 
-        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f); // geometry invalidates once
+        // A new destination does not re-size the stream while it may still be moving (F071): nothing is posted, so nothing
+        // is repainted either ...
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f);
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.False(eng.Commands.TryTakeRepaint());
+        // ... and once it has held still, the new stream size is asked for once and the frame is repainted at it.
+        now += VideoStreamSizeGate.SettleMs;
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f);
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((640, 360), (w, h));
         Assert.True(eng.Commands.TryTakeRepaint());
+    }
+
+    // ── the stream size: no sizing for an unlaid-out rect (F051), buckets that settle and an echo before the compositor
+    //    hears of them (F071) ──────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PumpVideo_WithAnEmptyRect_PublishesTheNaturalSize_ButNeverSizesOrPlacesTheStream()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1920; eng.NativeH = 1080; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, default, 1f);      // the element's pump before its area is laid out
+
+        Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());     // state and natural size still publish
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));       // no 2x1 swap chain
+        Assert.True(binding.ContentSize.IsEmpty);
+        Assert.False(core.SurfaceGeometry.Peek().IsPlaced);
+
+        s.PumpVideo(binding, new RectF(0, 0, 960, 540), 1f);              // the first laid-out pump sizes it
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((960, 540), (w, h));
+
+        s.PumpVideo(binding, default, 1f);                                // the area collapsed again
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.Equal(new SizeI(960, 540), binding.ContentSize);           // the last good size stays
+    }
+
+    [Fact]
+    public void PumpVideo_AResize_RequestsTheNewBucketOnlyOnceSettled_AndPublishesItOnlyWhenTheEngineEchoesIt()
+    {
+        var (s, _, eng) = NewSession();
+        long now = 0;
+        s.ClockMs = () => now;
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1920; eng.NativeH = 1080; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f);
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((640, 360), (w, h));                                 // the 1/3 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+        eng.EchoStreamRect(640, 360);
+
+        now = 100;
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);             // a resize gesture is under way
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+
+        now = 350;
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);             // it has been still for 250 ms
+        Assert.True(eng.Commands.TryTakeStreamRect(out w, out h));
+        Assert.Equal((1440, 810), (w, h));                                // the 3/4 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);           // DComp keeps scaling the old buffer by the old size
+
+        now = 400;
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);           // not echoed yet
+
+        eng.EchoStreamRect(1440, 810);
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);
+        Assert.Equal(new SizeI(1440, 810), binding.ContentSize);          // the engine applied it: now the compositor may use it
     }
 
     [Fact]

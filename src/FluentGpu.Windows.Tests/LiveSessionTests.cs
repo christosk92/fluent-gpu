@@ -524,8 +524,8 @@ public sealed class LiveSessionTests
 
         Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());
         Assert.True(e.Commands.TryTakeStreamRect(out int w, out int h));
-        Assert.Equal(1280, w);      // re-sized from the NEW natural size, capped at the 1280×720 destination
-        Assert.Equal(720, h);
+        Assert.Equal(1440, w);      // re-sized from the NEW natural size at once: the 3/4 bucket (the smallest that covers 1280×720)
+        Assert.Equal(810, h);
     }
 
     [Fact]

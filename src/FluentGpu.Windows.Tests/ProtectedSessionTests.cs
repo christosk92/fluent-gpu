@@ -421,18 +421,18 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
 
         session.PumpVideo(binding, Rect, 1f);
 
-        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);   // a 4K rung in a 640-px card allocates 640-px buffers
+        Assert.Equal(new SizeI(1280, 720), player.LastStreamSize);   // a 4K rung in a 640-px card allocates the 1/3 bucket, not 4K buffers
         Assert.Equal(1, player.SetStreamSizeCalls);
         var presenter = new FakeVideoPresenter();
         registry.Drain(presenter, scale: 1f);
         Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
-        Assert.Equal(640u, presenter.LastContentW);
-        Assert.Equal(360u, presenter.LastContentH);
+        Assert.Equal(1280u, presenter.LastContentW);
+        Assert.Equal(720u, presenter.LastContentH);
         Assert.Equal(Rect, presenter.LastPlaceRect);
         Assert.True(presenter.LastVisible);
         VideoSurfaceGeometry geometry = core.SurfaceGeometry.Peek();
         Assert.Equal(new SizeI(3840, 2160), geometry.Natural);
-        Assert.Equal(new SizeI(640, 360), geometry.Content);
+        Assert.Equal(new SizeI(1280, 720), geometry.Content);
         Assert.Equal(binding.Token, geometry.Token);
         var delivery = Assert.IsType<VideoDelivery.CompositedSurface>(session.Video);
         Assert.Equal(new SizeI(3840, 2160), delivery.NaturalSize);
@@ -468,7 +468,7 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         session.PumpVideo(binding, Rect, 1f);
         registry.Drain(presenter, scale: 1f);
 
-        Assert.Equal(new SizeI(1280, 720), player.LastStreamSize);   // sized and placed already, so the first frame lands in place
+        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);   // sized and placed already (the 1/2 bucket), so the first frame lands in place
         Assert.Equal(Rect, presenter.LastPlaceRect);
         Assert.False(presenter.LastVisible);
         Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
@@ -550,9 +550,80 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         player.SetNaturalSize(1920, 1080);              // ABR upgraded: FORMATCHANGE reported the bigger frame
         session.PumpVideo(binding, big, 1f);
 
-        Assert.Equal(new SizeI(1920, 1080), player.LastStreamSize);   // not pinned to the opening rung's swap chain
+        Assert.Equal(new SizeI(1920, 1080), player.LastStreamSize);   // not pinned to the opening rung's swap chain (asked at once)
         Assert.Equal(2, player.SetStreamSizeCalls);
+        // ... but the compositor keeps scaling the old buffer by the old size until native echoes the new one (the fake echoes
+        // at the next snapshot), so this pump still publishes the opening rung's content size.
+        Assert.Equal(new SizeI(1280, 720), core.SurfaceGeometry.Peek().Content);
+        session.PumpVideo(binding, big, 1f);
         Assert.Equal(new SizeI(1920, 1080), core.SurfaceGeometry.Peek().Content);
+    }
+
+    [Fact]
+    public void PumpVideo_WithAnEmptyRect_NeverSizesOrPlacesTheStream()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        VideoBinding binding = NewBinding(new VideoSurfaceRegistry());
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1920, 1080);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+
+        session.PumpVideo(binding, default, 1f);       // the element's pump before its area is laid out
+
+        Assert.Equal(0, player.SetStreamSizeCalls);    // no 2x1 swap chain
+        Assert.True(binding.ContentSize.IsEmpty);
+        Assert.False(core.SurfaceGeometry.Peek().IsPlaced);
+
+        session.PumpVideo(binding, Rect, 1f);          // the first laid-out pump sizes it
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);
+
+        session.PumpVideo(binding, default, 1f);       // the area collapsed again: size and placement stay
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+    }
+
+    [Fact]
+    public void PumpVideo_AResize_RequestsTheNewBucketOnlyOnceSettled_AndPublishesItOnlyWhenNativeEchoesIt()
+    {
+        var (session, _, player) = NewSession(startPaused: false);
+        long now = 0;
+        session.ClockMs = () => now;
+        VideoBinding binding = NewBinding(new VideoSurfaceRegistry());
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1920, 1080);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        player.EchoesStreamSize = false;               // the test holds the native echo back
+
+        session.PumpVideo(binding, Rect, 1f);
+        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);   // the 1/3 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+        player.ScriptedAppliedStreamSize = new SizeI(640, 360);
+
+        var grown = new RectF(0, 0, 1000, 562);
+        now = 100;
+        session.PumpVideo(binding, grown, 1f);         // a resize gesture is under way
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+
+        now = 350;
+        session.PumpVideo(binding, grown, 1f);         // it has been still for 250 ms
+        Assert.Equal(2, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(1440, 810), player.LastStreamSize);   // the 3/4 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);      // DComp keeps scaling the old buffer by the old size
+
+        now = 400;
+        session.PumpVideo(binding, grown, 1f);
+        Assert.Equal(2, player.SetStreamSizeCalls);                  // asked once
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);      // not echoed yet
+
+        player.ScriptedAppliedStreamSize = new SizeI(1440, 810);     // native applied it
+        session.PumpVideo(binding, grown, 1f);
+        Assert.Equal(new SizeI(1440, 810), binding.ContentSize);
     }
 
     [Fact]

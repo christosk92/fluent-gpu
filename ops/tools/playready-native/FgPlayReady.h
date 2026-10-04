@@ -202,6 +202,10 @@ typedef struct FgPrSnapshot
     uint64_t bytesDownloaded;
     uint64_t downloadElapsedMs;
     uint64_t storeBytes;            // what the SegmentStore currently holds (the counted half of the memory budget)
+    int32_t streamWidth, streamHeight;   // the stream size the engine has APPLIED (UpdateVideoStream(dst) succeeded: the swap
+                                         // chain's creation size or the last FgPrSessionSetStreamSize), 0x0 while none has been or
+                                         // the session is detached. The managed side keeps the compositor's content size at the
+                                         // previous value until this equals the size it asked for (an echo, not a guess)
 } FgPrSnapshot;
 
 /// What FgPrProbeFile answers about a local fragmented MP4 — the demuxer gate's read-out (tests only; no CDM, no GPU).

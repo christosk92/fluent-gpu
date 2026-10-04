@@ -1318,6 +1318,8 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
     }
     if (s.license) { fgpr::LicenseBind(s.license, -1); s.license = 0; }
     s.swapchainHandle.store(0, std::memory_order_release);
+    s.appliedStreamW.store(0, std::memory_order_release);
+    s.appliedStreamH.store(0, std::memory_order_release);
     s.seeking.store(0, std::memory_order_release);
     s.firstFrameQpc.store(0, std::memory_order_release);
     if (s.state.load(std::memory_order_acquire) != FgPrState_Error) s.state.store(FgPrState_Stopped, std::memory_order_release);
@@ -1585,6 +1587,16 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
     // rectangle, so the rect is logged with the first handle query: a {0,0,0,0} or 1x1 dst here is the bug, not
     // the handle. An invalid handle on a SUCCEEDED (typically S_FALSE) hr means "not ready yet", never "done".
     HRESULT hu = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
+    if (SUCCEEDED(hu))
+    {
+        // The echo the managed side waits for before it scales by this size (see FgPrSnapshot.streamWidth).
+        s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
+        s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+        // A re-created swap chain of a source that is not playing holds no frame at this size and nothing presents one by
+        // itself: ask for the current frame to be rendered into it (a playing source presents its own next frame).
+        if (reRaise && s.state.load(std::memory_order_acquire) != FgPrState_Playing)
+            rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
+    }
     HANDLE handle = nullptr;
     HRESULT hr = rt.engineEx->GetVideoSwapchainHandle(&handle);
     const bool usable = SUCCEEDED(hr) && handle != nullptr && handle != INVALID_HANDLE_VALUE;
@@ -1908,6 +1920,8 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         s.internalSeek.Cancel();
         s.handleTries = 0;
         s.swapchainHandle.store(0, std::memory_order_release);
+        s.appliedStreamW.store(0, std::memory_order_release);
+        s.appliedStreamH.store(0, std::memory_order_release);
         s.firstFrameQpc.store(0, std::memory_order_release);
         s.readyState.store(0, std::memory_order_release);
         s.errorHr.store(0, std::memory_order_release);
@@ -2136,8 +2150,26 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
         if (dst.right <= 0 || dst.bottom <= 0) return;
         MFARGB border = { 0, 0, 0, 255 };
         HRESULT hr = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
-        fgpr::RaiseLog(s.handle, "[cenc] stream size " + std::to_string(dst.right) + "x" + std::to_string(dst.bottom) +
-                                 (s.streamWidth ? "" : " (natural)") + " hr=" + fgpr::Hex(hr));
+        if (SUCCEEDED(hr))
+        {
+            // The compositor scales the swap chain's CURRENT frame by the new size's factor, but that frame was rendered at the
+            // old size: unless the source is playing (its next frame is rendered at the new size anyway), repaint so the frame
+            // DirectComposition scales is one MF rendered for this destination (the clear path's StreamRect + Repaint).
+            if (s.state.load(std::memory_order_acquire) != FgPrState_Playing)
+                rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
+            // Echo AFTER the repaint was asked for: the managed side publishes the new content size on seeing this.
+            s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
+            s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+        }
+        // Rate-limited (one line a second; a failure always): the size used to log once per change, and a resize gesture
+        // changed it every layout - a cross-thread log event per frame.
+        const int64_t now = fgpr::QpcNow();
+        if (FAILED(hr) || s.lastStreamLogQpc == 0 || now - s.lastStreamLogQpc >= fgpr::QpcFrequency())
+        {
+            s.lastStreamLogQpc = now;
+            fgpr::RaiseLog(s.handle, "[cenc] stream size " + std::to_string(dst.right) + "x" + std::to_string(dst.bottom) +
+                                     (s.streamWidth ? "" : " (natural)") + " hr=" + fgpr::Hex(hr));
+        }
     });
 }
 
@@ -2188,6 +2220,8 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSnapshot(FgPrRuntime rtHandle
     out->bytesDownloaded = s.bytesDownloaded.load(std::memory_order_acquire);
     out->downloadElapsedMs = s.downloadElapsedMs.load(std::memory_order_acquire);
     out->storeBytes = s.store ? s.store->Bytes() : 0;
+    out->streamWidth = s.appliedStreamW.load(std::memory_order_acquire);
+    out->streamHeight = s.appliedStreamH.load(std::memory_order_acquire);
     return S_OK;
 }
 

@@ -780,6 +780,7 @@ struct Session
     std::atomic<int64_t> volumeMicro{ 1000000 };
     std::atomic<int64_t> rateMicro{ 1000000 };
     int32_t streamWidth = 0, streamHeight = 0;    // FgPrSessionSetStreamSize (0×0 = natural)
+    int64_t lastStreamLogQpc = 0;                 // runtime thread: when the "[cenc] stream size" line was last written
     int32_t handleTries = 0;
     int64_t lastPositionRaiseQpc = 0;
     int64_t lastPositionRaisedMs = -1;
@@ -798,6 +799,7 @@ struct Session
     std::atomic<int64_t> bufferedAheadMs{ 0 };
     std::atomic<int64_t> retainedBehindMs{ 0 };
     std::atomic<int64_t> firstFrameQpc{ 0 };
+    std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // FgPrSnapshot.streamWidth/Height: the applied stream size
     std::atomic<uint64_t> bytesDownloaded{ 0 };
     std::atomic<uint64_t> downloadElapsedMs{ 0 };
 

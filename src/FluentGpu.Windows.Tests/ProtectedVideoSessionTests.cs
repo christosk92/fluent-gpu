@@ -560,6 +560,33 @@ public sealed class ProtectedVideoSessionTests
     }
 
     [Fact]
+    public void Pump_TheSnapshotsAppliedStreamSize_IsTheEchoTheOwnerWaitsFor()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        s.Start(s.Request);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1280, Height = 720, DurationMs = 60_000,
+        };
+        s.Pump(default);
+        Assert.True(s.AppliedStreamSize.IsEmpty);                      // native has applied nothing yet
+        Assert.Equal(0u, s.ReadSnapshot().StreamW);
+
+        rig.Sessions.Snapshot.StreamWidth = 640;
+        rig.Sessions.Snapshot.StreamHeight = 360;
+        s.Pump(default);
+        Assert.Equal(new SizeI(640, 360), s.AppliedStreamSize);
+        Assert.Equal(640u, s.ReadSnapshot().StreamW);
+        Assert.Equal(360u, s.ReadSnapshot().StreamH);
+
+        rig.Sessions.Snapshot.StreamWidth = 0;                         // detached: native zeroes the echo with the handle
+        rig.Sessions.Snapshot.StreamHeight = 0;
+        s.Pump(default);
+        Assert.True(s.AppliedStreamSize.IsEmpty);
+    }
+
+    [Fact]
     public void Seek_IsInFlightUntilTheSeekedEvent_WhichCarriesTheLandedPosition()
     {
         using var rig = new Rig();
