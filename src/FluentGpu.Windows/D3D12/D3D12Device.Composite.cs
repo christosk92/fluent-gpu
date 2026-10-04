@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using FluentGpu.Foundation;
 using FluentGpu.Render;
@@ -531,13 +531,13 @@ public sealed unsafe partial class D3D12Device
             float ox = cx + fw.Dx * k, oy = cy + fw.Dy * k;
             float keep = Math.Clamp(1f - it.FeedbackDecay, 0f, 1f);
             ColorF fade = it.Feedback.FadeTo;
-            _compositor.Begin(0f, 0f, w, h);
+            _compositor!.Begin(0f, 0f, w, h);
             var K = _compositor.K;
             K[8] = r0x; K[9] = r0y; K[10] = cx - (r0x * ox + r0y * oy); K[11] = 0f;
             K[12] = r1x; K[13] = r1y; K[14] = cy - (r1x * ox + r1y * oy); K[15] = 0f;
             K[16] = 1f / w; K[17] = 1f / h; K[18] = keep; K[19] = 1f / 255f;
             K[20] = fade.R * fade.A; K[21] = fade.G * fade.A; K[22] = fade.B * fade.A; K[23] = fade.A;
-            _compositor.Draw(_cmdList, SliceCompositor.Pso.Feedback, _surfaces.ScratchSrv(ping));
+            _compositor!.Draw(_cmdList, SliceCompositor.Pso.Feedback, _surfaces.ScratchSrv(ping));
         }
         // Pass 2: this frame's content on top, at the trail scale (Fresh: SrcOver, or Additive through the stream's SetBlend).
         float full = _frameScale;

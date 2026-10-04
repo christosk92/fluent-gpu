@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using FluentGpu.Foundation;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Dsl;
 
