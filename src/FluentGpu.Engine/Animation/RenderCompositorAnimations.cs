@@ -216,7 +216,7 @@ public sealed class RenderCompositorAnimations
             ref readonly var row = ref state.Desired.Row;
             _rowLive[i] = !state.Parked && scene.IsLive(row.Node);
             _rowDoneEdge[i] = state.Done && !wasDone;
-            if (_rowLive[i] && row.Channel is not (AnimChannel.HoverFade or AnimChannel.PressFade or AnimChannel.BrushFade))
+            if (_rowLive[i] && !IsSideTable(row.Channel))
             {
                 ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
                 if (!exists) accumulator.Acc = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
@@ -243,7 +243,7 @@ public sealed class RenderCompositorAnimations
             {
                 state.Hidden = true;
                 // flagged, not removed: a descendant's Reaches still reads this node's opacity from its accumulator
-                if (row.Channel is not (AnimChannel.HoverFade or AnimChannel.PressFade or AnimChannel.BrushFade))
+                if (!IsSideTable(row.Channel))
                     CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Hidden = true;
                 // A finite row still ticks to its Done (its lifecycle needs the edge); a loop never ends, so it waits.
                 HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Loop);
@@ -253,14 +253,17 @@ public sealed class RenderCompositorAnimations
             // row's next analytic sample differs in at least one ulp. (WebRender's approx_eq guards a property binding
             // that can be re-sent unchanged; our Value is recomputed, not re-sent.) A row that was hidden posed nothing
             // since: it re-poses as a change.
-            bool changed = !state.HasPosed || state.Value != state.PosedValue || state.Hidden;
-            state.PosedValue = state.Value;
+            // A wipe split poses at whole-DIP steps of its run (QuantizeWipe): only a step that crosses one is a change.
+            float posed = row.Channel == AnimChannel.GlyphWipeSplit ? QuantizeWipe(scene, row.Node, state.Value) : state.Value;
+            bool changed = !state.HasPosed || posed != state.PosedValue || state.Hidden;
+            state.PosedValue = posed;
             state.HasPosed = true;
             state.Hidden = false;
             ChangedThisTick |= changed;
             if (row.Channel is AnimChannel.HoverFade or AnimChannel.PressFade)
                 scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value, changed);
             else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value, changed);
+            else if (row.Channel == AnimChannel.GlyphWipeSplit) scene.SetCompositorGlyphWipe(row.Node, posed, changed);
             else CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Changed |= changed;   // any channel moving damages the node once
             HasActive |= !_paused && !state.Done;
         }
@@ -294,6 +297,19 @@ public sealed class RenderCompositorAnimations
             if (op <= 0f) return false;
         }
         return true;
+    }
+
+    /// <summary>Channels posed onto a side table (interaction, brush, glyph wipe) rather than folded into the transform /
+    /// opacity accumulator.</summary>
+    private static bool IsSideTable(AnimChannel channel)
+        => channel is AnimChannel.HoverFade or AnimChannel.PressFade or AnimChannel.BrushFade or AnimChannel.GlyphWipeSplit;
+
+    /// <summary>A wipe split rounded to whole DIPs of the run it sweeps (the node's width), the settled ends exact: the
+    /// boundary moves in pixel steps, so a tick that stays inside one changes nothing and re-records nothing.</summary>
+    internal static float QuantizeWipe(SceneRecordingSnapshot scene, NodeHandle node, float split)
+    {
+        float w = scene.Bounds(node).W;
+        return w > 1f && split > 0f && split < 1f ? MathF.Round(split * w) / w : split;
     }
 
     private static State Seed(in CompositorAnimationSnapshot.Entry entry, double capturedAtMs) => new()

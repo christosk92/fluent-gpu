@@ -19,6 +19,52 @@ static class CompositorAnimationChecks
         RowPoolCapacityBoundsAndFallback();
         RowPoolTicksAllocateNothing();
         HiddenLoopsDoNotDriveFrames();
+        GlyphWipeSplitPosesOnTheRenderThread();
+    }
+
+    /// <summary>The karaoke wipe as a render-thread animation (AnimChannel.GlyphWipeSplit): a keyframed split poses onto
+    /// the snapshot's wipe at whole-DIP steps of the run, a tick inside one step changes nothing, the authored column is
+    /// never touched, and the UI-owned path moves the store's wipe.</summary>
+    private static void GlyphWipeSplitPosesOnTheRenderThread()
+    {
+        var (scene, _, nodes, animation) = Fan(1);
+        var run = nodes[0];
+        scene.Bounds(run) = new(0, 0, 200, 20);
+        scene.Paint(run).VisualKind = VisualKind.Text;   // the wipe rides a text run (captured for text nodes only)
+        scene.SetGlyphWipe(run, new GlyphWipe(ColorF.FromRgba(255, 255, 255), ColorF.FromRgba(128, 128, 128), 0f));
+        animation.Keyframes(run, AnimChannel.GlyphWipeSplit, [new(0f, 0f), new(1f, 1f, Easing.Linear)], 1000f);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        var desired = new CompositorAnimationSnapshot();
+        animation.CaptureCompositorAnimations(desired, 0);
+        var renderer = new RenderCompositorAnimations();
+        renderer.Adopt(desired, snapshot, 0);
+        renderer.Tick(snapshot, 500);
+        snapshot.TryGetGlyphWipe(run, out var half);
+        renderer.Tick(snapshot, 501);   // 100.2 DIP: the same whole step
+        bool held = !renderer.ChangedThisTick;
+        renderer.Tick(snapshot, 503);   // 100.6 DIP: the next one
+        bool stepped = renderer.ChangedThisTick;
+        snapshot.TryGetGlyphWipe(run, out var next);
+        snapshot.BeginCompositorOverlay();
+        snapshot.TryGetGlyphWipe(run, out var authored);
+        Check("gate.compositor-glyph-wipe the render tick poses a keyframed wipe split at whole-DIP steps; a sub-DIP tick changes nothing; the authored wipe is untouched",
+            half.Split == 0.5f && held && stepped && MathF.Abs(next.Split - 101f / 200f) < 1e-6f && authored.Split == 0f,
+            $"split@500={half.Split} held={held} stepped={stepped} split@503={next.Split} authored={authored.Split}");
+        snapshot.ReleaseResources();
+
+        var (scene2, _, nodes2, _) = Fan(1);
+        var run2 = nodes2[0];
+        scene2.Bounds(run2) = new(0, 0, 200, 20);
+        scene2.Paint(run2).VisualKind = VisualKind.Text;   // the wipe rides a text run (captured for text nodes only)
+        scene2.SetGlyphWipe(run2, new GlyphWipe(ColorF.FromRgba(255, 255, 255), ColorF.FromRgba(128, 128, 128), 0f));
+        var ui = new AnimEngine(scene2);
+        ui.Keyframes(run2, AnimChannel.GlyphWipeSplit, [new(0f, 0f), new(1f, 1f, Easing.Linear)], 1000f);
+        ui.Tick(16);
+        ui.Tick(484);
+        scene2.TryGetGlyphWipe(run2, out var uiWipe);
+        Check("gate.compositor-glyph-wipe-ui the UI-owned path moves the store's wipe split",
+            uiWipe.Split > 0.3f && uiWipe.Split < 0.7f, $"split={uiWipe.Split}");
     }
 
     /// <summary>A loop on a node that cannot reach a pixel (Wavee's always-mounted Home busy bar, parked at opacity 0)
