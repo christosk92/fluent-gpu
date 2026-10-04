@@ -18,6 +18,54 @@ static class CompositorAnimationChecks
         RowPoolIsSparseAtSceneHighWater();
         RowPoolCapacityBoundsAndFallback();
         RowPoolTicksAllocateNothing();
+        HiddenLoopsDoNotDriveFrames();
+    }
+
+    /// <summary>A loop on a node that cannot reach a pixel (Wavee's always-mounted Home busy bar, parked at opacity 0)
+    /// must not drive frames: no pose, no change, no render activity. When its parent becomes visible, the next tick poses
+    /// it exactly where time puts it; a parent FADING IN from 0 keeps it posing from the fade's first tick.</summary>
+    private static void HiddenLoopsDoNotDriveFrames()
+    {
+        var (scene, root, nodes, animation) = Fan(1);
+        var bar = nodes[0];
+        scene.Paint(root).Opacity = 0f;
+        animation.Keyframes(bar, AnimChannel.TranslateX, [new(0f, 0f), new(1f, 100f, Easing.Linear)], 1000f, loop: true);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        var desired = new CompositorAnimationSnapshot();
+        animation.CaptureCompositorAnimations(desired, 0);
+        var renderer = new RenderCompositorAnimations();
+        renderer.Adopt(desired, snapshot, 0);
+        renderer.Tick(snapshot, 100);
+        renderer.Tick(snapshot, 200);
+        bool idle = !renderer.HasActive && !renderer.ChangedThisTick && snapshot.Paint(bar).LocalTransform.Dx == 0f;
+        scene.Paint(root).Opacity = 1f;   // the parent shows (a publication)
+        snapshot.Capture(scene);
+        animation.CaptureCompositorAnimations(desired, 300);
+        renderer.Adopt(desired, snapshot, 300);
+        float dx = snapshot.Paint(bar).LocalTransform.Dx;
+        bool shown = renderer.HasActive && renderer.ChangedThisTick && MathF.Abs(dx - 30f) < 0.5f;
+        Check("gate.compositor-hidden-loop-idle a loop under an opacity-0 parent poses nothing and keeps nothing awake; shown, it lands where time puts it",
+            idle && shown, $"idle={idle} shown={shown} dx@300ms={dx:0.00} (want 30)");
+        snapshot.ReleaseResources();
+
+        var (scene2, root2, nodes2, animation2) = Fan(1);
+        var bar2 = nodes2[0];
+        scene2.Paint(root2).Opacity = 0f;
+        animation2.Animate(root2, AnimChannel.Opacity, 0f, 1f, 250f, Easing.Linear);
+        animation2.Keyframes(bar2, AnimChannel.TranslateX, [new(0f, 0f), new(1f, 100f, Easing.Linear)], 1000f, loop: true);
+        var snapshot2 = new SceneRecordingSnapshot();
+        snapshot2.Capture(scene2);
+        var desired2 = new CompositorAnimationSnapshot();
+        animation2.CaptureCompositorAnimations(desired2, 0);
+        var renderer2 = new RenderCompositorAnimations();
+        renderer2.Adopt(desired2, snapshot2, 0);
+        renderer2.Tick(snapshot2, 50);
+        float dx2 = snapshot2.Paint(bar2).LocalTransform.Dx;
+        bool fading = renderer2.HasActive && renderer2.ChangedThisTick && dx2 > 0f;
+        Check("gate.compositor-hidden-loop-fade-in a parent fading in from opacity 0 keeps its child's loop posing from the first tick",
+            fading, $"active={renderer2.HasActive} changed={renderer2.ChangedThisTick} dx@50ms={dx2:0.00}");
+        snapshot2.ReleaseResources();
     }
 
     private static (SceneStore Scene, NodeHandle Node, AnimEngine Animation, SceneRecordingSnapshot Snapshot) Fixture()
