@@ -191,7 +191,7 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
     <rect class="b" x="420" y="110" width="300" height="50" rx="3"/><text class="t" x="434" y="131">7 SliceRecorder arenas</text><text class="tm" x="434" y="148">one stream per slice; markers cut segments</text>
     <rect class="b" x="420" y="180" width="300" height="50" rx="3"/><text class="t" x="434" y="201">8 Place + BuildComposite</text><text class="tm" x="434" y="218">poses, needed tiles, budget → CompositeFrame</text>
     <rect class="b" x="420" y="250" width="300" height="50" rx="3"/><text class="t" x="434" y="271">9 D3D12 SubmitComposite</text><text class="tm" x="434" y="288">tile raster → offscreen → composite pass</text>
-    <rect class="b" x="420" y="320" width="300" height="50" rx="3"/><text class="t" x="434" y="341">10 Present</text><text class="tm" x="434" y="358">FLIP_DISCARD, 3 buffers, whole frame</text>
+    <rect class="b" x="420" y="320" width="300" height="50" rx="3"/><text class="t" x="434" y="341">10 Present</text><text class="tm" x="434" y="358">FLIP_SEQUENTIAL, 3 buffers, Present1 dirty rects</text>
   </g>
   <g class="ln">
     <line x1="570" y1="90" x2="570" y2="108" marker-end="url(#p-ar)"/><line x1="570" y1="160" x2="570" y2="178" marker-end="url(#p-ar)"/>
@@ -360,7 +360,7 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 </table>
 </div>
 <div class="prose">
-<p>The swapchain uses <code>FLIP_DISCARD</code> with three back buffers (3 × 3440 × 1440 × 4 B = 56.7 MB). <code>FLIP_DISCARD</code> refuses <code>Present1</code> dirty rectangles. Thus each frame clears and composites the whole back buffer, and presents the whole frame.</p>
+<p>The primary swapchain uses <code>FLIP_SEQUENTIAL</code> with three back buffers (3 × 3440 × 1440 × 4 B = 56.7 MB). Each back buffer keeps its pixels. When the history of a buffer is known, the frame composites only the changed rectangles and presents them with <code>Present1</code> dirty rectangles. Otherwise the frame clears and composites the whole back buffer, and presents the whole frame. Change (f) gives the details. Popups and detached windows use <code>FLIP_DISCARD</code> and always present whole frames.</p>
 </div>
 </section>
 
@@ -503,7 +503,7 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
   <text class="tm" x="570" y="152" text-anchor="middle">cached while the content key stays the same</text>
 </svg>
 </div>
-<figcaption><b>Figure 8. Planned low-resolution route.</b> At <i>d</i> = 4, the raster work falls by 16 times and the slice holds no tiles. The numbers are estimates for a 3440 × 1440 Field. They are not measured.</figcaption>
+<figcaption><b>Figure 8. Low-resolution route.</b> At <i>d</i> = 4, the raster work falls by 16 times and the slice holds no tiles. The numbers are estimates for a 3440 × 1440 Field. They are not measured.</figcaption>
 </figure>
 </div>
 
@@ -519,6 +519,49 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 </div>
 </div>
 
+<div class="chg">
+<h3><span class="tag done">done</span>(f) Partial present: <code>FLIP_SEQUENTIAL</code> + <code>Present1</code> dirty rects</h3>
+<p class="file">FluentGpu.Windows/D3D12/D3D12Device.PartialPresent.cs (new) · D3D12Device.Composite.cs · D3D12Device.cs · Seams/Rhi/GpuFrameTelemetry.cs (<code>GpuKnockouts.FullPresent</code>) · WindowsApp/Probes/RepaintIdentityProbe.cs (gate)</p>
+<div class="prose">
+<p><b>Problem.</b> On a normal page, the now-playing equalizer ticks at 30 Hz. Its source comment says that each visible change costs a full-window present. The log showed the loop at about 35 fps. The only wake reason was <code>timer</code>, with <code>presents=1052</code> in 30 s. Each of these frames cleared, composited and presented the whole window to move three small bars. The swapchain was <code>FLIP_DISCARD</code>, which refuses dirty rectangles.</p>
+<p><b>Design.</b></p>
+<ol>
+  <li>The primary swapchain is <code>FLIP_SEQUENTIAL</code>. Each back buffer keeps the pixels of the last frame that the engine rendered into it. Popups and detached windows keep <code>FLIP_DISCARD</code>.</li>
+  <li>After the offscreen phase, <code>PpComputeDirty</code> makes one entry for each tile placement and for each prepared surface. The key of an entry is its identity: the item index, kind and slice, and the tile cell. The signature of a tile placement is the composite parameters of its item plus the tile surface and its raster serial. The signature of a retained surface (group, self-blur, acrylic backdrop, low-resolution boundary) is its content key. The signature of a degraded segment is its stream bytes, unless repaint damage reaches it. An entry without a key gets a new signature on each frame, so it is always dirty.</li>
+  <li>The engine compares the sorted entries with the entries of the previous frame. The dirty set is the old rectangle and the new rectangle of each entry that changed, appeared or went away. The diff does not use the damage of the recorder.</li>
+  <li><code>PpPlanRepaint</code> finds the age of the back buffer: the frames since the engine last rendered into it. The repaint set is the union of the dirty sets of those frames.</li>
+  <li>The composite pass loads the buffer with <code>PRESERVE</code>. For each repaint rectangle, it clears the rectangle with a <code>FillCopy</code> of the clear colour and draws only the items that touch it. <code>ItemScissor</code> clamps each item to the rectangle. <code>DrawRange</code> skips an item when its footprint is outside the rectangle.</li>
+  <li><code>Present1</code> sends the dirty set of this frame as dirty rectangles. DWM then composes only those rectangles.</li>
+</ol>
+<p><b>Whole-frame route.</b> These frames clear, composite and present the whole window, as before: the first frame, a resize, a DPI change, a clear-colour change, a change of the item structure (set or order), a repaint of 45 % of the window or more, a non-composite submit and a device rebuild. After a stood-down present (the window is covered), the next present is whole, because DWM did not see the changes of that frame.</p>
+<p><b>Limit.</b> A scroll moves every tile in the viewport. Thus a scroll frame usually takes the whole-frame route.</p>
+<p><b>Status.</b> Done, on branch <code>perf/partial-present</code> (fluent-gpu PR #34, stacked on PR #33). The gate <code>partial-present-identity</code> in <code>--repaint-identity</code> renders each static sub-scene at device scales 1.0 to 2.0. It applies six rounds of small changes through the partial route. Then it renders the same state with the whole-frame route. The two captures must be equal: 0 px difference. The GPU time on the owner's machine is not measured yet.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 230" role="img" aria-label="Before: a three-bar change clears and composites the whole window and presents the whole frame. After: the item diff finds one dirty rectangle; the pass preserves the buffer, composites only that rectangle and presents it as a dirty rectangle.">
+  <defs>
+    <marker id="f-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <text class="tb" x="20" y="20">Before: FLIP_DISCARD, whole frame</text><text class="tb" x="400" y="20">After: FLIP_SEQUENTIAL, partial</text>
+  <rect class="ba" x="20" y="34" width="320" height="130"/>
+  <rect class="b" x="40" y="132" width="60" height="18"/><text class="ts" x="70" y="145" text-anchor="middle">EQ bars</text>
+  <text class="ts" x="180" y="92" text-anchor="middle">clear + composite every item</text>
+  <text class="tA" x="180" y="186" text-anchor="middle">≈ 5 M px composited, whole present</text>
+  <rect class="b" x="400" y="34" width="320" height="130"/>
+  <rect class="ba" x="420" y="132" width="60" height="18"/><text class="ts" x="450" y="145" text-anchor="middle">EQ bars</text>
+  <text class="tm" x="560" y="74" text-anchor="middle">pixels kept from the last frame</text>
+  <text class="tm" x="560" y="90" text-anchor="middle">(PRESERVE load)</text>
+  <line class="la" x1="520" y1="128" x2="484" y2="138" marker-end="url(#f-ar)"/>
+  <text class="tA" x="580" y="124" text-anchor="middle">1 dirty rect</text>
+  <text class="ok" x="560" y="186" text-anchor="middle" font-size="11.5">composite the rect · Present1 dirty rect</text>
+  <text class="tm" x="560" y="204" text-anchor="middle">whole route kept for unknown history</text>
+</svg>
+</div>
+<figcaption><b>Figure 9. Effect of partial present.</b> Filled areas are composited on the frame. After the change, a small change composites and presents only its own rectangle. The rest of the back buffer keeps the pixels of the last frame.</figcaption>
+</figure>
+</div>
+
 <h3>Verification</h3>
 <div class="tbl">
 <table>
@@ -529,11 +572,13 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>VerticalSlice (incl. 4 <code>gate.tiles.repaint-boundary</code> checks)</td><td class="num">1734 checks pass</td><td class="num">1734 checks pass</td></tr>
 <tr><td>Wavee build</td><td>clean</td><td>clean</td></tr>
 <tr><td>Wavee tests</td><td class="num">14 206 pass, 1 skipped</td><td class="num">14 206 pass, 1 skipped</td></tr>
+<tr><td>(f) <code>--repaint-identity</code>, real D3D12 pixel readback</td><td class="num">175 / 175 identical (192 partial frames)</td><td class="num">60 / 60 <code>partial-present-identity</code></td></tr>
+<tr><td>(f) <code>FluentGpu.Windows.Tests</code></td><td class="num">530 / 530</td><td class="num">530 / 530</td></tr>
 <tr><td>GPU time on the owner's machine</td><td colspan="2">Not measured. The live instance must rebuild and restart. Read <code>[render.pace] gpuMs=</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">These results are for the branch <code>perf/repaint-boundaries</code> in both repos. They cover all five changes, (a) to (e).</p>
+<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). The engine rows are for <code>perf/partial-present</code>; Wavee builds clean against it.</p>
 </section>
 
 <!-- 8 -->
@@ -543,7 +588,7 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <table>
 <thead><tr><th>Cost</th><th>Cause</th><th>Next step</th></tr></thead>
 <tbody>
-<tr><td>Whole-window composite on every frame</td><td><code>FLIP_DISCARD</code> refuses dirty rectangles. A page with one moving progress bar still composites all 5 M px.</td><td>Use <code>FLIP_SEQUENTIAL</code>. Track the age of each back buffer. Composite the union of the damage of the last <i>N</i> frames. Present with <code>Present1</code> dirty rectangles.</td></tr>
+<tr><td>Whole-window composite on every frame</td><td><span class="tag done">done</span>Addressed by (f). A small change composites and presents only its own rectangles.</td><td>Read the GPU time on the owner's machine after a rebuild. A scroll still takes the whole-frame route; a scroll rectangle in <code>Present1</code> is a later step.</td></tr>
 <tr><td>Tile need of 15–37 × the window</td><td>On a 1179 × 759 window, visible need was 54–134 MB. Many thin segments each take bucketed 1024 × 512 cells. Overlapped slices each own tiles.</td><td>Smaller or adaptive cells. No surface for empty cells. Merge thin adjacent segments.</td></tr>
 <tr><td>Backdrops over moving content</td><td>A panel over the moving Field must blur again on each frame. This is correct.</td><td>The low-resolution Field (d) also makes each mini-composite cheaper.</td></tr>
 <tr><td>144 bar nodes recorded on each frame</td><td>A bound transform is recorded inline (CPU cost on the render thread).</td><td>One instanced <code>SeriesShape.Bars</code> primitive bound to one 48-sample series.</td></tr>
