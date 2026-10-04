@@ -1064,7 +1064,11 @@ public sealed partial class SliceRecorder
                     if (SliceOpBounds.TryGet(op, p, out RectF b))
                     {
                         if (!top.IsInfinite) b = b.Intersect(top);
-                        if (!b.IsEmpty) segBounds = Union(segBounds, b);
+                        // An INVISIBLE fill (opacity 0, or a solid colour of alpha 0 — a dimming plate parked at rest, a
+                        // transparent hit plate) paints nothing: it must not stretch the segment's painted bounds, or a
+                        // full-window plate makes its segment hold a window of empty tiles. Its bytes stay in the stream and
+                        // its content scan below is unchanged; the day it becomes visible its bytes change and it is scanned in.
+                        if (!b.IsEmpty && !InvisibleFill(op, p)) segBounds = Union(segBounds, b);
                         ContentScanOp(s, pos, in b, oh, layerPush);
                         if (op == DrawOp.DrawVideo)
                         {
@@ -2076,6 +2080,14 @@ public sealed partial class SliceRecorder
 
     /// <summary>A composite clip in device px, snapped OUT to whole pixels (the scissor a direct replay would set);
     /// unbounded → empty (no clip).</summary>
+    /// <summary>A <see cref="DrawOp.FillRoundRect"/> that paints nothing: zero opacity, or a solid fill of alpha 0.</summary>
+    private static bool InvisibleFill(DrawOp op, ReadOnlySpan<byte> payload)
+    {
+        if (op != DrawOp.FillRoundRect) return false;
+        var f = MemoryMarshal.Read<FillRoundRectCmd>(payload);
+        return f.Opacity <= 0f || (f.FillKind == 0 && f.Fill.A <= 0f);
+    }
+
     private static RectF ClipPx(in RectF clip, float scale)
     {
         if (clip.IsInfinite) return default;
