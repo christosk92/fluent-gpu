@@ -84,4 +84,25 @@ public sealed class CadencePacingTests
         Assert.Equal(1, CadencePacing.QuantizedWaitMs(Due30, Refresh60, Due30 - 0.0005));
         Assert.Equal(1, CadencePacing.QuantizedWaitMs(0.2, 0.0, -1.0));
     }
+
+    [Theory]
+    // A row due in 10 ms, 5 ms after the present, under a 30 fps ceiling: the wake lands on the 33.3 ms lattice point
+    // (5 + 29 = 34 = the Due30 period above), i.e. every 4th refresh at 120 Hz and every 2nd at 60 Hz — 30 fps.
+    // Flooring the finished wait instead gives max(4, 33) = 33 → a wake at 38 ms, past the lattice point, so the frame
+    // takes the NEXT vblank: 41.7 ms (24 fps) at 120 Hz, 50 ms (20 fps) at 60 Hz.
+    [InlineData(Refresh120, 29)]
+    [InlineData(Refresh60, 29)]
+    public void Floor_IsAnIntervalBetweenPresents_OnTheLattice(double refreshMs, int expectedWaitMs)
+        => Assert.Equal(expectedWaitMs, CadencePacing.FlooredWaitMs(10.0, Due30, refreshMs, 5.0));
+
+    [Fact]
+    public void Floor_NeverShortensASlowerRow_AndZeroDisablesIt()
+    {
+        // A 24 Hz row is already slower than a 30 fps ceiling: identical to the unfloored answer.
+        Assert.Equal(CadencePacing.QuantizedWaitMs(Due24, Refresh120, 5.0), CadencePacing.FlooredWaitMs(Due24, Due30, Refresh120, 5.0));
+        // floor 0 = no ceiling: the row's own answer verbatim, even for a fast row.
+        Assert.Equal(CadencePacing.QuantizedWaitMs(10.0, Refresh120, 5.0), CadencePacing.FlooredWaitMs(10.0, 0.0, Refresh120, 5.0));
+        // NaN due is "now" in QuantizedWaitMs; under the floor it paces at the floor instead of spinning.
+        Assert.Equal(29, CadencePacing.FlooredWaitMs(double.NaN, Due30, Refresh120, 5.0));
+    }
 }

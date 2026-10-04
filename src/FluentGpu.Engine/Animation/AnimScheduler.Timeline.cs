@@ -27,18 +27,15 @@ public sealed partial class AnimEngine
 
     /// <summary>Multi-keyframe eased track (@keyframes). Offsets ascending in 0..1; per-segment easing.
     /// <paramref name="cadence"/> is the row's own frame rate (<see cref="Cadence"/>, AnimClock.cs) — the DATA that
-    /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means: <see cref="Cadence.Display"/>
-    /// for a one-shot — it is short and must look smooth — and <see cref="Cadence.Default"/> for <c>loop: true</c>,
-    /// i.e. <see cref="DefaultLoopHz"/>, resolved live so a power policy can retune every idle loop. Pass
-    /// <c>cadence: Cadence.Display</c> for a TRANSIENT loop that must run at the panel refresh (an indeterminate
-    /// ProgressBar), or <c>Cadence.At(hz)</c> for a source with a native rate (a Lottie composition's frame rate).</summary>
+    /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means <see cref="Cadence.Display"/>,
+    /// one-shot or loop alike. Pass <c>Cadence.At(hz)</c> only for a source with a native rate (a Lottie composition's
+    /// frame rate) or one that genuinely wants fewer frames — it is opt-in, never inferred.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
                           bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
                           Cadence? cadence = null)
     {
         int s = Get(node, channel, composite != CompositeOp.Replace);
-        Cadence resolved = cadence ?? (loop ? Cadence.Default : Cadence.Display);
-        SetCadence(s, resolved);
+        SetCadence(s, cadence ?? Cadence.Display);
         ref AnimValue r = ref _slab.At(s);
         r.Kind = GenKind.Keyframes;
         r.Gen = default;

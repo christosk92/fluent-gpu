@@ -479,17 +479,21 @@ its two post-scroll defer windows (`AnimIsAmbient`, `AppHost.AmbientAnimationFps
 `AppHost.AmbientRate`/`AmbientRateMode`, `LatencySensitiveWake` and the `FG_ANIM_FPS` escape hatch — that whole
 heuristic existed only to approximate "is this frame ambient" from the outside. Every slab animation row now carries
 an explicit `Cadence` (`AnimEngine.Keyframes`/`UseKeyframes` take an optional `Cadence`; `null` resolves to
-`Cadence.Display` for a one-shot and to `AnimScheduler.DefaultLoopHz` for `loop: true`), so a row's rate is a property
+`Cadence.Display`, one-shot or `loop: true` — the engine-wide `DefaultLoopHz` loop rate was deleted on 2026-10-03: no
+reference engine has one, and it made idle motion choppy on high-refresh panels), so a row's rate is a property
 of the row, not inferred from what else is running. The host wakes at `min(AnimEngine.NextDueMs)`, quantized to a
 whole number of the window's own refreshes and phased on the last present (`CadencePacing.QuantizedWaitMs` — 30 Hz on
 a 120 Hz panel is every 4th refresh, on 50 Hz every 2nd); the wait token is `HostWaitKind.Cadence` (`cadence` in
 `[fps] wait` lines). Because a row only advances when its own cadence says it is due, a scroll running the frame loop
 at display rate no longer speeds up an unrelated 30 Hz shimmer — which is what made the scroll/mount grace windows
-unnecessary rather than requiring a replacement hold. `AppHost.InactiveFrameIntervalMs` (default 33 ms) is the one
-remaining window-state throttle: it floors the gap between animation-only frames while the window is not the
-foreground/active one, independent of any row's own cadence. `AppOptions.AmbientFps` is renamed
-`AppOptions.DefaultLoopHz`; `FG_ADAPTIVE_FPS` is `AppOptions.AdaptiveGpuPacing` (bool, default on). Diag tripwire:
-`[anim.cadence] displayRate-loops=<n>` fires every 30 s while a `loop: true` row is still running at display rate.
+unnecessary rather than requiring a replacement hold. There is NO focus throttle: the GPUI-style
+`AppHost.InactiveFrameIntervalMs` floor was deleted on 2026-10-03 — a visible window paces the same focused or not, as
+in Chromium, Gecko, Flutter, WinUI and Avalonia; hidden/minimized/covered windows park instead. The one policy ceiling
+is `AppHost.PowerCapFps` (default 0 = off), meant for the OS asking for less work (Windows Energy Saver): every motion
+frame, frame-clock pollers included, is paced to at most that rate on the vblank lattice (`HostWaitKind.PowerCap`,
+`power-cap` in `[fps] wait`), while scroll/drag/touch/repeat never are. The `[wake]` census splits its frame rate by
+window focus (`focus act=…fps/…s inact=…fps/…s`). `FG_ADAPTIVE_FPS` is `AppOptions.AdaptiveGpuPacing`
+(bool, default on). Live loops are counted in the `[wake]` census (`loop=<n>`) and `MemCensus` (`displayRateLoops`).
 
 **As-built (scroll-perf W6/E12): the slab's active-node chain + census memo.** `AnimValueSlab` threads the node indices
 that currently own rows on an intrusive doubly-linked chain (parallel `_nextActiveNode`/`_prevActiveNode` `int[]` keyed

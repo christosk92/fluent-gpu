@@ -50,8 +50,8 @@ public enum WakeReasons
 /// <summary>
 /// ALWAYS-ON attribution of WHY the frame loop stays awake — the smoking gun behind a process that never idles.
 /// Records the <see cref="WakeReasons"/> mask of every awake frame and emits one <c>[wake]</c> line per
-/// <see cref="ReportSeconds"/> through <see cref="FluentGpu.Foundation.Diag.Line"/>: the observed frame rate,
-/// per-reason kept-awake counts, SOLE-reason counts (frames where exactly one bit was set — the cleanest
+/// <see cref="ReportSeconds"/> through <see cref="FluentGpu.Foundation.Diag.Line"/>: the observed frame rate and its
+/// focus split (<c>focus act=…fps/…s inact=…fps/…s</c>, <see cref="AppendFocusSplit"/>), per-reason kept-awake counts, SOLE-reason counts (frames where exactly one bit was set — the cleanest
 /// attribution), the consecutive-awake streak, seconds since the loop last went fully idle, frames spent minimized,
 /// a reconcile/layout/record-only work split, the live <c>FrameClock.Tick</c> subscribers at print time
 /// (<c>pollers=</c>), and every subscriber that held ANY frame awake this window even if it had already unmounted by
@@ -94,7 +94,16 @@ internal sealed class WakeDiagnostics
     private long _layoutFrames;       // awake frames that ran layout
     private long _recordOnlyFrames;   // awake frames that neither reconciled nor laid out (compositor-only)
 
-    private long _skipMisses;         // maybe-unchanged frames whose draw-list hash missed the elision baseline
+    // The focus split: awake frames and wall time with the window NOT active (focus elsewhere), so "it gets slow when I
+    // click away" is a number in the log rather than an impression. Time is attributed to the state the previous Record
+    // observed — a focus edge is a window message, so it always wakes the loop and lands a Record of its own.
+    private readonly Func<bool> _windowActive;
+    private long _framesInactive;     // awake frames run while the window was not active
+    private long _activeTicks, _inactiveTicks;
+    private long _lastRecordTicks;
+    private bool _lastActive = true;
+
+    private long _skipMisses;        // maybe-unchanged frames whose draw-list hash missed the elision baseline
     private readonly System.Text.StringBuilder _sb = new(512);   // reused: no per-window buffer allocation
 
     private int _awakeStreak;         // consecutive awake frames (reset when the loop last saw None)
@@ -139,8 +148,33 @@ internal sealed class WakeDiagnostics
     private readonly Action<System.Text.StringBuilder> _appendRenderCensus;
 
     public WakeDiagnostics(FluentGpu.Signals.Signal<object?> frameClockSig, FluentGpu.Animation.AnimEngine anim, FluentGpu.Scene.SceneStore scene,
-        Action<System.Text.StringBuilder> appendRenderCensus)
-    { _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; }
+        Action<System.Text.StringBuilder> appendRenderCensus, Func<bool> windowActive)
+    { _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; _windowActive = windowActive; }
+
+    /// <summary>Close the elapsed span into the focus bucket the PREVIOUS observation saw, then re-sample focus.</summary>
+    private bool SampleFocus(long now)
+    {
+        if (_lastRecordTicks != 0)
+        {
+            long dt = now - _lastRecordTicks;
+            if (_lastActive) _activeTicks += dt; else _inactiveTicks += dt;
+        }
+        _lastRecordTicks = now;
+        return _lastActive = _windowActive();
+    }
+
+    internal long FramesInactiveForTest => _framesInactive;
+
+    /// <summary>Append <c> | focus act=Nfps/Ss inact=Nfps/Ss</c>: the awake-frame rate and wall time with the window
+    /// active vs not, for the window just closed. Exposed for tests the same way <see cref="AppendPollersSeen"/> is.</summary>
+    internal void AppendFocusSplit(System.Text.StringBuilder sb)
+    {
+        double f = Stopwatch.Frequency;
+        double actSec = _activeTicks / f, inactSec = _inactiveTicks / f;
+        long actFrames = _framesRun - _framesInactive;
+        sb.Append(CultureInfo.InvariantCulture,
+            $" | focus act={(actSec > 0 ? actFrames / actSec : 0):0.0}fps/{actSec:0.0}s inact={(inactSec > 0 ? _framesInactive / inactSec : 0):0.0}fps/{inactSec:0.0}s");
+    }
 
     /// <summary>Append <c>pollers=N</c> and, when N &gt; 0, <c>:Name,Name,…</c> — each live <c>FrameClock.Tick</c>
     /// subscriber's owning component type (<c>Computation.DiagOwner</c>), or <c>?</c> plus the computation's own
@@ -175,6 +209,7 @@ internal sealed class WakeDiagnostics
     {
         long now = Stopwatch.GetTimestamp();
         if (_windowStartTicks == 0) { _windowStartTicks = now; _lastIdleTicks = now; }
+        bool active = SampleFocus(now);
 
         if (reasons == WakeReasons.None)
         {
@@ -191,6 +226,7 @@ internal sealed class WakeDiagnostics
         _framesRun++;
         if (rendered) _framesRendered++;
         if (minimized) _framesMinimized++;
+        if (!active) _framesInactive++;
         // 3-way split (one bucket per frame): reconciled wins over layout-only wins over compositor-only record.
         if (reconciled) _reconciledFrames++;
         else if (laidOut) _layoutFrames++;
@@ -276,6 +312,8 @@ internal sealed class WakeDiagnostics
         // the answer to "which term did that", which is the whole reason this instrument exists.
         sb.Append(CultureInfo.InvariantCulture,
             $"[wake] {sec:0.0}s fps={(sec > 0 ? _framesRun / sec : 0):0.0} run={_framesRun} rendered={_framesRendered}");
+        SampleFocus(now);   // close the span since the last frame into its bucket, so the split covers the whole window
+        AppendFocusSplit(sb);
         sb.Append(CultureInfo.InvariantCulture,
             $" | reconciled={_reconciledFrames} layout={_layoutFrames} recordOnly={_recordOnlyFrames} skipMiss={_skipMisses}");
         sb.Append(CultureInfo.InvariantCulture, $" | streak={_awakeStreak} idleAgo={idleSec:0.0}s minimized={_framesMinimized}");
@@ -310,6 +348,9 @@ internal sealed class WakeDiagnostics
         _framesRun = 0;
         _framesRendered = 0;
         _framesMinimized = 0;
+        _framesInactive = 0;
+        _activeTicks = 0;
+        _inactiveTicks = 0;
         _reconciledFrames = 0;
         _layoutFrames = 0;
         _recordOnlyFrames = 0;

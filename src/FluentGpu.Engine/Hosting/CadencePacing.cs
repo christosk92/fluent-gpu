@@ -50,5 +50,16 @@ public static class CadencePacing
         return Floor1(Math.Ceiling(periodMs - sinceLastPresentMs % periodMs));
     }
 
+    /// <summary>The cadence wait under a frame-interval CEILING (<c>AppHost.PowerCapFps</c>): a row due sooner than
+    /// <paramref name="floorMs"/> is paced as if it were due at the floor, then quantized and phased exactly like any
+    /// other cadence row — so the ceiling is an interval BETWEEN PRESENTS on the vblank lattice. <paramref name="floorMs"/>
+    /// ≤ 0 (or NaN) disables it (<see cref="QuantizedWaitMs"/> verbatim).
+    /// <para>Never floor the FINISHED wait instead (the time from NOW): that stacks the floor on top of the time already
+    /// spent since the present and pushes the wake off the lattice. The deleted focus throttle did exactly that: 5 ms
+    /// after a present at 120 Hz its 33 ms floor landed the wake at 38 ms and the frame on the 5th vblank — 24 fps (20 at
+    /// 60 Hz) under a throttle documented as ~30.</para></summary>
+    public static int FlooredWaitMs(double dueMs, double floorMs, double refreshMs, double sinceLastPresentMs)
+        => QuantizedWaitMs(floorMs > 0.0 && !(dueMs >= floorMs) ? floorMs : dueMs, refreshMs, sinceLastPresentMs);
+
     private static int Floor1(double ms) => ms < 1.0 ? 1 : ms > int.MaxValue ? int.MaxValue : (int)ms;
 }

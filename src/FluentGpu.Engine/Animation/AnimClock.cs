@@ -66,7 +66,7 @@ public struct AnimClock
 public enum CadenceKind : byte
 {
     DisplayRate,   // present every frame while alive (a live spring/eased transform)
-    Hz,            // a fixed sub-refresh rate (caret blink 2Hz, shimmer 30Hz, dynamic-text HUD 10Hz)
+    Hz,            // an explicit, opt-in sub-refresh rate (caret blink 2Hz, dynamic-text HUD 10Hz)
     Driven,        // progress comes from a signal — event-woken by the signal write, NEVER timer-due
     OneShot,       // settled / fire-once — never timer-due
     Paused,        // KeepAlive-parked — excluded from the wake entirely
@@ -85,24 +85,15 @@ public struct Cadence
     public static Cadence Once => new() { Kind = CadenceKind.OneShot };
     public static Cadence Parked => new() { Kind = CadenceKind.Paused };
 
-    /// <summary>The perpetual-loop default: <see cref="CadenceKind.Hz"/> with <see cref="Hz"/> = 0, which the engine
-    /// resolves to <see cref="FluentGpu.Animation.AnimEngine.DefaultLoopHz"/> at wake/advance time — LATE, not at the
-    /// seed. So the app's power policy can retune every idle shimmer live (battery ⇒ 15Hz, AC ⇒ 30Hz) without
-    /// re-seeding a single row. <c>AnimEngine.Keyframes(..., loop: true)</c> with no explicit cadence means this.</summary>
-    public static Cadence Default => new() { Kind = CadenceKind.Hz, Hz = 0f };
-
-    /// <summary>True for <see cref="Default"/> — a rate the ENGINE resolves (<see cref="PeriodMs"/> cannot: it has no
-    /// fixed period of its own and reports +∞, so resolve through the engine before reading it).</summary>
-    public readonly bool IsDefault => Kind == CadenceKind.Hz && Hz <= 0f;
-
-    /// <summary>Milliseconds between frames this source needs. <c>0</c> = present every frame (DisplayRate);
-    /// <c>+∞</c> = never timer-due (Driven is event-woken; OneShot/Paused never wake — and so does
-    /// <see cref="Default"/>, whose rate only the engine knows: check <see cref="IsDefault"/> first). The scheduler's
-    /// <c>NextDueMs</c> scan takes the soonest <c>due − now</c> over live sources, skipping the +∞ ones.</summary>
+    /// <summary>Milliseconds between frames this source needs. <c>0</c> = present every frame (DisplayRate, and an
+    /// <see cref="At"/> rate ≤ 0 — there is no engine-resolved "default" rate any more: a loop with no explicit cadence
+    /// runs at the display rate, like every reference engine's); <c>+∞</c> = never timer-due (Driven is event-woken;
+    /// OneShot/Paused never wake). The scheduler's <c>NextDueMs</c> scan takes the soonest <c>due − now</c> over live
+    /// sources, skipping the +∞ ones.</summary>
     public readonly float PeriodMs => Kind switch
     {
         CadenceKind.DisplayRate => 0f,
-        CadenceKind.Hz => Hz <= 0f ? float.PositiveInfinity : 1000f / Hz,
+        CadenceKind.Hz => Hz <= 0f ? 0f : 1000f / Hz,
         _ => float.PositiveInfinity,
     };
 }

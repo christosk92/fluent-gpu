@@ -218,7 +218,7 @@ public static class ProgressBar
                             new(0.00f, ts.ContainerAnimationStartPosition, Easing.Linear),
                             new(0.75f, ts.ContainerAnimationEndPosition, IndetEase),   // 1.5s of 2.0s
                             new(1.00f, ts.ContainerAnimationEndPosition, Easing.Linear),
-                        }, LoopMs, loop: true, cadence: Cadence.Display);   // TRANSIENT loop: it must sweep smoothly, so it opts out of DefaultLoopHz
+                        }, LoopMs, loop: true, cadence: Cadence.Display);   // TRANSIENT loop: it must sweep smoothly (the default anyway; kept explicit)
                 }
 
                 if (!ind2Ref.Value.IsNull && scene.IsLive(ind2Ref.Value))
@@ -242,7 +242,7 @@ public static class ProgressBar
                             new(0.000f, ts.Container2AnimationStartPosition, Easing.Linear),
                             new(0.375f, ts.Container2AnimationStartPosition, Easing.Linear),   // 0.75s hold
                             new(1.000f, ts.Container2AnimationEndPosition, IndetEase),         // → 2.0s
-                        }, LoopMs, loop: true, cadence: Cadence.Display);   // TRANSIENT loop: it must sweep smoothly, so it opts out of DefaultLoopHz
+                        }, LoopMs, loop: true, cadence: Cadence.Display);   // TRANSIENT loop: it must sweep smoothly (the default anyway; kept explicit)
                     }
                 }
             }, DepKey.From(HashCode.Combine(Width, State)));

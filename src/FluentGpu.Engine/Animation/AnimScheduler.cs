@@ -79,14 +79,14 @@ public sealed partial class AnimEngine
                 if (r.Has(AnimFlags.Parked)) continue;
                 if (RenderOwnsCompositor && IsCompositorRow(in r)) continue;
 
-                // CADENCE gate. A row with its own period (a 30Hz shimmer, a 10Hz HUD) only advances when it is due;
+                // CADENCE gate. A row with its own period (an explicit Cadence.At — a 10Hz HUD) only advances when it is due;
                 // in between, Position is HELD and ElapsedMs is untouched, so the row simply isn't redrawn — the loop
                 // itself may still be running at panel rate for something else. When it IS due, it steps by the REAL
                 // elapsed since its own last advance (never the frame dt): rows sample at absolute ElapsedMs, so the
                 // shimmer traverses its keyframes at 30Hz whether the host runs at 30 or 120 fps.
                 float stepMs = step;
                 bool justSeeded = r.Has(AnimFlags.JustSeeded);
-                int periodMs = ResolvedPeriodMs(s);
+                int periodMs = PeriodMsOf(s);
                 // The SEED frame counts as the row's advance #0 (it shows the initial value): it is never held, and it
                 // stamps the cadence so the first real step lands one period later and the host's wait is already the
                 // row's own period on the very next RecommendedWaitMs.
