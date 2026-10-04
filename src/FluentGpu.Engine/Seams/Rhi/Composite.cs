@@ -64,7 +64,13 @@ public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float 
 public readonly record struct CompositeItem(int SliceId, CompositeKind Kind, Affine2D Transform, float Alpha, RectF Clip,
     CornerRadius4 ClipRadii, EdgeFeather Feather, float BlurSigma, AcrylicRecipe Acrylic, byte BlendCopy,
     RectF RoundClip = default, int GroupCount = 0, byte HasLayer = 0, RectF SourceClip = default,
-    EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0);
+    EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0)
+{
+    /// <summary><see cref="BlendCopy"/> = 1: write without blending.</summary>
+    public const byte BlendCopyWrite = 1;
+    /// <summary><see cref="BlendCopy"/> = 2: SCREEN onto the destination, <c>1 − (1 − s)(1 − d)</c> (BoxEl.LayerBlend.Screen).</summary>
+    public const byte BlendScreen = 2;
+}
 
 /// <summary>The backend's content-keyed offscreen cache for the last composite (gpu-renderer.md §13.1e/§13.1g):
 /// <paramref name="GroupSurfaces"/> = group surfaces RENDERED (a miss), <paramref name="GroupCacheHits"/> = groups

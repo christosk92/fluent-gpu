@@ -24,7 +24,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class SliceCompositor : IDisposable
 {
-    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, Count }
+    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, LoadScreen, SampleScreen, Count }
 
     public const int ConstantCount = 56;
 
@@ -53,6 +53,8 @@ internal sealed unsafe class SliceCompositor : IDisposable
         _pso[(int)Pso.LoadCopy] = MakePso(device, vs, load, Blend.Copy);
         _pso[(int)Pso.Sample] = MakePso(device, vs, sample, Blend.Over);
         _pso[(int)Pso.SampleCopy] = MakePso(device, vs, sample, Blend.Copy);
+        _pso[(int)Pso.LoadScreen] = MakePso(device, vs, load, Blend.Screen);
+        _pso[(int)Pso.SampleScreen] = MakePso(device, vs, sample, Blend.Screen);
         _pso[(int)Pso.Fill] = MakePso(device, vs, fill, Blend.Over);
         _pso[(int)Pso.FillCopy] = MakePso(device, vs, fill, Blend.Copy);
         _pso[(int)Pso.Erase] = MakePso(device, vs, fill, Blend.DestOut);
@@ -152,7 +154,7 @@ internal sealed unsafe class SliceCompositor : IDisposable
         GpuDrawCount.Frame++;
     }
 
-    private enum Blend : byte { Over, Copy, DestOut }
+    private enum Blend : byte { Over, Copy, DestOut, Screen }
 
     private ID3D12RootSignature* BuildRootSignature(ID3D12Device* device)
     {
@@ -220,6 +222,12 @@ internal sealed unsafe class SliceCompositor : IDisposable
             case Blend.Over:
                 rt.BlendEnable = BOOL.TRUE;
                 rt.SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA; rt.BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                rt.SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA; rt.BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                break;
+            case Blend.Screen:
+                // 1 − (1 − s)(1 − d) on premultiplied colour = s + d·(1 − s): ONE / INV_SRC_COLOR; alpha stays source-over.
+                rt.BlendEnable = BOOL.TRUE;
+                rt.SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_COLOR; rt.BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
                 rt.SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA; rt.BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
                 break;
             case Blend.DestOut:

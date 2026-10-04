@@ -59,6 +59,7 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<Point2> _radialCenter = new();
     private readonly SnapshotColumn<GradientSpec> _GradientTo = new();
     private readonly SnapshotColumn<float> _gradientMix = new();
+    private readonly SnapshotColumn<byte> _blend = new();
     private readonly SnapshotColumn<AcrylicSpec> _acrylic = new();
     private readonly SnapshotColumn<byte> _repaintBoundary = new();
     private readonly SnapshotColumn<EdgeFadeSpec> _edgeFade = new();
@@ -411,6 +412,7 @@ public sealed partial class SceneRecordingSnapshot
         _radialCenter.Remove(index);
         _GradientTo.Remove(index);
         _gradientMix.Remove(index);
+        _blend.Remove(index);
         _acrylic.Remove(index);
         _repaintBoundary.Remove(index);
         _edgeFade.Remove(index);
@@ -538,6 +540,7 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetRadialGradientCenter(node, out Point2 radialCenter)) _radialCenter.Set(index) = radialCenter;
             if (source.TryGetGradientTo(node, out var capturedGradientTo)) CopyGradient(ref _GradientTo.Set(index), in capturedGradientTo);
             if (source.TryGetGradientMix(node, out float gradientMix)) _gradientMix.Set(index) = gradientMix;
+            if (source.TryGetBlend(node, out byte blend)) _blend.Set(index) = blend;
             if (source.TryGetAcrylic(node, out AcrylicSpec acrylic)) _acrylic.Set(index) = acrylic;
             if (source.IsRepaintBoundary(node)) _repaintBoundary.Set(index) = source.RepaintBoundaryDown(node);
             if (source.TryGetEdgeFade(node, out EdgeFadeSpec edgeFade)) _edgeFade.Set(index) = edgeFade;
@@ -858,6 +861,10 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetRadialGradientCenter(NodeHandle node, out Point2 value) => _radialCenter.TryGet((int)node.Raw.Index, out value);
     public bool TryGetGradientTo(NodeHandle node, out GradientSpec value) => _GradientTo.TryGet((int)node.Raw.Index, out value);
     public bool TryGetGradientMix(NodeHandle node, out float value) => _gradientMix.TryGet((int)node.Raw.Index, out value);
+    /// <summary>BoxEl.Blend of <paramref name="node"/> (SrcOver when unset).</summary>
+    public PaintBlend PaintBlendOf(NodeHandle node) => _blend.TryGet((int)node.Raw.Index, out byte v) ? (PaintBlend)(v & 0xF) : PaintBlend.SrcOver;
+    /// <summary>BoxEl.LayerBlend of <paramref name="node"/> (SrcOver when unset).</summary>
+    public LayerBlend LayerBlendOf(NodeHandle node) => _blend.TryGet((int)node.Raw.Index, out byte v) ? (LayerBlend)(v >> 4) : LayerBlend.SrcOver;
     public bool TryGetAcrylic(NodeHandle node, out AcrylicSpec value) => _acrylic.TryGet((int)node.Raw.Index, out value);
     public bool IsRepaintBoundary(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out _);
     /// <summary>The boundary's raster downscale (1 = full resolution); 0 when the node is not a repaint boundary.</summary>
@@ -992,6 +999,7 @@ public sealed partial class SceneRecordingSnapshot
         _radialCenter.BeginCapture();
         _GradientTo.BeginCapture();
         _gradientMix.BeginCapture();
+        _blend.BeginCapture();
         _acrylic.BeginCapture();
         _repaintBoundary.BeginCapture();
         _edgeFade.BeginCapture();
@@ -1023,6 +1031,7 @@ public sealed partial class SceneRecordingSnapshot
         _radialCenter.EndCapture();
         _GradientTo.EndCapture();
         _gradientMix.EndCapture();
+        _blend.EndCapture();
         _acrylic.EndCapture();
         _repaintBoundary.EndCapture();
         _edgeFade.EndCapture();

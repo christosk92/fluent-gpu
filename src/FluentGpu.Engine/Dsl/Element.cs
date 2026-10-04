@@ -151,6 +151,15 @@ public sealed record BoxEl : Element
     /// <summary>The 0..1 blend from <see cref="Gradient"/> toward <see cref="GradientTo"/>. Bindable and paint-only (no
     /// relayout): a signal moves the colours without rebuilding a <see cref="GradientSpec"/>.</summary>
     public Prop<float> GradientMix { get; init; } = 0f;
+    /// <summary>How this box's subtree paints onto what is under it: <see cref="PaintBlend.Additive"/> adds light (glow,
+    /// particles) for every rect, gradient, series and sprite field below it. Glyphs, images and paths stay source-over.
+    /// Put it on a child of a <see cref="RepaintBoundary"/>, not on the boundary itself (the boundary records its subtree
+    /// into its own slice).</summary>
+    public PaintBlend Blend { get; init; } = PaintBlend.SrcOver;
+    /// <summary>How a <see cref="RepaintBoundary"/> slice composites onto the back buffer: <see cref="LayerBlend.Screen"/>
+    /// = <c>1 − (1 − s)(1 − d)</c> (soft clouds that brighten what they overlap). Needs <see cref="RepaintBoundary"/>;
+    /// detached windows (no layer route) fold it to source-over.</summary>
+    public LayerBlend LayerBlend { get; init; } = LayerBlend.SrcOver;
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.

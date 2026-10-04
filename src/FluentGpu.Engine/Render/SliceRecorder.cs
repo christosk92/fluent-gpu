@@ -161,6 +161,7 @@ public sealed partial class SliceRecorder
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
         public byte LowRes;
+        public bool Screen;   // BoxEl.LayerBlend.Screen: the item composites with CompositeItem.BlendCopy = BlendScreen
         // acrylic surfaces this slice's own walk recorded as their FallbackColor plate (carried when the slice is kept)
         public int AcrylicFallbacks;
         // an acrylic slice root: its frosted rect (the node box, containing-slice DIP), corner radii (DIP) and opacity
@@ -305,6 +306,7 @@ public sealed partial class SliceRecorder
             if (_recs[s].RegFrame == _frame) return -1;
             _recs[s].Kind = kind;
             _recs[s].LowRes = 0;   // the cut that registers it re-states its raster downscale (SetLowRes)
+            _recs[s].Screen = false;   // …and its composite blend (SetScreen)
             return s;
         }
         s = Allocate();
@@ -427,6 +429,8 @@ public sealed partial class SliceRecorder
     internal void SetBudget(int slot, BudgetClass budget) => _recs[slot].Budget = budget;
     /// <summary>The slice's raster downscale (0/1 = full resolution, tiled). Set by every cut that registers the slot.</summary>
     internal void SetLowRes(int slot, byte down) => _recs[slot].LowRes = down;
+    /// <summary>BoxEl.LayerBlend.Screen on a repaint boundary: its composite item screens onto the back buffer.</summary>
+    internal void SetScreen(int slot, bool screen) => _recs[slot].Screen = screen;
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -1950,7 +1954,7 @@ public sealed partial class SliceRecorder
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             AddItem(new CompositeItem(id, lowRes > 1 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH),
-                RadiiPx(e.RoundR, scale), feather, sigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
+                RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes),
                 in e.Layer, in e.Dist, in e);
         }

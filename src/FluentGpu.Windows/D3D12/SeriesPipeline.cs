@@ -62,6 +62,7 @@ internal sealed unsafe class SeriesPipeline : IDisposable
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
+    private ID3D12PipelineState* _psoAdd;   // DrawOp.SetBlend Additive
     // Instance storage is the device's SHARED per-frame UploadArena (see PolylineStrokePipeline): MaxInstances is this
     // pipeline's per-frame POLICY cap, not a memory reservation.
     private UploadArena _arena = null!;
@@ -248,6 +249,18 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12PipelineState* pso;
         Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "Series.CreateGraphicsPipelineState");
         _pso = pso;
+        // The ADDITIVE variant (visualizer F4): colour ONE/ONE adds the premultiplied source; alpha ZERO/ONE leaves the
+        // target's alpha untouched, so inside a transparent tile the result composites Over the page as page + glow.
+        pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
+        pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+        pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ZERO;
+        pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+        ID3D12PipelineState* psoAdd;
+        Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psoAdd), "Series.CreateGraphicsPipelineState(Additive)");
+        _psoAdd = psoAdd;
         vs->Release();
         ps->Release();
     }
@@ -259,7 +272,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Record one run (the Polyline contract: shared state and the PSO rebind independently; false when full,
     /// state untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<SeriesInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true)
+                       bool bindSharedState = true, bool bindPipelineState = true, bool additive = false)
     {
         int count = Math.Min(instances.Length, MaxInstances - _cursor);
         if (count <= 0) { _dropped += instances.Length; return false; }
@@ -277,7 +290,7 @@ float4 PSMain(VSOut i) : SV_Target
             var qv = _shared.QuadView;
             cmd->IASetVertexBuffers(0, 1, &qv);
         }
-        if (bindPipelineState) cmd->SetPipelineState(_pso);
+        if (bindPipelineState) cmd->SetPipelineState(additive ? _psoAdd : _pso);
         cmd->SetGraphicsRootShaderResourceView(1, gva);
         cmd->DrawInstanced((uint)(2 * SeriesSpec.ChunkSamples), (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
@@ -287,5 +300,6 @@ float4 PSMain(VSOut i) : SV_Target
     {
         // No instance buffers to release: the shared UploadArena owns them (disposed by the device).
         if (_pso != null) _pso->Release();
+        if (_psoAdd != null) _psoAdd->Release();
     }
 }

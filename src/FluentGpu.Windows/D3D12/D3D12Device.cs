@@ -180,7 +180,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // VideoHole is its OWN run class, not a Rect: a hole instance is opaque-alpha (A = VideoReady = 1) and square, so
     // inside the Rect class it would satisfy IsOpaquePlainRect and be drawn by the NO-BLEND opaque PSO as solid black —
     // the exact inverse of an erase. Its own class keeps the opaque segmentation of real rects byte-identical too.
-    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole, Path, Series }
+    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole, Path, Series, RectAdd, GradientAdd, SeriesAdd }
+    // DrawOp.SetBlend state of the stream being decoded: rect / gradient / series runs pushed while it is set take their
+    // ADDITIVE variants (the same instance lists, an additive PSO). Reset at every stream start; the recorder emits
+    // balanced pairs, so a stream ends SrcOver.
+    private bool _blendAdditive;
     private readonly List<(PrimKind Kind, int Count)> _runs = new();
     // Painter's-order guard for the glyph batch. RecordAll replays every glyph of a segment AFTER the segment's
     // non-glyph primitives ("text on top within a z-context"), which is only correct while nothing opaque is recorded
@@ -235,7 +239,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // (no-blend + minimal shader). So it participates in the same _sharedSdfStateBound dedup; only a PSO rebind is needed
     // when a rect run crosses the opaque↔blended boundary.
     // RectDestOut is a third rect PSO on the same shared SDF state (the video hole punch — RectPass.DestOut).
-    private enum BoundPipe : byte { None, Rect, RectOpaque, RectDestOut, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image, Path, Series }
+    private enum BoundPipe : byte { None, Rect, RectOpaque, RectDestOut, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image, Path, Series, RectAdd, GradientAdd, SeriesAdd }
     private BoundPipe _boundPipe;
     private bool _sharedSdfStateBound;
     private RECT _lastScissor;
@@ -1931,6 +1935,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
     private void PushRun(PrimKind kind)
     {
+        if (_blendAdditive)
+            kind = kind switch { PrimKind.Rect => PrimKind.RectAdd, PrimKind.Gradient => PrimKind.GradientAdd, PrimKind.Series => PrimKind.SeriesAdd, _ => kind };
         int n = _runs.Count;
         if (n > 0 && _runs[n - 1].Kind == kind) _runs[n - 1] = (kind, _runs[n - 1].Count + 1);
         else _runs.Add((kind, 1));
@@ -1939,6 +1945,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void Decode(ReadOnlySpan<byte> cmds)
     {
         ClearInsts();
+        _blendAdditive = false;
         int pos = 0;
         while (pos + sizeof(int) <= cmds.Length) pos = DecodeOne(cmds, pos);
     }
@@ -2180,6 +2187,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         PointCount = c.PointCount, TrimStart = c.TrimStart, TrimEnd = c.TrimEnd, RoundCaps = c.RoundCaps != 0 ? 1f : 0f,
                     });
                     PushRun(PrimKind.Polyline);
+                    break;
+                }
+                case DrawOp.SetBlend:
+                {
+                    _blendAdditive = MemoryMarshal.Read<SetBlendCmd>(cmds.Slice(pos)).Mode == (int)PaintBlend.Additive;
+                    pos += Unsafe.SizeOf<SetBlendCmd>();
                     break;
                 }
                 case DrawOp.DrawSeries:
@@ -3079,6 +3092,37 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         NoteSdfPipeBind(_seriesPipe!.Record(_cmdList, seriesSpan.Slice(sec, count), lw, lh, bindSeriesShared, bindSeriesPso),
                             bindSeriesShared, bindSeriesPso, BoundPipe.Series);
                         sec += count; break;
+                    case PrimKind.RectAdd:
+                    {
+                        // Additive rects: the rect instance list, the additive PSO; no opaque fast path, no stencil clone
+                        // (inside a stencil scope they are scissor-clipped only, like the other uncovered pipelines).
+                        var addRun = rectSpan.Slice(rc, count);
+                        rc += count;
+                        bool bindAddShared = !_sharedSdfStateBound;
+                        bool bindAddPso = _boundPipe != BoundPipe.RectAdd;
+                        if (stencilTest) _frameStencilFallback += count;
+                        NoteSdfPipeBind(_rectPipe!.Record(_cmdList, addRun, lw, lh, bindAddShared, bindAddPso, RectPass.Additive),
+                            bindAddShared, bindAddPso, BoundPipe.RectAdd);
+                        break;
+                    }
+                    case PrimKind.GradientAdd:
+                    {
+                        bool bindGaShared = !_sharedSdfStateBound;
+                        bool bindGaPso = _boundPipe != BoundPipe.GradientAdd;
+                        if (stencilTest) _frameStencilFallback += count;
+                        NoteSdfPipeBind(_gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh, bindGaShared, bindGaPso, stencilTest: false, additive: true),
+                            bindGaShared, bindGaPso, BoundPipe.GradientAdd);
+                        gc += count; break;
+                    }
+                    case PrimKind.SeriesAdd:
+                    {
+                        bool bindSaShared = !_sharedSdfStateBound;
+                        bool bindSaPso = _boundPipe != BoundPipe.SeriesAdd;
+                        if (stencilTest) _frameStencilFallback += count;
+                        NoteSdfPipeBind(_seriesPipe!.Record(_cmdList, seriesSpan.Slice(sec, count), lw, lh, bindSaShared, bindSaPso, additive: true),
+                            bindSaShared, bindSaPso, BoundPipe.SeriesAdd);
+                        sec += count; break;
+                    }
                     case PrimKind.Gradient:
                         bool bindGradientShared = !_sharedSdfStateBound;
                         bool bindGradientPso = _boundPipe != BoundPipe.Gradient;

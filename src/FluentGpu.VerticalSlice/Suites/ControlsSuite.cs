@@ -10689,6 +10689,7 @@ static partial class ControlsSuite
                 case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
                 case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
                 case DrawOp.DrawSeries: pos += Unsafe.SizeOf<DrawSeriesCmd>(); break;
+                case DrawOp.SetBlend: pos += Unsafe.SizeOf<SetBlendCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); layerBalance++; break;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); layerBalance--; break;
                 case DrawOp.DrawVideo:

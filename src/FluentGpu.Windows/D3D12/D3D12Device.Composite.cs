@@ -953,13 +953,21 @@ public sealed unsafe partial class D3D12Device
                         float x0 = it.Transform.Dx + placed[p].Key.Tx * TileGrid.W - ox, y0 = it.Transform.Dy + placed[p].Key.Ty * TileGrid.H - oy;
                         if (x0 >= tw || y0 >= th || x0 + placed[p].W <= 0f || y0 + placed[p].H <= 0f) continue;
                         DrawItemQuad(in it, x0, y0, x0 + placed[p].W, y0 + placed[p].H, ox, oy, feathers,
-                            it.BlendCopy != 0 ? SliceCompositor.Pso.LoadCopy : SliceCompositor.Pso.Load, _surfaces.TileSrv(placed[p].Surface));
+                            LoadPso(in it), _surfaces.TileSrv(placed[p].Surface));
                     }
                     break;
                 }
             }
         }
     }
+
+    /// <summary>The texel-load PSO an item composites with: copy, SCREEN (BoxEl.LayerBlend.Screen) or source-over.</summary>
+    private static SliceCompositor.Pso LoadPso(in CompositeItem it) => it.BlendCopy switch
+    {
+        CompositeItem.BlendCopyWrite => SliceCompositor.Pso.LoadCopy,
+        CompositeItem.BlendScreen => SliceCompositor.Pso.LoadScreen,
+        _ => SliceCompositor.Pso.Load,
+    };
 
     /// <summary>An item whose pixels were prepared offscreen (a degraded segment, a group, a self-blur): its surface at its
     /// region — a whole-pixel texel Load, or a bilinear sample of a downsampled blur.</summary>
@@ -976,7 +984,7 @@ public sealed unsafe partial class D3D12Device
             {
                 PixelRect c = _chunks[k].Rect;
                 DrawItemQuad(in it, c.Left - ox, c.Top - oy, c.Right - ox, c.Bottom - oy, ox, oy, feathers,
-                    it.BlendCopy != 0 ? SliceCompositor.Pso.LoadCopy : SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(_chunks[k].Surface));
+                    LoadPso(in it), _surfaces!.ScratchSrv(_chunks[k].Surface));
             }
             return;
         }
@@ -987,10 +995,10 @@ public sealed unsafe partial class D3D12Device
         int down = _itemDown[i];
         if (down <= 1)
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
-                SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
+                it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.LoadScreen : SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
         else
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
-                SliceCompositor.Pso.Sample, _surfaces!.ScratchSrv(s), sample: true,
+                it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces!.ScratchSrv(s), sample: true,
                 1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)));
     }
 

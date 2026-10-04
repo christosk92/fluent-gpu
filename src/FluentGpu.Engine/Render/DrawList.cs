@@ -62,7 +62,16 @@ public enum DrawOp : int
                                // amplitude. Fixed-size POD (nothing variable-length rides the stream, so clean-span reuse
                                // and every TryBodySize walker stay valid) — a series of N samples is ⌈(N−1)/31⌉ chunks.
                                // See DrawSeriesCmd.
+    SetBlend = 25,             // the PAINT BLEND for the primitives that follow in this stream (visualizer F4): SetBlendCmd.Mode
+                               // 0 = SrcOver, 1 = Additive (colour ONE/ONE, alpha ZERO/ONE — inside a transparent-cleared tile
+                               // the tile then composites Over the page as page + glow). The recorder emits it in balanced
+                               // pairs around an additive subtree (BoxEl.Blend) or leaf (SeriesEl/SpriteFieldEl.Blend), so a
+                               // stream always ends SrcOver. Rects, gradients, series and sprites honour it; glyphs, images
+                               // and paths stay SrcOver. No bounds of its own: every tile replay keeps it.
 }
+
+/// <summary>The payload of <see cref="DrawOp.SetBlend"/>: the <see cref="PaintBlend"/> as an int.</summary>
+public readonly record struct SetBlendCmd(int Mode);
 
 /// <summary>What the composite applies around a <see cref="CompositeSliceCmd"/>'s child slice, and in which space its
 /// parameters live. <see cref="OuterClip"/> = push <see cref="CompositeSliceCmd.OuterClip"/> first (an item
@@ -115,6 +124,8 @@ public struct DrawListOpcodeStats
     public int PushStencilClip, PopStencilClip;
     /// <summary>Series chunks (<see cref="DrawOp.DrawSeries"/>) — a SeriesEl of N samples records ⌈(N−1)/31⌉ of these.</summary>
     public int DrawSeries;
+    /// <summary>Paint-blend switches (<see cref="DrawOp.SetBlend"/>).</summary>
+    public int SetBlend;
     /// <summary>Retained-tile slice markers (<see cref="DrawOp.CompositeSlice"/>) — a span whose stats carry any holds a
     /// child slice's paint position.</summary>
     public int CompositeSlice;
@@ -153,6 +164,7 @@ public struct DrawListOpcodeStats
             case DrawOp.PopStencilClip: PopStencilClip++; break;
             case DrawOp.CompositeSlice: CompositeSlice++; break;
             case DrawOp.DrawSeries: DrawSeries++; break;
+            case DrawOp.SetBlend: SetBlend++; break;
         }
     }
 
@@ -583,6 +595,14 @@ public sealed class DrawList
     {
         WriteOp(DrawOp.PushClip);
         WritePayload(new ClipCmd(deviceRect, roundedRect, MathF.Max(0f, cornerRadius)));
+        PushSort(sortKey);
+    }
+
+    /// <summary>Switch the paint blend for the primitives that follow (<see cref="DrawOp.SetBlend"/>). Alloc-free.</summary>
+    public void SetBlend(PaintBlend mode, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.SetBlend);
+        WritePayload(new SetBlendCmd((int)mode));
         PushSort(sortKey);
     }
 

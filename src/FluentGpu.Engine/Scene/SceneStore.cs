@@ -162,6 +162,7 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
     private readonly ColdSlab<GradientSpec> _gradientTos = new();   // BoxEl.GradientTo: the blend target of the fill
     private readonly ColdSlab<float> _gradientMixes = new();        // BoxEl.GradientMix: 0..1 toward _gradientTos (absent = 0)
+    private readonly ColdSlab<byte> _blends = new();                // BoxEl.Blend (low nibble) | BoxEl.LayerBlend (high nibble); absent = both SrcOver
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
@@ -509,6 +510,7 @@ public sealed partial class SceneStore : ISceneBackend
             _radialGradientCenters.Remove(idx);
             _gradientTos.Remove(idx);
             _gradientMixes.Remove(idx);
+            _blends.Remove(idx);
             _borderBrushes.Remove(idx);
             _hoverGradients.Remove(idx);
             _pressedGradients.Remove(idx);
@@ -1925,6 +1927,18 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetGradientMix(NodeHandle h, out float mix) => _gradientMixes.TryGet((int)h.Raw.Index, out mix);
+
+    /// <summary>BoxEl.Blend / BoxEl.LayerBlend. Equality-gated; both SrcOver is stored as absent.</summary>
+    public void SetBlend(NodeHandle h, PaintBlend paint, LayerBlend layer)
+    {
+        int idx = (int)h.Raw.Index;
+        byte v = (byte)((byte)paint | ((byte)layer << 4));
+        bool had = _blends.TryGet(idx, out byte cur);
+        if (v == 0) { if (!had) return; _blends.Remove(idx); }
+        else { if (had && cur == v) return; _flags[idx] |= NodeFlags.SparsePaint; _blends.GetOrAdd(idx) = v; }
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetBlend(NodeHandle h, out byte packed) => _blends.TryGet((int)h.Raw.Index, out packed);
 
     public void SetBorderBrush(NodeHandle h, in GradientSpec g)
     {
