@@ -21,8 +21,9 @@ namespace FluentGpu.Rhi.D3D12;
 //   3. COMPOSITE — ONE CLEAR→STORE pass on the back buffer: the clear colour, then every item in painter order —
 //      whole-pixel tile placements (an exact texel Load × alpha × analytic feather × sdRoundRect clip), region / group /
 //      blur surfaces, acrylic, DestOut video holes.
-// The frame presents WHOLE: the FLIP_DISCARD swapchain refuses partial presentation (Present1 dirty rects are
-// DXGI_ERROR_INVALID_CALL), so the composite's PresentParams stay a host-side census, not a DXGI hint.
+// The primary target is FLIP_SEQUENTIAL and presents PARTIALLY when it can (D3D12Device.PartialPresent.cs): the composite
+// pass then PRESERVES the back buffer and recomposites only the repaint rects, and Present1 carries the dirty rects. The
+// whole-frame route (CLEAR load, full present) stays for every frame whose history cannot be trusted.
 public sealed unsafe partial class D3D12Device
 {
     public bool SupportsComposite => true;
@@ -145,12 +146,26 @@ public sealed unsafe partial class D3D12Device
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = sc.RtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtv.ptr += f.FrameIndex * _rtvSize;
-        // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on a
-        // tiler it is a per-bin fast clear instead of a full-window quad.
-        BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
-        BindCompositor((int)_w, (int)_h);
-        if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+        // Partial present (D3D12Device.PartialPresent.cs): what changed since this back buffer last received a frame.
+        PpComputeDirty(in frame, sc);
+        PpPlanRepaint(sc, f);
+        if (_ppPartial)
+        {
+            // PRESERVE: the buffer already holds every pixel outside the repaint rects; each rect is cleared and recomposited.
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Preserve);
+            BindCompositor((int)_w, (int)_h);
+            PpCompositeRects(in frame);
+        }
+        else
+        {
+            // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on
+            // a tiler it is a per-bin fast clear instead of a full-window quad.
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
+            BindCompositor((int)_w, (int)_h);
+            if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+        }
         EndPassIfOpen();
+        PpEndFrame(sc, f);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
 
         _surfaces.EndFrame();
@@ -183,7 +198,7 @@ public sealed unsafe partial class D3D12Device
         if (_renderPassesLogged) return;
         _renderPassesLogged = true;
         D3D12SideQueues.QueryRenderPassesTier(_device, out D3D12_RENDER_PASS_TIER tier);
-        Diag.Line($"[d3d12.present] renderPassesTier={(int)tier} composite=retained-tiles tile={TileGrid.W}x{TileGrid.H} canonicalViewport={CanonicalViewport} present=whole-frame(FLIP_DISCARD)");
+        Diag.Line($"[d3d12.present] renderPassesTier={(int)tier} composite=retained-tiles tile={TileGrid.W}x{TileGrid.H} canonicalViewport={CanonicalViewport} present=partial(FLIP_SEQUENTIAL, Present1 dirty rects)");
     }
 
     // ── rows / items bookkeeping ──────────────────────────────────────────────────────────────────────────────────
@@ -577,9 +592,10 @@ public sealed unsafe partial class D3D12Device
         if (hit >= 0)
         {
             _frameBlurCacheHits++; _offBlurHits++;
-            _itemSurface[i] = hit; _itemDown[i] = hitDown; _itemRegion[i] = region;
+            _itemSurface[i] = hit; _itemDown[i] = hitDown; _itemRegion[i] = region; _itemKey[i] = key;
             return;
         }
+        _itemKey[i] = key;   // the content key the partial-present diff signs this surface with
         int bs = AssembleBlurSource(in it, in src, in region, 0, 0, placed, (int)it.Transform.Dx, (int)it.Transform.Dy);
         FinishBlur(i, bs, in region, it.BlurSigma);
         if (_itemSurface[i] >= 0) _surfaces.Retain(_itemSurface[i], key, _itemDown[i], RetainedCap());
@@ -728,6 +744,7 @@ public sealed unsafe partial class D3D12Device
         // items before it (kind, placement, alpha, clip, feather, every tile surface + raster serial), the clear colour,
         // the region and the chain. A turn that moved or re-rastered nothing beneath re-uses it.
         ulong key = BackdropKey(in frame, i, l, t, r, b, iters, offset, out bool cacheable);
+        _itemKey[i] = cacheable ? key : 0UL;   // 0 = re-blurred from scratch: the partial-present diff treats it as changed
         if (cacheable)
         {
             int hit = _surfaces!.FindRetained(key, fence, out _);
@@ -913,6 +930,12 @@ public sealed unsafe partial class D3D12Device
         for (int i = a; i < b && i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
+            if (_frameClipOn && (uint)i < (uint)_itemFoot.Length && !Overlaps(in _itemFoot[i], in _frameClip))
+            {
+                // a partial composite: this item paints nothing inside the current repaint rect
+                if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
+                continue;
+            }
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -1084,9 +1107,20 @@ public sealed unsafe partial class D3D12Device
     private void ItemScissor(in CompositeItem it, int ox, int oy)
     {
         int tw = _compositor!.TargetW, th = _compositor.TargetH;
-        if (IsUnbounded(it.Clip)) { _compositor.Scissor(_cmdList, 0, 0, tw, th); _itemScissor = new PixelRect(0, 0, tw, th); return; }
-        int l = (int)MathF.Floor(it.Clip.X) - ox, t = (int)MathF.Floor(it.Clip.Y) - oy;
-        int r = (int)MathF.Ceiling(it.Clip.Right) - ox, b = (int)MathF.Ceiling(it.Clip.Bottom) - oy;
+        int l, t, r, b;
+        if (IsUnbounded(it.Clip)) { l = 0; t = 0; r = tw; b = th; }
+        else
+        {
+            l = (int)MathF.Floor(it.Clip.X) - ox; t = (int)MathF.Floor(it.Clip.Y) - oy;
+            r = (int)MathF.Ceiling(it.Clip.Right) - ox; b = (int)MathF.Ceiling(it.Clip.Bottom) - oy;
+        }
+        if (_frameClipOn)
+        {
+            // a partial composite: nothing outside the current repaint rect may be touched (that pixel is the previous frame)
+            l = Math.Max(l, _frameClip.Left - ox); t = Math.Max(t, _frameClip.Top - oy);
+            r = Math.Min(r, _frameClip.Right - ox); b = Math.Min(b, _frameClip.Bottom - oy);
+            if (r <= l || b <= t) { l = t = r = b = 0; }
+        }
         _compositor.Scissor(_cmdList, l, t, r, b);
         _itemScissor = new PixelRect(Math.Max(0, l), Math.Max(0, t), Math.Min(tw, r), Math.Min(th, b));
     }
