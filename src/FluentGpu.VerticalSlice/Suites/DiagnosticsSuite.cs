@@ -42,6 +42,7 @@ static class DiagnosticsSuite
         LocalizationKitChecks(strings);
         CountersAlwaysOnChecks(strings);
         UploadArenaChecks();
+        MediaCensusChecks();
     }
 
     // ── The shared per-frame UPLOAD ARENA's sizing/growth rule (Seams/Rhi/UploadArenaPolicy) ───────────────────────
@@ -160,6 +161,94 @@ static class DiagnosticsSuite
             && UploadArenaPolicy.DefaultInitialBytes < UploadArenaPolicy.PipelineWorstCaseBytes
             && served && episodes <= 2,
             $"worstCase={UploadArenaPolicy.PipelineWorstCaseBytes} initial={UploadArenaPolicy.DefaultInitialBytes} max={UploadArenaPolicy.DefaultMaxBytes} episodes={episodes} served={served}");
+    }
+
+    // ── F197 / F235: the media census and the cross-window dual-handle counter ──────────────────────────────────────────────
+    // Before: no census row named a video engine, a protected session's segment store, a prepared session or the runtime (the per-rebuild
+    // engine leak was invisible), and the one-surface-per-player tripwire was Debug-only and scanned ONE window's registry, so a main-window
+    // slot plus a pop-out slot on one swap chain could never be caught. Owners register themselves; the counter scans every window.
+    static void MediaCensusChecks()
+    {
+        MediaCensus.ResetForTest();
+        bool guardWas = OneSurfacePerPlayerGuard.Enabled;
+        OneSurfacePerPlayerGuard.Enabled = false;   // the duplicate binds below are the subject; the Debug tripwire would only print about them
+        try
+        {
+            int e1 = MediaCensus.Register(MediaCensusKind.VideoEngine, () => new MediaCensusRow(MediaCensusKind.VideoEngine, 1, 1920, 1080, 0, true));
+            int e2 = MediaCensus.Register(MediaCensusKind.VideoEngine, () => new MediaCensusRow(MediaCensusKind.VideoEngine, 2, 0, 0, 0, false));
+            int p1 = MediaCensus.Register(MediaCensusKind.ProtectedSession, () => new MediaCensusRow(MediaCensusKind.ProtectedSession, 7, 1280, 720, 33_554_432, true));
+            int p2 = MediaCensus.Register(MediaCensusKind.ProtectedSession, () => new MediaCensusRow(MediaCensusKind.ProtectedSession, 8, 0, 0, 1_000_000, false));
+            int bad = MediaCensus.Register(MediaCensusKind.VideoEngine, () => throw new InvalidOperationException("a describe that throws must not take the census down"));
+            MediaCensus.NotePrepared(+1);
+            MediaCensus.NoteProtectedRuntime(up: true);
+            MediaCensusSnapshot snap = MediaCensus.Capture();
+            Check("media.census names live engines (with natural sizes), protected sessions (with store bytes), prepared sessions and the runtime",
+                snap.VideoEngines == 2 && snap.VideoEngineSizes == "1920x1080,0x0" && snap.ProtectedSessions == 2 && snap.ProtectedAttached == 1
+                && snap.ProtectedStoreBytes == 34_554_432 && snap.PreparedSessions == 1 && snap.ProtectedRuntimeUp && snap.ProtectedRuntimeStarts == 1,
+                snap.Format());
+            string line = snap.Format();
+            Check("media.census line is one compact run and states that PMP decode (mfpmp.exe) is not counted",
+                line.Contains("videoEngines=2[1920x1080,0x0]") && line.Contains("protectedSessions=2 attached=1 storeBytes=34554432 prepared=1")
+                && line.Contains("protectedRuntime=up(starts=1)") && line.EndsWith("pmpDecode=not-counted", StringComparison.Ordinal) && !line.Contains('\n'), line);
+            Check("media.census count() reads the registered owners of one kind (the number the always-on create/destroy lines print)",
+                MediaCensus.Count(MediaCensusKind.VideoEngine) == 3 && MediaCensus.Count(MediaCensusKind.ProtectedSession) == 2,
+                $"engines={MediaCensus.Count(MediaCensusKind.VideoEngine)} sessions={MediaCensus.Count(MediaCensusKind.ProtectedSession)}");
+
+            MediaCensus.Unregister(e1); MediaCensus.Unregister(e1); MediaCensus.Unregister(0); MediaCensus.Unregister(bad);
+            MediaCensus.Unregister(p2);
+            MediaCensus.NotePrepared(-1);
+            MediaCensus.NoteProtectedRuntime(up: false);
+            MediaCensusSnapshot after = MediaCensus.Capture();
+            Check("media.census unregister is idempotent and a torn-down owner leaves the sample (engines, sessions, prepared, runtime down)",
+                after.VideoEngines == 1 && after.ProtectedSessions == 1 && after.ProtectedStoreBytes == 33_554_432 && after.PreparedSessions == 0
+                && !after.ProtectedRuntimeUp && after.ProtectedRuntimeStarts == 1 && after.Format().Contains("protectedRuntime=down"),
+                after.Format());
+            MediaCensus.Unregister(e2); MediaCensus.Unregister(p1);
+
+            // The dual-handle counter: two slots, ONE handle, across the main window's registry and a pop-out's.
+            var main = new VideoSurfaceRegistry();
+            var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+            main.Bind(main.Acquire(), 0x10);
+            int popToken = popout.Acquire();
+            popout.Bind(popToken, 0x30);
+            Check("media.dual-handle one handle per slot reads zero",
+                MediaCensus.CountDualHandleSlots(new[] { main, popout }) == 0, $"dual={MediaCensus.CountDualHandleSlots(new[] { main, popout })}");
+            popout.Bind(popToken, 0x10);
+            Check("media.dual-handle a pop-out slot on the main window's handle is counted although each registry alone is clean (the per-registry tripwire's blind spot)",
+                MediaCensus.CountDualHandleSlots(new[] { main, popout }) == 1
+                && MediaCensus.CountDualHandleSlots(new[] { main }) == 0 && MediaCensus.CountDualHandleSlots(new[] { popout }) == 0,
+                $"both={MediaCensus.CountDualHandleSlots(new[] { main, popout })}");
+            int second = main.Acquire();
+            main.Bind(second, 0x10);
+            Check("media.dual-handle two slots of one registry on one handle are counted too (and each extra writer adds one)",
+                MediaCensus.CountDualHandleSlots(new[] { main }) == 1 && MediaCensus.CountDualHandleSlots(new[] { main, popout }) == 2,
+                $"main={MediaCensus.CountDualHandleSlots(new[] { main })} both={MediaCensus.CountDualHandleSlots(new[] { main, popout })}");
+
+            Check("media.dual-handle the process table scans every registered window and forgets an unregistered (reaped) one",
+                MediaCensus.RegisterRegistry(main) && MediaCensus.RegisterRegistry(popout) && !MediaCensus.RegisterRegistry(popout)
+                && MediaCensus.Capture().DualHandleSlots == 2 && MediaCensus.Capture().Format().Contains("dualHandleSlots=2"), MediaCensus.Capture().Format());
+            MediaCensus.UnregisterRegistry(popout);
+            MediaCensusSnapshot reaped = MediaCensus.Capture();
+            Check("media.dual-handle a reaped window leaves the scan (the peak keeps the worst reading)",
+                reaped.DualHandleSlots == 1 && reaped.DualHandlePeak == 2, $"dual={reaped.DualHandleSlots} peak={reaped.DualHandlePeak}");
+            MediaCensus.UnregisterRegistry(main);
+            int beforeRelease = MediaCensus.CountDualHandleSlots(new[] { main, popout });
+            popout.Release(popToken);
+            int afterRelease = MediaCensus.CountDualHandleSlots(new[] { main, popout });
+            Check("media.dual-handle a released slot drops from the mirror at once (the UI-side release, not the render side's free)",
+                beforeRelease == 2 && afterRelease == 1, $"before={beforeRelease} after={afterRelease}");
+        }
+        finally
+        {
+            OneSurfacePerPlayerGuard.Enabled = guardWas;
+            MediaCensus.ResetForTest();
+        }
+
+        // render.pace: which swapchain's liveness-bounded wait timed out, and the pure naming of it.
+        Check("render.pace timeoutTarget names primary, child, both or none from the window's two timeout deltas",
+            FluentGpu.Hosting.Threading.RenderThread.PaceTimeoutTarget(0, 0) == "none" && FluentGpu.Hosting.Threading.RenderThread.PaceTimeoutTarget(2, 0) == "primary"
+            && FluentGpu.Hosting.Threading.RenderThread.PaceTimeoutTarget(0, 1) == "child" && FluentGpu.Hosting.Threading.RenderThread.PaceTimeoutTarget(3, 1) == "both",
+            "");
     }
 
     // P0 (Operation ultra-fast GPU engine) leftover: the FlexLayout diag counters (MeasureCount/ArrangeCount/

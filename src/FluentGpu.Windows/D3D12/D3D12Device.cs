@@ -3749,6 +3749,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if ((int)_factory->EnumAdapterByLuid(luid, __uuidof<IDXGIAdapter1>(), (void**)&adapter) < 0 || adapter == null)
             return;   // stale factory mid-topology-change: keep old state; the next 1 Hz sample retries
         bool sawOutput = false, owns = false;
+        FluentGpu.Media.VideoOverlayCaps overlay = default;   // F249: the owning output's overlay-plane verdict (default = unprobed)
         for (uint i = 0; ; i++)
         {
             IDXGIOutput* output = null;
@@ -3757,7 +3758,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if ((int)output->GetDesc(&od) >= 0)
             {
                 sawOutput = true;
-                if (od.Monitor == mon) owns = true;
+                if (od.Monitor == mon) { owns = true; overlay = ProbeOverlaySupport(output); }
             }
             output->Release();
             if (owns) break;
@@ -3768,6 +3769,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.TopologyMonitor = mon;
         bool topologyChanged = state != target.PresentTopologyState;
         target.PresentTopologyState = state;
+        bool overlayChanged = overlay != target.OverlayCaps;
+        target.OverlayCaps = overlay;
+        if (overlay.Probed) FluentGpu.Media.VideoOverlayCaps.Publish(in overlay);   // the engines read the newest verdict when they are created
 
         // Diagnostics-card snapshot (GpuVideoMemorySnapshot): merges the display-mode + topology fields without
         // touching the video-memory fields, which PublishVideoMemory refreshes on its own (~1/60-presents) cadence.
@@ -3789,12 +3793,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                       $" primaryHz={primaryHz:0.000} changed={(mismatch ? "true" : "false")}");
         }
 
-        if (!topologyChanged) return;
+        if (!topologyChanged && !overlayChanged) return;
+        // F249: an owned output no longer claims a direct scan-out path from adapter ownership alone; the note is what CheckOverlaySupport said.
         Diag.Line($"[d3d12.present] topology={(state == TopologyOwned ? "render-adapter-owns-output"
                 : state == TopologyCross ? "cross-adapter" : "render-adapter-has-no-outputs")}" +
             $" hwnd=0x{(nint)target.Hwnd:X}" +
             (state == TopologyOwned
-                ? " note=direct-scan-out-path-available"
+                ? $" overlay[{overlay.Describe()}] note={OverlayNote(in overlay)}"
                 : " note=presents-cross-adapters-via-DWM-(expected-on-hybrid-laptops;-adds-a-compositor-copy)"));
     }
 
@@ -3914,8 +3919,26 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // popup / pop-out. Logged rate-limited per target (the evidence for the next 1000 ms-class stall report).
     private const double NonPrimaryLatencyLogFloorMs = 20.0;
     private const double NonPrimaryLatencyLogPeriodMs = 2000.0;
-    private static void NoteNonPrimaryLatencyWait(D3D12Swapchain sc, double waitedMs, bool opened)
+
+    // F235: the always-on numbers behind that log, for the [render.pace] line: the window's longest non-primary wait (childWaitMax=) and
+    // the cumulative count of waits that ran out their bound (timeoutTarget=child). Written by the submitting thread only; read by the
+    // render thread's pace report (a torn-free long each).
+    private long _nonPrimaryWaitMaxUs, _nonPrimaryTimeouts;
+
+    /// <inheritdoc/>
+    public long NonPrimaryLatencyTimeouts => Volatile.Read(ref _nonPrimaryTimeouts);
+
+    /// <inheritdoc/>
+    public double NonPrimaryLatencyWaitMaxMs => Volatile.Read(ref _nonPrimaryWaitMaxUs) / 1000.0;
+
+    /// <inheritdoc/>
+    public void ResetNonPrimaryLatencyWindow() => Volatile.Write(ref _nonPrimaryWaitMaxUs, 0);
+
+    private void NoteNonPrimaryLatencyWait(D3D12Swapchain sc, double waitedMs, bool opened)
     {
+        long waitedUs = (long)(waitedMs * 1000.0);
+        if (waitedUs > Volatile.Read(ref _nonPrimaryWaitMaxUs)) Volatile.Write(ref _nonPrimaryWaitMaxUs, waitedUs);
+        if (!opened) Volatile.Write(ref _nonPrimaryTimeouts, _nonPrimaryTimeouts + 1);
         if (opened && waitedMs < NonPrimaryLatencyLogFloorMs) return;
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
         if (sc.LatencyWaitLogQpc != 0
@@ -4003,7 +4026,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void NoteSlotLivenessTimeout(D3D12Swapchain sc, uint boundMs)
     {
-        Volatile.Write(ref _slotLivenessTimeouts, _slotLivenessTimeouts + 1);
+        // The primary's timeouts are SlotLivenessTimeouts; a secondary swapchain's (reachable only through the per-target take) belong to
+        // NonPrimaryLatencyTimeouts, so the pace line's timeoutTarget= can say whose slot never opened (F235).
+        if (ReferenceEquals(sc, _primarySwapchain)) Volatile.Write(ref _slotLivenessTimeouts, _slotLivenessTimeouts + 1);
+        else Volatile.Write(ref _nonPrimaryTimeouts, _nonPrimaryTimeouts + 1);
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_slotLivenessLogQpc != 0
             && System.Diagnostics.Stopwatch.GetElapsedTime(_slotLivenessLogQpc, now).TotalMilliseconds < SlotLivenessLogPeriodMs)
@@ -5012,6 +5038,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // ── Present-topology attribution (WS-B) ── cached per swapchain so [d3d12.present] emits on CHANGE only.
     internal HMONITOR TopologyMonitor;     // monitor at last check (NULL = never checked)
     internal int PresentTopologyState;     // D3D12Device.Topology* — 0 unknown / 1 owned / 2 cross-adapter / 3 no-outputs
+    internal FluentGpu.Media.VideoOverlayCaps OverlayCaps;   // F249: the owning output's overlay-plane verdict at the last topology check (default = unprobed)
     // Per-window refresh period (mixed-refresh-rate audit): resolved on the SAME edge as TopologyMonitor above
     // (D3D12Device.SamplePresentTopology), via DisplayInfo.ForWindow — 0 until first resolved, meaning "use the
     // DWM-global fallback" (SamplePresentStats only overrides its local `refreshPeriod` when this is > 0).

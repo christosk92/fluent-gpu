@@ -1,4 +1,5 @@
-// PrRuntime.cpp — the process-lifetime PlayReady runtime: FgPrRuntimeCreateOnAdapter / FgPrRuntimeDestroy / FgPrRuntimeUptimeMs.
+// PrRuntime.cpp — the process-lifetime PlayReady runtime: FgPrRuntimeCreateOnAdapter / FgPrRuntimeDestroy / FgPrRuntimeUptimeMs /
+// FgPrRuntimeSetVideoOutputFormat.
 //
 // WHAT MOVED HERE, AND WHY IT IS DONE ONCE (wavee-0.3-video-engine-implementation.md §1.3, §3.1.1). The one-shot
 // FgPlayReadyRunEx did CoInitializeEx + MFStartup, D3D11CreateDevice + the DXGI manager, CreateAndPrepareCdm (which
@@ -625,7 +626,11 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // passed the manager as a creation attribute + USE_PMP_FOR_ALL_CONTENT; that A/B arm (FG_CENC_LEGACY_ENGINE_WIRING)
     // is deleted.
     attrs->SetUINT32(MF_MEDIA_ENGINE_CONTENT_PROTECTION_FLAGS, MF_MEDIA_ENGINE_ENABLE_PROTECTED_CONTENT);
-    attrs->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM);
+    // F249: BGRA is the long-standing output; NV12 only when the managed side asked for it (FgPrRuntimeSetVideoOutputFormat, behind
+    // --fg video-nv12, after its overlay probe said NV12 can take a plane).
+    const DXGI_FORMAT outputFormat = rt.videoOutputFormat == FgPrVideoOutput_Nv12 ? DXGI_FORMAT_NV12 : DXGI_FORMAT_B8G8R8A8_UNORM;
+    attrs->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, outputFormat);
+    LogLine(std::string("[cenc] engine output format ") + (outputFormat == DXGI_FORMAT_NV12 ? "NV12" : "BGRA"));
     if (HWND opmHwnd = rt.opm.Handle()) attrs->SetUINT64(MF_MEDIA_ENGINE_OPM_HWND, (UINT64)(uintptr_t)opmHwnd);
     hr = factory->CreateInstance(0, attrs.get(), rt.engine.put());
     LogLine("[cenc] CreateInstance(engine) hr=" + hx(hr));
@@ -724,8 +729,11 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
         }
         case MF_MEDIA_ENGINE_EVENT_CANPLAY:
             s.readyState.store((int32_t)rt.engine->GetReadyState(), std::memory_order_release);
-            Raise(h, FgPrEvent_CanPlay);
+            // The start-position fallback runs BEFORE the event so the event can carry its price (startCorrectionMs, 0 = the engine
+            // adopted the carried start): it is the switch budget's second-Start cost. The raise only queues, so the event still
+            // precedes everything the correction's own seek makes the engine say.
             fgpr::SessionOnCanPlay(rt, s);
+            Raise(h, FgPrEvent_CanPlay, s.startCorrectionMs);
             fgpr::SessionPublishHandle(rt, s, false);
             break;
         case MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY:
@@ -750,7 +758,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
                                       "ms, carried start " + std::to_string((long long)carried) + "ms, startCorrectionMs=" +
                                       std::to_string((long long)s.startCorrectionMs));
             }
-            Raise(h, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire));
+            // b = the QPC FIRSTFRAMEREADY was stamped at (the same value as FgPrSnapshot.firstFrameQpc), so the managed side times the
+            // first frame from the native clock rather than from whenever the event was dequeued.
+            Raise(h, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire), s.firstFrameQpc.load(std::memory_order_acquire));
             fgpr::SessionPublishHandle(rt, s, false);
             break;
         }
@@ -997,6 +1007,7 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreateOnAdapter(const wchar_t
         rt->handle = fgpr::NewHandle(fgpr::HandleKind::Runtime);
         rt->storePath = storePath;
         rt->adapterLuid = adapterLuid;
+        rt->videoOutputFormat = fgpr::Reg().videoOutputFormat.load(std::memory_order_acquire);
         rt->createdQpc = fgpr::QpcNow();
         rt->thread = std::thread(RuntimeThreadMain, rt);
     }
@@ -1072,6 +1083,12 @@ __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime handle)
 {
     std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(handle);
     return rt ? rt->UptimeMs() : 0;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format)
+{
+    fgpr::Reg().videoOutputFormat.store(format == FgPrVideoOutput_Nv12 ? FgPrVideoOutput_Nv12 : FgPrVideoOutput_Bgra, std::memory_order_release);
+    return S_OK;
 }
 
 __declspec(dllexport) int32_t __stdcall FgPrSessionPlaceOpmWindow(FgPrRuntime rtHandle, FgPrSession sh, uint64_t hostWindow,

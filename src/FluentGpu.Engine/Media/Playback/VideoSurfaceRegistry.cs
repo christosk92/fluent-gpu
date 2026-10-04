@@ -68,8 +68,13 @@ public sealed class VideoSurfaceRegistry
     private readonly Signal<VideoSurfaceId>[] _surfaceSignals;
     private readonly Signal<bool>[] _boundSignals;   // UI-thread-written mirror of the bound readiness the applier reports (see ImportResults)
     private readonly Signal<bool> _alwaysBound = new(true);   // per registry (never written): what Bound reports when there is no presenter to wait for
+    // Any-thread census mirror (F235): per slot, the handle a LIVE (in use, not release-pending) slot carries, else 0. The UI thread is the
+    // only writer (Acquire / Bind / Release / FreeSlot / DestroyAll); MediaCensus reads it from whatever thread samples, so the dual-handle
+    // count never touches the UI-thread slot table.
+    private readonly nuint[] _liveHandles = new nuint[MaxSurfaces];
     private long _seq;                // UI: the incarnation / handle-sequence counter
     private bool _publishDirty;       // UI: the table changed since the last snapshot, so a publication is owed (see HasUnpublishedChanges)
+    private long _snapshotSeq;        // UI: counts SnapshotInto calls; stamps every intent of a snapshot (VideoPresentIntent.Seq)
     private int _presentingCount;   // diagnostic census of slots a media player is actively presenting into
     private int _pendingPumpCount;  // slots with one coalesced pump awaiting the next host frame
     private int _geometryOnlyToken;  // the token whose geometry-only pump is running right now (0 outside one); see IsGeometryOnlyPump
@@ -118,6 +123,27 @@ public sealed class VideoSurfaceRegistry
     /// session reads it through <see cref="VideoBinding.WindowHandle"/> to tie output protection to that window's monitor.</summary>
     public nuint WindowHandle { get; set; }
 
+    /// <summary>Which window this registry belongs to, for the logs only: 0 is the main window, 1, 2, ... a detached pop-out (the same
+    /// target id its <c>[render.pace]</c> <c>child=</c> token and <c>[detached] attach</c> line carry). The host sets it when the child
+    /// is attached. With <see cref="VideoBinding.Token"/> it names WHICH slot of WHICH window wrote a stream size or a pump (F235): two
+    /// windows' pumps used to differ only by <c>scale=</c>.</summary>
+    public int HostOrdinal { get; set; }
+
+    /// <summary>Copy the handle of every live slot (in use, not release-pending, handle non-zero) into <paramref name="destination"/>
+    /// and return how many were written (at most <see cref="MaxSurfaces"/>, bounded by the span). Any thread, allocation-free: reads
+    /// the census mirror, never the UI-thread slot table, so it is safe against a window being reaped mid-scan (a torn read sees a
+    /// slot just freed or just bound, never a corrupt value).</summary>
+    internal int CopyLiveHandles(Span<nuint> destination)
+    {
+        int n = 0;
+        for (int i = 0; i < MaxSurfaces && n < destination.Length; i++)
+        {
+            nuint h = Volatile.Read(ref _liveHandles[i]);
+            if (h != 0) destination[n++] = h;
+        }
+        return n;
+    }
+
     // ── UI-thread API (the hook / the media-player façade) ─────────────────────────────────────────────────────────
 
     /// <summary>Reserve a surface slot. Returns a token (>0) or 0 when the pool is exhausted.</summary>
@@ -130,6 +156,7 @@ public sealed class VideoSurfaceRegistry
             if (_entries[i].InUse) continue;
             long gen = ++_seq;
             _entries[i] = new Entry { InUse = true, Visible = true, Gen = gen, HandleSeq = gen };
+            Volatile.Write(ref _liveHandles[i], 0);
             _surfaceSignals[i].Value = default;
             _boundSignals[i].Value = false;
             lock (_gate) _mail[i] = new VideoPresentIntent { Token = i + 1, Gen = gen, HandleSeq = gen, Visible = true };
@@ -229,6 +256,7 @@ public sealed class VideoSurfaceRegistry
             return;
         }
         e.DesiredHandle = dcompSurfaceHandle;
+        Volatile.Write(ref _liveHandles[token - 1], e.ReleasePending ? 0 : dcompSurfaceHandle);
         NoteHandle(token - 1, ref e);
         MarkDirty();
         if (dcompSurfaceHandle != 0) NoteStructural();
@@ -306,6 +334,7 @@ public sealed class VideoSurfaceRegistry
         if (_entries[i].Presenting) { _entries[i].Presenting = false; _presentingCount--; }
         ClearPumpPending(ref _entries[i]);
         _entries[i].ReleasePending = true;
+        Volatile.Write(ref _liveHandles[i], 0);
         lock (_gate) _mail[i].ReleasePending = true;
         MarkDirty();
     }
@@ -445,6 +474,18 @@ public sealed class VideoSurfaceRegistry
     /// change even when nothing else in the frame moved (a native event that only changes the video's rect or visibility).</summary>
     internal bool HasUnpublishedChanges => _publishDirty;
 
+    /// <summary>True while any slot's release is waiting for the render side to destroy it. A destroy stays coupled to the UI
+    /// frame's present (the two-clock tear lock), so such a table never rides a video-only post (F098).</summary>
+    internal bool HasReleasePending
+    {
+        get
+        {
+            for (int i = 0; i < MaxSurfaces; i++)
+                if (_entries[i].InUse && _entries[i].ReleasePending) return true;
+            return false;
+        }
+    }
+
     /// <summary>Declare the scene node whose ABSOLUTE rect this surface should follow, so a move that changes only a
     /// composited transform still re-places the video child. Pass <see cref="NodeHandle.Null"/> to stop tracking.
     /// <para>Why this exists: a surface's on-screen rect can change with NO layout change at all — a compositor-only
@@ -543,6 +584,7 @@ public sealed class VideoSurfaceRegistry
     /// UI thread (it asserts that); the same-thread shim calls it on the presenting thread. Zero-alloc.</summary>
     internal int SnapshotInto(Span<VideoPresentIntent> destination)
     {
+        long seq = ++_snapshotSeq;
         int n = 0;
         for (int i = 0; i < MaxSurfaces && n < destination.Length; i++)
         {
@@ -552,7 +594,7 @@ public sealed class VideoSurfaceRegistry
             it = new VideoPresentIntent
             {
                 Token = i + 1, Gen = e.Gen, HandleSeq = e.HandleSeq, DesiredHandle = e.DesiredHandle,
-                ReleasePending = e.ReleasePending, HasGeometry = true, Visible = e.Visible,
+                ReleasePending = e.ReleasePending, HasGeometry = true, Seq = seq, Visible = e.Visible,
                 RectDip = e.RectDip, ViewportDip = e.ViewportDip, RadiusDip = e.RadiusDip,
                 ContentW = e.ContentW, ContentH = e.ContentH, Z = e.Z,
             };
@@ -652,6 +694,7 @@ public sealed class VideoSurfaceRegistry
         _surfaceSignals[i].Value = default;
         _boundSignals[i].Value = false;
         lock (_gate) _mail[i] = default;
+        Volatile.Write(ref _liveHandles[i], 0);
         e = default;   // free the slot
     }
 
@@ -728,6 +771,7 @@ public sealed class VideoSurfaceRegistry
             _surfaceSignals[i].Value = default;
             _boundSignals[i].Value = false;
             _entries[i] = default;
+            Volatile.Write(ref _liveHandles[i], 0);
         }
         lock (_gate)
         {
@@ -784,6 +828,10 @@ public readonly struct VideoBinding
     /// <summary>The native handle of the window this binding's surface is presented in (an HWND), or 0 for an inert binding or a
     /// host with no window (headless). See <see cref="VideoSurfaceRegistry.WindowHandle"/>.</summary>
     public nuint WindowHandle => _registry?.WindowHandle ?? 0;
+
+    /// <summary>Which window the surface is presented in, for the logs: 0 main, 1, 2, ... a pop-out (see
+    /// <see cref="VideoSurfaceRegistry.HostOrdinal"/>); 0 for an inert binding.</summary>
+    public int HostOrdinal => _registry?.HostOrdinal ?? 0;
 
     /// <summary>The live surface id — <see cref="VideoSurfaceId.IsNone"/> until the host creates the child visual.</summary>
     public IReadSignal<VideoSurfaceId> Surface => _registry?.Surface(Token) ?? s_none;
@@ -858,6 +906,11 @@ public readonly struct VideoBinding
 /// registry's own remarks already place it OUTSIDE the zero-alloc gate surface, but the check costs nothing extra
 /// anyway: a fixed <c>MaxSurfaces</c>-slot scan over struct fields, no allocation on the passing path (the message
 /// is built only inside <see cref="Violation"/>).
+/// </para>
+/// <para>
+/// The shipping build has the same question answered by <see cref="MediaCensus.CountDualHandleSlots()"/> (F235): an always-on,
+/// allocation-free scan of every window's registry (the main window's AND each pop-out's, which this per-registry tripwire can never
+/// see across), shown in <c>mem.sample</c> and the <c>[memcensus]</c> media line.
 /// </para>
 /// </summary>
 public static class OneSurfacePerPlayerGuard

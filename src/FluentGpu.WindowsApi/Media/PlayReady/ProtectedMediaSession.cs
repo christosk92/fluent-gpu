@@ -48,6 +48,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private PlaybackState _publishedState = PlaybackState.Opening;
     private bool _commandsPublished;
     private bool _errorPublished;
+    // The native frame counters last handed to sink.Statistics (F066); -1 = nothing published yet.
+    private long _statsRendered = -1, _statsDropped = -1;
     private double _volume = 1.0;
     private bool _muted;
     private long _lastFirstFrameEpoch;
@@ -468,6 +470,24 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             message ?? "Protected playback failed (CDM/license).", null, locus, MediaRecovery.NeedsLicense);
     }
 
+    // F066: the native runtime polls the engine's FRAMES_RENDERED / FRAMES_DROPPED at its own bounded cadence, so the counters the
+    // snapshot carries change at most a couple of times a second; the sink is written only when they do. Published before the error
+    // gate so the counters of a source that failed (or was judged hung) stay on the signal the diagnostics read.
+    private void PublishStatistics(MediaSignalSink sink)
+    {
+        long rendered = _player.FramesRendered, dropped = _player.FramesDropped;
+        if (rendered == _statsRendered && dropped == _statsDropped) return;
+        if (_statsRendered < 0 && rendered == 0 && dropped == 0) return;   // nothing to say yet: keep Empty
+        _statsRendered = rendered;
+        _statsDropped = dropped;
+        sink.Statistics(StatisticsFrom(rendered, dropped));
+    }
+
+    internal static PlaybackStatistics StatisticsFrom(long framesRendered, long framesDropped)
+        => new(BytesDownloaded: 0, FramesDecoded: framesRendered + framesDropped, FramesDropped: framesDropped,
+               AudioUnderruns: 0, EstimatedThroughputKbps: 0, VideoBitrateKbps: 0, AudioBitrateKbps: 0,
+               StartupTime: TimeSpan.Zero, RebufferTime: TimeSpan.Zero, RebufferCount: 0, FramesRendered: framesRendered);
+
     /// <inheritdoc/>
     public void SetAdaptiveMaxHeight(int height)
     {
@@ -497,6 +517,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _player.Pump();
         ProtectedVideoState pv = _player.State.Value;
         UpdateAdaptiveState(sink, Environment.TickCount64);
+        PublishStatistics(sink);
 
         // 1. Terminal error → typed MediaError, published once. Never a silent drop.
         if (pv == ProtectedVideoState.Error)
@@ -631,7 +652,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             {
                 VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
                     pv == ProtectedVideoState.Playing, ClockMs());
-                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request);
+                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
                 binding.SetContentSize(content);

@@ -84,6 +84,7 @@ inline void LogLine(const std::string& /*s*/) {}
 
 #include "../FeedPlan.h"
 #include "../HandoverPolicy.h"
+#include "../FrameHealthPolicy.h"
 #include "../LicensePolicy.h"
 #include "../EventRing.h"
 #include "../WorkQueue.h"
@@ -2646,6 +2647,159 @@ static void Test_M51_OpmWindowLifecycle()
     CHECK(again.Handle() != nullptr);
 }
 
+/// F66 - the engine's rendered/dropped counters accumulate across the resets MF applies after a flush, and a warm engine's
+/// leftover totals are never counted into the next source.
+static void Test_N52_FrameCounters()
+{
+    using fgpr::health::FrameCounters;
+    {
+        FrameCounters c;
+        c.Observe(30, 1);
+        c.Observe(75, 1);
+        c.Observe(120, 4);
+        CHECK_EQ(c.rendered, (int64_t)120);
+        CHECK_EQ(c.dropped, (int64_t)4);
+    }
+    {
+        FrameCounters c;
+        c.Observe(100, 5);
+        c.Observe(12, 0);                    // a seek flushed the engine: both restarted from zero, the new reading IS the delta
+        CHECK_EQ(c.rendered, (int64_t)112);
+        CHECK_EQ(c.dropped, (int64_t)5);
+        c.Observe(40, 2);
+        CHECK_EQ(c.rendered, (int64_t)140);
+        CHECK_EQ(c.dropped, (int64_t)7);
+    }
+    {
+        FrameCounters c;
+        c.Observe(100, 10);
+        c.Observe(130, 3);                   // either counter going backwards is a reset of both
+        CHECK_EQ(c.rendered, (int64_t)230);
+        CHECK_EQ(c.dropped, (int64_t)13);
+    }
+    {
+        FrameCounters c;
+        c.Observe(500, 20);
+        c.Rebase(500, 20);                   // the next source reuses the warm engine, which still holds the old totals
+        CHECK_EQ(c.rendered, (int64_t)0);
+        c.Observe(520, 21);
+        CHECK_EQ(c.rendered, (int64_t)20);
+        CHECK_EQ(c.dropped, (int64_t)1);
+        c.Observe(8, 0);
+        CHECK_EQ(c.rendered, (int64_t)28);
+        c.Reset();
+        CHECK_EQ(c.rendered, (int64_t)0);
+    }
+    {
+        FrameCounters c;                     // a 32-bit counter that wraps cannot be told from a reset: the new reading is the delta
+        c.Observe(0xFFFFFFF0u, 0);
+        c.Observe(0x10u, 0);
+        CHECK_EQ(c.rendered, (int64_t)(0xFFFFFFF0ull + 0x10ull));
+    }
+}
+
+/// F66 - the no-rendered-frame hang check: once, only after the timeout of PLAYING, never for a source that has rendered a frame, and
+/// time outside PLAYING never counts.
+static void Test_N53_RenderedFrameWatch()
+{
+    using fgpr::health::RenderedFrameWatch;
+    using fgpr::health::kNoFrameTimeoutMs;
+    {
+        RenderedFrameWatch w;
+        CHECK(!w.Observe(1000, true, 0));                          // the window opens
+        CHECK(!w.Observe(1000 + kNoFrameTimeoutMs - 1, true, 0));
+        CHECK(w.Observe(1000 + kNoFrameTimeoutMs, true, 0));       // elapsed with still no frame
+        CHECK(!w.Observe(1000 + kNoFrameTimeoutMs * 3, true, 0));  // exactly once
+    }
+    {
+        RenderedFrameWatch w;
+        CHECK(!w.Observe(0, true, 0));
+        CHECK(!w.Observe(5000, true, 1));                          // one frame: the watch is over for this source
+        CHECK(!w.Observe(60000, true, 1));
+    }
+    {
+        RenderedFrameWatch w;
+        CHECK(!w.Observe(0, true, 0));
+        CHECK(!w.Observe(8000, true, 0));
+        CHECK(!w.Observe(9000, false, 0));                         // paused / seeking / waiting: not counting
+        CHECK(!w.Observe(30000, false, 0));
+        CHECK(!w.Observe(30500, true, 0));                         // resumed: a fresh window
+        CHECK(!w.Observe(30500 + kNoFrameTimeoutMs - 1, true, 0));
+        CHECK(w.Observe(30500 + kNoFrameTimeoutMs, true, 0));
+    }
+    {
+        RenderedFrameWatch w;
+        w.Restart(500);                                            // not counting: a no-op
+        CHECK(!w.Observe(1000, true, 0));
+        w.Restart(9000);                                           // UpdateVideoStream re-created the swap chain
+        CHECK(!w.Observe(9000 + kNoFrameTimeoutMs - 1, true, 0));
+        CHECK(w.Observe(9000 + kNoFrameTimeoutMs, true, 0));
+        w.Reset();
+        CHECK(!w.Observe(20000, true, 0));
+        CHECK(w.Observe(20000 + kNoFrameTimeoutMs, true, 0));
+    }
+    {
+        // No readable statistics = never a hang: PollFrameHealth feeds `playing && statsReadable`, so a renderer whose GetStatistics
+        // fails or returns VT_EMPTY is never judged, however long it plays.
+        RenderedFrameWatch w;
+        for (int64_t t = 0; t <= kNoFrameTimeoutMs * 5; t += 500) CHECK(!w.Observe(t, false, 0));
+        CHECK(!w.Observe(kNoFrameTimeoutMs * 5 + 500, true, 0));   // the counters become readable: the window opens only now
+        CHECK(!w.Observe(kNoFrameTimeoutMs * 5 + 500 + kNoFrameTimeoutMs - 1, true, 0));
+        CHECK(w.Observe(kNoFrameTimeoutMs * 5 + 500 + kNoFrameTimeoutMs, true, 0));
+    }
+}
+
+/// F198 - the swap-chain handles the runtime owns: a retired handle is closed exactly once, only after its grace (or when the
+/// retired list overflows), never while reinstated, and CloseAll takes the rest.
+static void Test_N54_RetiredHandles()
+{
+    using fgpr::health::RetiredHandles;
+    using fgpr::health::kHandleGraceMs;
+    using fgpr::health::kMaxRetiredHandles;
+    std::vector<uint64_t> closed;
+    auto close = [&closed](uint64_t h) { closed.push_back(h); };
+    {
+        RetiredHandles r;
+        r.Retire(0, 0, close);                                     // 0 = no handle: never retired
+        CHECK_EQ(r.Count(), (size_t)0);
+        r.Retire(0x10, 100, close);
+        r.Retire(0x20, 600, close);
+        r.Sweep(100 + kHandleGraceMs - 1, close);
+        CHECK(closed.empty());                                     // still inside the grace
+        r.Sweep(100 + kHandleGraceMs, close);
+        CHECK_EQ(closed.size(), (size_t)1);
+        CHECK_EQ(closed[0], (uint64_t)0x10);                       // only the one whose grace elapsed
+        CHECK_EQ(r.Count(), (size_t)1);
+        r.Sweep(600 + kHandleGraceMs, close);
+        CHECK_EQ(closed.size(), (size_t)2);
+        CHECK_EQ(r.Count(), (size_t)0);
+        r.Sweep(1000000, close);
+        CHECK_EQ(closed.size(), (size_t)2);                        // closed exactly once
+    }
+    closed.clear();
+    {
+        RetiredHandles r;
+        r.Retire(0x10, 0, close);
+        CHECK(r.Reinstate(0x10));                                  // MF handed back the identical handle: current again
+        CHECK(!r.Reinstate(0x10));
+        r.Sweep(1000000, close);
+        CHECK(closed.empty());
+    }
+    {
+        RetiredHandles r;
+        for (uint64_t h = 1; h <= kMaxRetiredHandles + 2; ++h) r.Retire(h, 0, close);   // a burst of format changes
+        CHECK_EQ(closed.size(), (size_t)2);                        // the oldest are closed at once, the newest kept
+        CHECK_EQ(closed[0], (uint64_t)1);
+        CHECK_EQ(closed[1], (uint64_t)2);
+        CHECK_EQ(r.Count(), kMaxRetiredHandles);
+        r.CloseAll(close);
+        CHECK_EQ(r.Count(), (size_t)0);
+        CHECK_EQ(closed.size(), (size_t)(2 + kMaxRetiredHandles));
+        r.CloseAll(close);                                         // idempotent
+        CHECK_EQ(closed.size(), (size_t)(2 + kMaxRetiredHandles));
+    }
+}
+
 int main()
 {
     struct TestCase { const char* name; void (*fn)(); };
@@ -2717,6 +2871,9 @@ int main()
         { "L13h_ParseInitCarriesPaspSpsAndTrexIntoTheType", Test_L13h_ParseInitCarriesPaspSpsAndTrexIntoTheType },
         { "M50_OpmScreenRect", Test_M50_OpmScreenRect },
         { "M51_OpmWindowLifecycle", Test_M51_OpmWindowLifecycle },
+        { "N52_FrameCounters", Test_N52_FrameCounters },
+        { "N53_RenderedFrameWatch", Test_N53_RenderedFrameWatch },
+        { "N54_RetiredHandles", Test_N54_RetiredHandles },
     };
 
     const int failBefore = g_fail;

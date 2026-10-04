@@ -146,7 +146,50 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         public string? FailureMessage;
         public Func<LicenseRequest, ValueTask<LicenseResponse>>? Relay;
         public DrmSystem System;
+        // F226 / F216: the acquisition's stamps (Stopwatch timestamps, 0 = not yet), the relay's own optional breakdown.
+        public long AcquiredTs, ChallengeTs, RelayDoneTs, UsableTs;
+        public bool HasRelayTiming;
+        public long RelayQueuedMs, RelayHttpMs;
     }
+
+    /// <summary>Where one key's acquisition spent its time (F226), as the runtime saw it: <see cref="ToChallengeMs"/> is acquire to the
+    /// CDM's challenge reaching the relay (the runtime queue's wait, which on a cold switch is the bring-up, plus CreateSession and
+    /// GenerateRequest; the native <c>[cdm]</c> lines split it), <see cref="RelayMs"/> the relay call (queue wait plus HTTP),
+    /// <see cref="QueuedMs"/> / <see cref="HttpMs"/> the relay's own split of that when it reports one (-1 otherwise),
+    /// <see cref="DeliverMs"/> the hand-over to the CDM until the key was usable (runtime queue, Update, key status) and
+    /// <see cref="TotalMs"/> acquire to usable. -1 = a stage not stamped yet. The stamps are on the Stopwatch clock.</summary>
+    internal readonly record struct LicenseTimings(long AcquiredTimestamp, long ChallengeTimestamp, long RelayDoneTimestamp, long UsableTimestamp,
+                                                   long QueuedMs, long HttpMs)
+    {
+        internal long ToChallengeMs => ProtectedVideoSession.StageMs(AcquiredTimestamp, ChallengeTimestamp);
+        internal long RelayMs => ProtectedVideoSession.StageMs(ChallengeTimestamp, RelayDoneTimestamp);
+        internal long DeliverMs => ProtectedVideoSession.StageMs(RelayDoneTimestamp, UsableTimestamp);
+        internal long TotalMs => ProtectedVideoSession.StageMs(AcquiredTimestamp, UsableTimestamp);
+    }
+
+    private static LicenseTimings TimingsOf(in LicenseEntry e)
+        => new(e.AcquiredTs, e.ChallengeTs, e.RelayDoneTs, e.UsableTs, e.HasRelayTiming ? e.RelayQueuedMs : -1, e.HasRelayTiming ? e.RelayHttpMs : -1);
+
+    /// <summary>The acquisition stamps of <paramref name="kid"/>'s cached key (a switch's <c>switch.budget</c> reads the licence stages
+    /// from it), or false when there is no row.</summary>
+    internal bool TryGetLicenseTimings(string? kid, out LicenseTimings timings)
+    {
+        timings = default;
+        if (string.IsNullOrEmpty(kid)) return false;
+        lock (_gate)
+        {
+            if (!_licenses.TryGetValue(kid, out LicenseEntry e)) return false;
+            timings = TimingsOf(in e);
+            return true;
+        }
+    }
+
+    // F216: when the native runtime reported ready (Stopwatch timestamp, 0 = not yet).
+    private long _readyTimestamp;
+
+    /// <summary>The Stopwatch timestamp at which the live native runtime reported ready (0 until it has): a switch that began before
+    /// it paid the difference as bring-up on its critical path.</summary>
+    internal long RuntimeReadyTimestamp => Volatile.Read(ref _readyTimestamp);
 
     /// <summary>A runtime over <paramref name="native"/> — the real DLL in production (<see cref="Shared"/>), a fake in
     /// the engine's own tests. <paramref name="idleMs"/> is the warm-idle window (tests shorten it).
@@ -317,7 +360,14 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 long t0 = Stopwatch.GetTimestamp();
                 int hr;
                 ulong rt;
-                try { hr = _native.RuntimeCreate(_storePath, GCHandle.ToIntPtr(_self), luid, out rt); }
+                try
+                {
+                    // F249: the engine's output format is read once, at bring-up: NV12 only behind --fg video-nv12 and only where the output's
+                    // overlay probe said NV12 can take a plane (an unprobed output, or the switch off, keeps BGRA).
+                    VideoOutputFormat outputFormat = VideoOverlayCaps.ChooseOutputFormat(FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput, VideoOverlayCaps.Latest);
+                    _native.SetVideoOutputFormat((int)outputFormat);
+                    hr = _native.RuntimeCreate(_storePath, GCHandle.ToIntPtr(_self), luid, out rt);
+                }
                 catch (Exception e)
                 {
                     StartupError = "The protected-video runtime could not start: " + e.Message;
@@ -333,6 +383,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 }
                 Volatile.Write(ref _createdTimestamp, t0);
                 Volatile.Write(ref _rt, rt);
+                if (ReferenceEquals(s_shared, this)) MediaCensus.NoteProtectedRuntime(up: true);   // F197: the process runtime's up/down is a census line
                 _createdAdapterLuid = luid;
                 _refs++;
                 StartupError = null;
@@ -517,6 +568,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         ulong rt = _rt;
         Volatile.Write(ref _rt, 0);
         Volatile.Write(ref _createdTimestamp, 0);
+        if (rt != 0 && ReferenceEquals(s_shared, this)) MediaCensus.NoteProtectedRuntime(up: false);
         return rt;
     }
 
@@ -622,6 +674,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                     {
                         State = LicenseCacheState.Pending,
                         AcquiredMs = now,
+                        AcquiredTs = Stopwatch.GetTimestamp(),
                         LastUsedMs = now,
                         Relay = relay,
                         System = system,
@@ -946,6 +999,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 return;
 
             case PrNative.EvRuntimeReady:
+                Volatile.Write(ref _readyTimestamp, Stopwatch.GetTimestamp());
                 Log($"runtime.ready ms={a}");
                 return;
 
@@ -999,6 +1053,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         if (licenseHandle == 0) return;
         string? kid = null;
         long sinceMs = 0;
+        LicenseTimings budget = default;
         lock (_gate)
         {
             foreach (KeyValuePair<string, LicenseEntry> kv in _licenses)
@@ -1039,6 +1094,8 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 {
                     e.State = LicenseCacheState.Usable;
                     e.ExpiresAtMs = b > 0 ? NowMs() + b : 0;
+                    e.UsableTs = Stopwatch.GetTimestamp();
+                    budget = TimingsOf(in e);
                 }
                 else
                 {
@@ -1061,6 +1118,8 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                     ? $"license.revoked kid={kid} status={b} hr=0x{unchecked((uint)a):X8} ms={sinceMs}"
                     : $"license.fail kid={kid} hr=0x{unchecked((uint)a):X8} ms={sinceMs}");
 
+        if (ev == PrNative.EvLicenseUsable) LogLicenseBudget(kid!, a, in budget);
+
         ProtectedVideoSession[] live;
         lock (_gate)
         {
@@ -1072,6 +1131,27 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         // A hardware-DRM reset can surface first as a failed key session.
         if (ev == PrNative.EvLicenseFailed && ProtectedRuntimeFaults.IsRuntimeReset(unchecked((int)a)))
             PoisonRuntime(unchecked((int)a), "license error", bringUpFailure: false);
+    }
+
+    /// <summary>F226: the ONE <c>license.budget</c> line of an acquisition, written when its key turns usable, so "where did the licence time
+    /// go" is read, not reconstructed. <c>totalMs</c> is native's acquire-to-usable (the same number as <c>license.ok</c>);
+    /// <c>bringUpWaitMs</c> is the part of acquire-to-challenge spent waiting for the native runtime to finish coming up (the item sits
+    /// behind it in the runtime queue), <c>cdmMs</c> the rest of it (queue, CreateSession, GenerateRequest; the native
+    /// <c>[cdm]</c> lines carry waitedMs / ms for each), <c>relayMs</c> the app relay call and, when it reports them,
+    /// <c>queuedMs</c> (its api-queue wait) and <c>httpMs</c> (the round trip), <c>deliverMs</c> hand-over to usable (runtime queue,
+    /// Update, key status). -1 = not reported. Skipped for a key whose acquisition this side did not stamp.</summary>
+    private void LogLicenseBudget(string kid, long totalMs, in LicenseTimings t)
+    {
+        if (t.AcquiredTimestamp == 0) return;
+        long toChallenge = t.ToChallengeMs;
+        long bringUpWait = 0;
+        long ready = Volatile.Read(ref _readyTimestamp);
+        if (ready == 0) bringUpWait = -1;
+        else if (ready > t.AcquiredTimestamp)
+            bringUpWait = ProtectedVideoSession.StageMs(t.AcquiredTimestamp, t.ChallengeTimestamp != 0 && t.ChallengeTimestamp < ready ? t.ChallengeTimestamp : ready);
+        long cdm = toChallenge < 0 ? -1 : bringUpWait < 0 ? toChallenge : Math.Max(0, toChallenge - bringUpWait);
+        Log($"license.budget kid={kid} totalMs={totalMs} bringUpWaitMs={bringUpWait} cdmMs={cdm} relayMs={t.RelayMs} " +
+            $"queuedMs={t.QueuedMs} httpMs={t.HttpMs} deliverMs={t.DeliverMs}");
     }
 
     /// <summary>The native table's LRU closed <paramref name="licenseHandle"/>'s key session to admit another KID: drop the row
@@ -1169,6 +1249,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             if (!_licenses.TryGetValue(kid, out LicenseEntry e)) return PrNative.EFail;
             relay = e.Relay;
             system = e.System;
+            if (e.ChallengeTs == 0) { e.ChallengeTs = Stopwatch.GetTimestamp(); _licenses[kid] = e; }
         }
         if (relay is null)
         {
@@ -1272,6 +1353,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             if (license.IsEmpty) { Fail("The DRM license relay returned an empty license."); return; }
             if (Interlocked.Exchange(ref _done, 1) != 0) return;
             _owner.ForgetRelay(_license, this);
+            _owner.NoteRelayDone(_kid, _license, task.Result);
             try { _delivery.Deliver(license.Span, 0); } catch { /* a destroyed runtime ignores a late delivery */ }
             _owner.Log($"license.delivered kid={_kid} lic={_license} bytes={license.Length}");
         }
@@ -1302,6 +1384,24 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             if (Interlocked.Exchange(ref _done, 1) != 0) return;
             _owner.ForgetRelay(_license, this);
             try { _delivery.Deliver(ReadOnlySpan<byte>.Empty, LicenseRelayFailedHr); } catch { }
+        }
+    }
+
+    /// <summary>The relay answered with a license: stamp when, and keep the relay's own queue / HTTP split when it reported one (F226).
+    /// Matched by KID and handle, so a late answer of a replaced license never stamps the fresh row.</summary>
+    private void NoteRelayDone(string kid, ulong license, LicenseResponse response)
+    {
+        lock (_gate)
+        {
+            if (!_licenses.TryGetValue(kid, out LicenseEntry e) || (e.Handle != 0 && e.Handle != license)) return;
+            e.RelayDoneTs = Stopwatch.GetTimestamp();
+            if (response.QueuedMs >= 0 || response.HttpMs >= 0)
+            {
+                e.HasRelayTiming = true;
+                e.RelayQueuedMs = response.QueuedMs;
+                e.RelayHttpMs = response.HttpMs;
+            }
+            _licenses[kid] = e;
         }
     }
 
@@ -1386,10 +1486,14 @@ internal static class ProtectedRuntimeFaults
     internal const int DxgiDeviceReset = unchecked((int)0x887A0007);
     /// <summary>MF_E_SHUTDOWN.</summary>
     internal const int MfShutdown = unchecked((int)0xC00D3E85);
+    /// <summary>HRESULT_FROM_WIN32(ERROR_TIMEOUT) - what the native runtime reports (as MF_MEDIA_ENGINE_ERR_DECODE) when a source was
+    /// playing with NO frame rendered by the engine for 10 s (F066): a dead swap-chain handle, a stuck topology or a lost device that
+    /// never raised an error. The engine is shared by every session, so the runtime is rebuilt rather than the source retried on it.</summary>
+    internal const int NoRenderedFrame = unchecked((int)0x800705B4);
 
     /// <summary>True for an HRESULT after which the runtime must be rebuilt, not retried.</summary>
     internal static bool IsRuntimeReset(int hr)
-        => hr is TeeInvalidHwDrmState or AsdActiveDisplayFail or DxgiDeviceRemoved or DxgiDeviceReset or MfShutdown;
+        => hr is TeeInvalidHwDrmState or AsdActiveDisplayFail or DxgiDeviceRemoved or DxgiDeviceReset or MfShutdown or NoRenderedFrame;
 }
 
 /// <summary>Where a license relay's answer goes: the native <c>FgPrLicenseDeliver</c> in production, a recorder in the
@@ -1410,6 +1514,9 @@ internal interface IPrRuntimeNative
     /// <summary><c>FgPrRuntimeCreateOnAdapter</c> with the runtime's event thunk and <paramref name="ctx"/>. <paramref name="adapterLuid"/>
     /// (packed <c>(HighPart &lt;&lt; 32) | LowPart</c>, 0 = default adapter) is the adapter the D3D11 video device is created on.</summary>
     int RuntimeCreate(string storePath, nint ctx, long adapterLuid, out ulong runtime);
+    /// <summary><c>FgPrRuntimeSetVideoOutputFormat</c> (F249): the media engine's output format for the runtime the NEXT
+    /// <see cref="RuntimeCreate"/> brings up - 0 = BGRA (the default), 1 = NV12 (<see cref="VideoOutputFormat"/>).</summary>
+    void SetVideoOutputFormat(int format);
     /// <summary><c>FgPrRuntimeDestroy</c>.</summary>
     void RuntimeDestroy(ulong runtime);
     /// <summary><c>FgPrLicenseAcquire</c> with the runtime's relay thunk and <paramref name="ctx"/>.</summary>
@@ -1434,7 +1541,7 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
     /// protected open, so it is reported as unavailable up front instead.</summary>
     internal static readonly string[] RequiredExports =
     [
-        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs",
+        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetVideoOutputFormat",
         "FgPrLicenseAcquire", "FgPrLicenseState", "FgPrLicenseRelease",
         "FgPrSessionCreate", "FgPrSessionPrefetch", "FgPrSessionAttach", "FgPrSessionDetach", "FgPrSessionDestroy",
         "FgPrSessionPlay", "FgPrSessionPause", "FgPrSessionSeek", "FgPrSessionSetVolume", "FgPrSessionSetRate",
@@ -1488,6 +1595,8 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
         runtime = rt;
         return hr;
     }
+
+    public void SetVideoOutputFormat(int format) => PrNative.FgPrRuntimeSetVideoOutputFormat(format);
 
     public void RuntimeDestroy(ulong runtime) => PrNative.FgPrRuntimeDestroy(runtime);
 

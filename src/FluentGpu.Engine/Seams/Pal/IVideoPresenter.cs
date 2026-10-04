@@ -16,7 +16,8 @@ public readonly record struct VideoSurfaceId(uint Value)
 /// The video-compositing PAL seam (<c>docs/plans/video-compositing-spine-design.md §4</c>,
 /// <c>docs/plans/video-phase1-plan.md §4</c> — DRM-free spine). Composites externally-produced video as a sibling
 /// DirectComposition visual the engine never paints into: a child visual z-BELOW the UI swapchain visual, revealed
-/// through a premultiplied-0 hole-punch in the UI back buffer. The portable core references only this interface (it
+/// through a premultiplied-0 hole-punch in the UI back buffer (or, while the host promotes it through <see cref="SetOverlay"/>,
+/// ABOVE that visual over the same hole). The portable core references only this interface (it
 /// stays TerraFX-free); every <c>IDCompositionVisual</c>/<c>IDCompositionSurface</c> ComPtr lives behind the Windows
 /// leaf (<c>FluentGpu.Windows/Pal/DCompVideoPresenter.cs</c>), render-thread-confined like the rest of the device.
 /// </summary>
@@ -71,6 +72,21 @@ public interface IVideoPresenter
     /// cannot do — a video child visual composites outside the UI back buffer, so it ignores the caller's ClipToBounds.
     /// Half the shorter side gives a circle. Default no-op so headless/test presenters need not implement it.</summary>
     void SetCornerRadius(VideoSurfaceId id, float radiusPx) { }
+
+    /// <summary>True when this presenter's output reported overlay-plane support for the video (F087: the Windows probe,
+    /// <see cref="FluentGpu.Media.VideoOverlayCaps"/>), so a surface may be promoted ABOVE the UI plane through
+    /// <see cref="SetOverlay"/>. Default false: a headless / test presenter, or an output that was not probed or reported no plane,
+    /// keeps every surface an underlay.</summary>
+    bool SupportsOverlay => false;
+
+    /// <summary>
+    /// Overlay mode (F087): <see langword="true"/> moves the child visual ABOVE the UI visual (inserted above it, in the same
+    /// <c>(Z, slot)</c> order among the other promoted surfaces), <see langword="false"/> returns it to its place BELOW the UI visual.
+    /// The caller promotes only a surface whose rect nothing paints over, and demotes it on the turn something does; the UI back
+    /// buffer's hole stays punched in both modes, so only the visual's z-order changes. Queued for the next <see cref="Commit"/>
+    /// like every other mutation. Default no-op so headless/test presenters need not implement it.
+    /// </summary>
+    void SetOverlay(VideoSurfaceId id, bool above) { }
 
     /// <summary>Tear down one surface (removes the child visual, releases its content). Cold path.</summary>
     void Destroy(VideoSurfaceId id);

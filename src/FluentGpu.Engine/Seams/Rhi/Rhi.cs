@@ -116,10 +116,24 @@ public partial interface IGpuDevice : IDisposable
     /// (<see cref="SlotLivenessTimeouts"/>).</para></summary>
     bool TryTakePresentSlot(int timeoutMs) => true;
 
-    /// <summary>Liveness-bounded present-slot takes that timed out so far (CUMULATIVE; render thread writes, any thread reads):
-    /// the take proceeded without the slot ever opening. Surfaced as <c>slotTimeouts=</c> in the <c>[render.pace]</c> line.
+    /// <summary>Liveness-bounded present-slot takes of the PRIMARY swapchain that timed out so far (CUMULATIVE; render thread writes,
+    /// any thread reads): the take proceeded without the slot ever opening. A secondary swapchain's are
+    /// <see cref="NonPrimaryLatencyTimeouts"/>. Surfaced as <c>slotTimeouts=</c> in the <c>[render.pace]</c> line.
     /// Default 0: the headless seam has no present queue.</summary>
     long SlotLivenessTimeouts => 0;
+
+    /// <summary>Blocking latency waits a NON-primary swapchain's submit (a detached pop-out's, a popup's) ran out the 1 s bound for
+    /// without its slot opening (CUMULATIVE; any thread reads). They run on the shared render thread, so each is a main-window
+    /// stall attributable to that secondary window; <see cref="SlotLivenessTimeouts"/> counts the PRIMARY's only. The
+    /// <c>[render.pace]</c> line's <c>timeoutTarget=primary|child</c> is the difference of the two (F235). Default 0.</summary>
+    long NonPrimaryLatencyTimeouts => 0;
+
+    /// <summary>The longest blocking latency wait of a non-primary swapchain since <see cref="ResetNonPrimaryLatencyWindow"/>, in
+    /// milliseconds: the <c>childWaitMax=</c> of the <c>[render.pace]</c> line (the primary's own is <c>slotWaitMax=</c>). Default 0.</summary>
+    double NonPrimaryLatencyWaitMaxMs => 0.0;
+
+    /// <summary>Start a new <see cref="NonPrimaryLatencyWaitMaxMs"/> window (the pace report opens one every second). Render thread.</summary>
+    void ResetNonPrimaryLatencyWindow() { }
 
     /// <summary>The per-swapchain form of <see cref="TryTakePresentSlot(int)"/>: take <paramref name="target"/>'s OWN
     /// present-slot credit (waiting at most <paramref name="timeoutMs"/>, 0 = a non-blocking probe). The shared render thread

@@ -120,6 +120,8 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // comparison and publishes nothing when nothing changed.
     private MediaCommandFlags _publishedCommands;
     private bool _errorPublished;
+    // The renderer frame counters last handed to sink.Statistics (F066); -1 = nothing published yet.
+    private long _statsRendered = -1, _statsDropped = -1;
     private bool _seeking;
     // Native DComp auto-presents decoded frames. This flag asks for a Repaint command only for an initial/reconfigured
     // hand-off or a real media-engine event, never once per host frame.
@@ -503,6 +505,10 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             if (_metaReady) PublishCommands(sink, snap, EngineLiveFor(snap));
         }
 
+        // 0a. Rendered/dropped-frame health (F066), before the error gate so the counters of a source that failed (or was judged hung)
+        // are still on the signal the diagnostics read.
+        PublishStatistics(sink, in snap);
+
         // 1. Terminal error — map the MF media-engine error code to a typed MediaError (published once). Never a silent drop.
         if ((snap.Flags & VideoEngineFlags.Error) != 0)
         {
@@ -677,6 +683,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 if (!step.Request.IsEmpty)
                 {
                     _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
+                    Diag.Line($"[video] stream.size backend=mf host={binding.HostOrdinal} token={binding.Token} size={step.Request.Width}x{step.Request.Height}");   // F235: which window's slot asked (the gate makes it once per real change)
                     Volatile.Write(ref _repaintPending, 1);
                 }
                 ArmSizeRetry(step.RetryInMs);
@@ -808,6 +815,22 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
 
     private static string LabelOf(AdaptiveTrackGroup group)
         => string.IsNullOrWhiteSpace(group.Language) ? group.Id : $"{group.Language} · {group.Id}";
+
+    /// <summary>Publish the rendered/dropped frame counters. F066: the engine polls FRAMES_RENDERED / FRAMES_DROPPED at its own
+    /// bounded cadence, so the snapshot's counters change at most a couple of times a second; the sink is written only when they do (a steady pump publishes nothing).</summary>
+    private void PublishStatistics(MediaSignalSink sink, in VideoEngineSnapshot snap)
+    {
+        if (snap.FramesRendered == _statsRendered && snap.FramesDropped == _statsDropped) return;
+        if (_statsRendered < 0 && snap.FramesRendered == 0 && snap.FramesDropped == 0) return;   // nothing to say yet: keep Empty
+        _statsRendered = snap.FramesRendered;
+        _statsDropped = snap.FramesDropped;
+        sink.Statistics(StatisticsFrom(in snap));
+    }
+
+    internal static PlaybackStatistics StatisticsFrom(in VideoEngineSnapshot snap)
+        => new(BytesDownloaded: 0, FramesDecoded: snap.FramesRendered + snap.FramesDropped, FramesDropped: snap.FramesDropped,
+               AudioUnderruns: 0, EstimatedThroughputKbps: 0, VideoBitrateKbps: 0, AudioBitrateKbps: 0,
+               StartupTime: TimeSpan.Zero, RebufferTime: TimeSpan.Zero, RebufferCount: 0, FramesRendered: snap.FramesRendered);
 
     /// <summary>Publish the command bitset — core transport + the manifest's selection bits + (for an engine-reported
     /// live source) GoLive and the seekability verdict for its DVR window. Value-gated on the last published set, so

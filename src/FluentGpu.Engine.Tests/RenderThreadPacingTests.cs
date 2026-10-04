@@ -428,6 +428,201 @@ public sealed class RenderThreadPacingTests
             FluentGpu.Foundation.Diag.Sink = previousSink;
         }
     }
+
+    // F235: the pace line says WHOSE slot wait timed out and how long a secondary window made the shared thread wait: timeoutTarget=
+    // (primary | child | both | none) from the two timeout deltas, and childWaitMax= (the pop-out's longest blocking latency wait,
+    // the figure slotWaitMax= never includes).
+    [Fact]
+    public void ChildSlotWaits_AreAttributedOnThePaceLine_WithTimeoutTargetAndChildWaitMax()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var lines = new List<string>();
+        var previousSink = FluentGpu.Foundation.Diag.Sink;
+        FluentGpu.Foundation.Diag.Sink = l => { lock (lines) lines.Add(l); };
+        var seam = new SceneFramePublisher();
+        var display = new VirtualDisplay();
+        bool childStalled = false;
+        var rt = new RenderThread(seam, _ => { }, async: false,
+            needsTick: () => true, ownMotion: () => true,
+            tick: () => { }, tickPeriod: () => PeriodQpc, displayClock: display,
+            takePresentSlot: _ => true,
+            paceHost: () => new RenderPaceHostState(0, false, default, 1.0, 1,
+                SlotLivenessTimeouts: 0, NonPrimaryLatencyTimeouts: childStalled ? 2 : 0, NonPrimaryLatencyWaitMaxMs: childStalled ? 12.5 : 0.0));
+        try
+        {
+            display.Now = 0;
+            rt.DrainSync();                                  // the first turn opens the 1 s pace window (child counters at their base)
+            display.Now = 1;
+            rt.DrainSync();
+            childStalled = true;                             // a pop-out's blocking latency wait ran out its bound twice inside the window
+            Thread.Sleep(1100);
+            display.Now = 2;
+            rt.DrainSync();                                  // a turn past the window closes it: the line is written
+            string? pace;
+            lock (lines) pace = lines.Find(l => l.StartsWith("[render.pace]", StringComparison.Ordinal));
+            Assert.NotNull(pace);
+            Assert.Contains("slotTimeouts=0 timeoutTarget=child childWaitMax=12.50 childTimeouts=2 ", pace);
+        }
+        finally
+        {
+            rt.Dispose(); display.Dispose();
+            FluentGpu.Foundation.Diag.Sink = previousSink;
+        }
+    }
+
+    [Theory]
+    [InlineData(0, 0, "none")]
+    [InlineData(4, 0, "primary")]
+    [InlineData(0, 1, "child")]
+    [InlineData(2, 3, "both")]
+    public void PaceTimeoutTarget_NamesWhichSwapchainsSlotTimedOut(long primary, long child, string expected)
+        => Assert.Equal(expected, RenderThread.PaceTimeoutTarget(primary, child));
+
+    // F215: the detached children's present drain runs after the primary's present, so no worst present's `work` contains it. Its
+    // own wall time per turn (avg / max / count in the window) is printed on the pace line, so a stall inside a pop-out's submit,
+    // fence wait or present is attributed to the child drain instead of looking like unexplained parent work.
+    [Fact]
+    public void ChildDrainTime_IsPrintedOnThePaceLine()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var lines = new List<string>();
+        var previousSink = FluentGpu.Foundation.Diag.Sink;
+        FluentGpu.Foundation.Diag.Sink = l => { lock (lines) lines.Add(l); };
+        var seam = new SceneFramePublisher();
+        var display = new VirtualDisplay();
+        var rt = new RenderThread(seam, _ => { }, async: false,
+            needsTick: () => true, ownMotion: () => true,
+            tick: () => { }, tickPeriod: () => PeriodQpc, displayClock: display,
+            takePresentSlot: _ => true, extraDrain: () => Thread.Sleep(30));
+        try
+        {
+            display.Now = 0;
+            rt.DrainSync();                                  // the first turn opens the 1 s pace window
+            display.Now = 1;
+            rt.DrainSync();                                  // a turn inside the window: its child drain is counted
+            Thread.Sleep(1100);
+            display.Now = 2;
+            rt.DrainSync();                                  // a turn past the window closes it: the line is written
+            string? pace;
+            lock (lines) pace = lines.Find(l => l.StartsWith("[render.pace]", StringComparison.Ordinal));
+            Assert.NotNull(pace);
+            int at = pace.IndexOf("childDrain(avg=", StringComparison.Ordinal);
+            Assert.True(at >= 0, pace);
+            int maxAt = pace.IndexOf("max=", at, StringComparison.Ordinal);
+            string maxText = pace[(maxAt + 4)..pace.IndexOf(' ', maxAt)];
+            Assert.True(double.Parse(maxText, System.Globalization.CultureInfo.InvariantCulture) >= 25.0, pace);
+        }
+        finally
+        {
+            rt.Dispose(); display.Dispose();
+            FluentGpu.Foundation.Diag.Sink = previousSink;
+        }
+    }
+
+    // F098: a UI wake that was only its video pump parks the registry's snapshot (a video-only post) and wakes the loop; the loop's
+    // preTurn applies it. That turn records nothing, takes no present slot and presents nothing, and the post is not a publication
+    // (the publish sequence does not move, no frame becomes pending).
+    [Fact]
+    public void AVideoOnlyPost_IsAppliedInPreTurn_WithoutARecordASlotTakeOrAPublication()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        var reg = new FluentGpu.Media.VideoSurfaceRegistry();
+        var scratch = new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+        byte[] one = [1];
+        int submits = 0, takes = 0, applied = 0, appliedIntents = 0;
+        var rt = new RenderThread(seam, _ => Interlocked.Increment(ref submits), async: false,
+            takePresentSlot: _ => { Interlocked.Increment(ref takes); return true; },
+            preTurn: () =>
+            {
+                if (!seam.TryTakeVideoOnly(scratch, out int n)) return;
+                Volatile.Write(ref appliedIntents, n);
+                Interlocked.Increment(ref applied);
+            });
+        try
+        {
+            int token = reg.Acquire();
+            reg.Place(token, new FluentGpu.Foundation.RectF(0f, 0f, 10f, 10f));
+            seam.Publish(one, default, default, video: reg);
+            rt.DrainSync();                                  // the baseline frame: one slot take, one submit
+            Assert.Equal(1, Volatile.Read(ref submits));
+            Assert.Equal(1, Volatile.Read(ref takes));
+            ulong seq = seam.PublishSeq;
+
+            reg.Place(token, new FluentGpu.Foundation.RectF(5f, 5f, 10f, 10f));
+            Assert.True(seam.TryPostVideoOnly(reg));
+            Assert.True(seam.HasVideoOnlyPost);
+            Assert.False(seam.HasPendingFrame);              // a post is not a publication
+            Assert.Equal(seq, seam.PublishSeq);
+            rt.DrainSync();                                  // the wake: one turn, applied by the preTurn hook
+
+            Assert.Equal(1, Volatile.Read(ref applied));
+            Assert.Equal(1, Volatile.Read(ref appliedIntents));
+            Assert.False(seam.HasVideoOnlyPost);             // exactly once
+            Assert.Equal(1, Volatile.Read(ref submits));     // nothing recorded or presented
+            Assert.Equal(1, Volatile.Read(ref takes));       // no present slot reserved for it
+            Assert.Equal(seq, seam.PublishSeq);
+        }
+        finally { rt.Dispose(); }
+    }
+
+    // F098: the post may never reorder against a full publication. It is refused before the first publication and while one is
+    // outstanding (its snapshot is the older state), and a full publication carrying the registry's snapshot supersedes a parked one.
+    [Fact]
+    public void AVideoOnlyPost_IsRefusedAroundAnOutstandingPublication_AndSupersededByTheNextOne()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        var reg = new FluentGpu.Media.VideoSurfaceRegistry();
+        var scratch = new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+        byte[] one = [1];
+        int token = reg.Acquire();
+        reg.Place(token, new FluentGpu.Foundation.RectF(0f, 0f, 10f, 10f));
+
+        Assert.False(seam.TryPostVideoOnly(reg));            // nothing published yet: the first frame carries the table
+        seam.Publish(one, default, default, video: reg);
+        Assert.False(seam.TryPostVideoOnly(reg));            // that frame is outstanding: it would be applied around the post
+        Assert.True(seam.TryAcquire(out _));                 // the renderer adopts it
+
+        reg.Place(token, new FluentGpu.Foundation.RectF(5f, 5f, 10f, 10f));
+        Assert.True(reg.HasUnpublishedChanges);
+        Assert.True(seam.TryPostVideoOnly(reg));
+        Assert.False(reg.HasUnpublishedChanges);             // the post carried the change
+        Assert.Equal(1L, seam.VideoOnlyPosts);
+
+        reg.Place(token, new FluentGpu.Foundation.RectF(9f, 9f, 10f, 10f));
+        seam.Publish(one, default, default, video: reg);     // a full publication: a newer snapshot than the parked post
+        Assert.False(seam.HasVideoOnlyPost);
+        Assert.False(seam.TryTakeVideoOnly(scratch, out _));
+        Assert.False(seam.TryPostVideoOnly(reg));            // and it is outstanding in turn
+    }
+
+    // F098: the parked snapshot is the registry's, intent for intent, stamped with the snapshot sequence the applier orders
+    // geometry by, and taking it empties the mailbox.
+    [Fact]
+    public void ATakenVideoOnlyPost_CarriesTheSnapshot_AndEmptiesTheMailbox()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        var reg = new FluentGpu.Media.VideoSurfaceRegistry();
+        var scratch = new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+        byte[] one = [1];
+        int token = reg.Acquire();
+        reg.SetContentSize(token, 1920, 1080);
+        seam.Publish(one, default, default, video: reg);
+        Assert.True(seam.TryAcquire(out _));
+
+        reg.SetContentSize(token, 1280, 720);
+        Assert.True(seam.TryPostVideoOnly(reg));
+        Assert.True(seam.TryTakeVideoOnly(scratch, out int count));
+        Assert.Equal(1, count);
+        Assert.Equal(token, scratch[0].Token);
+        Assert.Equal(1280u, scratch[0].ContentW);
+        Assert.Equal(720u, scratch[0].ContentH);
+        Assert.True(scratch[0].HasGeometry);
+        Assert.True(scratch[0].Seq > 1L);                    // newer than the publication's snapshot
+        Assert.False(seam.TryTakeVideoOnly(scratch, out _));
+    }
 }
 
 /// <summary>F244: <see cref="PresentSplit"/> names the call a present turn blocked in.</summary>

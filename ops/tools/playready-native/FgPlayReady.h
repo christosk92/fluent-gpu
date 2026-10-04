@@ -81,9 +81,13 @@ enum FgPrEvent
     FgPrEvent_Buffered = 21,         // a = forward buffered ms, b = backward retained ms
     FgPrEvent_Keyframes = 22,        // a = segment index parsed; the keyframe table grew (poll FgPrSessionGetKeyframes)
     FgPrEvent_Metadata = 30,         // a = duration ms, b = (width << 32) | height
-    FgPrEvent_CanPlay = 31,
-    FgPrEvent_FirstFrame = 32,       // MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY; a = presentation position ms
-    FgPrEvent_Handle = 33,           // a = the DComp swapchain handle (re-raised on RESOURCELOST, and when the value changes)
+    FgPrEvent_CanPlay = 31,          // a = startCorrectionMs: how far behind the carried start the engine clock was and had to be sought
+                                     // (the second source Start the CANPLAY fallback costs; 0 = the engine adopted the carried start)
+    FgPrEvent_FirstFrame = 32,       // MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY; a = presentation position ms, b = the QPC it was stamped at
+                                     // (FgPrSnapshot.firstFrameQpc): the first-frame time on the native clock, not the dequeue time
+    FgPrEvent_Handle = 33,           // a = the DComp swapchain handle (re-raised on RESOURCELOST, and when the value changes). The RUNTIME
+                                     // owns it: the consumer binds it (CreateSurfaceFromHandle takes its own reference) and never closes
+                                     // it; a replaced one (or the one of a detached session) is closed ~2 s after it was superseded
     FgPrEvent_Position = 34,         // a = position ms, b = QPC ticks of the sample — ≤ 4 Hz, never a pump trigger
     FgPrEvent_Seeking = 35,          // a = target ms
     FgPrEvent_Seeked = 36,           // a = landed ms, b = ms since the seek was posted
@@ -135,6 +139,13 @@ enum FgPrSeekMode
 {
     FgPrSeekMode_Exact = 0,       // SetCurrentTime — decode from the keyframe to the exact PTS (a commit)
     FgPrSeekMode_Keyframe = 1,    // SetCurrentTimeEx(APPROXIMATE) — present the keyframe ≤ target (a scrub preview)
+};
+
+/// FgPrRuntimeSetVideoOutputFormat values: the pixel format the runtime's media engine outputs into its windowless swap chain.
+enum FgPrVideoOutput
+{
+    FgPrVideoOutput_Bgra = 0,     // B8G8R8A8_UNORM - the format the engine has always been forced to (the default)
+    FgPrVideoOutput_Nv12 = 1,     // NV12 - the decoder's own format: no per-frame NV12 -> BGRA video-processor pass, and a YUV overlay plane can take it
 };
 
 // ── descriptors ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -206,6 +217,10 @@ typedef struct FgPrSnapshot
                                          // chain's creation size or the last FgPrSessionSetStreamSize), 0x0 while none has been or
                                          // the session is detached. The managed side keeps the compositor's content size at the
                                          // previous value until this equals the size it asked for (an echo, not a guess)
+    int64_t framesRendered;         // IMFMediaEngineEx FRAMES_RENDERED / FRAMES_DROPPED for THIS attach, polled every ~500 ms while the
+    int64_t framesDropped;          // source plays and accumulated across the counter resets MF applies after a flush; frozen while
+                                    // paused / seeking / waiting, 0 until the first poll. A source playing with NO rendered frame for 10 s
+                                    // raises FgPrEvent_Error(a = MF_MEDIA_ENGINE_ERR_DECODE, b = 0x800705B4 ERROR_TIMEOUT)
 } FgPrSnapshot;
 
 /// What FgPrProbeFile answers about a local fragmented MP4 — the demuxer gate's read-out (tests only; no CDM, no GPU).
@@ -246,6 +261,14 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime rt);
 
 /// How long the runtime thread has been alive, in ms — the timeline every `[video.native]` line is stamped with.
 __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime rt);
+
+/// F249: choose the media engine's output format (FgPrVideoOutput) for the NEXT runtime created in this process. Process-wide and READ
+/// ONCE, when FgPrRuntimeCreateOnAdapter starts the bring-up: call it BEFORE the create; a runtime that already exists keeps the format it
+/// was created with. An unknown value selects BGRA, the default. The managed side asks for NV12 only behind `--fg video-nv12` and only
+/// after its output's overlay probe (IDXGIOutput3::CheckOverlaySupport) reported NV12 as plane-capable. A separate export, not a new
+/// parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale build (RequiredExports) instead of being
+/// called with arguments it would misread. Always returns S_OK.
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format);
 
 // ── license cache (KID-keyed; the runtime owns the CDM; key sessions stay open until Expired or Release) ─────────────
 

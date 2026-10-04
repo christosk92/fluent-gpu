@@ -721,6 +721,50 @@ public sealed class MfMediaSessionTests
     }
 
     [Fact]
+    public void RendererFrameCounters_AreMappedOntoPlaybackStatistics_AndValueGated()
+    {
+        var (s, core, eng) = NewSession();
+        Pump(s);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // nothing counted yet: the seam keeps Empty
+
+        eng.Frames = (120, 3);
+        Pump(s);
+        PlaybackStatistics stats = core.Statistics.Peek();
+        Assert.Equal(120, stats.FramesRendered);
+        Assert.Equal(3, stats.FramesDropped);
+        Assert.Equal(123, stats.FramesDecoded);   // MF reports no separate decoder count: rendered + dropped
+
+        core.SetStatistics(PlaybackStatistics.Empty);
+        Pump(s);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // unchanged counters publish nothing
+
+        eng.Frames = (180, 3);
+        Pump(s);
+        Assert.Equal(180, core.Statistics.Peek().FramesRendered);
+    }
+
+    [Fact]
+    public void AHungEngine_IsATypedRetryableDecodeError_AndItsCountersStayPublished()
+    {
+        var (s, core, eng) = NewSession();
+        int hr = unchecked((int)0x800705B4);   // HRESULT_FROM_WIN32(ERROR_TIMEOUT): no frame rendered within 10 s of playing
+        eng.Frames = (0, 7);
+        eng.ErrorCode = 3;                     // MF_MEDIA_ENGINE_ERR_DECODE
+        eng.ErrorHr = hr;
+        eng.HasError = true;
+
+        Pump(s);
+
+        MediaError? error = core.Error.Peek();
+        Assert.NotNull(error);
+        Assert.Equal(MediaErrorCategory.Decode, error!.Category);
+        Assert.Equal(MediaRecovery.Retryable, error.Recovery);
+        Assert.Equal(hr, (int)error.UnderlyingCode!.Value);
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+        Assert.Equal(7, core.Statistics.Peek().FramesDropped);   // published ahead of the error gate
+    }
+
+    [Fact]
     public async Task DisposeAsync_InvokesTheReleaseCallback_AndDoesNotDisposeTheEngine()
     {
         // Required new coverage (plan §7/§1.4 (e)): a warm-pooled session (MfMediaPlayer.OpenAsync always supplies a

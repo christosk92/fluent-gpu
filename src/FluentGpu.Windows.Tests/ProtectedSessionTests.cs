@@ -346,6 +346,43 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
     }
 
     [Fact]
+    public void TheNativeFrameCounters_ArePublishedAsPlaybackStatistics_ValueGated()
+    {
+        var (session, core, player) = NewSession();
+        session.PumpVideo(default, Rect, 1f);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // nothing polled yet: the seam keeps Empty
+
+        player.FramesRendered = 90;
+        player.FramesDropped = 2;
+        session.PumpVideo(default, Rect, 1f);
+        PlaybackStatistics stats = core.Statistics.Peek();
+        Assert.Equal(90, stats.FramesRendered);
+        Assert.Equal(2, stats.FramesDropped);
+        Assert.Equal(92, stats.FramesDecoded);
+
+        core.SetStatistics(PlaybackStatistics.Empty);
+        session.PumpVideo(default, Rect, 1f);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // unchanged counters publish nothing
+
+        player.FramesRendered = 150;
+        session.PumpVideo(default, Rect, 1f);
+        Assert.Equal(150, core.Statistics.Peek().FramesRendered);
+    }
+
+    [Fact]
+    public void ANoRenderedFrameHang_IsARetryableNonDrmError_NotALicenseFailure()
+    {
+        int hr = unchecked((int)0x800705B4);   // what the native runtime raises after 10 s of playing with no frame rendered
+
+        MediaError error = ProtectedMediaSession.ProtectedFailure("Protected playback failed (MF_MEDIA_ENGINE_ERR 3, 0x800705B4).", hr,
+            needsRuntimeRebuild: false, locus: null);
+
+        Assert.Equal(MediaRecovery.Retryable, error.Recovery);   // the runtime is rebuilt and the source reopened in place
+        Assert.NotEqual(MediaErrorCategory.Drm, error.Category);
+        Assert.Equal(hr, (int)error.UnderlyingCode!.Value);
+    }
+
+    [Fact]
     public void AnErrorAFreshRuntimeCures_PublishesARetryableNonDrmError_CarryingTheHresult()
     {
         var (session, core, player) = NewSession();
@@ -406,6 +443,27 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
     }
 
     // ── the composited surface ───────────────────────────────────────────────────────────────────────────────────────
+
+    // F235: the stream-size request carries WHO asked (the slot's registry token and its window's ordinal), so the managed
+    // "[video] stream.size" line can tell the main window's slot from a pop-out's with no native ABI change.
+    [Fact]
+    public void PumpVideo_TagsTheStreamSizeRequestWithTheBindingTokenAndHostOrdinal()
+    {
+        var (session, _, player) = NewSession();
+        var registry = new VideoSurfaceRegistry { HostOrdinal = 2 };
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(3840, 2160);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Loading);
+
+        session.PumpVideo(binding, Rect, 1f);
+
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal((binding.Token, 2), Assert.Single(player.StreamSizeTags));
+        Assert.Equal(2, binding.HostOrdinal);
+    }
 
     [Fact]
     public void PumpVideo_WithAValidBindingAndASurface_SizesTheStreamToWhatTheDestinationCanShow()

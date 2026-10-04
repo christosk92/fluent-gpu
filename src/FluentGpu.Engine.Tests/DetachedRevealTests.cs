@@ -106,6 +106,8 @@ public sealed class DetachedRevealTests
         Assert.Equal(1.5, seen.WindowCreateMs);
         Assert.Equal(2.5, seen.HostCtorMs);
         Assert.True(seen.FirstFrameMs >= 0.0 && seen.FirstPresentMs >= seen.FirstFrameMs, $"split {seen}");
+        // F215: the render side's own stamp of that first successful present is never later than the moment the UI noticed it.
+        Assert.True(seen.RenderPresentMs >= 0.0 && seen.RenderPresentMs <= seen.FirstPresentMs, $"split {seen}");
         Assert.Equal(seen, rig.Child.OpenTiming);
 
         for (int i = 0; i < 5; i++) rig.Parent.TickDetachedHosts();   // later ticks never show it again
@@ -169,6 +171,7 @@ public sealed class DetachedRevealTests
 
         Assert.Equal(1, rig.ChildWindow.ShowCalls);
         Assert.True(seen.TimedOut);
+        Assert.Equal(-1.0, seen.RenderPresentMs);   // F215: no present was seen, so there is no render-side stamp
         Assert.False(rig.ChildSwapchain.HasPresentedContent);
         rig.Parent.TickDetachedHosts();
         Assert.Equal(1, rig.ChildWindow.ShowCalls);

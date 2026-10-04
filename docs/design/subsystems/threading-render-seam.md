@@ -999,6 +999,19 @@ visual shows through (`gpu-renderer.md` §7.3).
   none, so these results use the registry's own mailbox instead; the render thread never writes a `Signal` or the pump counters.
   The early structural drain (a handle arriving with no publication behind it) reads a small content mailbox - handle, sequence and
   release flag, never geometry - under the same lock; `VideoSurfaceRegistry.StructuralVersion` is the O(1) gate.
+- **A wake that is only the video pump publishes no scene (F098).** `AppHost.RunFrame` runs the coalesced pump itself when the wake
+  mask is exactly `VideoPumpPending` (no input, layout clean, nothing wrote a transform; async hosts with a render thread only). A
+  pump that wrote no intent ends the turn (`VideoOnlyQuietTurns`: no capture, no post, no record). One that wrote only registry
+  intents parks their snapshot in `SceneFramePublisher.TryPostVideoOnly` and wakes the loop with `WakeForVideo`; the loop's
+  `preTurn` (`ApplyVideoOnlyPost`) takes it and applies it against the retained frame's posed holes and scale, with no slot take, no
+  record and no present. A present that stood down applies releases only, and an owed present (a detached child's refused frame,
+  not yet on the glass) is held the same way - the post is adopted content-only and the retry's drain places it when that frame
+  lands, so a hole-punched video never leads the frame that carries its hole. The post is state like a publication's snapshot, ordered by the same rules: it is made only when the first
+  publication exists and none is outstanding (`HasPendingFrame` false), a full publication carrying a snapshot discards a parked
+  post, and each snapshot is stamped (`VideoPresentIntent.Seq`) so the applier adopts geometry only from a snapshot at least as
+  new as the one it holds - a retained frame re-read on an elided or motion turn can no longer pull a newer placement back. A
+  pump that wrote a signal or dirtied layout, a table with a release pending (a destroy stays coupled to the present), or an
+  outstanding publication all take the ordinary frame, which carries the intents as before.
 - **Stage B - one composition for the hole and the video, on a geometry-motion turn only.** When the apply that follows a present
   will MOVE an already-placed surface (`VideoPlacementApplier.PrepareGeometry`), the host arms `ISwapchain.HintGeometryMotionPresent`:
   the present first waits (bounded at one 60 Hz refresh, polling the fence, counted as `motionFenceWait` / `motionFenceTimeout`)
@@ -1189,6 +1202,15 @@ do not cover: a preempted thread, the feedback publish), and `blocker=` names th
 thread samples the split only when a present sets a new worst. The Wavee `mem.sample` line carries `pageFaults` /
 `pageFaultsDelta` / `pageFaultsPerSec` (the process counter, soft + hard) so an off-CPU block under high machine memory load
 can be told from DWM / the present queue. A diagnostic only: nothing here is a pacing input.
+
+**What `work=` does not contain: the children's drain (F215).** `_extraDrain` (every detached child's present, then the turn's one
+composition commit) runs AFTER the primary's present, so no worst present's `work=` includes it, yet a pop-out that submits, waits
+its fence or presents slowly delays the PARENT's next turn right there. The `[render.pace]` line therefore ends with
+`childDrain(avg= max= n=)`: the wall time of that call per turn in the 1 s window, stamped with two QPC reads and no allocation. A
+parent `work=` far above `run=` with a small `childDrain` is not the pop-out; a large `childDrain` max names it, and the `child=` tail
+says which child. The pop-out's open is timed the same way: `[detached] reveal ... renderPresentMs=` (the render thread's own stamp
+of the child's first successful present, against `firstPresentMs`, when the UI noticed it) and `[detached] first.video.bind ms=` (the
+first surface handle the child's presenter accepted, `VideoPlacementApplier.FirstBindQpc`: the picture, not just the frame).
 
 **A pop-out produces once per parent tick (F106).** A detached child has no compositor clock of its own, so its UI-side
 `ProductionGateBlocks` samples the PARENT render thread's clock (`RenderThread.TryGetDisplayTick`, `AppHost.PacingClock`):

@@ -1294,6 +1294,109 @@ static void ScheduleEngineRelease(Runtime& rt)
     });
 }
 
+// ── F198: swap-chain handle ownership ────────────────────────────────────────────────────────────────────────────────
+// IMFMediaEngineEx::GetVideoSwapchainHandle hands out a FRESH NT handle per call that the caller closes. The managed presenter's
+// CreateSurfaceFromHandle takes its own reference and never owns the value, so the runtime owns every handle it publishes: it
+// stays open while it is the session's published FgPrSnapshot.handle (a device recovery binds it again), and one that is replaced
+// or whose session detaches is retired and closed health::kHandleGraceMs later, once the render thread has bound its successor.
+
+static int64_t TickMs() { return (int64_t)GetTickCount64(); }
+
+static void CloseSwapchainHandle(uint64_t handle)
+{
+    if (handle != 0) CloseHandle((HANDLE)(uintptr_t)handle);
+}
+
+/// `handle` is no longer any session's published handle: keep it open for the grace, then close it. Runtime thread.
+static void RetireSwapchainHandle(Runtime& rt, uint64_t handle)
+{
+    if (handle == 0) return;
+    rt.retiredHandles.Retire(handle, TickMs(), CloseSwapchainHandle);
+    Runtime* raw = &rt;   // the runtime thread runs the item and owns a strong ref for as long as it does
+    rt.queue.PostAfter((int32_t)(fgpr::health::kHandleGraceMs + 50), [raw] { raw->retiredHandles.Sweep(TickMs(), CloseSwapchainHandle); });
+}
+
+/// Publish a freshly queried handle as the session's current one, retiring the handle it replaces. An identical value is the
+/// same handle (MF did not duplicate it), which is not a second reference to close. Returns the replaced value.
+static uint64_t AdoptSwapchainHandle(Runtime& rt, Session& s, uint64_t value)
+{
+    const uint64_t prev = s.swapchainHandle.exchange(value, std::memory_order_acq_rel);
+    if (prev == value) return prev;
+    rt.retiredHandles.Reinstate(value);   // it was waiting out its grace: current again, never closed
+    RetireSwapchainHandle(rt, prev);
+    return prev;
+}
+
+// ── F066: rendered / dropped frames and the rendered-frame hang check ────────────────────────────────────────────────────
+
+static bool ReadEngineStat(Runtime& rt, MF_MEDIA_ENGINE_STATISTIC id, uint32_t& out)
+{
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    bool ok = false;
+    if (SUCCEEDED(rt.engineEx->GetStatistics(id, &pv)) && (pv.vt == VT_UI4 || pv.vt == VT_UI8))
+    {
+        out = pv.vt == VT_UI4 ? (uint32_t)pv.ulVal : (uint32_t)pv.uhVal.QuadPart;
+        ok = true;
+    }
+    PropVariantClear(&pv);
+    return ok;
+}
+
+static bool ReadEngineFrameStats(Runtime& rt, uint32_t& rendered, uint32_t& dropped)
+{
+    return ReadEngineStat(rt, MF_MEDIA_ENGINE_STATISTIC_FRAMES_RENDERED, rendered) &&
+           ReadEngineStat(rt, MF_MEDIA_ENGINE_STATISTIC_FRAMES_DROPPED, dropped);
+}
+
+/// A new source starts counting from whatever the (shared, warm) engine reads now: MF resets the counters itself once the new
+/// source flushes in, which FrameCounters::Observe folds in as a decrease.
+static void RebaseFrameStats(Runtime& rt, Session& s)
+{
+    uint32_t rendered = 0, dropped = 0;
+    if (ReadEngineFrameStats(rt, rendered, dropped)) s.frames.Rebase(rendered, dropped);
+}
+
+/// One turn of the frame-health check (runtime thread, from the position sample the engine's TIMEUPDATE drives). The counters are
+/// read at most every health::kStatsPollMs and only while the source plays video: not paused, seeking, waiting or starved, and
+/// only once a stream rect was applied (a swap chain with nothing sized into it has nothing to render). The same turn judges
+/// Chromium's rendered-frame detection: playing with NO frame rendered within health::kNoFrameTimeoutMs of PLAYING (or of the last
+/// UpdateVideoStream) is a hang - a dead swap-chain handle, a stuck topology, a lost device that never raised an error - and is
+/// reported as a typed decode error the managed side turns into a Retryable failure on a rebuilt runtime.
+static void PollFrameHealth(Runtime& rt, Session& s)
+{
+    if (!rt.engineEx) return;
+    const int64_t nowMs = TickMs();
+    const bool playing = !s.attachPending && s.metadataSeen && s.state.load(std::memory_order_acquire) == FgPrState_Playing &&
+                         s.seeking.load(std::memory_order_acquire) == 0 && !s.waitGate.waiting &&
+                         s.readyState.load(std::memory_order_acquire) >= 3 &&
+                         s.appliedStreamW.load(std::memory_order_acquire) > 0 && s.appliedStreamH.load(std::memory_order_acquire) > 0;
+    if (playing && nowMs >= s.nextFrameStatsMs)
+    {
+        s.nextFrameStatsMs = nowMs + fgpr::health::kStatsPollMs;
+        uint32_t rendered = 0, dropped = 0;
+        s.frameStatsReadable = ReadEngineFrameStats(rt, rendered, dropped);
+        if (s.frameStatsReadable)
+        {
+            s.frames.Observe(rendered, dropped);
+            s.framesRendered.store(s.frames.rendered, std::memory_order_release);
+            s.framesDropped.store(s.frames.dropped, std::memory_order_release);
+        }
+    }
+    // A statistics read that fails or comes back empty is telemetry trouble, never a hang (Chromium skips its rendered-frame check
+    // unless PopulateStatistics succeeded): the watch only counts time while the counters are actually readable.
+    if (s.frameWatch.Observe(nowMs, playing && s.frameStatsReadable, s.frames.rendered))
+    {
+        fgpr::RaiseLog(s.handle, "[video.render] no frame rendered within " + std::to_string((long long)(fgpr::health::kNoFrameTimeoutMs / 1000)) +
+                                 "s of playing (stream " + std::to_string(s.appliedStreamW.load(std::memory_order_acquire)) + "x" +
+                                 std::to_string(s.appliedStreamH.load(std::memory_order_acquire)) + ", dropped=" +
+                                 std::to_string((long long)s.frames.dropped) + "); the session fails and the runtime is rebuilt");
+        s.errorHr.store(fgpr::health::kNoRenderedFrameHr, std::memory_order_release);
+        s.state.store(FgPrState_Error, std::memory_order_release);
+        Raise(s.handle, FgPrEvent_Error, fgpr::health::kNoRenderedFrameCode, (int64_t)fgpr::health::kNoRenderedFrameHr);
+    }
+}
+
 /// `releaseSource` = false when the engine's source stays loaded after this detach: an attach of ANOTHER session replaces
 /// it (that session's own SetSource unloads it, so nothing loads twice in a row), or the caller arms the grace unload
 /// (DetachDeferRelease). True unloads it now - the session failed, there is nothing to hand over.
@@ -1317,7 +1420,7 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
         s.streaming = false;
     }
     if (s.license) { fgpr::LicenseBind(s.license, -1); s.license = 0; }
-    s.swapchainHandle.store(0, std::memory_order_release);
+    RetireSwapchainHandle(rt, s.swapchainHandle.exchange(0, std::memory_order_acq_rel));   // F198: closed after the grace, not leaked
     s.appliedStreamW.store(0, std::memory_order_release);
     s.appliedStreamH.store(0, std::memory_order_release);
     s.seeking.store(0, std::memory_order_release);
@@ -1476,6 +1579,7 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
         return;
     }
     rt.engineSource = s.handle;
+    RebaseFrameStats(rt, s);   // F066
     Raise(s.handle, FgPrEvent_Attached, attachMs);
 
     const double volume = (double)s.volumeMicro.load(std::memory_order_acquire) / 1000000.0;
@@ -1590,8 +1694,13 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
     if (SUCCEEDED(hu))
     {
         // The echo the managed side waits for before it scales by this size (see FgPrSnapshot.streamWidth).
+        const bool sizeChanged = s.appliedStreamW.load(std::memory_order_relaxed) != (int32_t)dst.right ||
+                                 s.appliedStreamH.load(std::memory_order_relaxed) != (int32_t)dst.bottom;
         s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
         s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+        // F066: a re-sized (re-created) stream gets a fresh no-frame window. Only a CHANGED size: this runs on every call while no
+        // handle has been obtained yet, and restarting each time would keep a source that never gets a swap chain from ever timing out.
+        if (sizeChanged) s.frameWatch.Restart(TickMs());
         // A re-created swap chain of a source that is not playing holds no frame at this size and nothing presents one by
         // itself: ask for the current frame to be rendered into it (a playing source presents its own next frame).
         if (reRaise && s.state.load(std::memory_order_acquire) != FgPrState_Playing)
@@ -1609,7 +1718,7 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
         return;
     }
     const uint64_t value = (uint64_t)(uintptr_t)handle;
-    const uint64_t prev = s.swapchainHandle.exchange(value, std::memory_order_acq_rel);
+    const uint64_t prev = AdoptSwapchainHandle(rt, s, value);   // F198: the runtime owns it; the one it replaces is retired
     if (prev != value || reRaise)
     {
         fgpr::RaiseLog(s.handle, "[cenc] " + std::to_string(nvw) + "x" + std::to_string(nvh) +
@@ -1644,7 +1753,7 @@ void fgpr::SessionOnFormatChange(Runtime& rt, Session& s)
     const HRESULT hr = rt.engineEx->GetVideoSwapchainHandle(&handle);
     if (FAILED(hr) || handle == nullptr || handle == INVALID_HANDLE_VALUE) return;
     const uint64_t value = (uint64_t)(uintptr_t)handle;
-    if (s.swapchainHandle.exchange(value, std::memory_order_acq_rel) == value) return;
+    if (AdoptSwapchainHandle(rt, s, value) == value) return;   // F198
     fgpr::RaiseLog(s.handle, "[cenc] format change: swap-chain handle=" + std::to_string(value) + " (re-created)");
     Raise(s.handle, FgPrEvent_Handle, (int64_t)value);
 }
@@ -1679,6 +1788,8 @@ void fgpr::SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow)
         s.lastPositionRaiseQpc = qpc;
         Raise(s.handle, FgPrEvent_Position, ms, qpc);
     }
+
+    PollFrameHealth(rt, s);   // F066: after the Position raise, so a hang's Error is the newest event
 }
 
 void fgpr::SessionOnCanPlay(Runtime& rt, Session& s)
@@ -1725,6 +1836,8 @@ void fgpr::SessionsShutdown(Runtime& rt)
         }
     }
     for (auto const& sp : mine) DestroyInternal(rt, sp);
+    // F198: whatever the grace timers had not closed yet (their items are dropped once the queue stops) goes with the runtime.
+    rt.retiredHandles.CloseAll(CloseSwapchainHandle);
     // The join point for the feeders just stopped: nothing may still be building a Media Foundation source when the
     // runtime shuts Media Foundation down. They are cancelled and kicked above, so this waits out one GET's cancellation.
     rt.reaper.Drain();
@@ -1919,9 +2032,12 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         s.startCorrectionMs = 0;
         s.internalSeek.Cancel();
         s.handleTries = 0;
-        s.swapchainHandle.store(0, std::memory_order_release);
+        RetireSwapchainHandle(rt, s.swapchainHandle.exchange(0, std::memory_order_acq_rel));   // F198
         s.appliedStreamW.store(0, std::memory_order_release);
         s.appliedStreamH.store(0, std::memory_order_release);
+        s.frames.Reset(); s.frameWatch.Reset(); s.nextFrameStatsMs = 0; s.frameStatsReadable = false;   // F066: this attach counts from zero
+        s.framesRendered.store(0, std::memory_order_release);
+        s.framesDropped.store(0, std::memory_order_release);
         s.firstFrameQpc.store(0, std::memory_order_release);
         s.readyState.store(0, std::memory_order_release);
         s.errorHr.store(0, std::memory_order_release);
@@ -2160,6 +2276,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
             // Echo AFTER the repaint was asked for: the managed side publishes the new content size on seeing this.
             s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
             s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+            s.frameWatch.Restart(TickMs());   // F066
         }
         // Rate-limited (one line a second; a failure always): the size used to log once per change, and a resize gesture
         // changed it every layout - a cross-thread log event per frame.
@@ -2222,6 +2339,8 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSnapshot(FgPrRuntime rtHandle
     out->storeBytes = s.store ? s.store->Bytes() : 0;
     out->streamWidth = s.appliedStreamW.load(std::memory_order_acquire);
     out->streamHeight = s.appliedStreamH.load(std::memory_order_acquire);
+    out->framesRendered = s.framesRendered.load(std::memory_order_acquire);
+    out->framesDropped = s.framesDropped.load(std::memory_order_acquire);
     return S_OK;
 }
 

@@ -62,7 +62,9 @@ public sealed class RenderThread : IDisposable
     // Runs ON this thread at the top of every turn that got past the resize / device-lost gates, BEFORE the primary's present
     // decision and its (possibly long) present-slot wait, also on a bare wake (a quiesce nudge, a child's wake, a video handle
     // arriving). The host's early, structural video drain for the parent and every child (F208): a surface is created and bound
-    // without waiting behind the slot. Null => nothing early to do.
+    // without waiting behind the slot. It also applies a parked video-only post (F098: a UI wake that was only its video pump parks
+    // the registry's snapshot in the publisher and wakes this loop with WakeForVideo, publishing no frame): such a turn takes no
+    // slot, records nothing and presents nothing. Null => nothing early to do.
     private readonly Action? _preTurn;
     private readonly Func<bool>? _needsTick;   // render-side motion live, on this host OR a detached child? (AppHost.HasRenderMotion) — wakes the loop at the display clock
     // Render-side motion live on THIS host alone (AppHost.HasOwnRenderMotion). Only this makes the turn a parent present: the
@@ -138,9 +140,13 @@ public sealed class RenderThread : IDisposable
     // the window opened, plus the counter values at the window start. Nothing here allocates; the line does, once a second.
     private long _paceWindowStartQpc, _paceWindowTickSeq, _paceFresh0, _paceMotion0, _paceSkipped0, _paceMissed0, _paceRace0;
     private long _slotWaitSumQpc, _slotWaitMaxQpc, _slotWaitCount, _presentLagMaxQpc;
+    // F215: the detached children's present drain (extraDrain, which runs AFTER the primary's present and so is in no worst present's
+    // work): sum / max / count of its wall time per turn in the window. A pop-out that submits, waits its fence or presents slowly
+    // stalls the PARENT's next turn here, and the line must be able to say so.
+    private long _childDrainSumQpc, _childDrainMaxQpc, _childDrainCount;
     // Cumulative slot-wait totals for the UI-readable pace snapshot (render thread writes, UI reads — torn-free longs).
     private long _slotWaitTotalCount, _slotWaitTotalQpc, _slotWaitTotalMaxQpc;
-    private long _paceIgnored0, _paceSlotDrops0, _paceSlotTimeouts0;
+    private long _paceIgnored0, _paceSlotDrops0, _paceSlotTimeouts0, _paceChildTimeouts0;
     // The window's WORST present (the one that set _presentLagMaxQpc), split: wake lag (tick → turn start), slot wait, work
     // (slot open → done), the render thread's own running time across the turn (ThreadCycles at a running-max rate), its
     // tick and when it completed — so a [render.pace] line says whether the worst present was a thread that did not wake,
@@ -349,7 +355,15 @@ public sealed class RenderThread : IDisposable
             // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render
             // thread. Runs every turn (a child's wake may carry no parent publish, so it must not hang off the parent
             // TryAcquire above). Cheap no-op when no child has published since its last present (dedup in TryAcquire).
-            _extraDrain?.Invoke();
+            if (_extraDrain is { } extraDrain)
+            {
+                long drainStart = Stopwatch.GetTimestamp();
+                extraDrain();
+                long drainQpc = Stopwatch.GetTimestamp() - drainStart;
+                _childDrainSumQpc += drainQpc;
+                _childDrainCount++;
+                if (drainQpc > _childDrainMaxQpc) _childDrainMaxQpc = drainQpc;
+            }
             ReportPace(turnStart, motionLive);
             if (requestedDrain > Volatile.Read(ref _completedDrains))
             {
@@ -584,7 +598,8 @@ public sealed class RenderThread : IDisposable
     /// depth, adaptive GPU governor EMA + engaged, the UI loop's last wait kind, the latest retired GPU execution), the
     /// worst present's split (wake / slot / work, then the host's phases of that work and the blocking one named:
     /// <see cref="PresentSplit"/>), and the slot catch-up (<see cref="SlotCatchUp"/>): skips in the window, the smoothed frame
-    /// cost it compares against the refresh, and whether it is backing off. Every figure up to there is the PRIMARY
+    /// cost it compares against the refresh, and whether it is backing off, then <c>childDrain(avg max n)</c>: the wall time of the detached children's present
+    /// drain per turn in the window (F215; it runs after the primary's present, so no worst present's work contains it). Every figure up to there is the PRIMARY
     /// swapchain's; a trailing <c>child=[t&lt;id&gt;(presents deferred skipped slotWaitAvg/Max lagMax workMax) ...]</c> section carries each
     /// detached pop-out's own (<see cref="ChildPresentPace"/>), present only while a child presented or was deferred in the window.
     /// Allocation only here, on the 1 Hz path; the window resets when motion stops.</summary>
@@ -598,8 +613,11 @@ public sealed class RenderThread : IDisposable
             _paceFresh0 = _freshPresents; _paceMotion0 = _motionPresents; _paceSkipped0 = _skippedTicks;
             _paceMissed0 = _missedMotionTicks; _paceRace0 = _raceHits; _paceCatchUp0 = _catchUpSkips;
             _paceIgnored0 = _displayClock?.IgnoredReturns ?? 0; _paceSlotDrops0 = _displayClock?.SlotDrops ?? 0;
-            _paceSlotTimeouts0 = _paceHost?.Invoke().SlotLivenessTimeouts ?? 0;
+            RenderPaceHostState host0 = _paceHost?.Invoke() ?? default;
+            _paceSlotTimeouts0 = host0.SlotLivenessTimeouts;
+            _paceChildTimeouts0 = host0.NonPrimaryLatencyTimeouts;
             _slotWaitSumQpc = 0; _slotWaitMaxQpc = 0; _slotWaitCount = 0; _presentLagMaxQpc = 0;
+            _childDrainSumQpc = 0; _childDrainMaxQpc = 0; _childDrainCount = 0;
             _worstWakeQpc = _worstSlotQpc = _worstWorkQpc = _worstTick = _worstDoneQpc = 0; _worstRunMs = float.NaN;
             _worstSplit = default;
             _childPaceBegin?.Invoke();
@@ -612,10 +630,18 @@ public sealed class RenderThread : IDisposable
         long ignored = clock?.IgnoredReturns ?? 0, slotDrops = clock?.SlotDrops ?? 0;
         RenderPaceHostState host = _paceHost?.Invoke() ?? default;
         string child = _childPaceReport?.Invoke() ?? "";
+        long childTimeouts = host.NonPrimaryLatencyTimeouts - _paceChildTimeouts0;
+        string timeoutTarget = PaceTimeoutTarget(host.SlotLivenessTimeouts - _paceSlotTimeouts0, childTimeouts);
+        double childDrainAvg = _childDrainCount == 0 ? 0 : _childDrainSumQpc * toMs / _childDrainCount;
         FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)}{child}"));
+            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} timeoutTarget={timeoutTarget} childWaitMax={host.NonPrimaryLatencyWaitMaxMs:F2} childTimeouts={childTimeouts} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)} childDrain(avg={childDrainAvg:F2} max={_childDrainMaxQpc * toMs:F2} n={_childDrainCount}){child}"));
         _paceWindowStartQpc = 0;   // next turn opens a fresh window
     }
+
+    /// <summary>Which swapchain's liveness-bounded slot waits timed out in a pace window (F235): <c>none</c>, <c>primary</c> (the
+    /// main window), <c>child</c> (a pop-out or popup, whose blocking wait runs on this shared thread) or <c>both</c>. Pure.</summary>
+    internal static string PaceTimeoutTarget(long primaryTimeouts, long childTimeouts)
+        => primaryTimeouts > 0 ? (childTimeouts > 0 ? "both" : "primary") : childTimeouts > 0 ? "child" : "none";
 
     /// <summary>UI thread, FORCE-SYNC (Step 4): wake the render thread and block until it has submitted+presented the
     /// just-published frame.</summary>

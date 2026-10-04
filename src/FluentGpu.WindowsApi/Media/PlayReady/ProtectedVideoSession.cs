@@ -51,6 +51,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private ulong _s;
     private long _nativeStartMs;         // the start position the native session currently opens at
     private bool _holdsRuntimeRef;
+    private int _censusToken;           // MediaCensus registration (F197): live from a successful native create until Dispose
     private bool _licensePinned;
     private bool _disposed;
     private string? _startupError;
@@ -88,6 +89,16 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private long _attachTimestamp;
     private long _bytes, _bytesMs;
 
+    // ── F216: the switch budget's stamps (Stopwatch timestamps = QPC ticks, 0 = not yet), written from native threads, read when the
+    // first frame lands. Native's own clock is the same QPC, so a native stamp (FirstFrame's b) joins these without conversion.
+    private long _originTimestamp;          // the open that began this switch (ProtectedVideoRequest.OriginTimestamp, else the first Start)
+    private long _prefetchStartTimestamp;   // the first PrefetchCoreAsync call: when the init + first segments started to be fetched
+    private long _setSourceMs = -1;         // native: Attach -> SetSource returning (EvAttached.a)
+    private long _metadataTimestamp, _canPlayTimestamp;
+    private long _startCorrectionMs;        // EvCanPlay.a: how far behind the carried start the engine clock was (the second source Start's price)
+    private long _firstFrameQpc;            // EvFirstFrame.b: native's QPC at FIRSTFRAMEREADY
+    private int _budgetLogged;              // 1 once switch.budget was written: one line per session, never per re-attach
+
     // The store's window around the playhead: written by the Buffered event (a prepared session is never pumped, and its
     // prepare decides readiness from this) and refreshed by every pump from the snapshot.
     private long _forwardBufferedMs, _retainedBehindMs;
@@ -99,6 +110,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     // The swap-chain handle the last pump's snapshot reported for the attached source (0 = none): what Bind hands to a
     // presenting element's binding. Written by the state pump, read by Bind (both UI thread).
     private nuint _surfaceHandle;
+    // F198: the attach epoch _surfaceHandle belongs to, and the (epoch, binding token) Bind last handed a handle to. The native
+    // runtime now closes a retired swap-chain handle, so the kernel may reuse its VALUE for the next attach's handle: the
+    // registry's value gate would drop that bind and the presenter would keep the surface wrapped from the old handle. The first
+    // bind of each attach (and of each new binding) is therefore forced, once. Both are UI-thread fields.
+    private int _surfaceEpoch;
+    private int _boundEpoch;
+    private int _boundToken;
     private string? _activeRepresentationId;
     private string? _downloadingRepresentationId;
     // Native reports the OPENING representation as -1 (it never learns that index). Once a switch's picture has been shown,
@@ -108,6 +126,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private int _streamW = -1, _streamH = -1;
     // The stream size native reports as applied, from the last pump's snapshot (UI thread; empty while detached).
     private SizeI _appliedStream;
+    // The native renderer's frame counters from the last pump's snapshot (UI thread; F066).
+    private long _framesRendered, _framesDropped;
     // The OPM window placement native last ACCEPTED (host 0 = none): value-gates PlaceOutputProtectionWindow, and is cleared at
     // every attach because another session (the other window's) may have moved the one shared window since.
     private nuint _opmHost;
@@ -197,6 +217,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         }
         session._s = handle;
         runtime.RegisterSession(handle, session);
+        session._censusToken = MediaCensus.Register(MediaCensusKind.ProtectedSession, session.DescribeCensus);
         runtime.Log($"session.create s={handle} key={session._logKey} startMs={session._nativeStartMs} " +
                     $"kid={session._kid ?? "(from init)"} license={runtime.LicenseStateFor(session._kid)}");
         return session;
@@ -234,6 +255,11 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     public ProtectedVideoPhase Phase => _phase;
     /// <inheritdoc/>
     public long FirstFrameEpoch => Volatile.Read(ref _firstFrameEpoch);
+    /// <inheritdoc/>
+    public long FirstFrameQpc => Volatile.Read(ref _firstFrameQpc);
+    /// <summary>The start-position fallback's price for THIS attach, from its first CANPLAY (ms the engine clock was behind the carried
+    /// start and had to be sought; 0 = it adopted the start, or no CANPLAY yet). The <c>switch.budget</c> line prints it.</summary>
+    internal long StartCorrectionMs => Volatile.Read(ref _startCorrectionMs);
     /// <inheritdoc/>
     public bool HasFirstFrame
     {
@@ -278,6 +304,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (_disposed || _s == 0) return Task.FromResult(false);
         int n = segments > 0 ? segments : DefaultPrefetchSegments;
         long t0 = Stopwatch.GetTimestamp();
+        Interlocked.CompareExchange(ref _prefetchStartTimestamp, t0, 0);   // F216: the budget's initStartMs (the first fetch, never a later one)
         // The wait is registered BEFORE the native call: a store that already holds the window answers from the feeder
         // thread at once, and a waiter registered after that answer would wait for a Buffered event that never comes.
         Task<bool> wait = _rt.WaitBufferedAsync(_s, ct);
@@ -303,6 +330,9 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     {
         if (_disposed) return;
         if (_s == 0) { RequestPump(); return; }
+        // F216: a prepared session was created before the open that takes it, so the budget counts from that open's stamp.
+        if (Volatile.Read(ref _originTimestamp) == 0)
+            Volatile.Write(ref _originTimestamp, request.OriginTimestamp != 0 ? request.OriginTimestamp : Stopwatch.GetTimestamp());
 
         if (_kid is null || (_request.Pssh.IsEmpty && _rt.LicenseHandleFor(_kid) == 0))
         {
@@ -377,6 +407,11 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         }
 
         Interlocked.Increment(ref _attachEpoch);
+        Volatile.Write(ref _setSourceMs, -1);         // F216: this attach's stages start over
+        Volatile.Write(ref _metadataTimestamp, 0);
+        Volatile.Write(ref _canPlayTimestamp, 0);
+        Volatile.Write(ref _startCorrectionMs, 0);
+        Volatile.Write(ref _firstFrameQpc, 0);
         Volatile.Write(ref _attachTimestamp, Stopwatch.GetTimestamp());
         int hr = _native.SessionAttach(_rt.Handle, _s, lic);
         if (hr < 0)
@@ -487,16 +522,26 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     }
 
     /// <inheritdoc/>
-    public void SetStreamSize(SizeI size)
+    public void SetStreamSize(SizeI size) => SetStreamSize(size, 0, 0);
+
+    /// <inheritdoc/>
+    public void SetStreamSize(SizeI size, int token, int host)
     {
         if (_disposed || _s == 0 || Volatile.Read(ref _attached) == 0) return;
         if (size.Width == _streamW && size.Height == _streamH) return;   // value-gated: one native call per real change
         _streamW = size.Width; _streamH = size.Height;
         _native.SessionSetStreamSize(_rt.Handle, _s, Math.Max(0, size.Width), Math.Max(0, size.Height));
+        // F235: the native "[cenc] stream size" line cannot say who asked. Always on, once per real change (the gate above).
+        LogVideo($"stream.size key={_logKey} host={host} token={token} size={size.Width}x{size.Height}");
     }
 
     /// <inheritdoc/>
     public SizeI AppliedStreamSize => _appliedStream;
+
+    /// <inheritdoc/>
+    public long FramesRendered => _framesRendered;
+    /// <inheritdoc/>
+    public long FramesDropped => _framesDropped;
 
     /// <inheritdoc/>
     public void PlaceOutputProtectionWindow(nuint hostWindow, int left, int top, int right, int bottom)
@@ -530,6 +575,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (_disposed) return;
         _disposed = true;
         PumpRequested = null;
+        if (_censusToken != 0) { MediaCensus.Unregister(_censusToken); _censusToken = 0; }
         if (_s != 0)
         {
             ulong s = _s;
@@ -537,9 +583,22 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             _s = 0;
             Volatile.Write(ref _attached, 0);
             try { _native.SessionDestroy(_rt.Handle, s); } catch { }
+            _rt.Log($"session.destroy s={s} key={_logKey} live={MediaCensus.Count(MediaCensusKind.ProtectedSession)}");   // F197: pairs with session.create
         }
         if (_licensePinned) { _rt.PinLicense(_kid, pinned: false); _licensePinned = false; }
         if (_holdsRuntimeRef) { _holdsRuntimeRef = false; _rt.Release(); }
+    }
+
+    /// <summary>What the media census (F197) reads for this session: the native snapshot's natural size and segment store bytes
+    /// (read directly, not from the last pump, because a prepared session is never pumped), and whether it is attached. A session whose
+    /// runtime was lost or that is being disposed reads as an empty store.</summary>
+    private MediaCensusRow DescribeCensus()
+    {
+        ulong s = _s;
+        PrNative.Snapshot n = default;
+        bool ok = !_disposed && s != 0 && _native.SessionSnapshot(_rt.Handle, s, ref n) >= 0;
+        return new MediaCensusRow(MediaCensusKind.ProtectedSession, unchecked((long)s), ok ? n.Width : 0, ok ? n.Height : 0,
+            ok ? unchecked((long)n.StoreBytes) : 0, Volatile.Read(ref _attached) != 0);
     }
 
     // ── the pump (UI thread) ───────────────────────────────────────────────────────────────────────────────────────
@@ -630,6 +689,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             }
         }
         _appliedStream = n.StreamWidth > 0 && n.StreamHeight > 0 ? new SizeI(n.StreamWidth, n.StreamHeight) : SizeI.Zero;
+        _framesRendered = Math.Max(0, n.FramesRendered);
+        _framesDropped = Math.Max(0, n.FramesDropped);
         Volatile.Write(ref _forwardBufferedMs, Math.Max(0, n.BufferedAheadMs));
         Volatile.Write(ref _retainedBehindMs, Math.Max(0, n.RetainedBehindMs));
         if (n.ActiveRepresentation >= 0 && _videoTrack is { } track && n.ActiveRepresentation < track.Representations.Count)
@@ -656,6 +717,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (n.Handle != 0 && attached)
         {
             _surfaceHandle = (nuint)n.Handle;
+            _surfaceEpoch = epoch;
             _hasSurface = true;
         }
         else
@@ -673,7 +735,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         // registry token that must receive the SAME handle — no open, no seek. The attach flag is event-fresh, so a handle
         // the state pump has not yet seen detached is never handed to a new slot.
         nuint handle = _surfaceHandle;
-        if (handle != 0 && Volatile.Read(ref _attached) != 0) binding.Bind(handle);
+        if (handle == 0 || Volatile.Read(ref _attached) == 0) return;
+        // F198: forced once per attach epoch and binding token, never on an unchanged repeat (a forced re-bind re-wraps the surface).
+        int epoch = _surfaceEpoch;
+        bool force = epoch != _boundEpoch || binding.Token != _boundToken;
+        binding.Bind(handle, force);
+        _boundEpoch = epoch;
+        _boundToken = binding.Token;
     }
 
     /// <summary>The managed lifecycle state for a native <c>FgPrState</c> and the facts the events established. Pure.
@@ -747,6 +815,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             BufferedAheadMs = n.BufferedAheadMs,
             StreamW = (uint)Math.Max(0, n.StreamWidth),
             StreamH = (uint)Math.Max(0, n.StreamHeight),
+            FramesRendered = Math.Max(0, n.FramesRendered),
+            FramesDropped = Math.Max(0, n.FramesDropped),
         };
     }
 
@@ -776,11 +846,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
                 break;
 
             case PrNative.EvAttached:
-                LogVideo($"attach.ok key={_logKey} setSourceMs={a}");
+                Volatile.Write(ref _setSourceMs, a);
+                LogVideo($"attach.ok key={_logKey} setSourceMs={a} sinceAttachMs={SinceAttachMs()}");
                 break;
 
             case PrNative.EvMetadata:
                 Volatile.Write(ref _metadataAttachEpoch, epoch);
+                Interlocked.CompareExchange(ref _metadataTimestamp, Stopwatch.GetTimestamp(), 0);
                 LogVideo($"metadata key={_logKey} dur={a}ms size={(b >> 32) & 0xFFFFFFFF}x{b & 0xFFFFFFFF} " +
                          $"sinceAttachMs={SinceAttachMs()}");
                 break;
@@ -811,15 +883,26 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
 
             case PrNative.EvCanPlay:
                 Volatile.Write(ref _canPlayAttachEpoch, epoch);
-                LogVideo($"canplay key={_logKey} sinceAttachMs={SinceAttachMs()}");
+                // The FIRST CANPLAY of an attach carries the start-position fallback's price (a = startCorrectionMs, 0 = none).
+                if (Interlocked.CompareExchange(ref _canPlayTimestamp, Stopwatch.GetTimestamp(), 0) == 0)
+                    Volatile.Write(ref _startCorrectionMs, Math.Max(0, a));
+                LogVideo($"canplay key={_logKey} sinceAttachMs={SinceAttachMs()} startCorrectionMs={Volatile.Read(ref _startCorrectionMs)}");
                 break;
 
             case PrNative.EvFirstFrame:
                 if (Volatile.Read(ref _firstFrameAttachEpoch) != epoch)
                 {
+                    // The stamp lands BEFORE the epoch bumps: an observer that sees the new epoch reads this attach's QPC.
+                    long delivered = Stopwatch.GetTimestamp();
+                    long qpc = b > 0 && b <= delivered ? b : delivered;   // native's FIRSTFRAMEREADY QPC (a fake or an old DLL sends 0)
+                    Volatile.Write(ref _firstFrameQpc, qpc);
                     Volatile.Write(ref _firstFrameAttachEpoch, epoch);
                     Interlocked.Increment(ref _firstFrameEpoch);
-                    LogVideo($"first.frame key={_logKey} at={a}ms sinceAttachMs={SinceAttachMs()}");
+                    // sinceAttachMs is the NATIVE clock's (attach -> FIRSTFRAMEREADY); queuedMs is how long the event sat before this
+                    // thread saw it, so a late line can no longer be mistaken for a late frame.
+                    LogVideo($"first.frame key={_logKey} at={a}ms sinceAttachMs={StageMs(Volatile.Read(ref _attachTimestamp), qpc)} " +
+                             $"queuedMs={StageMs(qpc, delivered)}");
+                    LogSwitchBudget(qpc);
                 }
                 break;
 
@@ -907,6 +990,48 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     {
         long t = Volatile.Read(ref _attachTimestamp);
         return t == 0 ? -1 : (long)Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+    }
+
+    /// <summary>Whole milliseconds from <paramref name="from"/> to <paramref name="to"/> (Stopwatch timestamps, clamped at 0), or -1
+    /// when either was never stamped.</summary>
+    internal static long StageMs(long from, long to)
+        => from == 0 || to == 0 ? -1 : Math.Max(0, (long)Stopwatch.GetElapsedTime(from, to).TotalMilliseconds);
+
+    /// <summary>F216: the ONE always-on <c>switch.budget</c> line of this session, written when its first frame lands. Every stage is a
+    /// time on one QPC clock, so the line says where a switch's time went without subtracting log lines across threads:
+    /// <c>bringUpMs</c> (how long after the open the native runtime was still coming up; 0 when it was already warm),
+    /// <c>licenseMs / licenseQueuedMs / licenseHttpMs</c> (the key's acquisition and, when the relay reports them, its api-queue wait
+    /// and network round trip; <c>licenseOnPath</c> 1 when the key became usable AFTER the open began),
+    /// <c>initStartMs</c> (open to the first fetch of the init + first segments; <c>prepared</c> 1 when that fetch began BEFORE the
+    /// open, so it cost nothing on the switch), <c>attachAtMs</c> (open to the SetSource request), <c>setSourceMs</c> (native, the
+    /// SetSource call), then <c>metadataMs / canplayMs / firstFrameMs</c> counted from the attach, <c>startCorrectionMs</c> (the
+    /// carried-start fallback's second source Start; 0 = none) and <c>sinceOpenMs</c> (open to first frame, native clock). -1 = the
+    /// stage was never stamped. The app's own <c>first.frame sinceSwitchMs</c> counts from its switch.begin, before the open.</summary>
+    private void LogSwitchBudget(long firstFrameQpc)
+    {
+        if (Interlocked.Exchange(ref _budgetLogged, 1) != 0) return;
+        long attach = Volatile.Read(ref _attachTimestamp);
+        long origin = Volatile.Read(ref _originTimestamp);
+        if (origin == 0) origin = attach;
+        long prefetch = Volatile.Read(ref _prefetchStartTimestamp);
+        bool prepared = prefetch != 0 && prefetch < origin;
+        long initStart = prefetch == 0 ? StageMs(origin, attach) : prepared ? 0 : StageMs(origin, prefetch);
+
+        long bringUp = 0;
+        long ready = _rt.RuntimeReadyTimestamp;
+        if (ready == 0) bringUp = -1;
+        else if (ready > origin) bringUp = StageMs(origin, ready);
+
+        string license = "licenseMs=-1 licenseQueuedMs=-1 licenseHttpMs=-1 licenseOnPath=0";
+        if (_rt.TryGetLicenseTimings(_kid, out ProtectedVideoRuntime.LicenseTimings lt))
+            license = $"licenseMs={lt.TotalMs} licenseQueuedMs={lt.QueuedMs} licenseHttpMs={lt.HttpMs} " +
+                      $"licenseOnPath={(lt.UsableTimestamp > origin ? 1 : 0)}";
+
+        LogVideo($"switch.budget key={_logKey} bringUpMs={bringUp} {license} initStartMs={initStart} prepared={(prepared ? 1 : 0)} " +
+                 $"attachAtMs={StageMs(origin, attach)} setSourceMs={Volatile.Read(ref _setSourceMs)} " +
+                 $"metadataMs={StageMs(attach, Volatile.Read(ref _metadataTimestamp))} canplayMs={StageMs(attach, Volatile.Read(ref _canPlayTimestamp))} " +
+                 $"startCorrectionMs={Volatile.Read(ref _startCorrectionMs)} firstFrameMs={StageMs(attach, firstFrameQpc)} " +
+                 $"sinceOpenMs={StageMs(origin, firstFrameQpc)}");
     }
 
     private void LogVideo(string line) => ProtectedVideoRuntime.WriteVideoLine(line);

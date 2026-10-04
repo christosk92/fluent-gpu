@@ -308,14 +308,19 @@ static void QueryKeyStatus(const std::shared_ptr<fgpr::License>& licPtr)
 }
 
 // Update() with the license the managed relay delivered (runtime thread).
-static void ApplyLicense(fgpr::Runtime& rt, const std::shared_ptr<fgpr::License>& lic, const std::vector<uint8_t>& license)
+// `deliveredQpc` is when the managed relay handed the license over (DeliverThunk): the gap to this item running is the runtime
+// queue's wait (F226), logged with the Update() cost so the licence's native half is readable without subtracting log lines.
+static void ApplyLicense(fgpr::Runtime& rt, const std::shared_ptr<fgpr::License>& lic, const std::vector<uint8_t>& license, int64_t deliveredQpc)
 {
     if (!rt.Ready() || lic->closed.load(std::memory_order_acquire)) return;
     winrt::com_ptr<IMFContentDecryptionModuleSession> session = lic->KeySession();
     if (!session) { FailLicense(*lic, E_UNEXPECTED); return; }
+    const int64_t waitedMs = fgpr::MsSinceQpc(deliveredQpc);
+    const int64_t updateQpc = fgpr::QpcNow();
     HRESULT hu = session->Update(license.data(), (DWORD)license.size());
     LogLine("[cdm] Update() (relay) kid=" + fgpr::Narrow(lic->kidHex) + " license=" + std::to_string(license.size()) +
-            "B hr=" + fgpr::Hex(hu));
+            "B hr=" + fgpr::Hex(hu) + " waitedMs=" + std::to_string((long long)waitedMs) +
+            " updateMs=" + std::to_string((long long)fgpr::MsSinceQpc(updateQpc)));
     if (FAILED(hu))
     {
         // CRITICAL DIAGNOSTIC: dump a printable prefix of the relay license body so we can tell a genuine
@@ -348,6 +353,7 @@ static fgpr::Lane LicenseLane(const fgpr::License& lic)
 static void __stdcall DeliverThunk(void* deliverCtx, const uint8_t* license, int32_t licenseLen, int32_t hr)
 {
     const uint64_t id = (uint64_t)(uintptr_t)deliverCtx;
+    const int64_t deliveredQpc = fgpr::QpcNow();   // F226: when the relay handed the license over; ApplyLicense reports the queue wait from it
     DeliverRecord rec;
     {
         std::lock_guard<std::mutex> g(Deliveries().mx);
@@ -373,7 +379,7 @@ static void __stdcall DeliverThunk(void* deliverCtx, const uint8_t* license, int
     }
     // ONE copy out of the managed buffer (§3.5: one byte[] per challenge) — the caller's memory is not ours after return.
     std::vector<uint8_t> bytes(license, license + (size_t)licenseLen);
-    rt->queue.Post([raw, lic, bytes] { ApplyLicense(*raw, lic, bytes); }, LicenseLane(*lic));
+    rt->queue.Post([raw, lic, bytes, deliveredQpc] { ApplyLicense(*raw, lic, bytes, deliveredQpc); }, LicenseLane(*lic));
 }
 
 // The session KeyMessage (CDM thread). The PlayReady KeyMessage is a UTF-16 XML envelope:
@@ -472,6 +478,8 @@ static void StartAcquisition(fgpr::Runtime& rt, const std::shared_ptr<fgpr::Lice
     if (lic->closed.load(std::memory_order_acquire)) return;
     // Once: the attach verb starts its own licence ahead of itself, and the Maintenance item posted by FgPrLicenseAcquire is then a no-op.
     if (lic->started.exchange(true, std::memory_order_acq_rel)) return;
+    // F226: how long this item sat in the runtime queue (acquire posted -> running): behind bring-up on a cold switch, ~0 warm.
+    const int64_t waitedMs = fgpr::MsSinceQpc(lic->acquireQpc);
     if (!rt.Ready() || !rt.cdm)
     {
         const HRESULT bring = (HRESULT)rt.bringUp.load(std::memory_order_acquire);
@@ -484,16 +492,20 @@ static void StartAcquisition(fgpr::Runtime& rt, const std::shared_ptr<fgpr::Lice
     // 0x80704005). Production = Spotify, which issues NON-persistable streaming licenses → TEMPORARY (verified: temp
     // session → Update() hr=0x0, key USABLE, plays). The persistent-license A/B arm (FG_CENC_PERSIST_SESSION, for the
     // Axinom entitlement's persistable test license) is deleted: TEMPORARY is the only session type created.
+    const int64_t createQpc = fgpr::QpcNow();
     HRESULT hr = rt.cdm->CreateSession(MF_MEDIAKEYSESSION_TYPE_TEMPORARY, cb, &session);
     cb->Release();
-    LogLine("[cenc] proactive CreateSession (temporary) kid=" + fgpr::Narrow(lic->kidHex) + " hr=" + fgpr::Hex(hr));
+    LogLine("[cenc] proactive CreateSession (temporary) kid=" + fgpr::Narrow(lic->kidHex) + " hr=" + fgpr::Hex(hr) +
+            " waitedMs=" + std::to_string((long long)waitedMs) + " ms=" + std::to_string((long long)fgpr::MsSinceQpc(createQpc)));
     if (FAILED(hr) || !session) { FailLicense(*lic, FAILED(hr) ? hr : E_NOINTERFACE); return; }
     {
         std::lock_guard<std::mutex> g(lic->mx);
         lic->keySession.attach(session);   // kept alive so the key stays usable across every session that uses the KID
     }
+    const int64_t generateQpc = fgpr::QpcNow();
     HRESULT hrg = session->GenerateRequest(L"cenc", lic->pssh.data(), (DWORD)lic->pssh.size());   // fires KeyMessage
-    LogLine("[cenc] proactive GenerateRequest(cenc, " + std::to_string(lic->pssh.size()) + "B) hr=" + fgpr::Hex(hrg));
+    LogLine("[cenc] proactive GenerateRequest(cenc, " + std::to_string(lic->pssh.size()) + "B) hr=" + fgpr::Hex(hrg) +
+            " ms=" + std::to_string((long long)fgpr::MsSinceQpc(generateQpc)));
     if (FAILED(hrg)) FailLicense(*lic, hrg);
 }
 

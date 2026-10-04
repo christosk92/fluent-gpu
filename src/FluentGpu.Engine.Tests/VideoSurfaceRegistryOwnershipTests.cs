@@ -216,6 +216,33 @@ public sealed class VideoSurfaceRegistryOwnershipTests
         Assert.Equal(1, p.Count("Place("));              // the older publication's geometry still lands
     }
 
+    // F098: geometry is state of one snapshot. The elided / motion turn re-reads its RETAINED frame's snapshot; after a video-only post
+    // delivered newer geometry, that older snapshot must not pull the placement back.
+    [Fact]
+    public void GeometryOfAnOlderSnapshot_NeverOverwritesANewerOne()
+    {
+        var reg = new VideoSurfaceRegistry();
+        var applier = new VideoPlacementApplier(reg);
+        var p = new RecordingPresenter();
+        int token = reg.Acquire();
+        reg.Bind(token, 0x10);
+        reg.Place(token, Rect);
+        var older = new VideoPresentIntent[VideoSurfaceRegistry.MaxSurfaces];
+        int olderCount = reg.SnapshotInto(older);
+        applier.ApplyTurn(p, older.AsSpan(0, olderCount), default, 1f, VideoApplyScope.Full, deferCommit: false);
+        Assert.Equal(1, p.Count("Place("));
+
+        reg.Place(token, new RectF(30f, 40f, 100f, 50f));   // newer geometry, delivered by a later snapshot (a video-only post)
+        var newer = new VideoPresentIntent[VideoSurfaceRegistry.MaxSurfaces];
+        int newerCount = reg.SnapshotInto(newer);
+        Assert.True(newer[0].Seq > older[0].Seq);
+        applier.ApplyTurn(p, newer.AsSpan(0, newerCount), default, 1f, VideoApplyScope.Full, deferCommit: false);
+        Assert.Equal(2, p.Count("Place("));
+
+        applier.ApplyTurn(p, older.AsSpan(0, olderCount), default, 1f, VideoApplyScope.Full, deferCommit: false);   // the retained frame re-read
+        Assert.Equal(2, p.Count("Place("));                 // the placement is not pulled back to the older rect
+    }
+
     [Fact]
     public void ARebindUnderANewSequence_WrapsTheSameHandleAgain_OnlyOnce()
     {

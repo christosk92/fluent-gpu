@@ -128,6 +128,9 @@ internal sealed class FakeVideoEngine : IVideoEngine
     /// the command queue here, so a test models the engine's echo of a <see cref="VideoCommandKind.StreamRect"/> itself with
     /// <see cref="EchoStreamRect"/>.</summary>
     public (uint W, uint H) AppliedStream { get => (_s.StreamW, _s.StreamH); set { _s.StreamW = value.W; _s.StreamH = value.H; Publish(); } }
+    /// <summary>The renderer's rendered/dropped frame counters the snapshot carries (F066). Setting them publishes a fresh snapshot but
+    /// does NOT wake the session: pair it with <see cref="RaiseStateChanged"/> where the wake matters.</summary>
+    public (long Rendered, long Dropped) Frames { get => (_s.FramesRendered, _s.FramesDropped); set { _s.FramesRendered = value.Rendered; _s.FramesDropped = value.Dropped; Publish(); } }
     /// <summary>Echo a stream size as applied and wake the session, as the engine's refresh does after a StreamRect.</summary>
     public void EchoStreamRect(int w, int h) { AppliedStream = ((uint)w, (uint)h); RaiseStateChanged(); }
 
@@ -195,6 +198,8 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public int Commits;
     public int Applies;              // ApplyPending calls: a deferred-commit drain applies here and leaves the ONE device commit to the host
     public bool CanAttach = true;    // false models a target whose first Present has not bound its composition graph yet
+    public bool OverlaySupported;    // models an output whose overlay probe reported a plane (IVideoPresenter.SupportsOverlay, F087)
+    public bool? LastOverlay;        // the last SetOverlay argument (null = never called): true = the visual was inserted ABOVE the UI visual
 
     public VideoSurfaceId CreateSurface()
     {
@@ -231,6 +236,8 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
 
     public void SetViewport(VideoSurfaceId id, RectF deviceRect) { LastViewport = deviceRect; Calls.Add($"Viewport({id.Value})"); }
     public void SetVisible(VideoSurfaceId id, bool visible) { LastVisible = visible; Calls.Add($"Visible({id.Value},{visible})"); }
+    public bool SupportsOverlay => OverlaySupported;
+    public void SetOverlay(VideoSurfaceId id, bool above) { LastOverlay = above; Calls.Add($"Overlay({id.Value},{above})"); }
     public void Destroy(VideoSurfaceId id) => Calls.Add($"Destroy({id.Value})");
     public void ApplyPending() => Applies++;
     public bool CanAttachSurfaces => CanAttach;
@@ -299,6 +306,8 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public bool HasSurface { get; set; }
     public ProtectedVideoPhase Phase { get; set; }
     public long FirstFrameEpoch { get; set; }
+    /// <summary>The native first-frame QPC (F215); 0 = none, like a player with no native clock.</summary>
+    public long FirstFrameQpc { get; set; }
     private bool? _hasFirstFrame;
     /// <summary>Whether THIS attach has presented its first frame. Unless a test sets it, it follows <see cref="FirstFrameEpoch"/>
     /// (non-zero = presented); setting it models a detach (false) or a re-attach before its first frame.</summary>
@@ -311,6 +320,9 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public int IndexEpoch { get; set; }
     public long BytesDownloaded { get; set; }
     public long DownloadElapsedMs { get; set; }
+    /// <summary>The native renderer's frame counters (F066), as of the last pump.</summary>
+    public long FramesRendered { get; set; }
+    public long FramesDropped { get; set; }
 
     public IReadSignal<ProtectedVideoState> State => _state;
     public IReadSignal<long> PositionMs => _positionMs;
@@ -415,6 +427,9 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public void SetVolume(float volume) => LastVolume = volume;
     public void SetRate(float rate) => LastRate = rate;
     public void SetStreamSize(SizeI size) { SetStreamSizeCalls++; LastStreamSize = size; }
+    /// <summary>The (registry token, host ordinal) of every attributed <see cref="SetStreamSize(SizeI, int, int)"/> request, in order (F235).</summary>
+    public readonly List<(int Token, int Host)> StreamSizeTags = new();
+    public void SetStreamSize(SizeI size, int token, int host) { StreamSizeTags.Add((token, host)); SetStreamSize(size); }
     /// <summary>True (the default): the native echo follows <see cref="SetStreamSize"/> at once, as the real runtime's snapshot
     /// does after a pump. False: <see cref="ScriptedAppliedStreamSize"/> is what the snapshot reports, so a test holds an echo back.</summary>
     public bool EchoesStreamSize = true;
@@ -453,6 +468,7 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     private readonly List<ulong> _released = new();
     private readonly List<(string Kid, ulong License)> _acquired = new();
     private readonly List<long> _luids = new();
+    private readonly List<int> _formatsAtCreate = new();
     private readonly HashSet<ulong> _live = new();                 // key sessions the "native table" still holds
     private readonly Dictionary<ulong, int> _states = new();       // FgPrLicenseState overrides (a kill, an expiry)
     private ulong _nextHandle = 0x100;
@@ -478,6 +494,11 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     public long LastAdapterLuid { get; private set; }
     public long[] AdapterLuids { get { lock (_gate) return _luids.ToArray(); } }
 
+    /// <summary>The output format the runtime asked for before its last create (<c>FgPrRuntimeSetVideoOutputFormat</c>; 0 = BGRA, 1 = NV12) -
+    /// the value in force at each <see cref="RuntimeCreate"/>, in order, and the last one set (0 until a set).</summary>
+    public int LastVideoOutputFormat { get; private set; }
+    public int[] VideoOutputFormatsAtCreate { get { lock (_gate) return _formatsAtCreate.ToArray(); } }
+
     /// <summary>Completes on the first <see cref="RuntimeDestroy"/> — a test awaits it with a bounded timeout instead of
     /// polling the runtime's warm-idle teardown (which runs on a timer thread).</summary>
     public TaskCompletionSource Destroyed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -498,6 +519,11 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
 
     public bool IsAvailable => Available;
 
+    public void SetVideoOutputFormat(int format)
+    {
+        lock (_gate) LastVideoOutputFormat = format;
+    }
+
     public int RuntimeCreate(string storePath, nint ctx, long adapterLuid, out ulong runtime)
     {
         lock (_gate)
@@ -506,6 +532,7 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
             LastStorePath = storePath;
             LastAdapterLuid = adapterLuid;
             _luids.Add(adapterLuid);
+            _formatsAtCreate.Add(LastVideoOutputFormat);
             if (CreateHr < 0)
             {
                 runtime = 0;

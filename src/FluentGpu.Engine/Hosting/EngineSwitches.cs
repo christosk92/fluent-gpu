@@ -34,6 +34,10 @@ namespace FluentGpu.Hosting;
 /// a later turn instead of ever blocking the shared render thread in Present (A/B arm, default off).</item>
 /// <item><c>gpu-timing</c> — start with the pass-granular GPU timeline on (<c>AppHost.GpuPassTimingEnabled</c>, the
 /// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
+/// <item><c>video-nv12</c> — both media engines (clear and protected) output NV12 instead of the forced BGRA when the
+/// output's overlay probe reports NV12 support (F249, A/B arm, default off).</item>
+/// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
+/// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
 /// </list>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
@@ -74,6 +78,21 @@ public static class EngineSwitches
     /// the child's present slot is already probed without waiting (F090), so the default is decided by PresentMon
     /// (MsBetweenDisplayChange) on both HWNDs with the pop-out playing, not by this flag's existence.</summary>
     public static bool NonBlockingSecondaryPresent;
+
+    /// <summary>NV12 media-engine output (F249, <c>--fg video-nv12</c>): both engines drop the forced B8G8R8A8 output format for NV12
+    /// when the render output's overlay probe (<see cref="FluentGpu.Media.VideoOverlayCaps"/>) reports NV12 as plane-capable, so the
+    /// decoded frame skips the per-frame NV12 to BGRA video-processor pass and a YUV overlay plane can take it. BGRA stays the fallback
+    /// whenever the probe says no or has not run. A HYPOTHESIS arm, default off: whether MF honours the format for a windowless swap
+    /// chain and whether DWM then promotes it is only settled by PresentMon (the Hardware Composed / MPO plane columns) with the
+    /// switch on and off.</summary>
+    public static bool Nv12VideoOutput;
+
+    /// <summary>Overlay promotion (F087, <c>--fg video-overlay</c>): a video whose rect nothing paints over (a fullscreen video with its
+    /// chrome hidden, an idle pop-out) is inserted ABOVE the UI visual and falls back to the hole-punched underlay the turn something
+    /// covers it, with a hold after each demotion; only where the output's overlay probe reports support. The UI hole stays punched in
+    /// both modes. A HYPOTHESIS arm, default off, decided by the owner's PresentMon A/B (<c>MsBetweenDisplayChange</c> and the
+    /// PresentMode column, switch on vs off), not by this flag's existence.</summary>
+    public static bool VideoOverlay;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -146,6 +165,8 @@ public static class EngineSwitches
             case "no-vsync": NoVsync = true; return true;
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
+            case "video-nv12": Nv12VideoOutput = true; return true;
+            case "video-overlay": VideoOverlay = true; return true;
             default: return false;
         }
     }

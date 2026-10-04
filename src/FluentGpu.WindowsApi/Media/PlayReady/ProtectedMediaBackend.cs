@@ -102,7 +102,11 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             throw new NotSupportedException("ProtectedMediaBackend requires a source carrying a DrmConfig (source.With(drm)).");
 
         ProtectedVideoRequest request = BuildRequest(source, source.Drm, opts.LicenseRelay ?? _defaultRelay, opts.StartPaused, _descriptor)
-            with { StartPosition = opts.StartPosition > TimeSpan.Zero ? opts.StartPosition : TimeSpan.Zero };
+            with
+            {
+                StartPosition = opts.StartPosition > TimeSpan.Zero ? opts.StartPosition : TimeSpan.Zero,
+                OriginTimestamp = System.Diagnostics.Stopwatch.GetTimestamp(),   // F216: the switch.budget counts from this open
+            };
 
         IProtectedVideoPlayer? player = TakePrepared(request);
         if (player is null)
@@ -320,6 +324,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             Player = player;
             Request = request;
             CreatedMs = owner.Clock();
+            MediaCensus.NotePrepared(+1);   // F197: a prepared session (its segment store is resident) until the open or the disposal claims it
         }
 
         internal IProtectedVideoPlayer Player { get; }
@@ -342,7 +347,12 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
 
         internal bool IsExpired(long nowMs) => AgeMs(nowMs) > PreparedExpiryMs;
 
-        internal bool Claim() => Interlocked.Exchange(ref _claimed, 1) == 0;
+        internal bool Claim()
+        {
+            if (Interlocked.Exchange(ref _claimed, 1) != 0) return false;
+            MediaCensus.NotePrepared(-1);
+            return true;
+        }
 
         /// <summary>Dispose the player unless the open already took it.</summary>
         internal void Release()

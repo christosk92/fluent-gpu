@@ -183,11 +183,15 @@ public sealed class QualitySet
     public void PublishActive(QualityVariant? variant) => _active.Value = variant;
 }
 
-/// <summary>Low-frequency diagnostic snapshot. Backends publish it at a bounded cadence, never per decoded sample.</summary>
+/// <summary>Low-frequency diagnostic snapshot. Backends publish it at a bounded cadence, never per decoded sample.
+/// The Media Foundation backends (clear and protected) feed the frame counters from the engine's own FRAMES_RENDERED /
+/// FRAMES_DROPPED, polled while video plays and accumulated across the engine's post-flush resets: <see cref="FramesRendered"/>
+/// is what the renderer presented, <see cref="FramesDropped"/> what it dropped, and <see cref="FramesDecoded"/> their sum
+/// (Media Foundation exposes no separate decoder count). A frame the compositor missed after presenting is in neither.</summary>
 public readonly record struct PlaybackStatistics(
     long BytesDownloaded, long FramesDecoded, long FramesDropped, long AudioUnderruns,
     double EstimatedThroughputKbps, double VideoBitrateKbps, double AudioBitrateKbps,
-    TimeSpan StartupTime, TimeSpan RebufferTime, int RebufferCount)
+    TimeSpan StartupTime, TimeSpan RebufferTime, int RebufferCount, long FramesRendered = 0)
 {
     public static PlaybackStatistics Empty => default;
 }

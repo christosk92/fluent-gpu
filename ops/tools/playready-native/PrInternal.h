@@ -271,6 +271,7 @@ inline void LogLine(const std::string& s) { fgpr::RaiseLog(0, s); }
 #include "SegmentStore.h"
 #include "FeedPlan.h"
 #include "HandoverPolicy.h"
+#include "FrameHealthPolicy.h"
 #include "WorkQueue.h"
 
 namespace fgpr {
@@ -587,6 +588,7 @@ struct Runtime
     uint64_t handle = 0;
     std::wstring storePath;
     int64_t adapterLuid = 0;             // (HighPart << 32) | LowPart of the adapter the D3D11 device is created on; 0 = default
+    int32_t videoOutputFormat = 0;       // FgPrVideoOutput the engine is created with (Reg().videoOutputFormat as of the create; F249)
     int64_t createdQpc = 0;
     WorkQueue queue;
     std::thread thread;
@@ -647,6 +649,10 @@ struct Runtime
 
     /// The armed unload of `engineSource` (PrSession.cpp ScheduleEngineRelease). Runtime thread only.
     handover::ReleaseGate releaseGate;
+    /// F198: the swap-chain handles no session publishes any more (replaced, or its session detached), kept open for
+    /// health::kHandleGraceMs so the managed render thread can finish binding their successors, then closed (PrSession.cpp
+    /// RetireSwapchainHandle). Runtime thread only.
+    health::RetiredHandles retiredHandles;
 
     /// Joins destroyed sessions' feeder threads off the runtime thread (PrSession.cpp DestroyInternal); drained before
     /// Media Foundation is shut down and shut down by FgPrRuntimeDestroy.
@@ -782,6 +788,12 @@ struct Session
     int32_t streamWidth = 0, streamHeight = 0;    // FgPrSessionSetStreamSize (0×0 = natural)
     int64_t lastStreamLogQpc = 0;                 // runtime thread: when the "[cenc] stream size" line was last written
     int32_t handleTries = 0;
+    // F066 (runtime thread): the renderer's frame counters accumulated across MF's post-flush resets, when they were last read,
+    // and the no-rendered-frame watch. Reset with every attach; the accumulated totals are published through the atomics below.
+    health::FrameCounters frames;
+    health::RenderedFrameWatch frameWatch;
+    int64_t nextFrameStatsMs = 0;
+    bool frameStatsReadable = false;              // the last statistics poll read real counters; the hang watch only counts time while they are readable
     int64_t lastPositionRaiseQpc = 0;
     int64_t lastPositionRaisedMs = -1;
 
@@ -800,6 +812,7 @@ struct Session
     std::atomic<int64_t> retainedBehindMs{ 0 };
     std::atomic<int64_t> firstFrameQpc{ 0 };
     std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // FgPrSnapshot.streamWidth/Height: the applied stream size
+    std::atomic<int64_t> framesRendered{ 0 }, framesDropped{ 0 };    // FgPrSnapshot.framesRendered/Dropped (F066), this attach
     std::atomic<uint64_t> bytesDownloaded{ 0 };
     std::atomic<uint64_t> downloadElapsedMs{ 0 };
 
@@ -819,6 +832,7 @@ struct Registry
 {
     std::mutex mx;
     std::shared_ptr<Runtime> runtime;                                   // one per process
+    std::atomic<int32_t> videoOutputFormat{ 0 };                        // FgPrVideoOutput for the NEXT runtime (FgPrRuntimeSetVideoOutputFormat; F249)
     std::unordered_map<uint64_t, std::shared_ptr<Session>> sessions;
 };
 

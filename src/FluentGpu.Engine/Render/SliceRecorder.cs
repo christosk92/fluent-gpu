@@ -944,6 +944,7 @@ public sealed partial class SliceRecorder
         public int Seg; public RectF Rect; public VideoEraseOrder Order;
         public RectF Hole; public CornerRadius4 Radii; public float Strength; public RectF RoundRect; public float RoundR;
         public int SurfaceId;   // the registry slot token the DrawVideo carries (F070: keys the posed hole the video placement follows)
+        public RectF After;     // F087: the union of the painted bounds (slot space DIP) of every op recorded AFTER this DrawVideo in its segment
     }
     private struct ScanFade { public int Seg; public RectF Rect; public float Start, End; }
 
@@ -1069,6 +1070,11 @@ public sealed partial class SliceRecorder
                         if (!top.IsInfinite) b = b.Intersect(top);
                         if (!b.IsEmpty) segBounds = Union(segBounds, b);
                         ContentScanOp(s, pos, in b, oh, layerPush);
+                        // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
+                        // own DrawVideo is added below, after this, and never counts against itself).
+                        if (!b.IsEmpty)
+                            for (int vi = videos - 1; vi >= 0 && _scanVideos[s][vi].Seg == marks; vi--)
+                                _scanVideos[s][vi].After = Union(_scanVideos[s][vi].After, b);
                         if (op == DrawOp.DrawVideo)
                         {
                             var v = MemoryMarshal.Read<DrawVideoCmd>(p);
@@ -1202,6 +1208,10 @@ public sealed partial class SliceRecorder
     // thread's VideoPlacementApplier follows, so a composite-only scroll or animation turn moves the video exactly as far as the hole.
     private readonly FluentGpu.Media.VideoPosedHole[] _posedHoles = new FluentGpu.Media.VideoPosedHole[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
     private int _posedHoleCount;
+    // F087: what the occlusion verdict of each posed hole needs, parallel to _posedHoles: its erase's plan entry (-1 = the clip emptied the
+    // erase), its segment, the posed bounds of the ops that paint after it in that segment, and whether it sits in an inline group layer.
+    private struct PosedMeta { public int PlanIdx, Slot, Seg; public RectF After; public bool Inline; }
+    private readonly PosedMeta[] _posedMeta = new PosedMeta[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
     private ulong _compositeHash;
 
     /// <summary>Video hole rects (window DIP) the last <see cref="Place"/> placed — the published answer for
@@ -1240,6 +1250,7 @@ public sealed partial class SliceRecorder
         root.EffClip = RectF.Infinite;
         root.Visited = true;
         PlaceSlot(RootSlot, scene, 0f, 0f, 0f, 0f, RectF.Infinite, RectF.Infinite, float.NaN, 0f, RectF.Infinite, default, 0f, default, default, default, false, ref repaint);
+        if (_posedHoleCount > 0) ClassifyVideoOcclusion();
         // The census's Folded: the inline (folded) group layers the placed partition composites — read off the arenas'
         // scans, so a slice kept whole or a span copied from the prior buffer still counts the folds it carries.
         int folded = 0;
@@ -1311,11 +1322,20 @@ public sealed partial class SliceRecorder
             RectF wr = Offset(sv.Rect, accDx, accDy);
             // F070: the posed hole as the video placement follows it - the unclipped rect and the clip that cuts it, recorded BEFORE the
             // clip empties the erase, so a hole scrolled fully under a header still tells the applier to hide the video there.
+            int posedAt = -1;
             if (sv.SurfaceId > 0 && _posedHoleCount < _posedHoles.Length)
-                _posedHoles[_posedHoleCount++] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = effClip };
+            {
+                posedAt = _posedHoleCount++;
+                _posedHoles[posedAt] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = effClip };
+                _posedMeta[posedAt] = new PosedMeta
+                {
+                    PlanIdx = -1, Slot = slot, Seg = k, After = Offset(sv.After, accDx, accDy), Inline = order == VideoEraseOrder.AfterSegment,
+                };
+            }
             if (!effClip.IsInfinite) wr = wr.Intersect(effClip);
             if (wr.IsEmpty) continue;
             ref Plan ve = ref NewPlan(PlanKind.Video);
+            if (posedAt >= 0) _posedMeta[posedAt].PlanIdx = _planCount - 1;
             ve.Slot = slot; ve.Rect = wr;
             // F078: the erase carries the hole's own shape and strength, like the in-tile punch it pairs with.
             ve.Hole = Offset(sv.Hole, accDx, accDy);
@@ -1330,6 +1350,75 @@ public sealed partial class SliceRecorder
             Mix(ref _compositeHash, sv.Radii.BottomRight); Mix(ref _compositeHash, sv.Radii.BottomLeft);
             if (sv.RoundR > 0f) { MixRect(ref _compositeHash, ve.RoundRect); Mix(ref _compositeHash, sv.RoundR); }
         }
+    }
+
+    /// <summary>F087: the occlusion verdict of every posed hole of the plan just laid out - does anything paint over the visible part of
+    /// the hole AFTER the video's own <c>DrawVideo</c>? Painter order is the plan's order: the later ops of the hole's own segment
+    /// (<see cref="ScanVideo.After"/>), then every later segment (its painted bounds at its posed offset, cut by its composite clip), backdrop
+    /// and hole. Bounds are per whole segment, so a segment that merely has paint somewhere over the hole's rect counts as covering it: the
+    /// verdict can only err towards "covered" (underlay), never towards a video hiding UI. A hole inside an inline group layer, or one the
+    /// clip emptied, is never clear. Neither is a hole whose erase is PARTIAL (<see cref="Plan.Alpha"/> below 1: the underlay leaves part of
+    /// the UI over the video, a promoted visual has no opacity and would show at full strength over it), one an in-stream rounded clip cuts
+    /// (<see cref="Plan.RoundR"/> above 0: the presenter rounds only by the element's own corner radius, a promoted video would show square
+    /// corners over the UI outside the ancestor's rounded clip), or one that sits under a layer or group surface (an ancestor's opacity /
+    /// fade / blur composites the UI over the underlay the same way). Detached fly snapshots are recorded into the root slice's tail, so they
+    /// are plan segments like any other and count as covering. Allocation-free; runs only when the plan holds a hole.</summary>
+    private void ClassifyVideoOcclusion()
+    {
+        for (int h = 0; h < _posedHoleCount; h++)
+        {
+            ref PosedMeta m = ref _posedMeta[h];
+            bool clear = false;
+            if (m.PlanIdx >= 0 && !m.Inline && _plan[m.PlanIdx].Alpha >= 0.999f && _plan[m.PlanIdx].RoundR <= 0f && !InsideGroup(m.PlanIdx))
+            {
+                RectF hole = _plan[m.PlanIdx].Rect;   // the part of the hole the composite clip leaves: what the video shows
+                clear = !hole.IsEmpty && (m.After.IsEmpty || !m.After.Overlaps(in hole));
+                for (int j = m.PlanIdx + 1; clear && j < _planCount; j++)
+                {
+                    ref Plan e = ref _plan[j];
+                    RectF r;
+                    switch (e.Kind)
+                    {
+                        case PlanKind.Seg:
+                        {
+                            if (e.Slot == m.Slot && e.Segment == m.Seg)
+                            {
+                                // the hole's own segment: its later ops are m.After; a leaf layer / distributed fade on it dims the UI over the video
+                                if (e.HasLayer || e.Dist.Count > 0) clear = false;
+                                continue;
+                            }
+                            ScanSeg[]? segs = e.Slot >= 0 && e.Slot < _scanSegs.Length ? _scanSegs[e.Slot] : null;
+                            if (segs is null || (uint)e.Segment >= (uint)segs.Length) { clear = false; continue; }
+                            RectF b = segs[e.Segment].Bounds;
+                            r = b.IsEmpty ? default : Offset(in b, e.AccDx, e.AccDy);
+                            if (!e.Clip.IsInfinite) r = r.Intersect(e.Clip);
+                            break;
+                        }
+                        case PlanKind.Backdrop:
+                        case PlanKind.Video:
+                            r = e.Rect;
+                            break;
+                        default:
+                            continue;   // a group's open / close: what it encloses is Seg entries of their own
+                    }
+                    if (!r.IsEmpty && r.Overlaps(in hole)) clear = false;
+                }
+            }
+            _posedHoles[h].Unoccluded = clear;
+        }
+    }
+
+    /// <summary>Is plan entry <paramref name="idx"/> inside an open GROUP (a layer slice with children composited through one surface)?</summary>
+    private bool InsideGroup(int idx)
+    {
+        int depth = 0;
+        for (int j = idx - 1; j >= 0; j--)
+        {
+            PlanKind k = _plan[j].Kind;
+            if (k == PlanKind.GroupClose) depth++;
+            else if (k == PlanKind.GroupOpen && depth-- == 0) return true;
+        }
+        return false;
     }
 
     /// <summary>A scroller's CHROME slice (its scrollbar thumb, or its rail + edge-cue chevrons): drawn over the scroller's

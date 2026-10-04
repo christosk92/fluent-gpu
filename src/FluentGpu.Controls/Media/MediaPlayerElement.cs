@@ -310,7 +310,7 @@ public sealed class MediaPlayerElement : Component
     private Action<Action>? _postToUi;
     private readonly Action _drainPumpRequest;
     private int _pumpPostQueued;
-    (VideoAspectMode Mode, int Aw, int Ah, int Nw, int Nh, int Vw, int Vh, int Rw, int Rh, int Host, int Pres) _loggedPump;
+    (VideoAspectMode Mode, int Aw, int Ah, int Nw, int Nh, int Vw, int Vh, int Rw, int Rh, int Host, int Pres, int Ord, int Tok) _loggedPump;
 
     // Geometry motion (a drag, a resize, an animated placement) pumps only to PLACE the surface; the session publish, the
     // adaptive-viewport bookkeeping and the [video] pump line wait for the geometry to settle. One trailing timer, armed
@@ -1453,7 +1453,7 @@ public sealed class MediaPlayerElement : Component
                 return;
             }
         }
-        LogPump(pumpMode, area, natural, videoRect, viewport, s, defer: motion || _settleArmed);
+        LogPump(b, pumpMode, area, natural, videoRect, viewport, s, defer: motion || _settleArmed);
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
         Player.PumpVideo(b, videoRect, s);
         // The first metadata, a FORMATCHANGE or a different-aspect ABR rung publishes a new natural size INSIDE the pump,
@@ -1505,7 +1505,7 @@ public sealed class MediaPlayerElement : Component
         scene.Mark(hole, NodeFlags.LayoutDirty);
     }
 
-    void LogPump(VideoAspectMode mode, RectF area, SizeI natural, RectF videoRect, RectF viewport, float scale, bool defer)
+    void LogPump(in VideoBinding b, VideoAspectMode mode, RectF area, SizeI natural, RectF videoRect, RectF viewport, float scale, bool defer)
     {
         // Geometry motion changes this tuple every frame: only the settled geometry is worth a line. While a motion burst
         // is open (settle armed) no pump logs, geometry-only or full alike (a native/transport pump mid-drag would write
@@ -1518,10 +1518,13 @@ public sealed class MediaPlayerElement : Component
             Vw: (int)viewport.W, Vh: (int)viewport.H,
             Rw: (int)videoRect.W, Rh: (int)videoRect.H,
             Host: PresentingFullscreen && !IsFullscreenPresentation ? 1 : 0,
-            Pres: IsFullscreenPresentation ? 1 : 0);
+            Pres: IsFullscreenPresentation ? 1 : 0,
+            Ord: b.HostOrdinal, Tok: b.Token);
         if (line.Equals(_loggedPump)) return;
         _loggedPump = line;
-        Diag.Line($"[video] pump mode={mode} natural={natural.Width}x{natural.Height} area={(int)area.W}x{(int)area.H} viewport={(int)viewport.W}x{(int)viewport.H} videoRect={(int)videoRect.X},{(int)videoRect.Y} {(int)videoRect.W}x{(int)videoRect.H} hostFs={line.Host} overlayFs={line.Pres} scale={scale:0.##}");
+        // host= / token= (F235): WHICH window's registry and WHICH slot wrote this pump. Two windows' pumps used to differ only by scale=,
+        // so a dual-writer hunt could not tell the main window's slot from a pop-out's.
+        Diag.Line($"[video] pump host={line.Ord} token={line.Tok} mode={mode} natural={natural.Width}x{natural.Height} area={(int)area.W}x{(int)area.H} viewport={(int)viewport.W}x{(int)viewport.H} videoRect={(int)videoRect.X},{(int)videoRect.Y} {(int)videoRect.W}x{(int)videoRect.H} hostFs={line.Host} overlayFs={line.Pres} scale={scale:0.##}");
     }
 
     /// <summary>Intersect <paramref name="rect"/> with the bounds of every <c>ClipsToBounds</c> ancestor.

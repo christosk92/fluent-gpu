@@ -168,6 +168,7 @@ public sealed class ProtectedRuntimeRecoveryTests
     [InlineData(unchecked((int)0x887A0005))]   // DXGI_ERROR_DEVICE_REMOVED
     [InlineData(unchecked((int)0x887A0007))]   // DXGI_ERROR_DEVICE_RESET
     [InlineData(unchecked((int)0xC00D3E85))]   // MF_E_SHUTDOWN
+    [InlineData(unchecked((int)0x800705B4))]   // ERROR_TIMEOUT: playing with no rendered frame for 10 s (F066)
     public void AResetClassSessionError_PoisonsTheRuntime_AndTheNextAcquireReplacesIt(int hr)
     {
         Assert.True(ProtectedRuntimeFaults.IsRuntimeReset(hr));

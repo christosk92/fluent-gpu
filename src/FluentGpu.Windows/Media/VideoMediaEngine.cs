@@ -72,6 +72,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // commands still wake the loop immediately regardless of this timeout via VideoEngineCommandQueue.Wake).
     private const int ActiveRefreshMs = 250;
     private const int ParkedRefreshMs = 1000;
+    // F066: while video is playing, the renderer's FRAMES_RENDERED / FRAMES_DROPPED are read at most this often (Chromium's 500 ms
+    // statistics poll; an in-proc property read, never when paused, parked, starved or seeking).
+    private const long FrameStatsPollMs = 500;
+    // HRESULT_FROM_WIN32(ERROR_TIMEOUT): the HRESULT a rendered-frame hang (RenderedFrameWatch) is reported with, under MF_MEDIA_ENGINE_ERR_DECODE.
+    private const int HrNoRenderedFrame = unchecked((int)0x800705B4);
     // Position-only snapshot changes coalesce StateChanged to at most this often (~1 Hz) — MediaSeekBar already treats a
     // native position report as a low-cadence anchor and interpolates on its own FrameClock ticker.
     private static readonly long s_positionRaiseTicks = Stopwatch.Frequency;
@@ -112,6 +117,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // elapse.
     private readonly BlockingCollection<Action> _work = new();
     private readonly VideoSnapshotBuffer _snapshot = new();
+    // F197: this engine's creation number (the id both always-on lines and the census row carry) and its MediaCensus registration, live from
+    // the thread's bring-up to its DisposeCom. Engine-thread only (Interlocked so DisposeCom stays idempotent).
+    private static int s_nextOrdinal;
+    private readonly int _ordinal = Interlocked.Increment(ref s_nextOrdinal);
+    private int _censusToken;
     private readonly VideoEngineCommandQueue _commands = new();
 
     // ── Per-source event state (set on MF worker threads via OnEngineEvent; read only on the engine thread inside
@@ -157,6 +167,16 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private int _naturalQueriedForEpoch = -1;
     private nuint _cachedHandle;
     private int _handleQueriedForEpoch = -1;   // presentation epoch the cached handle was last queried at; -1 = never
+    // F198: every GetVideoSwapchainHandle call returns a FRESH NT handle the caller must close (the MS sample, Chromium and Firefox all
+    // own it). They are owned here: the current one stays open for as long as it is published (a device recovery binds it again), a
+    // superseded one is closed one replacement or SwapchainHandleLedger.DefaultGraceMs later - after the render thread's
+    // CreateSurfaceFromHandle took its own reference - and the rest at DisposeCom.
+    private readonly SwapchainHandleLedger _handles = new(static h => CloseHandle((HANDLE)(nint)h));
+    // F066: the renderer's frame counters accumulated across MF's post-flush resets, the next poll time and the no-rendered-frame watch.
+    private VideoFrameCounters _frames;
+    private RenderedFrameWatch _frameWatch;
+    private long _nextStatsPollMs;
+    private bool _frameStatsReadable;   // the last statistics poll read real counters; the hang watch only counts time while they are readable
     private double _cachedDuration;
     private double _lastRate = 1.0;            // the last Rate command applied; re-applied after every SetSource, and the
                                                // published fallback while there is no engine to read the rate back from
@@ -223,6 +243,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private void ThreadMain()
     {
         int hr = CreateEngine();
+        // Always-on (F197): one line per engine create and destroy, with the live count, so a per-rebuild leak reads straight off the log.
+        _censusToken = MediaCensus.Register(MediaCensusKind.VideoEngine, DescribeCensus);
+        Diag.Line($"[video] engine.create id={_ordinal} hr=0x{(uint)hr:X8} live={MediaCensus.Count(MediaCensusKind.VideoEngine)}");
         if (hr < 0)
         {
             _faulted = true;
@@ -272,7 +295,15 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             if ((hr = MFCreateAttributes(&attrs, 4)) < 0) return Log("MFCreateAttributes", hr);
             Guid gCb = MF.MF_MEDIA_ENGINE_CALLBACK; attrs->SetUnknown(&gCb, (IUnknown*)_notify);
             if (_dxgiManager != null) { Guid gDm = MF.MF_MEDIA_ENGINE_DXGI_MANAGER; attrs->SetUnknown(&gDm, (IUnknown*)_dxgiManager); }
-            Guid gFmt = MF.MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT; attrs->SetUINT32(&gFmt, (uint)DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM);
+            // F249: BGRA is the long-standing output (a video-processor NV12 -> BGRA pass per decoded frame). NV12 only behind --fg video-nv12
+            // and only where the output's overlay probe says NV12 can take a plane; the verdict is the newest published one (an engine is
+            // created after its window's output was probed), and an unprobed output keeps BGRA.
+            VideoOverlayCaps overlayCaps = VideoOverlayCaps.Latest;
+            VideoOutputFormat outputFormat = VideoOverlayCaps.ChooseOutputFormat(FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput, in overlayCaps);
+            DXGI_FORMAT dxgiFormat = outputFormat == VideoOutputFormat.Nv12 ? DXGI_FORMAT.DXGI_FORMAT_NV12 : DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+            if (FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput)
+                Diag.Line($"[video] output format={(outputFormat == VideoOutputFormat.Nv12 ? "nv12" : "bgra")} overlay[{overlayCaps.Describe()}] (--fg video-nv12)");
+            Guid gFmt = MF.MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT; attrs->SetUINT32(&gFmt, (uint)dxgiFormat);
 
             Guid clsid = CLSID.CLSID_MFMediaEngineClassFactory;
             Guid iidF = IID.IID_IMFMediaEngineClassFactory;
@@ -381,6 +412,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                     // MF can drop a rate set while the topology loads and falls back to the DEFAULT rate on Play, so the
                     // rate the session asked for is re-asserted against the new source (the session also re-posts it).
                     ApplyRate(_lastRate);
+                    RebaseFrameStats();
                 }
             }
             else
@@ -440,7 +472,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                 MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
                 int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
                 if (hr < 0) Log("UpdateVideoStream(dst)", hr);
-                else if (w > 0 && h > 0) { _appliedStreamW = (uint)w; _appliedStreamH = (uint)h; }
+                else if (w > 0 && h > 0)
+                {
+                    _appliedStreamW = (uint)w; _appliedStreamH = (uint)h;
+                    _frameWatch.Restart(Environment.TickCount64);   // a re-sized (re-created) stream gets a fresh no-frame window
+                }
             }
         }
 
@@ -477,6 +513,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
         _appliedStreamW = 0; _appliedStreamH = 0;
         _cachedHandle = 0; _handleQueriedForEpoch = -1;
+        _handles.Retire(Environment.TickCount64);   // F198: the old source's handle is superseded; it is closed a replacement or a grace later
+        _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false;
         _cachedDuration = 0;
         // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
         // FORMATCHANGE/RESOURCELOST — bump the same epoch so a consumer re-queries it.
@@ -491,6 +529,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private void RefreshAndPublishSnapshot()
     {
         if (Interlocked.Exchange(ref _deviceProbePending, 0) != 0) CheckDeviceRemoved("engine event");
+        _handles.Sweep(Environment.TickCount64);
         uint readyState = _engine != null ? _engine->GetReadyState() : 0;
         // LOADEDMETADATA is trusted only once the engine itself reports HAVE_METADATA (see _metadataTrusted).
         bool metadata = _metadataLoaded && readyState >= EngineLivenessRule.HaveMetadata;
@@ -513,6 +552,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 
         double duration = 0, position = 0;
         double seekStart = 0, seekEnd = 0;
+        // Read ONCE: the size and handle below are queried for this epoch, so the snapshot must publish this epoch with them. A
+        // FORMATCHANGE landing mid-refresh would otherwise pair the NEW epoch with the OLD handle, which the consumer keeps and the
+        // handle ledger (F198) closes after its delay.
+        int epoch = Volatile.Read(ref _presentationEpoch);
 
         if (_engine != null)
         {
@@ -565,8 +608,6 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                         finally { range->Release(); }
                     }
 
-                    int epoch = Volatile.Read(ref _presentationEpoch);
-
                     // Native decoded video size — re-query once per presentation epoch (0×0 IS a valid answer:
                     // audio-only). An ABR variant switch (FORMATCHANGE) changes the decoded frame size with no
                     // transport transition to ride in on, so this is what keeps the composited fit correct after one.
@@ -587,8 +628,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                     // (empty size) has no handle to wait for.
                     if (_handleQueriedForEpoch != epoch || (_cachedHandle == 0 && _naturalW != 0 && _naturalH != 0))
                     {
-                        HANDLE h;
-                        _cachedHandle = _engineEx->GetVideoSwapchainHandle(&h) >= 0 ? (nuint)(nint)h : 0;
+                        HANDLE h = default;
+                        nuint queried = _engineEx->GetVideoSwapchainHandle(&h) >= 0 && (nint)h != -1 ? (nuint)(nint)h : 0;
+                        // F198: a successful query hands over a handle this engine now owns; the one it supersedes is retired.
+                        _handles.Adopt(queried, Environment.TickCount64);
+                        _cachedHandle = queried;
                         _handleQueriedForEpoch = epoch;
                     }
                 }
@@ -611,14 +655,40 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         }
         if (_waiting && _playing && metadata) flags |= VideoEngineFlags.Waiting;
 
-        if (_naturalQueriedForEpoch == Volatile.Read(ref _presentationEpoch)) flags |= VideoEngineFlags.NaturalSizeKnown;
+        if (_naturalQueriedForEpoch == epoch) flags |= VideoEngineFlags.NaturalSizeKnown;
         if (_liveLatched) flags |= VideoEngineFlags.LiveSource;
         long firstFrame = metadata ? Volatile.Read(ref _firstFrameTicks) : 0;
+
+        // F066: rendered/dropped-frame health. Polled only while VIDEO is actually playing - not paused, parked, starved, seeking or
+        // failed, with a frame's worth of data (HAVE_FUTURE_DATA, as the native path gates it), and only once a stream rect was applied (an engine with no element mounted may never create a swap chain to render
+        // into, which is no hang). The same turn judges Chromium's rendered-frame detection: no frame rendered within
+        // RenderedFrameWatch.DefaultTimeoutMs of PLAYING or of the last UpdateVideoStream is a hung surface (a dead swap-chain handle, a
+        // stuck topology, a lost device that never raised an error), reported as a typed Decode error and a Faulted engine so the retry
+        // gets a fresh one.
+        long nowMs = Environment.TickCount64;
+        bool videoPlaying = (flags & (VideoEngineFlags.Playing | VideoEngineFlags.Waiting | VideoEngineFlags.Seeking | VideoEngineFlags.Error | VideoEngineFlags.Ended)) == VideoEngineFlags.Playing
+                            && readyState >= HaveFutureData
+                            && (flags & VideoEngineFlags.NaturalSizeKnown) != 0 && _naturalW != 0 && _naturalH != 0
+                            && _appliedStreamW != 0 && _appliedStreamH != 0;
+        if (videoPlaying && nowMs >= _nextStatsPollMs)
+        {
+            _nextStatsPollMs = nowMs + FrameStatsPollMs;
+            PollFrameStats();
+        }
+        // A statistics read that fails or comes back empty is telemetry trouble, never a hang (Chromium skips its rendered-frame check
+        // unless PopulateStatistics succeeded): the watch only counts time while the counters are actually readable.
+        if (_frameWatch.Observe(nowMs, videoPlaying && _frameStatsReadable, _frames.Rendered))
+        {
+            _error = true; _errorCode = MfMediaEngineErrDecode; _errorHr = HrNoRenderedFrame;
+            _faulted = true;
+            flags |= VideoEngineFlags.Error | VideoEngineFlags.Faulted;
+            Diag.Line($"[video.render] no frame rendered within {RenderedFrameWatch.DefaultTimeoutMs / 1000}s of playing (stream {_appliedStreamW}x{_appliedStreamH}, dropped={_frames.Dropped}); engine faulted, the retry rebuilds it");
+        }
 
         var snap = new VideoEngineSnapshot
         {
             SourceEpoch = _committedSourceEpoch,
-            PresentationEpoch = Volatile.Read(ref _presentationEpoch),
+            PresentationEpoch = epoch,
             Flags = flags,
             ReadyState = readyState,
             NaturalW = _naturalW,
@@ -636,6 +706,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             SeekedCount = Volatile.Read(ref _seekedCount),
             StreamW = _appliedStreamW,
             StreamH = _appliedStreamH,
+            FramesRendered = _frames.Rendered,
+            FramesDropped = _frames.Dropped,
         };
         _snapshot.Publish(snap);
 
@@ -670,6 +742,42 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         if (_engine == null) return _lastRate;
         double r = _engine->GetPlaybackRate();
         return double.IsFinite(r) && r > 0 ? r : _lastRate;
+    }
+
+    // Engine thread only. One FRAMES_RENDERED / FRAMES_DROPPED reading (a VT_UI4 PROPVARIANT each, as Chromium and Firefox read them).
+    private bool TryReadFrameStats(out uint rendered, out uint dropped)
+    {
+        rendered = 0; dropped = 0;
+        if (_engineEx == null) return false;
+        return TryReadStat(MF_MEDIA_ENGINE_STATISTIC.MF_MEDIA_ENGINE_STATISTIC_FRAMES_RENDERED, out rendered)
+               && TryReadStat(MF_MEDIA_ENGINE_STATISTIC.MF_MEDIA_ENGINE_STATISTIC_FRAMES_DROPPED, out dropped);
+    }
+
+    private bool TryReadStat(MF_MEDIA_ENGINE_STATISTIC stat, out uint value)
+    {
+        value = 0;
+        PROPVARIANT pv = default;
+        try
+        {
+            if (_engineEx->GetStatistics(stat, &pv) < 0) return false;
+            if ((int)pv.vt != 19) return false;   // VT_UI4: an S_OK that left the PROPVARIANT empty is a failed read, not zero frames
+            value = pv.ulVal;
+            return true;
+        }
+        finally { PropVariantClear(&pv); }
+    }
+
+    private void PollFrameStats()
+    {
+        _frameStatsReadable = TryReadFrameStats(out uint rendered, out uint dropped);
+        if (_frameStatsReadable) _frames.Observe(rendered, dropped);
+    }
+
+    // A new source starts counting from whatever the (warm) engine's counters read now: MF resets them itself once the new source
+    // flushes in, which Observe folds in as a decrease.
+    private void RebaseFrameStats()
+    {
+        if (TryReadFrameStats(out uint rendered, out uint dropped)) _frames.Rebase(rendered, dropped);
     }
 
     /// <inheritdoc/>
@@ -796,6 +904,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         if (_engine != null) _engine->Shutdown();
         if (_engineEx != null) { _engineEx->Release(); _engineEx = null; }
         if (_engine != null) { _engine->Release(); _engine = null; }
+        // F198: the swap-chain handles this engine queried are its to close (current and retired); the engine that produced them is gone.
+        _handles.CloseAll();
         // Borrowed from the shared device (MfVideoDevice): drop the pointers only, the lease below gives them back.
         _dxgiManager = null;
         _d3d = null;
@@ -805,6 +915,20 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         // Last: the device (and MFStartup) may only go away once this engine's COM objects are released. The device itself
         // lingers for the next engine; it is destroyed here only when this was its last lease and it was retired.
         if (_videoLease != null) { _videoLease.Dispose(); _videoLease = null; }
+        int census = Interlocked.Exchange(ref _censusToken, 0);
+        if (census != 0)
+        {
+            MediaCensus.Unregister(census);
+            Diag.Line($"[video] engine.destroy id={_ordinal} live={MediaCensus.Count(MediaCensusKind.VideoEngine)}");
+        }
+    }
+
+    // What the media census reads for this engine, from any thread: the published snapshot's natural size and whether it has a swap
+    // chain handle out (attached to a source that produced one).
+    private MediaCensusRow DescribeCensus()
+    {
+        VideoEngineSnapshot s = _snapshot.Read();
+        return new MediaCensusRow(MediaCensusKind.VideoEngine, _ordinal, (int)s.NaturalW, (int)s.NaturalH, 0, s.SwapchainHandle != 0);
     }
 
     /// <inheritdoc/>

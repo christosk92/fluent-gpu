@@ -13,7 +13,9 @@ namespace FluentGpu.Pal.Windows;
 /// <c>docs/plans/video-compositing-spine-design.md §4</c>). Manages video child visuals under the primary swapchain's
 /// DirectComposition ROOT, strictly z-BELOW the UI swapchain visual, using the SAME <c>IDCompositionDevice</c> as
 /// <see cref="D3D12Device"/> (one device, one Commit). <c>BindSurfaceHandle</c> wraps an external DComp surface handle
-/// with <c>IDCompositionDevice::CreateSurfaceFromHandle</c> → <c>IDCompositionVisual::SetContent</c>.
+/// with <c>IDCompositionDevice::CreateSurfaceFromHandle</c> → <c>IDCompositionVisual::SetContent</c>. Only while the host promotes a
+/// surface (<see cref="SetOverlay"/>, F087: nothing paints over its rect and the output reported overlay support) does its parent sit
+/// ABOVE the UI visual instead.
 /// <para>Each slot is Chromium's clip-visual / transform-visual split: an UNTRANSFORMED device-space parent
 /// carries the whole-pixel offset, the viewport clip and the rounded-corner clip (a DComp clip lives in the visual's
 /// pre-transform space, so on the scaled visual it would be scaled with the content), and a child under it carries the
@@ -46,6 +48,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         public float Radius;                 // device-px corner radius (0 = square → the plain rect clip)
         public int Z;
         public bool Visible;
+        public bool Overlay;                 // F087: promoted above the UI visual (default: the underlay below it)
         public bool InTree;                  // Parent AddVisual'd under the current root (false while hidden)
         public bool Dirty;                   // Place/SetVisible pending for the next Commit
         public bool PlacementFaulted;        // last ApplyPlacement hit a failing native call and bailed early (diagnostic;
@@ -212,6 +215,27 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
+    /// <summary>F087: overlay promotion is offered only where the render output reported an overlay plane for NV12, YUY2 or BGRA
+    /// (<see cref="D3D12Swapchain.OverlayCaps"/>, probed with <c>IDXGIOutput3::CheckOverlaySupport</c> on the topology edge).</summary>
+    public bool SupportsOverlay => Target.OverlayCaps.AnyPromotable;
+
+    public void SetOverlay(VideoSurfaceId id, bool above)
+    {
+        _device.AssertRenderThread();
+        ref Slot s = ref Get(id);
+        if (s.Overlay == above) return;
+        s.Overlay = above;
+        if (s.InTree)
+        {
+            // The visual's place relative to the UI visual is fixed at AddVisual, so crossing it re-inserts the parent (queued for this
+            // frame's Commit like a Z change). Content, clip and transform live on the visuals and are untouched.
+            DetachChild(ref s);
+            AttachChild((int)id.Value - 1);
+            _graphDirty = true;
+        }
+        if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
+    }
+
     public void SetCornerRadius(VideoSurfaceId id, float radiusPx)
     {
         _device.AssertRenderThread();
@@ -301,19 +325,37 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         // swapchain and is revealed at its rect through the premultiplied-0 hole-punch the UI back buffer draws there
         // (the IVideoPresenter contract), so UI chrome (rounded corners, overlays, transport) composites OVER the video
         // edge. Among video siblings the stack is (Z, slot) ascending: the reference is the in-tree sibling with the
-        // next-higher key, else the UI visual itself (so a video can never land above the UI).
+        // next-higher key, else the UI visual itself (so an underlay can never land above the UI; only a surface the host promoted does).
         IDCompositionVisual* above = sc.DcompVisual;
         int best = -1;
-        for (int j = 0; j < MaxSurfaces; j++)
+        if (!s.Overlay)
         {
-            if (j == idx) continue;
-            ref Slot o = ref _slots[j];
-            if (!o.InUse || !o.InTree) continue;
-            if (o.Z < s.Z || (o.Z == s.Z && j < idx)) continue;   // below us in the stack
-            if (best < 0 || o.Z < _slots[best].Z || (o.Z == _slots[best].Z && j < best)) best = j;
+            // The underlay stack: only the underlay siblings count (a promoted one sits above the UI visual, not in this stack).
+            for (int j = 0; j < MaxSurfaces; j++)
+            {
+                if (j == idx) continue;
+                ref Slot o = ref _slots[j];
+                if (!o.InUse || !o.InTree || o.Overlay) continue;
+                if (o.Z < s.Z || (o.Z == s.Z && j < idx)) continue;   // below us in the stack
+                if (best < 0 || o.Z < _slots[best].Z || (o.Z == _slots[best].Z && j < best)) best = j;
+            }
+        }
+        else
+        {
+            // F087: a promoted surface goes ABOVE the UI visual. Among the promoted siblings the stack is the same (Z, slot) ascending, so
+            // it is inserted directly above the in-tree promoted sibling with the next-LOWER key, else directly above the UI visual.
+            for (int j = 0; j < MaxSurfaces; j++)
+            {
+                if (j == idx) continue;
+                ref Slot o = ref _slots[j];
+                if (!o.InUse || !o.InTree || !o.Overlay) continue;
+                if (o.Z > s.Z || (o.Z == s.Z && j > idx)) continue;   // above us in the stack
+                if (best < 0 || o.Z > _slots[best].Z || (o.Z == _slots[best].Z && j > best)) best = j;
+            }
         }
         if (best >= 0) above = _slots[best].Parent;
-        if (!Ok(sc.DcompRoot->AddVisual(s.Parent, BOOL.FALSE, above), "Root.AddVisual(video parent, below UI)"))
+        if (!Ok(sc.DcompRoot->AddVisual(s.Parent, s.Overlay ? BOOL.TRUE : BOOL.FALSE, above),
+                s.Overlay ? "Root.AddVisual(video parent, above UI)" : "Root.AddVisual(video parent, below UI)"))
         {
             _attachPending = true;   // s.InTree stays false; the next Commit retries (RetryAttach)
             return;

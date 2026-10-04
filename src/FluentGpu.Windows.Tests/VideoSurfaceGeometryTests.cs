@@ -312,4 +312,87 @@ public sealed class VideoSurfaceGeometryTests
         Assert.Contains("Destroy(1)", presenter.Calls);
         Assert.Equal(0, presenter.Commits);
     }
+
+    // ── F235: ONE swap-chain handle on two LIVE slots, across windows ───────────────────────────────────────────────────────
+    // The Debug-only OneSurfacePerPlayerGuard scans a single registry (and is compiled out of the shipping binary); every window owns
+    // its own registry, so a main-window slot plus a pop-out slot writing one player's swap chain was invisible to it. The census counter
+    // scans every registered window through each registry's any-thread handle mirror.
+
+    private static int BindOne(VideoSurfaceRegistry registry, nuint handle)
+    {
+        int token = registry.Acquire();
+        registry.Bind(token, handle);
+        return token;
+    }
+
+    [Fact]
+    public void DualHandleCounter_SeesTwoWindowsWritingOneHandle_WhichNoSingleRegistryCanSee()
+    {
+        var main = new VideoSurfaceRegistry();
+        var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+        BindOne(main, 0x10);
+        BindOne(main, 0x20);
+        int popToken = BindOne(popout, 0x30);
+
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+
+        popout.Bind(popToken, 0x10);                  // the pop-out's slot now carries the main window's handle
+        Assert.Equal(1, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main }));    // each window alone looks fine: the blind spot
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { popout }));
+    }
+
+    [Fact]
+    public void DualHandleCounter_DropsASlotThatWasReleasedOrWhoseWindowWasTornDown()
+    {
+        var main = new VideoSurfaceRegistry();
+        var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+        BindOne(main, 0x10);
+        int popToken = BindOne(popout, 0x10);
+        Assert.Equal(1, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+
+        popout.Release(popToken);                      // the UI-side release clears the mirror at once, before the render side frees the slot
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+
+        int again = BindOne(popout, 0x10);
+        Assert.NotEqual(0, again);
+        Assert.Equal(1, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+        popout.DestroyAll(new FakeVideoPresenter());   // a reaped window: nothing it carried may linger in the scan
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+    }
+
+    [Fact]
+    public void DualHandleCounter_ProcessTable_FollowsRegisterAndUnregister_AndNeverCountsAZeroHandle()
+    {
+        var main = new VideoSurfaceRegistry();
+        var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+        BindOne(main, 0x44);
+        BindOne(popout, 0x44);
+        BindOne(main, 0);                              // a slot with no handle yet is not a writer
+        BindOne(popout, 0);
+        Assert.True(MediaCensus.RegisterRegistry(main));
+        Assert.True(MediaCensus.RegisterRegistry(popout));
+        try
+        {
+            Assert.False(MediaCensus.RegisterRegistry(popout));                  // already present
+            Assert.Equal(1, MediaCensus.CountDualHandleSlots());
+            Assert.True(MediaCensus.DualHandlePeak >= 1);   // (Capture() would also call every other test's session census callback)
+            MediaCensus.UnregisterRegistry(popout);                              // the pop-out was reaped
+            Assert.Equal(0, MediaCensus.CountDualHandleSlots());
+        }
+        finally
+        {
+            MediaCensus.UnregisterRegistry(main);
+            MediaCensus.UnregisterRegistry(popout);
+        }
+    }
+
+    [Fact]
+    public void BindingNamesItsWindow_ForTheAttributionLines()
+    {
+        var registry = new VideoSurfaceRegistry { HostOrdinal = 3 };
+        var binding = new VideoBinding(registry, registry.Acquire());
+        Assert.Equal(3, binding.HostOrdinal);
+        Assert.Equal(0, default(VideoBinding).HostOrdinal);   // an inert binding belongs to no window
+    }
 }

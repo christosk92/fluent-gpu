@@ -20,6 +20,7 @@ internal struct VideoPresentIntent
     public nuint DesiredHandle;      // the DComp surface handle to bind (0 = none produced yet)
     public bool ReleasePending;      // the UI released the token: the render side destroys the surface, then reports the slot free
     public bool HasGeometry;         // the fields below are authoritative (a publication snapshot); false for the content-only mailbox
+    public long Seq;                 // the registry snapshot this was copied in (SnapshotInto counter): geometry of an OLDER snapshot never overwrites a newer one's (a retained frame re-read after a video-only post, F098)
     public bool Visible;
     public bool HasHoleOrigin;       // HoleX/HoleY: the window-DIP origin of the hole this surface sits behind, as of this publication
     public float HoleX, HoleY;
@@ -40,6 +41,11 @@ internal struct VideoPosedHole
     public int Token;
     public RectF Hole;
     public RectF EffClip;
+    /// <summary>F087 occlusion verdict of this turn's composite: nothing paints over the visible part of the hole after the video's own
+    /// <c>DrawVideo</c> (not a later op of its segment, not a later segment, slice, backdrop or hole in painter order). False is the
+    /// conservative answer - anything the recorder cannot prove clear (a hole inside an inline group layer, a fully clipped hole, a
+    /// default value) - and keeps the video an underlay. Judged on the painted bounds of whole segments, so it can only err towards "covered".</summary>
+    public bool Unoccluded;
 }
 
 /// <summary>What one <see cref="VideoPlacementApplier.ApplyTurn"/> may touch.</summary>
@@ -86,6 +92,7 @@ internal sealed class VideoPlacementApplier
         public bool InUse;
         public VideoPresentIntent Intent;   // the adopted intent: content merged by HandleSeq, geometry by publication
         public bool HasGeometry;            // a publication has delivered Intent's geometry
+        public long GeomSeq;                // the snapshot sequence Intent's geometry came from (see VideoPresentIntent.Seq)
         public VideoSurfaceId SurfaceId;    // none until first created
         public nuint BoundHandle;           // last handle actually bound (set only once the presenter reports success)
         public int BindFailures;            // consecutive failed BindSurfaceHandle calls for the current DesiredHandle
@@ -95,6 +102,8 @@ internal sealed class VideoPlacementApplier
         public bool Placed;                 // the presenter has been given a placement at least once
         public float AppliedDx, AppliedDy, AppliedScale;
         public RectF AppliedClip;           // the composite clip the placement was last cut by (Infinite = none)
+        public VideoOverlayGate Overlay;    // F087: the promotion state the next placement applies (above the UI plane or below it)
+        public bool AppliedOverlay;         // the z-order the presenter was last given
     }
 
     private readonly VideoSurfaceRegistry _registry;
@@ -110,11 +119,32 @@ internal sealed class VideoPlacementApplier
     private bool _structuralPending;       // a live slot still needs its surface created or its handle bound
     private int _seenStructuralVersion;    // the registry's structural version this side has adopted
     private bool _lastTurnMoved;
+    private bool? _overlaySwitch;          // a test's stand-in for EngineSwitches.VideoOverlay (null = read the switch)
 
     internal VideoPlacementApplier(VideoSurfaceRegistry registry) { _registry = registry; }
 
+    /// <summary>F087: whether overlay promotion is on for this applier. Reads <see cref="FluentGpu.Hosting.EngineSwitches.VideoOverlay"/>
+    /// (default off) unless a test pinned it; a surface is promoted only when this holds AND the presenter reports
+    /// <see cref="IVideoPresenter.SupportsOverlay"/>.</summary>
+    internal bool OverlayEnabled
+    {
+        get => _overlaySwitch ?? FluentGpu.Hosting.EngineSwitches.VideoOverlay;
+        set => _overlaySwitch = value;
+    }
+
+    // Promotion needs the switch and a presenter that says its output can take a plane; _drainedBy is the presenter of the last apply
+    // (null before the first one: nothing is promoted until a presenter has been seen).
+    private bool OverlayEligible() => OverlayEnabled && _drainedBy is { SupportsOverlay: true };
+
     /// <summary>Counter (render thread writes): applies that moved an already-placed surface.</summary>
     internal long MotionTurns { get; private set; }
+
+    private long _firstBindQpc;
+
+    /// <summary>F215: the <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> at which the presenter FIRST accepted a surface handle
+    /// (a successful <see cref="IVideoPresenter.BindSurfaceHandle"/>), 0 until then. Render thread writes once; any thread may read. The
+    /// pop-out's time-to-first-video is measured to this, not to the reveal (which only proves the child presented its own frame).</summary>
+    internal long FirstBindQpc => Volatile.Read(ref _firstBindQpc);
 
     /// <summary>The O(1) gate of the early drain: a handle the UI raised that this side has not adopted yet, or a live slot whose
     /// surface or bind is still owed (a failed create or bind, a presenter swap). A hint: the full apply does the same work.</summary>
@@ -166,13 +196,19 @@ internal sealed class VideoPlacementApplier
                 s.Dirty = true;
                 _anyDirty = true;
             }
-            if (src.HasGeometry && (!s.HasGeometry || GeometryChanged(in s.Intent, in src)))
+            // Geometry is state of ONE snapshot, so it is adopted only from a snapshot at least as new as the one it came from: the
+            // elided / motion turn that re-reads its retained frame must not pull back what a newer video-only post delivered (F098).
+            if (src.HasGeometry && src.Seq >= s.GeomSeq)
             {
-                CopyGeometry(ref s.Intent, in src);
-                s.HasGeometry = true;
-                s.Dirty = true;
-                s.GeomDirty = true;
-                _anyDirty = true;
+                s.GeomSeq = src.Seq;
+                if (!s.HasGeometry || GeometryChanged(in s.Intent, in src))
+                {
+                    CopyGeometry(ref s.Intent, in src);
+                    s.HasGeometry = true;
+                    s.Dirty = true;
+                    s.GeomDirty = true;
+                    _anyDirty = true;
+                }
             }
         }
     }
@@ -220,22 +256,30 @@ internal sealed class VideoPlacementApplier
     // read off THIS turn's composite, so a composite-only scroll turn or a compositor-animation turn moves the video with the hole.
     private void MarkPosedDirty(ReadOnlySpan<VideoPosedHole> posed, float scale)
     {
+        // F087: the overlay verdict rides the same per-turn pose read. The gate is idempotent for one turn's inputs, so the second
+        // read of the same turn (PrepareGeometry, then ApplyTurn) changes nothing; a z-order change dirties the slot but is not a move.
+        bool overlayEligible = OverlayEligible();
+        long now = overlayEligible ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         for (int i = 0; i < MaxSurfaces; i++)
         {
             ref Slot s = ref _slots[i];
             if (!s.InUse || !s.Placed || !s.HasGeometry || s.SurfaceId.IsNone || s.Intent.ReleasePending) continue;
             float dx = 0f, dy = 0f;
             RectF clip = RectF.Infinite;
+            bool unoccluded = false;
             if (s.Intent.HasHoleOrigin && TryGetPosed(posed, in s.Intent, out VideoPosedHole ph))
             {
                 dx = ph.Hole.X - s.Intent.HoleX;
                 dy = ph.Hole.Y - s.Intent.HoleY;
                 clip = ph.EffClip;
+                unoccluded = ph.Unoccluded;
             }
-            if (MathF.Abs(dx - s.AppliedDx) <= PoseEpsilonDip && MathF.Abs(dy - s.AppliedDy) <= PoseEpsilonDip
-                && s.AppliedScale == scale && clip == s.AppliedClip) continue;
+            bool overlayChanged = s.Overlay.Update(overlayEligible, unoccluded, now) != s.AppliedOverlay;
+            bool poseSame = MathF.Abs(dx - s.AppliedDx) <= PoseEpsilonDip && MathF.Abs(dy - s.AppliedDy) <= PoseEpsilonDip
+                && s.AppliedScale == scale && clip == s.AppliedClip;
+            if (poseSame && !overlayChanged) continue;
             s.Dirty = true;
-            s.GeomDirty = true;
+            if (!poseSame) s.GeomDirty = true;
             _anyDirty = true;
         }
     }
@@ -363,6 +407,7 @@ internal sealed class VideoPlacementApplier
                     s.BoundHandle = s.Intent.DesiredHandle;
                     changed = true;
                     announce = true;
+                    if (Volatile.Read(ref _firstBindQpc) == 0) Volatile.Write(ref _firstBindQpc, System.Diagnostics.Stopwatch.GetTimestamp());
                     // Always-on, one line per HANDLE CHANGE (the native engine swaps to a new swap chain on a resolution
                     // change): the line that says whether the visual follows it or keeps showing the first, now-dead one.
                     Diag.Line($"[video.surface] bind token={i + 1} id={s.SurfaceId.Value} handle=0x{s.Intent.DesiredHandle:X}"
@@ -476,6 +521,14 @@ internal sealed class VideoPlacementApplier
         if (!viewportEmpty) presenter.SetViewport(s.SurfaceId, viewportDev);
         presenter.SetCornerRadius(s.SurfaceId, it.RadiusDip * scale);
         presenter.SetVisible(s.SurfaceId, visible);
+        // F087: the z-order the turn's verdict chose (above the UI plane only while nothing paints over the rect), given to the
+        // presenter on a change only, so a default-off run makes no extra presenter call at all.
+        if (s.Overlay.Above != s.AppliedOverlay)
+        {
+            presenter.SetOverlay(s.SurfaceId, s.Overlay.Above);
+            s.AppliedOverlay = s.Overlay.Above;
+            Diag.Line($"[video.surface] overlay token={i + 1} id={s.SurfaceId.Value} above={(s.AppliedOverlay ? "true" : "false")}");
+        }
 
         if (s.Placed && s.GeomDirty) _lastTurnMoved = true;
         s.Placed = true;
@@ -551,6 +604,8 @@ internal sealed class VideoPlacementApplier
             s.BindFailures = 0;
             s.NextBindDrain = 0;
             s.Placed = false;
+            s.Overlay.Reset();        // the new presenter's visuals start below the UI plane
+            s.AppliedOverlay = false;
             s.GeomDirty = s.HasGeometry;
             s.Dirty = true;
             ClearBound(i);

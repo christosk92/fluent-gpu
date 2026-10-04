@@ -99,8 +99,11 @@ public sealed record DrmConfig(DrmSystem System, string? LicenseServerUri = null
 public sealed record LicenseRequest(DrmSystem System, ReadOnlyMemory<byte> Challenge, string? KeyId, MediaLocus Locus,
                                     CancellationToken Cancel = default);
 
-/// <summary>The license blob returned to the CDM (spec §9.2).</summary>
-public sealed record LicenseResponse(ReadOnlyMemory<byte> License);
+/// <summary>The license blob returned to the CDM (spec §9.2). <paramref name="QueuedMs"/> and <paramref name="HttpMs"/> are OPTIONAL
+/// telemetry (F226) from a relay that can tell them apart: the time the request waited for a worker before it started, and the
+/// network round trip itself (-1 = not reported). The runtime folds them into its one <c>license.budget</c> line, so "where did the
+/// licence time go" never has to be reconstructed by subtracting log lines across threads.</summary>
+public sealed record LicenseResponse(ReadOnlyMemory<byte> License, long QueuedMs = -1, long HttpMs = -1);
 
 // ── Subtitles (spec §6) ──────────────────────────────────────────────────────────────────────────────────────────────
 

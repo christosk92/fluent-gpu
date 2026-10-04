@@ -125,9 +125,13 @@ public readonly record struct DetachedWindowRequest(
 /// <item><see cref="FirstPresentMs"/>: wall time from the start of the open until the first present was observed on the UI
 /// thread (it contains the three stages above plus any render-thread wait).</item>
 /// </list>
-/// <see cref="TimedOut"/> is true when the window was shown by the reveal timeout instead of by a presented frame.</summary>
+/// <see cref="TimedOut"/> is true when the window was shown by the reveal timeout instead of by a presented frame.
+/// <see cref="RenderPresentMs"/> (F215) is the same stage as <see cref="FirstPresentMs"/> read from the clock the RENDER thread
+/// stamped when the child's first present succeeded, so <c>FirstPresentMs - RenderPresentMs</c> is the lag the UI added in
+/// noticing it; -1 when the reveal came from the timeout (no present was seen) or the backend does not stamp it. The time to the
+/// child's first VIDEO BIND is a later stage than the reveal: <see cref="IDetachedVideoWindow.OnFirstVideoBound"/>.</summary>
 public readonly record struct DetachedOpenTiming(
-    double WindowCreateMs, double HostCtorMs, double FirstFrameMs, double FirstPresentMs, bool TimedOut);
+    double WindowCreateMs, double HostCtorMs, double FirstFrameMs, double FirstPresentMs, bool TimedOut, double RenderPresentMs = -1.0);
 
 /// <summary>A live handle to a detached video window (see <see cref="InputHooks.OpenDetachedWindow"/>).</summary>
 public interface IDetachedVideoWindow
@@ -140,6 +144,14 @@ public interface IDetachedVideoWindow
     /// timeout), with the full <see cref="DetachedOpenTiming"/>. Set it right after the open call returns: the reveal happens on
     /// a later frame. Default: ignored.</summary>
     Action<DetachedOpenTiming>? OnRevealed { get => null; set { } }
+    /// <summary>Milliseconds from the start of the open to the pop-out's first SUCCESSFUL video bind (the presenter accepted a
+    /// swap-chain handle for one of the window's surfaces: the first moment the picture can be composited there), or -1 while none
+    /// has landed. The reveal (<see cref="OnRevealed"/>) only proves the child presented its own frame; with a protected source the
+    /// bind follows the native handle and can land later. Default: -1 (a backend that does not measure).</summary>
+    double FirstVideoBindMs => -1.0;
+    /// <summary>Fired once, on the UI thread, when <see cref="FirstVideoBindMs"/> is known (its argument). Set it right after the open
+    /// call returns. Default: ignored.</summary>
+    Action<double>? OnFirstVideoBound { get => null; set { } }
     /// <summary>True until the window is closed/reaped.</summary>
     bool IsOpen { get; }
     /// <summary>Toggle persistent always-on-top.</summary>

@@ -115,12 +115,14 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
                 // A discarded engine that is still leased is left to its session: ReturnEngine sees it is no longer
                 // _warm and disposes it off the lock, so each engine is disposed exactly once.
                 if (!_leased) discarded = _warm;
+                if (_warm is not null) Diag.Line($"[video] engine.discard reason=faulted leased={(_leased ? 1 : 0)}");   // F197: why an engine goes away, next to its engine.destroy line
                 _leased = false;
                 _warm = _engineFactory();
                 _warm.Start();
             }
             if (_leased)
             {
+                Diag.Line("[video] engine.extra reason=concurrent-lease (a second engine alongside the warm one)");
                 var extra = _engineFactory();
                 extra.Start();
                 leased = extra;
@@ -178,6 +180,7 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
             idle = _warm;
             _warm = null;
         }
+        Diag.Line($"[video] engine.discard reason=idle afterMs={_warmIdleMs}");
         idle.Dispose();
     }
 

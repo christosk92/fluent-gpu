@@ -97,6 +97,33 @@ public sealed class VideoPlacementSameTurnTests
         Assert.Equal(B, p.LastPlace);
     }
 
+    // F215: the pop-out's time-to-first-video is measured to the first handle the presenter ACCEPTED, stamped once.
+    [Fact]
+    public void FirstBindQpc_IsStampedByTheFirstAcceptedBind_AndNotMovedByALaterOne()
+    {
+        BindUi();
+        var seam = new SceneFramePublisher();
+        var reg = new VideoSurfaceRegistry();
+        var applier = new VideoPlacementApplier(reg);
+        var p = new PlacementPresenter();
+        int token = reg.Acquire();
+        reg.Place(token, A);
+        applier.ApplyTurn(p, seam.VideoIntents(PublishAndAcquire(seam, reg)), default, 1f, VideoApplyScope.Full, deferCommit: false);
+        Assert.Equal(0, p.Binds);
+        Assert.Equal(0L, applier.FirstBindQpc);             // a surface with no handle yet has bound nothing
+
+        reg.Bind(token, 0x10);
+        applier.ApplyTurn(p, seam.VideoIntents(PublishAndAcquire(seam, reg)), default, 1f, VideoApplyScope.Full, deferCommit: false);
+        long first = applier.FirstBindQpc;
+        Assert.Equal(1, p.Binds);
+        Assert.NotEqual(0L, first);
+
+        reg.Bind(token, 0x20);                               // a swap chain re-created on a resolution change: a second bind
+        applier.ApplyTurn(p, seam.VideoIntents(PublishAndAcquire(seam, reg)), default, 1f, VideoApplyScope.Full, deferCommit: false);
+        Assert.Equal(2, p.Binds);
+        Assert.Equal(first, applier.FirstBindQpc);           // the time-to-first-video stays at the first one
+    }
+
     [Fact]
     public void AnElidedTurn_AppliesContentButHoldsGeometry_UntilATurnThatPresentsTheMatchingHole()
     {

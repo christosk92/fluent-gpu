@@ -62,6 +62,18 @@ public interface IProtectedVideoPlayer : IDisposable
     /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which <see cref="PositionMs"/> was
     /// sampled natively (0 = unknown). The UI extrapolates <c>pos + Δt·rate</c> while playing.</summary>
     long PositionQpc { get; }
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> (QPC) value at which the engine reported this attach's
+    /// FIRSTFRAMEREADY, as the native runtime stamped it (F215), or 0 until it lands. Unlike the moment a UI observer notices
+    /// <see cref="FirstFrameEpoch"/> change (which a stage that unmounted the pump can delay by seconds), it is when the frame was
+    /// actually ready, so a switch's first-frame time can be computed from it. Default 0: a player with no native clock.</summary>
+    long FirstFrameQpc => 0;
+    /// <summary>F066: frames the native engine's renderer PRESENTED for the attached source (IMFMediaEngineEx FRAMES_RENDERED, polled
+    /// natively while it plays and accumulated across the engine's post-flush resets), as of the last <see cref="Pump()"/>. 0 until the
+    /// first poll and for a player with no native engine (the default).</summary>
+    long FramesRendered => 0;
+    /// <summary>F066: frames the native renderer DROPPED for the attached source (FRAMES_DROPPED, same accumulation as
+    /// <see cref="FramesRendered"/>), as of the last <see cref="Pump()"/>. Counts only the renderer's own drops.</summary>
+    long FramesDropped => 0;
     /// <summary>True while a seek is in flight (a JOINING state: the previous frame stays on screen).</summary>
     bool IsSeeking { get; }
     /// <summary>The last seek's landed position in ms, or -1 while none has landed since the last seek was issued.</summary>
@@ -128,6 +140,11 @@ public interface IProtectedVideoPlayer : IDisposable
     void SetRate(float rate);
     /// <summary>Size the engine's video stream to what the destination can show (device px); empty restores natural.</summary>
     void SetStreamSize(SizeI size);
+    /// <summary>The attributed form of <see cref="SetStreamSize(SizeI)"/>: the same request, tagged with the registry
+    /// <paramref name="token"/> of the slot asking and the <paramref name="host"/> ordinal of its window (0 main, 1.. a pop-out) so the
+    /// <c>[video] stream.size</c> line names which window and slot wrote it (F235; no native ABI change: the tag only rides the
+    /// managed log). The default drops the tag.</summary>
+    void SetStreamSize(SizeI size, int token, int host) => SetStreamSize(size);
     /// <summary>The stream size (device px) the native engine has APPLIED, as of the last <see cref="Pump()"/>: the echo of
     /// <see cref="SetStreamSize"/> (or the size the swap chain was created at), empty while none has been applied or the
     /// session is detached. The owner keeps the compositor's content size at the previous value until this equals the size it

@@ -66,6 +66,11 @@ public sealed record ProtectedVideoRequest
     public long BufferAheadMs { get; init; } = ProtectedVideoSession.DefaultBufferAheadMs;
     /// <summary>The byte cap of this session's segment store.</summary>
     public long StoreBudgetBytes { get; init; } = ProtectedVideoSession.DefaultStoreBudgetBytes;
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> at which the open that produced this request began (F216):
+    /// the origin the session's <c>switch.budget</c> line counts from. A prepared session was created long before the open that takes
+    /// it, so the stage times are measured from THIS, not from the session's creation. 0 = unknown (the session then counts from its
+    /// own attach).</summary>
+    public long OriginTimestamp { get; init; }
 
     // ── the paired AUDIO representation (optional) — the video's own soundtrack ───────────────────────────────────────
     // Null ⇒ video only. Segment count / start number / stride / length are SHARED with the video: both representations

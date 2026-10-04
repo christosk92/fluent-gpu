@@ -28,8 +28,8 @@ internal static unsafe partial class PrNative
     internal const int EvBuffered = 21;
     internal const int EvKeyframes = 22;
     internal const int EvMetadata = 30;
-    internal const int EvCanPlay = 31;
-    internal const int EvFirstFrame = 32;
+    internal const int EvCanPlay = 31;      // a = startCorrectionMs (the carried-start fallback's second source Start; 0 = none)
+    internal const int EvFirstFrame = 32;   // a = position ms, b = native's QPC at FIRSTFRAMEREADY (0 from a fake / an older DLL)
     internal const int EvHandle = 33;
     internal const int EvPosition = 34;
     internal const int EvSeeking = 35;
@@ -152,6 +152,8 @@ internal static unsafe partial class PrNative
         public ulong StoreBytes;
         public int StreamWidth;
         public int StreamHeight;
+        public long FramesRendered;
+        public long FramesDropped;
     }
 
     /// <summary>Blittable mirror of <c>FgPrProbeResult</c> — what the demuxer found in a local fragmented MP4.</summary>
@@ -182,6 +184,11 @@ internal static unsafe partial class PrNative
 
     [LibraryImport(LibraryName)]
     internal static partial long FgPrRuntimeUptimeMs(ulong rt);
+
+    /// <summary>F249: the media engine's output format for the NEXT runtime (0 = BGRA, the default; 1 = NV12). Process-wide, read once
+    /// when the runtime is created, so it is set BEFORE <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int FgPrRuntimeSetVideoOutputFormat(int format);
 
     // ── license ────────────────────────────────────────────────────────────────────────────────────────────────────
 

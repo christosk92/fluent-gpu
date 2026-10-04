@@ -1195,6 +1195,27 @@ scroll or animation turn moves the video with the hole), and on a turn that move
 for its own GPU work and the placement is committed immediately after it (`threading-render-seam.md` §10, Stage B). They are still
 two flushes; the single-transaction form (one DComp visual holding hole and video) is a recorded follow-up, not built.
 
+**Overlay probe, NV12 output and overlay promotion (F249 / F087, both A/B arms, default off).** `D3D12Device.SamplePresentTopology` asks
+the output the window sits on, once per output (first resolve or monitor change, never per present), what it reports through
+`IDXGIOutput3::CheckOverlaySupport` for NV12, YUY2 and BGRA, and logs that verdict on the `[d3d12.present] topology=...` line
+(`overlay[nv12=direct+scaling yuy2=none bgra=direct] note=...`) in place of the old `direct-scan-out-path-available`, which was printed
+from adapter ownership alone. The verdict is `VideoOverlayCaps` (published process-wide; `default` = not probed, which claims nothing).
+`--fg video-nv12` drops the forced B8G8R8A8 `MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT` for NV12 on both engines (the clear engine at
+`CreateEngine`, the protected one through `FgPrRuntimeSetVideoOutputFormat`, called before the runtime create reads it) only when the
+probe reports NV12 as plane-capable; BGRA is the fallback. `--fg video-overlay` lets the video visual sit ABOVE the UI visual while
+nothing paints over its rect and the output reported a plane: the composite plan classifies every posed hole after the plan is laid out
+(`SliceRecorder.ClassifyVideoOcclusion` -> `VideoPosedHole.Unoccluded`: no op after the `DrawVideo` in its segment, and no later
+segment, slice, backdrop or hole in painter order overlaps the visible hole; judged on whole-segment painted bounds, so it only errs
+towards "covered". A hole is also never clear when its erase is partial (opacity below 1: the promoted visual has no opacity), when an
+in-stream rounded clip cuts it (the presenter rounds only by the element's own corner radius), or when it sits under a layer or group
+surface; detached fly snapshots sit in the root slice's tail and count as covering segments), and `VideoPlacementApplier` runs each surface through a `VideoOverlayGate` (promote at the first clear turn, demote
+the SAME turn something covers it, hold the underlay for 500 ms after a demotion so the visual's z-order never flaps). The hole itself
+stays punched in both modes (a video above it simply covers it), so promotion changes only the visual's z-order
+(`IVideoPresenter.SetOverlay`, `DCompVideoPresenter` re-inserts the parent above the UI visual). Measure with PresentMon before turning
+either switch on by default: `--fg video-overlay` and/or `--fg video-nv12` vs neither, on the Adreno box, comparing the PresentMode column
+(Composed: Flip vs Hardware Composed: Independent Flip / MPO plane) and `MsBetweenDisplayChange` while a video plays fullscreen with
+the chrome hidden.
+
 ---
 
 ### 7.4 Top bands + the drop-spotlight scrim (`EraseRoundRectCmd`)

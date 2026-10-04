@@ -826,6 +826,7 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Render thread, with the <c>[render.pace]</c> window: open every attached child's window.</summary>
     private void BeginChildPaceWindow()
     {
+        _device.ResetNonPrimaryLatencyWindow();   // childWaitMax= is a per-window figure, like every child token
         var list = Volatile.Read(ref _childRenderSources);
         for (int i = 0; i < list.Length; i++) list[i]._childPace?.BeginWindow();
     }
@@ -854,7 +855,7 @@ public sealed partial class AppHost : IDisposable
     private RenderPaceHostState SamplePaceHostState()
         => new(_gpuBoundEma, _gpuGovernorEngaged, _lastWaitKind,
                _swapchain.TryGetGpuRenderSample(out GpuRenderSample s) ? s.ExecutionMs : 0.0, Volatile.Read(ref _maxFrameLatency),
-               _device.SlotLivenessTimeouts);
+               _device.SlotLivenessTimeouts, _device.NonPrimaryLatencyTimeouts, _device.NonPrimaryLatencyWaitMaxMs);
 
     /// <summary>UI-readable pacing snapshot: the render thread's cumulative present counters, the display clock's filter
     /// state, the present-queue depth, the adaptive GPU governor and the latest GPU execution — the data behind the
@@ -2049,13 +2050,14 @@ public sealed partial class AppHost : IDisposable
     /// handle of an entry that still needs one (<see cref="FluentGpu.Media.VideoPlacementApplier.ApplyStructural"/>, off the registry's content mailbox), so a
     /// pop-out's picture no longer waits behind another window's slot wait or for its own UI frame to be published. Only
     /// create and bind move early: <c>Place</c> moves of an existing surface and <c>Destroy</c> stay coupled to the UI frame's
-    /// present (<see cref="DrainVideoForPresentTurn"/>), the two-clock tear lock. O(hosts) when nothing needs it.</summary>
+    /// present (<see cref="DrainVideoForPresentTurn"/>), the two-clock tear lock. A parked video-only post (F098: the UI's wake was
+    /// only its video pump, so it published no frame) is applied here too, off the retained frame's glass. O(hosts) when nothing needs it.</summary>
     private void DrainVideoStructuralPreTurn()
     {
         Threading.ThreadGuard.AssertRender();
         var list = Volatile.Read(ref _childRenderSources);
-        bool any = VideoApplier.HasStructuralWork;
-        for (int i = 0; !any && i < list.Length; i++) any = !list[i]._renderFailed && list[i].VideoApplier.HasStructuralWork;
+        bool any = HasEarlyVideoWork;
+        for (int i = 0; !any && i < list.Length; i++) any = !list[i]._renderFailed && list[i].HasEarlyVideoWork;
         if (!any) return;
         // Popup swapchain work first: its visual edits ride the same device commit as the video's (DrainChildRenderSources runs it
         // again later in the turn, a cheap no-op by then).
@@ -2071,18 +2073,29 @@ public sealed partial class AppHost : IDisposable
         CommitVideoTurn(list);
     }
 
+    /// <summary>Render thread: what the early video drain owes this host - a handle to create or bind, or a parked video-only post.</summary>
+    private bool HasEarlyVideoWork => VideoApplier.HasStructuralWork || _renderSeam.HasVideoOnlyPost;
+
+    // Render-thread scratch for a taken video-only post (F098); allocated on the first one.
+    private FluentGpu.Media.VideoPresentIntent[]? _videoOnlyScratch;
+
     /// <summary>Render thread: this host's early video drain (see <see cref="DrainVideoStructuralPreTurn"/>). Waits for the first
     /// presented frame's scale; a failure follows the present path's own policy (a device loss is the recovery's, a child
     /// latches <see cref="_renderFailed"/>, anything else on the parent is a bug and rethrows).</summary>
     private void DrainVideoStructural()
     {
-        if (_lastRenderScale <= 0f || !VideoApplier.HasStructuralWork) return;
+        bool videoOnly = _renderSeam.HasVideoOnlyPost;
+        if (_lastRenderScale <= 0f || !(videoOnly || VideoApplier.HasStructuralWork)) return;
         try
         {
-            // The content mailbox, not the live registry (F183): the handle, its sequence and any release - never geometry, which only a
-            // publication delivers (a surface created before its first publication is simply not placed yet).
-            if (_device.GetVideoPresenter(_swapchain) is { } vp && VideoApplier.ApplyStructural(vp, _lastRenderScale, deferCommit: true))
-                _window.Wake();
+            if (_device.GetVideoPresenter(_swapchain) is { } vp)
+            {
+                bool edge = videoOnly && ApplyVideoOnlyPost(vp);
+                // The content mailbox, not the live registry (F183): the handle, its sequence and any release - never geometry, which only a
+                // publication (or the video-only post above) delivers (a surface created before its first publication is simply not placed yet).
+                if (VideoApplier.ApplyStructural(vp, _lastRenderScale, deferCommit: true)) edge = true;
+                if (edge) _window.Wake();
+            }
         }
         catch (System.Exception ex) when (_asyncActive)
         {
@@ -2090,6 +2103,30 @@ public sealed partial class AppHost : IDisposable
             if (_parentRenderThread is null) throw;
             NoteChildRenderFailure(ex);
         }
+    }
+
+    /// <summary>Render thread (F098): apply the video snapshot the UI parked instead of publishing a frame. Nothing in the UI changed
+    /// (that is what makes a post legal), so the glass still shows the retained frame's holes: the snapshot is placed against that
+    /// frame's posed holes and scale exactly as a re-present of it would be, and a present that stood down applies releases only. An
+    /// owed present (<see cref="_presentOwed"/>: the active frame was refused and is not on the glass yet) is held the same way, as a
+    /// content-only adopt: its retry drain places the post's geometry when that frame lands. The
+    /// device commit is the pre-turn's (<see cref="CommitVideoTurn"/>). Left parked (false, nothing taken) while no frame has been
+    /// presented to this target yet - the next publication carries the snapshot. Returns true on a bound-readiness edge.</summary>
+    private bool ApplyVideoOnlyPost(IVideoPresenter vp)
+    {
+        Threading.ThreadGuard.AssertRender();
+        if (!_hasActiveRenderFrame || !_renderSeam.IsCurrentTarget(_activeRenderFrame)) return false;
+        var scratch = _videoOnlyScratch ??= new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+        if (!_renderSeam.TryTakeVideoOnly(scratch, out int count)) return false;
+        // An owed present (non-blocking secondary) is held like a stood-down one: the active frame is the refused one, not yet on the
+        // glass, so nothing is placed or destroyed against its holes. ContentOnly still adopts the snapshot (handle, release flag and
+        // geometry with its newer Seq); the retry's Full drain places it against that frame's holes when it lands.
+        var scope = _presentOwed ? FluentGpu.Media.VideoApplyScope.ContentOnly
+            : _swapchain.LastPresentStoodDown ? FluentGpu.Media.VideoApplyScope.ReleasesOnly : FluentGpu.Media.VideoApplyScope.Full;
+        bool edge = VideoApplier.ApplyTurn(vp, scratch.AsSpan(0, count), VideoPosedHoles(in _activeRenderFrame),
+            _activeRenderFrame.Submit.Scale, scope, deferCommit: true);
+        _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
+        return edge;
     }
 
     /// <summary>Render thread, parent host: the turn's ONE device-level composition Commit (F080) and the readiness it makes
@@ -2269,10 +2306,20 @@ public sealed partial class AppHost : IDisposable
     private long _revealDeadlineQpc;
     private long _openStartQpc;           // the QPC the open began (OpenDetachedWindow entry): FirstPresentMs counts from here
     private double _openFirstFrameMs = -1;   // the child's first RunFrame, timed once (-1 = not run yet)
+    // F215: the QPC this host's first successful Present completed (render thread writes once, UI reads; 0 = none yet), and the
+    // pop-out's first successful video bind (UI side: _firstVideoBindMs from the open start, -1 = none yet, once reported).
+    private long _firstPresentQpc;
+    private double _firstVideoBindMs = -1;
+    private bool _firstVideoBindReported;
     // The pop-out open cost split (F110): window and host-ctor stages are stamped by OpenDetachedWindow, the frame and present
     // stages when the reveal lands. OnRevealed is the handle's callback (cleared after it fires, like OnClosed).
     internal DetachedOpenTiming OpenTiming;
     internal Action<DetachedOpenTiming>? OnRevealed;
+    /// <summary>F215: ms from the open start to the child's first SUCCESSFUL video bind (the presenter accepted a swap-chain handle for
+    /// one of its surfaces), or -1 while none has landed. Set by <see cref="PollFirstVideoBind"/> on the UI thread.</summary>
+    internal double FirstVideoBindMs => _firstVideoBindMs;
+    /// <summary>Fired once, on the UI thread, with <see cref="FirstVideoBindMs"/> (cleared after it fires, like <see cref="OnRevealed"/>).</summary>
+    internal Action<double>? OnFirstVideoBound;
     private WindowStateRelay _windowStateRelay;   // placement + visibility samples → AppHost.WindowStateChanged edges
     private bool _inPaint;
     private Size2 _lastSize;
@@ -2628,13 +2675,17 @@ public sealed partial class AppHost : IDisposable
         // published between that first present and this Show, was dropped while the window was hidden. Re-present now that it
         // is visible, or the occluded state (and a stale frame) lingers until the occlusion probe.
         if (_swapchain.IsOccluded) RequestFullRepaintOnce();
+        // The render thread stamped the first successful Present itself (NotePresented); FirstPresentMs is when the UI OBSERVED one, so
+        // the two differ by the reveal lag a busy UI or an async render thread adds (-1 here: the reveal came from the timeout).
+        long presentedQpc = Volatile.Read(ref _firstPresentQpc);
+        double renderPresentMs = presented && presentedQpc != 0 ? Math.Max(0.0, QpcToMs(presentedQpc - _openStartQpc)) : -1.0;
         var timing = new DetachedOpenTiming(OpenTiming.WindowCreateMs, OpenTiming.HostCtorMs,
-            Math.Max(0.0, _openFirstFrameMs), QpcToMs(now - _openStartQpc), TimedOut: !presented);
+            Math.Max(0.0, _openFirstFrameMs), QpcToMs(now - _openStartQpc), TimedOut: !presented, RenderPresentMs: renderPresentMs);
         OpenTiming = timing;
         // Always-on, one line per open: the split that the app's own log used to guess at (window vs. host vs. first frame vs.
         // first present), plus whether the reveal was earned by a presented frame or forced by the timeout.
         Diag.Line(string.Create(CultureInfo.InvariantCulture,
-            $"[detached] reveal hwnd={_window.Handle.Value:X} windowMs={timing.WindowCreateMs:F1} ctorMs={timing.HostCtorMs:F1} firstFrameMs={timing.FirstFrameMs:F1} firstPresentMs={timing.FirstPresentMs:F1} timedOut={(timing.TimedOut ? 1 : 0)}"));
+            $"[detached] reveal hwnd={_window.Handle.Value:X} windowMs={timing.WindowCreateMs:F1} ctorMs={timing.HostCtorMs:F1} firstFrameMs={timing.FirstFrameMs:F1} firstPresentMs={timing.FirstPresentMs:F1} renderPresentMs={timing.RenderPresentMs:F1} timedOut={(timing.TimedOut ? 1 : 0)}"));
         var cb = OnRevealed;
         OnRevealed = null;
         cb?.Invoke(timing);
@@ -2653,6 +2704,26 @@ public sealed partial class AppHost : IDisposable
         }
         else RunFrame();
         TryRevealDetached();
+        PollFirstVideoBind();
+    }
+
+    /// <summary>Detached CHILD, UI thread, once per tick after its frame (F215): the first time this child's video applier reports a
+    /// successful bind, stamp the pop-out's time-to-first-video (from the open start), log it as one always-on line and fire
+    /// <see cref="OnFirstVideoBound"/>. The reveal only proves the child presented ITS frame; the picture is behind the bind, which
+    /// follows the native handle and can land well after the reveal. A cheap flag test once reported (or for a host that never
+    /// opened as a pop-out).</summary>
+    internal void PollFirstVideoBind()
+    {
+        if (_firstVideoBindReported || _openStartQpc == 0) return;
+        long bindQpc = Volatile.Read(ref _videoApplier)?.FirstBindQpc ?? 0;
+        if (bindQpc == 0) return;
+        _firstVideoBindReported = true;
+        _firstVideoBindMs = Math.Max(0.0, QpcToMs(bindQpc - _openStartQpc));
+        Diag.Line(string.Create(CultureInfo.InvariantCulture,
+            $"[detached] first.video.bind hwnd={_window.Handle.Value:X} ms={_firstVideoBindMs:F1} afterRevealMs={(OpenTiming.FirstPresentMs > 0.0 ? _firstVideoBindMs - OpenTiming.FirstPresentMs : -1.0):F1}"));
+        var cb = OnFirstVideoBound;
+        OnFirstVideoBound = null;
+        cb?.Invoke(_firstVideoBindMs);
     }
 
     /// <summary>Track a freshly built detached child so <see cref="TickDetachedHosts"/> ticks and reaps it. The pop-out shares
@@ -2818,6 +2889,7 @@ public sealed partial class AppHost : IDisposable
         next[old.Length] = child;
         // Its pace evidence exists BEFORE the render thread can see the child (the Volatile.Write below publishes it).
         child._childPace = new Threading.ChildPresentPace(Interlocked.Increment(ref s_childPaceTargets));
+        child._videoSurfaces.HostOrdinal = child._childPace.Target;   // F235: the pump / stream-size lines name WHICH window's registry wrote (0 = main)
         // Once per child, always-on: WHERE this child's frames are submitted. A pop-out that presented through the wrong target
         // (F090) was attributable only indirectly; the line names the route, the swapchain and the backend up front.
         Diag.Line(string.Create(CultureInfo.InvariantCulture,
@@ -2997,6 +3069,8 @@ public sealed partial class AppHost : IDisposable
         public void SetTopmost(bool topmost) { _child._revealTopmost = topmost; _window.SetTopmost(topmost); }
         public DetachedOpenTiming OpenTiming => _child.OpenTiming;
         public Action<DetachedOpenTiming>? OnRevealed { get => _child.OnRevealed; set => _child.OnRevealed = value; }
+        public double FirstVideoBindMs => _child.FirstVideoBindMs;
+        public Action<double>? OnFirstVideoBound { get => _child.OnFirstVideoBound; set => _child.OnFirstVideoBound = value; }
         public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
         // Overrides IDetachedVideoWindow.MoveTo's SetBounds(current-size)-based default: the PAL window has its own
         // pure-move primitive (IPlatformWindow.MoveToPx), so route to it directly and skip the BoundsPx read-back.
@@ -4311,6 +4385,7 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
         _reconciler.SetAmbient(VideoCompositor.Current, new Signal<object?>(_videoSurfaces));   // video-surface intent buffer for UseVideoSurface
         _videoSurfaces.RequireSlotBinding = !_isHeadless;   // a real host drains into a presenter: elements wait for their OWN slot's bind (the headless seam has no presenter to wait for)
+        if (!_isHeadless) FluentGpu.Media.MediaCensus.RegisterRegistry(_videoSurfaces);   // F235: every window's registry joins the process-wide dual-handle scan (unregistered in FinishDispose)
         _reconciler.SetAmbient(HostTimers.Current, new Signal<object?>(_timers));   // frame-clock timer queue for the timing hooks (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue)
 
         // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
@@ -4791,6 +4866,23 @@ public sealed partial class AppHost : IDisposable
             wake = ComputeWakeReasons();   // a completed decode forced this paint → re-attribute (now FrameNeeded)
         }
 
+        // F098: a wake whose ONLY reason is a coalesced video pump (a native state edge, a transport command, a geometry request)
+        // almost never changes a pixel of the UI, and used to cost a reconcile-free but full scene capture + publish here and a
+        // record + hash on the render thread to move at most a few DirectComposition properties. Run the pump now and, when it
+        // wrote nothing a frame must carry, stop; when it wrote only registry intents, park their snapshot for the render
+        // thread's early video drain (a video-only post, no capture / record / present). Anything else it touched (a signal, a
+        // dirty layout) takes the ordinary frame below.
+        if (wake == WakeReasons.VideoPumpPending && inputKindMask == 0 && clicks == 0 && TryRunVideoOnlyTurn())
+        {
+            LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
+            NoteNoPresentTurn();   // no present this turn (see _lastNoPresentQpc's doc)
+            if (_wakeDiag is not null) { _wakeDiag.Record(wake, awake: true, rendered: false, reconciled: false, laidOut: false, minimized: false); _wakeDiag.MaybeReport(); }
+            if (_memCensus is not null) _memCensus.MaybeReport();
+            if (s_allocTypes) AllocTypeProfiler.MaybeReport();
+            if (s_allocDiag) _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
+            return LastStats;
+        }
+
         // Production gate (see ProductionGateBlocks). Deliberately the LAST thing before Paint: the pump, the input
         // dispatch, the close/device-lost/minimize gates and the image pump above have all already run, so nothing that
         // affects correctness or input latency is skipped — only the production of a frame that could not have been
@@ -4824,6 +4916,65 @@ public sealed partial class AppHost : IDisposable
         // into the guard is behaviour-identical — and the non-const operand keeps the folded body off CS0162.
         if (RenderBudget.CompiledIn && RenderBudget.Enabled) { RenderBudget.FrameBoundary(); RenderBudget.MaybeReport(); }
         return painted;
+    }
+
+    private long _videoOnlyQuietTurns;
+    // Test seam (F098): lets a host that never goes async take the video-only turn, so a headless gate can observe the post.
+    private bool _videoOnlyTurnInline;
+
+    /// <summary>Video-only turns that found the pump wrote nothing a frame must carry (cumulative): no capture, no post, no wake.</summary>
+    internal long VideoOnlyQuietTurns => Volatile.Read(ref _videoOnlyQuietTurns);
+
+    /// <summary>Video-only posts handed to the render thread instead of a publication (cumulative, F098).</summary>
+    internal long VideoOnlyPosts => _renderSeam.VideoOnlyPosts;
+
+    /// <summary>Test-only (F098): take the video-only turn on a host without a render thread. The post then stays in the seam
+    /// (nothing drains it), so the gate reads it with <c>TryTakeVideoOnlyForTest</c>.</summary>
+    internal bool VideoOnlyTurnInlineForTest { get => _videoOnlyTurnInline; set => _videoOnlyTurnInline = value; }
+
+    /// <summary>Test-only (F098): take the parked video-only post, as the render thread's early drain would.</summary>
+    internal bool TryTakeVideoOnlyForTest(FluentGpu.Media.VideoPresentIntent[] destination, out int count)
+        => _renderSeam.TryTakeVideoOnly(destination, out count);
+
+    /// <summary>UI thread, <see cref="RunFrame"/>, wake reason exactly <see cref="WakeReasons.VideoPumpPending"/> (F098): run the
+    /// coalesced video pump and decide whether the frame it would have ridden is owed. Returns true when the turn is complete
+    /// (nothing for Paint): the pump wrote no intent, or its intents went to the render thread as a video-only post. Returns
+    /// false when a real frame is owed - the pump wrote a signal or dirtied layout, a full publication is still outstanding, the
+    /// table holds a pending release, or the host is not one whose render side records (headless / single-thread / force-sync
+    /// keep the one-publication-per-pump path, which their skip-submit already elides). The pump has then already run and Paint
+    /// carries its intents.
+    /// <para>Safe because nothing else asked for this frame: the wake mask is the pump alone (no reconcile, animation, scroll,
+    /// image or input work), layout is clean and nothing wrote a transform, so the scene the render thread holds is exactly the
+    /// one the UI would capture and every hole in it is where the video will be placed. A destroy and a placement that moves with
+    /// a hole stay with the publication that carries the hole: a post is refused while a release is pending or a full publication
+    /// is outstanding (see <see cref="Threading.SceneFramePublisher.TryPostVideoOnly"/>).</para></summary>
+    private bool TryRunVideoOnlyTurn()
+    {
+        bool threaded = _asyncActive && OwningRenderThread is not null;
+        if (!threaded && !_videoOnlyTurnInline) return false;
+        if (!_everLaidOut || _needFullLayout || _revealPending || _scene.Root.IsNull) return false;
+        if (_scene.AnyLayoutDirty || _scene.AnyTransformWrote) return false;
+        _videoSurfaces.PumpPending(_scene.DeviceScale);
+        // The pump wrote a signal (a readiness edge, a state mirror) or dirtied layout: the frame it needs is owed, and Paint carries
+        // this pump's intents like any other. The pump consumed the pending-pump wake bit, so the owed frame is named explicitly: if
+        // the production gate declines it this tick, the next RunFrame still finds a reason to produce it.
+        if (_runtime.HasPending || _frameNeeded || _scene.AnyLayoutDirty)
+        {
+            _frameNeeded = true;
+            return false;
+        }
+        if (!_videoSurfaces.HasUnpublishedChanges)
+        {
+            Interlocked.Increment(ref _videoOnlyQuietTurns);
+            return true;
+        }
+        if (_videoSurfaces.HasReleasePending || !_renderSeam.TryPostVideoOnly(_videoSurfaces))
+        {
+            _frameNeeded = true;   // the intents ride an ordinary publication (see above)
+            return false;
+        }
+        OwningRenderThread?.WakeForVideo();   // the early video drain (preTurn) applies the post: no publication, record or present behind it
+        return true;
     }
 
     /// <summary>True when nothing of the host window is on screen: minimized (PAL <see cref="Pal.WindowState.Minimized"/>)
@@ -6763,6 +6914,8 @@ public sealed partial class AppHost : IDisposable
     {
         long qpc = Stopwatch.GetTimestamp();   // first statement: everything downstream of Present is attribution error
         Volatile.Write(ref _lastPresentQpc, qpc);
+        // F215: the first present that actually put content on the glass (a stood-down present is not one).
+        if (Volatile.Read(ref _firstPresentQpc) == 0 && _swapchain.HasPresentedContent) Volatile.Write(ref _firstPresentQpc, qpc);
         long prev = _prevPresentedQpc;
         _prevPresentedQpc = qpc;
         Interlocked.Increment(ref _presentedFramesTotal);
@@ -7141,6 +7294,7 @@ public sealed partial class AppHost : IDisposable
     /// destruction never runs inside the render-thread rendezvous.</summary>
     private void FinishDispose()
     {
+        FluentGpu.Media.MediaCensus.UnregisterRegistry(_videoSurfaces);   // F235: a reaped pop-out leaves the dual-handle scan (its slots were released with it)
         if (!_isDetachedChild && ReferenceEquals(HostDispatch.Current, _uiPoster))
             HostDispatch.Current = null;   // drop the process-static poster so a disposed host leaks no callback
 
