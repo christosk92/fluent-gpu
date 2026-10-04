@@ -611,10 +611,24 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>Before (the build of the owner)</td><td class="num">4.11 ms</td><td class="num">11.3 s</td><td class="num">120</td></tr>
 <tr><td>#33 + #34</td><td class="num">2.60 ms</td><td class="num">11.7 s</td><td class="num">120</td></tr>
 <tr><td>#33 + #34 + #35</td><td class="num">2.60 ms</td><td class="num">0.81 s</td><td class="num">120</td></tr>
+<tr><td>+ WaveeMusic#177 quarter-scale backdrop art (commit <code>b2b4cee3</code>)</td><td class="num">1.64 ms</td><td class="num">1.19 s</td><td class="num">120</td></tr>
 </tbody>
 </table>
 </div>
 <p class="prose">These numbers come from a separate <code>--fake</code> instance with a scratch profile, on the same 3440 × 1440, 120 Hz display. The GPU value is the 20 s average of <code>[render.pace] gpuMs</code>. The live instance of the owner is not measured yet.</p>
+
+<h3>Memory on the fullscreen stage</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art</th></tr></thead>
+<tbody>
+<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50)</td><td class="num">47.5 MB (33)</td></tr>
+<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.2 MB</td><td class="num">123.9 MB</td></tr>
+<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">311.5 MB</td><td class="num">268.1 MB</td></tr>
+</tbody>
+</table>
+</div>
+<p class="prose">The repaint boundaries cut the root into more segments, and the art held a second window of tiles. The quarter-scale art boundary removes that second window. The live instance of the owner is not measured yet.</p>
 
 <h3>Verification</h3>
 <div class="tbl">
