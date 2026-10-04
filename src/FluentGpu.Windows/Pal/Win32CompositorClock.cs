@@ -55,6 +55,30 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// <summary>Burst length worth one log line. Shorter runs of ignored returns are ordinary double-tick noise; the
     /// 9-21 return storms this clock was rebuilt for are the ones a user log must be able to show.</summary>
     private const int FastBurstLogMin = 8;
+    /// <summary>Past this many ignored returns in one burst the waiter stops re-entering the export at once and parks
+    /// ~1 ms between waits. The documented storms (9-21 returns around a monitor / DPI change) never reach it.</summary>
+    internal const int SpinGuardBurst = 32;
+    /// <summary>A burst this long means the export is not blocking at all (measured on a second instance: ~2,300 returns
+    /// every 2 ms, a whole core spent re-waiting). Such a clock is no vblank reference: the waiter switches to
+    /// SYNTHESIZED ticks (<see cref="EnterSynthesized"/>) — a high-resolution timer at the window's period — so the host
+    /// keeps display-rate pacing without the spin, and probes the export again every <see cref="SynthProbeMs"/>.</summary>
+    internal const int NoBlockBurst = 1000;
+    /// <summary>The blocked-time check: over each window of this length (ms) with at least <see cref="NoBlockMinCalls"/>
+    /// waits, a waiter that spent less than 1/<see cref="NoBlockRatio"/> of the window INSIDE the export is not being
+    /// paced by it (a real compositor clock keeps it blocked nearly the whole time, storms included).</summary>
+    private const int NoBlockWindowMs = 250;
+    private const int NoBlockMinCalls = 60;
+    private const int NoBlockRatio = 10;
+    /// <summary>While synthesizing, how often (ms) the waiter tries the real export once to see whether it blocks again.</summary>
+    private const int SynthProbeMs = 2000;
+
+    // synthesized mode (waiter thread only): the export does not block, so a high-resolution timer beats the lattice
+    private bool _synth;
+    private long _synthNextQpc, _synthProbeAtQpc;
+    private HANDLE _synthTimer;
+    private EventWaitHandle? _synthTimerWait;
+    private bool _synthTimerUnavailable;
+    private readonly long _refreshHintQpc;
 
     private readonly HANDLE _tickEvent;                 // auto-reset: one signal per compositor tick
     private readonly AutoResetEvent _armGate = new(false);   // parks the waiter thread while disarmed
@@ -98,6 +122,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
         // Seed the window period from the hint and let the loop's "push on change" path apply it: one code path keeps
         // the filter's window period current, whether it came from the constructor or from a later monitor hop.
         _windowPeriodQpc = refreshPeriodHintQpc > 0 ? refreshPeriodHintQpc : 0;
+        _refreshHintQpc = refreshPeriodHintQpc > 0 ? refreshPeriodHintQpc : 0;
         _tickEvent = waitForClock is null ? CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null) : HANDLE.NULL;
         _thread = new Thread(Loop) { IsBackground = true, Name = "fgpu-vblank" };
         // Above normal: the tick is a phase signal with a hard deadline (it is worthless one refresh late), and the
@@ -223,6 +248,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
                 // a hole is not a period sample, a drift measurement, or a slot.
                 _filter.Reset();
                 PublishFilterState();
+                _blockWindowStart = 0;   // a parked stretch is not wait time
                 _armGate.WaitOne();   // 0% CPU while the app is idle, minimized, or not display-paced
                 continue;
             }
@@ -235,7 +261,10 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
                 LogLattice();
             }
 
+            if (_synth) { if (!SynthesizedTurn()) break; continue; }
+
             uint r;
+            long waitStart = _timestamp();
             try
             {
                 // count=0/handles=null: wait on the compositor clock alone. The timeout is liveness only.
@@ -249,13 +278,30 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
 
             if (_disposed) break;
             long now = _timestamp();
+            if (NoteBlocking(waitStart, now)) { EnterSynthesized(now); continue; }
             // Snapshot the two streaks the filter is about to clear — the transition logs below describe what ENDED.
             int burst = _filter.FastBurst;
             long burstSpan = _filter.FastBurstSpanQpc;
             int synthesized = _filter.SynthesizedRun;
 
             TickVerdict verdict = _filter.Observe(r, now, out long publishQpc);
-            if (verdict == TickVerdict.Ignored) continue;   // a double tick / burst return: not a vblank
+            if (verdict == TickVerdict.Ignored)
+            {
+                // a double tick / burst return: not a vblank. A short storm re-waits at once; a long one must not spin.
+                int run = _filter.FastBurst;
+                if (run >= NoBlockBurst)
+                {
+                    Diag.Line($"[compositor-clock] fast-burst n={run} spanMs={Ms(_filter.FastBurstSpanQpc):0.0} (no-block)");
+                    EnterSynthesized(now);
+                    continue;
+                }
+                if (run >= SpinGuardBurst)
+                {
+                    _armGate.WaitOne(1);   // park ~1 ms; the gate still cancels it (dispose / reprobe / re-arm)
+                    if (_disposed) break;
+                }
+                continue;
+            }
             // A synthesized tick does not end a burst (the storm is still open), so the line waits for the real end.
             if (burst >= FastBurstLogMin && verdict != TickVerdict.SynthesizedTick)
                 Diag.Line($"[compositor-clock] fast-burst n={burst} spanMs={Ms(burstSpan):0.0}");
@@ -323,6 +369,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private void ConsumeReprobe()
     {
         _reprobeRequested = false;
+        _synth = false;   // a new display topology: try the real export again
         _filter.Reset();
         _loggedDecimating = false;
         PublishFilterState();
@@ -334,6 +381,121 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// filter's job, not a reason to give up the display's phase for the rest of the session. Logs via
     /// <see cref="Diag.Line"/> (the always-on channel: silent degradation is exactly what a user log must show) once
     /// per latch, never per tick. <see cref="Reprobe"/> clears it.</summary>
+    /// <summary>The export does not block: beat the window's period with a high-resolution timer instead (waiter thread).</summary>
+    private void EnterSynthesized(long nowQpc)
+    {
+        _synth = true;
+        long period = SynthPeriodQpc();
+        _synthNextQpc = nowQpc + period;
+        _synthProbeAtQpc = nowQpc + _qpcFrequency * SynthProbeMs / 1000;
+        _filter.Reset();
+        Volatile.Write(ref _measuredPeriodQpc, 0);
+        Volatile.Write(ref _latticePeriodQpc, period);
+        _decimating = false;
+        Diag.Line($"[compositor-clock] synthesized reason=no-block period={Ms(period):0.00}");
+    }
+
+    /// <summary>The synthesized beat: the window's monitor period, else the refresh hint, else 1/60 s.</summary>
+    private long SynthPeriodQpc()
+    {
+        long w = Volatile.Read(ref _windowPeriodQpc);
+        return w > 0 ? w : _refreshHintQpc > 0 ? _refreshHintQpc : _qpcFrequency / 60;
+    }
+
+    /// <summary>One synthesized turn: now and then probe the real export; else sleep to the next lattice point on the
+    /// high-resolution timer (cancellable through the arm gate) and publish it. False = disposed.</summary>
+    private bool SynthesizedTurn()
+    {
+        long now = _timestamp();
+        long period = SynthPeriodQpc();
+        if (now >= _synthProbeAtQpc)
+        {
+            _synthProbeAtQpc = now + _qpcFrequency * SynthProbeMs / 1000;
+            uint pr;
+            try { pr = _waitForClock is null ? DCompositionWaitForCompositorClock(0, null, WaitTimeoutMs) : _waitForClock(); }
+            catch (Exception) { pr = WaitFailedResult; }
+            long after = _timestamp();
+            if (pr == 0 && after - now >= period / 2)
+            {
+                _synth = false;
+                _filter.Reset();
+                _blockWindowStart = 0;
+                Diag.Line("[compositor-clock] hardware-restored reason=blocks-again");
+                return !_disposed;
+            }
+            now = after;
+        }
+        SleepUntil(_synthNextQpc, now);
+        if (_disposed) return false;
+        if (_reprobeRequested || !_synth) return true;
+        long tick = _synthNextQpc;
+        now = _timestamp();
+        _synthNextQpc += period;
+        if (_synthNextQpc <= now) _synthNextQpc = now + period;   // a late wake re-phases instead of bursting to catch up
+        Volatile.Write(ref _latticePeriodQpc, period);
+        PublishTick(tick);
+        return true;
+    }
+
+    private const uint WaitFailedResult = 0xFFFFFFFF;
+
+    /// <summary>Sleep until <paramref name="targetQpc"/> on a high-resolution waitable timer (the default 15.6 ms timer
+    /// resolution would halve a 120 Hz beat), or on the arm gate if no such timer exists. The arm gate cancels either.</summary>
+    private void SleepUntil(long targetQpc, long nowQpc)
+    {
+        long delta = targetQpc - nowQpc;
+        if (delta <= 0) return;
+        if (_synthTimer == HANDLE.NULL && !_synthTimerUnavailable)
+        {
+            _synthTimer = CreateWaitableTimerExW(null, null, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
+                0x0002 | 0x00100000 /* TIMER_MODIFY_STATE | SYNCHRONIZE */);
+            if (_synthTimer == HANDLE.NULL) _synthTimerUnavailable = true;
+            else _synthTimerWait = new EventWaitHandle(false, EventResetMode.AutoReset)
+                { SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle((nint)_synthTimer.Value, ownsHandle: false) };
+        }
+        if (_synthTimerWait is not null)
+        {
+            LARGE_INTEGER due = default;
+            due.QuadPart = -(delta * 10_000_000 / _qpcFrequency);   // relative, 100 ns units
+            if (due.QuadPart == 0) due.QuadPart = -1;
+            if (SetWaitableTimer(_synthTimer, &due, 0, null, null, BOOL.FALSE))
+            {
+                WaitHandle.WaitAny([_synthTimerWait, _armGate]);
+                return;
+            }
+        }
+        _armGate.WaitOne(MsUntil(targetQpc, nowQpc));
+    }
+
+    /// <summary>Publish one tick as is (no slot / decimation filter): stamp, then seq, then the events.</summary>
+    private void PublishTick(long qpc)
+    {
+        Volatile.Write(ref _tickQpc, qpc);
+        Volatile.Write(ref _tickSeq, _tickSeq + 1);
+        if (Volatile.Read(ref _armed) != 0 && _tickEvent != HANDLE.NULL) SetEvent(_tickEvent);
+        lock (_renderGate)
+            if (_renderArmed != 0) _renderSubscription?.Event.Set();
+    }
+
+    // the blocked-time window (waiter thread only)
+    private long _blockWindowStart, _blockedQpc;
+    private int _blockCalls;
+
+    /// <summary>Account one wait (<paramref name="start"/> → <paramref name="end"/>) to the blocked-time window; true when a
+    /// closed window shows the export is not blocking (see <see cref="NoBlockWindowMs"/>).</summary>
+    private bool NoteBlocking(long start, long end)
+    {
+        if (_blockWindowStart == 0) { _blockWindowStart = start; _blockedQpc = 0; _blockCalls = 0; }
+        _blockedQpc += end - start;
+        _blockCalls++;
+        long elapsed = end - _blockWindowStart;
+        if (elapsed < _qpcFrequency * NoBlockWindowMs / 1000) return false;
+        bool noBlock = _blockCalls >= NoBlockMinCalls && _blockedQpc * NoBlockRatio < elapsed;
+        if (noBlock) Diag.Line($"[compositor-clock] no-block calls={_blockCalls} blockedMs={Ms(_blockedQpc):0.0} windowMs={Ms(elapsed):0.0}");
+        _blockWindowStart = 0;
+        return noBlock;
+    }
+
     private void MarkUnavailable(string reason)
     {
         _unavailable = true;
@@ -394,6 +556,8 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
         // on a background thread, which is a process kill.
         if (!_thread.Join((int)WaitTimeoutMs * 4)) return;
         if (_tickEvent != HANDLE.NULL) CloseHandle(_tickEvent);
+        _synthTimerWait?.Dispose();   // does not own the handle
+        if (_synthTimer != HANDLE.NULL) CloseHandle(_synthTimer);
         _armGate.Dispose();
     }
 }
