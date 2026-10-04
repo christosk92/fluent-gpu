@@ -803,6 +803,9 @@ public sealed partial class AppHost : IDisposable
     private readonly InputHooks _inputHooks = new();
     private readonly Signal<object?> _inputHooksSig;
     private readonly Signal<object?> _frameClockSig = new(0L);
+    /// <summary>The <c>FrameClock.PaceableTick</c> ambient: the same frame counter as <see cref="_frameClockSig"/>, but its
+    /// subscribers raise <see cref="WakeReasons.FrameClockPaceable"/>, which the GPU governor may pace.</summary>
+    private readonly Signal<object?> _frameClockPaceableSig = new(0L);
     private long _frameClock;
     // Drag epoch → UseDragState. EDGE-triggered (session begin/end, OverTarget / Effect / Caption change, settle
     // start+expiry): the chip FOLLOWS through the DragPosX/Y binds below, so bumping this per frame — as it used to —
@@ -1806,7 +1809,7 @@ public sealed partial class AppHost : IDisposable
         WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
         WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageReady | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
         // An explicit UI frame-clock poller or a queued native-video hand-off must not be swallowed by a modal loop.
-        WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending |
+        WakeReasons.FrameClockPoller | WakeReasons.FrameClockPaceable | WakeReasons.VideoPumpPending |
         // A due frame-clock timer (a debounce/timeout/interval) must still fire while the user drags/resizes the window.
         WakeReasons.Timer |
         // …and a due pinned-leftover image restart (T10) is the same kind of deadline.
@@ -2765,6 +2768,8 @@ public sealed partial class AppHost : IDisposable
         // A compositor-bound UI clock (not native video presentation) is an explicit request for panel-rate frames.
         // This keeps the seek playhead smooth while a native DirectComposition video presents decoded frames on its own.
         if (_frameClockSig.HasSubscribers) r |= WakeReasons.FrameClockPoller;
+        // A paceable per-frame clock (a visualizer) asks for frames too, but the governor may pace it (GpuGovernorWake.NeverPace).
+        if (_frameClockPaceableSig.HasSubscribers) r |= WakeReasons.FrameClockPaceable;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
         // from playback state: a playing DComp video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
@@ -3225,6 +3230,7 @@ public sealed partial class AppHost : IDisposable
         // Fully qualified: FluentGpu.Pal.FrameClock (the scroll-v3 seam clock, §5.1) is now ALSO in scope via
         // `using FluentGpu.Pal;` — bare `FrameClock` is ambiguous with FluentGpu.Hooks.FrameClock (this ambient key).
         _reconciler.SetAmbient(FluentGpu.Hooks.FrameClock.Tick, _frameClockSig);
+        _reconciler.SetAmbient(FluentGpu.Hooks.FrameClock.PaceableTick, _frameClockPaceableSig);
         _uiPoster = Post;   // ONE delegate instance so HostDispatch.Current can be identity-compared on teardown
         _hostPostSig = new Signal<object?>(_uiPoster);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
@@ -3951,7 +3957,12 @@ public sealed partial class AppHost : IDisposable
             // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
             // frame and the loop could never fall out of display rate. Only when watched — 0-alloc when nothing polls.
-            if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;
+            if (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers)
+            {
+                ++_frameClock;
+                if (_frameClockSig.HasSubscribers) _frameClockSig.Value = _frameClock;
+                if (_frameClockPaceableSig.HasSubscribers) _frameClockPaceableSig.Value = _frameClock;
+            }
             // ── Live drag publication (see the _dragEpoch field comment) ────────────────────────────────────────────
             // POSITION goes out as two float SIGNALS every frame: a bound preview transform is a compositor write, so a
             // drag move costs no render/reconcile/layout and no allocation. The EPOCH — which does re-render the preview

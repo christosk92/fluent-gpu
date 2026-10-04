@@ -24,8 +24,15 @@ public readonly record struct VisualizerFrame(ReadOnlyMemory<float> Magnitudes, 
 /// the band count, whether the session was muted/silenced (the UI shows its idle breath), the PRE-gain RMS of the
 /// analysed window (what Tape's meter and Field's breath use — the level tap's RMS is post-volume), how far behind the
 /// newest rendered sample the window ended (frames — a diagnostic of the alignment actually applied), the analysis
-/// cost, and whether a spectrum lease is live at all.</summary>
-public readonly record struct SpectrumInfo(long Sequence, int BandCount, bool Muted, float WindowRms, long AlignFrames, float FftMs, bool Live);
+/// cost, and whether a spectrum lease is live at all. <paramref name="Flux"/> is the spectral flux of this publish (mean
+/// band rise in dB, <see cref="OnsetDetector"/>); <paramref name="OnsetSequence"/> increments on every detected onset, so a
+/// reader compares it with the last one it saw; <paramref name="OnsetStrength"/> is that onset's 0..1 strength.</summary>
+public readonly record struct SpectrumInfo(long Sequence, int BandCount, bool Muted, float WindowRms, long AlignFrames, float FftMs, bool Live,
+    float Flux = 0f, long OnsetSequence = 0, float OnsetStrength = 0f);
+
+/// <summary>What accompanied the last published waveform: the same <paramref name="Sequence"/> as the band publish it
+/// came with, the sample count, the session's sample rate, and whether a spectrum lease is live.</summary>
+public readonly record struct WaveformInfo(long Sequence, int SampleCount, int SampleRate, bool Live);
 
 /// <summary>One EQ band (spec §7.10). Each parameter is a signal — a slider write ramps smoothly (set-vs-ramp is a
 /// value, not a topology edit — no zipper noise).</summary>
@@ -107,6 +114,10 @@ public interface IAudioEffects
     /// copied — 0 before the first publish or without a lease. THE ONLY spectrum read path; the UI PULLS it on its own
     /// cadence, nothing pushes.</summary>
     int CopySpectrum(Span<float> destination, out SpectrumInfo info);
+    /// <summary>Copy the latest time-domain samples (mono, −1..1, the centre <see cref="AudioEffects.WaveformSamples"/> of the
+    /// same latency-aligned window the bands came from) into <paramref name="destination"/>. Same lease, same lock, same
+    /// sequence as <see cref="CopySpectrum"/>; 0 before the first publish or without a lease.</summary>
+    int CopyWaveform(Span<float> destination, out WaveformInfo info);
     /// <summary>The user's playback-sync offset in milliseconds (positive reads the window EARLIER, for a device that
     /// adds latency the clock cannot see, e.g. Bluetooth). Clamped to ±500. Cross-thread safe.</summary>
     float SpectrumOffsetMs { get; set; }
@@ -130,6 +141,13 @@ public sealed class AudioEffects : IAudioEffects
     private bool _spectrumMuted;
     private float _spectrumWindowRms, _spectrumFftMs;
     private long _spectrumAlignFrames;
+    private float _spectrumFlux, _onsetStrength;
+    private long _onsetSequence;
+
+    /// <summary>How many time-domain samples a publish carries (the centre of the 2048-sample analysis window).</summary>
+    public const int WaveformSamples = 1024;
+    private readonly float[][] _waveform = [new float[WaveformSamples], new float[WaveformSamples]];
+    private int _waveformFront, _waveformCount, _waveformRate;
     private int _spectrumOffsetMsBits;                  // float bits, Volatile: written by the UI, read on the clock thread
 
     private readonly IReadSignal<VisualizerFrame> _visualizerView;
@@ -202,6 +220,7 @@ public sealed class AudioEffects : IAudioEffects
             if (_spectrumConsumers++ == 0)
             {
                 _magnitudeCount = 0;
+                _waveformCount = 0;
                 Volatile.Write(ref _spectrumEpoch, ++_nextVisualizerEpoch);
             }
         }
@@ -215,6 +234,7 @@ public sealed class AudioEffects : IAudioEffects
             if (--_spectrumConsumers != 0) return;
             Volatile.Write(ref _spectrumEpoch, 0);
             _magnitudeCount = 0;                            // CopySpectrum returns 0 from here on; the level frame is untouched
+            _waveformCount = 0;
         }
     }
 
@@ -225,7 +245,8 @@ public sealed class AudioEffects : IAudioEffects
 
     /// <summary>Control-thread publish of one analysed window (never RT). Writes the BACK buffer, swaps, bumps the
     /// sequence; false when the lease or the source has moved on. Never touches <see cref="_visualizer"/> (O2).</summary>
-    internal bool PublishSpectrum(long source, long epoch, ReadOnlySpan<float> bandsDb, bool muted, float windowRms, long alignFrames, float fftMs)
+    internal bool PublishSpectrum(long source, long epoch, ReadOnlySpan<float> bandsDb, bool muted, float windowRms, long alignFrames, float fftMs,
+        ReadOnlySpan<float> waveform = default, int sampleRate = 0, float flux = 0f, bool onset = false, float onsetStrength = 0f)
     {
         lock (_visualizerGate)
         {
@@ -235,11 +256,22 @@ public sealed class AudioEffects : IAudioEffects
             bandsDb[..n].CopyTo(_magnitudes[back]);
             _magnitudeFront = back;
             _magnitudeCount = n;
+            if (!waveform.IsEmpty)
+            {
+                int wback = _waveformFront ^ 1;
+                int w = Math.Min(waveform.Length, WaveformSamples);
+                waveform[..w].CopyTo(_waveform[wback]);
+                _waveformFront = wback;
+                _waveformCount = w;
+                _waveformRate = sampleRate;
+            }
             _spectrumSequence++;
             _spectrumMuted = muted;
             _spectrumWindowRms = windowRms;
             _spectrumAlignFrames = alignFrames;
             _spectrumFftMs = fftMs;
+            _spectrumFlux = flux;
+            if (onset) { _onsetSequence++; _onsetStrength = onsetStrength; }
             return true;
         }
     }
@@ -251,7 +283,20 @@ public sealed class AudioEffects : IAudioEffects
         {
             int n = Math.Min(_magnitudeCount, destination.Length);
             if (n > 0) _magnitudes[_magnitudeFront].AsSpan(0, n).CopyTo(destination);
-            info = new SpectrumInfo(_spectrumSequence, n, _spectrumMuted, _spectrumWindowRms, _spectrumAlignFrames, _spectrumFftMs, _spectrumEpoch != 0);
+            info = new SpectrumInfo(_spectrumSequence, n, _spectrumMuted, _spectrumWindowRms, _spectrumAlignFrames, _spectrumFftMs, _spectrumEpoch != 0,
+                _spectrumFlux, _onsetSequence, _onsetStrength);
+            return n;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int CopyWaveform(Span<float> destination, out WaveformInfo info)
+    {
+        lock (_visualizerGate)
+        {
+            int n = Math.Min(_waveformCount, destination.Length);
+            if (n > 0) _waveform[_waveformFront].AsSpan(0, n).CopyTo(destination);
+            info = new WaveformInfo(_spectrumSequence, n, _waveformRate, _spectrumEpoch != 0);
             return n;
         }
     }
@@ -310,6 +355,8 @@ public sealed class NullAudioEffects : IAudioEffects
     public IDisposable AcquireSpectrum() => NoVisualizer;
     /// <inheritdoc/>
     public int CopySpectrum(Span<float> destination, out SpectrumInfo info) { info = default; return 0; }
+    /// <inheritdoc/>
+    public int CopyWaveform(Span<float> destination, out WaveformInfo info) { info = default; return 0; }
     /// <inheritdoc/>
     public float SpectrumOffsetMs { get; set; }
     /// <summary>The shared inert instance.</summary>
