@@ -891,9 +891,11 @@ public sealed unsafe partial class D3D12Device
         }
     }
 
-    /// <summary>A tile placement's window-px rect, exactly as <see cref="DrawRange"/> places its quad.</summary>
+    /// <summary>A tile placement's window-px rect, exactly as <see cref="DrawRange"/> places its quad: the part of the tile
+    /// its ops paint (<see cref="TilePlacement.Px0"/>..).</summary>
     private static RectF PlacementRect(in CompositeItem it, in TilePlacement p)
-        => new(it.Transform.Dx + p.Key.Tx * TileGrid.W, it.Transform.Dy + p.Key.Ty * TileGrid.H, p.W, p.H);
+        => new(it.Transform.Dx + p.Key.Tx * TileGrid.W + p.Px0, it.Transform.Dy + p.Key.Ty * TileGrid.H + p.Py0,
+               Math.Max(0, p.Px1 - p.Px0), Math.Max(0, p.Py1 - p.Py0));
 
     private static bool Overlaps(in PixelRect a, in PixelRect b)
         => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
@@ -985,10 +987,16 @@ public sealed unsafe partial class D3D12Device
                     for (int p = 0; p < placed.Length; p++)
                     {
                         if (!_surfaces!.TouchTile(placed[p].Surface, fence)) { _frameLostPlacements++; continue; }
-                        float x0 = it.Transform.Dx + placed[p].Key.Tx * TileGrid.W - ox, y0 = it.Transform.Dy + placed[p].Key.Ty * TileGrid.H - oy;
-                        if (x0 >= tw || y0 >= th || x0 + placed[p].W <= 0f || y0 + placed[p].H <= 0f) continue;
-                        DrawItemQuad(in it, x0, y0, x0 + placed[p].W, y0 + placed[p].H, ox, oy, feathers,
-                            it.BlendCopy != 0 ? SliceCompositor.Pso.LoadCopy : SliceCompositor.Pso.Load, _surfaces.TileSrv(placed[p].Surface));
+                        // only the part of the tile its ops paint (TilePlacement.Paint*): the rest of the surface is transparent
+                        ref readonly TilePlacement tp = ref placed[p];
+                        int px0 = tp.Px0, py0 = tp.Py0, px1 = tp.Px1, py1 = tp.Py1;
+                        if (px1 <= px0 || py1 <= py0) continue;
+                        float x0 = it.Transform.Dx + tp.Key.Tx * TileGrid.W - ox + px0, y0 = it.Transform.Dy + tp.Key.Ty * TileGrid.H - oy + py0;
+                        float x1 = x0 + (px1 - px0), y1 = y0 + (py1 - py0);
+                        if (x0 >= tw || y0 >= th || x1 <= 0f || y1 <= 0f) continue;
+                        DrawItemQuad(in it, x0, y0, x1, y1, ox, oy, feathers,
+                            it.BlendCopy != 0 ? SliceCompositor.Pso.LoadCopy : SliceCompositor.Pso.Load, _surfaces.TileSrv(tp.Surface),
+                            srcOx: px0, srcOy: py0);
                     }
                     break;
                 }
@@ -1047,7 +1055,7 @@ public sealed unsafe partial class D3D12Device
     /// pixels), only the strips around it evaluate it.</summary>
     private void DrawItemQuad(in CompositeItem it, float x0, float y0, float x1, float y1, int ox, int oy, bool feathers,
         SliceCompositor.Pso pso, D3D12_GPU_DESCRIPTOR_HANDLE srv, bool sample = false, float sampleSx = 0f, float sampleSy = 0f,
-        float clampU = 0f, float clampV = 0f)
+        float clampU = 0f, float clampV = 0f, int srcOx = 0, int srcOy = 0)
     {
         bool f1 = feathers && !it.Feather.IsNone, f2 = feathers && !it.Feather2.IsNone;
         Span<FeatherPiece> pieces = stackalloc FeatherPiece[FeatherQuadSplit.MaxPieces];
@@ -1078,7 +1086,7 @@ public sealed unsafe partial class D3D12Device
             _compositor!.Begin(p.X0, p.Y0, p.X1, p.Y1);
             if (sample) _compositor.SampleMap(x0, y0, sampleSx, sampleSy);
             if (clampU > 0f) _compositor.SampleClamp(clampU, clampV);
-            else _compositor.SourceOrigin(p.X0 - x0, p.Y0 - y0);
+            else _compositor.SourceOrigin(p.X0 - x0 + srcOx, p.Y0 - y0 + srcOy);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
             if (p.Feathered)

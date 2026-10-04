@@ -56,6 +56,42 @@ static class TileSuite
         RepaintBoundaryChecks(strings, fonts);
         InvisibleBoundsChecks(strings, fonts);
         OpaqueCoverChecks(strings, fonts);
+        TilePaintChecks(strings, fonts);
+    }
+
+    // ── gate.tiles.paint ─────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>A small box in a segment whose bounds a second box far away stretches over the whole window: every tile
+    /// placement carries the part of its tile its ops paint, so the composite draws two small quads, not the cells.</summary>
+    sealed class SparseProbe : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Grow = 1f, ZStack = true,
+            Children =
+            [
+                new BoxEl { AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(40f, 40f, 0f, 0f), Width = 160f, Height = 40f, Fill = ColorF.FromRgba(200, 90, 60) },
+                new BoxEl { AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(1000f, 900f, 0f, 0f), Width = 120f, Height = 60f, Fill = ColorF.FromRgba(60, 90, 200) },
+            ],
+        };
+    }
+
+    static void TilePaintChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var (app, window, dev, host) = Host("tiles-paint", strings, fonts, new SparseProbe());
+        using var _a = app; using var _h = host;
+        Frames(host, 20);
+        long cells = 0, painted = 0;
+        bool inside = true;
+        string seen = "";
+        foreach (var p in dev.LastCompositePlacements)
+        {
+            cells += (long)p.W * p.H;
+            painted += (long)Math.Max(0, p.Px1 - p.Px0) * Math.Max(0, p.Py1 - p.Py0);
+            inside &= p.Px0 >= 0 && p.Py0 >= 0 && p.Px1 <= p.W && p.Py1 <= p.H;
+            seen += $" [{p.Key.Tx},{p.Key.Ty} {p.W}x{p.H} paint {p.Px0},{p.Py0}-{p.Px1},{p.Py1}]";
+        }
+        Check("gate.tiles.paint a sparse segment's placements composite only what their tiles paint (two small boxes, not the cells)",
+            cells > 0 && painted > 0 && painted * 20 < cells && inside, $"cells={cells} painted={painted}{seen}");
     }
 
     // ── gate.tiles.opaque-cover ──────────────────────────────────────────────────────────────────────────────────

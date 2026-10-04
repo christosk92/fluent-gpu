@@ -23,9 +23,10 @@ public sealed class SliceTableContentTests
 
         public ulong Key => KeyValue;
 
-        public ulong Want(in RectF tilePx, out int ops)
+        public ulong Want(in RectF tilePx, out int ops, out RectF paint)
         {
             Folds++;
+            paint = new RectF(0f, 0f, tilePx.W, tilePx.H);
             var (h, o) = Of((int)(tilePx.Y / TileGrid.H));
             ops = o;
             return h;
