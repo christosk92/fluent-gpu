@@ -25,6 +25,7 @@ namespace FluentGpu.Rhi.D3D12;
 public sealed unsafe partial class D3D12Device
 {
     private int[] _coveredBy = new int[64];
+    private PixelRect[] _occRect = new PixelRect[64];   // per top-level occluder: the whole pixels it writes opaque
     /// <summary>Top-level items the last composite left out as hidden under a later opaque item (always-on counter).</summary>
     public int LastOccludedItems { get; private set; }
     /// <summary>Window px of the items the last composite left out as hidden (their footprints, summed).</summary>
@@ -36,7 +37,9 @@ public sealed unsafe partial class D3D12Device
     private void BeginOcclusion(int n)
     {
         if (_coveredBy.Length < n) _coveredBy = new int[Math.Max(n, _coveredBy.Length * 2)];
+        if (_occRect.Length < n) _occRect = new PixelRect[Math.Max(n, _occRect.Length * 2)];
         Array.Fill(_coveredBy, -1, 0, n);
+        Array.Clear(_occRect, 0, n);
         LastOccludedItems = 0; LastOccludedPx = 0;
     }
 
@@ -53,7 +56,10 @@ public sealed unsafe partial class D3D12Device
             int end = it.Kind == CompositeKind.Group ? Math.Min(items.Length, j + 1 + it.GroupCount) : j + 1;
             PrepareRange(in frame, j, end);
             if (on && it.Opaque.W > 0f && it.Opaque.H > 0f && it.Kind != CompositeKind.Group && OccluderRect(in frame, j, out PixelRect occ))
+            {
+                _occRect[j] = occ;
                 Occlude(in frame, j, in occ);
+            }
             j = end - 1;
         }
     }
@@ -179,6 +185,21 @@ public sealed unsafe partial class D3D12Device
             default:
                 return false;
         }
+    }
+
+    /// <summary>The highest top-level occluder below item <paramref name="i"/> whose opaque pixels contain
+    /// <paramref name="region"/>, or -1. A backdrop's mini-composite over that region starts at it: everything before it
+    /// (and the clear) paints nothing there. An occluder hidden by a later one lies inside that one, which also contains the
+    /// region, so the highest is always drawn.</summary>
+    private int CoverFrom(int i, in PixelRect region)
+    {
+        if (region.IsEmpty) return -1;
+        for (int j = Math.Min(i, _occRect.Length) - 1; j >= 0; j--)
+        {
+            ref readonly PixelRect o = ref _occRect[j];
+            if (!o.IsEmpty && region.Left >= o.Left && region.Top >= o.Top && region.Right <= o.Right && region.Bottom <= o.Bottom) return j;
+        }
+        return -1;
     }
 
     /// <summary>Is item <paramref name="k"/> hidden for a composite of items [.., <paramref name="end"/>) — by an occluder

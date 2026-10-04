@@ -743,7 +743,10 @@ public sealed unsafe partial class D3D12Device
         // The frosted backdrop is retained keyed by everything beneath it (§A.5 — composite-only turns keep it): the
         // items before it (kind, placement, alpha, clip, feather, every tile surface + raster serial), the clear colour,
         // the region and the chain. A turn that moved or re-rastered nothing beneath re-uses it.
-        ulong key = BackdropKey(in frame, i, l, t, r, b, iters, offset, out bool cacheable);
+        // An opaque item below covering the whole region: the mini-composite starts at it, with no clear (D3D12Device.Occlusion.cs)
+        int cover = CoverFrom(i, new PixelRect(l, t, r, b));
+        int from = Math.Max(cover, 0);
+        ulong key = BackdropKey(in frame, i, from, l, t, r, b, iters, offset, out bool cacheable);
         _itemKey[i] = cacheable ? key : 0UL;   // 0 = re-blurred from scratch: the partial-present diff treats it as changed
         if (cacheable)
         {
@@ -759,13 +762,13 @@ public sealed unsafe partial class D3D12Device
         lv[0] = _surfaces!.AcquireScratch(w, h, fence);
         if (lv[0] < 0) return;
         ScratchBarrier(lv[0], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        BeginPass(_surfaces.ScratchRtv(lv[0]), w, h, PassLoad.Clear);
+        BeginPass(_surfaces.ScratchRtv(lv[0]), w, h, cover >= 0 ? PassLoad.Discard : PassLoad.Clear);
         BindCompositor(_surfaces.ScratchW(lv[0]), _surfaces.ScratchH(lv[0]));
         _compositor!.Scissor(_cmdList, 0, 0, w, h);
         _compositor.Begin(0f, 0f, w, h);
         _compositor.Color(frame.Info.Clear);
-        _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
-        DrawRange(in frame, 0, i, l, t, w, h, i);
+        if (cover < 0) _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);   // else the occluder writes every pixel
+        DrawRange(in frame, from, i, l, t, w, h, i);
         EndPassIfOpen();
         ScratchBarrier(lv[0], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
@@ -792,7 +795,7 @@ public sealed unsafe partial class D3D12Device
     /// degraded segment elsewhere no longer makes every backdrop uncacheable. Two shapes can carry pixels from OUTSIDE the
     /// region into it and are keyed unscoped: an earlier backdrop overlapping the region (its blur sampled its own region),
     /// and a group overlapping it (its surface may be blurred over its whole footprint).</para></summary>
-    private ulong BackdropKey(in CompositeFrame frame, int i, int l, int t, int r, int b, int iters, float offset, out bool cacheable)
+    private ulong BackdropKey(in CompositeFrame frame, int i, int from, int l, int t, int r, int b, int iters, float offset, out bool cacheable)
     {
         cacheable = true;
         if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) { cacheable = false; return 0; }
@@ -801,13 +804,14 @@ public sealed unsafe partial class D3D12Device
         Mix(ref h, (ulong)(uint)iters << 32 | BitConverter.SingleToUInt32Bits(offset));
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(frame.Info.Clear.R) << 32 | BitConverter.SingleToUInt32Bits(frame.Info.Clear.G));
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(frame.Info.Clear.B) << 32 | BitConverter.SingleToUInt32Bits(frame.Info.Clear.A));
+        Mix(ref h, 0xF20E_0000_0000_0000UL | (uint)from);   // the items before an opaque cover of the region draw nothing there
         ReadOnlySpan<CompositeItem> items = frame.Items;
         var region = new PixelRect(l, t, r, b);
         bool scoped = true;
-        for (int k = 0; k < i && k < items.Length; k++)
+        for (int k = from; k < i && k < items.Length; k++)
             if (items[k].Kind == CompositeKind.Backdrop && Overlaps(in _itemRegion[k], in region)) { scoped = false; break; }
         int unscopedEnd = -1;   // items [.., unscopedEnd) sit inside a group that overlaps the region: keyed whole
-        for (int k = 0; k < i && k < items.Length; k++)
+        for (int k = from; k < i && k < items.Length; k++)
         {
             ref readonly CompositeItem it = ref items[k];
             if (Hidden(k, i))
