@@ -53,6 +53,100 @@ static class TileSuite
         NoBlankChecks(strings, fonts);
         SegmentExtentChecks(strings, fonts);
         RenderAllocZeroChecks(strings, fonts);
+        RepaintBoundaryChecks(strings, fonts);
+    }
+
+    // ── gate.tiles.repaint-boundary ──────────────────────────────────────────────────────────────────────────────
+    /// <summary>A moving shape UNDER static content (the fullscreen stage's drifting Field under its scrim, bars and
+    /// panels): inline, every tile it crosses re-rasters with all the static paint in it; behind a BoxEl.RepaintBoundary
+    /// it re-rasters only its own isolation slice and the static tiles stay valid.</summary>
+    sealed class BoundaryProbe(bool boundary, float rasterScale = 1f) : Component
+    {
+        public static readonly Signal<int> Shift = new(0);
+        public override Element Render()
+        {
+            var cells = new Element[24];
+            for (int i = 0; i < cells.Length; i++)
+            {
+                int c = i % 6, r = i / 6;
+                cells[i] = new BoxEl
+                {
+                    AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                    Margin = new Edges4(50f + c * 190f, 50f + r * 230f, 0f, 0f), Width = 150f, Height = 150f,
+                    Fill = ColorF.FromRgba(40, 44, (byte)(60 + i * 4)),
+                };
+            }
+            var blob = new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Width = 900f, Height = 700f, Corners = CornerRadius4.All(350f),
+                Fill = ColorF.FromRgba(120, 60, 160),
+                Transform = Prop.Of(() => Affine2D.Translation(Shift.Value * 7f, Shift.Value * 3f)),
+            };
+            return new BoxEl
+            {
+                Grow = 1f, ZStack = true, Fill = ColorF.FromRgba(18, 18, 22),
+                Children =
+                [
+                    new BoxEl { Grow = 1f, ZStack = true, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, RepaintBoundary = boundary, RasterScale = rasterScale, Children = [blob] },
+                    new BoxEl { Grow = 1f, ZStack = true, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, Children = cells },
+                ],
+            };
+        }
+    }
+
+    static (int Rasters, int Outside, int EffectSlice) BoundaryRun(StringTable strings, HeadlessFontSystem fonts, bool boundary)
+        => BoundaryRun(strings, fonts, boundary, 1f, out _);
+
+    static (int Rasters, int Outside, int EffectSlice) BoundaryRun(StringTable strings, HeadlessFontSystem fonts, bool boundary,
+        float rasterScale, out int lowResItems)
+    {
+        BoundaryProbe.Shift.Value = 0;
+        lowResItems = 0;
+        var (app, window, dev, host) = Host(boundary ? "tiles-boundary" : "tiles-boundary-inline", strings, fonts, new BoundaryProbe(boundary, rasterScale));
+        using var _a = app; using var _h = host;
+        Frames(host, 30);
+        int effect = -1;
+        foreach (var row in dev.LastCompositeSlices) if (row.Kind == SliceKind.Effect) effect = row.Id;
+        int rasters = 0, outside = 0;
+        int seen = dev.CompositeFrameCount;
+        for (int step = 0; step < 4; step++)
+        {
+            BoundaryProbe.Shift.Value++;
+            for (int i = 0; i < 4; i++)
+            {
+                host.RunFrame();
+                if (dev.CompositeFrameCount == seen) continue;
+                seen = dev.CompositeFrameCount;
+                foreach (var op in dev.LastCompositeRecords)
+                {
+                    if (op.Kind == CompositeRecordKind.DrawItem && op.Item.Kind == CompositeKind.Direct && op.Item.LowResDown == 4) lowResItems++;
+                    if (op.Kind != CompositeRecordKind.RasterTile) continue;
+                    rasters++;
+                    if (op.Tile.SliceId != effect) outside++;
+                }
+            }
+        }
+        return (rasters, outside, effect);
+    }
+
+    static void RepaintBoundaryChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var inline = BoundaryRun(strings, fonts, boundary: false);
+        var cut = BoundaryRun(strings, fonts, boundary: true);
+        Check("gate.tiles.repaint-boundary control: INLINE, a shape moving under static cells re-rasters the static tiles it crosses",
+            inline.EffectSlice < 0 && inline.Outside > 0, $"inline rasters={inline.Rasters} outside={inline.Outside} effect={inline.EffectSlice}");
+        Check("gate.tiles.repaint-boundary a RepaintBoundary cuts its own Effect slice and the move re-rasters ONLY that slice's tiles",
+            cut.EffectSlice >= 0 && cut.Rasters > 0 && cut.Outside == 0,
+            $"boundary rasters={cut.Rasters} outside={cut.Outside} effect={cut.EffectSlice} (inline rasters={inline.Rasters})");
+        var low = BoundaryRun(strings, fonts, boundary: true, rasterScale: 0.25f, out int lowItems);
+        Check("gate.tiles.repaint-boundary RasterScale 1/4: the boundary composites as ONE low-resolution Direct item (LowResDown 4) and rasters NO tiles, its own or the static ones",
+            low.EffectSlice >= 0 && lowItems > 0 && low.Rasters == 0,
+            $"lowres items={lowItems} rasters={low.Rasters} outside={low.Outside} effect={low.EffectSlice}");
+        Check("gate.tiles.repaint-boundary RasterScale snaps to the downscale ladder (≥0.75→1, 0.5→2, 0.25→4, below→8)",
+            SceneStore.RasterDown(1f) == 1 && SceneStore.RasterDown(0.8f) == 1 && SceneStore.RasterDown(0.5f) == 2
+            && SceneStore.RasterDown(0.25f) == 4 && SceneStore.RasterDown(0.1f) == 8 && SceneStore.RasterDown(float.NaN) == 1,
+            $"1→{SceneStore.RasterDown(1f)} 0.5→{SceneStore.RasterDown(0.5f)} 0.25→{SceneStore.RasterDown(0.25f)} 0.1→{SceneStore.RasterDown(0.1f)}");
+        BoundaryProbe.Shift.Value = 0;
     }
 
     // ── gate.tiles.needed-order ─────────────────────────────────────────────────────────────────────────────────

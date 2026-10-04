@@ -151,6 +151,19 @@ public sealed record BoxEl : Element
     public GradientSpec? HoverBorderBrush { get; init; }
     public GradientSpec? PressedBorderBrush { get; init; }
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
+    /// <summary>Record this subtree into its OWN retained slice (Flutter's RepaintBoundary, CSS <c>will-change</c>): a
+    /// change inside it — a looping keyframe, a bound transform/opacity, a per-frame visualizer — re-rasters only this
+    /// slice's tiles, and a change around it never re-rasters this one. Put it on the root of content that animates
+    /// continuously while the content painted under and over it stays still. Spends the effect-slice budget
+    /// (<c>SliceRecorder.EffectSliceCap</c>); past it, or inside an inline group layer, the subtree records inline as
+    /// before (identical pixels either way).</summary>
+    public bool RepaintBoundary { get; init; }
+    /// <summary>The raster resolution of a <see cref="RepaintBoundary"/> slice relative to the window (1 = full; snapped
+    /// to 1/2, 1/4 or 1/8). Below 1 the slice holds NO tiles: each change replays it once into one surface at that scale
+    /// and the composite upsamples it bilinearly — a fraction of the raster work and memory. Only for SOFT content whose
+    /// look survives the upsample (large radial gradients, drifting colour fields, heavily blurred art); text and crisp
+    /// edges soften. Ignored without <see cref="RepaintBoundary"/>.</summary>
+    public float RasterScale { get; init; } = 1f;
     public bool TabShape { get; init; }            // selected TabView header: rounded top + bottom flares
     public float TabFlareRadius { get; init; } = 4f;
     /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels

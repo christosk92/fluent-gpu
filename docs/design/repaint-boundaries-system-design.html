@@ -1,0 +1,574 @@
+<title>FluentGpu Frame Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~70ch) on a drafting-paper ground; figures may run wider; the accent marks ONLY what this session changed. */
+:root{
+  --bg:#f3f5f6; --panel:#ffffff; --ink:#15212b; --muted:#566573; --rule:#cfd7dd; --grid:#e3e8ec;
+  --accent:#d0621b; --accent-soft:#f6dcc9; --ok:#2f7d4f; --warn:#a35d00;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10171d; --panel:#172129; --ink:#e3e9ee; --muted:#9aa9b5; --rule:#2c3a45; --grid:#1d2832;
+  --accent:#f08a43; --accent-soft:#3d2616; --ok:#62c18b; --warn:#e3a54c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10171d; --panel:#172129; --ink:#e3e9ee; --muted:#9aa9b5; --rule:#2c3a45; --grid:#1d2832;
+  --accent:#f08a43; --accent-soft:#3d2616; --ok:#62c18b; --warn:#e3a54c; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding:0 16px}
+.wrap{max-width:860px;margin:0 auto;padding-block:40px 80px}
+.prose{max-width:70ch}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;line-height:1.15;letter-spacing:-.005em}
+h1{font-size:clamp(2rem,5vw,2.9rem);margin:.2em 0 .3em}
+h2{font-size:1.65rem;margin:2.6em 0 .5em;padding-top:.6em;border-top:1px solid var(--rule)}
+h3{font-size:1.2rem;margin:1.8em 0 .4em}
+.eyebrow{font:500 .78rem/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:1.1rem;color:var(--ink)}
+p{margin:.6em 0}
+ul,ol{padding-left:1.3em;margin:.5em 0}
+li{margin:.25em 0}
+code{font:.88em var(--mono);background:var(--grid);padding:.08em .32em;border-radius:3px}
+.sec-no{font:500 .9rem var(--mono);color:var(--muted);margin-right:.5em}
+figure{margin:1.6em 0;background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:16px}
+figure .scroll{overflow-x:auto}
+figure svg{display:block;width:100%;height:auto;min-width:560px;color:var(--ink);font-family:var(--mono)}
+figcaption{font-size:.9rem;color:var(--muted);margin-top:10px;max-width:70ch}
+figcaption b{color:var(--ink);font-weight:600}
+.tbl{overflow-x:auto;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:.92rem;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font:600 .78rem var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+td.num{text-align:right;white-space:nowrap;font-family:var(--mono)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:1.2em 0}
+.fact{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 14px}
+.fact .v{font:600 1.5rem/1.1 var(--display);font-variant-numeric:tabular-nums}
+.fact .k{font-size:.83rem;color:var(--muted)}
+.chg{border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:1.2em 0}
+.tag{display:inline-block;font:500 .72rem var(--mono);letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:3px;margin-right:6px;vertical-align:2px}
+.tag.done{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.tag.wip{background:var(--accent-soft);color:var(--accent)}
+.tag.next{background:var(--grid);color:var(--muted)}
+.file{font:.82rem var(--mono);color:var(--muted)}
+nav.toc{font-size:.92rem;margin:1.4em 0 0;display:flex;flex-wrap:wrap;gap:6px 14px}
+nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule)}
+nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
+/* svg classes (page CSS reaches inline SVG) */
+.b{fill:var(--panel);stroke:currentColor;stroke-width:1.2}
+.bm{fill:var(--grid);stroke:currentColor;stroke-width:1}
+.ba{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.6}
+.fa{fill:var(--accent)}
+.sa{stroke:var(--accent)}
+.ln{stroke:currentColor;stroke-width:1.2;fill:none}
+.la{stroke:var(--accent);stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:4 4}
+.t{fill:currentColor;font-size:12px}
+.ts{fill:currentColor;font-size:10.5px}
+.tm{fill:var(--muted);font-size:10.5px}
+.tb{fill:currentColor;font-size:12.5px;font-weight:500}
+.tA{fill:var(--accent);font-size:11.5px;font-weight:500}
+.ok{fill:var(--ok)}
+@media (prefers-reduced-motion:no-preference){nav.toc a{transition:border-color .15s}}
+</style>
+
+<div class="wrap">
+<header class="prose">
+  <div class="eyebrow">System design · FluentGpu engine · working tree of 2026-10-04 · not committed</div>
+  <h1>FluentGpu Frame Engine</h1>
+  <p class="lede">This document describes how one frame moves through the engine: from a signal change on the UI thread to a present on the display. It also records the changes of this session, why we made them, and the costs that remain.</p>
+  <p class="eyebrow" style="margin-top:1em">Text standard: ASD-STE100 (Simplified Technical English). Code names stay in their original form.</p>
+  <nav class="toc" aria-label="Sections">
+    <a href="#goals">1 Goals</a><a href="#threads">2 Threads</a><a href="#pipeline">3 Pipeline</a><a href="#tiles">4 Retained tiles</a>
+    <a href="#damage">5 Damage</a><a href="#composite">6 Composite</a><a href="#changes">7 Changes</a><a href="#remaining">8 Remaining costs</a>
+  </nav>
+</header>
+
+<!-- 1 -->
+<section id="goals">
+<h2><span class="sec-no">1</span>Overview and goals</h2>
+<div class="prose">
+<p>FluentGpu is a GPU UI engine for .NET 10. It compiles with NativeAOT. It draws all UI with Direct3D 12. Wavee is the main application that uses it.</p>
+<p>The engine has four design goals:</p>
+<ol>
+  <li><b>Cost follows change.</b> A frame that changes a small area must cost a small amount of CPU and GPU time.</li>
+  <li><b>Retained GPU work.</b> The engine keeps rasterized pixels in tiles between frames. It draws a tile again only when the content of that tile changes.</li>
+  <li><b>Two threads.</b> The UI thread never waits for the GPU. The render thread never waits for layout.</li>
+  <li><b>No allocation in the hot path.</b> Steady frames do not allocate managed memory.</li>
+</ol>
+<p>The owner measured a failure of goal 1 on the full-screen visualizer stage (3440 × 1440 px, 120 Hz, Adreno X1-85). The values below come from the live log of process 17536.</p>
+</div>
+<div class="facts">
+  <div class="fact"><div class="v">4.0–4.6 ms</div><div class="k">GPU time per frame (<code>gpuMs</code>)</div></div>
+  <div class="fact"><div class="v">120 / s</div><div class="k">fresh UI frames, each presented</div></div>
+  <div class="fact"><div class="v">≈ 50 %</div><div class="k">GPU load: 4.3 ms × 120 = 516 ms each second</div></div>
+  <div class="fact"><div class="v">100 %</div><div class="k">repaint coverage of every steady frame</div></div>
+  <div class="fact"><div class="v">32 M px</div><div class="k">offscreen pixels in one frame (6.5 × the window)</div></div>
+  <div class="fact"><div class="v">98 MB</div><div class="k">tiles the visible content needs, against a 48 MiB budget</div></div>
+</div>
+</section>
+
+<!-- 2 -->
+<section id="threads">
+<h2><span class="sec-no">2</span>Thread model</h2>
+<div class="prose">
+<p>The engine uses two threads and one mailbox between them.</p>
+<ul>
+  <li>The <b>UI thread</b> runs signals, the reconciler, layout and animation. Then it captures a snapshot of the scene.</li>
+  <li><code>SceneFramePublisher</code> is a single-producer, single-consumer mailbox with three slots. Each slot holds one snapshot. The newest publication wins.</li>
+  <li>The <b>render thread</b> claims the newest slot. It records the slices, builds the composite frame, submits the D3D12 work and presents on the display tick.</li>
+</ul>
+<p>A skipped publication is normal. The UI thread can publish faster or slower than the display. When the render thread skips a publication, the publisher adds the repaint damage of that publication to the next one. A gap does not force a full repaint. Only a target change (first frame, resize, DPI change, device recovery) forces a full repaint at the seam.</p>
+<p>The UI thread keeps its dirty bits and its removal ledger until the render thread confirms the consumed sequence. Thus every snapshot describes the change since the last consumed frame.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 360" role="img" aria-label="Sequence: the UI thread publishes snapshots into a three-slot mailbox; the render thread claims the newest, records, composites and presents on the display tick.">
+  <defs>
+    <marker id="s-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <g class="tb" text-anchor="middle">
+    <text x="100" y="24">UI thread</text><text x="330" y="24">SceneFramePublisher</text><text x="550" y="24">Render thread</text><text x="700" y="24">Display</text>
+  </g>
+  <g class="ln dash"><line x1="100" y1="34" x2="100" y2="345"/><line x1="330" y1="34" x2="330" y2="345"/><line x1="550" y1="34" x2="550" y2="345"/><line x1="700" y1="34" x2="700" y2="345"/></g>
+  <rect class="b" x="26" y="48" width="148" height="44" rx="3"/>
+  <text class="ts" x="100" y="66" text-anchor="middle">signals → reconcile</text>
+  <text class="ts" x="100" y="81" text-anchor="middle">→ layout → animation</text>
+  <rect class="bm" x="290" y="100" width="80" height="44" rx="3"/>
+  <text class="ts" x="330" y="118" text-anchor="middle">slot 0 · 1 · 2</text>
+  <text class="tm" x="330" y="133" text-anchor="middle">last writer wins</text>
+  <line class="ln" x1="100" y1="112" x2="288" y2="112" marker-end="url(#s-ar)"/>
+  <text class="ts" x="194" y="106" text-anchor="middle">capture + publish seq N</text>
+  <line class="ln" x1="100" y1="160" x2="288" y2="160" marker-end="url(#s-ar)"/>
+  <text class="ts" x="194" y="154" text-anchor="middle">publish N+1</text>
+  <text class="tm" x="194" y="175" text-anchor="middle">N not claimed: damage carried</text>
+  <line class="ln" x1="550" y1="196" x2="372" y2="196" marker-end="url(#s-ar)"/>
+  <text class="ts" x="461" y="190" text-anchor="middle">claim newest (N+1)</text>
+  <rect class="b" x="470" y="210" width="160" height="58" rx="3"/>
+  <text class="ts" x="550" y="228" text-anchor="middle">record slices</text>
+  <text class="ts" x="550" y="243" text-anchor="middle">build CompositeFrame</text>
+  <text class="ts" x="550" y="258" text-anchor="middle">SubmitComposite</text>
+  <line class="ln" x1="700" y1="290" x2="552" y2="290" marker-end="url(#s-ar)"/>
+  <text class="ts" x="626" y="284" text-anchor="middle">DisplayTick</text>
+  <line class="ln" x1="550" y1="312" x2="698" y2="312" marker-end="url(#s-ar)"/>
+  <text class="ts" x="626" y="306" text-anchor="middle">Present</text>
+  <line class="ln dash" x1="550" y1="334" x2="102" y2="334" marker-end="url(#s-ar)"/>
+  <text class="ts" x="325" y="328" text-anchor="middle">consumed seq = N+1 → UI releases its ledgers</text>
+</svg>
+</div>
+<figcaption><b>Figure 1. One frame across the two threads.</b> The UI thread does not wait for the render thread. The render thread adopts only the newest publication. When only compositor animations change, the render thread presents the retained frame again (the <code>motion</code> count in <code>[render.pace]</code>).</figcaption>
+</figure>
+</section>
+
+<!-- 3 -->
+<section id="pipeline">
+<h2><span class="sec-no">3</span>Frame pipeline</h2>
+<div class="prose">
+<p>The pipeline has ten stages. Five stages run on the UI thread. Five stages run on the render thread.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 400" role="img" aria-label="Pipeline: five UI-thread stages from signals to snapshot capture, then five render-thread stages from scene recording to present.">
+  <defs>
+    <marker id="p-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <text class="tb" x="40" y="26">UI thread</text>
+  <text class="tb" x="420" y="26">Render thread</text>
+  <g>
+    <rect class="b" x="40" y="40" width="300" height="50" rx="3"/><text class="t" x="54" y="61">1 Signals</text><text class="tm" x="54" y="78">Signal&lt;T&gt; writes mark dependent bindings</text>
+    <rect class="b" x="40" y="110" width="300" height="50" rx="3"/><text class="t" x="54" y="131">2 Reconciler</text><text class="tm" x="54" y="148">elements → nodes; bound props write columns</text>
+    <rect class="b" x="40" y="180" width="300" height="50" rx="3"/><text class="t" x="54" y="201">3 SceneStore (SoA)</text><text class="tm" x="54" y="218">flags, bounds, paint + sparse side columns</text>
+    <rect class="b" x="40" y="250" width="300" height="50" rx="3"/><text class="t" x="54" y="271">4 Layout + animation</text><text class="tm" x="54" y="288">flex solve; keyframe and transition tracks</text>
+    <rect class="b" x="40" y="320" width="300" height="50" rx="3"/><text class="t" x="54" y="341">5 SceneRecordingSnapshot</text><text class="tm" x="54" y="358">incremental capture of dirty nodes</text>
+  </g>
+  <g class="ln">
+    <line x1="190" y1="90" x2="190" y2="108" marker-end="url(#p-ar)"/><line x1="190" y1="160" x2="190" y2="178" marker-end="url(#p-ar)"/>
+    <line x1="190" y1="230" x2="190" y2="248" marker-end="url(#p-ar)"/><line x1="190" y1="300" x2="190" y2="318" marker-end="url(#p-ar)"/>
+    <path d="M340,345 C380,345 380,65 418,65" marker-end="url(#p-ar)"/>
+  </g>
+  <text class="ts" x="384" y="210" text-anchor="middle" transform="rotate(-90 384 210)">publish</text>
+  <g>
+    <rect class="b" x="420" y="40" width="300" height="50" rx="3"/><text class="t" x="434" y="61">6 SceneRecorder walk</text><text class="tm" x="434" y="78">draw ops; span reuse for clean subtrees</text>
+    <rect class="b" x="420" y="110" width="300" height="50" rx="3"/><text class="t" x="434" y="131">7 SliceRecorder arenas</text><text class="tm" x="434" y="148">one stream per slice; markers cut segments</text>
+    <rect class="b" x="420" y="180" width="300" height="50" rx="3"/><text class="t" x="434" y="201">8 Place + BuildComposite</text><text class="tm" x="434" y="218">poses, needed tiles, budget → CompositeFrame</text>
+    <rect class="b" x="420" y="250" width="300" height="50" rx="3"/><text class="t" x="434" y="271">9 D3D12 SubmitComposite</text><text class="tm" x="434" y="288">tile raster → offscreen → composite pass</text>
+    <rect class="b" x="420" y="320" width="300" height="50" rx="3"/><text class="t" x="434" y="341">10 Present</text><text class="tm" x="434" y="358">FLIP_DISCARD, 3 buffers, whole frame</text>
+  </g>
+  <g class="ln">
+    <line x1="570" y1="90" x2="570" y2="108" marker-end="url(#p-ar)"/><line x1="570" y1="160" x2="570" y2="178" marker-end="url(#p-ar)"/>
+    <line x1="570" y1="230" x2="570" y2="248" marker-end="url(#p-ar)"/><line x1="570" y1="300" x2="570" y2="318" marker-end="url(#p-ar)"/>
+  </g>
+</svg>
+</div>
+<figcaption><b>Figure 2. The ten stages of a frame.</b> Stages 1–5 produce a snapshot. Stages 6–10 turn the snapshot into pixels. The render thread records the scene, so a slow record does not block input on the UI thread.</figcaption>
+</figure>
+<div class="tbl">
+<table>
+<thead><tr><th>Stage</th><th>Main type</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td>Reconcile</td><td><code>Reconciler</code></td><td>Node columns. Bound props (<code>Prop.Of</code>) write only their column and set <code>PaintDirty</code> or <code>TransformDirty</code>.</td></tr>
+<tr><td>Store</td><td><code>SceneStore</code></td><td>Structure-of-arrays columns. Rare paint (acrylic, gradients, edge fade, repaint boundary) lives in sparse side columns.</td></tr>
+<tr><td>Capture</td><td><code>SceneRecordingSnapshot</code></td><td>A copy of the changed nodes only. It is the render thread's read-only scene.</td></tr>
+<tr><td>Record</td><td><code>SceneRecorder</code>, <code>SliceRecorder</code></td><td>Draw-op byte streams in per-slice arenas, a span index, the repaint region.</td></tr>
+<tr><td>Plan</td><td><code>SliceRecorder.Place</code>, <code>SliceTable</code></td><td><code>CompositeFrame</code>: slice rows, tile raster list, composite items in painter order.</td></tr>
+<tr><td>Submit</td><td><code>D3D12Device.SubmitComposite</code></td><td>One command list. Three phases. One back buffer.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- 4 -->
+<section id="tiles">
+<h2><span class="sec-no">4</span>Retained tiles</h2>
+<div class="prose">
+<h3>Slices</h3>
+<p>A <b>slice</b> is a part of the scene that the engine records into its own stream (arena). There are three kinds:</p>
+<ul>
+  <li><b>Static root.</b> Slot 0. It holds all content that has no reason to be separate.</li>
+  <li><b>Scroll.</b> The content root of a scroll viewport. The engine records it in content space. The scroll offset is a composite parameter, so a scroll records no bytes.</li>
+  <li><b>Effect.</b> A node with a composite-time parameter: group opacity, self-blur, edge fade, acrylic, sticky or parallax translation. A repaint boundary is also an Effect slice (section 7c). The engine cuts at most 16 Effect slices (<code>EffectSliceCap</code>) and 16 acrylic slices. Past the cap, the content records inline. The pixels stay the same.</li>
+</ul>
+<p>A slice also has a <b>role</b>: <code>Main</code>, <code>Thumb</code> (scroll thumb), <code>Band</code> and <code>PinnedBand</code> (virtual list rows), <code>Layer</code> and <code>Chrome</code>.</p>
+<h3>Segments</h3>
+<p>The parent stream holds a <code>CompositeSlice</code> marker at the paint position of each child slice. The markers cut the parent stream into <b>segments</b>. Each segment becomes one row (<code>SliceRow</code>) in the <code>SliceTable</code>. A row has a frame (origin, residual, scale), its painted bounds (<code>ContentBounds</code>) and an identity. The identity uses the node, the role, the segment index and the two markers around it. It does not use the bounds of the child. Thus a child that moves does not change the identity of the parent segments.</p>
+<h3>Tiles</h3>
+<p>The <code>TileGrid</code> divides each segment into cells of 1024 × 512 device pixels. The engine cuts each tile surface at the painted bounds of its segment. Tile validity comes from the content. Each turn, every resident tile compares the hash of its last raster with the hash of the content that its segment bytes now describe. If the hashes are different, the tile rasters again.</p>
+<h3>Budget</h3>
+<p>The tile budget is <code>clamp(5 × window bytes, 48 MiB, 128 MiB)</code>. At 3440 × 1440 px this is about 99 MB. The table requests visible tiles first, then the tiles ahead of a scroll, then the tiles behind it. If the visible tiles of a slice do not fit, the slice is <b>degraded</b>. A degraded slice gets the <code>Direct</code> route: the backend replays it into temporary chunks on every frame. This is correct, but it is expensive.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 330" role="img" aria-label="The root stream is cut by two markers into three segments; each segment and child slice owns tiles; the composite draws the items in painter order.">
+  <defs>
+    <marker id="t-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <text class="tb" x="20" y="22">Root stream (slot 0)</text>
+  <rect class="b" x="20" y="34" width="110" height="34"/><text class="ts" x="75" y="55" text-anchor="middle">art · wash</text>
+  <rect class="ba" x="130" y="34" width="34" height="34"/><text class="tA" x="147" y="56" text-anchor="middle">M1</text>
+  <rect class="b" x="164" y="34" width="120" height="34"/><text class="ts" x="224" y="55" text-anchor="middle">scrim · caption</text>
+  <rect class="bm" x="284" y="34" width="34" height="34"/><text class="ts" x="301" y="56" text-anchor="middle">M2</text>
+  <rect class="b" x="318" y="34" width="100" height="34"/><text class="ts" x="368" y="55" text-anchor="middle">chrome</text>
+  <g class="tm" text-anchor="middle"><text x="75" y="84">segment 0</text><text x="224" y="84">segment 1</text><text x="368" y="84">segment 2</text></g>
+  <text class="tA" x="147" y="104" text-anchor="middle">Effect slice</text>
+  <text class="ts" x="301" y="104" text-anchor="middle">Scroll slice</text>
+  <g class="ln">
+    <line x1="75" y1="90" x2="75" y2="134" marker-end="url(#t-ar)"/><line x1="147" y1="110" x2="147" y2="134" marker-end="url(#t-ar)"/>
+    <line x1="224" y1="90" x2="224" y2="134" marker-end="url(#t-ar)"/><line x1="301" y1="110" x2="301" y2="134" marker-end="url(#t-ar)"/>
+    <line x1="368" y1="90" x2="368" y2="134" marker-end="url(#t-ar)"/>
+  </g>
+  <text class="tb" x="20" y="152">Tiles (1024 × 512 cells, cut at painted bounds)</text>
+  <g>
+    <rect class="b" x="40" y="164" width="34" height="18"/><rect class="b" x="74" y="164" width="34" height="18"/><rect class="b" x="40" y="182" width="34" height="18"/><rect class="b" x="74" y="182" width="20" height="18"/>
+    <rect class="ba" x="130" y="164" width="34" height="18"/><rect class="ba" x="130" y="182" width="34" height="18"/>
+    <rect class="b" x="190" y="164" width="34" height="18"/><rect class="b" x="224" y="164" width="22" height="18"/>
+    <rect class="b" x="284" y="164" width="34" height="18"/><rect class="b" x="284" y="182" width="34" height="18"/><rect class="b" x="284" y="200" width="34" height="18"/>
+    <rect class="b" x="340" y="164" width="34" height="10"/><rect class="b" x="374" y="164" width="18" height="10"/>
+  </g>
+  <line class="ln" x1="440" y1="190" x2="488" y2="190" marker-end="url(#t-ar)"/>
+  <text class="tb" x="500" y="22">Composite items (painter order)</text>
+  <g>
+    <rect class="b" x="500" y="40" width="240" height="30"/><text class="ts" x="512" y="59">1 Tiles · root segment 0</text>
+    <rect class="ba" x="500" y="78" width="240" height="30"/><text class="tA" x="512" y="97">2 Region · Effect slice (M1)</text>
+    <rect class="b" x="500" y="116" width="240" height="30"/><text class="ts" x="512" y="135">3 Tiles · root segment 1</text>
+    <rect class="b" x="500" y="154" width="240" height="30"/><text class="ts" x="512" y="173">4 Tiles · Scroll slice (posed)</text>
+    <rect class="b" x="500" y="192" width="240" height="30"/><text class="ts" x="512" y="211">5 Tiles · root segment 2</text>
+  </g>
+  <text class="tm" x="20" y="252">Each tile keeps its pixels while its content hash stays the same.</text>
+  <text class="tm" x="20" y="270">A change inside M1 changes only the M1 tiles; segments 0–2 keep their identity.</text>
+  <text class="tm" x="20" y="288">Over budget, a slice degrades: its item becomes Direct and replays each frame.</text>
+</svg>
+</div>
+<figcaption><b>Figure 3. From slice tree to composite items.</b> Markers cut the root stream into segments. Each segment and each child slice owns tiles. The composite draws one item for each segment or slice, in painter order.</figcaption>
+</figure>
+</section>
+
+<!-- 5 -->
+<section id="damage">
+<h2><span class="sec-no">5</span>Damage</h2>
+<div class="prose">
+<p>The engine has two damage records. They answer different questions. Do not use one in place of the other.</p>
+<ul>
+  <li><b><code>RepaintDamageRegion</code></b> answers: "Which pixels can be different from the last presented frame?" It holds up to 16 disjoint rectangles in window DIPs. When a 17th rectangle comes, the region merges the pair that adds the least dead area. The region can also be <b>full</b>, with a named reason.</li>
+  <li><b><code>FrameInfo.Damage</code></b> answers: "What must a cached blur sample again?" It is one bounding rectangle over the nodes that moved by transform.</li>
+</ul>
+<p>A full region invalidates every tile (<code>InvalidateAll</code>, reason <code>BackgroundOrTheme</code>). A region with rectangles does not invalidate tiles. Tile validity comes from the content hash (section 4). The rectangles feed only the Present dirty-rectangle census.</p>
+</div>
+<div class="tbl">
+<table>
+<thead><tr><th>Full reason</th><th>When the engine sets it</th></tr></thead>
+<tbody>
+<tr><td><code>TargetInvalidated</code></td><td>First frame, resize, DPI change, clear-colour change, device recovery. The only reason that the publisher seam sets.</td></tr>
+<tr><td><code>MissingPriorExtent</code></td><td>A moved node has no recoverable last-presented extent.</td></tr>
+<tr><td><code>MissingRemovalExtent</code></td><td>A removed node has no recoverable extent.</td></tr>
+<tr><td><code>StructuralInvalidation</code></td><td>The removal ledger overflowed, or the scene rebuilt.</td></tr>
+<tr><td><code>ImageContent</code></td><td>More than 64 images changed content under identical draw ops in one pump.</td></tr>
+<tr><td><code>DetachedContent</code></td><td>Live image cross-fades that the engine cannot itemize.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- 6 -->
+<section id="composite">
+<h2><span class="sec-no">6</span>Composite submit</h2>
+<div class="prose">
+<p>The primary window uses one route: the retained-tile composite. It records one command list with three phases. It never reads the back buffer and never copies a render target.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 250" role="img" aria-label="Three phases in one command list: tile raster, offscreen work with a retained cache, and one composite pass into the back buffer, then present.">
+  <defs>
+    <marker id="c-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <rect class="b" x="20" y="30" width="190" height="96" rx="3"/>
+  <text class="tb" x="34" y="52">1 Tile raster</text>
+  <text class="ts" x="34" y="72">invalid tiles only</text>
+  <text class="ts" x="34" y="88">CLEAR → PRESERVE pass</text>
+  <text class="ts" x="34" y="104">into tile surfaces</text>
+  <rect class="b" x="250" y="30" width="230" height="96" rx="3"/>
+  <text class="tb" x="264" y="52">2 Offscreen</text>
+  <text class="ts" x="264" y="72">Direct chunks (degraded)</text>
+  <text class="ts" x="264" y="88">group surfaces · self-blur</text>
+  <text class="ts" x="264" y="104">acrylic: mini-composite → Kawase</text>
+  <rect class="b" x="520" y="30" width="220" height="96" rx="3"/>
+  <text class="tb" x="534" y="52">3 Composite pass</text>
+  <text class="ts" x="534" y="72">one CLEAR → STORE pass</text>
+  <text class="ts" x="534" y="88">every item, painter order</text>
+  <text class="ts" x="534" y="104">into the back buffer</text>
+  <g class="ln"><line x1="210" y1="78" x2="248" y2="78" marker-end="url(#c-ar)"/><line x1="480" y1="78" x2="518" y2="78" marker-end="url(#c-ar)"/></g>
+  <rect class="bm" x="250" y="160" width="230" height="58" rx="3"/>
+  <text class="t" x="264" y="182">Retained derived surfaces</text>
+  <text class="tm" x="264" y="200">content key · max 25 % of tile budget</text>
+  <path class="ln" d="M330,126 L330,158" marker-end="url(#c-ar)"/><text class="ts" x="338" y="146">key miss: store</text>
+  <path class="ln" d="M420,158 L420,128" marker-end="url(#c-ar)"/><text class="ts" x="428" y="146">key hit: reuse</text>
+  <line class="ln" x1="630" y1="126" x2="630" y2="168" marker-end="url(#c-ar)"/>
+  <rect class="b" x="560" y="170" width="140" height="40" rx="3"/><text class="t" x="630" y="195" text-anchor="middle">Present (whole)</text>
+</svg>
+</div>
+<figcaption><b>Figure 4. The three phases of <code>SubmitComposite</code>.</b> Phase 2 can reuse a retained surface when its content key did not change. A cache hit removes the most expensive offscreen work.</figcaption>
+</figure>
+<div class="tbl">
+<table>
+<thead><tr><th>Item kind</th><th>What the composite draws</th></tr></thead>
+<tbody>
+<tr><td><code>Tiles</code></td><td>The tiles of a segment, as whole-pixel texel loads × alpha × analytic edge feather × rounded clip.</td></tr>
+<tr><td><code>Region</code></td><td>The tiles of an Effect slice, with its composite clip and layer parameters.</td></tr>
+<tr><td><code>Direct</code></td><td>A slice without valid tiles. Phase 2 replays it into temporary chunks.</td></tr>
+<tr><td><code>Group</code></td><td>The enclosed items, composited into one surface first. Exact group opacity. Cached by content key.</td></tr>
+<tr><td><code>Backdrop</code></td><td>A frosted surface: a mini-composite of the items below it in its region, blurred with dual Kawase, then tinted.</td></tr>
+<tr><td><code>EraseVideoHole</code></td><td>A DestOut erase. The DComp video visual shows through the hole.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="prose">
+<p>The swapchain uses <code>FLIP_DISCARD</code> with three back buffers (3 × 3440 × 1440 × 4 B = 56.7 MB). <code>FLIP_DISCARD</code> refuses <code>Present1</code> dirty rectangles. Thus each frame clears and composites the whole back buffer, and presents the whole frame.</p>
+</div>
+</section>
+
+<!-- 7 -->
+<section id="changes">
+<h2><span class="sec-no">7</span>Changes of this session</h2>
+<div class="prose">
+<p>The log showed that every steady frame repainted the whole window. The causes were in the engine, not in the amount of content. The changes below remove those causes. They do not reduce a cache or a budget.</p>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(a) Acrylic cache key scoped to its region</h3>
+<p class="file">FluentGpu.Windows/D3D12/D3D12Device.Composite.cs · BackdropKey, ItemMayPaint</p>
+<div class="prose">
+<p><b>Problem.</b> The cache key of an acrylic backdrop mixed every item before it, anywhere in the window. A spectrum bar on the left changed the key of the panel on the right. Also, one <code>Direct</code> item anywhere made every backdrop uncacheable. Thus all three panels blurred again on every frame.</p>
+<p><b>Change.</b> The mini-composite is scissored to the backdrop region. An item with no pixels in that region cannot change the result. <code>ItemMayPaint</code> now tests the item clip, each tile placement and each prepared surface or chunk against the region. The key mixes only the items that can paint into the region. A <code>Direct</code> item makes the backdrop uncacheable only when it touches the region.</p>
+<p><b>Safety.</b> Two shapes can carry pixels from outside the region into it. The key stays unscoped for them: an earlier backdrop that overlaps the region, and a group that overlaps the region.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 210" role="img" aria-label="Before: the backdrop key covers the whole window, so a moving bar far away re-blurs the panel. After: the key covers only the panel region, so the panel stays cached.">
+  <text class="tb" x="20" y="20">Before</text><text class="tb" x="400" y="20">After</text>
+  <rect class="b" x="20" y="30" width="340" height="150"/>
+  <rect class="la dash" x="24" y="34" width="332" height="142"/>
+  <rect class="bm" x="60" y="90" width="12" height="70"/><rect class="bm" x="80" y="70" width="12" height="90"/><rect class="bm" x="100" y="100" width="12" height="60"/>
+  <text class="ts" x="86" y="60" text-anchor="middle">bars move</text>
+  <rect class="b" x="240" y="50" width="100" height="110" rx="4"/><text class="ts" x="290" y="102" text-anchor="middle">acrylic</text><text class="ts" x="290" y="117" text-anchor="middle">panel</text>
+  <text class="tA" x="190" y="196" text-anchor="middle">key = all items → re-blur every frame</text>
+  <rect class="b" x="400" y="30" width="340" height="150"/>
+  <rect class="bm" x="440" y="90" width="12" height="70"/><rect class="bm" x="460" y="70" width="12" height="90"/><rect class="bm" x="480" y="100" width="12" height="60"/>
+  <text class="ts" x="466" y="60" text-anchor="middle">bars move</text>
+  <rect class="la dash" x="608" y="38" width="124" height="134"/>
+  <rect class="b" x="620" y="50" width="100" height="110" rx="4"/><text class="ts" x="670" y="102" text-anchor="middle">acrylic</text><text class="ts" x="670" y="117" text-anchor="middle">panel</text>
+  <text class="ts" x="570" y="196" text-anchor="middle">key = items in region (dashed) → cache hit</text>
+</svg>
+</div>
+<figcaption><b>Figure 5. Scope of the backdrop key.</b> The dashed outline is the area whose items enter the key. After the change, motion outside the panel region does not invalidate the panel.</figcaption>
+</figure>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(b) Degraded raster bounded to the painted area</h3>
+<p class="file">FluentGpu.Windows/D3D12/D3D12Device.Composite.cs · PrepareDirect</p>
+<div class="prose">
+<p><b>Problem.</b> A degraded segment without a clip (for example <code>#root</code>) rastered the whole window into chunks on every frame. This was true also when the segment painted a small area.</p>
+<p><b>Change.</b> The raster area is now the clip ∩ the window ∩ the segment's <code>ContentBounds</code> (moved by the placement offset, plus 1 px). The tile route anchors and cuts its surfaces at the same bounds. Thus the pixels are identical.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 170" role="img" aria-label="Before: a degraded unclipped segment rasters every chunk of the window. After: it rasters only the chunks that its painted bounds touch.">
+  <text class="tb" x="20" y="20">Before: whole window, every frame</text><text class="tb" x="400" y="20">After: painted bounds only</text>
+  <g>
+    <rect class="ba" x="20" y="32" width="85" height="55"/><rect class="ba" x="105" y="32" width="85" height="55"/><rect class="ba" x="190" y="32" width="85" height="55"/><rect class="ba" x="275" y="32" width="85" height="55"/>
+    <rect class="ba" x="20" y="87" width="85" height="55"/><rect class="ba" x="105" y="87" width="85" height="55"/><rect class="ba" x="190" y="87" width="85" height="55"/><rect class="ba" x="275" y="87" width="85" height="55"/>
+    <rect class="ln" x="130" y="60" width="90" height="50"/><text class="ts" x="175" y="89" text-anchor="middle">content</text>
+  </g>
+  <g>
+    <rect class="b" x="400" y="32" width="85" height="55"/><rect class="ba" x="485" y="32" width="85" height="55"/><rect class="ba" x="570" y="32" width="85" height="55"/><rect class="b" x="655" y="32" width="85" height="55"/>
+    <rect class="b" x="400" y="87" width="85" height="55"/><rect class="ba" x="485" y="87" width="85" height="55"/><rect class="ba" x="570" y="87" width="85" height="55"/><rect class="b" x="655" y="87" width="85" height="55"/>
+    <rect class="ln" x="510" y="60" width="90" height="50"/><text class="ts" x="555" y="89" text-anchor="middle">content</text>
+  </g>
+  <text class="tA" x="190" y="162" text-anchor="middle">8 of 8 chunks</text><text class="tA" x="570" y="162" text-anchor="middle">4 of 8 chunks</text>
+</svg>
+</div>
+<figcaption><b>Figure 6. Degraded raster area.</b> Filled cells are the chunks that the backend rasters on each frame.</figcaption>
+</figure>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(c) <code>BoxEl.RepaintBoundary</code>: an isolation slice</h3>
+<p class="file">Dsl/Element.cs · Scene/SceneStore.cs · Scene/SceneRecordingSnapshot.cs · Reconciler/Reconciler.cs · Render/SceneRecorder.cs</p>
+<div class="prose">
+<p><b>Problem.</b> The Field background of the stage has four blobs of about 3800 px. They move on every frame. They were in the root slice, together with the art, the scrim, the bars and the caption. A move of a fraction of a pixel changed the content hash of every root tile. Thus every tile rastered again on every frame, with all the static paint in it.</p>
+<p><b>Change.</b> <code>RepaintBoundary = true</code> on a box makes its subtree an Effect slice without a layer and without a pose. The cut uses the plain-sticky branch of <code>SceneRecorder</code>, which already cut a layer-less Effect slice. The boundary records into its own arena and owns its own tiles. The parent segments keep their identity, because the identity uses the marker node, not its bounds.</p>
+<p><b>Path of the flag.</b> <code>BoxEl.RepaintBoundary</code> → <code>SceneStore</code> sparse column (sets <code>SparsePaint</code>, marks the node record-dirty) → snapshot column → recorder cut. The cut spends the Effect budget. Past the budget, or inside an inline group layer, the subtree records inline. The pixels stay the same.</p>
+<p><b>Test.</b> The gate <code>gate.tiles.repaint-boundary</code> moves a shape under 24 static cells. Inline: 8 tile rasters, all 8 in static tiles. With the boundary: 8 tile rasters, 0 in static tiles.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 220" role="img" aria-label="Before: the moving blob shares tiles with static content, so every tile rasters again. After: the blob has its own slice; only its tiles raster again and the static tiles stay valid.">
+  <text class="tb" x="20" y="20">Before: one root slice</text><text class="tb" x="400" y="20">After: root slice + boundary slice</text>
+  <g>
+    <rect class="ba" x="20" y="34" width="85" height="60"/><rect class="ba" x="105" y="34" width="85" height="60"/><rect class="ba" x="190" y="34" width="85" height="60"/><rect class="ba" x="275" y="34" width="85" height="60"/>
+    <rect class="ba" x="20" y="94" width="85" height="60"/><rect class="ba" x="105" y="94" width="85" height="60"/><rect class="ba" x="190" y="94" width="85" height="60"/><rect class="ba" x="275" y="94" width="85" height="60"/>
+    <ellipse class="ln" cx="150" cy="96" rx="120" ry="56"/>
+    <text class="ts" x="190" y="74" text-anchor="middle">blob + art + scrim + bars</text>
+  </g>
+  <text class="tA" x="190" y="176" text-anchor="middle">all root tiles raster again</text>
+  <g>
+    <text class="tm" x="400" y="46">root slice</text>
+    <rect class="b" x="470" y="34" width="66" height="34"/><rect class="b" x="536" y="34" width="66" height="34"/><rect class="b" x="602" y="34" width="66" height="34"/><rect class="b" x="668" y="34" width="66" height="34"/>
+    <text class="tm" x="400" y="110">boundary</text>
+    <rect class="ba" x="470" y="96" width="66" height="34"/><rect class="ba" x="536" y="96" width="66" height="34"/><rect class="ba" x="602" y="96" width="66" height="34"/><rect class="ba" x="668" y="96" width="66" height="34"/>
+    <ellipse class="ln" cx="580" cy="113" rx="90" ry="15"/>
+  </g>
+  <text class="ok" x="602" y="160" text-anchor="middle" font-size="11.5">root tiles: valid, no raster</text>
+  <text class="tA" x="602" y="176" text-anchor="middle">boundary tiles: only the blob</text>
+</svg>
+</div>
+<figcaption><b>Figure 7. Effect of a repaint boundary.</b> Filled tiles raster on each frame. After the change, the static paint keeps its tiles. The composite still blends the two slices in painter order.</figcaption>
+</figure>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(d) <code>BoxEl.RasterScale</code>: low-resolution route</h3>
+<p class="file">Dsl/Element.cs · Scene/* · Render/SliceRecorder.cs · Seams/Rhi/Composite.cs (CompositeItem.LowResDown) · D3D12Device.Composite.cs (PrepareLowRes) · TileSuite.cs (gate)</p>
+<div class="prose">
+<p><b>Problem.</b> With (c), the Field still rasters about 5 M px of overlapping radial gradients on every frame. Its tiles also hold about 20 MB (one window of BGRA8 at 3440 × 1440). The content is soft. A raster at a lower scale and a bilinear upsample give the same look.</p>
+<p><b>Design.</b></p>
+<ol>
+  <li><code>RasterScale</code> snaps to 1/2, 1/4 or 1/8. The store keeps the factor <i>d</i> (2, 4 or 8) in the boundary column.</li>
+  <li><code>SliceRecorder</code> keeps <i>d</i> on the slice record. <code>Place</code> requests no tiles for that slice. It emits a <code>Direct</code> item with <code>LowResDown = d</code>.</li>
+  <li>The backend replays the segment once, at scale / <i>d</i>, into one scratch surface. It aligns the surface origin to the <i>d</i> grid.</li>
+  <li>The backend keeps the surface under a content key. A static Field and the backdrops above it stay cached.</li>
+  <li><code>DrawSurfaceItem</code> draws the surface with the bilinear <code>Sample</code> path (the path that downsampled blurs already use).</li>
+</ol>
+<p><b>Limit.</b> Use it only for soft content. Text and sharp edges become soft.</p>
+<p><b>Status.</b> Done. <code>PrepareLowRes</code> replays the segment at scale / <i>d</i> into one scratch surface. It keeps the surface under a content key: the segment bytes, the region and <i>d</i>. It uses the kept surface again when no repaint damage reaches the region. A re-render that damage caused changes the key that the backdrops see. Thus a backdrop never uses a blur of old pixels. The Wavee Field uses <code>RasterScale = 0.25</code>. The gate <code>gate.tiles.repaint-boundary</code> shows that a 1/4 boundary composites as one <code>Direct</code> item with <code>LowResDown = 4</code>, and rasters no tiles. Debug and Release builds and all test suites pass.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 190" role="img" aria-label="Full resolution: the slice rasters into window-sized tiles. Low resolution: the slice replays into one small surface at one quarter scale, then the composite upsamples it.">
+  <defs>
+    <marker id="d-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <text class="tb" x="20" y="20">Today (after c)</text><text class="tb" x="400" y="20">Low-resolution route, d = 4</text>
+  <rect class="b" x="20" y="34" width="70" height="40"/><text class="ts" x="55" y="58" text-anchor="middle">segment</text>
+  <line class="ln" x1="90" y1="54" x2="128" y2="54" marker-end="url(#d-ar)"/>
+  <g><rect class="ba" x="130" y="34" width="56" height="40"/><rect class="ba" x="186" y="34" width="56" height="40"/><rect class="ba" x="242" y="34" width="56" height="40"/><rect class="ba" x="298" y="34" width="56" height="40"/>
+  <rect class="ba" x="130" y="74" width="56" height="40"/><rect class="ba" x="186" y="74" width="56" height="40"/><rect class="ba" x="242" y="74" width="56" height="40"/><rect class="ba" x="298" y="74" width="56" height="40"/></g>
+  <text class="tA" x="242" y="134" text-anchor="middle">≈ 5 M px raster · ≈ 20 MB tiles</text>
+  <rect class="b" x="400" y="34" width="70" height="40"/><text class="ts" x="435" y="58" text-anchor="middle">segment</text>
+  <line class="ln" x1="470" y1="54" x2="506" y2="54" marker-end="url(#d-ar)"/>
+  <rect class="ba" x="508" y="38" width="40" height="22"/><text class="ts" x="528" y="76" text-anchor="middle">1 surface</text>
+  <text class="tm" x="528" y="90" text-anchor="middle">scale / 4</text>
+  <line class="ln" x1="550" y1="50" x2="588" y2="50" marker-end="url(#d-ar)"/>
+  <text class="ts" x="569" y="42" text-anchor="middle">bilinear ×4</text>
+  <rect class="b" x="590" y="34" width="150" height="80"/><text class="ts" x="665" y="78" text-anchor="middle">composite</text>
+  <text class="ts" x="570" y="134" text-anchor="middle">≈ 0.3 M px raster · ≈ 1.2 MB surface</text>
+  <text class="tm" x="570" y="152" text-anchor="middle">cached while the content key stays the same</text>
+</svg>
+</div>
+<figcaption><b>Figure 8. Planned low-resolution route.</b> At <i>d</i> = 4, the raster work falls by 16 times and the slice holds no tiles. The numbers are estimates for a 3440 × 1440 Field. They are not measured.</figcaption>
+</figure>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(e) Wavee: boundaries on the stage</h3>
+<p class="file">WaveeMusic/src/apps/Wavee/Shell/Visualizer.UI.cs</p>
+<div class="prose">
+<ul>
+  <li><code>FieldFace</code> (the stage background and the Field preview) has <code>RepaintBoundary = true</code>.</li>
+  <li><code>FaceFrame</code> (every visualizer face and the 8 picker previews) has <code>RepaintBoundary = true</code>.</li>
+  <li><code>Clock.Copy</code> stops when the samples did not change. Before, it bumped the version of 6 series on every tick and caused a record with no pixel change.</li>
+</ul>
+</div>
+</div>
+
+<h3>Verification</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Check</th><th>Debug</th><th>Release</th></tr></thead>
+<tbody>
+<tr><td>Engine build (warnings are errors)</td><td>clean</td><td>clean</td></tr>
+<tr><td>Engine tests</td><td class="num">1186 / 1186</td><td class="num">1184 / 1184</td></tr>
+<tr><td>VerticalSlice (incl. 4 <code>gate.tiles.repaint-boundary</code> checks)</td><td class="num">1734 checks pass</td><td class="num">1734 checks pass</td></tr>
+<tr><td>Wavee build</td><td>clean</td><td>clean</td></tr>
+<tr><td>Wavee tests</td><td class="num">14 206 pass, 1 skipped</td><td class="num">14 206 pass, 1 skipped</td></tr>
+<tr><td>GPU time on the owner's machine</td><td colspan="2">Not measured. The live instance must rebuild and restart. Read <code>[render.pace] gpuMs=</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="prose">These results are for the branch <code>perf/repaint-boundaries</code> in both repos. They cover all five changes, (a) to (e).</p>
+</section>
+
+<!-- 8 -->
+<section id="remaining">
+<h2><span class="sec-no">8</span>Remaining costs and next work</h2>
+<div class="tbl">
+<table>
+<thead><tr><th>Cost</th><th>Cause</th><th>Next step</th></tr></thead>
+<tbody>
+<tr><td>Whole-window composite on every frame</td><td><code>FLIP_DISCARD</code> refuses dirty rectangles. A page with one moving progress bar still composites all 5 M px.</td><td>Use <code>FLIP_SEQUENTIAL</code>. Track the age of each back buffer. Composite the union of the damage of the last <i>N</i> frames. Present with <code>Present1</code> dirty rectangles.</td></tr>
+<tr><td>Tile need of 15–37 × the window</td><td>On a 1179 × 759 window, visible need was 54–134 MB. Many thin segments each take bucketed 1024 × 512 cells. Overlapped slices each own tiles.</td><td>Smaller or adaptive cells. No surface for empty cells. Merge thin adjacent segments.</td></tr>
+<tr><td>Backdrops over moving content</td><td>A panel over the moving Field must blur again on each frame. This is correct.</td><td>The low-resolution Field (d) also makes each mini-composite cheaper.</td></tr>
+<tr><td>144 bar nodes recorded on each frame</td><td>A bound transform is recorded inline (CPU cost on the render thread).</td><td>One instanced <code>SeriesShape.Bars</code> primitive bound to one 48-sample series.</td></tr>
+<tr><td>Keyframe and bound transforms</td><td>Only scroll, sticky and parallax translation are composite-time poses.</td><td>Extend composite-time poses to translation and scale for soft slices.</td></tr>
+</tbody>
+</table>
+</div>
+<h3>Memory of the live process (640 MB private)</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Part</th><th class="num">MB</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>GPU allocations (shared memory counts as private)</td><td class="num">348</td><td>213 tracked: swapchain 56.7, tiles 48.8, images ≈ 69, glyph atlas 16, baked blur 4.3. 135 inside the driver, not attributed.</td></tr>
+<tr><td>Managed heap (committed)</td><td class="num">214</td><td>LOH 100.4 (≈ 75 from the app at boot), gen2 66, POH 19.1 (audio read-ahead ring, by design), fragmentation 15–39.</td></tr>
+<tr><td>Other native</td><td class="num">≈ 78</td><td>JIT runtime, DirectWrite, SQLite, audio.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="prose">
+<ul>
+  <li>The live process is the JIT build (<code>bin\Release\net10.0</code>). The NativeAOT publish removes the JIT code heaps. Estimate: 30–80 MB less, and less CPU.</li>
+  <li>Large response bodies go into the LOH and cause fragmentation. Stream or pool them.</li>
+  <li>The 135 MB driver part needs a PIX or ETW GPU-memory capture.</li>
+</ul>
+<p><b>Rule.</b> Do not reduce a cache, a budget or a pool to lower the memory floor. That moves the cost to raster or decode work. Remove only real waste.</p>
+</div>
+</section>
+</div>

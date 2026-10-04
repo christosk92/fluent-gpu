@@ -1661,6 +1661,7 @@ internal sealed class SceneRecordingContext
                 if (slot >= 0 && HasWalkStackHeadroom(ref stats))
                 {
                     sl.SetBudget(slot, budget);
+                    if (!isAcrylic && !selfLayerCut) sl.SetLowRes(slot, scene.RepaintBoundaryDown(node));
                     bool group = isEdgeFade || isBlurGroup || isOpacityGroup;
                     int mflags = (group ? (int)CompositeSliceFlags.Layer | (isBlurGroup ? (int)CompositeSliceFlags.InnerClip : 0)
                         | (isEdgeFade && distributeFade ? (int)CompositeSliceFlags.DistributeFade : 0) : 0)
@@ -1758,24 +1759,30 @@ internal sealed class SceneRecordingContext
                 groupLayer = groupLayer with { DeviceRect = deviceBounds.Intersect(wc), CompositeClip = groupLayer.CompositeClip.Intersect(wc) };
             }
         }
-        else if (stickyCut)
+        else if (stickyCut || (!isSliceSelf && stats.Slicing && stats.InlineLayerDepth == 0 && maybeSparsePaint
+                 && !(isEdgeFade || isBlurGroup || isOpacityGroup || isAcrylic) && scene.IsRepaintBoundary(node)))
         {
             // A plain sticky node (no layer of its own): cut an Effect slice whose marker carries only the sticky clip. It
             // spends the effect budget; past it the clip records inline (baked).
+            // A REPAINT BOUNDARY (BoxEl.RepaintBoundary) takes the same cut without the sticky clip: an isolation slice with
+            // no layer and no pose, so its continuously-changing subtree re-rasters only its own tiles and never the tiles
+            // of what is painted under / over it (the parent's segments are content-validated per tile; the marker's
+            // identity is its node, not its bounds). Past the budget it records inline — identical pixels.
             var sl = stats.Slices!;
             int slot = sl.EffectBudgetLeft ? sl.FindOrCreate(nodeIdx, node.Raw.Gen, SliceRole.Main, SliceKind.Effect) : -1;
             if (slot >= 0 && HasWalkStackHeadroom(ref stats))
             {
                 sl.SetBudget(slot, SliceRecorder.BudgetClass.Effect);
-                const int sflags = (int)CompositeSliceFlags.StickyClip;
+                if (!stickyCut) sl.SetLowRes(slot, scene.RepaintBoundaryDown(node));
+                int sflags = stickyCut ? (int)CompositeSliceFlags.StickyClip : 0;
                 var cmd = new CompositeSliceCmd(nodeIdx, node.Raw.Gen, (int)SliceRole.Main, (int)SliceKind.Effect, sflags, clip,
                     default, default, default, deviceBounds, key, key);
                 dl.CompositeSlice(in cmd, key);
                 sl.AddChild(stats.CurSlot, slot);
                 sl.SetPose(slot, SliceRecorder.PoseKind.None, Affine2D.Identity, 0f, 0f, Affine2D.Identity, 0f, 0f);
                 sl.SetMarker(slot, in clip, sflags, default, default);
-                sl.SetSticky(slot, true, in world);
-                sl.UnbakeClip(nodeIdx);
+                sl.SetSticky(slot, stickyCut, in world);
+                if (stickyCut) sl.UnbakeClip(nodeIdx);
                 var saved = SaveSlice(ref stats);
                 stats.SelfNode = node;
                 stats.SelfSlot = slot;
@@ -1783,7 +1790,7 @@ internal sealed class SceneRecordingContext
                 stats.SelfOmitLayer = false;
                 stats.SelfPose = SliceRecorder.PoseKind.None;
                 stats.SelfAcrylic = false;
-                stats.SelfStickyClip = true;
+                stats.SelfStickyClip = stickyCut;
                 EnterSlice(ref stats, sl, slot, 0f, 0f);
                 SpanRecordResult res;
                 try

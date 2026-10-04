@@ -58,6 +58,7 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<ClipPathSpec> _clipPath = new();
     private readonly SnapshotColumn<Point2> _radialCenter = new();
     private readonly SnapshotColumn<AcrylicSpec> _acrylic = new();
+    private readonly SnapshotColumn<byte> _repaintBoundary = new();
     private readonly SnapshotColumn<EdgeFadeSpec> _edgeFade = new();
     private readonly SnapshotColumn<ImageVisualEffects> _imageEffects = new();
     private readonly SnapshotColumn<BrushAnim> _brushAnim = new();
@@ -407,6 +408,7 @@ public sealed partial class SceneRecordingSnapshot
         _clipPath.Remove(index);
         _radialCenter.Remove(index);
         _acrylic.Remove(index);
+        _repaintBoundary.Remove(index);
         _edgeFade.Remove(index);
         _imageEffects.Remove(index);
         _brushAnim.Remove(index);
@@ -531,6 +533,7 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetClipPath(node, out ClipPathSpec clipPath)) _clipPath.Set(index) = clipPath;
             if (source.TryGetRadialGradientCenter(node, out Point2 radialCenter)) _radialCenter.Set(index) = radialCenter;
             if (source.TryGetAcrylic(node, out AcrylicSpec acrylic)) _acrylic.Set(index) = acrylic;
+            if (source.IsRepaintBoundary(node)) _repaintBoundary.Set(index) = source.RepaintBoundaryDown(node);
             if (source.TryGetEdgeFade(node, out EdgeFadeSpec edgeFade)) _edgeFade.Set(index) = edgeFade;
             if (source.TryGetImageEffects(node, out ImageVisualEffects imageEffects)) _imageEffects.Set(index) = imageEffects;
             if (source.TryGetBrushAnim(node, out BrushAnim brushAnim)) _brushAnim.Set(index) = brushAnim;
@@ -848,6 +851,9 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetClipPath(NodeHandle node, out ClipPathSpec value) => _clipPath.TryGet((int)node.Raw.Index, out value);
     public bool TryGetRadialGradientCenter(NodeHandle node, out Point2 value) => _radialCenter.TryGet((int)node.Raw.Index, out value);
     public bool TryGetAcrylic(NodeHandle node, out AcrylicSpec value) => _acrylic.TryGet((int)node.Raw.Index, out value);
+    public bool IsRepaintBoundary(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out _);
+    /// <summary>The boundary's raster downscale (1 = full resolution); 0 when the node is not a repaint boundary.</summary>
+    public byte RepaintBoundaryDown(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out byte d) ? d : (byte)0;
     public bool TryGetEdgeFade(NodeHandle node, out EdgeFadeSpec value) => _edgeFade.TryGet((int)node.Raw.Index, out value);
     public bool TryGetImageEffects(NodeHandle node, out ImageVisualEffects value) => _imageEffects.TryGet((int)node.Raw.Index, out value);
     public bool TryGetBrushAnim(NodeHandle node, out BrushAnim value)
@@ -970,6 +976,7 @@ public sealed partial class SceneRecordingSnapshot
         _clipPath.BeginCapture();
         _radialCenter.BeginCapture();
         _acrylic.BeginCapture();
+        _repaintBoundary.BeginCapture();
         _edgeFade.BeginCapture();
         _imageEffects.BeginCapture();
         _brushAnim.BeginCapture();
@@ -998,6 +1005,7 @@ public sealed partial class SceneRecordingSnapshot
         _clipPath.EndCapture();
         _radialCenter.EndCapture();
         _acrylic.EndCapture();
+        _repaintBoundary.EndCapture();
         _edgeFade.EndCapture();
         _imageEffects.EndCapture();
         _brushAnim.EndCapture();
