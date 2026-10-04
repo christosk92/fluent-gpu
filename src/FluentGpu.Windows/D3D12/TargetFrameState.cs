@@ -44,6 +44,9 @@ internal sealed unsafe class TargetFrameState
 
     // ── present side (moved from D3D12Device) ────────────────────────────────────────────────────────────────────
     internal bool OccludedLatched, LastPresentStoodDown, SkipLatencyOnce, SkipVsyncOnce, HintSettlePresent;
+    // F070 Stage B: the next Present of this target waits (bounded) for its own submit's fence first. Armed by the host for a turn that
+    // moves video geometry, consumed by Present, render-thread-only.
+    internal bool HintMotionFenceWait;
     // The last Present(noWait: true) of this target was REFUSED (DXGI_ERROR_WAS_STILL_DRAWING): nothing was queued and the
     // latency credit is still held. Render-thread-only, reset at the top of every Present.
     internal bool LastPresentRefused;

@@ -288,7 +288,9 @@ public sealed class RenderThreadPacingTests
             Assert.Equal(0, rt.SkippedTicks);
             Assert.Equal(0, rt.RaceHits);
             Assert.Equal(1, takes);
-            Assert.Equal(-1, lastTimeout);                   // the parent's turn is not clock-paced by the child's motion: the liveness-bounded take, no grace
+            // the parent's turn is not clock-paced by the child's motion: the liveness-bounded take (negative), no grace, bounded at
+            // max(2 x refresh, 34 ms) rather than the backend's 1 s default (F208)
+            Assert.Equal(-RenderThread.UnpacedSlotBoundMs(PeriodQpc * 1000.0 / Stopwatch.Frequency), lastTimeout);
         }
         finally { rt.Dispose(); display.Dispose(); }
     }

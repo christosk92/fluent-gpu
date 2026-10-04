@@ -45,6 +45,7 @@ static partial class ControlsSuite
         VideoHoleChecks(strings);
         VideoChromeOverHoleChecks(strings);
         VideoSlotReadinessChecks();
+        VideoPlacementChecks();
         MediaPlayerElementRendersChecks(strings);
         GeometryOnlyPumpChecks(strings);
         VideoAspectChangeChecks(strings);

@@ -108,8 +108,18 @@ public partial interface IGpuDevice : IDisposable
     /// slot still busy after it means the previous present missed its vblank, and the loop skips that tick instead of
     /// queueing a frame that could only land late (see D3D12Device.TryTakePresentSlot) — so the bound must hold at
     /// millisecond precision (a plain OS wait timeout is only as fine as the timer resolution). Default true: the headless
-    /// seam has no present queue, and a backend without a latency waitable keeps waiting inside submit.</para></summary>
+    /// seam has no present queue, and a backend without a latency waitable keeps waiting inside submit.</para>
+    /// <para>A NEGATIVE <paramref name="timeoutMs"/> is the liveness-bounded wait that proceeds (credit held) even when the slot
+    /// never opened, so a lost device cannot wedge the loop: <c>-1</c> bounds it at the backend's default (1 s), any other
+    /// <c>-N</c> at N ms (an unpaced turn's <c>max(2 x refresh, 34 ms)</c>, F208 - a minimized or cloaked primary whose
+    /// presents never retire no longer costs a second per turn). A backend counts and reports the liveness timeouts
+    /// (<see cref="SlotLivenessTimeouts"/>).</para></summary>
     bool TryTakePresentSlot(int timeoutMs) => true;
+
+    /// <summary>Liveness-bounded present-slot takes that timed out so far (CUMULATIVE; render thread writes, any thread reads):
+    /// the take proceeded without the slot ever opening. Surfaced as <c>slotTimeouts=</c> in the <c>[render.pace]</c> line.
+    /// Default 0: the headless seam has no present queue.</summary>
+    long SlotLivenessTimeouts => 0;
 
     /// <summary>The per-swapchain form of <see cref="TryTakePresentSlot(int)"/>: take <paramref name="target"/>'s OWN
     /// present-slot credit (waiting at most <paramref name="timeoutMs"/>, 0 = a non-blocking probe). The shared render thread
@@ -168,6 +178,12 @@ public partial interface IGpuDevice : IDisposable
     /// <see langword="null"/> when the target is not composited / the backend cannot composite video. Default routes to
     /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
     FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
+
+    /// <summary>The ONE device-level composition flush of a render turn (F080): every presenter's queued mutations
+    /// (<see cref="FluentGpu.Pal.IVideoPresenter.ApplyPending"/>) are made visible by a single commit on the shared composition
+    /// device, after the parent and every detached child drained. No-op when nothing was applied since the last commit, and on a
+    /// backend without a composition device (the default). Render thread only.</summary>
+    void CommitVideoComposition() { }
 
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
@@ -457,6 +473,14 @@ public interface ISwapchain : IDisposable
     /// the sync: the present itself never blocks on it, because the video placement for the frame must be committed first
     /// (see <see cref="CompleteSettlePresent"/>). Default no-op.</summary>
     void HintSettlePresent() { }
+
+    /// <summary>Arm, for THIS target's next present only (self-resetting), the geometry-motion present (F070 Stage B): the frame
+    /// being presented moves a video surface that is already on screen, so the present first waits (bounded by about one refresh) for
+    /// the frame's own GPU work to retire, and the host commits the new video placement the instant the present returns. The new hole
+    /// and the new video rect then become eligible for the SAME DWM composition instead of landing a queue-depth apart. A frame whose
+    /// GPU work runs longer than the bound presents anyway (one skewed frame, counted). Armed ONLY for a turn that moves video
+    /// geometry, never on steady playback or idle. Default no-op: a backend with no present queue to skew against.</summary>
+    void HintGeometryMotionPresent() { }
 
     /// <summary>Run (or drop) the sync <see cref="HintSettlePresent"/> armed. The host calls this AFTER it committed the
     /// frame's video placement, so the hole and the video geometry reach DWM in the same composition: a blocking flush

@@ -72,7 +72,7 @@ staging block — see §4.6 for the handshake (no GPU readback).
 | `ImageRefTable` (realization slab), `ResidencyManager` LRU/pin bookkeeping, `UseImage` hook cells, request-epoch | **UI thread** | mutated in phases 1/4/8/12 only |
 | `DecodeScheduler` request `Channel`, result MPSC ring, recycled CPU `StagingBlock` slab | **WORKER pool** writes pixels; **render thread** drains the ring | pure decode jobs; touch no Scene/RhiTable/fence |
 | Every `ComPtr` (bucket textures, staging ring, `IDCompositionVisual`), `RhiHandleTable`, GPU fence, deferred-delete ring, `CopyBufferToTexture` | **RENDER thread** | the §2 confinement keystone — UI thread touches ZERO COM |
-| `VideoSurfaceRegistry` arbitration state | **UI thread** | decides; the render thread executes `Place`/`SetVisible` at phase 11 |
+| `VideoSurfaceRegistry` slot table, pump counters, `Surface`/`Bound` signals | **UI thread** | decides; a POD snapshot of it rides every publication (`VideoPresentIntent`), and the render thread's `VideoPlacementApplier` (sole consumer, owner of the presenter-side surface ids / bound handles) executes `Place`/`SetVisible` from THAT snapshot in the turn that presents it (F070 / F183, `threading-render-seam.md` §10). The render thread never reads the registry; it posts surface id / bound / release-complete back through a lock-guarded mailbox the UI thread folds into the signals |
 
 The build-order rule (`hardened-v1-plan.md` §6) applies verbatim: ship **single-thread-correct first**
 (UI thread produces decode requests AND drains results AND uploads, quarantine = 0), then flip the
@@ -815,7 +815,8 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
   the priority-arbitration registry automatically resolving a cross-slot hand-off — that registry-driven arbitration
   was never built (see the reconciliation above). **What is as-built:** `Place(token, rect, z)` and
   `SetVisible(token, visible)` are real, generic, **per-slot** primitives, and any single call that changes one is
-  committed on the render thread at phase 11 (`Drain` → `presenter.Commit()`), so no in-flight frame observes a
+  applied on the render thread by the turn that presents the publication carrying it (`VideoPlacementApplier.ApplyTurn`; the
+  same-thread `VideoSurfaceRegistry.Drain` shim does the same for the single-thread host), so no in-flight frame observes a
   torn half-write. But the registry itself does not sequence "new owner in, old owner out" across two slots as one
   atomic unit the way the unbuilt design promised — a caller wanting a hand-off calls `Place`/`SetVisible` on each
   token itself, so a multi-slot hand-off's atomicity is only as good as the caller's own ordering, not a guarantee

@@ -969,15 +969,56 @@ order, no pass bucket) erases a **transparent premultiplied-0 hole** into the UI
 buffer by the retained-tile composite every presented frame) so the video child
 visual shows through (`gpu-renderer.md` §7.3).
 
-- The UI thread, at PUBLISH, records `PresentIntent` into the `SceneFrame`: video surface placements
-  (`Place(id, deviceRect, opacity, z)`), and a `dcompCommitNeeded` flag (set only when a visual prop
-  changed — the hole moved, a surface was created/destroyed, z reordered).
-- The render thread, at R5, executes `IVideoPresenter.Place(...)` and the UI-swapchain `Present`, then
-  issues **one DComp `Commit()`** that atomically lands both the new UI frame and the video placement —
-  so the hole and the surface never tear apart across a frame.
+- **Placement is frame-sourced (F070 / F183, AS-BUILT 2026-10).** `VideoSurfaceRegistry` is UI-thread-only state: the pump
+  writes rects, visibility and handles into it and the render thread NEVER reads it. At every PUBLISH
+  (`SceneFramePublisher.PublishScene` / `Publish`, right after the phase-7.2 pump) the host copies every live slot into a POD
+  `VideoPresentIntent` block carried by the published slot (`RenderFrame.VideoIntentCount`, read through
+  `SceneFramePublisher.VideoIntents(rf)`, stable while the consumer retains the claim, exactly like the command arena). The
+  snapshot is STATE, not an event log: each publication carries the full intent of every live slot, so a publication the render
+  thread skips is superseded by the next and a `ReleasePending` or a handle bind can never be dropped; the two event-like intents
+  are idempotent through a per-slot incarnation (`Gen`) and a handle sequence (`HandleSeq`), so a stale snapshot of a freed
+  slot cannot resurrect it and an older source never overwrites a newer handle. `VideoSurfaceRegistry.HasUnpublishedChanges`
+  makes an intent that only changes the video (not the scene) defeat the UI's skip-submit, so a publication is always owed.
+- `VideoPlacementApplier` (render thread, one per host) is the SOLE consumer. Per turn (`ApplyTurn`) it adopts the presented frame's
+  snapshot and applies it to `IVideoPresenter` with the FRAME's scale, in the scope the turn earns: **Full** (the turn presents, or its
+  frame is already on the glass: create / bind / geometry / destroy), **ContentOnly** (the record was elided: create and bind only;
+  the elided publication's own geometry was applied by the turn that recorded it, and a held move or destroy waits for a turn that
+  presents the matching hole), **ReleasesOnly** (the present stood down: releases only, placements stay pending) and **Structural**
+  (the early drain, below). The applier owns everything the old drain wrote from the render thread: surface ids, the bound handle, the
+  failed-bind backoff, the bound bits.
+- **Posed travel.** The render thread re-poses scroll and compositor animations on composite-only turns, which moves the hole with no
+  UI pump. `SliceRecorder.PlaceVideoErases` records each hole's UNCLIPPED posed rect and the composite clip that cut it, keyed by the
+  registry token the `DrawVideoCmd` carries (`SceneRecordingContext.PosedVideoHoles`). The snapshot carries the hole origin the UI
+  painted (`HasHoleOrigin`, only when the tracked node's rect IS the placed rect); the applier moves the video by
+  `posed hole origin - published hole origin` and re-clips its viewport by the posed clip (a hole scrolled fully under a header hides
+  the video there). So a composite-only turn moves the video exactly as far as the hole, in the same turn.
+- **Results come back by mailbox, not by touching UI state.** The applier posts per slot the surface it created, whether it is
+  bound AND composed, and release-complete (`VideoSurfaceRegistry.PostResult`, one short lock around a fixed-size array); the UI
+  thread folds them into the `Surface` / `Bound` signals and frees the slot in `ImportResults` (top of `PumpPending` and `Acquire`),
+  matching on the incarnation. `RecordingFeedback` is published only by turns that record, and the early drain and elided turns have
+  none, so these results use the registry's own mailbox instead; the render thread never writes a `Signal` or the pump counters.
+  The early structural drain (a handle arriving with no publication behind it) reads a small content mailbox - handle, sequence and
+  release flag, never geometry - under the same lock; `VideoSurfaceRegistry.StructuralVersion` is the O(1) gate.
+- **Stage B - one composition for the hole and the video, on a geometry-motion turn only.** When the apply that follows a present
+  will MOVE an already-placed surface (`VideoPlacementApplier.PrepareGeometry`), the host arms `ISwapchain.HintGeometryMotionPresent`:
+  the present first waits (bounded at one 60 Hz refresh, polling the fence, counted as `motionFenceWait` / `motionFenceTimeout`)
+  for the frame's own GPU work, then presents, then commits the new placement AT ONCE (`CommitVideoComposition`, per target)
+  with no DwmFlush in between (F101), so the flip carrying the new hole and the video's new rect become eligible for the same DWM
+  composition instead of landing a queue depth apart. Every other turn keeps F080's one commit at the end of the turn; steady
+  playback and idle never enter the mode. A turn whose GPU work outruns the bound presents anyway (one skewed frame).
 - **FluentGpu never touches video pixels** (externally decoded — `MediaPlayerElement`/PlayReady). The
   heaviest continuous workload is off our threads by construction. This is why the video present-tree is a
   v1 deliverable that is *single-thread-friendly* (WaveeMusic §"v1-safe").
+
+**Follow-up (NOT built): Stage C, one DComp visual for the card.** The structural end state is a single transaction:
+the UI plane as an `IDCompositionDynamicTexture` (`IDCompositionDevice6::PresentCompositionTextures` + ONE `Commit()` that also
+carries the video placement, Windows 11 24H2+ / build 26100+, hand-generated vtables for NativeAOT, with Stage B kept as the
+fallback; the latency waitable and DXGI frame statistics would have to be re-plumbed), and optionally promoting the floating /
+PiP card to its own composition layer under a parent that also parents the video child, so a drag is one `SetOffset` plus one
+`Commit` with no UI re-render. Until then the two flushes (the swapchain `Present`, the DComp `Commit`) are not one transaction:
+Stage B makes them land together on a motion turn in the common case; residual skew is not removed by this work, and masking it
+(an opaque backing under each underlay, F086; bitmap interpolation, F073; a 1 px inset hole under the card's own border) belongs to
+those separate items.
 
 After present, the render thread `Volatile.Write`s the **present-ack seq** (the `PublishSeq` of the frame
 just presented). The UI thread reads it at phase 1 / phase 12 to know which passive effects (frame N+1)
@@ -1165,12 +1206,35 @@ probed without waiting, so a Present that blocks the shared thread needs a full 
 child's Present carries `DXGI_PRESENT_DO_NOT_WAIT` (`ISwapchain.PresentNoWait`); `DXGI_ERROR_WAS_STILL_DRAWING` queues
 nothing, spends no credit (`LatencyCreditHeld` stays set, so the next submit does not wait twice) and leaves the frame owed
 (`AppHost._presentOwed`): `DrainChildRenderSources` re-presents it on a later turn, or a fresh publication supersedes it.
-The video hole-punch drain (`VideoSurfaceRegistry.Drain`: DComp Place/Destroy/bind) is NOT run for a refused present: it rides
+The video placement apply (`VideoPlacementApplier.ApplyTurn`: DComp Place/Destroy/bind) is NOT run for a refused present: it rides
 the turn whose UI frame actually lands (the retry, or the superseding publication), so a video never moves or disappears ahead
-of the swapchain frame that carries its hole; the pending intents stay dirty in the registry meanwhile. A disposed target
+of the swapchain frame that carries its hole; the pending intents stay dirty in the applier's shadow meanwhile. A disposed target
 never reports a refusal (`LastPresentRefused` is reset before the `Disposed` early-out), so it cannot keep a frame owed.
 Refusals are counted in the child's pace token (`skipped=`). The default is decided by PresentMon on both HWNDs
 (`MsBetweenDisplayChange`) with the pop-out playing, not by the flag's existence.
+
+**Video structural drain before the slot wait; one composition commit per turn (F208 / F080, AS-BUILT 2026-10).** A pop-out's
+surface used to be created and bound only inside its host's `SubmitPresentOnRenderThread`, i.e. after the parent's own present
+decision and its slot wait (a measured 0.7-1.5 s on a fresh frame). `RenderThread` now takes a `preTurn` hook, run after the resize
+/ device-lost gates and BEFORE `PresentTurn` (so also on a bare wake): `AppHost.DrainVideoStructuralPreTurn` drains the popup
+render actions, then `VideoPlacementApplier.ApplyStructural` (off the registry's content mailbox) for this host and every non-failed child,
+then one commit. ONLY create and bind (plus the initial placement of a surface created in that pass, when a publication already delivered
+its geometry) move early; `Place` moves of an existing surface and
+`Release` destroys stay coupled to the UI frame's present (the two-clock tear lock: a visual created early sits z-below the UI
+swapchain, so it shows only through a hole the UI punches after the slot's `Bound` edge). A handle arriving (`Bind` / `Rebind`)
+calls `VideoSurfaceRegistry.StructuralWake`, wired to `RenderThread.WakeForVideo` (any thread, the child's to its PARENT's loop),
+so the drain runs with no UI publication. The hint `VideoPlacementApplier.HasStructuralWork` makes a clean call O(1); a presenter that cannot attach yet
+(`IVideoPresenter.CanAttachSurfaces`, false until its first Present binds the DComp graph) is left to the first coupled drain.
+The coupled applies (`DrainVideoForPresentTurn`) now only APPLY (`IVideoPresenter.ApplyPending`) and the turn's ONE device commit
+(`IGpuDevice.CommitVideoComposition`, then `VideoPlacementApplier.PublishCommitted` per host: readiness is published only after
+the commit) is made at the end of `DrainChildRenderSources`, after the parent and every child drained, so the shared
+`IDCompositionDevice` is flushed once per turn instead of once per window. A present that stood down (`LastPresentStoodDown`)
+applies releases only (`VideoApplyScope.ReleasesOnly`): its placements stay pending for the next real present. An UNPACED turn's slot take
+is the liveness form bounded at `max(2 x refresh, 34 ms)` (`RenderThread.UnpacedSlotBoundMs`, passed as a negative timeout;
+-1 stays the backend's 1 s) and proceeds with the credit held, so a minimized / cloaked primary whose presents never retire costs
+two refreshes instead of a second; every such timeout is counted (`IGpuDevice.SlotLivenessTimeouts`, `slotTimeouts=` in
+`[render.pace]`) and one rate-limited `[d3d12.present] slot liveness timeout` line names the primary's HWND state, queue depth and
+present counters. Measure with PresentMon on both HWNDs (the bounded take may move the block into `Present`, a hypothesis).
 
 **A background window is throttled on every autonomous wake, and a covered one parks (F241 / F239, AS-BUILT 2026-10).** The
 render thread and the device queue are shared by every window of the process, so a window nobody is looking at must not keep

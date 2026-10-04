@@ -1188,8 +1188,12 @@ would stall the pop-out it also presents), it only consumes the hint.
 **Damage / re-punch.** The composite redraws the whole back buffer on every presented frame, so every hole item is
 re-punched every frame with no extra rule, and the retained tile keeps its own erased pixels; there is no
 video-hole damage-inflation rule (the partial-canvas decode that needed one is deleted). Flush-wise the hole rides the
-UI swapchain `Present` while the child placement rides the per-frame DComp `Commit` the video pump issues: two flushes
-on one frame turn, not one (`docs/plans/video-phase1-plan.md §2`, correction #4).
+UI swapchain `Present` while the child placement rides a DComp `Commit`: two flushes on one frame turn, not one
+(`docs/plans/video-phase1-plan.md §2`, correction #4). F070 makes them AGREE rather than merge: the video is placed from the
+snapshot of the frame being presented, moved by the hole's own posed travel (`SliceRecorder.PosedHoles`, so a composite-only
+scroll or animation turn moves the video with the hole), and on a turn that moves an on-screen surface the present waits (bounded)
+for its own GPU work and the placement is committed immediately after it (`threading-render-seam.md` §10, Stage B). They are still
+two flushes; the single-transaction form (one DComp visual holding hole and video) is a recorded follow-up, not built.
 
 ---
 

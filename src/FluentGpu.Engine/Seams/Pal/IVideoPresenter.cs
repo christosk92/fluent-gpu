@@ -76,8 +76,22 @@ public interface IVideoPresenter
     void Destroy(VideoSurfaceId id);
 
     /// <summary>
-    /// Flush all queued <see cref="Place"/>/<see cref="SetVisible"/>/<see cref="BindSurfaceHandle"/> mutations into
-    /// one <c>IDCompositionDevice::Commit</c> — the per-frame commit at phase 11 (the "two-clock tear" lock: the hole
+    /// Apply every queued <see cref="Place"/>/<see cref="SetVisible"/>/<see cref="BindSurfaceHandle"/> mutation to the
+    /// presenter's own visuals WITHOUT the device-level flush (F080): the host then makes ONE
+    /// <see cref="FluentGpu.Rhi.IGpuDevice.CommitVideoComposition"/> per render turn after the parent and every detached child
+    /// applied theirs, instead of one commit per window. Default <see cref="Commit"/>: a presenter with no shared device
+    /// flush has nothing to defer.
+    /// </summary>
+    void ApplyPending() => Commit();
+
+    /// <summary>True when this presenter can attach new surfaces to a live composition root now. A composited swapchain binds
+    /// its DirectComposition graph on its first Present, so a surface created before that would sit unattached while the UI
+    /// already punched its hole: the early (structural) drain waits for this. Default true.</summary>
+    bool CanAttachSurfaces => true;
+
+    /// <summary>
+    /// <see cref="ApplyPending"/> plus the device flush: all queued mutations become one
+    /// <c>IDCompositionDevice::Commit</c> — the per-frame commit at phase 11 (the "two-clock tear" lock: the hole
     /// rides the same frame-turn's <c>Present</c>). No-op when nothing is dirty.
     /// </summary>
     void Commit();

@@ -277,4 +277,39 @@ public sealed class VideoSurfaceGeometryTests
         Assert.Equal(MathF.Round(presenter.LastPlaceRect.Right), presenter.LastPlaceRect.Right);
         Assert.Equal(MathF.Round(presenter.LastViewport.Bottom), presenter.LastViewport.Bottom);
     }
+
+    // F208 / F080 over a real session's pump: the surface its first bind produces is created, bound and placed by the EARLY
+    // (structural) drain with no commit of its own, the host's one device commit follows, and the coupled drain that rides the
+    // UI frame's present is still the only thing that applies a later placement or a destroy.
+    [Fact]
+    public void StructuralDrain_BindsASessionsFirstHandleEarly_WithoutCommitting_AndLeavesPlaceAndDestroyCoupled()
+    {
+        var (s, _, e) = NewSession();
+        VideoBinding binding = NewBinding(out VideoSurfaceRegistry registry);
+        e.MetadataLoaded = true; e.NativeW = 640; e.NativeH = 360; e.Handle = 0xF00D;
+        var rectDip = new RectF(10f, 20f, 320f, 180f);
+        s.PumpVideo(binding, rectDip, 1f);
+        Assert.True(registry.HasStructuralWork);
+
+        var presenter = new FakeVideoPresenter();
+        registry.DrainStructural(presenter, 1f, deferCommit: true);
+        Assert.Contains("Create(1)", presenter.Calls);
+        Assert.NotEqual((nuint)0, presenter.LastBoundHandle);
+        Assert.Equal(1, presenter.Applies);
+        Assert.Equal(0, presenter.Commits);                  // the host commits once per turn, after every host applied
+        Assert.False(registry.HasStructuralWork);
+
+        // A move of the placed surface and the destroy of a released one wait for the coupled drain.
+        int placesAfterCreate = presenter.Calls.FindAll(c => c.StartsWith("Place(", StringComparison.Ordinal)).Count;
+        binding.SetViewport(new RectF(12f, 22f, 300f, 170f));
+        registry.DrainStructural(presenter, 1f, deferCommit: true);
+        Assert.Equal(placesAfterCreate, presenter.Calls.FindAll(c => c.StartsWith("Place(", StringComparison.Ordinal)).Count);
+        binding.Release();
+        registry.DrainStructural(presenter, 1f, deferCommit: true);
+        Assert.DoesNotContain("Destroy(1)", presenter.Calls);
+
+        registry.Drain(presenter, 1f, deferCommit: true);
+        Assert.Contains("Destroy(1)", presenter.Calls);
+        Assert.Equal(0, presenter.Commits);
+    }
 }

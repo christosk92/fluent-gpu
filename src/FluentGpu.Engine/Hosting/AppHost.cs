@@ -403,7 +403,12 @@ public sealed partial class AppHost : IDisposable
     private readonly Component _root;
     private readonly StringTable _strings;
     private readonly IFontSystem _fonts;   // retained so a detached child host (pop-out video window) can be constructed with the same font system
-    private readonly FluentGpu.Media.VideoSurfaceRegistry _videoSurfaces = new();   // UI-thread video-surface intents, drained into IVideoPresenter at phase 11
+    private readonly FluentGpu.Media.VideoSurfaceRegistry _videoSurfaces = new();   // UI-thread video-surface intents; a snapshot rides every publication (F070)
+    // The render thread's sole consumer of video placement (F070 / F183): applies the PUBLISHED snapshot to the IVideoPresenter in the turn
+    // that presents it. Render-thread-only; created lazily by that thread. The single-thread host (no render thread) drains through the
+    // registry's same-thread shim instead.
+    private FluentGpu.Media.VideoPlacementApplier? _videoApplier;
+    private FluentGpu.Media.VideoPlacementApplier VideoApplier => _videoApplier ??= new FluentGpu.Media.VideoPlacementApplier(_videoSurfaces);
 
     // Detached child hosts (the pop-out video mini-player): each is a full AppHost over its OWN top-level window +
     // composited swapchain + presenter, sharing this device/fonts/strings/images. Ticked by the loop via
@@ -847,7 +852,8 @@ public sealed partial class AppHost : IDisposable
     /// Cross-thread reads of plain fields; allocation-free (a record struct by value).</summary>
     private RenderPaceHostState SamplePaceHostState()
         => new(_gpuBoundEma, _gpuGovernorEngaged, _lastWaitKind,
-               _swapchain.TryGetGpuRenderSample(out GpuRenderSample s) ? s.ExecutionMs : 0.0, Volatile.Read(ref _maxFrameLatency));
+               _swapchain.TryGetGpuRenderSample(out GpuRenderSample s) ? s.ExecutionMs : 0.0, Volatile.Read(ref _maxFrameLatency),
+               _device.SlotLivenessTimeouts);
 
     /// <summary>UI-readable pacing snapshot: the render thread's cumulative present counters, the display clock's filter
     /// state, the present-queue depth, the adaptive GPU governor and the latest GPU execution — the data behind the
@@ -1623,7 +1629,7 @@ public sealed partial class AppHost : IDisposable
                 // and the feedback of that frame already ran with its first attempt. The video drain did NOT: it rides the
                 // turn whose UI frame actually lands, so a hole-punched video never moves ahead of the frame that carries
                 // its hole (a refused retry leaves the intents dirty in the registry for the next one).
-                if (PresentFrame(in rf, _owedComposited)) DrainVideoForPresentTurn(in rf);
+                if (PresentFrame(in rf, _owedComposited)) DrainVideoForPresentTurn(in rf, placement: !_swapchain.LastPresentStoodDown);
                 return;
             }
             int feedbackSize = 0;
@@ -1674,7 +1680,7 @@ public sealed partial class AppHost : IDisposable
                 {
                     Interlocked.Increment(ref _framesSkippedSubmit);
                     long splitElided = Stopwatch.GetTimestamp();
-                    DrainVideoForPresentTurn(in rf);   // owed regardless — see its remarks
+                    DrainVideoForPresentTurn(in rf, elided: true);   // owed regardless (content only) — see its remarks
                     _presentSplit = BuildPresentSplit(splitT0, splitStaged, splitElided, splitElided, splitElided, submitted: false);
                     // E5: this turn elides the record AND the submit, so it will never reach the staging pass above
                     // again for a while — fence-only maintenance (retire-backlog release) still owes forward progress,
@@ -1817,6 +1823,7 @@ public sealed partial class AppHost : IDisposable
             // A REFUSED non-blocking present (false) skips the video drain below: its Place/Destroy/bind commits stay coupled to
             // the UI frame that reaches the glass, so they ride the owed frame's retry (or the superseding publication).
             long splitBeforePresent = Stopwatch.GetTimestamp();
+            if (presented) ArmGeometryMotionPresent(in rf);
             bool landed = !presented || PresentFrame(in rf, composited);
             long splitPresented = Stopwatch.GetTimestamp();
             if (feedbackSize != 0)
@@ -1826,7 +1833,9 @@ public sealed partial class AppHost : IDisposable
                 if (settledPoses > _lastSettledPoseCount) _window.Wake();
                 _lastSettledPoseCount = settledPoses;
             }
-            if (landed) DrainVideoForPresentTurn(in rf);
+            // A present that stood down (cloaked / minimized / occluded: nothing visible, nothing queued) must not commit video
+            // placement for a hole that never reached the glass (F080): the placements stay dirty for the next real present.
+            if (landed) DrainVideoForPresentTurn(in rf, placement: !(presented && _swapchain.LastPresentStoodDown));
             _presentSplit = BuildPresentSplit(splitT0, splitStaged, splitRecorded, splitBeforePresent, splitPresented, submitted: presented);
         }
         catch (System.Exception ex) when (_asyncActive)
@@ -1845,16 +1854,21 @@ public sealed partial class AppHost : IDisposable
             if (!_device.NoteIfDeviceLost())
             {
                 if (_parentRenderThread is null) throw;
-                if (!_renderFailed)
-                {
-                    _renderFailed = true;
-                    string line = $"[detached] child frame failed hwnd={_window.Handle.Value:X}: {ex.GetType().Name}: {ex.Message}";
-                    Console.Error.WriteLine(line);
-                    Diag.Sink?.Invoke(line);
-                    OnRenderFailed?.Invoke();
-                }
+                NoteChildRenderFailure(ex);
             }
         }
+    }
+
+    /// <summary>Render thread, detached child only: latch <see cref="_renderFailed"/> once, log ONE always-on line and fire
+    /// <see cref="OnRenderFailed"/> (see the catch in <see cref="SubmitPresentOnRenderThread"/>).</summary>
+    private void NoteChildRenderFailure(System.Exception ex)
+    {
+        if (_renderFailed) return;
+        _renderFailed = true;
+        string line = $"[detached] child frame failed hwnd={_window.Handle.Value:X}: {ex.GetType().Name}: {ex.Message}";
+        Console.Error.WriteLine(line);
+        Diag.Sink?.Invoke(line);
+        OnRenderFailed?.Invoke();
     }
 
     /// <summary>Whether this host's presents are non-blocking (F085): only a detached child riding a parent's render thread,
@@ -1892,20 +1906,44 @@ public sealed partial class AppHost : IDisposable
         return true;
     }
 
-    /// <summary>11.5 (threaded) — the video hole-punch drain rides THIS present turn on the presenting thread,
-    /// mirroring the sync path's after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every
-    /// presenter call assert the render/submit thread when render-confined, so the drain MUST run here, not UI-side;
-    /// the UI-side call at phase 11.5 is skipped whenever a render thread exists. Uses the FRAME's scale
-    /// (rf.Submit.Scale) rather than the live _window.Scale — the drain must place video for the frame it presents.
-    /// <para>Its own method because a turn that elides the record still owes it: video placement is not a function of
-    /// whether the UI scene changed, and a skipped turn that also skipped the drain would leave a moving video at a
-    /// stale rect.</para></summary>
-    private void DrainVideoForPresentTurn(in Threading.RenderFrame rf)
+    /// <summary>11.5 (threaded) — the video placement rides THIS present turn on the presenting thread, mirroring the sync path's
+    /// after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every presenter call assert the render/submit
+    /// thread when render-confined, so the apply MUST run here, not UI-side; the UI-side call at phase 11.5 is skipped whenever a
+    /// render thread exists. F070: it applies the SNAPSHOT the presented frame carries (<see cref="Threading.SceneFramePublisher.VideoIntents"/>),
+    /// never the live registry, moved by the hole's posed travel on this turn's composite (<see cref="VideoPosedHoles"/>), with the
+    /// FRAME's scale (rf.Submit.Scale) rather than the live _window.Scale — the video lands under the hole of the frame it is
+    /// presented with, not under whatever the UI has written since.
+    /// <para>Its own method because a turn that elides the record still owes its CONTENT half: <paramref name="elided"/> applies only
+    /// create / bind (a handle that arrived, a failed bind's retry); geometry and destroys belong to the turn that presents the
+    /// matching hole, and the elided publication's own geometry was applied by the turn that recorded it.</para>
+    /// <para>F080: the placement is APPLIED here but not committed. The turn's ONE device-level commit is
+    /// <see cref="CommitVideoTurn"/>, at the end of <see cref="DrainChildRenderSources"/>, after the parent and every child
+    /// drained, so the shared composition device is flushed once per turn instead of once per window. A turn that MOVES an
+    /// already-placed surface commits at once instead (F070 Stage B), right after the present that carries the new hole and with no
+    /// flush in between: the hole's flip and the video's new rect then become eligible for the same DWM composition.
+    /// <paramref name="placement"/> false is a present that stood down: only releases are applied.</para></summary>
+    private void DrainVideoForPresentTurn(in Threading.RenderFrame rf, bool placement = true, bool elided = false)
     {
+        Threading.ThreadGuard.AssertRender();
         long videoStart = Stopwatch.GetTimestamp();
+        _lastRenderScale = rf.Submit.Scale;   // the early (structural) drain places a new surface with the last presented frame's scale
         // A bound-readiness edge is published from this (render) thread; the UI loop may be blocked with nothing else
-        // to wake it, so the poster drop / hole punch would stall. Wake is thread-safe.
-        if (_device.GetVideoPresenter(_swapchain) is { } vp && _videoSurfaces.Drain(vp, rf.Submit.Scale)) _window.Wake();
+        // to wake it, so the poster drop / hole punch would stall. Wake is thread-safe. Deferred commit only while a render loop
+        // exists to make it (every caller runs inside one of its turns).
+        if (_device.GetVideoPresenter(_swapchain) is { } vp)
+        {
+            bool deferCommit = OwningRenderThread is not null;
+            var scope = !placement ? FluentGpu.Media.VideoApplyScope.ReleasesOnly
+                : elided ? FluentGpu.Media.VideoApplyScope.ContentOnly : FluentGpu.Media.VideoApplyScope.Full;
+            var applier = VideoApplier;
+            bool edge = applier.ApplyTurn(vp, _renderSeam.VideoIntents(rf), VideoPosedHoles(in rf), rf.Submit.Scale, scope, deferCommit);
+            if (deferCommit && applier.LastTurnMovedGeometry)
+            {
+                _device.CommitVideoComposition();   // Stage B: this target's motion lands right after ITS present, not at the end of the turn
+                edge |= applier.PublishCommitted();
+            }
+            if (edge) _window.Wake();
+        }
         // F101: a settle hint armed for this turn is consumed WITHOUT blocking, and only after the placement commit above. The
         // render thread is shared with the pop-out, so it never sits in a DWM flush; the next turn's compositor-tick wake is
         // the settle.
@@ -1916,6 +1954,22 @@ public sealed partial class AppHost : IDisposable
         _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
         FeedUploadPacing();
         _splitVideoMs = ToMs(Stopwatch.GetTimestamp() - videoStart);   // F244: the drain's share of this turn's work
+    }
+
+    /// <summary>The holes this frame's composite placed, with the pose it applied (F070): what the video placement follows. Empty for a
+    /// frame that carries no scene (a finished command stream).</summary>
+    private ReadOnlySpan<FluentGpu.Media.VideoPosedHole> VideoPosedHoles(in Threading.RenderFrame rf)
+        => rf.HasScene ? _renderSeam.Scene(rf).Scene.Recording.PosedVideoHoles : default;
+
+    /// <summary>Render thread, just before the present (F070 Stage B): adopt the frame's video snapshot and, when the apply that follows
+    /// will MOVE a surface that is already on screen, arm the swapchain's geometry-motion present - a bounded wait for this frame's own
+    /// GPU work, so the flip carrying the new hole and the Commit that moves the video reach DWM together. Armed only on a turn that moves
+    /// video geometry (a drag, a scroll, a resize), never on steady playback, idle or a content-only turn.</summary>
+    private void ArmGeometryMotionPresent(in Threading.RenderFrame rf)
+    {
+        if (_device.GetVideoPresenter(_swapchain) is null) return;   // nothing composited behind this target: no video to skew against
+        if (VideoApplier.PrepareGeometry(_renderSeam.VideoIntents(rf), VideoPosedHoles(in rf), rf.Submit.Scale))
+            _swapchain.HintGeometryMotionPresent();
     }
 
     /// <summary>F255: tell the device what the weak tier's image-upload budget depends on, on the thread that drains this
@@ -1984,6 +2038,71 @@ public sealed partial class AppHost : IDisposable
         WakeFrame();
     }
 
+    // Render thread only: the DIP->device scale of the last frame this host's present turn drained video for (0 = none yet).
+    // What the early (structural) drain places a freshly created surface with, before this turn's own frame is chosen.
+    private float _lastRenderScale;
+
+    /// <summary>Render thread, parent host: the EARLY half of the video drain (F208), the render loop's <c>preTurn</c> hook. Runs
+    /// at the top of every turn past the resize / device-lost gates (also a bare wake: a video handle arriving wakes the loop),
+    /// BEFORE the primary's present-slot wait: for this host and every non-failed child it creates the surface and binds the
+    /// handle of an entry that still needs one (<see cref="FluentGpu.Media.VideoPlacementApplier.ApplyStructural"/>, off the registry's content mailbox), so a
+    /// pop-out's picture no longer waits behind another window's slot wait or for its own UI frame to be published. Only
+    /// create and bind move early: <c>Place</c> moves of an existing surface and <c>Destroy</c> stay coupled to the UI frame's
+    /// present (<see cref="DrainVideoForPresentTurn"/>), the two-clock tear lock. O(hosts) when nothing needs it.</summary>
+    private void DrainVideoStructuralPreTurn()
+    {
+        Threading.ThreadGuard.AssertRender();
+        var list = Volatile.Read(ref _childRenderSources);
+        bool any = VideoApplier.HasStructuralWork;
+        for (int i = 0; !any && i < list.Length; i++) any = !list[i]._renderFailed && list[i].VideoApplier.HasStructuralWork;
+        if (!any) return;
+        // Popup swapchain work first: its visual edits ride the same device commit as the video's (DrainChildRenderSources runs it
+        // again later in the turn, a cheap no-op by then).
+        DrainPopupRenderActions();
+        DrainVideoStructural();
+        for (int i = 0; i < list.Length; i++)
+        {
+            var child = list[i];
+            if (child._renderFailed) continue;
+            child.DrainPopupRenderActions();
+            child.DrainVideoStructural();
+        }
+        CommitVideoTurn(list);
+    }
+
+    /// <summary>Render thread: this host's early video drain (see <see cref="DrainVideoStructuralPreTurn"/>). Waits for the first
+    /// presented frame's scale; a failure follows the present path's own policy (a device loss is the recovery's, a child
+    /// latches <see cref="_renderFailed"/>, anything else on the parent is a bug and rethrows).</summary>
+    private void DrainVideoStructural()
+    {
+        if (_lastRenderScale <= 0f || !VideoApplier.HasStructuralWork) return;
+        try
+        {
+            // The content mailbox, not the live registry (F183): the handle, its sequence and any release - never geometry, which only a
+            // publication delivers (a surface created before its first publication is simply not placed yet).
+            if (_device.GetVideoPresenter(_swapchain) is { } vp && VideoApplier.ApplyStructural(vp, _lastRenderScale, deferCommit: true))
+                _window.Wake();
+        }
+        catch (System.Exception ex) when (_asyncActive)
+        {
+            if (_device.NoteIfDeviceLost()) return;
+            if (_parentRenderThread is null) throw;
+            NoteChildRenderFailure(ex);
+        }
+    }
+
+    /// <summary>Render thread, parent host: the turn's ONE device-level composition Commit (F080) and the readiness it makes
+    /// true. Every presenter shares the device's one <c>IDCompositionDevice</c>, so a single commit flushes the parent's and every
+    /// pop-out's tree in the same DWM frame; each registry then publishes which of its slots are bound AND composed, waking its
+    /// UI loop on an edge. O(1) when nothing was applied since the last commit.</summary>
+    private void CommitVideoTurn(AppHost[] children)
+    {
+        _device.CommitVideoComposition();
+        if (VideoApplier.PublishCommitted()) _window.Wake();
+        for (int i = 0; i < children.Length; i++)
+            if (children[i].VideoApplier.PublishCommitted()) children[i]._window.Wake();
+    }
+
     /// <summary>Render thread, failed detached child only (<see cref="_renderFailed"/>): clear the retry state a refused or
     /// deferred present left behind (it would keep <see cref="HasRenderMotion"/> true for a child that will never present
     /// again) and apply any pending video-surface intent for the last frame it drew, without touching the swapchain. Runs from
@@ -1998,8 +2117,10 @@ public sealed partial class AppHost : IDisposable
         if (_failedVideoDrainStopped) return;
         try
         {
+            // The content mailbox (releases, handles) over the geometry of the last frame this child drew: it publishes no more frames.
             if (_hasActiveRenderFrame && _device.GetVideoPresenter(_swapchain) is { } vp)
-                _videoSurfaces.Drain(vp, _activeRenderFrame.Submit.Scale);
+                VideoApplier.ApplyMailbox(vp, _activeRenderFrame.Submit.Scale, FluentGpu.Media.VideoApplyScope.Full, false,
+                    VideoPosedHoles(in _activeRenderFrame));
         }
         catch (Exception ex)
         {
@@ -2796,6 +2917,9 @@ public sealed partial class AppHost : IDisposable
             }
             child._deferredSinceQpc = 0;
         }
+        // The turn's one composition commit: the parent's own drain (earlier in this turn) and every child's applied their
+        // placement without one (F080).
+        CommitVideoTurn(list);
     }
 
     /// <summary>UI thread: stop + join this host's render thread on window close (idempotent with Dispose). Ordered BEFORE
@@ -4218,9 +4342,12 @@ public sealed partial class AppHost : IDisposable
                 takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
                 submitAbortHandleSink: _device.SetSubmitAbortHandle,
                 ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
-                motionThrottleMs: RenderLoopThrottleMs, presentSplit: SamplePresentSplit);
+                motionThrottleMs: RenderLoopThrottleMs, presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn);
             _device.MarkRenderConfined();
+            _videoSurfaces.StructuralWake = _renderThread.WakeForVideo;   // a handle arriving wakes the loop: no UI publication needed (F208)
         }
+        else if (_isDetachedChild && parentRenderThread is not null)
+            _videoSurfaces.StructuralWake = parentRenderThread.WakeForVideo;   // a pop-out's handle wakes the PARENT's loop, which drains it
         EnableEvidence();   // the evidence ledgers live on the recorder pair that composites (AppHost.Evidence.cs)
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
@@ -5420,7 +5547,8 @@ public sealed partial class AppHost : IDisposable
                 && !_device.HasPendingUploads
                 && !_swapchain.TextRepaintPending
                 && !_bakedBlurQueue.HasRunnableJob
-                && !_images.HasActiveCrossfades;
+                && !_images.HasActiveCrossfades
+                && !_videoSurfaces.HasUnpublishedChanges;   // F070: a video intent the frame has not carried yet is owed a publication
             ulong dlHash = 0UL;
             bool skipSubmit = false;
             if (maybeUnchanged)
@@ -5509,7 +5637,7 @@ public sealed partial class AppHost : IDisposable
                     _framePublishSeq = _renderSeam.PublishScene(_scene, _images, _strings, recordOptions,
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
                         CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
-                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent);
+                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces);
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;
@@ -5539,7 +5667,7 @@ public sealed partial class AppHost : IDisposable
                     _scene.ClearCaptureLedger(oldestSlotSeq);
                 }
                 else _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
-                    suppressVsync: keepAlive, settlePresent: settlePresent);
+                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces);
                 if (_renderThread is not null)
                 {
                     if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)

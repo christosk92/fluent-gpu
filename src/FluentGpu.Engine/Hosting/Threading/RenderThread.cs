@@ -59,6 +59,11 @@ public sealed class RenderThread : IDisposable
     // Null on a host with no children (or a child host, which has no render thread of its own). Runs regardless of whether
     // the parent published this turn — a child wake carries no parent publish, so the parent-seam TryAcquire may no-op.
     private readonly Action? _extraDrain;
+    // Runs ON this thread at the top of every turn that got past the resize / device-lost gates, BEFORE the primary's present
+    // decision and its (possibly long) present-slot wait, also on a bare wake (a quiesce nudge, a child's wake, a video handle
+    // arriving). The host's early, structural video drain for the parent and every child (F208): a surface is created and bound
+    // without waiting behind the slot. Null => nothing early to do.
+    private readonly Action? _preTurn;
     private readonly Func<bool>? _needsTick;   // render-side motion live, on this host OR a detached child? (AppHost.HasRenderMotion) — wakes the loop at the display clock
     // Render-side motion live on THIS host alone (AppHost.HasOwnRenderMotion). Only this makes the turn a parent present: the
     // tick rule, the primary present credit, the motion run and the tick-spent mark are the parent swapchain's; a child's motion
@@ -135,7 +140,7 @@ public sealed class RenderThread : IDisposable
     private long _slotWaitSumQpc, _slotWaitMaxQpc, _slotWaitCount, _presentLagMaxQpc;
     // Cumulative slot-wait totals for the UI-readable pace snapshot (render thread writes, UI reads — torn-free longs).
     private long _slotWaitTotalCount, _slotWaitTotalQpc, _slotWaitTotalMaxQpc;
-    private long _paceIgnored0, _paceSlotDrops0;
+    private long _paceIgnored0, _paceSlotDrops0, _paceSlotTimeouts0;
     // The window's WORST present (the one that set _presentLagMaxQpc), split: wake lag (tick → turn start), slot wait, work
     // (slot open → done), the render thread's own running time across the turn (ThreadCycles at a running-max rate), its
     // tick and when it completed — so a [render.pace] line says whether the worst present was a thread that did not wake,
@@ -210,9 +215,10 @@ public sealed class RenderThread : IDisposable
                         Func<int, bool>? takePresentSlot = null, Func<RenderPaceHostState>? paceHost = null,
                         Action<nint>? submitAbortHandleSink = null, Func<bool>? ownMotion = null,
                         Action? childPaceBegin = null, Func<string?>? childPaceReport = null, Func<int>? motionThrottleMs = null,
-                        Func<PresentSplit>? presentSplit = null)
+                        Func<PresentSplit>? presentSplit = null, Action? preTurn = null)
     {
         _presentSplit = presentSplit;
+        _preTurn = preTurn;
         _motionThrottleMs = motionThrottleMs;
         _paceHost = paceHost;
         _ownMotion = ownMotion;
@@ -261,6 +267,15 @@ public sealed class RenderThread : IDisposable
     public ulong PresentAck => Volatile.Read(ref _presentAck);
 
     private long PeriodQpc() => Math.Max(1, _tickPeriod?.Invoke() ?? Stopwatch.Frequency / 60);
+
+    /// <summary>The bound (ms) of an UNPACED turn's liveness take: <c>max(2 x refresh, 34 ms)</c> (F208). It replaces the plain
+    /// 1 s liveness wait: a slot that never opens costs two refreshes, then the turn proceeds with the credit held, exactly as
+    /// the 1 s wait did. Chromium's DComp pacing wait is bounded the same way.</summary>
+    public static int UnpacedSlotBoundMs(double refreshMs) => (int)Math.Max(34.0, Math.Ceiling(refreshMs * 2.0));
+
+    // The takePresentSlot argument of an unpaced turn: a NEGATIVE value is the liveness-bounded take (it proceeds, credit held,
+    // even if the slot never opened), here with a bound of UnpacedSlotBoundMs (-1 alone would be the backend's 1 s default).
+    private static int UnpacedLivenessTake(double refreshMs) => -UnpacedSlotBoundMs(refreshMs);
 
     /// <summary>Backstop for a tick-paced wait: two refresh periods, clamped 8–34 ms (the UI's TickBackstopMs rule). The
     /// tick normally ends the wait; this fires only when the compositor stalls or a clock capability loss signalled the
@@ -327,6 +342,9 @@ public sealed class RenderThread : IDisposable
                 _parkRequested.Reset();
                 continue;
             }
+            // Before the present decision: the slot wait inside it may take far longer than any structural video work (F208), and
+            // the bare-wake early-out inside it must not skip this.
+            _preTurn?.Invoke();
             bool motionLive = PresentTurn(turnStart);
             // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render
             // thread. Runs every turn (a child's wake may carry no parent publish, so it must not hang off the parent
@@ -446,11 +464,13 @@ public sealed class RenderThread : IDisposable
         // vblank retires only at the NEXT vblank (+0.2–0.7 ms), so a slot still busy past the grace means the previous
         // present missed its vblank and owns this one. Waiting would present this tick's frame after the following vblank
         // too — and every later turn would inherit that late phase for as long as motion continues (09-29: runs of 55–86
-        // turns one tick behind). Unpaced turns (no clock / no motion) keep the liveness-bounded wait.
+        // turns one tick behind). Unpaced turns (no clock / no motion) keep the liveness-bounded wait, bounded at
+        // max(2 x refresh, 34 ms) (F208): a slot that never opens (a minimized / cloaked / occluded primary whose presents do
+        // not retire) costs that, not a second.
         long slotWait0 = Stopwatch.GetTimestamp();
         bool paced = tickSeq != 0;
         double refreshMs = PeriodQpc() * 1000.0 / Stopwatch.Frequency;
-        bool held = _takePresentSlot?.Invoke(paced ? SlotCatchUp.GraceMs(refreshMs) : -1) ?? true;
+        bool held = _takePresentSlot?.Invoke(paced ? SlotCatchUp.GraceMs(refreshMs) : UnpacedLivenessTake(refreshMs)) ?? true;
         // The UI asked to park while the slot was being waited for (the take returns false WITHOUT taking the credit when the
         // park request interrupts it): present nothing, and do not retake below — the retake is the wait the UI is blocked
         // behind. The gate at the top of the loop parks next; the publication stays pending for the turn after Resume.
@@ -578,6 +598,7 @@ public sealed class RenderThread : IDisposable
             _paceFresh0 = _freshPresents; _paceMotion0 = _motionPresents; _paceSkipped0 = _skippedTicks;
             _paceMissed0 = _missedMotionTicks; _paceRace0 = _raceHits; _paceCatchUp0 = _catchUpSkips;
             _paceIgnored0 = _displayClock?.IgnoredReturns ?? 0; _paceSlotDrops0 = _displayClock?.SlotDrops ?? 0;
+            _paceSlotTimeouts0 = _paceHost?.Invoke().SlotLivenessTimeouts ?? 0;
             _slotWaitSumQpc = 0; _slotWaitMaxQpc = 0; _slotWaitCount = 0; _presentLagMaxQpc = 0;
             _worstWakeQpc = _worstSlotQpc = _worstWorkQpc = _worstTick = _worstDoneQpc = 0; _worstRunMs = float.NaN;
             _worstSplit = default;
@@ -592,7 +613,7 @@ public sealed class RenderThread : IDisposable
         RenderPaceHostState host = _paceHost?.Invoke() ?? default;
         string child = _childPaceReport?.Invoke() ?? "";
         FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)}{child}"));
+            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)}{child}"));
         _paceWindowStartQpc = 0;   // next turn opens a fresh window
     }
 
@@ -616,6 +637,16 @@ public sealed class RenderThread : IDisposable
         ThreadGuard.AssertUi();
         if (_disposed) return;   // teardown race (e.g. a detached child's last publish after the parent thread joined): drop it
         _wake.Set();
+    }
+
+    /// <summary>ANY thread: wake the loop with no publication (a video surface handle arrived, F208) so its <c>preTurn</c> runs
+    /// on the next turn instead of waiting for a UI frame to be published. A wake the loop has not consumed yet coalesces
+    /// (auto-reset). Silently dropped once the thread is disposed.</summary>
+    public void WakeForVideo()
+    {
+        if (_disposed) return;
+        try { _wake.Set(); }
+        catch (ObjectDisposedException) { }   // teardown race: Dispose closed the event between the check and the Set
     }
 
     /// <summary>UI thread, ASYNC (Step 2): PARK the render loop before mutating the swapchain in Resize, and BLOCK until

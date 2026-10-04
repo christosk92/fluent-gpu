@@ -23,8 +23,9 @@ namespace FluentGpu.Pal.Windows;
 /// Mica or the desktop. Z order is structural (siblings are inserted in
 /// <c>(Z, slot)</c> order, always below the UI visual) and a hidden slot is REMOVED from the tree, not clipped to empty.</para>
 /// Every ComPtr here
-/// is render-thread-sole-owned (<c>AssertRenderThread</c> on every method); mutations queue and flush on one
-/// <see cref="Commit"/> per frame (phase 11 — the "two-clock tear" lock with the UI hole's Present).
+/// is render-thread-sole-owned (<c>AssertRenderThread</c> on every method); mutations queue, are applied by
+/// <see cref="ApplyPending"/> and flushed by ONE device commit per render turn (phase 11 — the "two-clock tear" lock with the
+/// UI hole's Present; <see cref="D3D12Device.CommitVideoComposition"/> after the parent and every pop-out applied theirs).
 /// </summary>
 public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
 {
@@ -67,7 +68,8 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     // The swapchain whose DirectComposition root hosts THIS presenter's video children. The primary window's presenter
     // targets the primary swapchain; a detached/secondary video window gets its OWN presenter targeting ITS swapchain
     // (see D3D12Device.GetVideoPresenter(ISwapchain)). Every presenter shares the device's one IDCompositionDevice, so
-    // one IDCompositionDevice::Commit flushes all windows' trees — a per-presenter Commit is correct, just redundant.
+    // one IDCompositionDevice::Commit flushes all windows' trees: ApplyPending only notes that the device owes a commit
+    // (D3D12Device.NoteVideoCommitDue) and the host makes it once per render turn (F080); Commit() = ApplyPending + that flush.
     private readonly D3D12Swapchain _target;
 
     public DCompVideoPresenter(D3D12Device device, D3D12Swapchain target)
@@ -244,7 +246,11 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         s.InUse = false;
     }
 
-    public void Commit()
+    /// <summary>True once the target swapchain's DirectComposition root and UI visual exist (its first Present binds them), so
+    /// a created surface can be attached at once rather than waiting for a later retry.</summary>
+    public bool CanAttachSurfaces => Target is { DcompRoot: not null, DcompVisual: not null };
+
+    public void ApplyPending()
     {
         _device.AssertRenderThread();
         if (_attachPending) RetryAttach();
@@ -259,9 +265,15 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             s.Dirty = false;
         }
         _dirtyCount = 0;
-        Ok(Dcomp->Commit(), "video presenter Commit");   // non-throwing; a failure here just leaves DWM showing the
-                                                          // prior frame's composition — the next dirty placement retries
         _graphDirty = false;
+        _device.NoteVideoCommitDue();   // the device-level Commit (Commit() below, or the host's once-per-turn one) flushes them
+    }
+
+    public void Commit()
+    {
+        ApplyPending();
+        _device.CommitVideoComposition();   // non-throwing; a failure just leaves DWM showing the prior frame's composition —
+                                            // the next dirty placement retries
     }
 
     // Retry the AddVisual of every live child that is not in the tree yet: a child created before the swapchain's DComp

@@ -78,6 +78,7 @@ public static class SuiteRegistry
         new("continuity", "continuity", VisualContinuityChecks.Run),
         new("detached-render", "detached-render", FluentGpu.VerticalSlice.Suites.DetachedRenderResilienceSuite.Run),
         new("detached-pacing", "detached-pacing", FluentGpu.VerticalSlice.Suites.DetachedPacingSuite.Run),   // F094/F097: a pop-out's motion is not the parent's present; per-target pacing evidence and queue depth
+        new("detached-video", "detached-video", FluentGpu.VerticalSlice.Suites.DetachedVideoSuite.Run),   // F208/F080: the early video drain runs before the slot wait with no UI publish; one deferred commit per turn
     ];
 
     public static IEnumerable<SuiteEntry> Filter(string? suiteSpec)

@@ -187,6 +187,8 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public uint LastContentW, LastContentH;
     public bool LastVisible;
     public int Commits;
+    public int Applies;              // ApplyPending calls: a deferred-commit drain applies here and leaves the ONE device commit to the host
+    public bool CanAttach = true;    // false models a target whose first Present has not bound its composition graph yet
 
     public VideoSurfaceId CreateSurface()
     {
@@ -224,6 +226,8 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public void SetViewport(VideoSurfaceId id, RectF deviceRect) { LastViewport = deviceRect; Calls.Add($"Viewport({id.Value})"); }
     public void SetVisible(VideoSurfaceId id, bool visible) { LastVisible = visible; Calls.Add($"Visible({id.Value},{visible})"); }
     public void Destroy(VideoSurfaceId id) => Calls.Add($"Destroy({id.Value})");
+    public void ApplyPending() => Applies++;
+    public bool CanAttachSurfaces => CanAttach;
     public void Commit() => Commits++;
 }
 

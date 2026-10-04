@@ -943,6 +943,7 @@ public sealed partial class SliceRecorder
     {
         public int Seg; public RectF Rect; public VideoEraseOrder Order;
         public RectF Hole; public CornerRadius4 Radii; public float Strength; public RectF RoundRect; public float RoundR;
+        public int SurfaceId;   // the registry slot token the DrawVideo carries (F070: keys the posed hole the video placement follows)
     }
     private struct ScanFade { public int Seg; public RectF Rect; public float Start, End; }
 
@@ -1085,6 +1086,7 @@ public sealed partial class SliceRecorder
                                     Radii = new CornerRadius4(v.Radii.TopLeft * rs, v.Radii.TopRight * rs, v.Radii.BottomRight * rs, v.Radii.BottomLeft * rs),
                                     Strength = Math.Clamp(v.VideoReady, 0f, 1f) * Math.Clamp(v.Opacity, 0f, 1f),
                                     RoundRect = round, RoundR = roundR,
+                                    SurfaceId = v.SurfaceId,
                                 };
                                 WarnFadedVideo(v.Opacity);
                             }
@@ -1196,11 +1198,20 @@ public sealed partial class SliceRecorder
     private int _planCount;
     private readonly RectF[] _videoRects = new RectF[8];
     private int _videoRectCount;
+    // F070: each hole's UNCLIPPED rect at the slot's posed offset, keyed by the registry token its DrawVideo carries - what the render
+    // thread's VideoPlacementApplier follows, so a composite-only scroll or animation turn moves the video exactly as far as the hole.
+    private readonly FluentGpu.Media.VideoPosedHole[] _posedHoles = new FluentGpu.Media.VideoPosedHole[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+    private int _posedHoleCount;
     private ulong _compositeHash;
 
     /// <summary>Video hole rects (window DIP) the last <see cref="Place"/> placed — the published answer for
     /// <c>RectOverVideoHole</c> and the video presenter's feedback.</summary>
     internal ReadOnlySpan<RectF> VideoRects => _videoRects.AsSpan(0, _videoRectCount);
+
+    /// <summary>The holes the last <see cref="Place"/> placed as the video placement must follow them (F070): the unclipped posed rect and
+    /// the composite clip that cut it, per registry token. A hole the composite clipped away entirely is still listed (its clip is what
+    /// hides the video behind it).</summary>
+    internal ReadOnlySpan<FluentGpu.Media.VideoPosedHole> PosedHoles => _posedHoles.AsSpan(0, _posedHoleCount);
 
     /// <summary>A signature of everything the last <see cref="Place"/> composites: every placed segment's arena CONTENT
     /// (a byte hash — a slice re-walked into identical bytes signs the same), its posed offset, clip and layer, every
@@ -1220,6 +1231,7 @@ public sealed partial class SliceRecorder
     {
         _planCount = 0;
         _videoRectCount = 0;
+        _posedHoleCount = 0;
         _compositeHash = 14695981039346656037UL;
         if (_slotCount == 0 || !_recs[RootSlot].Live) return;
         for (int s = 0; s < _slotCount; s++) _recs[s].Visited = false;
@@ -1297,6 +1309,10 @@ public sealed partial class SliceRecorder
             ref ScanVideo sv = ref _scanVideos[slot][v];
             if (sv.Seg != k || sv.Order != order) continue;
             RectF wr = Offset(sv.Rect, accDx, accDy);
+            // F070: the posed hole as the video placement follows it - the unclipped rect and the clip that cuts it, recorded BEFORE the
+            // clip empties the erase, so a hole scrolled fully under a header still tells the applier to hide the video there.
+            if (sv.SurfaceId > 0 && _posedHoleCount < _posedHoles.Length)
+                _posedHoles[_posedHoleCount++] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = effClip };
             if (!effClip.IsInfinite) wr = wr.Intersect(effClip);
             if (wr.IsEmpty) continue;
             ref Plan ve = ref NewPlan(PlanKind.Video);
