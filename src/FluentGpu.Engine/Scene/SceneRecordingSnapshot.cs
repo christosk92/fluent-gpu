@@ -55,6 +55,9 @@ public sealed partial class SceneRecordingSnapshot
     // VisualKind-gated capture-time copy like _rowCells (a SeriesEl has no other sparse paint of its own).
     private readonly SnapshotColumn<SeriesSpec> _series = new();
     private readonly SnapshotColumn<SeriesSamplesCapture> _seriesSamples = new();
+    // SpriteFieldEl (VisualKind.Sprites): the static spec + the pooled instance copy, captured like the series samples.
+    private readonly SnapshotColumn<SpriteSpec> _spriteSpec = new();
+    private readonly SnapshotColumn<SpriteCapture> _sprites = new();
     private readonly SnapshotColumn<ClipPathSpec> _clipPath = new();
     private readonly SnapshotColumn<Point2> _radialCenter = new();
     private readonly SnapshotColumn<GradientSpec> _GradientTo = new();
@@ -280,6 +283,8 @@ public sealed partial class SceneRecordingSnapshot
             _spanDecorations.BeginCapture();
             _rowCells.BeginCapture();
             _seriesSamples.BeginCapture();
+            _spriteSpec.BeginCapture();
+            _sprites.BeginCapture();
         }
         // These three are rebuilt wholesale on EVERY capture: they are tiny (orphans are budget-capped, scroll rows
         // are a handful of viewports) and rebuilding is cheaper than tracking deltas through them.
@@ -345,6 +350,8 @@ public sealed partial class SceneRecordingSnapshot
             _spanDecorations.EndCapture();
             _rowCells.EndCapture();
             _seriesSamples.EndCapture();
+            _spriteSpec.EndCapture();
+            _sprites.EndCapture();
         }
         _orphanChildren.EndCapture();
 
@@ -408,6 +415,8 @@ public sealed partial class SceneRecordingSnapshot
         _path.Remove(index);
         _series.Remove(index);
         _seriesSamples.Remove(index);
+        _spriteSpec.Remove(index);
+        _sprites.Remove(index);
         _clipPath.Remove(index);
         _radialCenter.Remove(index);
         _GradientTo.Remove(index);
@@ -570,6 +579,17 @@ public sealed partial class SceneRecordingSnapshot
             rc.Count = rowCells.Length;
             rc.Placeholder = rowPlaceholder;
             rc.PlaceholderColor = rowPlaceholderColor;
+        }
+        if (_paint[index].VisualKind == VisualKind.Sprites)
+        {
+            if (source.TryGetSpriteSpec(node, out var spriteSpec)) _spriteSpec.Set(index) = spriteSpec;
+            if (source.TryGetSprites(node, out var sprites))
+            {
+                ref var sp = ref _sprites.Set(index);
+                if (sp.Sprites is null || sp.Sprites.Length < sprites.Length) sp.Sprites = new Sprite[Math.Max(64, sprites.Length)];
+                sprites.CopyTo(sp.Sprites);
+                sp.Count = sprites.Length;
+            }
         }
         if (_paint[index].VisualKind == VisualKind.Series && source.TryGetSeriesSamples(node, out var seriesSamples))
         {
@@ -851,6 +871,14 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetPath(NodeHandle node, out PathSpec value) => _path.TryGet((int)node.Raw.Index, out value);
     public bool TryGetSeries(NodeHandle node, out SeriesSpec value) => _series.TryGet((int)node.Raw.Index, out value);
     /// <summary>The recorder's read of a captured series (the render-thread twin of <c>SceneStore.TryGetSeriesSamples</c>).</summary>
+    public bool TryGetSpriteSpec(NodeHandle node, out SpriteSpec spec) => _spriteSpec.TryGet((int)node.Raw.Index, out spec);
+    public bool TryGetSprites(NodeHandle node, out ReadOnlySpan<Sprite> sprites)
+    {
+        if (_sprites.TryGet((int)node.Raw.Index, out var c) && c.Sprites is not null) { sprites = c.Sprites.AsSpan(0, c.Count); return true; }
+        sprites = default;
+        return false;
+    }
+
     public bool TryGetSeriesSamples(NodeHandle node, out ReadOnlySpan<float> samples)
     {
         if (_seriesSamples.TryGet((int)node.Raw.Index, out var c) && c.Samples is not null) { samples = c.Samples.AsSpan(0, c.Count); return true; }
@@ -1054,6 +1082,7 @@ public sealed partial class SceneRecordingSnapshot
     private struct SpanDecoration { public SpanStyle[] Styles; public SpanRect[] Rects; }
     private struct RowCellsCapture { public RowCellRecorded[]? Cells; public int Count; public bool Placeholder; public ColorF PlaceholderColor; }
     private struct SeriesSamplesCapture { public float[]? Samples; public int Count; }
+    private struct SpriteCapture { public Sprite[]? Sprites; public int Count; }
 }
 
 /// <summary>Reusable dense visual rows indexed by sparse scene slots. Mutation is confined to exclusive capture.</summary>

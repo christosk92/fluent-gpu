@@ -1023,6 +1023,7 @@ public sealed partial class TreeReconciler
         PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
         PathEl x => b is PathEl y ? PathElDiff.FirstBoundFlip(x, y) : null,
         SeriesEl x => b is SeriesEl y ? SeriesElDiff.FirstBoundFlip(x, y) : null,
+        SpriteFieldEl x => b is SpriteFieldEl y ? SpriteFieldElDiff.FirstBoundFlip(x, y) : null,
         _ => null,
     };
 
@@ -1041,6 +1042,7 @@ public sealed partial class TreeReconciler
         PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
         PathEl x => b is not PathEl y || PathElDiff.AnyChanged(x, y),
         SeriesEl x => b is not SeriesEl y || SeriesElDiff.AnyChanged(x, y),
+        SpriteFieldEl x => b is not SpriteFieldEl y || SpriteFieldElDiff.AnyChanged(x, y),
         _ => true,
     };
 
@@ -2800,6 +2802,10 @@ public sealed partial class TreeReconciler
         {
             BindSeriesSamples(node, se);   // Reconciler.Series.cs — the bound sample-source channel
         }
+        else if (el is SpriteFieldEl sf)
+        {
+            BindSprites(node, sf);   // Reconciler.Sprites.cs — the bound instance-buffer channel
+        }
         else if (el is ListRowEl lr)
         {
             BindListRowCells(node, lr);   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
@@ -3860,6 +3866,8 @@ public sealed partial class TreeReconciler
                 return true;
             case SeriesEl se:
                 return !se.Samples.IsBound;   // a bound sample source is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
+            case SpriteFieldEl sf:
+                return !sf.Instances.IsBound; // likewise the bound instance buffer (Reconciler.Sprites.cs)
             case PathEl pe:
                 // Mirrors the BoxEl rule just below: a path with an OnRealized capture (the hero-art draw-on timelines)
                 // must mount fresh every time so the callback fires and the caller's ref stays pointed at a live node.
@@ -5426,6 +5434,22 @@ public sealed partial class TreeReconciler
                 li.MinW = se.MinWidth; li.MinH = se.MinHeight; li.MaxW = se.MaxWidth; li.MaxH = se.MaxHeight;
                 li.FlexGrow = se.Grow; li.FlexShrink = se.Shrink; li.FlexBasis = se.Basis;
                 li.AlignSelf = se.AlignSelf; li.JustifySelf = se.JustifySelf;
+                break;
+            }
+            case SpriteFieldEl sf:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.Sprites;
+                paint.Opacity = sf.Opacity;
+                _scene.SetSpriteSpec(node, new SpriteSpec(sf.Kernel, sf.Blend, sf.Opacity));
+                if (!sf.Instances.IsBound) _scene.SetSprites(node, sf.Instances.Value.AsSpan());
+                // else: the bound path defers to BindSprites' mount-time effect.
+                ref LayoutInput li = ref _scene.Layout(node);
+                li.Margin = sf.Margin;
+                li.Width = sf.Width; li.Height = sf.Height;
+                li.MinW = sf.MinWidth; li.MinH = sf.MinHeight; li.MaxW = sf.MaxWidth; li.MaxH = sf.MaxHeight;
+                li.FlexGrow = sf.Grow; li.FlexShrink = sf.Shrink; li.FlexBasis = sf.Basis;
+                li.AlignSelf = sf.AlignSelf; li.JustifySelf = sf.JustifySelf;
                 break;
             }
             case ListRowEl lr:

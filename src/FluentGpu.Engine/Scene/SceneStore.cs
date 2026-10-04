@@ -537,6 +537,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_paint[idx].VisualKind == VisualKind.ListRow && (_rowCells.Count != 0 || _rowCellClickHandlers.Count != 0))
             ReleaseRowCells(idx);
         if (_paint[idx].VisualKind == VisualKind.Series && _seriesSamples.Count != 0) _seriesSamples.Remove(idx);
+        if (_paint[idx].VisualKind == VisualKind.Sprites) ReleaseSprites(idx);
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);

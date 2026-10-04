@@ -2612,6 +2612,26 @@ internal sealed class SceneRecordingContext
                 }
                 break;
             }
+            case VisualKind.Sprites:
+            {
+                if (!maybeSparsePaint || !overlapsRecordClip) break;
+                if (!scene.TryGetSpriteSpec(node, out var sps) || !scene.TryGetSprites(node, out var sprites) || sprites.Length == 0) break;
+                bool spriteAdd = sps.Blend == PaintBlend.Additive && _additiveDepth == 0;
+                if (spriteAdd) dl.SetBlend(PaintBlend.Additive);
+                int chunkStart = dl.BytePosition;
+                dl.Sprites(sps.Kernel, sprites, world, opacity, key);
+                if (spriteAdd) dl.SetBlend(PaintBlend.SrcOver);
+                // the subtree bounds: the union of every sprite (kernel-exact) + the AA pad, in world space
+                float sl = float.PositiveInfinity, st = float.PositiveInfinity, sr = float.NegativeInfinity, sbm = float.NegativeInfinity;
+                for (int si = 0; si < sprites.Length; si++)
+                {
+                    RectF sb = sprites[si].Bounds(sps.Kernel);
+                    sl = MathF.Min(sl, sb.X); st = MathF.Min(st, sb.Y); sr = MathF.Max(sr, sb.X + sb.W); sbm = MathF.Max(sbm, sb.Y + sb.H);
+                }
+                _ = chunkStart;
+                if (sr >= sl && sbm >= st) result.Include(world.TransformBounds(new RectF(sl - 1f, st - 1f, sr - sl + 2f, sbm - st + 2f)));
+                break;
+            }
             case VisualKind.Series:
             {
                 if (!maybeSparsePaint || !overlapsRecordClip) break;

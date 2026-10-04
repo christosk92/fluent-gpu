@@ -207,6 +207,7 @@ public static class Asserts
         DrawOp.StrokePath => Unsafe.SizeOf<StrokePathCmd>(),
         DrawOp.DrawSeries => Unsafe.SizeOf<DrawSeriesCmd>(),
         DrawOp.SetBlend => Unsafe.SizeOf<SetBlendCmd>(),
+        DrawOp.DrawSprites => Unsafe.SizeOf<DrawSpritesCmd>(),
         DrawOp.PushStencilClip => Unsafe.SizeOf<PushStencilClipCmd>(),
         DrawOp.PopStencilClip => Unsafe.SizeOf<PopStencilClipCmd>(),
         _ => 0,

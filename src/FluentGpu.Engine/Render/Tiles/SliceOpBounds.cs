@@ -42,6 +42,7 @@ public static class SliceOpBounds
             case DrawOp.FillPath: { var c = Read<FillPathCmd>(payload); return Box(c.Rect, c.Transform, RepaintCull.AaHaloDip, out bounds); }
             case DrawOp.StrokePath: { var c = Read<StrokePathCmd>(payload); return Box(c.Rect, c.Transform, RepaintCull.AaHaloDip, out bounds); }
             case DrawOp.DrawSeries: { var c = Read<DrawSeriesCmd>(payload); return Box(c.Rect, c.Transform, c.Shape >= 2 ? RepaintCull.StrokeHalo(c.Thickness + 2f) : RepaintCull.AaHaloDip, out bounds); }
+            case DrawOp.DrawSprites: { var c = Read<DrawSpritesCmd>(payload); return Box(c.Rect, c.Transform, RepaintCull.AaHaloDip + 1f, out bounds); }
             case DrawOp.PushLayer:
             {
                 // An inline (folded) layer: an acrylic paints its frosted rect; a blur's Gaussian reaches past its content

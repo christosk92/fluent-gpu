@@ -93,6 +93,7 @@ public static class RepaintStreamSafety
             case DrawOp.StrokePath: body = Unsafe.SizeOf<StrokePathCmd>(); break;
             case DrawOp.DrawSeries: body = Unsafe.SizeOf<DrawSeriesCmd>(); break;
             case DrawOp.SetBlend: body = Unsafe.SizeOf<SetBlendCmd>(); break;
+            case DrawOp.DrawSprites: body = Unsafe.SizeOf<DrawSpritesCmd>(); break;
             case DrawOp.PushStencilClip: body = Unsafe.SizeOf<PushStencilClipCmd>(); break;
             case DrawOp.PopStencilClip: body = Unsafe.SizeOf<PopStencilClipCmd>(); break;
             case DrawOp.PopLayer: body = Unsafe.SizeOf<PopLayerCmd>(); break;

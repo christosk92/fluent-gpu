@@ -223,6 +223,14 @@ public sealed partial class SceneRecordingSnapshot
         if (hasSeries != otherSeries) return Fail(out mismatch, $"n#{i} series samples presence");
         if (hasSeries && !mineSeries.SequenceEqual(theirSeries)) return Fail(out mismatch, $"n#{i} series samples");
 
+        bool hasSprites = TryGetSprites(node, out var mineSprites);
+        bool otherSprites = other.TryGetSprites(node, out var theirSprites);
+        if (hasSprites != otherSprites) return Fail(out mismatch, $"n#{i} sprites presence");
+        if (hasSprites && !System.Runtime.InteropServices.MemoryMarshal.AsBytes(mineSprites).SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(theirSprites)))
+            return Fail(out mismatch, $"n#{i} sprites");
+        if (TryGetSpriteSpec(node, out var mineSpec) != other.TryGetSpriteSpec(node, out var theirSpec) || mineSpec != theirSpec)
+            return Fail(out mismatch, $"n#{i} sprite spec");
+
         if (!ScrollChrome.Get(i).Equals(other.ScrollChrome.Get(i))) return Fail(out mismatch, $"n#{i} scroll chrome");
         return true;
     }

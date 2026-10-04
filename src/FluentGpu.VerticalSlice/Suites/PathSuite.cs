@@ -882,6 +882,7 @@ static class PathSuite
         dl.PopStencilClip(rect, pathRef, identity);
         dl.PopLayer(rect);
         dl.SetBlend(PaintBlend.SrcOver);
+        dl.Sprites(SpriteKernel.Disc, [new Sprite { X = 10f, Y = 10f, W = 4f, H = 4f, Rgba = 0xFFFFFFFFu }], Affine2D.Identity, 1f);
         dl.PopClip();
 
         // Every SUBMITTABLE opcode: DrawOp.CompositeSlice is the slice recorder's internal marker and never reaches a
