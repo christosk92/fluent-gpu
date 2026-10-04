@@ -699,6 +699,44 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 </div>
 <p class="prose">Each pair is two <code>--fake</code> instances with scratch profiles on the same machine, playing, with the stage open. The CPU value is noisy and bimodal: almost all of it is on one thread, which used 1.2 s and 2.5 s each 20 s in two runs of merged main, and 2.1 s and 2.0 s in two runs of (i) + (j). Each build also had a run near 0.4 %. Four pairs do not show a CPU change, and they do not exclude one. The pass timeline (probe on) gave composite 1.19 → 0.89 ms and a whole frame of 2.30 → 1.92 ms.</p>
 
+<div class="chg">
+<h3><span class="tag done">done</span>(k) A tile composites only the part that its ops paint</h3>
+<p class="file">FluentGpu.Engine/Render/Evidence/TileContentHash.cs (<code>TileWant</code>, <code>TileOp.Clip</code>) · Render/Tiles/SliceTable.Content.cs (<code>PlacementPaint</code>) · Render/Tiles/SliceTable.cs (<code>TilePlacement.Paint*</code>) · D3D12Device.Composite.cs</p>
+<div class="prose">
+<p><b>Problem.</b> A tile cell is 1024 × 512 px. The table cuts it only at the right and bottom edges of the painted bounds of its segment. On the stage, the chrome segment holds a top bar, the hero at the left and panes at the right, so its bounds cover the window. The composite drew each of its 9 cells completely on each frame (2.9 M px). Most of each cell is transparent.</p>
+<p><b>Design.</b></p>
+<ol>
+  <li>The content scan for each tile already visits each op that reaches the tile. It now also returns the painted rect of the tile: the union of the footprints of those ops, cut by the tile. A clip scope paints nothing and is not in the union. A layer scope composites its content back and is in the union.</li>
+  <li>The slice table keeps the painted rect for each surface: one for the want and one for the pixels that the surface holds. A placement carries the union of the two, rounded out to whole px. A tile that rasters in this submission holds the want, so no painted pixel is left out.</li>
+  <li>The composite draws only that part of the tile. The texel origin follows the part. The partial-present diff, the culling of the backdrop key and the occlusion footprints use the same part.</li>
+</ol>
+<p><b>Status.</b> Done, on branch <code>perf/tile-paint</code> (on top of (i)). The gate <code>gate.tiles.paint</code> shows a sparse segment that composites 15,152 px of its 1,179,648 px of cells. <code>--repaint-identity</code>: 195 / 195 identical.</p>
+</div>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(l) A backdrop over an opaque item starts its mini-composite at that item</h3>
+<p class="file">FluentGpu.Windows/D3D12/D3D12Device.Occlusion.cs (<code>CoverFrom</code>) · D3D12Device.Composite.cs (<code>PrepareBackdrop</code>, <code>BackdropKey</code>)</p>
+<div class="prose">
+<p><b>Problem.</b> The mini-composite of an acrylic backdrop starts with a clear and a fill of the clear colour over its whole region, then draws each item before the backdrop. On the stage, the bar lies on the opaque backdrop from (j). The clear, the fill and each item under the backdrop paint nothing in the region of the bar.</p>
+<p><b>Design.</b> The occlusion pass keeps the opaque whole pixels of each occluder. When the region of a backdrop is inside the highest occluder below it, the pass opens with DISCARD, the fill is not drawn, the mini-composite starts at the occluder, and the key of the retained result includes only the items from the occluder on. <code>GpuKnockouts.NoOcclusion</code> turns this off with the rest of the occlusion route.</p>
+<p><b>Status.</b> Done, on branch <code>perf/backdrop-clear</code> (on top of (k)). <code>--repaint-identity</code>: 195 / 195 identical; the full-window scene of <code>occlusion-identity</code> uses this route.</p>
+</div>
+</div>
+
+<h3>Measured on the stage: (k) + (l)</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Stage, <code>--fake</code>, 120 Hz</th><th>(i) + (j)</th><th>(i) .. (l)</th><th>Runs</th></tr></thead>
+<tbody>
+<tr><td>GPU per frame (<code>[render.pace] gpuMs</code>, last 8 s)</td><td class="num">1.90 – 1.91 ms</td><td class="num">1.69 ms</td><td class="num">2 A/B pairs</td></tr>
+<tr><td>GPU 3D engine (Task Manager counter)</td><td class="num">24.4 – 25.9 %</td><td class="num">21.7 – 25.1 %</td><td class="num">2 A/B pairs</td></tr>
+<tr><td>Private memory on the stage</td><td class="num">311.7 – 313.2 MB</td><td class="num">311.4 – 311.9 MB</td><td class="num">2 A/B pairs</td></tr>
+</tbody>
+</table>
+</div>
+<p class="prose">From merged main to (i) .. (l), the GPU time of the stage goes from 2.32–2.36 ms to 1.69 ms per frame (−28 %). CPU does not change in these pairs. Almost all of it is the render thread: driver calls to submit, present and draw, about 0.5 ms per frame. A per-thread OS sample is the correct tool: a <code>dotnet-trace</code> thread-time sample counts the time that a thread waits in <code>WaitHandle.WaitMultiple</code> as CPU.</p>
+
 <h3>Measured on the fullscreen stage</h3>
 <div class="tbl">
 <table>
@@ -745,6 +783,8 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>(i) Engine tests · <code>FluentGpu.Windows.Tests</code></td><td class="num">1186 · 533</td><td class="num">1184 · 533</td></tr>
 <tr><td>(i) <code>--repaint-identity</code>, real D3D12 pixel readback (Release)</td><td class="num" colspan="2">195 / 195 identical (15 new <code>occlusion-identity</code>)</td></tr>
 <tr><td>(j) Wavee tests</td><td class="num">14 206 pass, 1 skipped</td><td class="num">14 206 pass, 1 skipped</td></tr>
+<tr><td>(k) + (l) Engine tests · <code>FluentGpu.Windows.Tests</code> · VerticalSlice</td><td class="num">1189 · 533 · 1741</td><td class="num">1187 · 533 · 1741</td></tr>
+<tr><td>(k), (l) <code>--repaint-identity</code> (Release), each branch</td><td class="num" colspan="2">195 / 195 identical</td></tr>
 <tr><td>GPU time on the owner's machine</td><td colspan="2">Not measured. The live instance must rebuild and restart. Read <code>[render.pace] gpuMs=</code>.</td></tr>
 </tbody>
 </table>
