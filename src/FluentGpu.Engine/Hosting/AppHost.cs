@@ -462,6 +462,7 @@ public sealed partial class AppHost : IDisposable
     private readonly TreeReconciler _reconciler;
     private readonly FlexLayout _layout;
     private readonly LayoutInvalidator _invalidator;
+    private readonly HashSet<NodeHandle> _followAnchors = new();   // F169 scratch: the follow pass's anchor chains, handed to _anim each frame
     private readonly DrawList _drawList = new();
     private readonly SpanTable _spanTable = new();
     private bool _imageCrossfadeWasActive;
@@ -5315,6 +5316,29 @@ public sealed partial class AppHost : IDisposable
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
+            // 7.15 follow-rect (F169): a node that must cover ANOTHER node's rect this frame (the docked video overlay over its
+            // hollow reservation) takes size and position from the target's PAINTED rect here: after layout AND the animation
+            // tick (so a paint-only slide of the target is already in its transform), before the video geometry scan and
+            // record. The size write re-solves only the follower's dirty scope; the position is then a paint translation.
+            // A render-owned compositor row would NOT be in that transform (the render thread advances it, the UI sees it only
+            // at feedback), so the pass republishes its anchor chains below and the anim engine keeps their translate/scale
+            // rows UI-owned while a follower follows (next frame's tick onward; a row already in flight hands over at once).
+            bool hasFollowers = _scene.HasFollowers;
+            if (hasFollowers)
+            {
+                if (_scene.SizeFollowRects())
+                {
+                    _invalidator.RunDirty(layoutSize);
+                    _scene.ClearLayoutDirty();
+                }
+                _scene.PlaceFollowRects();
+            }
+            if (hasFollowers || _anim.HasFollowAnchors)   // the second term releases the anchors the frame the last follower goes
+            {
+                _followAnchors.Clear();
+                if (hasFollowers) _scene.CollectFollowAnchors(_followAnchors);
+                _anim.SetFollowAnchors(_followAnchors);
+            }
             // 7.2 video pump: event/geometry/transport requests are coalesced into one post-layout turn per surface.
             // Native DirectComposition video presents decoded frames independently, so a playing video no longer turns
             // every host frame into RepaintCurrentFrame. Render remains pure; registered pumps only write value-gated

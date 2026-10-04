@@ -92,11 +92,15 @@ public interface IMediaPlayer : IAsyncDisposable
     /// <summary>The composited-video child-visual id; <see cref="VideoSurfaceId.IsNone"/> until the first video frame.</summary>
     IReadSignal<VideoSurfaceId> VideoSurface { get; }
 
-    /// <summary>Drive one UI-thread video pump: the routed backend (when it produces a composited surface) translates its
-    /// engine state into the player signals, binds the produced DirectComposition handle into <paramref name="binding"/>
-    /// (the hole the control draws), and sizes/places the video child at <paramref name="videoRect"/> (DIP) ×
-    /// <paramref name="scale"/> (device px). A no-op for audio-only / headless players. The control (<c>MediaPlayerElement</c>)
-    /// calls this for an initial hand-off and coalesced native/geometry/transport requests; it is not a per-frame repaint path.</summary>
+    /// <summary>Drive one UI-thread video pump for the presenting control: the routed backend (when it produces a composited
+    /// surface) binds the produced DirectComposition handle into <paramref name="binding"/> (the hole the control draws), and
+    /// sizes/places the video child at <paramref name="videoRect"/> (DIP) × <paramref name="scale"/> (device px). A no-op for
+    /// audio-only / headless players. The control (<c>MediaPlayerElement</c>) calls this for an initial hand-off and
+    /// coalesced native/geometry/transport requests; it is not a per-frame repaint path.
+    /// <para>A player that owns its control plane (<see cref="MediaPlayer"/>) publishes state, position, duration, natural
+    /// size and errors on its own, from its session's pump requests, whether or not any control is mounted, so this call is
+    /// the surface half only. A player that does not (the headless scripted player) publishes them from inside this call
+    /// as well.</para></summary>
     void PumpVideo(VideoBinding binding, RectF videoRect, float scale);
 
     // ── transport: idempotent, coalescing — complete (never throw) on supersession ────────────────────────────────────

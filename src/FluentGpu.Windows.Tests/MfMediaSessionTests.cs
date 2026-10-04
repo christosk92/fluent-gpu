@@ -590,6 +590,104 @@ public sealed class MfMediaSessionTests
         Assert.Equal(0.0, secsLow, 6);
     }
 
+    // ── the two pumps (F132): state needs no element, geometry needs the state half to have adopted the source ───────────
+
+    [Fact]
+    public void PumpState_AdvancesStateDurationNaturalSizeAndPosition_WithNoBindingAtAll()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.DurationSeconds = 90; eng.Handle = 0xBEEF;
+
+        s.PumpState();                                                    // no element, no binding, no rect
+
+        Assert.Equal(PlaybackState.Ready, core.State.Peek());
+        Assert.Equal(new SizeI(1280, 720), core.NaturalSize.Peek());
+        Assert.Equal(TimeSpan.FromSeconds(90), core.Duration.Peek());
+        Assert.True(core.VideoSurface.Peek().IsNone);                     // readiness needs a bound handle: that is the geometry half's
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));       // nothing sized, nothing repainted
+        Assert.False(eng.Commands.TryTakeRepaint());
+
+        _ = s.PlayAsync(); eng.Playing = true; eng.CurrentTimeSeconds = 12;
+        s.PumpState();
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.InRange(core.Position.Peek(), TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(14));
+
+        eng.HasError = true; eng.ErrorCode = 2;                           // a failure while nothing is mounted still surfaces
+        s.PumpState();
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+        Assert.Equal(MediaErrorCategory.Network, core.Error.Peek()!.Category);
+    }
+
+    [Fact]
+    public void PumpGeometry_BindsAndPlaces_ButPublishesNoState_AndWaitsForTheStateHalf()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.DurationSeconds = 90; eng.Handle = 0xBEEF;
+        eng.FirstFrameTimestamp = 7;
+
+        s.PumpGeometry(binding, new RectF(10, 20, 640, 360), 2f);         // the state half has not adopted the source yet
+        Assert.Equal(PlaybackState.Opening, core.State.Peek());           // …and the geometry half publishes no state of its own
+        Assert.Equal(SizeI.Zero, core.NaturalSize.Peek());
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.True(core.VideoSurface.Peek().IsNone);
+
+        s.PumpState();
+        Assert.Equal(PlaybackState.Ready, core.State.Peek());
+        s.PumpGeometry(binding, new RectF(10, 20, 640, 360), 2f);
+
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((1280, 720), (w, h));
+        Assert.False(core.VideoSurface.Peek().IsNone);                    // handle bound + this source's first frame
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1f);
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+
+        s.PumpGeometry(default, new RectF(0, 0, 100, 100), 1f);           // an inert binding does nothing at all
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+    }
+
+    [Fact]
+    public void PumpGeometry_LeavesAPresentationEpochTheStateHalfHasNotAdopted_ForTheNextTurn()
+    {
+        var (s, _, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xAAAA;
+        s.PumpState();
+        s.PumpGeometry(binding, Rect, 1f);
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xAAAA, presenter.LastBoundHandle);
+
+        eng.Handle = 0xBBBB;
+        eng.RaiseFormatChange();
+        s.PumpGeometry(binding, Rect, 1f);                                // the epoch moved and the state half has not seen it
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xAAAA, presenter.LastBoundHandle);           // the old handle is not re-bound over a replaced swap chain
+
+        s.PumpState();                                                    // the same raise requests the state pump first…
+        s.PumpGeometry(binding, Rect, 1f);                                // …then the element's turn
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xBBBB, presenter.LastBoundHandle);
+    }
+
+    [Fact]
+    public void PumpVideo_IsTheTwoHalvesInOneCall()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.DurationSeconds = 90; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 2f);              // one snapshot, state then geometry
+
+        Assert.Equal(TimeSpan.FromSeconds(90), core.Duration.Peek());
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((1280, 720), (w, h));
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1f);
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+    }
+
     // ── stale-epoch guard + disposal ─────────────────────────────────────────────────────────────────────────────────
 
     [Fact]

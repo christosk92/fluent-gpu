@@ -626,6 +626,91 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         Assert.Equal(new SizeI(1440, 810), binding.ContentSize);
     }
 
+    // ── the two pumps (F132): state with no element, surface from the handle the state pump saw ─────────────────────────────
+
+    [Fact]
+    public void PumpState_PublishesStateSizeDurationPositionAndSurfaceReadiness_WithNoBinding_AndNeverBinds()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.FirstFrameEpoch = 1;
+        player.Phase = ProtectedVideoPhase.Playing;
+        player.SetNaturalSize(1280, 720);
+        player.SetDurationMs(60_000);
+        player.SetPositionMs(5_000);
+        player.PositionQpc = Stopwatch.GetTimestamp();
+        player.SetState(ProtectedVideoState.Playing);
+
+        session.PumpState();                                                   // no element, no binding, no rect
+
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.Equal(new SizeI(1280, 720), core.NaturalSize.Peek());
+        Assert.Equal(TimeSpan.FromSeconds(60), core.Duration.Peek());
+        Assert.True(core.Position.Peek() >= TimeSpan.FromSeconds(5));
+        Assert.False(core.VideoSurface.Peek().IsNone);                         // first frame of this attach on a live surface
+        Assert.Equal(1, player.PumpCalls);
+        Assert.Empty(player.PumpedTokens);                                     // the surface half never ran
+        Assert.Equal(0, player.SetStreamSizeCalls);
+    }
+
+    [Fact]
+    public void PumpState_AFailureWhileNothingIsMounted_StillSurfaces()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        player.SetError("The license server refused.");
+        player.SetState(ProtectedVideoState.Error);
+
+        session.PumpState();
+
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+        Assert.NotNull(core.Error.Peek());
+    }
+
+    [Fact]
+    public void PumpGeometry_BindsTheHandleAndPlaces_WithoutRunningTheStatePump()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        session.PumpState();                                                   // the state pump saw the surface first
+
+        VideoBinding binding = NewBinding(registry);
+        session.PumpGeometry(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.Equal(1, player.PumpCalls);                                     // geometry added no state pump …
+        Assert.Equal(new[] { binding.Token }, player.PumpedTokens);            // … and handed the binding to the player once
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+        Assert.Equal(Rect, presenter.LastPlaceRect);
+        Assert.Equal(binding.Token, core.SurfaceGeometry.Peek().Token);
+
+        session.PumpGeometry(default, Rect, 1f);                               // an inert binding is not even forwarded
+        Assert.Single(player.PumpedTokens);
+    }
+
+    [Fact]
+    public void PumpGeometry_AfterATerminalError_BindsButSizesAndPlacesNothing()
+    {
+        var (session, _, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.SetState(ProtectedVideoState.Error);
+        player.SetError("boom");
+        session.PumpState();
+
+        session.PumpGeometry(NewBinding(registry), Rect, 1f);
+
+        Assert.Equal(0, player.SetStreamSizeCalls);
+    }
+
     [Fact]
     public void APlacementMove_BindsTheSameHandleThroughTheNewToken_OnTheNextPump_WithNoReopen()
     {

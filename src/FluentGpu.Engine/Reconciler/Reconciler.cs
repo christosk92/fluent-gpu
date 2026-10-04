@@ -2470,7 +2470,8 @@ public sealed partial class TreeReconciler
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
-                    Affine2D next = fx.Read();
+                    Affine2D next = fx.Read();                // read FIRST: the read is what keeps the effect subscribed
+                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the translation this frame
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.LocalTransform == next) return;
                     paint.LocalTransform = next;
@@ -2637,7 +2638,8 @@ public sealed partial class TreeReconciler
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();
+                    float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
+                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
                     ref var li = ref _scene.Layout(node);
                     if (wPrimed && li.Width.Equals(next)) return;
                     wPrimed = true;
@@ -2654,7 +2656,8 @@ public sealed partial class TreeReconciler
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();
+                    float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
+                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
                     ref var li = ref _scene.Layout(node);
                     if (hPrimed && li.Height.Equals(next)) return;
                     hPrimed = true;
@@ -3868,7 +3871,7 @@ public sealed partial class TreeReconciler
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
                     || b.RadialGradientCenter.IsBound || b.Width.IsBound || b.Height.IsBound
-                    || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
+                    || b.OnRealized is not null || b.OnBoundsChanged is not null || b.FollowRect is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
             case GridEl g:
@@ -4977,6 +4980,7 @@ public sealed partial class TreeReconciler
                 if (b.IsolateLayout) _scene.Mark(node, NodeFlags.LayoutBoundary); else _scene.Unmark(node, NodeFlags.LayoutBoundary);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
+                _scene.SetFollowRect(node, b.FollowRect);   // F169: the engine's post-layout follow pass (SceneStore.Follow.cs)
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);

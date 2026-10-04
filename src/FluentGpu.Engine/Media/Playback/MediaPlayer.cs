@@ -21,6 +21,12 @@ namespace FluentGpu.Media;
 /// signal-forwarding + backend-swap wiring is fully real and exercised headlessly via a registered test backend. A host
 /// that ships platform backends (the Windows host) installs them once through <see cref="MediaRouter.SetDefaultRegistrar"/>,
 /// and every <see cref="Create"/>/<see cref="Build"/> player then resolves them with no registration of its own.</para>
+/// <para><b>The control plane belongs to the player, not to an element (F132).</b> A session that has video raises
+/// <see cref="IVideoPumpSource.PumpRequested"/> from its engine thread; the player turns each raise into ONE coalesced
+/// UI-thread state pump of its own (state, position, duration, natural size, errors, seek landing, the DRM phase), through
+/// the poster captured at construction, so the signals advance with no <c>MediaPlayerElement</c> mounted (a hand-off
+/// between windows, a covered presenter, a closed pop-out). A mounted element only binds the surface and places it
+/// (<see cref="PumpVideo"/>); it is told about the same raise right after the state pump has been queued.</para>
 /// </summary>
 public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSource
 {
@@ -41,6 +47,18 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     // The UI poster of the host that was live when this player was built, captured ONCE: the marshal target belongs to the
     // player, not to whichever host last wrote HostDispatch.Current (a pop-out child used to overwrite and then null it).
     private readonly Action<Action>? _uiPost = FluentGpu.Hooks.HostDispatch.Current;
+
+    // The player's own state pump (F132). _statePumpQueued coalesces a burst of raises into one posted turn (cleared before
+    // the turn runs, so a raise during it queues the next one); _statePumpRunning/_statePumpAgain only matter where there
+    // is no poster (headless: the request runs inline, and a session that raises from inside its own pump folds the nested
+    // request into one more turn instead of recursing). The age is read from any thread by diagnostics.
+    private const int MaxStatePumpTurns = 4;
+    private int _statePumpQueued;
+    private int _statePumpRunning;
+    private int _statePumpAgain;
+    private int _statePumps;
+    private long _lastStatePumpMs;   // Environment.TickCount64 of the last state pump, or of the session connect; 0 = no session
+    private readonly Action _statePumpTurn;
 
     // Open ordering (last wins). _openGeneration names the one open that may still publish; a newer open, Stop and
     // DisposeAsync advance it and cancel _openCts, so a session that finishes opening late is disposed, never connected.
@@ -64,6 +82,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         _abr = abr;
         _licenseRelay = licenseRelay;
         _sink = new MediaSignalSink(_core);
+        _statePumpTurn = StatePumpTurn;
     }
 
     /// <summary>Create a player with working defaults; the backend is resolved on the first <c>Play</c> from the host's
@@ -79,6 +98,22 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     public IMediaSession? Session => _session;
     /// <inheritdoc/>
     public event Action? PumpRequested;
+
+    /// <summary>How many state pumps this player has run for its video sessions (see the class remarks). A diagnostic: a
+    /// playing video whose count stops moving has a control plane that is not being driven.</summary>
+    public int StatePumpCount => Volatile.Read(ref _statePumps);
+
+    /// <summary>Milliseconds since the connected video session was last state-pumped, or since it connected when it has not
+    /// been yet; 0 while no video session is connected. Safe from any thread. A PLAYING session raises at least about once a
+    /// second (the engines' position tick), so a large value here means state, position and errors have stopped publishing.</summary>
+    public long StatePumpAgeMs
+    {
+        get
+        {
+            long last = Volatile.Read(ref _lastStatePumpMs);
+            return last == 0 ? 0 : Math.Max(0, Environment.TickCount64 - last);
+        }
+    }
 
     // ── the one-call easy path (all funnel into Play(MediaSource)) ───────────────────────────────────────────────────
 
@@ -104,10 +139,70 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
 
     private static bool LooksLikeUri(string s) => s.Contains("://", StringComparison.Ordinal);
 
-    // A session may raise this from a native/media worker thread. Consumers (the media element) marshal it to the UI
-    // thread before requesting the registry pump, so this facade deliberately does no scene work here.
-    private void OnSessionPumpRequested() { if (!_disposed) PumpRequested?.Invoke(); }
-    private void RequestVideoPump() { if (!_disposed) PumpRequested?.Invoke(); }
+    // A session may raise this from a native/media worker thread. The player queues its own state pump FIRST (the posts run
+    // in order), then tells the mounted element, which marshals to the UI thread before requesting the registry pump: by
+    // the time the element binds and places, the state this raise announced has been published. The facade does no scene
+    // work here.
+    private void OnSessionPumpRequested() => RequestVideoPump();
+    private void RequestVideoPump()
+    {
+        if (_disposed) return;
+        RequestStatePump();
+        PumpRequested?.Invoke();
+    }
+
+    // Asks for ONE UI-thread state pump. Any thread. With a poster the requests coalesce into a single posted turn; with
+    // none (headless/test: no cross-thread hop to make) the pump runs right here. It asks only when there is something to
+    // pump (a video session, or captions following the position): an audio-only player, and the Stop / Close resets that
+    // run with no session, cost no UI hop, so every transport verb stays free of one and an open still posts two hops.
+    private void RequestStatePump()
+    {
+        if (_session is not IVideoSurfaceSession && _activeCaptions is null) return;
+        var post = _uiPost ?? FluentGpu.Hooks.HostDispatch.Current;
+        if (post is null) { RunStatePump(); return; }
+        if (Interlocked.Exchange(ref _statePumpQueued, 1) != 0) return;
+        post(_statePumpTurn);
+    }
+
+    private void StatePumpTurn()
+    {
+        Volatile.Write(ref _statePumpQueued, 0);
+        RunStatePump();
+    }
+
+    private void RunStatePump()
+    {
+        if (Interlocked.Exchange(ref _statePumpRunning, 1) != 0) { Volatile.Write(ref _statePumpAgain, 1); return; }
+        try
+        {
+            for (int turn = 0; turn < MaxStatePumpTurns; turn++)
+            {
+                Volatile.Write(ref _statePumpAgain, 0);
+                PumpStateOnce();
+                if (Volatile.Read(ref _statePumpAgain) == 0) break;
+            }
+        }
+        finally { Volatile.Write(ref _statePumpRunning, 0); }
+    }
+
+    // One state pump: the session publishes its state through the sink (no surface, no element), then the active captions
+    // follow the position it just published. UI thread (or inline where there is no poster).
+    private void PumpStateOnce()
+    {
+        if (_disposed) return;
+        IMediaSession? session = _session;
+        if (session is IVideoSurfaceSession surface)
+        {
+            surface.PumpState();
+            Volatile.Write(ref _lastStatePumpMs, Environment.TickCount64);
+            Interlocked.Increment(ref _statePumps);
+        }
+        if (_activeCaptions is { } captions)
+        {
+            captions.Advance(_core.Position.Peek());
+            _core.SetActiveCue(captions.ActiveCue.Peek());
+        }
+    }
 
     private void AttachVideoPumpSource(IMediaSession session)
     {
@@ -115,10 +210,12 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         if (session is not IVideoPumpSource source) return;
         _videoPumpSource = source;
         source.PumpRequested += OnSessionPumpRequested;
+        Volatile.Write(ref _lastStatePumpMs, Environment.TickCount64);   // the age of a session that has not been pumped yet counts from its connect
     }
 
     private void DetachVideoPumpSource()
     {
+        Volatile.Write(ref _lastStatePumpMs, 0);   // no session, no age
         if (_videoPumpSource is not { } source) return;
         source.PumpRequested -= OnSessionPumpRequested;
         _videoPumpSource = null;
@@ -182,17 +279,20 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     /// <inheritdoc/>
     public IReadSignal<VideoSurfaceId> VideoSurface => _core.VideoSurface;
 
-    /// <inheritdoc/>
+    /// <summary>The element's turn: bind the surface handle, size the stream and place the child (the GEOMETRY half of the
+    /// session's pump). It publishes no state, position or error: the player runs the state half itself, from the
+    /// session's own pump requests (see the class remarks), so nothing is published twice and nothing waits for an element.</summary>
     public void PumpVideo(VideoBinding binding, RectF videoRect, float scale)
     {
         if (_disposed) return;
+        // The state half must have run before the geometry half acts on it, whichever host's queue drains first: a pop-out
+        // element posts through its own host while the state pump posts to the one this player was built on, and nothing
+        // orders those two queues. A FORMATCHANGE / RESOURCELOST epoch the geometry half has not seen adopted is skipped
+        // (and nobody asks again), so a state turn that is still queued runs HERE, first. The queued turn then finds
+        // nothing new: the pump is value-gated, and a nested or concurrent run only folds into _statePumpAgain.
+        if (Volatile.Read(ref _statePumpQueued) != 0) RunStatePump();
         // Only a composited-video session (the MF backend) drives the surface handoff; everything else is a no-op.
-        (_session as IVideoSurfaceSession)?.PumpVideo(binding, videoRect, scale);
-        if (_activeCaptions is { } captions)
-        {
-            captions.Advance(_core.Position.Peek());
-            _core.SetActiveCue(captions.ActiveCue.Peek());
-        }
+        (_session as IVideoSurfaceSession)?.PumpGeometry(binding, videoRect, scale);
 
         // Preserve active-presentation diagnostics. This no longer wakes the host: native DirectComposition video
         // presents decoded frames independently, while the UI playhead owns its explicit FrameClock subscription.

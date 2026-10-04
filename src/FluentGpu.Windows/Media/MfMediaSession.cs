@@ -460,15 +460,41 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     public void PumpVideo(VideoBinding binding, RectF videoRect, float scale)
     {
         if (_disposed || _sink is null) return;
-        var sink = _sink;
+        // ONE seqlock read for the whole turn — wait-free, alloc-free, never torn — shared by both halves.
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch) return;   // stale or superseded: see PumpState
+        PumpStateCore(_sink, in snap);
+        PumpGeometryCore(_sink, in snap, binding, videoRect, scale);
+    }
 
+    /// <inheritdoc/>
+    public void PumpState()
+    {
+        if (_disposed || _sink is null) return;
         // ONE seqlock read for this whole turn — wait-free, alloc-free, never torn.
         VideoEngineSnapshot snap = _engine.Snapshot;
         // Stale (the engine hasn't drained our SetSource yet) or superseded (a LATER session reused this warm engine):
         // either way nothing below is safe to act on. The next pump — requested by the engine's own StateChanged once
         // it catches up — retries.
         if (snap.SourceEpoch != _sourceEpoch) return;
+        PumpStateCore(_sink, in snap);
+    }
 
+    /// <inheritdoc/>
+    public void PumpGeometry(VideoBinding binding, RectF videoRect, float scale)
+    {
+        if (_disposed || _sink is null || !binding.IsValid) return;
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch) return;
+        PumpGeometryCore(_sink, in snap, binding, videoRect, scale);
+    }
+
+    // The STATE half of the pump (F132): everything this session publishes without a surface — the manifest catalog, errors,
+    // the first-frame stamp, metadata (natural size, duration, commands), state, buffering, position, cues and the live
+    // timeline. It needs no element and writes only through the sink, so MediaPlayer runs it on every pump request whether
+    // or not anything is mounted.
+    private void PumpStateCore(MediaSignalSink sink, in VideoEngineSnapshot snap)
+    {
         // 0. A manifest that finished loading since the last pump, adopted here on the UI thread (the sink's sole writer).
         if (AdoptPendingManifest(out bool firstCatalog))
         {
@@ -579,69 +605,6 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             }
         }
 
-        // 3. Composited-surface handoff (Path A) — the single (DRM-free here) bind point. Value-gated all the way down.
-        if (binding.IsValid && _metaReady)
-        {
-            if (_handle == 0)
-            {
-                _handle = snap.SwapchainHandle;
-                if (_handle != 0) Volatile.Write(ref _repaintPending, 1);
-            }
-            if (_handle != 0)
-            {
-                binding.Bind(_handle, _forceRebind);
-                _forceRebind = false;
-                // Readiness = handle bound AND this source's first frame landed. Binding alone is not it: the swap chain of
-                // a warm engine still holds the PREVIOUS video's last frame (or nothing yet) until the new source presents.
-                PublishSurface(sink, firstFrame ? new VideoSurfaceId(1) : default);
-
-                // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
-                // fit — the same contract the protected/PlayReady path has always used. The stream is sized to a bucket
-                // of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the smallest that still covers the destination),
-                // so a 4K frame in a 640-px card does not allocate 4K buffers and a resize gesture does not re-allocate
-                // the swap chain per layout: a new bucket is requested only once the destination has held still, and the
-                // compositor keeps scaling the PREVIOUS content size until the engine echoes the new one as applied. One
-                // factor on both axes, so the ratio — the thing the fit depends on — is preserved exactly.
-                // An area that is not laid out (the element pumps with an empty rect before it exists, or after it
-                // collapsed) is no destination: it sizes nothing and places nothing (F051), while everything above still
-                // published.
-                if (VideoStreamSizing.IsLaidOut(videoRect))
-                {
-                    var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
-                    VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, applied,
-                        (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs());
-                    if (!step.Request.IsEmpty)
-                    {
-                        _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
-                        Volatile.Write(ref _repaintPending, 1);
-                    }
-                    ArmSizeRetry(step.RetryInMs);
-                    SizeI content = step.Content;
-                    binding.SetContentSize(content);
-                    binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
-                    // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
-                    // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a
-                    // source whose metadata loaded — so an unconditional show can never override a parked player's hide.
-                    // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
-                    // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
-                    // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
-                    sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
-                        new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
-                        { Token = binding.Token });
-                }
-                // A paused seek that just finished owes a repaint (MF does not present the landed frame by itself).
-                if (snap.SeekedCount != _seekedSeen)
-                {
-                    _seekedSeen = snap.SeekedCount;
-                    Volatile.Write(ref _repaintPending, 1);
-                }
-                // Never while the engine is Playing — MF presents its own frames, and an all-NULL UpdateVideoStream there
-                // only injects an extra present. The pending request stays armed and is paid at the first non-Playing pump.
-                if ((snap.Flags & VideoEngineFlags.Playing) == 0 && Interlocked.Exchange(ref _repaintPending, 0) != 0)
-                    _engine.Commands.Post(VideoCommandKind.Repaint);
-            }
-        }
-
         // 4. State + position from the engine (the presentation clock is authoritative for position; extrapolated
         // forward by elapsed·rate while playing so a pump between two engine self-refreshes still reports a moving
         // playhead instead of a stair-stepped one).
@@ -669,6 +632,78 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         }
         if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(snap.PositionSeconds));
         else if (engineLive && _metaReady) PublishEngineLiveTimeline(sink, snap, TimeSpan.FromSeconds(snap.PositionSeconds));
+    }
+
+    // The GEOMETRY half of the pump (F132): bind the surface handle, size the stream and place the child, for the element
+    // that presents this video. It reads the snapshot the state half last acted on; anything the state half has not adopted
+    // yet (an error, a presentation epoch it has not seen) is left for the next turn, which the same raise requests right
+    // after the state pump. Publishes the surface readiness and the placement report, no state, position or error.
+    private void PumpGeometryCore(MediaSignalSink sink, in VideoEngineSnapshot snap, VideoBinding binding, RectF videoRect, float scale)
+    {
+        if (!binding.IsValid || !_metaReady) return;
+        if ((snap.Flags & (VideoEngineFlags.Error | VideoEngineFlags.MetadataLoaded)) != VideoEngineFlags.MetadataLoaded) return;
+        if (snap.PresentationEpoch != _presentationEpoch) return;
+        bool firstFrame = snap.FirstFrameTimestamp != 0;
+
+        // Composited-surface handoff (Path A) — the single (DRM-free here) bind point. Value-gated all the way down.
+        if (_handle == 0)
+        {
+            _handle = snap.SwapchainHandle;
+            if (_handle != 0) Volatile.Write(ref _repaintPending, 1);
+        }
+        if (_handle != 0)
+        {
+            binding.Bind(_handle, _forceRebind);
+            _forceRebind = false;
+            // Readiness = handle bound AND this source's first frame landed. Binding alone is not it: the swap chain of
+            // a warm engine still holds the PREVIOUS video's last frame (or nothing yet) until the new source presents.
+            PublishSurface(sink, firstFrame ? new VideoSurfaceId(1) : default);
+
+            // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
+            // fit — the same contract the protected/PlayReady path has always used. The stream is sized to a bucket
+            // of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the smallest that still covers the destination),
+            // so a 4K frame in a 640-px card does not allocate 4K buffers and a resize gesture does not re-allocate
+            // the swap chain per layout: a new bucket is requested only once the destination has held still, and the
+            // compositor keeps scaling the PREVIOUS content size until the engine echoes the new one as applied. One
+            // factor on both axes, so the ratio — the thing the fit depends on — is preserved exactly.
+            // An area that is not laid out (the element pumps with an empty rect before it exists, or after it
+            // collapsed) is no destination: it sizes nothing and places nothing (F051), while everything above still
+            // published.
+            if (VideoStreamSizing.IsLaidOut(videoRect))
+            {
+                var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
+                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, applied,
+                    (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs());
+                if (!step.Request.IsEmpty)
+                {
+                    _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
+                    Volatile.Write(ref _repaintPending, 1);
+                }
+                ArmSizeRetry(step.RetryInMs);
+                SizeI content = step.Content;
+                binding.SetContentSize(content);
+                binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
+                // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
+                // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a
+                // source whose metadata loaded — so an unconditional show can never override a parked player's hide.
+                // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
+                // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
+                // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
+                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
+                    new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
+                    { Token = binding.Token });
+            }
+            // A paused seek that just finished owes a repaint (MF does not present the landed frame by itself).
+            if (snap.SeekedCount != _seekedSeen)
+            {
+                _seekedSeen = snap.SeekedCount;
+                Volatile.Write(ref _repaintPending, 1);
+            }
+            // Never while the engine is Playing — MF presents its own frames, and an all-NULL UpdateVideoStream there
+            // only injects an extra present. The pending request stays armed and is paid at the first non-Playing pump.
+            if ((snap.Flags & VideoEngineFlags.Playing) == 0 && Interlocked.Exchange(ref _repaintPending, 0) != 0)
+                _engine.Commands.Post(VideoCommandKind.Repaint);
+        }
     }
 
     /// <summary>The manifest-derived command bits (quality/track selection, GoLive), or <c>None</c> for a plain

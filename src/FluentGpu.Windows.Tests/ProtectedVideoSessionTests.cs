@@ -306,6 +306,60 @@ public sealed class ProtectedVideoSessionTests
     }
 
     [Fact]
+    public void Pump_WithNoBinding_PublishesTheSurfaceFacts_AndBindHandsTheKnownHandleToALaterElement()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        var registry = new VideoSurfaceRegistry();
+        s.Start(s.Request);
+        rig.Event(s, PrNative.EvMetadata, 200_000, (1920L << 32) | 1080);
+        rig.Event(s, PrNative.EvFirstFrame, 83_000);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1920, Height = 1080,
+            PositionMs = 83_500, PositionQpc = 777, DurationMs = 200_000, BufferedAheadMs = 12_000, FirstFrameQpc = 555,
+        };
+
+        s.Pump();                                                              // no element mounted anywhere: the state half alone
+
+        Assert.Equal(ProtectedVideoState.Playing, s.State.Peek());
+        Assert.Equal(83_500, s.PositionMs.Peek());
+        Assert.Equal(new Size2(1920, 1080), s.NaturalSize.Peek());
+        Assert.True(s.HasSurface);
+        s.Bind(default);                                                       // an inert binding is never touched
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1f);
+        Assert.Equal((nuint)0, presenter.LastBoundHandle);
+
+        // An element arrives later (a hand-off, a remount): it is handed the handle the state pump already saw.
+        var binding = new VideoBinding(registry, registry.Acquire());
+        s.Bind(binding);
+        registry.Drain(presenter, scale: 1f);
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+
+        // A native detach drops the handle: the next element gets nothing to bind.
+        s.Stop();
+        var later = new VideoBinding(registry, registry.Acquire());
+        presenter.Calls.Clear();
+        s.Bind(later);
+        registry.Drain(presenter, scale: 1f);
+        Assert.DoesNotContain(presenter.Calls, c => c.StartsWith("Bind(", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Pump_APumpWithNoElement_StillPublishesAFailure()
+    {
+        using var rig = new Rig();
+        rig.Sessions.CreateHr = PrNative.EInvalidArg;
+        using ProtectedVideoSession s = rig.Create(Request());
+
+        s.Pump();                                                              // never throws, never needs a binding
+
+        Assert.Equal(ProtectedVideoState.Error, s.State.Peek());
+        Assert.Contains("0x80070057", s.Error.Peek());
+    }
+
+    [Fact]
     public void Pump_APlayingSourceWithNothingAheadAfterItsFirstFrame_IsRebuffering()
     {
         Assert.Equal(ProtectedVideoState.Buffering,

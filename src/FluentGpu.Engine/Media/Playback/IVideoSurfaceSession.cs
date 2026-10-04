@@ -12,15 +12,34 @@ namespace FluentGpu.Media;
 /// <para>The facade's <see cref="IMediaPlayer.PumpVideo"/> forwards to this when the routed session implements it; an
 /// audio-only or headless session does not, so <c>PumpVideo</c> is then a no-op. The seam is portable (no TerraFX): the
 /// Windows session implements it, the control drives it.</para>
+/// <para><b>Two pumps, two owners (F132).</b> The pump has two halves with different owners. The STATE half (state,
+/// buffering, position, duration, natural size, errors, seek landing, the DRM phase) needs no surface and no element: the
+/// facade (<see cref="MediaPlayer"/>) runs it itself on the UI thread whenever the session raises
+/// <see cref="IVideoPumpSource.PumpRequested"/>, so the control plane advances while no element is mounted. The GEOMETRY half (bind
+/// the surface handle, size the stream, place the child) belongs to whichever element presents the video. Both halves are
+/// value-gated, and a session that publishes nothing twice runs them in either order; <see cref="PumpVideo"/> is the two
+/// in one call.</para>
 /// </summary>
 public interface IVideoSurfaceSession
 {
-    /// <summary>Pump one UI-thread turn: translate engine state → the connected <see cref="MediaSignalSink"/>, bind the
-    /// produced DComp surface handle through <paramref name="binding"/> (value-gated), place the child at
-    /// <paramref name="videoRect"/> (DIP) and size the video stream to <paramref name="videoRect"/>×<paramref name="scale"/>
-    /// (device px). Called for initial binding and then when a native event, transport command, activation, or geometry
-    /// change requests a coalesced turn; it is intentionally not a per-frame repaint path.</summary>
+    /// <summary>Pump one UI-thread turn, state AND geometry: translate engine state → the connected
+    /// <see cref="MediaSignalSink"/>, bind the produced DComp surface handle through <paramref name="binding"/>
+    /// (value-gated), place the child at <paramref name="videoRect"/> (DIP) and size the video stream to
+    /// <paramref name="videoRect"/>×<paramref name="scale"/> (device px). An inert <paramref name="binding"/> (IsValid false)
+    /// skips every surface step and leaves the state half. Called for initial binding and then when a native event,
+    /// transport command, activation, or geometry change requests a coalesced turn; it is intentionally not a per-frame
+    /// repaint path.</summary>
     void PumpVideo(VideoBinding binding, RectF videoRect, float scale);
+
+    /// <summary>The state half alone: publish engine state, buffering, position, duration, natural size, errors, seek landing and
+    /// the DRM phase into the connected sink. Touches no surface and needs no element. UI thread only. The default runs
+    /// <see cref="PumpVideo"/> with an inert binding, so a session that has not split its pump still publishes state.</summary>
+    void PumpState() => PumpVideo(default, default, 1f);
+
+    /// <summary>The geometry half alone: bind the surface handle through <paramref name="binding"/>, size the stream and place the
+    /// child. Publishes no state of its own beyond the surface readiness it owns, and does nothing for an inert binding.
+    /// UI thread only. The default runs the whole <see cref="PumpVideo"/>.</summary>
+    void PumpGeometry(VideoBinding binding, RectF videoRect, float scale) => PumpVideo(binding, videoRect, scale);
 }
 
 /// <summary>Optional event source for a video session/player that needs one UI-thread pump. Native media callbacks may

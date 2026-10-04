@@ -752,6 +752,26 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
 > this block promised an atomic priority hand-off for, and the ladder above was never implemented for it — the
 > docked-video work relies on the as-built explicit-transfer contract described next, not on this block.
 
+> **Follow-rect (F169).** A stay-mounted presenter that must cover a hollow reservation elsewhere in the tree (Wavee's docked
+> video overlay over the rail's card) declares `BoxEl.FollowRect`: a thunk answering the reservation node, or Null for "not
+> following". `AppHost` resolves it at phase 7.15, after layout and the animation tick and immediately before the 7.2 geometry
+> scan: `SceneStore.SizeFollowRects` writes the follower's layout size from the target's (re-solving only what it dirtied),
+> then `PlaceFollowRects` writes a paint translation from the target's **painted** `AbsoluteRect`. The follower therefore lands on the
+> reservation in the same frame through resizes and paint-only motion (a rail slide, a page transition) that fire no
+> `OnBoundsChanged` edge, which a signal published from that callback cannot do. While following, the follower's own bound
+> Width/Height/Transform stand down; a freed or Null target leaves the last geometry in place. Scale on an ancestor of the
+> target is not followed (`AbsoluteRect` is translation-only).
+>
+> **Render-owned motion.** Under the default Async host the render thread owns eligible compositor rows (the rail's 300 ms
+> `TranslateX`, page transitions) and the UI-side transform only moves at feedback, so reading it at 7.15 would trail the slide.
+> The follow pass therefore publishes its **anchor set** (follower and target, each with its ancestor chain,
+> `SceneStore.CollectFollowAnchors`) to `AnimEngine.SetFollowAnchors` at the end of 7.15, and `AnimEngine.IsCompositorRow` is false
+> for translate/scale/rotate rows on an anchored node: those rows are UI-ticked (and kept out of the render thread's desired set,
+> `HasUiWork` true) for as long as a follower follows, and go back to the compositor the frame the follower stops. A row in
+> flight hands over from its last feedback pose (a slide that starts the same frame the reservation mounts begins render-owned
+> for that one frame, since the anchors are published after the pass and first apply to the next tick). The cost is that the
+> rail slide runs at UI-frame cadence only while a docked video is following it.
+
 > **As built (2026-07, G5g — the pump/ownership seam).** The rebuilt `MediaPlayerElement` (SPEC-INDEX §2, the
 > unified-media control) turned the registry into the **single-writer video-pump seam**, so that per-frame
 > `Player.PumpVideo`/`SetViewport` no longer runs as a *side effect inside `Render`* (the old anti-pattern) but on
@@ -1059,10 +1079,20 @@ above it. It is now a runtime with handles, spine unchanged:
   records are read from `senc` or `saiz`/`saio`. `FgPrProbeFile` runs that same code over a local file
   (`CencDemuxTests`).
 - **Event-driven presentation.** `FIRSTFRAMEREADY` / CANPLAY / SEEKED / errors are native events → one coalesced
-  `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpVideo` reads ONE snapshot and binds the handle —
-  no poll timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
+  `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpState` reads ONE snapshot and publishes state — no poll
+  timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
   `VideoStreamSizeGate` as the clear path (next bullet). `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
   `BufferedAheadMs`, and the protected session publishes that same POD.
+- **The control plane leaves the element (F132).** The session pump has two halves (`IVideoSurfaceSession.PumpState` /
+  `PumpGeometry`; `PumpVideo` is both, and a session that has not split gets default-interface fallbacks to it).
+  `MediaPlayer` subscribes to the session's `PumpRequested` and runs the STATE half itself, one coalesced post to the
+  poster it captured at construction (state, buffering, position, duration, natural size, errors, seek landing, the DRM
+  phase, captions), so the signals advance with no `MediaPlayerElement` mounted (a covered presenter, a hand-off between
+  windows). The element's `PumpVideo` is the GEOMETRY half only: bind the handle, size the stream, place the child, and
+  the player queues its state pump before it tells the element about the same raise, so the element binds after the state
+  was published. `ProtectedVideoSession.Pump()` publishes and remembers the handle the snapshot reported; `Bind` hands
+  it to a binding (and only a valid one), so a pump with no element never touches a binding and a later element binds
+  the handle already known. `MediaPlayer.StatePumpCount` / `StatePumpAgeMs` expose the heartbeat for diagnostics.
 - **Stream size: buckets, settle, echo (F071, F051, F260).** Layout never drives the decoder's swap chain. Both sessions
   size the stream through one `VideoStreamSizeGate`: a bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the
   smallest that covers the destination, with a 10 % shrink hysteresis), the first size and a changed natural size at once,

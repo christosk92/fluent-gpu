@@ -14,14 +14,19 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// <para><b>Events, not polls.</b> Every state change the native runtime observes (metadata, CANPLAY,
 /// FIRSTFRAMEREADY, seeking/seeked, playing/paused, the swap-chain handle, errors, license usable) raises
 /// <see cref="PumpRequested"/> from whatever thread saw it. The owner then runs ONE coalesced UI-thread
-/// <see cref="Pump"/>, which reads one native snapshot and writes value-gated signals. There is no timer anywhere in
+/// <see cref="Pump()"/>, which reads one native snapshot and writes value-gated signals. There is no timer anywhere in
 /// this contract: transport verbs return completed tasks because their acknowledgement IS the next event.</para>
-/// <para><b>Threading.</b> The signals are written only inside <see cref="Pump"/> (the UI thread). The transport verbs
+/// <para><b>Two halves (F132).</b> <see cref="Pump()"/> is the STATE half and needs no element: it reads the snapshot and
+/// publishes state, position, duration, natural size, errors, the seek landing and the DRM phase. <see cref="Bind"/> is the
+/// SURFACE half: it hands the swap-chain handle the last <see cref="Pump()"/> saw to a presenting element's binding. A
+/// pump with no element therefore never touches a binding, and an element that arrives later binds the handle already
+/// known. <see cref="Pump(in VideoBinding)"/> is the two in one call.</para>
+/// <para><b>Threading.</b> The signals are written only inside <see cref="Pump()"/> (the UI thread). The transport verbs
 /// are callable from any thread and never block.</para>
 /// </summary>
 public interface IProtectedVideoPlayer : IDisposable
 {
-    /// <summary>The lifecycle state (written by <see cref="Pump"/>).</summary>
+    /// <summary>The lifecycle state (written by <see cref="Pump()"/>).</summary>
     IReadSignal<ProtectedVideoState> State { get; }
     /// <summary>The position at the last snapshot, in ms. Extrapolate between pumps from <see cref="PositionQpc"/>.</summary>
     IReadSignal<long> PositionMs { get; }
@@ -31,7 +36,7 @@ public interface IProtectedVideoPlayer : IDisposable
     IReadSignal<Size2> NaturalSize { get; }
     /// <summary>The terminal error text, or null.</summary>
     IReadSignal<string?> Error { get; }
-    /// <summary>The HRESULT behind <see cref="Error"/> (0 = none known), as of the last <see cref="Pump"/> that published it.</summary>
+    /// <summary>The HRESULT behind <see cref="Error"/> (0 = none known), as of the last <see cref="Pump()"/> that published it.</summary>
     int ErrorHr { get; }
     /// <summary>True when <see cref="Error"/> is one a fresh protected runtime cures: the runtime this session lived on was
     /// replaced (bring-up failed, a device removed/reset, a hardware-DRM context reset), or could not be brought up. The owner
@@ -49,7 +54,7 @@ public interface IProtectedVideoPlayer : IDisposable
     /// per video frame; position-only samples do not raise it.</summary>
     event Action? PumpRequested;
 
-    /// <summary>Where the switch is (the poster/spinner discriminator), as of the last <see cref="Pump"/>.</summary>
+    /// <summary>Where the switch is (the poster/spinner discriminator), as of the last <see cref="Pump()"/>.</summary>
     ProtectedVideoPhase Phase { get; }
     /// <summary>Bumps once per source the moment FIRSTFRAMEREADY lands (0 until then) — the surface drops its poster on
     /// a change of this value, never on a state guess.</summary>
@@ -123,7 +128,7 @@ public interface IProtectedVideoPlayer : IDisposable
     void SetRate(float rate);
     /// <summary>Size the engine's video stream to what the destination can show (device px); empty restores natural.</summary>
     void SetStreamSize(SizeI size);
-    /// <summary>The stream size (device px) the native engine has APPLIED, as of the last <see cref="Pump"/>: the echo of
+    /// <summary>The stream size (device px) the native engine has APPLIED, as of the last <see cref="Pump()"/>: the echo of
     /// <see cref="SetStreamSize"/> (or the size the swap chain was created at), empty while none has been applied or the
     /// session is detached. The owner keeps the compositor's content size at the previous value until this equals the size it
     /// asked for, so DirectComposition never scales a buffer still at the old size by the new size's factor.</summary>
@@ -138,8 +143,19 @@ public interface IProtectedVideoPlayer : IDisposable
     void Stop();
     /// <summary>Append one lifecycle diagnostic line to the ONE <c>[video]</c> timeline (always on; never per frame).</summary>
     void LogDiagnostic(string message);
-    /// <summary>Read one native snapshot, write value-gated signals, and bind the swap-chain handle through
-    /// <paramref name="binding"/> (bound every pump: a placement move targets a NEW registry token that must receive
-    /// the same handle). UI thread only; called for a coalesced request, never per host frame.</summary>
-    void Pump(in VideoBinding binding);
+    /// <summary>The STATE half: read one native snapshot and write value-gated signals (state, phase, position, duration,
+    /// natural size, errors, the seek landing, the applied stream size) and remember the swap-chain handle the snapshot
+    /// reported (<see cref="HasSurface"/>). Touches no binding and needs no element. UI thread only; called for a coalesced
+    /// request, never per host frame.</summary>
+    void Pump();
+    /// <summary>The SURFACE half: bind the swap-chain handle the last <see cref="Pump()"/> saw through
+    /// <paramref name="binding"/>, while the session is attached and <see cref="HasSurface"/> (bound every time: a placement
+    /// move targets a NEW registry token that must receive the same handle). Does nothing for an inert binding. UI thread only.</summary>
+    void Bind(in VideoBinding binding);
+    /// <summary>Both halves in order: <see cref="Pump()"/>, then <see cref="Bind"/>.</summary>
+    void Pump(in VideoBinding binding)
+    {
+        Pump();
+        Bind(binding);
+    }
 }

@@ -245,8 +245,9 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
 /// <para>Mirrors the production contract where it matters to the session: the transport verbs return COMPLETED tasks
 /// (their acknowledgement is the next event), <see cref="SeekAsync(long, SeekMode, long)"/> marks
 /// <see cref="IsSeeking"/> synchronously and clears <see cref="LastSeekLandedMs"/> (the test lands the seek by clearing
-/// <see cref="IsSeeking"/>), and <see cref="Pump"/> binds <see cref="SurfaceHandle"/> through the binding it is given on
-/// EVERY pump (recording the token) so a placement move is observable at the registry.</para>
+/// <see cref="IsSeeking"/>), and <see cref="Bind"/> binds <see cref="SurfaceHandle"/> through the binding it is given on
+/// EVERY call (recording the token) so a placement move is observable at the registry; <see cref="Pump()"/> is the state
+/// half and never touches a binding.</para>
 /// <para><see cref="ReadyOnPrefetch"/> makes <see cref="PrefetchAsync"/> land 4 s of forward media when it completes; <see cref="PrefetchResult"/> (null ⇒
 /// completes at once) lets a test hold the prefetch open.</para>
 /// </summary>
@@ -277,9 +278,10 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public long[] Keyframes = Array.Empty<long>();
     /// <summary>The scripted buffered ranges as flattened (start, end) ms pairs <see cref="GetBuffered"/> copies out.</summary>
     public long[] Buffered = Array.Empty<long>();
-    /// <summary>The swap-chain handle <see cref="Pump"/> binds through the binding while <see cref="HasSurface"/> (0 = none).</summary>
+    /// <summary>The swap-chain handle <see cref="Bind"/> binds through the binding while <see cref="HasSurface"/> (0 = none).</summary>
     public nuint SurfaceHandle;
-    /// <summary>Every binding token the player was pumped with, in order (0 for an inert/default binding).</summary>
+    /// <summary>Every binding token <see cref="Bind"/> was called with, in order (0 for an inert/default binding): the
+    /// surface half of the pump. <see cref="PumpCalls"/> counts the state half.</summary>
     public readonly List<int> PumpedTokens = new();
     public string? LastSelectedRepresentationId;
     /// <summary>The retain window of the last <see cref="SelectVideoRepresentationAsync"/> (-1 = append at the buffer end).</summary>
@@ -426,11 +428,14 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public void Stop() => StopCalls++;
     public void LogDiagnostic(string message) { lock (_diagnostics) _diagnostics.Add(message); }
 
-    public void Pump(in VideoBinding binding)
+    /// <summary>The state half: counted, and it touches no binding (a pump with no element must never need one).</summary>
+    public void Pump() => PumpCalls++;
+
+    /// <summary>The surface half: the handle is handed to the binding EVERY time, as production does.</summary>
+    public void Bind(in VideoBinding binding)
     {
-        PumpCalls++;
         PumpedTokens.Add(binding.Token);
-        if (HasSurface && SurfaceHandle != 0) binding.Bind(SurfaceHandle);   // bound EVERY pump, as production does
+        if (HasSurface && SurfaceHandle != 0) binding.Bind(SurfaceHandle);
     }
 
     public void Dispose() => DisposeCalls++;

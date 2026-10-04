@@ -18,7 +18,7 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// <para><b>The switch.</b> <see cref="Start"/> is one <c>FgPrSessionAttach</c> — a <c>SetSource</c> on an engine that
 /// is already alive, with a license that is (usually) already usable and an init segment plus the first segments at
 /// the start position (usually) already in memory. Metadata, CANPLAY and FIRSTFRAMEREADY arrive as events; each asks
-/// for ONE coalesced UI pump; <see cref="Pump"/> reads ONE native snapshot.</para>
+/// for ONE coalesced UI pump; <see cref="Pump()"/> reads ONE native snapshot.</para>
 /// <para><b>Seeking.</b> Flush, not recreate: the native side repositions the source on its runtime thread
 /// immediately (or registers the target as the feeder's next fetch and repositions from the fetch's completion) — no
 /// tick, no ack poll, no suppression window. <see cref="IsSeeking"/> is a JOINING state; the landed position arrives
@@ -96,6 +96,9 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private ProtectedVideoPhase _phase = ProtectedVideoPhase.Idle;
     private long _positionQpc;
     private bool _hasSurface;
+    // The swap-chain handle the last pump's snapshot reported for the attached source (0 = none): what Bind hands to a
+    // presenting element's binding. Written by the state pump, read by Bind (both UI thread).
+    private nuint _surfaceHandle;
     private string? _activeRepresentationId;
     private string? _downloadingRepresentationId;
     // Native reports the OPENING representation as -1 (it never learns that index). Once a switch's picture has been shown,
@@ -164,7 +167,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     /// Create a session for <paramref name="request"/> on <paramref name="runtime"/>: takes a runtime reference
     /// (bringing the native runtime up on first use) and creates the native store + source + feeder. No engine call —
     /// whatever is attached keeps playing. A missing component or a failed bring-up yields a session whose first
-    /// <see cref="Pump"/> publishes a typed error; it never throws.
+    /// <see cref="Pump()"/> publishes a typed error; it never throws.
     /// </summary>
     public static ProtectedVideoSession Create(ProtectedVideoRuntime runtime, ProtectedVideoRequest request)
     {
@@ -544,6 +547,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     /// <inheritdoc/>
     public void Pump(in VideoBinding binding)
     {
+        Pump();
+        Bind(binding);
+    }
+
+    /// <inheritdoc/>
+    public void Pump()
+    {
         if (_startupError is { } startup)
         {
             if (_error.Peek() is null) { _errorHr = _startupHr; _error.Value = startup; }
@@ -558,6 +568,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         {
             // The runtime was replaced under this session (OnRuntimeLost): its native handle is gone, so no snapshot can ever
             // be read again. Publish the failure that ended it rather than returning in silence forever.
+            _surfaceHandle = 0;   // and the swap chain went with it: Bind must never hand a later element the old one
             PublishRuntimeLoss();
             return;
         }
@@ -637,20 +648,32 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         // 5. The same POD the clear path publishes (gate.media.seam.snapshot-alloc-free covers both backends).
         _snapshots.Publish(Map(in n, epoch, firstFrame, metadata, canPlay));
 
-        // 6. The surface. Bound EVERY pump (the registry value-gates a repeat): a placement move (docked → PiP →
-        //    pop-out) targets a NEW registry token that must receive the SAME handle — no open, no seek.
-        //    The snapshot's handle is the truth, so a native detach (another session's attach replaced this one) drops the
-        //    surface here too: native zeroes the handle at detach, and a re-attach publishes a fresh one. Reading it, not a
-        //    Detached event, means a late event of an old attach can never clear a newer one.
+        // 6. The surface, as the snapshot saw it (Bind hands it to an element, if one is presenting). The snapshot's handle is
+        //    the truth, so a native detach (another session's attach replaced this one) drops the surface here too: native
+        //    zeroes the handle at detach, and a re-attach publishes a fresh one. Reading it, not a Detached event, means a
+        //    late event of an old attach can never clear a newer one. No binding is touched here: this pump runs with no
+        //    element mounted.
         if (n.Handle != 0 && attached)
         {
-            binding.Bind((nuint)n.Handle);
+            _surfaceHandle = (nuint)n.Handle;
             _hasSurface = true;
         }
-        else if (!attached || n.Handle == 0)
+        else
         {
+            _surfaceHandle = 0;
             _hasSurface = false;
         }
+    }
+
+    /// <inheritdoc/>
+    public void Bind(in VideoBinding binding)
+    {
+        if (!binding.IsValid || _disposed || _s == 0) return;
+        // Bound EVERY time (the registry value-gates a repeat): a placement move (docked → PiP → pop-out) targets a NEW
+        // registry token that must receive the SAME handle — no open, no seek. The attach flag is event-fresh, so a handle
+        // the state pump has not yet seen detached is never handed to a new slot.
+        nuint handle = _surfaceHandle;
+        if (handle != 0 && Volatile.Read(ref _attached) != 0) binding.Bind(handle);
     }
 
     /// <summary>The managed lifecycle state for a native <c>FgPrState</c> and the facts the events established. Pure.

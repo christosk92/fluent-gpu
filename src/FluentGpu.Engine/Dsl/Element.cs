@@ -391,6 +391,19 @@ public sealed record BoxEl : Element
     /// that need their own laid-out width/height without subscribing to raw viewport changes.</summary>
     public Action<RectF>? OnBoundsChanged { get; init; }
 
+    /// <summary>Follow another node's on-screen rect: answers the node this box must cover RIGHT NOW (typically a hollow
+    /// reservation captured through <see cref="OnRealized"/>), or <see cref="NodeHandle.Null"/> for "not following". While it
+    /// answers a live node the host rewrites this box's layout Width/Height and paint translation from that node's rect in
+    /// the SAME frame, after layout and the animation tick and before the video geometry scan and record, so the box tracks
+    /// the target through resizes AND paint-only motion (a slide, a page transition) that fire no bounds edge; while it follows, the
+    /// animation engine keeps translate/scale/rotate rows on the follower and target chains UI-ticked (a render-owned row would
+    /// not advance the UI-side pose the pass reads). This box's own
+    /// Width/Height/Transform bindings stand down while it follows and next apply when one of their sources changes after it
+    /// stops (so let the thunk's answer be a function of a signal those bindings read too). The thunk runs on the UI thread
+    /// outside any reactive scope (read signals with Peek), must not allocate, and must be the SAME delegate every render
+    /// (a fresh closure per render re-diffs the box). The target must not be inside this box's own subtree.</summary>
+    public Func<NodeHandle>? FollowRect { get; init; }
+
     public Element[] Children { get; init; } = [];
 
     /// <summary>Z-stack: children overlay at this box's origin (each filling it unless sized), painted in order

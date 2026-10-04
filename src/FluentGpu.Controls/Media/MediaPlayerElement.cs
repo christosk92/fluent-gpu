@@ -402,6 +402,10 @@ public sealed class MediaPlayerElement : Component
     // The device scale the most recent PumpNow ran at (1 until the first pump). Render-time FitVideoRect uses it so
     // the hole's layout margins agree with the pump's DComp placement in VideoAspectMode.Native (natural is px).
     private float _lastPumpScale = 1f;
+    // The natural size the most recent placed pump ran with (null until the first one). The player publishes the natural size
+    // from its own state pump (F132), so it can change BEFORE a pump turn rather than inside it: a difference here is what
+    // makes the turn refit. The first pump has nothing to differ from: Render already laid the hole out from the size it read.
+    private SizeI? _pumpedNatural;
     private bool _cursorHidden;
     private NodeHandle _playerRoot;
     private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowBlur, _seedPointerPresence;
@@ -1287,9 +1291,10 @@ public sealed class MediaPlayerElement : Component
     private void PumpNow(float scale) => PumpCore(scale, refit: false);
 
     /// <summary>The pump body. <paramref name="refit"/> is set only for the ONE same-pump follow-up that a natural-size
-    /// change inside <see cref="IMediaPlayer.PumpVideo"/> asks for (<see cref="PumpNow"/> never sets it, and the follow-up
-    /// never asks again, so it cannot loop): the hole is still laid out from the PREVIOUS natural size, so the rect comes
-    /// from the fit of the NEW size instead of from the hole node.</summary>
+    /// change asks for, whether it landed since the last pump (the player's own state pump) or inside
+    /// <see cref="IMediaPlayer.PumpVideo"/> (<see cref="PumpNow"/> never sets it, and the follow-up never asks again, so it
+    /// cannot loop): the hole is still laid out from the PREVIOUS natural size, so the rect comes from the fit of the NEW
+    /// size instead of from the hole node.</summary>
     private void PumpCore(float scale, bool refit)
     {
         VideoBinding b = _binding;
@@ -1298,13 +1303,16 @@ public sealed class MediaPlayerElement : Component
         // DirectComposition visual below the UI swapchain, so it is not clipped or covered by whatever the shell draws
         // next — a parked page's frame keeps compositing at its last placement (a navigated-away artist portrait on the
         // nav rail). Decorative clips SKIP the pump while inactive (they must not keep an MF session alive off-screen).
-        // Non-decorative player surfaces (PiP / pop-out) still pump: the MF session only advances while pumped, and
-        // NaturalSize / duration never publish without it — hiding without pumping is the black Loading poster over audio.
+        // Non-decorative player surfaces (PiP / pop-out) still pump. A MediaPlayer advances its own state, position, duration
+        // and natural size from its state pump, with or without this element (F132), so for it the pump is the surface bind and
+        // placement only; a player that publishes them from inside PumpVideo (the headless scripted one) still needs the call, and
+        // hiding without pumping would be the black Loading poster over audio.
         // VISIBILITY IS THIS ELEMENT'S DECISION, written LAST on every path: sessions only express readiness (they place
         // content and bind the handle, they never show the surface), so nothing pumped below can overwrite the hide.
-        // The inactive pump is STATE-ONLY: the inert default binding (IsValid false) makes every session skip its
-        // bind / Place / SetVisible(true) / stream-size step, so position, state, Ended and errors keep publishing while
-        // the slot stays hidden at its last geometry. It must NOT fall through to the placed pump below: a presence-
+        // The inactive pump carries the inert default binding (IsValid false): every session skips its bind / Place /
+        // SetVisible(true) / stream-size step, so the slot stays hidden at its last geometry, and a player that publishes
+        // position, state, Ended and errors from inside PumpVideo keeps doing so (a MediaPlayer never depended on this
+        // element for them). It must NOT fall through to the placed pump below: a presence-
         // collapsed surface keeps stale non-zero descendant bounds but is clipped to 0x0 by its own ancestor, so that
         // path would bail on the empty viewport before ever reaching PumpVideo, and a placed pump from a covered or
         // handed-off presenter would re-show its visual and fight the active one over the stream size. Uncovering
@@ -1322,8 +1330,9 @@ public sealed class MediaPlayerElement : Component
         var scene = _scene;
         NodeHandle h = _areaRef?.Value ?? default;
         // Non-decorative player surfaces must keep calling PumpVideo even before the area is laid out (remount /
-        // generation swap frames): MF only publishes duration + NaturalSize inside PumpVideo. Returning early here is
-        // what left a video→video successor stuck on the Opening/Loading poster at 0:00 with no duration adopt.
+        // generation swap frames): a player that publishes duration + NaturalSize from inside PumpVideo would otherwise be
+        // left on the Opening/Loading poster at 0:00 with no duration adopt (MediaPlayer no longer is: its own state pump
+        // publishes them, F132). Returning early here is what left a video→video successor stuck that way.
         if (scene is null || h.IsNull || !scene.IsLive(h))
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
@@ -1340,6 +1349,18 @@ public sealed class MediaPlayerElement : Component
             return;
         }
         SizeI natural = Player.NaturalSize.Peek();
+        // The natural size may have changed since this element's last placed pump (the player publishes it from its own state
+        // pump, before this turn, not inside PumpVideo): the hole is then still laid out from the PREVIOUS size, so write its
+        // Margin from the new size now and run this turn as the refit pass, exactly the correction the follow-up below makes
+        // for a player that publishes the size from inside PumpVideo. The new frame is never placed into the old fit.
+        bool naturalMoved = _pumpedNatural is { } pumpedNatural && natural != pumpedNatural;
+        _pumpedNatural = natural;
+        if (!refit && naturalMoved)
+        {
+            SyncHoleLetterbox(scene.Bounds(h));
+            PumpCore(s, refit: true);
+            return;
+        }
         bool audioOnly = IsAudioOnly(natural);
         RectF videoRect = area;
         // The node whose absolute rect the surface must FOLLOW. Registered from here rather than at realize time
@@ -1360,7 +1381,7 @@ public sealed class MediaPlayerElement : Component
                 videoRect = FitVideoRectSnapped(area, natural, mode, customAspect, s);
             else if (refit || ModeMayOverflow(mode))
             {
-                // REFIT (the natural size changed inside PumpVideo): the hole node is still laid out from the previous
+                // REFIT (the natural size changed since the last pump, or inside PumpVideo): the hole node is still laid out from the previous
                 // natural size, so its rect is the OLD fit. The new fit is computed from the same insets
                 // SyncHoleLetterbox is about to write as the hole's Margin, so the next layout lands on exactly this rect.
                 // CENTER-CROP and NATIVE are the two modes whose fitted rect deliberately OVERFLOWS the stage: crop

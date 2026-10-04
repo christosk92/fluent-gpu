@@ -19,7 +19,9 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// <see cref="MediaErrorCategory.Drm"/> error, never a silent black frame.
 /// <para><b>Event-driven.</b> The player raises <see cref="IProtectedVideoPlayer.PumpRequested"/> when native state
 /// changed; this session forwards it as its own <see cref="PumpRequested"/> (the same <see cref="IVideoPumpSource"/>
-/// contract the clear session uses) and does every signal write in <see cref="PumpVideo"/>. There is no poll timer, no
+/// contract the clear session uses) and does every signal write in <see cref="PumpState"/>, which needs no element (F132:
+/// the owning <c>MediaPlayer</c> runs it); only the surface bind, the stream sizing and the placement report wait for an
+/// element, in <see cref="PumpGeometry"/>. There is no poll timer, no
 /// transport ack wait and no seek suppression window: the first frame is on screen one host frame after the engine
 /// presents it, a seek publishes its target at once and its landed position on the Seeked event, and position is a
 /// timestamped native sample extrapolated by elapsed·rate exactly as the clear path does.</para>
@@ -479,10 +481,20 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     /// <inheritdoc/>
     public void PumpVideo(VideoBinding binding, RectF videoRect, float scale)
     {
+        PumpState();
+        PumpGeometry(binding, videoRect, scale);
+    }
+
+    /// <inheritdoc/>
+    public void PumpState()
+    {
         if (_disposed || _sink is null) return;
         MediaSignalSink sink = _sink;
 
-        _player.Pump(binding);
+        // The STATE half (F132): one native snapshot, then everything this session publishes without a surface — the error,
+        // the first-frame deadline, the VideoSurface readiness, natural size, duration, state, buffering and position. No
+        // element is needed and no binding is touched, so MediaPlayer runs it on every pump request.
+        _player.Pump();
         ProtectedVideoState pv = _player.State.Value;
         UpdateAdaptiveState(sink, Environment.TickCount64);
 
@@ -561,39 +573,6 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             sink.Duration(_duration);
         }
 
-        // 4. The composited surface (already bound by the player's pump): size the STREAM to what the destination can
-        //    show — the same rule as the clear path, so a 4K rung in a 640-px card allocates a third-size buffer — and place it.
-        //    It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
-        //    previous source's last frame until the new one decodes, and a detached slot would show another session's.
-        //    The stream is a BUCKET of the natural frame (never the raw destination), requested once the destination has held
-        //    still, and the compositor keeps the previous content size until the native snapshot echoes the new one as
-        //    applied. A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
-        if (binding.IsValid && _player.HasSurface)
-        {
-            if (VideoStreamSizing.IsLaidOut(videoRect))
-            {
-                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
-                    pv == ProtectedVideoState.Playing, ClockMs());
-                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request);
-                ArmSizeRetry(step.RetryInMs);
-                SizeI content = step.Content;
-                binding.SetContentSize(content);
-                binding.Place(videoRect);
-                PlaceOutputProtection(binding, videoRect, scale);
-                binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
-                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
-                    { Token = binding.Token });
-            }
-            else
-            {
-                binding.SetVisible(false);
-            }
-        }
-        else if (binding.IsValid)
-        {
-            binding.SetVisible(false);   // detached (or not produced yet): never leave a stale slot showing
-        }
-
         // 5. State + position. A seek holds the published target until the Seeked event, then the landed position
         //    takes over — no tolerance window, no timeout.
         bool seeking = _player.IsSeeking;
@@ -622,6 +601,54 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             long pos = ExtrapolatePositionMs(_player.PositionMs.Value, _player.PositionQpc,
                 pv == ProtectedVideoState.Playing, _rate, Stopwatch.GetTimestamp());
             if (_lastFirstFrameEpoch != 0 || pos > 0) sink.Position(TimeSpan.FromMilliseconds(pos));
+        }
+    }
+
+    /// <inheritdoc/>
+    public void PumpGeometry(VideoBinding binding, RectF videoRect, float scale)
+    {
+        if (_disposed || _sink is null || !binding.IsValid) return;
+        MediaSignalSink sink = _sink;
+
+        // The SURFACE half (F132): hand the handle the last state pump saw to this element's binding, then size and place it.
+        // It reads what the state pump published (state, natural size, surface readiness) and writes none of it, so a pump
+        // with no element and an element with no pump of its own never disagree. A terminal error ends the surface work.
+        _player.Bind(binding);
+        ProtectedVideoState pv = _player.State.Value;
+        if (pv == ProtectedVideoState.Error) return;
+        bool presenting = _player.HasFirstFrame && _player.HasSurface;
+
+        // The composited surface (just bound above): size the STREAM to what the destination can show — the same rule as the
+        // clear path, so a 4K rung in a 640-px card allocates a third-size buffer — and place it.
+        // It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
+        // previous source's last frame until the new one decodes, and a detached slot would show another session's.
+        // The stream is a BUCKET of the natural frame (never the raw destination), requested once the destination has held
+        // still, and the compositor keeps the previous content size until the native snapshot echoes the new one as
+        // applied. A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
+        if (_player.HasSurface)
+        {
+            if (VideoStreamSizing.IsLaidOut(videoRect))
+            {
+                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
+                    pv == ProtectedVideoState.Playing, ClockMs());
+                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request);
+                ArmSizeRetry(step.RetryInMs);
+                SizeI content = step.Content;
+                binding.SetContentSize(content);
+                binding.Place(videoRect);
+                PlaceOutputProtection(binding, videoRect, scale);
+                binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
+                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
+                    { Token = binding.Token });
+            }
+            else
+            {
+                binding.SetVisible(false);
+            }
+        }
+        else
+        {
+            binding.SetVisible(false);   // detached (or not produced yet): never leave a stale slot showing
         }
     }
 
