@@ -71,7 +71,24 @@ public enum SeriesShape : byte
     Mirrored = 1,
     /// <summary>A constant-width ribbon through the sample polyline (outlines, Charts/Waveform later).</summary>
     Stroke = 2,
+    /// <summary>A closed loop about the box centre: sample <c>i</c> of N sits at angle <c>2π·i/(N−1)</c> (0 = →, clockwise in
+    /// screen space) and radius <c>sample · Amplitude · min(W, H)/2</c>; sample 0 and sample N−1 should match to close it.
+    /// <c>Thickness</c> &gt; 0 draws a ribbon along the loop; ≤ 0 fills from the centre.</summary>
+    Polar = 3,
 }
+
+/// <summary>What a <c>SeriesEl</c> gradient runs along: <see cref="Amplitude"/> (the baseline → a sample of 1.0, the v1
+/// behaviour) or <see cref="Along"/> (the first sample → the last, e.g. a colour sweep across an oscilloscope line).</summary>
+public enum SeriesGradientAxis : byte { Amplitude = 0, Along = 1 }
+
+/// <summary>How a primitive's colour combines with what is already in its target (visualizer F4). <see cref="Additive"/>
+/// adds light (colour ONE/ONE, alpha untouched): inside a transparent-cleared tile the tile then composites Over the page
+/// as page + glow, so additive needs no layer. Inherited by a <c>BoxEl</c> subtree.</summary>
+public enum PaintBlend : byte { SrcOver = 0, Additive = 1 }
+
+/// <summary>How a repaint-boundary slice composites onto the back buffer (visualizer F4). <see cref="Screen"/> needs the
+/// destination colour, so it exists only at composite time: <c>1 − (1 − s)(1 − d)</c>.</summary>
+public enum LayerBlend : byte { SrcOver = 0, Screen = 1 }
 
 /// <summary>The STATIC half of a <c>SeriesEl</c>: shape, colour or ≤ 4-stop gradient by amplitude, stroke thickness,
 /// the baseline (a fraction of the box height; NaN = the shape's default — 1 for Baseline/Stroke, 0.5 for Mirrored)
@@ -80,7 +97,9 @@ public enum SeriesShape : byte
 /// live in their own pooled side table (<c>SceneStore.Series.cs</c>), never in this struct. POD; the gradient's stops
 /// array is copied by the snapshot.</summary>
 public readonly record struct SeriesSpec(SeriesShape Shape, ColorF Color, GradientSpec? Gradient, float Thickness,
-                                         float Baseline, float Amplitude, float Opacity)
+                                         float Baseline, float Amplitude, float Opacity,
+                                         GradientSpec? GradientTo = null, SeriesGradientAxis GradientAxis = SeriesGradientAxis.Amplitude,
+                                         bool AntiAlias = true, PaintBlend Blend = PaintBlend.SrcOver)
 {
     /// <summary>The most samples one node carries; extras are dropped at write time.</summary>
     public const int MaxSamples = 512;

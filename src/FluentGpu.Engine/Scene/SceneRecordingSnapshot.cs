@@ -57,6 +57,8 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<SeriesSamplesCapture> _seriesSamples = new();
     private readonly SnapshotColumn<ClipPathSpec> _clipPath = new();
     private readonly SnapshotColumn<Point2> _radialCenter = new();
+    private readonly SnapshotColumn<GradientSpec> _GradientTo = new();
+    private readonly SnapshotColumn<float> _gradientMix = new();
     private readonly SnapshotColumn<AcrylicSpec> _acrylic = new();
     private readonly SnapshotColumn<byte> _repaintBoundary = new();
     private readonly SnapshotColumn<EdgeFadeSpec> _edgeFade = new();
@@ -407,6 +409,8 @@ public sealed partial class SceneRecordingSnapshot
         _seriesSamples.Remove(index);
         _clipPath.Remove(index);
         _radialCenter.Remove(index);
+        _GradientTo.Remove(index);
+        _gradientMix.Remove(index);
         _acrylic.Remove(index);
         _repaintBoundary.Remove(index);
         _edgeFade.Remove(index);
@@ -532,6 +536,8 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetSeries(node, out SeriesSpec series)) CopySeries(ref _series.Set(index), in series);
             if (source.TryGetClipPath(node, out ClipPathSpec clipPath)) _clipPath.Set(index) = clipPath;
             if (source.TryGetRadialGradientCenter(node, out Point2 radialCenter)) _radialCenter.Set(index) = radialCenter;
+            if (source.TryGetGradientTo(node, out var capturedGradientTo)) CopyGradient(ref _GradientTo.Set(index), in capturedGradientTo);
+            if (source.TryGetGradientMix(node, out float gradientMix)) _gradientMix.Set(index) = gradientMix;
             if (source.TryGetAcrylic(node, out AcrylicSpec acrylic)) _acrylic.Set(index) = acrylic;
             if (source.IsRepaintBoundary(node)) _repaintBoundary.Set(index) = source.RepaintBoundaryDown(node);
             if (source.TryGetEdgeFade(node, out EdgeFadeSpec edgeFade)) _edgeFade.Set(index) = edgeFade;
@@ -850,6 +856,8 @@ public sealed partial class SceneRecordingSnapshot
     }
     public bool TryGetClipPath(NodeHandle node, out ClipPathSpec value) => _clipPath.TryGet((int)node.Raw.Index, out value);
     public bool TryGetRadialGradientCenter(NodeHandle node, out Point2 value) => _radialCenter.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGradientTo(NodeHandle node, out GradientSpec value) => _GradientTo.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGradientMix(NodeHandle node, out float value) => _gradientMix.TryGet((int)node.Raw.Index, out value);
     public bool TryGetAcrylic(NodeHandle node, out AcrylicSpec value) => _acrylic.TryGet((int)node.Raw.Index, out value);
     public bool IsRepaintBoundary(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out _);
     /// <summary>The boundary's raster downscale (1 = full resolution); 0 when the node is not a repaint boundary.</summary>
@@ -953,13 +961,20 @@ public sealed partial class SceneRecordingSnapshot
 
     private static void CopySeries(ref SeriesSpec target, in SeriesSpec source)
     {
+        GradientSpec? gradient = null, to = null;
         if (source.Gradient is { } g)
         {
             GradientSpec copy = target.Gradient ?? default;
             CopyGradient(ref copy, in g);           // pools the stops array exactly as the BoxEl gradient columns do
-            target = source with { Gradient = copy };
+            gradient = copy;
         }
-        else target = source;
+        if (source.GradientTo is { } gt)
+        {
+            GradientSpec copy = target.GradientTo ?? default;
+            CopyGradient(ref copy, in gt);
+            to = copy;
+        }
+        target = source with { Gradient = gradient, GradientTo = to };
     }
 
     private void BeginSparseCapture()
@@ -975,6 +990,8 @@ public sealed partial class SceneRecordingSnapshot
         _series.BeginCapture();
         _clipPath.BeginCapture();
         _radialCenter.BeginCapture();
+        _GradientTo.BeginCapture();
+        _gradientMix.BeginCapture();
         _acrylic.BeginCapture();
         _repaintBoundary.BeginCapture();
         _edgeFade.BeginCapture();
@@ -1004,6 +1021,8 @@ public sealed partial class SceneRecordingSnapshot
         _series.EndCapture();
         _clipPath.EndCapture();
         _radialCenter.EndCapture();
+        _GradientTo.EndCapture();
+        _gradientMix.EndCapture();
         _acrylic.EndCapture();
         _repaintBoundary.EndCapture();
         _edgeFade.EndCapture();

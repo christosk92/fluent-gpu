@@ -2188,7 +2188,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawSeriesCmd>();
                     // SeriesPipeline's VS clamps every vertex's y to Rect.Y..Rect.Y+H, so the box is the cull rect; a Stroke
                     // ribbon's normal can push x past it by thickness/2, which StrokeHalo covers.
-                    float halo = c.Shape == 2 ? RepaintCull.StrokeHalo(c.Thickness) : RepaintCull.AaHaloDip;
+                    float halo = c.Shape >= 2 ? RepaintCull.StrokeHalo(c.Thickness + 2f) : RepaintCull.AaHaloDip;   // Stroke and Polar ribbons: + the 1-DIP AA fringe each side
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, halo)) break;
                     CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,

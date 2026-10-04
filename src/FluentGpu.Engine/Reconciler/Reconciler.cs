@@ -2588,6 +2588,21 @@ public sealed partial class TreeReconciler
                     else _scene.ClearRadialGradientCenter(node);
                 }));
             }
+            if (b.GradientMix.IsBound)
+            {
+                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.GradientMix : default);
+                AddBinding(node, fx.Start(() =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    float mix = fx.Read();
+                    float prev = _scene.TryGetGradientMix(node, out float m) ? m : 0f;
+                    float next = float.IsFinite(mix) ? Math.Clamp(mix, 0f, 1f) : 0f;
+                    if (prev == next) return;
+                    NodeBindingWriteCount++;
+                    _scene.SetGradientMix(node, next);
+                }));
+            }
             if (b.Validation.IsBound)
             {
                 // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
@@ -3851,7 +3866,7 @@ public sealed partial class TreeReconciler
                 return pe.OnRealized is null;
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
-                    || b.RadialGradientCenter.IsBound || b.Width.IsBound || b.Height.IsBound
+                    || b.RadialGradientCenter.IsBound || b.GradientMix.IsBound || b.Width.IsBound || b.Height.IsBound
                     || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
@@ -4824,6 +4839,8 @@ public sealed partial class TreeReconciler
                     if (float.IsFinite(center.X) && float.IsFinite(center.Y)) _scene.SetRadialGradientCenter(node, center);
                     else _scene.ClearRadialGradientCenter(node);
                 }
+                if (b.GradientTo is { } gto) _scene.SetGradientTo(node, gto); else _scene.ClearGradientTo(node);
+                if (!b.GradientMix.IsBound) _scene.SetGradientMix(node, b.GradientMix.Value);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.HoverGradient is { } hg) _scene.SetHoverGradient(node, hg); else _scene.ClearHoverGradient(node);
                 if (b.PressedGradient is { } pg) _scene.SetPressedGradient(node, pg); else _scene.ClearPressedGradient(node);
@@ -5397,7 +5414,9 @@ public sealed partial class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Series;
                 paint.Opacity = se.Opacity;
-                _scene.SetSeries(node, new SeriesSpec(se.Shape, se.Color, se.Gradient, se.Thickness, se.Baseline, se.Amplitude, se.Opacity));
+                _scene.SetSeries(node, new SeriesSpec(se.Shape, se.Color, se.Gradient, se.Thickness, se.Baseline, se.Amplitude, se.Opacity,
+                                                      se.GradientTo, se.GradientAxis, se.AntiAlias, se.Blend));
+                if (!se.GradientMix.IsBound) _scene.SetGradientMix(node, se.GradientMix.Value);
                 if (!se.Samples.IsBound) _scene.SetSeriesSamples(node, se.Samples.Value.AsSpan());
                 // else: the bound path defers to BindSeriesSamples' mount-time effect (the ListRowEl.Cells deferral).
                 ref LayoutInput li = ref _scene.Layout(node);

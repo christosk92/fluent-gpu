@@ -160,6 +160,8 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<ClipPathSpec> _clipPaths = new();   // tier-3 stencil path clip (gpu-renderer.md §6) — implies ClipsToBounds
     private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
+    private readonly ColdSlab<GradientSpec> _gradientTos = new();   // BoxEl.GradientTo: the blend target of the fill
+    private readonly ColdSlab<float> _gradientMixes = new();        // BoxEl.GradientMix: 0..1 toward _gradientTos (absent = 0)
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
@@ -505,6 +507,8 @@ public sealed partial class SceneStore : ISceneBackend
             _clipPaths.Remove(idx);
             _gradients.Remove(idx);
             _radialGradientCenters.Remove(idx);
+            _gradientTos.Remove(idx);
+            _gradientMixes.Remove(idx);
             _borderBrushes.Remove(idx);
             _hoverGradients.Remove(idx);
             _pressedGradients.Remove(idx);
@@ -1888,6 +1892,39 @@ public sealed partial class SceneStore : ISceneBackend
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
     }
+
+    public void SetGradientTo(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _gradientTos.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetGradientTo(NodeHandle h, out GradientSpec g) => _gradientTos.TryGet((int)h.Raw.Index, out g);
+    public void ClearGradientTo(NodeHandle h) { int idx = (int)h.Raw.Index; _gradientTos.Remove(idx); MarkRecordDirty(idx); }
+
+    /// <summary>The fill's blend toward <see cref="SetGradientTo"/>. Paint-only: equal writes are no-ops; 0 is stored as
+    /// absent (the recorder's default).</summary>
+    public void SetGradientMix(NodeHandle h, float mix)
+    {
+        int idx = (int)h.Raw.Index;
+        mix = float.IsFinite(mix) ? Math.Clamp(mix, 0f, 1f) : 0f;
+        bool had = _gradientMixes.TryGet(idx, out float current);
+        if (mix <= 0f)
+        {
+            if (!had) return;
+            _gradientMixes.Remove(idx);
+        }
+        else
+        {
+            if (had && current == mix) return;
+            _flags[idx] |= NodeFlags.SparsePaint;
+            _gradientMixes.GetOrAdd(idx) = mix;
+        }
+        _flags[idx] |= NodeFlags.PaintDirty;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetGradientMix(NodeHandle h, out float mix) => _gradientMixes.TryGet((int)h.Raw.Index, out mix);
 
     public void SetBorderBrush(NodeHandle h, in GradientSpec g)
     {

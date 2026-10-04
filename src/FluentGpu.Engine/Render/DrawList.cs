@@ -442,6 +442,12 @@ public struct DrawSeriesCmd
     public ColorF C0, C1, C2, C3;
     public float O0, O1, O2, O3;
     public int StopCount;
+    /// <summary>Bit 0: AA fringe on a ribbon (Stroke/Polar). Bit 1: the gradient runs ALONG the series (by sample index),
+    /// not by amplitude.</summary>
+    public int Flags;
+    /// <summary>The samples just outside this chunk (the neighbour of S[0] and of S[Count−1]), so a ribbon's tangent and a
+    /// Polar loop's closing seam are continuous across chunk edges.</summary>
+    public float Prev, Next;
     public Samples32 S;
 }
 
@@ -843,7 +849,8 @@ public sealed class DrawList
 
     /// <summary>Record a sample series as chunked <see cref="DrawSeriesCmd"/>s. <paramref name="rect"/> is the node box;
     /// <paramref name="samples"/> beyond <see cref="SeriesSpec.MaxSamples"/> are dropped. Alloc-free.</summary>
-    public void Series(in RectF rect, in SeriesSpec spec, ReadOnlySpan<float> samples, in Affine2D transform, float opacity, ulong sortKey = 0)
+    public void Series(in RectF rect, in SeriesSpec spec, ReadOnlySpan<float> samples, in Affine2D transform, float opacity, ulong sortKey = 0,
+                       float gradientMix = 0f)
     {
         int n = Math.Min(samples.Length, SeriesSpec.MaxSamples);
         if (n < 2 || rect.W <= 0f || rect.H <= 0f) return;
@@ -858,18 +865,35 @@ public sealed class DrawList
             if (stops > 1) { c1 = st[1].Color; o1 = st[1].Offset; }
             if (stops > 2) { c2 = st[2].Color; o2 = st[2].Offset; }
             if (stops > 3) { c3 = st[3].Color; o3 = st[3].Offset; }
+            // GradientMix: blend the stops toward GradientTo on stack locals (the BoxEl LerpStops rule: shared prefix only).
+            if (gradientMix > 0.001f && spec.GradientTo is { } gt && gt.Stops is { Length: > 0 } ts)
+            {
+                float t = MathF.Min(1f, gradientMix);
+                int m = Math.Min(stops, Math.Min(ts.Length, GradientSpec.MaxStops));
+                if (m > 0) { c0 = ColorF.LerpLinear(c0, ts[0].Color, t); o0 += (ts[0].Offset - o0) * t; }
+                if (m > 1) { c1 = ColorF.LerpLinear(c1, ts[1].Color, t); o1 += (ts[1].Offset - o1) * t; }
+                if (m > 2) { c2 = ColorF.LerpLinear(c2, ts[2].Color, t); o2 += (ts[2].Offset - o2) * t; }
+                if (m > 3) { c3 = ColorF.LerpLinear(c3, ts[3].Color, t); o3 += (ts[3].Offset - o3) * t; }
+            }
         }
+        bool polar = spec.Shape == SeriesShape.Polar;
         float baseline = float.IsNaN(spec.Baseline) ? (spec.Shape == SeriesShape.Mirrored ? 0.5f : 1f) : spec.Baseline;
+        int flags = (spec.AntiAlias ? 1 : 0) | (spec.GradientAxis == SeriesGradientAxis.Along ? 2 : 0);
         for (int start = 0; start < n - 1; start += SeriesSpec.ChunkSamples - 1)
         {
             int count = Math.Min(SeriesSpec.ChunkSamples, n - start);
+            int before = start - 1, after = start + count;
+            float prev = before >= 0 ? samples[before] : (polar ? samples[Math.Max(0, n - 2)] : samples[0]);
+            float next = after < n ? samples[after] : (polar ? samples[Math.Min(1, n - 1)] : samples[n - 1]);
             var cmd = new DrawSeriesCmd
             {
-                Rect = new RectF(rect.X + start * dx, rect.Y, (count - 1) * dx, rect.H),
+                // A Polar chunk can reach anywhere in the node box, so its cull/slice rect is the whole box.
+                Rect = polar ? rect : new RectF(rect.X + start * dx, rect.Y, (count - 1) * dx, rect.H),
                 Transform = transform, Opacity = opacity,
                 Shape = (int)spec.Shape, Count = count, Total = n, Index = start,
                 X0 = rect.X + start * dx, Dx = dx, Baseline = baseline, Amplitude = spec.Amplitude, Thickness = spec.Thickness,
                 C0 = c0, C1 = c1, C2 = c2, C3 = c3, O0 = o0, O1 = o1, O2 = o2, O3 = o3, StopCount = stops,
+                Flags = flags, Prev = prev, Next = next,
             };
             for (int i = 0; i < count; i++) cmd.S[i] = samples[start + i];
             WriteOp(DrawOp.DrawSeries);

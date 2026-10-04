@@ -178,6 +178,8 @@ public sealed partial class SceneRecordingSnapshot
         if (!SparseEqual(_series, other._series, i, SeriesEqual, out which)) return Fail(out mismatch, $"n#{i} SeriesSpec ({which})");
         if (!SparseEqual(_clipPath, other._clipPath, i, (in ClipPathSpec a, in ClipPathSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ClipPathSpec ({which})");
         if (!SparseEqual(_radialCenter, other._radialCenter, i, (in Point2 a, in Point2 b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} RadialCenter ({which})");
+        if (!SparseEqual(_GradientTo, other._GradientTo, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} GradientTo ({which})");
+        if (!SparseEqual(_gradientMix, other._gradientMix, i, (in float a, in float b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} GradientMix ({which})");
         if (!SparseEqual(_acrylic, other._acrylic, i, (in AcrylicSpec a, in AcrylicSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} AcrylicSpec ({which})");
         if (!SparseEqual(_edgeFade, other._edgeFade, i, (in EdgeFadeSpec a, in EdgeFadeSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} EdgeFadeSpec ({which})");
         if (!SparseEqual(_imageEffects, other._imageEffects, i, (in ImageVisualEffects a, in ImageVisualEffects b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ImageVisualEffects ({which})");
@@ -252,9 +254,12 @@ public sealed partial class SceneRecordingSnapshot
     private static bool SeriesEqual(in SeriesSpec a, in SeriesSpec b)
     {
         if (a.Shape != b.Shape || !a.Color.Equals(b.Color) || a.Thickness != b.Thickness || !a.Baseline.Equals(b.Baseline)
-            || a.Amplitude != b.Amplitude || a.Opacity != b.Opacity || (a.Gradient is null) != (b.Gradient is null)) return false;
-        if (a.Gradient is not { } ga || b.Gradient is not { } gb) return true;
-        return GradientEqual(in ga, in gb);
+            || a.Amplitude != b.Amplitude || a.Opacity != b.Opacity || (a.Gradient is null) != (b.Gradient is null)
+            || (a.GradientTo is null) != (b.GradientTo is null) || a.GradientAxis != b.GradientAxis || a.AntiAlias != b.AntiAlias
+            || a.Blend != b.Blend) return false;
+        if (a.Gradient is { } ga && b.Gradient is { } gb && !GradientEqual(in ga, in gb)) return false;
+        if (a.GradientTo is { } ta && b.GradientTo is { } tb && !GradientEqual(in ta, in tb)) return false;
+        return true;
     }
 
     private static bool PaintEqual(in NodePaint a, in NodePaint b) => a.Equals(b);

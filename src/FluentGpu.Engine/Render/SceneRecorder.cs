@@ -2271,8 +2271,11 @@ internal sealed class SceneRecordingContext
                 if (hasGradFill)
                 {
                     bool hasRadialCenter = scene.TryGetRadialGradientCenter(node, out Point2 radialCenter);
+                    GradientSpec gto = default;
+                    float gMix = scene.TryGetGradientMix(node, out float mixValue) ? mixValue : 0f;
+                    bool hasTo = gMix > 0f && scene.TryGetGradientTo(node, out gto) && gto.Stops is { Length: > 0 };
                     EmitGradient(dl, local, p.Corners, in g, in hg, hasHG, in pg, hasPG, gHoverT, gPressT,
-                        hasRadialCenter, radialCenter, world, opacity, key);
+                        hasRadialCenter, radialCenter, world, opacity, key, in gto, hasTo ? gMix : 0f);
                 }
                 else if (fill.A > 0f)
                     dl.FillRoundRect(local, p.Corners, fill, world, opacity, key);
@@ -2603,8 +2606,9 @@ internal sealed class SceneRecordingContext
             {
                 if (!maybeSparsePaint || !overlapsRecordClip) break;
                 if (!scene.TryGetSeries(node, out var ss) || !scene.TryGetSeriesSamples(node, out var seriesSamples) || seriesSamples.Length < 2) break;
-                dl.Series(local, in ss, seriesSamples, world, opacity, key);
-                float seriesHalo = ss.Shape == SeriesShape.Stroke ? ss.Thickness : 0f;
+                float seriesMix = scene.TryGetGradientMix(node, out float sm) ? sm : 0f;
+                dl.Series(local, in ss, seriesSamples, world, opacity, key, seriesMix);
+                float seriesHalo = ss.Shape is SeriesShape.Stroke or SeriesShape.Polar ? ss.Thickness + 1f : 0f;
                 result.Include(world.TransformBounds(new RectF(local.X - seriesHalo, local.Y - seriesHalo, local.W + 2f * seriesHalo, local.H + 2f * seriesHalo)));
                 break;
             }
@@ -3633,7 +3637,8 @@ internal sealed class SceneRecordingContext
 
     private void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
-        bool hasRadialCenter, Point2 radialCenter, in Affine2D world, float opacity, ulong key)
+        bool hasRadialCenter, Point2 radialCenter, in Affine2D world, float opacity, ulong key,
+        in GradientSpec mixTo = default, float mix = 0f)
     {
         // axis endpoints in local 0..1: linear from the angle (0 = →, 90 = ↓); radial carries its origin in `start`
         // and origin+radius in `end` (the shader reconstructs centre/radius from them).
@@ -3655,6 +3660,8 @@ internal sealed class SceneRecordingContext
         int n = Math.Min(s.Length, GradientSpec.MaxStops);
         ColorF c0 = s[0].Color, c1 = n > 1 ? s[1].Color : c0, c2 = n > 2 ? s[2].Color : c1, c3 = n > 3 ? s[3].Color : c2;
         float o0 = s[0].Offset, o1 = n > 1 ? s[1].Offset : 1f, o2 = n > 2 ? s[2].Offset : 1f, o3 = n > 3 ? s[3].Offset : 1f;
+        // GradientMix (a palette cross-fade): the resting stops blend toward GradientTo FIRST, so hover/press still read on top.
+        if (mix > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in mixTo, mix);
         // P4b: per-frame interpolate the resting stops toward the hover/pressed gradient by the eased progress (stack locals,
         // never a new GradientSpec). Differing stop counts blend only the shared prefix (rest of resting stops hold).
         if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);

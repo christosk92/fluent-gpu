@@ -143,6 +143,14 @@ public sealed record BoxEl : Element
     /// keeps <see cref="GradientSpec.RadialCenter"/> as the source of truth; a signal updates paint only, without a
     /// component render or gradient-spec rebuild (pointer-driven spotlight/reveal effects).</summary>
     public Prop<Point2> RadialGradientCenter { get; init; } = new Point2(float.NaN, float.NaN);
+    /// <summary>A second gradient the fill blends toward by <see cref="GradientMix"/> (0 = <see cref="Gradient"/>, 1 = this).
+    /// Must share <see cref="Gradient"/>'s stop count (the <see cref="HoverGradient"/> rule; a different count blends only
+    /// the shared prefix). Static; the blend happens at record time on stack locals, so a palette cross-fade costs no
+    /// re-render and no allocation.</summary>
+    public GradientSpec? GradientTo { get; init; }
+    /// <summary>The 0..1 blend from <see cref="Gradient"/> toward <see cref="GradientTo"/>. Bindable and paint-only (no
+    /// relayout): a signal moves the colours without rebuilding a <see cref="GradientSpec"/>.</summary>
+    public Prop<float> GradientMix { get; init; } = 0f;
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
