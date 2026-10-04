@@ -55,6 +55,75 @@ static class TileSuite
         RenderAllocZeroChecks(strings, fonts);
         RepaintBoundaryChecks(strings, fonts);
         InvisibleBoundsChecks(strings, fonts);
+        OpaqueCoverChecks(strings, fonts);
+    }
+
+    // ── gate.tiles.opaque-cover ──────────────────────────────────────────────────────────────────────────────────
+    /// <summary>A page under an overlay in its own repaint boundary (the Wavee stage over the app shell). The overlay's
+    /// composite item carries <see cref="CompositeItem.Opaque"/> — the window-px rect it paints fully opaque, which lets the
+    /// backend leave out what it hides — ONLY when that is true: an opaque square fill at alpha 1, opacity 1.</summary>
+    sealed class CoverProbe(int mode) : Component
+    {
+        // 0 opaque full-window (tiles) · 1 the same at RasterScale 1/4 · 2 a translucent fill · 3 rounded corners ·
+        // 4 opacity 0.5 · 5 opaque at fractional insets
+        public override Element Render()
+        {
+            var page = new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(40f, 40f, 0f, 0f),
+                Width = 300f, Height = 200f, Fill = ColorF.FromRgba(200, 90, 60),
+            };
+            var overlay = new BoxEl
+            {
+                AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, ZStack = true, RepaintBoundary = true,
+                RasterScale = mode == 1 ? 0.25f : 1f,
+                Margin = mode == 5 ? new Edges4(40.5f, 30.25f, 60f, 50.75f) : default,
+                Fill = mode == 2 ? ColorF.FromRgba(20, 22, 28, 0xF0) : ColorF.FromRgba(20, 22, 28),
+                Corners = mode == 3 ? CornerRadius4.All(12f) : default,
+                Opacity = mode == 4 ? 0.5f : 1f,
+                Children = [new BoxEl { AlignSelf = FlexAlign.Center, JustifySelf = FlexAlign.Center, Width = 100f, Height = 100f, Fill = ColorF.FromRgba(90, 160, 220) }],
+            };
+            return new BoxEl { Grow = 1f, ZStack = true, Children = [page, overlay] };
+        }
+    }
+
+    static RectF CoverOf(StringTable strings, HeadlessFontSystem fonts, int mode, out bool found)
+    {
+        var (app, window, dev, host) = Host("tiles-cover-" + mode, strings, fonts, new CoverProbe(mode));
+        using var _a = app; using var _h = host;
+        Frames(host, 20);
+        int effect = -1;
+        foreach (var row in dev.LastCompositeSlices) if (row.Kind == SliceKind.Effect) effect = row.Id;
+        RectF opaque = default;
+        found = false;
+        foreach (var op in dev.LastCompositeRecords)
+            if (op.Kind == CompositeRecordKind.DrawItem && op.Item.SliceId == effect && effect >= 0) { opaque = op.Item.Opaque; found = true; }
+        return opaque;
+    }
+
+    static void OpaqueCoverChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var tiles = CoverOf(strings, fonts, 0, out bool f0);
+        Check("gate.tiles.opaque-cover an opaque full-window overlay boundary covers the window",
+            f0 && tiles.X <= 0f && tiles.Y <= 0f && tiles.Right >= 1200f && tiles.Bottom >= 1000f, $"found={f0} opaque={tiles}");
+        var low = CoverOf(strings, fonts, 1, out bool f1);
+        Check("gate.tiles.opaque-cover the same overlay at RasterScale 1/4 carries the same cover (the backend maps it through the upsample)",
+            f1 && low.X <= 0f && low.Y <= 0f && low.Right >= 1200f && low.Bottom >= 1000f, $"found={f1} opaque={low}");
+        var inset = CoverOf(strings, fonts, 5, out bool f5);
+        Check("gate.tiles.opaque-cover fractional insets keep the fill's exact edges (the backend rounds them in)",
+            f5 && inset.X == 40.5f && inset.Y == 30.25f && inset.Right == 1140f && inset.Bottom == 949.25f, $"found={f5} opaque={inset}");
+        // the overlay's own fill claims nothing when it is translucent or rounded: the cover left is the opaque square
+        // centred inside it (550,450 100x100); at opacity 0.5 nothing in the overlay is opaque
+        string seen = "";
+        bool exact = true;
+        foreach (int m in (int[])[2, 3, 4])
+        {
+            var r = CoverOf(strings, fonts, m, out bool f);
+            bool want = m == 4 ? r.W <= 0f && r.H <= 0f : r.X == 550f && r.Y == 450f && r.W == 100f && r.H == 100f;
+            if (!f || !want) exact = false;
+            seen += $" mode{m}: found={f} opaque={r.X},{r.Y} {r.W}x{r.H}";
+        }
+        Check("gate.tiles.opaque-cover a translucent fill, rounded corners or opacity 0.5 claim no cover of their own", exact, seen);
     }
 
     // ── gate.tiles.invisible-bounds ──────────────────────────────────────────────────────────────────────────────

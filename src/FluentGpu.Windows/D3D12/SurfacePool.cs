@@ -275,6 +275,15 @@ internal sealed unsafe class SurfacePool : IDisposable
     public int ScratchRefused { get; private set; }
     public long ScratchPx { get; private set; }
 
+    /// <summary>Retire every scratch texture, retained results included (each behind its fence), so the next leases create
+    /// textures of exactly their bucket size. A probe's control between two captures: a sampled route (an upsample, a blur
+    /// chain) maps its coordinates through the leased texture's size, and a larger pooled texture can move a coordinate
+    /// across the filter's fixed-point weight step (≤ 1/255 on a gradient). Between frames only (render thread parked).</summary>
+    public void DropScratch()
+    {
+        for (int i = 0; i < _scratch.Length; i++) Retire(ref _scratch[i]);
+    }
+
     public void ReleaseScratch(int i) { if ((uint)i < (uint)_scratch.Length && !_scratch[i].Retained) _scratch[i].InUse = false; }
 
     /// <summary>The scratch retained under <paramref name="key"/> by an earlier turn, leased for this one (−1 = none);
