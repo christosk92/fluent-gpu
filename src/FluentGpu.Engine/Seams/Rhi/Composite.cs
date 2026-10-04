@@ -64,8 +64,12 @@ public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float 
 public readonly record struct CompositeItem(int SliceId, CompositeKind Kind, Affine2D Transform, float Alpha, RectF Clip,
     CornerRadius4 ClipRadii, EdgeFeather Feather, float BlurSigma, AcrylicRecipe Acrylic, byte BlendCopy,
     RectF RoundClip = default, int GroupCount = 0, byte HasLayer = 0, RectF SourceClip = default,
-    EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0)
+    EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0,
+    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f)
 {
+    /// <summary>A FEEDBACK item (BoxEl.Feedback, visualizer F6): a <see cref="CompositeKind.Direct"/> low-res item whose backend
+    /// surface persists and is advanced through <see cref="FeedbackWarp"/> / <see cref="FeedbackDecay"/> each change.</summary>
+    public bool IsFeedback => FeedbackDecay > 0f;
     /// <summary><see cref="BlendCopy"/> = 1: write without blending.</summary>
     public const byte BlendCopyWrite = 1;
     /// <summary><see cref="BlendCopy"/> = 2: SCREEN onto the destination, <c>1 − (1 − s)(1 − d)</c> (BoxEl.LayerBlend.Screen).</summary>
@@ -228,6 +232,9 @@ public static class CompositeFrameFlags
 
 public partial interface IGpuDevice
 {
+    /// <summary>A feedback trail (visualizer F6) is still settling after its content stopped changing: the host must keep
+    /// producing (and submitting) frames until it is false. Read cross-thread; a device with no feedback route says false.</summary>
+    bool HasLiveFeedback => false;
     /// <summary>True when <see cref="SubmitComposite"/> is implemented (the headless model and D3D12).</summary>
     bool SupportsComposite => false;
 

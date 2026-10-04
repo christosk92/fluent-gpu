@@ -24,7 +24,26 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class SliceCompositor : IDisposable
 {
-    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, LoadScreen, SampleScreen, Count }
+    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, LoadScreen, SampleScreen, Feedback, Count }
+
+    /// <summary>The F6 feedback pass, appended to composite.hlsl: the previous trail sampled through the INVERSE warp
+    /// (K[2], K[3] = affine rows mapping destination px → source px), multiplied by the keep fraction toward the fade colour
+    /// (K[4].z, K[5]), minus a 4×4 ordered dither of K[4].w (1/255) so 8-bit residue dies instead of parking at one step.
+    /// Outside the source it reads transparent (no clamp smear).</summary>
+    private const string FeedbackHlsl = """
+static const float gBayer4[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+float4 PSFeedback(V i) : SV_Target
+{
+    float2 p = i.pos.xy - K[0].xy;
+    float2 s = float2(dot(K[2].xy, p) + K[2].z, dot(K[3].xy, p) + K[3].z);
+    float2 uv = s * K[4].xy;
+    float4 c = (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) ? float4(0, 0, 0, 0) : gSrc.SampleLevel(gLinear, uv, 0);
+    c = lerp(K[5], c, K[4].z);
+    int2 q = int2(i.pos.xy) & 3;
+    float d = (gBayer4[q.y * 4 + q.x] + 0.5) / 16.0 * K[4].w;
+    return saturate(c - d);
+}
+""";
 
     public const int ConstantCount = 56;
 
@@ -39,7 +58,7 @@ internal sealed unsafe class SliceCompositor : IDisposable
     public void Init(ID3D12Device* device)
     {
         _root = BuildRootSignature(device);
-        string src = EdgeFeatherMask.Hlsl + "\n" + LoadHlsl();
+        string src = EdgeFeatherMask.Hlsl + "\n" + LoadHlsl() + "\n" + FeedbackHlsl;
         ID3DBlob* vs = ShaderCompiler.Compile(src, "VSQuad", "vs_5_1", "composite");
         ID3DBlob* load = ShaderCompiler.Compile(src, "PSLoad", "ps_5_1", "composite");
         ID3DBlob* sample = ShaderCompiler.Compile(src, "PSSample", "ps_5_1", "composite");
@@ -49,6 +68,7 @@ internal sealed unsafe class SliceCompositor : IDisposable
         ID3DBlob* kd = ShaderCompiler.Compile(src, "PSKawaseDown", "ps_5_1", "composite");
         ID3DBlob* ku = ShaderCompiler.Compile(src, "PSKawaseUp", "ps_5_1", "composite");
         ID3DBlob* acr = ShaderCompiler.Compile(src, "PSAcrylic", "ps_5_1", "composite");
+        ID3DBlob* fb = ShaderCompiler.Compile(src, "PSFeedback", "ps_5_1", "composite");
         _pso[(int)Pso.Load] = MakePso(device, vs, load, Blend.Over);
         _pso[(int)Pso.LoadCopy] = MakePso(device, vs, load, Blend.Copy);
         _pso[(int)Pso.Sample] = MakePso(device, vs, sample, Blend.Over);
@@ -63,8 +83,9 @@ internal sealed unsafe class SliceCompositor : IDisposable
         _pso[(int)Pso.KawaseDown] = MakePso(device, vs, kd, Blend.Copy);
         _pso[(int)Pso.KawaseUp] = MakePso(device, vs, ku, Blend.Copy);
         _pso[(int)Pso.Acrylic] = MakePso(device, vs, acr, Blend.Over);
+        _pso[(int)Pso.Feedback] = MakePso(device, vs, fb, Blend.Copy);
         vs->Release(); load->Release(); sample->Release(); fill->Release(); blur->Release(); down->Release();
-        kd->Release(); ku->Release(); acr->Release();
+        kd->Release(); ku->Release(); acr->Release(); fb->Release();
     }
 
     private static string LoadHlsl()

@@ -507,7 +507,8 @@ public sealed partial class AppHost : IDisposable
         if (!paused && _hasActiveRenderFrame && _renderSeam.IsCurrentTarget(_activeRenderFrame))
         {
             var frame = _renderSeam.Scene(_activeRenderFrame);
-            active = _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame));
+            active = _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
+                || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
         return active;
@@ -1402,7 +1403,7 @@ public sealed partial class AppHost : IDisposable
                 // stream AND an empty repaint region, which is exactly the question ShouldSkipRenderSubmit asks. A row
                 // that DID move fails the hash compare on its own. Only image crossfades advance pixels with no bit
                 // anywhere to show for it, so they alone keep a frame owed.
-                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs);
+                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || _device.HasLiveFeedback;   // + a settling feedback trail (F6)
                 // An armed frame capture must present (evidence-diagnostics §A.6) — no tile is invalidated: the capture shows
                 // exactly the retained pixels.
                 bool skip = Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
@@ -2770,6 +2771,8 @@ public sealed partial class AppHost : IDisposable
         if (_frameClockSig.HasSubscribers) r |= WakeReasons.FrameClockPoller;
         // A paceable per-frame clock (a visualizer) asks for frames too, but the governor may pace it (GpuGovernorWake.NeverPace).
         if (_frameClockPaceableSig.HasSubscribers) r |= WakeReasons.FrameClockPaceable;
+        // A feedback trail (visualizer F6) still settling: the backend advances it on frames with no scene change.
+        if (_device.HasLiveFeedback) r |= WakeReasons.FeedbackSettle;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
         // from playback state: a playing DComp video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;

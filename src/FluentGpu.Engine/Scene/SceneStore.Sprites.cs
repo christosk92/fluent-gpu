@@ -4,6 +4,12 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Scene;
 
+/// <summary>A feedback boundary's live state: the spec, the current per-advance warp and decay (NaN = the spec's).</summary>
+public readonly record struct FeedbackState(FeedbackSpec Spec, Affine2D Warp, float Decay)
+{
+    public float EffectiveDecay => float.IsFinite(Decay) ? Math.Clamp(Decay, 0f, 1f) : Spec.Decay;
+}
+
 /// <summary>The static half of a <c>SpriteFieldEl</c>: kernel, paint blend, opacity. POD.</summary>
 public readonly record struct SpriteSpec(SpriteKernel Kernel, PaintBlend Blend, float Opacity);
 

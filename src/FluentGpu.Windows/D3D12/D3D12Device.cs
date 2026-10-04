@@ -4588,6 +4588,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // The retained-tile surfaces died with the device: the host's target-epoch bump invalidates every tile, and the
         // next composite recreates what it rasters.
         _surfaces?.Dispose(); _surfaces = null;
+        _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
         _compositor?.Dispose(); _compositor = null;
         _imageTextures?.Dispose(); _imageTextures = null;
         _shadowPipe?.Dispose(); _shadowPipe = null;

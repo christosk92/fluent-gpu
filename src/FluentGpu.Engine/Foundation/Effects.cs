@@ -90,6 +90,19 @@ public enum PaintBlend : byte { SrcOver = 0, Additive = 1 }
 /// destination colour, so it exists only at composite time: <c>1 − (1 − s)(1 − d)</c>.</summary>
 public enum LayerBlend : byte { SrcOver = 0, Screen = 1 }
 
+/// <summary>A FEEDBACK boundary (visualizer F6, MilkDrop/G-Force trails): every advance draws the previous frame of this
+/// boundary into itself through the bound warp, keeps <c>1 − Decay</c> of it (lerped toward <see cref="FadeTo"/>), then
+/// paints this frame's content on top with <see cref="Fresh"/>. <see cref="Decay"/> is per ADVANCE (the app scales it by
+/// dt / 16.7 ms so a trail looks the same at 60 and 144 Hz). <see cref="RasterScale"/> is the surface scale (0.5 default:
+/// a quarter of the pixels, MilkDrop-authentic softness). The trail lives in a retained surface: memory pressure or a
+/// device loss restarts it, never breaks it.</summary>
+public readonly record struct FeedbackSpec(float Decay, float RasterScale = 0.5f, ColorF FadeTo = default, PaintBlend Fresh = PaintBlend.SrcOver)
+{
+    public bool IsNone => !(Decay > 0f);
+    /// <summary>Advances a stopped trail keeps running until it is below one 8-bit step: ⌈ln(1/255) / ln(1 − Decay)⌉, capped at 240.</summary>
+    public int SettleTurns => IsNone ? 0 : Math.Min(240, (int)MathF.Ceiling(MathF.Log(1f / 255f) / MathF.Log(MathF.Max(1e-4f, 1f - MathF.Min(Decay, 0.9999f)))));
+}
+
 /// <summary>The STATIC half of a <c>SeriesEl</c>: shape, colour or ≤ 4-stop gradient by amplitude, stroke thickness,
 /// the baseline (a fraction of the box height; NaN = the shape's default — 1 for Baseline/Stroke, 0.5 for Mirrored)
 /// and the amplitude (the box-height fraction a sample of 1.0 reaches; for <see cref="SeriesShape.Mirrored"/> it is

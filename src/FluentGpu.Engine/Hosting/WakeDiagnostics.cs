@@ -37,6 +37,7 @@ public enum WakeReasons
     FrameClockPoller = 1 << 22, // an explicit FrameClock.Tick subscriber (for example the smooth compositor-bound playhead)
     VideoPumpPending = 1 << 23, // one coalesced native-video / geometry pump must run after layout settles
     FrameClockPaceable = 1 << 25, // a FrameClock.PaceableTick subscriber: per-frame motion the GPU governor MAY pace (a visualizer)
+    FeedbackSettle = 1 << 29,     // a feedback trail (BoxEl.Feedback) still decaying after its content stopped: frames owed until it parks
     WarmingVirtuals = 1 << 24,  // a KeepAlive unpark replay still in flight
     ScrollProducer = 1 << 26,  // IPlatformWindow.ScrollProducerLive: a frame-aligned producer (DM
                                // engaged/pending, or a hi-res wheel-fallback gesture live) needs one PumpScroll per refresh

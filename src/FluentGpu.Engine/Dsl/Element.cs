@@ -160,6 +160,13 @@ public sealed record BoxEl : Element
     /// = <c>1 − (1 − s)(1 − d)</c> (soft clouds that brighten what they overlap). Needs <see cref="RepaintBoundary"/>;
     /// detached windows (no layer route) fold it to source-over.</summary>
     public LayerBlend LayerBlend { get; init; } = LayerBlend.SrcOver;
+    /// <summary>Make this box a FEEDBACK boundary (visualizer F6; see <see cref="FeedbackSpec"/>). Implies a repaint boundary
+    /// at <see cref="FeedbackSpec.RasterScale"/>. Detached windows (no layer route) draw the fresh content only.</summary>
+    public FeedbackSpec? Feedback { get; init; }
+    /// <summary>The per-advance warp of the previous frame about the box centre (zoom / rotate / drift), DIP. Bindable.</summary>
+    public Prop<Affine2D> FeedbackTransform { get; init; } = Affine2D.Identity;
+    /// <summary>Overrides <see cref="FeedbackSpec.Decay"/> per advance (NaN = the spec's). Bindable: a kick can burst the trail.</summary>
+    public Prop<float> FeedbackDecay { get; init; } = float.NaN;
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.

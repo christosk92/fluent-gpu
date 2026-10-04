@@ -162,6 +162,8 @@ public sealed partial class SliceRecorder
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
         public byte LowRes;
         public bool Screen;   // BoxEl.LayerBlend.Screen: the item composites with CompositeItem.BlendCopy = BlendScreen
+        public bool HasFeedback;          // BoxEl.Feedback: the item advances a trail surface (CompositeItem.Feedback*)
+        public FeedbackState Feedback;
         // acrylic surfaces this slice's own walk recorded as their FallbackColor plate (carried when the slice is kept)
         public int AcrylicFallbacks;
         // an acrylic slice root: its frosted rect (the node box, containing-slice DIP), corner radii (DIP) and opacity
@@ -307,6 +309,7 @@ public sealed partial class SliceRecorder
             _recs[s].Kind = kind;
             _recs[s].LowRes = 0;   // the cut that registers it re-states its raster downscale (SetLowRes)
             _recs[s].Screen = false;   // …and its composite blend (SetScreen)
+            _recs[s].HasFeedback = false;   // …and its feedback trail (SetFeedback)
             return s;
         }
         s = Allocate();
@@ -431,6 +434,8 @@ public sealed partial class SliceRecorder
     internal void SetLowRes(int slot, byte down) => _recs[slot].LowRes = down;
     /// <summary>BoxEl.LayerBlend.Screen on a repaint boundary: its composite item screens onto the back buffer.</summary>
     internal void SetScreen(int slot, bool screen) => _recs[slot].Screen = screen;
+    /// <summary>BoxEl.Feedback on a repaint boundary: its composite item is a FEEDBACK item (the backend's trail surface).</summary>
+    internal void SetFeedback(int slot, in FeedbackState state) { _recs[slot].HasFeedback = !state.Spec.IsNone; _recs[slot].Feedback = state; }
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -1952,10 +1957,12 @@ public sealed partial class SliceRecorder
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
-            AddItem(new CompositeItem(id, lowRes > 1 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
+            if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed)
+            AddItem(new CompositeItem(id, lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH),
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
-                feather2, default, e.Dist.Count, lowRes),
+                feather2, default, e.Dist.Count, lowRes,
+                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }

@@ -2590,6 +2590,32 @@ public sealed partial class TreeReconciler
                     else _scene.ClearRadialGradientCenter(node);
                 }));
             }
+            if (b.FeedbackTransform.IsBound)
+            {
+                var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.FeedbackTransform : default);
+                AddBinding(node, fx.Start(() =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node) || !_scene.TryGetFeedback(node, out var st)) return;
+                    Affine2D warp = fx.Read();
+                    if (st.Warp.Equals(warp)) return;
+                    NodeBindingWriteCount++;
+                    _scene.SetFeedback(node, st with { Warp = warp });
+                }));
+            }
+            if (b.FeedbackDecay.IsBound)
+            {
+                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.FeedbackDecay : default);
+                AddBinding(node, fx.Start(() =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node) || !_scene.TryGetFeedback(node, out var st)) return;
+                    float decay = fx.Read();
+                    if (st.Decay.Equals(decay)) return;
+                    NodeBindingWriteCount++;
+                    _scene.SetFeedback(node, st with { Decay = decay });
+                }));
+            }
             if (b.GradientMix.IsBound)
             {
                 var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.GradientMix : default);
@@ -3874,7 +3900,8 @@ public sealed partial class TreeReconciler
                 return pe.OnRealized is null;
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
-                    || b.RadialGradientCenter.IsBound || b.GradientMix.IsBound || b.Width.IsBound || b.Height.IsBound
+                    || b.RadialGradientCenter.IsBound || b.GradientMix.IsBound || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound
+                    || b.Width.IsBound || b.Height.IsBound
                     || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
@@ -4855,8 +4882,18 @@ public sealed partial class TreeReconciler
                 if (b.HoverBorderBrush is { } hbb) _scene.SetHoverBorderBrush(node, hbb); else _scene.ClearHoverBorderBrush(node);
                 if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
-                _scene.SetRepaintBoundary(node, b.RepaintBoundary, SceneStore.RasterDown(b.RasterScale));
+                // A feedback box IS a repaint boundary, at the feedback surface scale.
+                _scene.SetRepaintBoundary(node, b.RepaintBoundary || b.Feedback is not null,
+                    SceneStore.RasterDown(b.Feedback is { } fspec ? fspec.RasterScale : b.RasterScale));
                 _scene.SetBlend(node, b.Blend, b.LayerBlend);
+                if (b.Feedback is { } fb)
+                {
+                    // the bound channels own their halves (BindNode): seed from the previous state when bound
+                    Affine2D warp = b.FeedbackTransform.IsBound && _scene.TryGetFeedback(node, out var prevFb) ? prevFb.Warp : b.FeedbackTransform.IsBound ? Affine2D.Identity : b.FeedbackTransform.Value;
+                    float decay = b.FeedbackDecay.IsBound && _scene.TryGetFeedback(node, out var prevFd) ? prevFd.Decay : b.FeedbackDecay.IsBound ? float.NaN : b.FeedbackDecay.Value;
+                    _scene.SetFeedback(node, new FeedbackState(fb, warp, decay));
+                }
+                else _scene.SetFeedback(node, null);
                 if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
                 _scene.SetHitTestPassThrough(node, b.HitTestPassThrough ? node : NodeHandle.Null);   // self = yield to behind, except own children
                 _scene.SetBlocksBackgroundScroll(node, b.BlocksBackgroundScroll);

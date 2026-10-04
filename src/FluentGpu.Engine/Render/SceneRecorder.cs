@@ -1784,6 +1784,7 @@ internal sealed class SceneRecordingContext
                 sl.SetBudget(slot, SliceRecorder.BudgetClass.Effect);
                 if (!stickyCut) sl.SetLowRes(slot, scene.RepaintBoundaryDown(node));
                 sl.SetScreen(slot, !stickyCut && scene.LayerBlendOf(node) == LayerBlend.Screen);
+                if (!stickyCut && scene.TryGetFeedback(node, out var feedbackState)) sl.SetFeedback(slot, in feedbackState);
                 int sflags = stickyCut ? (int)CompositeSliceFlags.StickyClip : 0;
                 var cmd = new CompositeSliceCmd(nodeIdx, node.Raw.Gen, (int)SliceRole.Main, (int)SliceKind.Effect, sflags, clip,
                     default, default, default, deviceBounds, key, key);

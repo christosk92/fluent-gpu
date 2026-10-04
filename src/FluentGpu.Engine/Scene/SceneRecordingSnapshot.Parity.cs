@@ -181,6 +181,7 @@ public sealed partial class SceneRecordingSnapshot
         if (!SparseEqual(_GradientTo, other._GradientTo, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} GradientTo ({which})");
         if (!SparseEqual(_gradientMix, other._gradientMix, i, (in float a, in float b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} GradientMix ({which})");
         if (!SparseEqual(_blend, other._blend, i, (in byte a, in byte b) => a == b, out which)) return Fail(out mismatch, $"n#{i} Blend ({which})");
+        if (!SparseEqual(_feedback, other._feedback, i, (in FeedbackState a, in FeedbackState b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} Feedback ({which})");
         if (!SparseEqual(_acrylic, other._acrylic, i, (in AcrylicSpec a, in AcrylicSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} AcrylicSpec ({which})");
         if (!SparseEqual(_edgeFade, other._edgeFade, i, (in EdgeFadeSpec a, in EdgeFadeSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} EdgeFadeSpec ({which})");
         if (!SparseEqual(_imageEffects, other._imageEffects, i, (in ImageVisualEffects a, in ImageVisualEffects b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ImageVisualEffects ({which})");

@@ -162,7 +162,8 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
     private readonly ColdSlab<GradientSpec> _gradientTos = new();   // BoxEl.GradientTo: the blend target of the fill
     private readonly ColdSlab<float> _gradientMixes = new();        // BoxEl.GradientMix: 0..1 toward _gradientTos (absent = 0)
-    private readonly ColdSlab<byte> _blends = new();                // BoxEl.Blend (low nibble) | BoxEl.LayerBlend (high nibble); absent = both SrcOver
+    private readonly ColdSlab<byte> _blends = new();
+    private readonly ColdSlab<FeedbackState> _feedback = new();   // BoxEl.Feedback + its bound warp/decay (visualizer F6)                // BoxEl.Blend (low nibble) | BoxEl.LayerBlend (high nibble); absent = both SrcOver
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
@@ -511,6 +512,7 @@ public sealed partial class SceneStore : ISceneBackend
             _gradientTos.Remove(idx);
             _gradientMixes.Remove(idx);
             _blends.Remove(idx);
+            _feedback.Remove(idx);
             _borderBrushes.Remove(idx);
             _hoverGradients.Remove(idx);
             _pressedGradients.Remove(idx);
@@ -1928,6 +1930,20 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetGradientMix(NodeHandle h, out float mix) => _gradientMixes.TryGet((int)h.Raw.Index, out mix);
+
+    /// <summary>BoxEl.Feedback (null clears). Equality-gated; marks the record dirty so the slice re-records and its composite
+    /// item carries the new warp/decay.</summary>
+    public void SetFeedback(NodeHandle h, FeedbackState? state)
+    {
+        int idx = (int)h.Raw.Index;
+        bool had = _feedback.TryGet(idx, out var cur);
+        if (state is not { } s) { if (!had) return; _feedback.Remove(idx); MarkRecordDirty(idx); return; }
+        if (had && cur == s) return;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _feedback.GetOrAdd(idx) = s;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetFeedback(NodeHandle h, out FeedbackState state) => _feedback.TryGet((int)h.Raw.Index, out state);
 
     /// <summary>BoxEl.Blend / BoxEl.LayerBlend. Equality-gated; both SrcOver is stored as absent.</summary>
     public void SetBlend(NodeHandle h, PaintBlend paint, LayerBlend layer)
