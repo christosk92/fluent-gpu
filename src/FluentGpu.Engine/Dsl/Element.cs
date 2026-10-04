@@ -153,8 +153,9 @@ public sealed record BoxEl : Element
     public Prop<float> GradientMix { get; init; } = 0f;
     /// <summary>How this box's subtree paints onto what is under it: <see cref="PaintBlend.Additive"/> adds light (glow,
     /// particles) for every rect, gradient, series and sprite field below it. Glyphs, images and paths stay source-over.
-    /// Put it on a child of a <see cref="RepaintBoundary"/>, not on the boundary itself (the boundary records its subtree
-    /// into its own slice).</summary>
+    /// Put it on a child of a <see cref="RepaintBoundary"/>, not on the boundary itself: a boundary (also a Feedback or
+    /// RasterScale box) records its subtree into its own slice, which starts source-over — an additive ancestor never
+    /// reaches into it.</summary>
     public PaintBlend Blend { get; init; } = PaintBlend.SrcOver;
     /// <summary>How a <see cref="RepaintBoundary"/> slice composites onto the back buffer: <see cref="LayerBlend.Screen"/>
     /// = <c>1 − (1 − s)(1 − d)</c> (soft clouds that brighten what they overlap). Needs <see cref="RepaintBoundary"/>;

@@ -36,8 +36,10 @@ float4 PSFeedback(V i) : SV_Target
 {
     float2 p = i.pos.xy - K[0].xy;
     float2 s = float2(dot(K[2].xy, p) + K[2].z, dot(K[3].xy, p) + K[3].z);
-    float2 uv = s * K[4].xy;
-    float4 c = (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) ? float4(0, 0, 0, 0) : gSrc.SampleLevel(gLinear, uv, 0);
+    float2 ext = float2(K[2].w, K[3].w);   // the trail's extent in px; the pooled ping may be larger (K[4].xy = 1 / its size)
+    bool outside = s.x < 0.0 || s.y < 0.0 || s.x > ext.x || s.y > ext.y;
+    float2 uv = clamp(s, 0.5, ext - 0.5) * K[4].xy;   // never filter in a texel past the trail
+    float4 c = outside ? float4(0, 0, 0, 0) : gSrc.SampleLevel(gLinear, uv, 0);
     c = lerp(K[5], c, K[4].z);
     int2 q = int2(i.pos.xy) & 3;
     float d = (gBayer4[q.y * 4 + q.x] + 0.5) / 16.0 * K[4].w;

@@ -381,6 +381,9 @@ internal sealed class SceneRecordingContext
         // walk produces in slice space is mapped into the window by it. SliceDepth = depth below the slice root (span
         // index). Self* = the pending slice-root walk the containing cut handed over (consumed by WalkCore).
         public SliceRecorder? Slices;
+        /// <summary>How many enclosing <see cref="Walk"/> frames of the CURRENT arena are inside an additive subtree
+        /// (BoxEl.Blend). Saved and zeroed at every slice cut, restored after it.</summary>
+        public int AdditiveDepth;
         public bool Slicing;
         public int CurSlot;
         public ulong CurGen, PriorGen;
@@ -1219,16 +1222,19 @@ internal sealed class SceneRecordingContext
             markersBefore = dl.OpcodeStats.CompositeSlice;
         }
         // BoxEl.Blend: an additive subtree is bracketed by a balanced SetBlend pair INSIDE this node's span-index entry, so a
-        // clean-span copy carries both ends. Nested additive subtrees emit nothing (depth-counted).
+        // clean-span copy carries both ends. Nested additive subtrees emit nothing (depth-counted, per arena: a slice cut
+        // starts its own arena at depth 0, so the bracket never reaches across a RepaintBoundary).
         bool additive = scene.PaintBlendOf(node) == PaintBlend.Additive;
-        if (additive && _additiveDepth++ == 0) dl.SetBlend(PaintBlend.Additive);
+        bool opened = additive && stats.AdditiveDepth++ == 0;
+        if (opened) dl.SetBlend(PaintBlend.Additive);
+        bool closed = !additive;
         try
         {
             var r = WalkCore(scene, dl, images, node, parentWorld, parentOpacity, depth, clip, in focus, in textEdit,
                 scrollThumb, scrollTrack, parentScaleX, parentScaleY, parentInMotion,
                 parentScrollInMotion, inherited, skipRoots, spans, spanFrame,
                 spanReuseDisabled, spanStoreEnabled, ref stats);
-            if (additive && --_additiveDepth == 0) { dl.SetBlend(PaintBlend.SrcOver); additive = false; }
+            if (!closed) { closed = true; stats.AdditiveDepth--; if (opened) dl.SetBlend(PaintBlend.SrcOver); }
             if (entry >= 0)
                 stats.Slices!.EndIndexEntry(entrySlot, entry, r.HasBounds ? r.SubtreeBounds : default, dl.BytePosition,
                     dl.SortPosition, dl.OpcodeStats.CompositeSlice != markersBefore);
@@ -1236,14 +1242,11 @@ internal sealed class SceneRecordingContext
         }
         finally
         {
-            if (additive && --_additiveDepth == 0) dl.SetBlend(PaintBlend.SrcOver);   // an exceptional exit still balances
+            if (!closed) { stats.AdditiveDepth--; if (opened) dl.SetBlend(PaintBlend.SrcOver); }   // an exceptional exit still balances
             stats.SliceDepth--;
             PopWalkPath();
         }
     }
-
-    /// <summary>How many enclosing <see cref="Walk"/> frames are inside an additive subtree (BoxEl.Blend).</summary>
-    private int _additiveDepth;
 
     /// <summary>The slice context a cut saves around the child slice's walk.</summary>
     private struct SliceCtx
@@ -1253,13 +1256,14 @@ internal sealed class SceneRecordingContext
         public float CurDx, CurDy, OwnDx, OwnDy;
         public RectF SliceClip;
         public bool GeomCovered;
+        public int AdditiveDepth;
     }
 
     private static SliceCtx SaveSlice(ref RecordAccumulator stats) => new()
     {
         CurSlot = stats.CurSlot, SliceDepth = stats.SliceDepth, CurGen = stats.CurGen, PriorGen = stats.PriorGen,
         CurDx = stats.CurDx, CurDy = stats.CurDy, OwnDx = stats.SliceOwnDx, OwnDy = stats.SliceOwnDy,
-        SliceClip = stats.SliceClip, GeomCovered = stats.GeomCovered,
+        SliceClip = stats.SliceClip, GeomCovered = stats.GeomCovered, AdditiveDepth = stats.AdditiveDepth,
     };
 
     private static void RestoreSlice(ref RecordAccumulator stats, in SliceCtx c)
@@ -1268,6 +1272,7 @@ internal sealed class SceneRecordingContext
         stats.CurDx = c.CurDx; stats.CurDy = c.CurDy; stats.SliceOwnDx = c.OwnDx; stats.SliceOwnDy = c.OwnDy;
         stats.SliceClip = c.SliceClip;
         stats.GeomCovered = c.GeomCovered;
+        stats.AdditiveDepth = c.AdditiveDepth;
     }
 
     private static void EnterSlice(ref RecordAccumulator stats, SliceRecorder sl, int slot, float ownDx, float ownDy)
@@ -1277,6 +1282,7 @@ internal sealed class SceneRecordingContext
         stats.SliceOwnDx = ownDx; stats.SliceOwnDy = ownDy;
         stats.SliceDepth = 0;
         stats.GeomCovered = false;
+        stats.AdditiveDepth = 0;   // a child arena opens its own SetBlend brackets
         stats.CurGen = sl.CurGen(slot);
         stats.PriorGen = sl.PriorGen(slot);
     }
@@ -1890,6 +1896,9 @@ internal sealed class SceneRecordingContext
             // Inside an inline group layer the subtree records with no slice cut (its markers would be skipped): a span
             // recorded outside one (which may carry markers) is not the same bytes.
             if (stats.InlineLayerDepth > 0) spanInputSig = (spanInputSig ^ 0x1A7E_1A7EUL) * 1099511628211UL;
+            // Inside an additive bracket a nested additive node or sprite field emits no SetBlend of its own: a span recorded
+            // outside one carries its own pair, so it is not the same bytes either.
+            if (stats.AdditiveDepth > 0) spanInputSig = (spanInputSig ^ 0xADD0_ADD0UL) * 1099511628211UL;
             if (isSliceSelf)
             {
                 // KEEP the slice whole: its root is clean and its span is the whole CURRENT arena ⇒ not one byte of it can
@@ -2617,9 +2626,8 @@ internal sealed class SceneRecordingContext
             {
                 if (!maybeSparsePaint || !overlapsRecordClip) break;
                 if (!scene.TryGetSpriteSpec(node, out var sps) || !scene.TryGetSprites(node, out var sprites) || sprites.Length == 0) break;
-                bool spriteAdd = sps.Blend == PaintBlend.Additive && _additiveDepth == 0;
+                bool spriteAdd = sps.Blend == PaintBlend.Additive && stats.AdditiveDepth == 0;
                 if (spriteAdd) dl.SetBlend(PaintBlend.Additive);
-                int chunkStart = dl.BytePosition;
                 dl.Sprites(sps.Kernel, sprites, world, opacity, key);
                 if (spriteAdd) dl.SetBlend(PaintBlend.SrcOver);
                 // the subtree bounds: the union of every sprite (kernel-exact) + the AA pad, in world space
@@ -2629,7 +2637,6 @@ internal sealed class SceneRecordingContext
                     RectF sb = sprites[si].Bounds(sps.Kernel);
                     sl = MathF.Min(sl, sb.X); st = MathF.Min(st, sb.Y); sr = MathF.Max(sr, sb.X + sb.W); sbm = MathF.Max(sbm, sb.Y + sb.H);
                 }
-                _ = chunkStart;
                 if (sr >= sl && sbm >= st) result.Include(world.TransformBounds(new RectF(sl - 1f, st - 1f, sr - sl + 2f, sbm - st + 2f)));
                 break;
             }
@@ -2638,7 +2645,7 @@ internal sealed class SceneRecordingContext
                 if (!maybeSparsePaint || !overlapsRecordClip) break;
                 if (!scene.TryGetSeries(node, out var ss) || !scene.TryGetSeriesSamples(node, out var seriesSamples) || seriesSamples.Length < 2) break;
                 float seriesMix = scene.TryGetGradientMix(node, out float sm) ? sm : 0f;
-                bool seriesAdd = ss.Blend == PaintBlend.Additive && _additiveDepth == 0;
+                bool seriesAdd = ss.Blend == PaintBlend.Additive && stats.AdditiveDepth == 0;
                 if (seriesAdd) dl.SetBlend(PaintBlend.Additive);
                 dl.Series(local, in ss, seriesSamples, world, opacity, key, seriesMix);
                 if (seriesAdd) dl.SetBlend(PaintBlend.SrcOver);

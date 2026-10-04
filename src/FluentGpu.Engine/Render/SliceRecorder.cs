@@ -1900,6 +1900,7 @@ public sealed partial class SliceRecorder
             // needed tiles: the composite viewport ∩ the segment's painted bounds, and a scroll slice's realized coverage.
             // A low-resolution boundary holds none (the backend replays it into one downscaled surface instead).
             byte lowRes = r.LowRes > 1 && r.Kind == SliceKind.Effect ? r.LowRes : (byte)0;
+            if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed): no tiles
             if (!contentPx.IsEmpty && lowRes == 0)
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
@@ -1957,7 +1958,6 @@ public sealed partial class SliceRecorder
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
-            if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed)
             AddItem(new CompositeItem(id, lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH),
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,

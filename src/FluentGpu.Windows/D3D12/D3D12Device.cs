@@ -185,8 +185,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole, Path, Series, RectAdd, GradientAdd, SeriesAdd, Sprites, SpritesAdd }
     // DrawOp.SetBlend state of the stream being decoded: rect / gradient / series runs pushed while it is set take their
     // ADDITIVE variants (the same instance lists, an additive PSO). Reset at every stream start; the recorder emits
-    // balanced pairs, so a stream ends SrcOver.
-    private bool _blendAdditive;
+    // balanced pairs, so a stream ends SrcOver. _blendBase is the replay's floor: a feedback trail whose fresh content
+    // paints Additive (FeedbackSpec.Fresh) holds it, so a nested bracket's closing SetBlend(SrcOver) stays additive.
+    private bool _blendAdditive, _blendBase;
     private readonly List<(PrimKind Kind, int Count)> _runs = new();
     // Painter's-order guard for the glyph batch. RecordAll replays every glyph of a segment AFTER the segment's
     // non-glyph primitives ("text on top within a z-context"), which is only correct while nothing opaque is recorded
@@ -2213,7 +2214,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 }
                 case DrawOp.SetBlend:
                 {
-                    _blendAdditive = MemoryMarshal.Read<SetBlendCmd>(cmds.Slice(pos)).Mode == (int)PaintBlend.Additive;
+                    _blendAdditive = _blendBase || MemoryMarshal.Read<SetBlendCmd>(cmds.Slice(pos)).Mode == (int)PaintBlend.Additive;
                     pos += Unsafe.SizeOf<SetBlendCmd>();
                     break;
                 }
@@ -3314,6 +3315,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         _streamLw = lw; _streamLh = lh;
         ClearInsts();
+        _blendAdditive = false;   // a walk never inherits the previous stream's paint blend
         _clipStack.Clear();
         _roundedClipStack.Clear();
         ResetDesiredScissor();

@@ -460,7 +460,7 @@ public sealed unsafe partial class D3D12Device
     /// <summary>One feedback boundary's trail between frames: the retained-surface key of its last advance, the content key
     /// that advance consumed, how many settle advances remain, and when it last advanced (a resume after a long gap clears
     /// it — a stale trail jumping is worse than a restart). Render-thread owned; dropped with the device's surfaces.</summary>
-    private struct FeedbackTrail { public ulong SurfaceKey, ContentKey; public int SettleLeft; public long LastTicks, Advances; public int W, H, D; }
+    private struct FeedbackTrail { public ulong SurfaceKey, ContentKey; public int SettleLeft; public long LastTicks, Advances, Turn; public int W, H, D; }
     private readonly Dictionary<long, FeedbackTrail> _feedbackTrails = new();
     private int _feedbackLive;   // Volatile: any trail still settling (IGpuDevice.HasLiveFeedback)
 
@@ -474,13 +474,10 @@ public sealed unsafe partial class D3D12Device
     {
         ref readonly CompositeItem it = ref frame.Items[i];
         int d = Math.Max(1, (int)it.LowResDown);
+        // The trail covers the item's REGION (its composite clip ∩ the window), not the content's painted bounds: the warp
+        // carries old pixels past the fresh content, and a surface anchored on bounds that move with the content would
+        // re-anchor (or restart) the trail every advance. Clip the feedback box (ClipToBounds) to bound it.
         PixelRect area = ItemRegion(in it, 0);
-        if (!row.ContentBounds.IsEmpty)
-        {
-            RectF c = row.ContentBounds;
-            area = new PixelRect(Math.Max(area.Left, (int)MathF.Floor(it.Transform.Dx + c.X) - 1), Math.Max(area.Top, (int)MathF.Floor(it.Transform.Dy + c.Y) - 1),
-                Math.Min(area.Right, (int)MathF.Ceiling(it.Transform.Dx + c.Right) + 1), Math.Min(area.Bottom, (int)MathF.Ceiling(it.Transform.Dy + c.Bottom) + 1));
-        }
         if (area.IsEmpty) return;
         int tx = (int)it.Transform.Dx, ty = (int)it.Transform.Dy;
         int x0 = FloorDiv(area.Left - tx + row.Frame.OriginX, d), y0 = FloorDiv(area.Top - ty + row.Frame.OriginY, d);
@@ -492,10 +489,11 @@ public sealed unsafe partial class D3D12Device
 
         long id = (long)row.NodeIndex << 32 | row.Gen;
         _feedbackTrails.TryGetValue(id, out var trail);
+        float decay = float.IsFinite(it.FeedbackDecay) ? it.FeedbackDecay : it.Feedback.Decay;
         ulong content = 0xFEED_0000_0000_0001UL;
         MixBytes(ref content, frame.PrefixOf(in row));
         MixBytes(ref content, frame.StreamOf(in row));
-        Mix(ref content, (ulong)BitConverter.SingleToUInt32Bits(it.FeedbackDecay) << 32 | (uint)d);
+        Mix(ref content, (ulong)BitConverter.SingleToUInt32Bits(decay) << 32 | (uint)d);
         Mix(ref content, (ulong)BitConverter.SingleToUInt32Bits(it.FeedbackWarp.M11) << 32 | BitConverter.SingleToUInt32Bits(it.FeedbackWarp.M12));
         Mix(ref content, (ulong)BitConverter.SingleToUInt32Bits(it.FeedbackWarp.Dx) << 32 | BitConverter.SingleToUInt32Bits(it.FeedbackWarp.Dy));
         ulong fence = _fenceValue + 1;
@@ -504,16 +502,19 @@ public sealed unsafe partial class D3D12Device
         bool stale = trail.LastTicks != 0 && (now - trail.LastTicks) > 2L * Stopwatch.Frequency;
         bool changed = content != trail.ContentKey;
         int ping = resized || stale || trail.SurfaceKey == 0 ? -1 : _surfaces!.FindRetained(trail.SurfaceKey, fence, out _);
-        if (!changed && trail.SettleLeft <= 0 && ping >= 0)
+        int s = !changed && trail.SettleLeft <= 0 && ping >= 0 ? -1 : _surfaces!.AcquireScratch(w, h, fence);
+        if (s < 0)
         {
-            // Parked: nothing new to draw and the trail is below one 8-bit step — re-composite the last surface as-is.
+            // Parked (nothing new to draw and the trail is below one 8-bit step), or no scratch this frame: re-composite the
+            // last surface as-is rather than flash empty.
+            if (ping < 0) return;
+            trail.Turn = _compositeTurn;
+            _feedbackTrails[id] = trail;
             _itemSurface[i] = ping; _itemDown[i] = d; _itemRegion[i] = region; _itemKey[i] = trail.SurfaceKey;
             return;
         }
-        int s = _surfaces!.AcquireScratch(w, h, fence);
-        if (s < 0) return;
         ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var rtv = _surfaces.ScratchRtv(s);
+        var rtv = _surfaces!.ScratchRtv(s);
         BeginPass(rtv, w, h, PassLoad.Clear);
         if (ping >= 0)
         {
@@ -529,35 +530,41 @@ public sealed unsafe partial class D3D12Device
             // (x', y') = (M11 x + M21 y, M12 x + M22 y) ⇒ x = (M22 x' − M21 y')/det, y = (−M12 x' + M11 y')/det
             float r0x = fw.M22 / det, r0y = -fw.M21 / det, r1x = -fw.M12 / det, r1y = fw.M11 / det;
             float ox = cx + fw.Dx * k, oy = cy + fw.Dy * k;
-            float keep = Math.Clamp(1f - it.FeedbackDecay, 0f, 1f);
+            float keep = Math.Clamp(1f - decay, 0f, 1f);
             ColorF fade = it.Feedback.FadeTo;
+            BindCompositor(w, h);   // the pass just opened: nothing has bound the compositor's root signature / viewport yet
             _compositor!.Begin(0f, 0f, w, h);
             var K = _compositor.K;
-            K[8] = r0x; K[9] = r0y; K[10] = cx - (r0x * ox + r0y * oy); K[11] = 0f;
-            K[12] = r1x; K[13] = r1y; K[14] = cy - (r1x * ox + r1y * oy); K[15] = 0f;
-            K[16] = 1f / w; K[17] = 1f / h; K[18] = keep; K[19] = 1f / 255f;
+            // K[11] / K[15]: the trail's extent in px (the valid part of the ping; a pooled scratch may be larger)
+            K[8] = r0x; K[9] = r0y; K[10] = cx - (r0x * ox + r0y * oy); K[11] = w;
+            K[12] = r1x; K[13] = r1y; K[14] = cy - (r1x * ox + r1y * oy); K[15] = h;
+            K[16] = 1f / _surfaces.ScratchW(ping); K[17] = 1f / _surfaces.ScratchH(ping); K[18] = keep; K[19] = 1f / 255f;
             K[20] = fade.R * fade.A; K[21] = fade.G * fade.A; K[22] = fade.B * fade.A; K[23] = fade.A;
             _compositor!.Draw(_cmdList, SliceCompositor.Pso.Feedback, _surfaces.ScratchSrv(ping));
         }
-        // Pass 2: this frame's content on top, at the trail scale (Fresh: SrcOver, or Additive through the stream's SetBlend).
+        // Pass 2: this frame's content on top, at the trail scale. FeedbackSpec.Fresh = Additive floors the replay's paint
+        // blend at additive (fresh light adds onto the trail); SrcOver leaves the stream's own SetBlend brackets in charge.
         float full = _frameScale;
         _frameScale = full / d;
+        _blendBase = it.Feedback.Fresh == PaintBlend.Additive;
         try { ReplaySegment(in frame, in row, -x0, -y0, w, h, rtv, new RectF(-1e7f, -1e7f, 2e7f, 2e7f)); }
-        finally { _frameScale = full; }
+        finally { _frameScale = full; _blendBase = false; _blendAdditive = false; }
         EndPassIfOpen();
         ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         InvalidateCmdState();
         trail.Advances++;
         ulong key = 0xFEED_5000_0000_0001UL ^ (ulong)id;
         Mix(ref key, (ulong)trail.Advances);
-        trail.SettleLeft = changed ? it.Feedback.SettleTurns : trail.SettleLeft - 1;
-        trail.SurfaceKey = key; trail.ContentKey = content; trail.LastTicks = now; trail.W = w; trail.H = h; trail.D = d;
+        trail.SettleLeft = changed ? FeedbackSpec.SettleTurnsFor(decay) : trail.SettleLeft - 1;
+        trail.SurfaceKey = key; trail.ContentKey = content; trail.LastTicks = now; trail.Turn = _compositeTurn; trail.W = w; trail.H = h; trail.D = d;
         _feedbackTrails[id] = trail;
         _surfaces.Retain(s, key, d, RetainedCap());
         _itemSurface[i] = s; _itemDown[i] = d; _itemRegion[i] = region; _itemKey[i] = key;
     }
 
-    /// <summary>After a composite: publish whether any trail still settles, and forget trails whose boundary left the frame.</summary>
+    /// <summary>After a composite: publish whether any trail PREPARED THIS COMPOSITE still settles, and forget trails whose
+    /// boundary left the frame (not prepared for 2 s). A trail missing from this composite cannot settle, so it stops
+    /// counting as live at once — else an unmounted boundary held the FeedbackSettle wake forever.</summary>
     private void EndFeedbackFrame(in CompositeFrame frame)
     {
         if (_feedbackTrails.Count == 0) { Volatile.Write(ref _feedbackLive, 0); return; }
@@ -566,8 +573,9 @@ public sealed unsafe partial class D3D12Device
         _feedbackGone.Clear();
         foreach (var (id, trail) in _feedbackTrails)
         {
-            if (trail.SettleLeft > 0) live = true;
-            if (now - trail.LastTicks > 2L * Stopwatch.Frequency && trail.SettleLeft <= 0) _feedbackGone.Add(id);
+            bool here = trail.Turn == _compositeTurn;
+            if (here && trail.SettleLeft > 0) live = true;
+            if (!here && now - trail.LastTicks > 2L * Stopwatch.Frequency) _feedbackGone.Add(id);
         }
         foreach (long id in _feedbackGone) _feedbackTrails.Remove(id);
         Volatile.Write(ref _feedbackLive, live ? 1 : 0);

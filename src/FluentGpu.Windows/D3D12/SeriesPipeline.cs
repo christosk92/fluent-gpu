@@ -299,7 +299,7 @@ float4 PSMain(VSOut i) : SV_Target
     public void Dispose()
     {
         // No instance buffers to release: the shared UploadArena owns them (disposed by the device).
-        if (_pso != null) _pso->Release();
-        if (_psoAdd != null) _psoAdd->Release();
+        if (_pso != null) { _pso->Release(); _pso = null; }
+        if (_psoAdd != null) { _psoAdd->Release(); _psoAdd = null; }
     }
 }

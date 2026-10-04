@@ -3891,7 +3891,7 @@ public sealed partial class TreeReconciler
             case PolylineStrokeEl:
                 return true;
             case SeriesEl se:
-                return !se.Samples.IsBound;   // a bound sample source is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
+                return !se.Samples.IsBound && !se.GradientMix.IsBound;   // a bound sample source / mix is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
             case SpriteFieldEl sf:
                 return !sf.Instances.IsBound; // likewise the bound instance buffer (Reconciler.Sprites.cs)
             case PathEl pe:

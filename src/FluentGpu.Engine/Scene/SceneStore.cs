@@ -162,8 +162,8 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
     private readonly ColdSlab<GradientSpec> _gradientTos = new();   // BoxEl.GradientTo: the blend target of the fill
     private readonly ColdSlab<float> _gradientMixes = new();        // BoxEl.GradientMix: 0..1 toward _gradientTos (absent = 0)
-    private readonly ColdSlab<byte> _blends = new();
-    private readonly ColdSlab<FeedbackState> _feedback = new();   // BoxEl.Feedback + its bound warp/decay (visualizer F6)                // BoxEl.Blend (low nibble) | BoxEl.LayerBlend (high nibble); absent = both SrcOver
+    private readonly ColdSlab<byte> _blends = new();              // BoxEl.Blend (low nibble) | BoxEl.LayerBlend (high nibble); absent = both SrcOver
+    private readonly ColdSlab<FeedbackState> _feedback = new();   // BoxEl.Feedback + its bound warp/decay (visualizer F6)
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
@@ -1901,6 +1901,7 @@ public sealed partial class SceneStore : ISceneBackend
     public void SetGradientTo(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
+        if (_gradientTos.TryGet(idx, out var cur) && cur.Equals(g)) return;   // equal writes are no-ops (a re-render re-applies)
         _flags[idx] |= NodeFlags.SparsePaint;
         _gradientTos.GetOrAdd(idx) = g;
         MarkRecordDirty(idx);

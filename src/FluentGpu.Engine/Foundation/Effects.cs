@@ -72,7 +72,8 @@ public enum SeriesShape : byte
     /// <summary>A constant-width ribbon through the sample polyline (outlines, Charts/Waveform later).</summary>
     Stroke = 2,
     /// <summary>A closed loop about the box centre: sample <c>i</c> of N sits at angle <c>2π·i/(N−1)</c> (0 = →, clockwise in
-    /// screen space) and radius <c>sample · Amplitude · min(W, H)/2</c>; sample 0 and sample N−1 should match to close it.
+    /// screen space) and radius <c>sample · Amplitude · min(W, H)/2</c>, with samples and Amplitude clamped to 0..1 so the loop
+    /// stays in its box (a 1.4:1 ellipse is a square series under a ScaleX); sample 0 and sample N−1 should match to close it.
     /// <c>Thickness</c> &gt; 0 draws a ribbon along the loop; ≤ 0 fills from the centre.</summary>
     Polar = 3,
 }
@@ -100,7 +101,11 @@ public readonly record struct FeedbackSpec(float Decay, float RasterScale = 0.5f
 {
     public bool IsNone => !(Decay > 0f);
     /// <summary>Advances a stopped trail keeps running until it is below one 8-bit step: ⌈ln(1/255) / ln(1 − Decay)⌉, capped at 240.</summary>
-    public int SettleTurns => IsNone ? 0 : Math.Min(240, (int)MathF.Ceiling(MathF.Log(1f / 255f) / MathF.Log(MathF.Max(1e-4f, 1f - MathF.Min(Decay, 0.9999f)))));
+    public int SettleTurns => IsNone ? 0 : SettleTurnsFor(Decay);
+    /// <summary><see cref="SettleTurns"/> for an effective per-advance <paramref name="decay"/> (a bound FeedbackDecay
+    /// overrides the spec's); 0 when it does not decay.</summary>
+    public static int SettleTurnsFor(float decay) => !(decay > 0f) ? 0
+        : Math.Min(240, (int)MathF.Ceiling(MathF.Log(1f / 255f) / MathF.Log(MathF.Max(1e-4f, 1f - MathF.Min(decay, 0.9999f)))));
 }
 
 /// <summary>The STATIC half of a <c>SeriesEl</c>: shape, colour or ≤ 4-stop gradient by amplitude, stroke thickness,

@@ -17,6 +17,16 @@ public sealed class FeedbackSpecTests
         => Assert.Equal(expected, new FeedbackSpec(decay).SettleTurns);
 
     [Fact]
+    public void Settle_turns_follow_the_effective_decay()
+    {
+        // a bound FeedbackDecay of 0.5 settles in 8 advances even when the spec says 0.06 (90)
+        Assert.Equal(8, FeedbackSpec.SettleTurnsFor(0.5f));
+        Assert.Equal(new FeedbackSpec(0.06f).SettleTurns, FeedbackSpec.SettleTurnsFor(0.06f));
+        Assert.Equal(0, FeedbackSpec.SettleTurnsFor(0f));
+        Assert.Equal(0, FeedbackSpec.SettleTurnsFor(float.NaN));
+    }
+
+    [Fact]
     public void No_decay_is_no_feedback()
     {
         Assert.True(new FeedbackSpec(0f).IsNone);
