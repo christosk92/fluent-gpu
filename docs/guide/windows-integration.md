@@ -21,12 +21,13 @@ In Wavee that channel is `DeepLinkChannel` and the verbs are `wavee://…`. See 
 | **Toasts** | Action Center notifications, live-updating progress, and OS-scheduled delivery with the app closed | `Notifications/` — `ToastNotifier`, `ToastBuilder`, `ToastImageCache` | [pitfalls](../../.claude/skills/wavee-native/pitfalls.md), [bridges](../../.claude/skills/wavee/bridges.md) |
 | **Power** | Playback keeps the machine awake; sleep/resume is handled rather than survived | `Power/PowerSession` | [power-network](../../.claude/skills/wavee-native/power-network.md) |
 | **Network cost** | Metered connections quietly cap quality and defer prefetch | `Network/` — `NetworkStatus`, `NetworkCost` | [power-network](../../.claude/skills/wavee-native/power-network.md) |
+| **Compute devices (NPU)** | Which NPU this PC has, for on-device AI features | `Devices/ComputeAdapters` — `ComputeAdapterInfo`, `ComputeAdapterVendors` | XML docs on `ComputeAdapters` (DXCore; fail-soft, any thread, ~1-5 ms — not per frame) |
 | **Mouse & keyboard navigation** | Mouse side buttons and Back/Forward keys navigate | engine PAL seam `IPlatformApp.AppNavigationCommand` | [pal-rhi](../design/subsystems/pal-rhi.md), [shortcuts](shortcuts.md) |
 | **System theme** | Light/dark and accent follow the OS, reduced motion is honoured | engine (`FluentApp.SystemColorsChanged`, `Motion.ReducedMotion`) | [rendering-and-performance](rendering-and-performance.md) |
 
 ## Which layer owns what
 
-- **`FluentGpu.WindowsApi`** — OS *services*: shell, notifications, power, network, activation, storage, credentials. AOT-clean hand-rolled Win32/WinRT interop, no WindowsAppSDK and no CsWinRT. It knows nothing about your app.
+- **`FluentGpu.WindowsApi`** — OS *services*: shell, notifications, power, network, activation, storage, credentials, compute devices. AOT-clean hand-rolled Win32/WinRT interop, no WindowsAppSDK and no CsWinRT. It knows nothing about your app.
 - **The engine PAL (`IPlatformApp`)** — OS *input and window* events that must reach the frame loop: activation redirects, thumb-button clicks, taskbar-button-created, navigation commands, colour-settings changes. Payloads are plain scalars so the engine stays TerraFX-free, and every one is delivered on the **UI thread** with the same stash-and-drain discipline (the backend stashes, wakes a frame, and re-raises at the top of `Paint`), so handlers may mutate signals directly.
 - **Your app** — the bridges that mirror app state onto those surfaces, and the single verb router that consumes activations.
 
