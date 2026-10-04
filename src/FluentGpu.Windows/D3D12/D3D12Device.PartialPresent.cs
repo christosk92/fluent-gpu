@@ -151,10 +151,18 @@ public sealed unsafe partial class D3D12Device
         _ppCurN = 0;
         ulong structure = 0x5747_0000_0000_0001UL;
         ulong fresh = 0xF2E5_0000_0000_0000UL ^ (ulong)(uint)_compositeTurn * 0x9E3779B97F4A7C15UL;   // differs every turn
+        int hiddenEnd = -1;   // the members of a hidden group
         for (int i = 0; i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
             Mix(ref structure, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
+            if (i < hiddenEnd || Hidden(i, items.Length))
+            {
+                // hidden under a later opaque item: it paints no pixel, so it never repaints one (D3D12Device.Occlusion.cs)
+                if (it.Kind == CompositeKind.Group) hiddenEnd = Math.Max(hiddenEnd, i + 1 + it.GroupCount);
+                _itemFoot[i] = default;
+                continue;
+            }
             ulong id = 0xE7A1_0000_0000_0001UL;
             Mix(ref id, (ulong)(uint)i << 40 | (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);   // structure is equal ⇒ i is a stable identity
             ulong sig = PpItemSig(in it);

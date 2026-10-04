@@ -638,6 +638,67 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 </figure>
 </div>
 
+<div class="chg">
+<h3><span class="tag done">done</span>(i) Occlusion: an item under an opaque item is not drawn</h3>
+<p class="file">FluentGpu.Engine/Render/SliceRecorder.cs (<code>OpaqueFill</code>, <code>OpaquePx</code>) · FluentGpu.Engine/Seams/Rhi/Composite.cs (<code>CompositeItem.Opaque</code>) · FluentGpu.Windows/D3D12/D3D12Device.Occlusion.cs · D3D12Device.Composite.cs · D3D12Device.PartialPresent.cs · composite.hlsl (<code>PSSample</code> clamp)</p>
+<div class="prose">
+<p><b>Problem.</b> When the fullscreen stage of Wavee is open, the app shell is still in the scene under it. A probe of the pass timeline on the stage (<code>--fake</code>, 2496 × 1664 px, 120 Hz) showed six composite items. The first item was the root of the shell: 12 tiles, 4.7 M px. The stage drew over all of it, but the composite drew it on each frame. The frosted bar of the stage also drew the shell into its mini-composite on each frame.</p>
+<p><b>Design.</b></p>
+<ol>
+  <li>The segment scan finds the largest rect that the segment paints fully opaque. The fill must be a <code>FillRoundRect</code> with a solid colour of alpha 1, opacity 1, no corner radius and a translation-only transform. It must be outside each layer and outside each rounded or stencil clip. The rectangular clips cut the rect.</li>
+  <li>The recorder puts this rect on the composite item in window px (<code>CompositeItem.Opaque</code>). It does this only when the item composites its pixels without change: alpha 1, no blur, no feather, no rounded clip, no distributed fade. A segment with a video hole gets no rect.</li>
+  <li>The device prepares the top-level items in painter order. After it prepares an item with a rect, it finds the whole pixels that the item writes fully opaque. For tiles, these are the whole pixels in the rect that resident tiles cover. For a low-resolution surface, these are the pixels whose bilinear upsample reads only opaque texels.</li>
+  <li>Each earlier top-level item whose footprint is in those pixels is hidden. The composite does not draw it. The mini-composite of a backdrop does not draw it when the occluder is below the backdrop. The content key of the backdrop and the partial-present diff do not include it.</li>
+  <li>The upsample of a low-resolution surface clamps to the last texel that it wrote. Before, the right and bottom edges sampled the cleared texels of a larger pooled texture. Thus the edge of the stage was 2 px translucent, and the shell showed through.</li>
+  <li><code>GpuKnockouts.NoOcclusion</code> draws each item. The identity probe compares the two routes.</li>
+</ol>
+<p><b>Limit.</b> Only a <code>FillRoundRect</code> makes an occluder. A hidden item is still prepared, and its tiles still raster when they change. Only the composite skips it.</p>
+<p><b>Status.</b> Done, on branch <code>perf/stage-motion</code>. The gate <code>gate.tiles.opaque-cover</code> (4 checks) shows which items get a rect. The real-GPU family <code>occlusion-identity</code> compares the two routes at 5 scales: 15 / 15 identical, with 2 or 3 hidden items in each. <code>SurfacePool.DropScratch</code> lets the probe capture both routes from a new pool: the pixels of a sampled route depend on the size of the leased texture (≤ 1/255), and the two routes lease differently.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 210" role="img" aria-label="Before: the composite draws the shell tiles, the low-resolution field, the tinted chrome tiles and the bar. After: the shell is hidden under the opaque backdrop, and the backdrop is one upsampled quad.">
+  <text class="tb" x="20" y="20">Before: 6 items, 3 of them window-sized</text><text class="tb" x="400" y="20">After: the shell is hidden</text>
+  <rect class="ba" x="20" y="40" width="340" height="26"/><text class="tm" x="190" y="58" text-anchor="middle">shell tiles · 4.7 M px · covered</text>
+  <rect class="b" x="20" y="72" width="340" height="26"/><text class="tm" x="190" y="90" text-anchor="middle">field (¼ scale) · 4.15 M px</text>
+  <rect class="b" x="20" y="104" width="340" height="26"/><text class="tm" x="190" y="122" text-anchor="middle">floor + art (root) · scrim + chrome tiles</text>
+  <rect class="b" x="20" y="136" width="340" height="26"/><text class="tm" x="190" y="154" text-anchor="middle">bar acrylic · lyrics · small tiles</text>
+  <text class="tA" x="190" y="190" text-anchor="middle">composite 1.24 ms · offscreen 1.1 ms</text>
+  <rect class="b" x="400" y="40" width="340" height="26" stroke-dasharray="4 3"/><text class="tm" x="570" y="58" text-anchor="middle">shell tiles · hidden, not drawn</text>
+  <rect class="b" x="400" y="72" width="340" height="26"/><text class="tm" x="570" y="90" text-anchor="middle">backdrop (¼ scale): floor, art, field, scrim</text>
+  <rect class="b" x="400" y="104" width="340" height="26"/><text class="tm" x="570" y="122" text-anchor="middle">chrome tiles (no scrim) · 2.9 M px</text>
+  <rect class="b" x="400" y="136" width="340" height="26"/><text class="tm" x="570" y="154" text-anchor="middle">bar acrylic · lyrics · small tiles</text>
+  <text class="ok" x="570" y="190" text-anchor="middle" font-size="11.5">composite 0.89 ms · offscreen 1.04 ms</text>
+</svg>
+</div>
+<figcaption><b>Figure 12. The composite of the stage, before and after (i) and (j).</b> The opaque backdrop hides the shell. The floor, the art, the field and the scrim are one quarter-scale surface. Times are from the pass timeline, with the timing probe on.</figcaption>
+</figure>
+</div>
+
+<div class="chg">
+<h3><span class="tag done">done</span>(j) Wavee: the backdrop of the stage is one quarter-scale boundary</h3>
+<p class="file">WaveeMusic: src/apps/Wavee/Shell/Stage.UI.cs (<code>Backdrop</code>) · Shell/Visualizer.UI.cs (<code>FieldFace(boundary:)</code>)</p>
+<div class="prose">
+<p><b>Problem.</b> The backdrop of the stage was three window-sized layers, and the field moves under all of them. Thus the composite drew all three on each frame: the floor and the blurred cover in the tiles of the root, the quarter-scale surface of the field, and the flat scrim. The scrim also made the chrome segment above it window-sized. The acrylic of the bar blurred all three again.</p>
+<p><b>Design.</b> The floor, the cover (512 px under an 80-DIP baked blur), the radial blobs of the field and the scrim are soft or flat. The <code>Backdrop</code> layer is now one <code>RepaintBoundary</code> at <code>RasterScale = 0.25</code> that holds all four. <code>FieldFace</code> gets <code>boundary: false</code> there. The four layers raster into one small surface and composite as one upsampled quad. The floor makes the backdrop opaque over the whole stage, so (i) hides the shell.</p>
+<p><b>Status.</b> Done, on branch <code>perf/stage-motion</code> in WaveeMusic, with a CHANGELOG entry.</p>
+</div>
+</div>
+
+<h3>Measured on the stage: (i) + (j)</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Stage, <code>--fake</code>, 120 Hz</th><th>Merged main</th><th>(i) + (j)</th><th>Runs</th></tr></thead>
+<tbody>
+<tr><td>GPU per frame (<code>[render.pace] gpuMs</code>, last 8 s)</td><td class="num">2.32 – 2.36 ms</td><td class="num">1.90 – 1.93 ms</td><td class="num">4 A/B pairs</td></tr>
+<tr><td>GPU 3D engine (Task Manager counter)</td><td class="num">32.1 – 33.2 %</td><td class="num">26.7 – 27.8 %</td><td class="num">4 A/B pairs</td></tr>
+<tr><td>Private memory on the stage</td><td class="num">271.4 – 296.2 MB</td><td class="num">266.9 – 288.3 MB</td><td class="num">4 A/B pairs</td></tr>
+<tr><td>Process CPU (of 12 cores)</td><td class="num">0.39 – 0.79 %</td><td class="num">0.37 – 1.03 %</td><td class="num">4 A/B pairs</td></tr>
+</tbody>
+</table>
+</div>
+<p class="prose">Each pair is two <code>--fake</code> instances with scratch profiles on the same machine, playing, with the stage open. The CPU value is noisy and bimodal: almost all of it is on one thread, which used 1.2 s and 2.5 s each 20 s in two runs of merged main, and 2.1 s and 2.0 s in two runs of (i) + (j). Each build also had a run near 0.4 %. Four pairs do not show a CPU change, and they do not exclude one. The pass timeline (probe on) gave composite 1.19 → 0.89 ms and a whole frame of 2.30 → 1.92 ms.</p>
+
 <h3>Measured on the fullscreen stage</h3>
 <div class="tbl">
 <table>
@@ -680,11 +741,15 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>(g) <code>FluentGpu.Windows.Tests</code> (3 new in <code>CompositorClockSpinTests</code>)</td><td class="num">533 / 533</td><td class="num">533 / 533</td></tr>
 <tr><td>(h) VerticalSlice (incl. 2 <code>gate.tiles.invisible-bounds</code> checks)</td><td class="num">1736 checks pass</td><td class="num">1736 checks pass</td></tr>
 <tr><td>(h) <code>--repaint-identity</code>, real D3D12 pixel readback</td><td class="num">175 / 175 identical</td><td class="num">—</td></tr>
+<tr><td>(i) VerticalSlice (incl. 4 <code>gate.tiles.opaque-cover</code> checks)</td><td class="num">1740 checks pass</td><td class="num">1740 checks pass</td></tr>
+<tr><td>(i) Engine tests · <code>FluentGpu.Windows.Tests</code></td><td class="num">1186 · 533</td><td class="num">1184 · 533</td></tr>
+<tr><td>(i) <code>--repaint-identity</code>, real D3D12 pixel readback (Release)</td><td class="num" colspan="2">195 / 195 identical (15 new <code>occlusion-identity</code>)</td></tr>
+<tr><td>(j) Wavee tests</td><td class="num">14 206 pass, 1 skipped</td><td class="num">14 206 pass, 1 skipped</td></tr>
 <tr><td>GPU time on the owner's machine</td><td colspan="2">Not measured. The live instance must rebuild and restart. Read <code>[render.pace] gpuMs=</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). Change (g) is on <code>perf/clock-spin-guard</code>, on top of (f). Change (h) is on <code>perf/invisible-bounds</code>, on top of (g). The engine rows are for these branches; Wavee builds clean against them.</p>
+<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). Change (g) is on <code>perf/clock-spin-guard</code>, on top of (f). Change (h) is on <code>perf/invisible-bounds</code>, on top of (g). Changes (i) and (j) are on <code>perf/stage-motion</code> in both repos, on top of the merged main. The engine rows are for these branches; Wavee builds clean against them.</p>
 </section>
 
 <!-- 8 -->
@@ -697,7 +762,8 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>Whole-window composite on every frame</td><td><span class="tag done">done</span>Addressed by (f). A small change composites and presents only its own rectangles.</td><td>Read the GPU time on the owner's machine after a rebuild. A scroll still takes the whole-frame route; a scroll rectangle in <code>Present1</code> is a later step.</td></tr>
 <tr><td>Tile need of 15–37 × the window</td><td>On a 1179 × 759 window, visible need was 54–134 MB. Many thin segments each take bucketed 1024 × 512 cells. Overlapped slices each own tiles.</td><td>Smaller or adaptive cells. No surface for empty cells. Merge thin adjacent segments.</td></tr>
 <tr><td>About 20 MB more tiles on the stage</td><td><span class="tag done">done</span>Addressed by (h). A full-window plate at opacity 0 made one root segment window-sized. Without it, the stage holds 63.3 MB of tiles.</td><td>The residual is +1.5 MB compared with the build before #33. Read the memory on the owner's machine after a rebuild.</td></tr>
-<tr><td>Backdrops over moving content</td><td>A panel over the moving Field must blur again on each frame. This is correct.</td><td>The low-resolution Field (d) also makes each mini-composite cheaper.</td></tr>
+<tr><td>Backdrops over moving content</td><td>A panel over the moving Field must blur again on each frame. This is correct. On the stage, the bar costs 0.73 ms of each 1.93 ms frame (pass timeline).</td><td>(i) removes the hidden shell from its mini-composite. Next: skip the clear of a mini-composite that an opaque item covers.</td></tr>
+<tr><td>Render-thread CPU on the stage</td><td>One thread uses about 60 or 100–125 ms each second, in two stable levels. Both builds showed both levels.</td><td>Find the cause with a CPU sample of the two levels.</td></tr>
 <tr><td>144 bar nodes recorded on each frame</td><td>A bound transform is recorded inline (CPU cost on the render thread).</td><td>One instanced <code>SeriesShape.Bars</code> primitive bound to one 48-sample series.</td></tr>
 <tr><td>Keyframe and bound transforms</td><td>Only scroll, sticky and parallax translation are composite-time poses.</td><td>Extend composite-time poses to translation and scale for soft slices.</td></tr>
 </tbody>

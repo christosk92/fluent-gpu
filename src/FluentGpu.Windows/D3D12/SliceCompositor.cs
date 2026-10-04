@@ -115,6 +115,9 @@ internal sealed unsafe class SliceCompositor : IDisposable
 
     public void SourceOrigin(float sx, float sy) { K[6] = sx; K[7] = sy; }
     public void SampleMap(float x0, float y0, float sx, float sy) { K[8] = x0; K[9] = y0; K[10] = sx; K[11] = sy; }
+    /// <summary>PSSample's far-edge clamp: uv never passes (<paramref name="maxU"/>, <paramref name="maxV"/>), the centre of
+    /// the last texel written into a pooled (larger) surface. Shares K[9] with <see cref="Color"/>, which PSSample never reads.</summary>
+    public void SampleClamp(float maxU, float maxV) { K[36] = maxU; K[37] = maxV; K[38] = 1f; K[39] = 0f; }
     public void Alpha(float a) => K[12] = a;
 
     public void RoundClip(in RectF rectPx, float radiusPx)

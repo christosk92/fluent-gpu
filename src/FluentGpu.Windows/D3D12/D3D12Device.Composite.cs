@@ -139,7 +139,7 @@ public sealed unsafe partial class D3D12Device
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
-        PrepareRange(in frame, 0, frame.Items.Length);
+        PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
         ID3D12Resource* backBuffer = sc.BackBuffers[f.FrameIndex];
@@ -810,6 +810,12 @@ public sealed unsafe partial class D3D12Device
         for (int k = 0; k < i && k < items.Length; k++)
         {
             ref readonly CompositeItem it = ref items[k];
+            if (Hidden(k, i))
+            {
+                // hidden under an opaque item below the backdrop: the mini-composite never draws it
+                if (it.Kind == CompositeKind.Group) k = Math.Min(items.Length, k + 1 + it.GroupCount) - 1;
+                continue;
+            }
             bool scope = scoped && k >= unscopedEnd;
             if (scope && !ItemMayPaint(in frame, k, in region))
             {
@@ -936,6 +942,12 @@ public sealed unsafe partial class D3D12Device
                 if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
                 continue;
             }
+            if (Hidden(i, b))
+            {
+                // an opaque item this composite draws later covers all its pixels (D3D12Device.Occlusion.cs)
+                if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
+                continue;
+            }
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -1012,9 +1024,20 @@ public sealed unsafe partial class D3D12Device
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
         else
+        {
+            // A low-resolution boundary's surface is pooled (often larger than the region): its far edges clamp to the last
+            // WRITTEN texel, as the sampler's clamp already does at uv 0 — the upsampled layer ends where its region ends on
+            // all four sides, instead of fading into the cleared texels past its right and bottom edges.
+            float clampU = 0f, clampV = 0f;
+            if (it.LowResDown > 1)
+            {
+                clampU = ((region.Right - region.Left) / down - 0.5f) / _surfaces!.ScratchW(s);
+                clampV = ((region.Bottom - region.Top) / down - 0.5f) / _surfaces.ScratchH(s);
+            }
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 SliceCompositor.Pso.Sample, _surfaces!.ScratchSrv(s), sample: true,
-                1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)));
+                1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+        }
     }
 
     /// <summary>One item quad (target px): a texel Load whose source origin is the quad's top-left, or — with
@@ -1023,7 +1046,8 @@ public sealed unsafe partial class D3D12Device
     /// (<see cref="FeatherQuadSplit"/>): the interior piece draws WITHOUT the feather (it is exactly 1 there — the same
     /// pixels), only the strips around it evaluate it.</summary>
     private void DrawItemQuad(in CompositeItem it, float x0, float y0, float x1, float y1, int ox, int oy, bool feathers,
-        SliceCompositor.Pso pso, D3D12_GPU_DESCRIPTOR_HANDLE srv, bool sample = false, float sampleSx = 0f, float sampleSy = 0f)
+        SliceCompositor.Pso pso, D3D12_GPU_DESCRIPTOR_HANDLE srv, bool sample = false, float sampleSx = 0f, float sampleSy = 0f,
+        float clampU = 0f, float clampV = 0f)
     {
         bool f1 = feathers && !it.Feather.IsNone, f2 = feathers && !it.Feather2.IsNone;
         Span<FeatherPiece> pieces = stackalloc FeatherPiece[FeatherQuadSplit.MaxPieces];
@@ -1053,6 +1077,7 @@ public sealed unsafe partial class D3D12Device
             ref readonly FeatherPiece p = ref pieces[k];
             _compositor!.Begin(p.X0, p.Y0, p.X1, p.Y1);
             if (sample) _compositor.SampleMap(x0, y0, sampleSx, sampleSy);
+            if (clampU > 0f) _compositor.SampleClamp(clampU, clampV);
             else _compositor.SourceOrigin(p.X0 - x0, p.Y0 - y0);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
