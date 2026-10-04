@@ -387,6 +387,95 @@ public sealed unsafe partial class D3D12Device
         }
     }
 
+    /// <summary>A LOW-RESOLUTION repaint boundary (BoxEl.RasterScale, <see cref="CompositeItem.LowResDown"/> = d): its
+    /// visible painted region replayed ONCE into one scratch at 1/d of the window scale, composited by
+    /// <see cref="DrawSurfaceItem"/>'s bilinear Sample route (down = d). It holds no tiles. The result is RETAINED under a
+    /// content key (the segment's bytes, its placement, the region, d) and re-used while no repaint damage reaches the
+    /// region — so a still field costs one upsample quad, and the acrylic backdrops above it stay cacheable
+    /// (<see cref="BackdropKey"/> mixes <c>_itemKey</c>). The region's origin is snapped so the low-res pixel grid lands on
+    /// whole window pixels: window px = (u + X0)·d − OriginX + Dx.</summary>
+    private void PrepareLowRes(in CompositeFrame frame, int i, in SliceRow row)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        int d = it.LowResDown;
+        PixelRect area = ItemRegion(in it, 0);
+        if (!row.ContentBounds.IsEmpty)
+        {
+            RectF c = row.ContentBounds;
+            area = new PixelRect(Math.Max(area.Left, (int)MathF.Floor(it.Transform.Dx + c.X) - 1), Math.Max(area.Top, (int)MathF.Floor(it.Transform.Dy + c.Y) - 1),
+                Math.Min(area.Right, (int)MathF.Ceiling(it.Transform.Dx + c.Right) + 1), Math.Min(area.Bottom, (int)MathF.Ceiling(it.Transform.Dy + c.Bottom) + 1));
+        }
+        if (area.IsEmpty) return;
+        int tx = (int)it.Transform.Dx, ty = (int)it.Transform.Dy;
+        int x0 = FloorDiv(area.Left - tx + row.Frame.OriginX, d), y0 = FloorDiv(area.Top - ty + row.Frame.OriginY, d);
+        int l = x0 * d - row.Frame.OriginX + tx, t = y0 * d - row.Frame.OriginY + ty;
+        int w = (area.Right - l + d - 1) / d, h = (area.Bottom - t + d - 1) / d;
+        if (w <= 0 || h <= 0) return;
+        var region = new PixelRect(l, t, l + w * d, t + h * d);
+        _frameDirectRegions++;
+
+        ulong key = 0xD0E5_0000_0000_0001UL;
+        Mix(ref key, (ulong)(uint)l << 32 | (uint)t); Mix(ref key, (ulong)(uint)w << 32 | (uint)h);
+        Mix(ref key, (ulong)(uint)d << 32 | BitConverter.SingleToUInt32Bits(_frameScale));
+        Mix(ref key, (ulong)BitConverter.SingleToUInt32Bits(row.Frame.ResidualX) << 32 | BitConverter.SingleToUInt32Bits(row.Frame.ResidualY));
+        MixBytes(ref key, frame.PrefixOf(in row));
+        MixBytes(ref key, frame.StreamOf(in row));
+        ulong fence = _fenceValue + 1;
+        var damage = frame.Info.RepaintDamage;
+        bool damaged = DamageReaches(in damage, in region);
+        if (!damaged)
+        {
+            int hit = _surfaces!.FindRetained(key, fence, out _);
+            if (hit >= 0)
+            {
+                _frameBlurCacheHits++;
+                _itemSurface[i] = hit; _itemDown[i] = d; _itemRegion[i] = region; _itemKey[i] = key;
+                return;
+            }
+        }
+        int s = _surfaces!.AcquireScratch(w, h, fence);
+        if (s < 0) return;
+        ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var rtv = _surfaces.ScratchRtv(s);
+        BeginPass(rtv, w, h, PassLoad.Clear);
+        float full = _frameScale;
+        _frameScale = full / d;   // the replay maps stream DIPs at the reduced scale (restored below)
+        try
+        {
+            ReplaySegment(in frame, in row, -x0, -y0, w, h, rtv, new RectF(-1e7f, -1e7f, 2e7f, 2e7f));
+        }
+        finally { _frameScale = full; }
+        EndPassIfOpen();
+        ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        InvalidateCmdState();
+        // A damage-forced re-render may have new pixels under byte-identical commands (an image's content swap): the key
+        // the backdrops above see must change with it, or they would re-use a blur of the old pixels.
+        _itemSurface[i] = s; _itemDown[i] = d; _itemRegion[i] = region; _itemKey[i] = damaged ? key ^ (fence * 0x9E3779B97F4A7C15UL) | 1UL : key;
+        _surfaces.Retain(s, key, d, RetainedCap());
+    }
+
+    /// <summary>Does this frame's repaint set reach <paramref name="region"/> (window px)? A forced-full set reaches all.</summary>
+    private bool DamageReaches(in RepaintDamageRegion damage, in PixelRect region)
+    {
+        if (damage.IsFull) return true;
+        ReadOnlySpan<RectF> rects = damage.AsSpan();
+        for (int k = 0; k < rects.Length; k++)
+        {
+            RectF px = new(rects[k].X * _frameScale, rects[k].Y * _frameScale, rects[k].W * _frameScale, rects[k].H * _frameScale);
+            if (Overlaps(px, in region)) return true;
+        }
+        return false;
+    }
+
+    private static void MixBytes(ref ulong h, ReadOnlySpan<byte> bytes)
+    {
+        Mix(ref h, (ulong)bytes.Length);
+        int n8 = bytes.Length / 8;
+        ReadOnlySpan<ulong> words = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ulong>(bytes[..(n8 * 8)]);
+        for (int k = 0; k < words.Length; k++) Mix(ref h, words[k]);
+        for (int k = n8 * 8; k < bytes.Length; k++) Mix(ref h, bytes[k]);
+    }
+
     /// <summary>The window-px region an item's offscreen surface must cover: its clip ∩ the window (the window when
     /// unbounded), grown by <paramref name="halo"/> and clamped.</summary>
     private PixelRect ItemRegion(in CompositeItem it, int halo)
@@ -417,9 +506,21 @@ public sealed unsafe partial class D3D12Device
         if (r < 0) return;
         ref readonly SliceRow row = ref frame.Slices[r];
         bool blur = it.BlurSigma > 0f;
+        if (it.LowResDown > 1 && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareLowRes(in frame, i, in row); return; }
         PixelRect src = default, region = default;
         if (blur) BlurRegions(in it, out src, out region);
         PixelRect area = blur ? src : ItemRegion(in it, 0);
+        // Bound the raster to the segment's PAINTED extent (SliceRow.ContentBounds, slice space ⇒ window px through the
+        // placement offset). The tile route anchors and cuts its surfaces at exactly those bounds (SegmentOrigin /
+        // SurfaceExtent), so nothing outside them is ever drawn; without this an unclipped degraded segment (#root)
+        // re-rastered the WHOLE window into transient chunks every frame whatever little it actually painted.
+        if (!blur && !row.ContentBounds.IsEmpty)
+        {
+            RectF c = row.ContentBounds;
+            int cl = (int)MathF.Floor(it.Transform.Dx + c.X) - 1, ct = (int)MathF.Floor(it.Transform.Dy + c.Y) - 1;
+            int cr = (int)MathF.Ceiling(it.Transform.Dx + c.X + c.W) + 1, cb = (int)MathF.Ceiling(it.Transform.Dy + c.Y + c.H) + 1;
+            area = new PixelRect(Math.Max(area.Left, cl), Math.Max(area.Top, ct), Math.Min(area.Right, cr), Math.Min(area.Bottom, cb));
+        }
         if (area.IsEmpty) return;
         _frameDirectRegions++;
         int first = _chunkCount;
@@ -667,20 +768,45 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>The content key of backdrop item <paramref name="i"/>: everything the mini-composite of items [0, i) would
     /// draw into (<paramref name="l"/>, <paramref name="t"/>)-(<paramref name="r"/>, <paramref name="b"/>). Not cacheable
-    /// when something beneath is redrawn from scratch every turn (a degraded segment, an unkeyed offscreen surface).</summary>
+    /// when something beneath is redrawn from scratch every turn (a degraded segment, an unkeyed offscreen surface).
+    /// <para>SCOPED to the region: the mini-composite is scissored to it (<see cref="DrawRange"/> into a w×h scratch), so
+    /// an item whose clip, tile placements or prepared surface lie wholly outside it paints none of its pixels and is
+    /// left out of the key — a visualizer animating across the window no longer re-blurs a panel it never touches, and a
+    /// degraded segment elsewhere no longer makes every backdrop uncacheable. Two shapes can carry pixels from OUTSIDE the
+    /// region into it and are keyed unscoped: an earlier backdrop overlapping the region (its blur sampled its own region),
+    /// and a group overlapping it (its surface may be blurred over its whole footprint).</para></summary>
     private ulong BackdropKey(in CompositeFrame frame, int i, int l, int t, int r, int b, int iters, float offset, out bool cacheable)
     {
         cacheable = true;
+        if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) { cacheable = false; return 0; }
         ulong h = 0xBACD_0000_0000_0001UL;
         Mix(ref h, (ulong)(uint)l << 32 | (uint)t); Mix(ref h, (ulong)(uint)r << 32 | (uint)b);
         Mix(ref h, (ulong)(uint)iters << 32 | BitConverter.SingleToUInt32Bits(offset));
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(frame.Info.Clear.R) << 32 | BitConverter.SingleToUInt32Bits(frame.Info.Clear.G));
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(frame.Info.Clear.B) << 32 | BitConverter.SingleToUInt32Bits(frame.Info.Clear.A));
         ReadOnlySpan<CompositeItem> items = frame.Items;
+        var region = new PixelRect(l, t, r, b);
+        bool scoped = true;
+        for (int k = 0; k < i && k < items.Length; k++)
+            if (items[k].Kind == CompositeKind.Backdrop && Overlaps(in _itemRegion[k], in region)) { scoped = false; break; }
+        int unscopedEnd = -1;   // items [.., unscopedEnd) sit inside a group that overlaps the region: keyed whole
         for (int k = 0; k < i && k < items.Length; k++)
         {
             ref readonly CompositeItem it = ref items[k];
-            if (it.Kind == CompositeKind.Direct || (_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) { cacheable = false; return 0; }
+            bool scope = scoped && k >= unscopedEnd;
+            if (scope && !ItemMayPaint(in frame, k, in region))
+            {
+                if (it.Kind == CompositeKind.Group) k = Math.Min(items.Length, k + 1 + it.GroupCount) - 1;
+                continue;
+            }
+            if (it.Kind == CompositeKind.Direct)
+            {
+                // A low-resolution boundary's surface is content-keyed (PrepareLowRes): the backdrop keys on that. Any
+                // other direct segment is re-drawn from scratch every turn — nothing beneath it can be cached.
+                if (it.LowResDown <= 1 || _itemKey[k] == 0) { cacheable = false; return 0; }
+                Mix(ref h, _itemKey[k]);
+            }
+            if (it.Kind == CompositeKind.Group) unscopedEnd = Math.Max(unscopedEnd, k + 1 + it.GroupCount);
             Mix(ref h, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
             Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
@@ -695,8 +821,10 @@ public sealed unsafe partial class D3D12Device
             if (it.Kind is CompositeKind.Tiles or CompositeKind.Region)
             {
                 ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
+                bool cull = scope && it.BlurSigma <= 0f;   // a blurred leaf samples its tiles past their own rects
                 for (int p = 0; p < placed.Length; p++)
                 {
+                    if (cull && !Overlaps(PlacementRect(in it, in placed[p]), in region)) continue;
                     Mix(ref h, (ulong)(ushort)placed[p].Key.Tx << 48 | (ulong)(ushort)placed[p].Key.Ty << 32 | (uint)placed[p].Surface);
                     Mix(ref h, _surfaces!.TileSerial(placed[p].Surface));
                 }
@@ -704,6 +832,52 @@ public sealed unsafe partial class D3D12Device
         }
         return h;
     }
+
+    /// <summary>Can item <paramref name="k"/> put any pixel inside <paramref name="region"/> when <see cref="DrawRange"/>
+    /// composites it? Conservative: true unless its scissor, every tile placement, or every prepared surface/chunk of it
+    /// lies wholly outside. Items before the backdrop are already prepared (PrepareRange runs in painter order).</summary>
+    private bool ItemMayPaint(in CompositeFrame frame, int k, in PixelRect region)
+    {
+        ref readonly CompositeItem it = ref frame.Items[k];
+        if (!IsUnbounded(it.Clip) && !Overlaps(it.Clip, in region)) return false;
+        switch (it.Kind)
+        {
+            case CompositeKind.Direct:
+            {
+                if (_itemSurface[k] >= 0) return Overlaps(in _itemRegion[k], in region);
+                int end = _itemChunkStart[k] + _itemChunkCount[k];
+                for (int c = _itemChunkStart[k]; c < end; c++)
+                    if (Overlaps(_chunks[c].Rect, in region)) return true;
+                return false;   // prepared nothing (or nothing here): it draws nothing into the region
+            }
+            case CompositeKind.Tiles:
+            case CompositeKind.Region:
+            {
+                if (it.BlurSigma > 0f) return _itemSurface[k] < 0 || Overlaps(in _itemRegion[k], in region);
+                ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
+                for (int p = 0; p < placed.Length; p++)
+                    if (Overlaps(PlacementRect(in it, in placed[p]), in region)) return true;
+                return false;
+            }
+            case CompositeKind.Group:
+                return it.Footprint.W <= 0f || it.Footprint.H <= 0f || Overlaps(it.Footprint, in region);
+            case CompositeKind.Backdrop:
+                return _itemSurface[k] < 0 || Overlaps(in _itemRegion[k], in region);
+            default:
+                return true;
+        }
+    }
+
+    /// <summary>A tile placement's window-px rect, exactly as <see cref="DrawRange"/> places its quad.</summary>
+    private static RectF PlacementRect(in CompositeItem it, in TilePlacement p)
+        => new(it.Transform.Dx + p.Key.Tx * TileGrid.W, it.Transform.Dy + p.Key.Ty * TileGrid.H, p.W, p.H);
+
+    private static bool Overlaps(in PixelRect a, in PixelRect b)
+        => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
+
+    /// <summary>Float rect vs pixel rect, rounded OUT (a sub-pixel sliver still counts).</summary>
+    private static bool Overlaps(in RectF a, in PixelRect b)
+        => MathF.Floor(a.X) < b.Right && b.Left < MathF.Ceiling(a.X + a.W) && MathF.Floor(a.Y) < b.Bottom && b.Top < MathF.Ceiling(a.Y + a.H);
 
     private void KawasePass(int src, int dst, int w, int h, int srcLevel, int dstLevel, float offset, bool down)
     {
