@@ -168,6 +168,7 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<GradientSpec> _hoverBorderBrushes = new();   // GEN-17 (wired)
     private readonly ColdSlab<GradientSpec> _pressedBorderBrushes = new();   // GEN-17 (wired)
     private readonly ColdSlab<AcrylicSpec> _acrylics = new();   // GEN-17 (wired)
+    private readonly ColdSlab<byte> _repaintBoundaries = new();   // BoxEl.RepaintBoundary (sparse; presence = on)
     // Per-element edge fade (sparse): feather the subtree's alpha (+ optional blur) near chosen edges; read at record
     // time → PushLayer{EdgeFade}. Freed on FreeSubtree.
     private readonly ColdSlab<EdgeFadeSpec> _edgeFades = new();   // GEN-17 (wired)
@@ -510,6 +511,7 @@ public sealed partial class SceneStore : ISceneBackend
             _hoverBorderBrushes.Remove(idx);
             _pressedBorderBrushes.Remove(idx);
             _acrylics.Remove(idx);
+            _repaintBoundaries.Remove(idx);
             _edgeFades.Remove(idx);
             _imageEffects.Remove(idx);
             _brushAnims.Remove(idx);
@@ -1946,6 +1948,27 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) { int idx = (int)h.Raw.Index; _acrylics.Remove(idx); MarkRecordDirty(idx); }
+
+    /// <summary>BoxEl.RepaintBoundary: the subtree records into its own retained slice (SceneRecorder's isolation cut).
+    /// Equality-gated so an identical re-render marks nothing.</summary>
+    /// <param name="down">The boundary's raster DOWNSCALE (1 = full resolution, 2/4/8 = BoxEl.RasterScale 1/2, 1/4, 1/8).</param>
+    public void SetRepaintBoundary(NodeHandle h, bool on, byte down = 1)
+    {
+        int idx = (int)h.Raw.Index;
+        bool had = _repaintBoundaries.TryGet(idx, out byte cur);
+        if (down < 1) down = 1;
+        if (had == on && (!on || cur == down)) return;
+        if (on) { _flags[idx] |= NodeFlags.SparsePaint; _repaintBoundaries.GetOrAdd(idx) = down; }
+        else _repaintBoundaries.Remove(idx);
+        MarkRecordDirty(idx);
+    }
+    public bool IsRepaintBoundary(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out _);
+    /// <summary>The boundary's raster downscale (1 = full); 0 when the node is not a repaint boundary.</summary>
+    public byte RepaintBoundaryDown(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out byte d) ? d : (byte)0;
+
+    /// <summary>BoxEl.RasterScale → the downscale factor the low-resolution slice route uses (snapped: 1, 2, 4, 8).</summary>
+    public static byte RasterDown(float rasterScale)
+        => rasterScale >= 0.75f || !float.IsFinite(rasterScale) ? (byte)1 : rasterScale >= 0.375f ? (byte)2 : rasterScale >= 0.1875f ? (byte)4 : (byte)8;
 
     public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e)
     {

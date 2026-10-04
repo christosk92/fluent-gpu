@@ -4830,6 +4830,7 @@ public sealed partial class TreeReconciler
                 if (b.HoverBorderBrush is { } hbb) _scene.SetHoverBorderBrush(node, hbb); else _scene.ClearHoverBorderBrush(node);
                 if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
+                _scene.SetRepaintBoundary(node, b.RepaintBoundary, SceneStore.RasterDown(b.RasterScale));
                 if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
                 _scene.SetHitTestPassThrough(node, b.HitTestPassThrough ? node : NodeHandle.Null);   // self = yield to behind, except own children
                 _scene.SetBlocksBackgroundScroll(node, b.BlocksBackgroundScroll);

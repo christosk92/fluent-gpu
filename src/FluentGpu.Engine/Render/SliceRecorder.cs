@@ -159,6 +159,8 @@ public sealed partial class SliceRecorder
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
+        // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
+        public byte LowRes;
         // acrylic surfaces this slice's own walk recorded as their FallbackColor plate (carried when the slice is kept)
         public int AcrylicFallbacks;
         // an acrylic slice root: its frosted rect (the node box, containing-slice DIP), corner radii (DIP) and opacity
@@ -302,6 +304,7 @@ public sealed partial class SliceRecorder
         {
             if (_recs[s].RegFrame == _frame) return -1;
             _recs[s].Kind = kind;
+            _recs[s].LowRes = 0;   // the cut that registers it re-states its raster downscale (SetLowRes)
             return s;
         }
         s = Allocate();
@@ -422,6 +425,8 @@ public sealed partial class SliceRecorder
 
     /// <summary>The cut budget <paramref name="slot"/> spends from now on (set at the cut, before its walk registers it).</summary>
     internal void SetBudget(int slot, BudgetClass budget) => _recs[slot].Budget = budget;
+    /// <summary>The slice's raster downscale (0/1 = full resolution, tiled). Set by every cut that registers the slot.</summary>
+    internal void SetLowRes(int slot, byte down) => _recs[slot].LowRes = down;
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -1883,8 +1888,10 @@ public sealed partial class SliceRecorder
             }
             row.SpanIndexCount = _frameSpanCount - row.SpanIndexStart;
 
-            // needed tiles: the composite viewport ∩ the segment's painted bounds, and a scroll slice's realized coverage
-            if (!contentPx.IsEmpty)
+            // needed tiles: the composite viewport ∩ the segment's painted bounds, and a scroll slice's realized coverage.
+            // A low-resolution boundary holds none (the backend replays it into one downscaled surface instead).
+            byte lowRes = r.LowRes > 1 && r.Kind == SliceKind.Effect ? r.LowRes : (byte)0;
+            if (!contentPx.IsEmpty && lowRes == 0)
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
                 // A self-blurred leaf samples its whole blur SOURCE (the visible output grown by the kernel's reach),
@@ -1941,9 +1948,10 @@ public sealed partial class SliceRecorder
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
-            AddItem(new CompositeItem(id, effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha, StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH),
+            AddItem(new CompositeItem(id, lowRes > 1 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
+                StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH),
                 RadiiPx(e.RoundR, scale), feather, sigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
-                feather2, default, e.Dist.Count),
+                feather2, default, e.Dist.Count, lowRes),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }
