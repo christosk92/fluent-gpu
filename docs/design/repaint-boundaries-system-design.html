@@ -562,6 +562,60 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 </figure>
 </div>
 
+<div class="chg">
+<h3><span class="tag done">done</span>(g) Compositor clock: no spin when the wait does not block</h3>
+<p class="file">FluentGpu.Windows/Pal/Win32CompositorClock.cs · FluentGpu.Windows.Tests/CompositorClockSpinTests.cs (new)</p>
+<div class="prose">
+<p><b>Problem.</b> A second Wavee instance showed the fullscreen stage in <code>--fake</code> mode. Only the background moved. The process used about 1.1 cores: 11.3 s of CPU in 10 s. The log showed <code>fast-burst n=2321 spanMs=2.0</code> and <code>ignored=1083794</code>. <code>DCompositionWaitForCompositorClock</code> returned about 2,300 times in each 2 ms. The tick filter ignored all returns but one for each tick. The waiter thread then waited again at once. Thus the waiter turned into a hot loop. The instance of the owner does not show this problem, but nothing in the engine stopped it.</p>
+<p><b>Design.</b></p>
+<ol>
+  <li>After 32 ignored returns in one burst, the waiter parks for about 1 ms between waits. The usual storms of 9 to 21 returns do not reach this limit.</li>
+  <li>The waiter measures the time that it stays blocked in the export. It uses windows of 250 ms. When a window has 60 waits or more and less than 10 % of the time is blocked, the export does not block. A burst of 1,000 returns has the same result.</li>
+  <li>Then the waiter starts <b>synthesized</b> ticks. It sleeps on a high-resolution waitable timer for one window period and publishes the tick directly. Thus the host keeps the display rate.</li>
+  <li>Every 2 s, and after each display change, the waiter tries the export one time. When the export blocks for half a period or more, the waiter uses the real clock again.</li>
+</ol>
+<p><b>Limit.</b> A first version marked the clock unavailable. The fallback of the render thread then used <code>WaitOne(8)</code>. At the default timer resolution of 15.6 ms, this gave 64 presents per second. The synthesized ticks keep 120 presents per second.</p>
+<p><b>Status.</b> Done, on branch <code>perf/clock-spin-guard</code> (fluent-gpu PR #35, stacked on PR #34). Three new tests in <code>CompositorClockSpinTests</code> pass: a wait that does not block gives 100 to 130 ticks per second with 2 export calls or fewer per second; a blocking clock and a storm of 20 returns stay on the export.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 210" role="img" aria-label="Before: the wait returns at once, the filter ignores the return, the waiter waits again at once, a hot loop. After: a blocked-time check finds that the export does not block, and the waiter beats the window period on a high-resolution timer.">
+  <defs>
+    <marker id="g-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <text class="tb" x="20" y="20">Before: the export does not block</text><text class="tb" x="400" y="20">After: synthesized ticks</text>
+  <rect class="b" x="20" y="40" width="150" height="40"/><text class="ts" x="95" y="64" text-anchor="middle">wait on the export</text>
+  <line class="ln" x1="170" y1="60" x2="208" y2="60" marker-end="url(#g-ar)"/>
+  <rect class="b" x="210" y="40" width="130" height="40"/><text class="ts" x="275" y="64" text-anchor="middle">return: ignored</text>
+  <path class="la" d="M275,80 L275,110 L95,110 L95,84" fill="none" marker-end="url(#g-ar)"/>
+  <text class="tA" x="185" y="132" text-anchor="middle">≈ 2,300 returns / 2 ms</text>
+  <text class="tA" x="185" y="150" text-anchor="middle">≈ 1.1 cores busy</text>
+  <rect class="b" x="400" y="40" width="160" height="40"/><text class="ts" x="480" y="58" text-anchor="middle">blocked &lt; 10 %</text><text class="tm" x="480" y="73" text-anchor="middle">of a 250 ms window</text>
+  <line class="ln" x1="560" y1="60" x2="588" y2="60" marker-end="url(#g-ar)"/>
+  <rect class="ba" x="590" y="40" width="150" height="40"/><text class="ts" x="665" y="58" text-anchor="middle">high-res timer</text><text class="tm" x="665" y="73" text-anchor="middle">one window period</text>
+  <path class="ln" d="M665,80 L665,110 L480,110 L480,130" fill="none" marker-end="url(#g-ar)"/>
+  <text class="ok" x="560" y="150" text-anchor="middle" font-size="11.5">publish a tick · 120 presents/s</text>
+  <text class="tm" x="560" y="170" text-anchor="middle">every 2 s: try the export one time</text>
+  <text class="ok" x="560" y="192" text-anchor="middle" font-size="11.5">CPU 11.7 s → 0.81 s per 10 s</text>
+</svg>
+</div>
+<figcaption><b>Figure 10. The clock fallback.</b> Before the change, a wait that does not block makes a hot loop. After the change, the waiter finds the problem in one window and uses a high-resolution timer at the window period.</figcaption>
+</figure>
+</div>
+
+<h3>Measured on the fullscreen stage</h3>
+<div class="tbl">
+<table>
+<thead><tr><th>Build</th><th>GPU per frame</th><th>CPU per 10 s</th><th>Render presents/s</th></tr></thead>
+<tbody>
+<tr><td>Before (the build of the owner)</td><td class="num">4.11 ms</td><td class="num">11.3 s</td><td class="num">120</td></tr>
+<tr><td>#33 + #34</td><td class="num">2.60 ms</td><td class="num">11.7 s</td><td class="num">120</td></tr>
+<tr><td>#33 + #34 + #35</td><td class="num">2.60 ms</td><td class="num">0.81 s</td><td class="num">120</td></tr>
+</tbody>
+</table>
+</div>
+<p class="prose">These numbers come from a separate <code>--fake</code> instance with a scratch profile, on the same 3440 × 1440, 120 Hz display. The GPU value is the 20 s average of <code>[render.pace] gpuMs</code>. The live instance of the owner is not measured yet.</p>
+
 <h3>Verification</h3>
 <div class="tbl">
 <table>
@@ -574,11 +628,12 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>Wavee tests</td><td class="num">14 206 pass, 1 skipped</td><td class="num">14 206 pass, 1 skipped</td></tr>
 <tr><td>(f) <code>--repaint-identity</code>, real D3D12 pixel readback</td><td class="num">175 / 175 identical (192 partial frames)</td><td class="num">60 / 60 <code>partial-present-identity</code></td></tr>
 <tr><td>(f) <code>FluentGpu.Windows.Tests</code></td><td class="num">530 / 530</td><td class="num">530 / 530</td></tr>
+<tr><td>(g) <code>FluentGpu.Windows.Tests</code> (3 new in <code>CompositorClockSpinTests</code>)</td><td class="num">533 / 533</td><td class="num">533 / 533</td></tr>
 <tr><td>GPU time on the owner's machine</td><td colspan="2">Not measured. The live instance must rebuild and restart. Read <code>[render.pace] gpuMs=</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). The engine rows are for <code>perf/partial-present</code>; Wavee builds clean against it.</p>
+<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). Change (g) is on <code>perf/clock-spin-guard</code>, on top of (f). The engine rows are for <code>perf/clock-spin-guard</code>; Wavee builds clean against it.</p>
 </section>
 
 <!-- 8 -->
