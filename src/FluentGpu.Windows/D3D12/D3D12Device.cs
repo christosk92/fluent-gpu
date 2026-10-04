@@ -1239,7 +1239,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         sd.BufferUsage = DXGI.DXGI_USAGE_RENDER_TARGET_OUTPUT;
         sd.BufferCount = FRAME_COUNT;
         sd.Scaling = DXGI_SCALING.DXGI_SCALING_STRETCH;
-        sd.SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        // The PRIMARY target is FLIP_SEQUENTIAL: each back buffer keeps its pixels, so a frame recomposites only what
+        // changed and presents with Present1 dirty rects (D3D12Device.PartialPresent.cs). Popups and detached windows
+        // replay whole frames (the direct route) and keep FLIP_DISCARD.
+        target.SequentialFlip = _primarySwapchain is null || ReferenceEquals(target, _primarySwapchain);
+        target.PpEpoch++;
+        sd.SwapEffect = target.SequentialFlip ? DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_DISCARD;
         sd.AlphaMode = target.Composited ? DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;
 
         // Latency-waitable swapchain (canon: pal-rhi.md §5.1 / budgets.md) — lets us bound queued frames and wait efficiently
@@ -1609,6 +1614,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _glyphs!.BeginFrame(slot);
         PrepareGlyphs(drawList);
         bool isPrimaryTarget = ReferenceEquals(sc, _primarySwapchain);
+        if (isPrimaryTarget) PpInvalidate();   // a direct replay rewrote the back buffer outside the partial bookkeeping
         BeginRecording(sc, f, slot, isPrimaryTarget);
         if ((_frameKnockouts & GpuKnockouts.ClearOnly) != 0) drawList = default;
         PassBoundary(GpuPassKind.Clear, (int)sc.W, (int)sc.H);
@@ -3359,7 +3365,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Whole-frame Present: the swapchain is FLIP_DISCARD, which refuses partial presentation (Present1 with dirty
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
-        HRESULT pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(target.SwapChain, interval, flags);   // GEN-COM (wired)
+        HRESULT pr;
+        if (target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent)
+        {
+            // Partial: the staged dirty rects of the frame just composited (relative to the last presented frame — a
+            // stood-down present clears the way with a whole one first, PpNeedFullPresent).
+            fixed (RECT* rects = target.PpPresentRects)
+            {
+                DXGI_PRESENT_PARAMETERS pp = default;
+                pp.DirtyRectsCount = (uint)target.PpPresentCount;
+                pp.pDirtyRects = rects;
+                pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChain1Vtbl.Present1(target.SwapChain, interval, flags, &pp);
+            }
+        }
+        else
+            pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(target.SwapChain, interval, flags);   // GEN-COM (wired)
+        target.PpPresentCount = 0;
+        target.PpNeedFullPresent = false;
         // The Present is what SPENDS the latency credit TryTakePresentSlot took (the waitable is a semaphore: it is
         // re-signaled when this present retires from the queue). Cleared on every path where Present actually ran —
         // success AND DXGI_STATUS_OCCLUDED, which is a success code that still consumed the slot. The stand-down /
@@ -3494,6 +3516,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void StandDownPresent(TargetFrameState f)
     {
         f.LastPresentStoodDown = true;
+        // DWM never saw this frame's changes: the next present of a partial-present target must be whole.
+        for (int i = 0; i < _swapchains.Count; i++)
+            if (ReferenceEquals(_swapchains[i].Frame, f)) { _swapchains[i].PpNeedFullPresent = true; _swapchains[i].PpPresentCount = 0; }
         f.HintSettlePresent = false;
         f.SkipVsyncOnce = false;
         EndTargetFrame();
@@ -4400,6 +4425,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             }
         }
         Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
+        target.PpEpoch++;   // new buffers hold nothing: the next frame composites and presents whole
         target.W = w; target.H = h;
         _w = w; _h = h;
         CreateRtvs(target);
@@ -4635,6 +4661,13 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal bool LatencyCreditHeld;
     internal uint SwapChainFlags;
     internal bool TearingSupported;
+    // partial present (D3D12Device.PartialPresent.cs): FLIP_SEQUENTIAL, the buffer epoch (bumped by every create / resize),
+    // and the dirty rects the next Present carries (0 = whole frame); a stood-down present makes the next one whole.
+    internal bool SequentialFlip;
+    internal uint PpEpoch;
+    internal readonly RECT[] PpPresentRects = new RECT[RepaintDamageRegion.MaxRects];
+    internal int PpPresentCount;
+    internal bool PpNeedFullPresent;
     internal uint W, H;
     // FrameIndex, StencilDsv/StencilDsvHeap/StencilDsvW/StencilDsvH DELETED (Phase 1, detached-window-render-
     // isolation-implementation.md §3.1/§3.5): they were the Activate/StoreActive per-target mirror of state that now

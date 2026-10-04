@@ -144,6 +144,73 @@ internal static class RepaintIdentityProbe
                 }
             }
 
+            // ── partial-present-identity: frames composited through the PRESERVE route (repaint rects into a back buffer
+            //    that keeps its pixels, FLIP_SEQUENTIAL) vs the same state composited and presented WHOLE ──
+            for (int id = 0; id < StaticNames.Length && Want("partial-present-identity"); id++)
+            {
+                total++;
+                RepaintIdentityScene.ResetAll();
+                RepaintIdentityScene.Scenario.Value = id;
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                long partial0 = 0, partial1 = 0;
+                host.RunWithRenderThreadParked(() => partial0 = gpu.PartialFrameCount);
+                for (int step = 1; step <= 6; step++)
+                {
+                    RepaintIdentityScene.Tick.Value++;
+                    if (step % 2 == 0) RepaintIdentityScene.TickB.Value++;
+                    if (step % 3 == 0) RepaintIdentityScene.TickC.Value++;
+                    RepaintIdentityScene.ScrollY.Value += 7f;
+                    RepaintIdentityScene.RowX.Value += 5f;
+                    Settle(host, w, 3);
+                }
+                byte[] partial = Capture(host, gpu, out int aw, out int ah, () => partial1 = gpu.PartialFrameCount);
+                host.GpuKnockouts = GpuKnockouts.FullPresent;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 6);
+                byte[] whole = Capture(host, gpu, out int bw, out int bh);
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 4);
+                string name = $"partial-present-identity/{StaticNames[id]}@{scale:0.00}";
+                Console.Error.WriteLine($"[repaint-identity] {name}: partial frames={partial1 - partial0}");
+                if (Judge(name, partial, whole, aw, ah, bw, bh, 0, outDir)) passed++; else failed++;
+            }
+            if (Want("partial-present-identity"))
+            {
+                total++;
+                RepaintIdentityScene.ResetAll();
+                RepaintIdentityScene.Scenario.Value = 11;
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                var handle = FindScroller(host);
+                string name = $"partial-present-identity/scroll@{scale:0.00}";
+                if (handle is null) { Console.Error.WriteLine($"[repaint-identity] {name}: INCONCLUSIVE — no scroller"); failed++; }
+                else
+                {
+                    long p0 = 0, p1 = 0;
+                    host.RunWithRenderThreadParked(() => p0 = gpu.PartialFrameCount);
+                    double at = 0.0;
+                    for (int step = 0; step < 9; step++)
+                    {
+                        at += 23.0 + 5.0 * step;   // small steps: most of the window keeps its pixels
+                        handle.ScrollTo(at, ScrollMove.Immediate);
+                        Settle(host, w, 3);
+                    }
+                    byte[] partial = Capture(host, gpu, out int aw, out int ah, () => p1 = gpu.PartialFrameCount);
+                    host.GpuKnockouts = GpuKnockouts.FullPresent;
+                    host.RequestFullRepaintOnce();
+                    Settle(host, w, 6);
+                    byte[] whole = Capture(host, gpu, out int bw, out int bh);
+                    host.GpuKnockouts = GpuKnockouts.None;
+                    Console.Error.WriteLine($"[repaint-identity] {name}: partial frames={p1 - p0}");
+                    if (Judge(name, partial, whole, aw, ah, bw, bh, 0, outDir)) passed++; else failed++;
+                    handle.ScrollTo(0.0, ScrollMove.Immediate);
+                }
+            }
+
             // ── tile-feather-identity ──
             if (Want("tile-feather-identity"))
             {
