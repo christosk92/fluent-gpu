@@ -54,7 +54,44 @@ static class TileSuite
         SegmentExtentChecks(strings, fonts);
         RenderAllocZeroChecks(strings, fonts);
         RepaintBoundaryChecks(strings, fonts);
+        InvisibleBoundsChecks(strings, fonts);
     }
+
+    // ── gate.tiles.invisible-bounds ──────────────────────────────────────────────────────────────────────────────
+    /// <summary>A full-window plate parked at opacity 0 (Wavee's setup cover scrim, always mounted) after a small box: the
+    /// plate paints nothing, so the box's segment must not hold a window of tiles for it.</summary>
+    sealed class PlateProbe(int mode) : Component   // 0 = no plate, 1 = plate at opacity 0, 2 = plate at opacity 1
+    {
+        public override Element Render()
+        {
+            var box = new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(40f, 40f, 0f, 0f),
+                Width = 160f, Height = 40f, Fill = ColorF.FromRgba(200, 90, 60),
+            };
+            Element[] kids = mode == 0 ? [box]
+                : [box, new BoxEl { Grow = 1f, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
+                       Fill = ColorF.FromRgba(0, 0, 0, 0x4D), Opacity = mode == 1 ? 0f : 1f, HitTestVisible = false }];
+            return new BoxEl { Grow = 1f, ZStack = true, Children = kids };
+        }
+    }
+
+    static void InvisibleBoundsChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        long Tiles(int mode)
+        {
+            var (app, window, dev, host) = Host("tiles-plate-" + mode, strings, fonts, new PlateProbe(mode));
+            using var _a = app; using var _h = host;
+            Frames(host, 20);
+            return host.LastTileCensus.VisibleNeedBytes;
+        }
+        long none = Tiles(0), hidden = Tiles(1), shown = Tiles(2);
+        Check("gate.tiles.invisible-bounds a full-window plate at opacity 0 adds no tiles to its segment",
+            hidden == none, $"visible tile bytes: no plate={none} plate@0={hidden} plate@1={shown}");
+        Check("gate.tiles.invisible-bounds the same plate at opacity 1 is painted and tiled",
+            shown > none, $"visible tile bytes: no plate={none} plate@1={shown}");
+    }
+
 
     // ── gate.tiles.repaint-boundary ──────────────────────────────────────────────────────────────────────────────
     /// <summary>A moving shape UNDER static content (the fullscreen stage's drifting Field under its scrim, bars and

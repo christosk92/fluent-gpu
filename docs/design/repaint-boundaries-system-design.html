@@ -603,6 +603,41 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 </figure>
 </div>
 
+<div class="chg">
+<h3><span class="tag done">done</span>(h) Invisible fills do not stretch segment bounds</h3>
+<p class="file">FluentGpu.Engine/Render/SliceRecorder.cs (<code>InvisibleFill</code>, the segment scan) · FluentGpu.VerticalSlice/Suites/TileSuite.cs (gate)</p>
+<div class="prose">
+<p><b>Problem.</b> The repaint boundaries cut the root of the stage into more segments. The tile memory of the stage went from 61.8 MB (35 tiles) to 81.8 MB (50 tiles). A diagnostic for each segment found the largest cause. One root segment was 2502 × 1670 px. It held a small button of 159 × 39 and one full-window fill at alpha 0.3 and opacity 0. This fill is the setup cover scrim of Wavee. It is always mounted, and its opacity is 0 when it does not dim. It paints nothing, but its bounds made the segment window-sized. Thus the engine kept about 16 MB of empty tiles for one small button.</p>
+<p><b>Design.</b></p>
+<ol>
+  <li>The slice recorder scans each segment one time. It adds the bounds of each draw op to the painted bounds of the segment.</li>
+  <li>A <code>FillRoundRect</code> with opacity 0, or a solid fill with alpha 0, does not add its bounds.</li>
+  <li>The bytes of the fill stay in the stream. The content scan for each tile does not change. Thus the replay and the tile validity do not change.</li>
+  <li>When the fill becomes visible, its bytes change. The recorder scans the segment again, and the bounds include the fill.</li>
+</ol>
+<p><b>Limit.</b> Only <code>FillRoundRect</code> is in scope. Other ops at opacity 0 still add their bounds. A measurement must show that they are important before the scope grows.</p>
+<p><b>Status.</b> Done, on branch <code>perf/invisible-bounds</code> (fluent-gpu PR #36, stacked on PR #35). The gate <code>gate.tiles.invisible-bounds</code> shows that a full-window plate at opacity 0 adds no tile bytes (131,072 with and without it). The same plate at opacity 1 needs 5,570,560 bytes. On the stage, tile memory went from 81.8 MB (50 tiles) to 63.3 MB (39 tiles) in 2 runs. <code>--repaint-identity</code> gives 175 / 175 identical.</p>
+</div>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 760 190" role="img" aria-label="Before: a small button and a full-window fill at opacity 0 share one segment, so the segment bounds and its tiles cover the window. After: the invisible fill is left out of the bounds, so the tiles cover only the button.">
+  <text class="tb" x="20" y="20">Before: the bounds include the invisible plate</text><text class="tb" x="400" y="20">After: the bounds skip it</text>
+  <rect class="b" x="20" y="34" width="340" height="120"/>
+  <rect class="ba" x="20" y="34" width="340" height="120" opacity="0.35"/>
+  <rect class="b" x="40" y="50" width="70" height="20"/><text class="tm" x="75" y="64" text-anchor="middle">button</text>
+  <text class="tA" x="190" y="110" text-anchor="middle">plate, opacity 0</text>
+  <text class="tA" x="190" y="176" text-anchor="middle">tiles over the whole window · ≈ 16 MB</text>
+  <rect class="b" x="400" y="34" width="340" height="120"/>
+  <rect class="ba" x="414" y="44" width="96" height="34"/>
+  <rect class="b" x="420" y="50" width="70" height="20"/><text class="tm" x="455" y="64" text-anchor="middle">button</text>
+  <text class="tm" x="570" y="110" text-anchor="middle">plate, opacity 0: not in the bounds</text>
+  <text class="ok" x="570" y="176" text-anchor="middle" font-size="11.5">tiles over the button only</text>
+</svg>
+</div>
+<figcaption><b>Figure 11. Bounds of a segment with an invisible plate.</b> Before the change, the plate at opacity 0 made the segment window-sized. After the change, the tiles cover only what paints.</figcaption>
+</figure>
+</div>
+
 <h3>Measured on the fullscreen stage</h3>
 <div class="tbl">
 <table>
@@ -620,15 +655,15 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <h3>Memory on the fullscreen stage</h3>
 <div class="tbl">
 <table>
-<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art (reverted)</th></tr></thead>
+<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art (reverted)</th><th>#33 .. #35 + #36</th></tr></thead>
 <tbody>
-<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50), 2 runs</td><td class="num">82.9 MB (51), 2 runs</td></tr>
-<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.5 MB</td><td class="num">158.7 MB</td></tr>
-<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">303.5 – 321.2 MB</td><td class="num">317.4 – 335.5 MB</td></tr>
+<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50), 2 runs</td><td class="num">82.9 MB (51), 2 runs</td><td class="num">63.3 MB (39), 2 runs</td></tr>
+<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.5 MB</td><td class="num">158.7 MB</td><td class="num">139.0 – 139.7 MB</td></tr>
+<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">303.5 – 321.2 MB</td><td class="num">317.4 – 335.5 MB</td><td class="num">280.2 – 301.8 MB</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">The repaint boundaries cut the root into more segments. On the stage, this costs about 20 MB more tile memory (61.8 MB → 81.8 MB in 2 runs). This is the memory price of the GPU saving. A quarter-scale boundary around the blurred backdrop art was tried to remove one window of these tiles. A repeated A/B, with the stage open in each log, gave 81.8 MB (50 tiles) without it and 82.9 MB (51 tiles) with it, in both runs. The root segment before the boundary keeps other window-sized content, so it keeps its tiles. The boundary only adds its own surface. Thus the change was reverted (<code>997b130c</code>). A first single run had shown 47.5 MB; that result did not repeat. The live instance of the owner is not measured yet.</p>
+<p class="prose">The repaint boundaries cut the root into more segments. On the stage, this costs about 20 MB more tile memory (61.8 MB → 81.8 MB in 2 runs). This is the memory price of the GPU saving. A quarter-scale boundary around the blurred backdrop art was tried to remove one window of these tiles. A repeated A/B, with the stage open in each log, gave 81.8 MB (50 tiles) without it and 82.9 MB (51 tiles) with it, in both runs. The root segment before the boundary keeps other window-sized content, so it keeps its tiles. The boundary only adds its own surface. Thus the change was reverted (<code>997b130c</code>). A first single run had shown 47.5 MB; that result did not repeat. Change (h) removes most of these 20 MB: the tile memory of the stage is 63.3 MB (39 tiles) in 2 runs, 1.5 MB more than before #33. The live instance of the owner is not measured yet.</p>
 
 <h3>Verification</h3>
 <div class="tbl">
@@ -643,11 +678,13 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>(f) <code>--repaint-identity</code>, real D3D12 pixel readback</td><td class="num">175 / 175 identical (192 partial frames)</td><td class="num">60 / 60 <code>partial-present-identity</code></td></tr>
 <tr><td>(f) <code>FluentGpu.Windows.Tests</code></td><td class="num">530 / 530</td><td class="num">530 / 530</td></tr>
 <tr><td>(g) <code>FluentGpu.Windows.Tests</code> (3 new in <code>CompositorClockSpinTests</code>)</td><td class="num">533 / 533</td><td class="num">533 / 533</td></tr>
+<tr><td>(h) VerticalSlice (incl. 2 <code>gate.tiles.invisible-bounds</code> checks)</td><td class="num">1736 checks pass</td><td class="num">1736 checks pass</td></tr>
+<tr><td>(h) <code>--repaint-identity</code>, real D3D12 pixel readback</td><td class="num">175 / 175 identical</td><td class="num">—</td></tr>
 <tr><td>GPU time on the owner's machine</td><td colspan="2">Not measured. The live instance must rebuild and restart. Read <code>[render.pace] gpuMs=</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). Change (g) is on <code>perf/clock-spin-guard</code>, on top of (f). The engine rows are for <code>perf/clock-spin-guard</code>; Wavee builds clean against it.</p>
+<p class="prose">Changes (a) to (e) are on the branch <code>perf/repaint-boundaries</code> in both repos. Change (f) is on <code>perf/partial-present</code> in fluent-gpu, on top of (a) to (e). Change (g) is on <code>perf/clock-spin-guard</code>, on top of (f). Change (h) is on <code>perf/invisible-bounds</code>, on top of (g). The engine rows are for these branches; Wavee builds clean against them.</p>
 </section>
 
 <!-- 8 -->
@@ -659,7 +696,7 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tbody>
 <tr><td>Whole-window composite on every frame</td><td><span class="tag done">done</span>Addressed by (f). A small change composites and presents only its own rectangles.</td><td>Read the GPU time on the owner's machine after a rebuild. A scroll still takes the whole-frame route; a scroll rectangle in <code>Present1</code> is a later step.</td></tr>
 <tr><td>Tile need of 15–37 × the window</td><td>On a 1179 × 759 window, visible need was 54–134 MB. Many thin segments each take bucketed 1024 × 512 cells. Overlapped slices each own tiles.</td><td>Smaller or adaptive cells. No surface for empty cells. Merge thin adjacent segments.</td></tr>
-<tr><td>About 20 MB more tiles on the stage</td><td>The Field boundary cuts the root into a segment before it and a segment after it. Each segment is window-sized, so each holds one window of tiles.</td><td>Open work: win back these 20 MB. Merge the two root segments where the content between them is soft, or let one window of tiles serve both segments.</td></tr>
+<tr><td>About 20 MB more tiles on the stage</td><td><span class="tag done">done</span>Addressed by (h). A full-window plate at opacity 0 made one root segment window-sized. Without it, the stage holds 63.3 MB of tiles.</td><td>The residual is +1.5 MB compared with the build before #33. Read the memory on the owner's machine after a rebuild.</td></tr>
 <tr><td>Backdrops over moving content</td><td>A panel over the moving Field must blur again on each frame. This is correct.</td><td>The low-resolution Field (d) also makes each mini-composite cheaper.</td></tr>
 <tr><td>144 bar nodes recorded on each frame</td><td>A bound transform is recorded inline (CPU cost on the render thread).</td><td>One instanced <code>SeriesShape.Bars</code> primitive bound to one 48-sample series.</td></tr>
 <tr><td>Keyframe and bound transforms</td><td>Only scroll, sticky and parallax translation are composite-time poses.</td><td>Extend composite-time poses to translation and scale for soft slices.</td></tr>
