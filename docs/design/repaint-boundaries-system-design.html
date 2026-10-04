@@ -611,24 +611,24 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tr><td>Before (the build of the owner)</td><td class="num">4.11 ms</td><td class="num">11.3 s</td><td class="num">120</td><td class="num">1</td></tr>
 <tr><td>#33 + #34</td><td class="num">2.60 ms</td><td class="num">11.7 s</td><td class="num">120</td><td class="num">1</td></tr>
 <tr><td>#33 + #34 + #35</td><td class="num">2.60 ms</td><td class="num">0.81 – 1.19 s</td><td class="num">120</td><td class="num">3 (GPU 2.60, 2.61, 2.60)</td></tr>
-<tr><td>+ WaveeMusic#177 quarter-scale backdrop art (commit <code>b2b4cee3</code>)</td><td class="num">1.64 ms (run 1), 2.95 ms (run 2)</td><td class="num">1.19 s, 1.25 s</td><td class="num">120</td><td class="num">2, conflicting</td></tr>
+<tr><td>Quarter-scale backdrop art (WaveeMusic <code>b2b4cee3</code>), <span class="tag wip">reverted</span> in <code>997b130c</code></td><td class="num">no gain</td><td class="num">no gain</td><td class="num">120</td><td class="num">2 A/B pairs</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">These numbers come from a separate <code>--fake</code> instance with a scratch profile, on the same 3440 × 1440, 120 Hz display. The GPU value is the 20 s average of <code>[render.pace] gpuMs</code>. The repeated result is 4.11 ms → 2.60 ms of GPU per frame. The two runs of the backdrop-art change do not agree. Run 2 was a NativeAOT build of the same code. Thus the effect of the art change is not established. It needs repeated runs. The live instance of the owner is not measured yet.</p>
+<p class="prose">These numbers come from a separate <code>--fake</code> instance with a scratch profile, on the same 3440 × 1440, 120 Hz display. The GPU value is the 20 s average of <code>[render.pace] gpuMs</code>. The repeated result is 4.11 ms → 2.60 ms of GPU per frame. The backdrop-art boundary was tried and reverted. The live instance of the owner is not measured yet.</p>
 
 <h3>Memory on the fullscreen stage</h3>
 <div class="tbl">
 <table>
-<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art, run 1</th><th>+ low-res art, run 2 (NativeAOT)</th></tr></thead>
+<thead><tr><th>Memory</th><th>Before (the build of the owner)</th><th>#33 + #34 + #35</th><th>+ low-res art (reverted)</th></tr></thead>
 <tbody>
-<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50), 2 runs</td><td class="num">47.5 MB (33)</td><td class="num">82.9 MB (51)</td></tr>
-<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.2 MB</td><td class="num">123.9 MB</td><td class="num">158.2 MB</td></tr>
-<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">311.5 MB</td><td class="num">268.1 MB</td><td class="num">326.5 MB</td></tr>
+<tr><td>Tile memory</td><td class="num">61.8 MB (35 tiles)</td><td class="num">81.8 MB (50), 2 runs</td><td class="num">82.9 MB (51), 2 runs</td></tr>
+<tr><td>Tracked GPU memory</td><td class="num">137.0 MB</td><td class="num">157.5 MB</td><td class="num">158.7 MB</td></tr>
+<tr><td>Private memory</td><td class="num">274.6 MB</td><td class="num">303.5 – 321.2 MB</td><td class="num">317.4 – 335.5 MB</td></tr>
 </tbody>
 </table>
 </div>
-<p class="prose">The repaint boundaries cut the root into more segments. On the stage, this costs about 20 MB more tile memory (61.8 MB → 81.8 MB in 2 runs). This is the memory price of the GPU saving. The quarter-scale art boundary is meant to remove one window of these tiles. Run 1 showed this (47.5 MB). Run 2 did not (82.9 MB). Thus its effect is not established. It needs repeated runs. The live instance of the owner is not measured yet.</p>
+<p class="prose">The repaint boundaries cut the root into more segments. On the stage, this costs about 20 MB more tile memory (61.8 MB → 81.8 MB in 2 runs). This is the memory price of the GPU saving. A quarter-scale boundary around the blurred backdrop art was tried to remove one window of these tiles. A repeated A/B, with the stage open in each log, gave 81.8 MB (50 tiles) without it and 82.9 MB (51 tiles) with it, in both runs. The root segment before the boundary keeps other window-sized content, so it keeps its tiles. The boundary only adds its own surface. Thus the change was reverted (<code>997b130c</code>). A first single run had shown 47.5 MB; that result did not repeat. The live instance of the owner is not measured yet.</p>
 
 <h3>Verification</h3>
 <div class="tbl">
@@ -659,6 +659,7 @@ nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
 <tbody>
 <tr><td>Whole-window composite on every frame</td><td><span class="tag done">done</span>Addressed by (f). A small change composites and presents only its own rectangles.</td><td>Read the GPU time on the owner's machine after a rebuild. A scroll still takes the whole-frame route; a scroll rectangle in <code>Present1</code> is a later step.</td></tr>
 <tr><td>Tile need of 15–37 × the window</td><td>On a 1179 × 759 window, visible need was 54–134 MB. Many thin segments each take bucketed 1024 × 512 cells. Overlapped slices each own tiles.</td><td>Smaller or adaptive cells. No surface for empty cells. Merge thin adjacent segments.</td></tr>
+<tr><td>About 20 MB more tiles on the stage</td><td>The Field boundary cuts the root into a segment before it and a segment after it. Each segment is window-sized, so each holds one window of tiles.</td><td>Open work: win back these 20 MB. Merge the two root segments where the content between them is soft, or let one window of tiles serve both segments.</td></tr>
 <tr><td>Backdrops over moving content</td><td>A panel over the moving Field must blur again on each frame. This is correct.</td><td>The low-resolution Field (d) also makes each mini-composite cheaper.</td></tr>
 <tr><td>144 bar nodes recorded on each frame</td><td>A bound transform is recorded inline (CPU cost on the render thread).</td><td>One instanced <code>SeriesShape.Bars</code> primitive bound to one 48-sample series.</td></tr>
 <tr><td>Keyframe and bound transforms</td><td>Only scroll, sticky and parallax translation are composite-time poses.</td><td>Extend composite-time poses to translation and scale for soft slices.</td></tr>
