@@ -1018,7 +1018,7 @@ public sealed partial class SliceRecorder
                     if (c.CornerRadius > 0f) { round = c.RoundedRect; roundR = c.CornerRadius; }
                     _scanClip.Add((r, round, roundR));
                     top = r;
-                    ContentScanOp(s, pos, in r, oh, scope: true);
+                    ContentScanOp(s, pos, in r, oh, scope: true, clip: true);
                     break;
                 }
                 case DrawOp.PushLayer:
@@ -1036,7 +1036,7 @@ public sealed partial class SliceRecorder
                     stencils++;
                     _scanClip.Add((r, round, roundR));
                     top = r;
-                    ContentScanOp(s, pos, in r, oh, scope: true);
+                    ContentScanOp(s, pos, in r, oh, scope: true, clip: true);
                     break;
                 }
                 case DrawOp.PopClip:

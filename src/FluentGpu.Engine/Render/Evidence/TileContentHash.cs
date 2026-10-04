@@ -15,6 +15,9 @@ public struct TileOp
     public RectF Bounds;
     public ulong Hash;
     public bool Scope;
+    /// <summary>A clip scope (PushClip / PushStencilClip): it limits what follows and paints nothing itself — left out of
+    /// a tile's painted rect. A layer scope composites its content back and is part of it.</summary>
+    public bool Clip;
 }
 
 /// <summary>
@@ -91,22 +94,49 @@ public static class TileContentHash
     /// is a <see cref="InvalidationReason.PrimCount"/> invalidation, a primitive entered or left the tile).</summary>
     public static ulong TileWant(ReadOnlySpan<TileOp> ops, ReadOnlySpan<int> openScopes, int segment, int segStart, int segEnd,
         in RectF tilePx, float scale, float originX, float originY, out int visits, out int hits)
+        => TileWant(ops, openScopes, segment, segStart, segEnd, in tilePx, scale, originX, originY, out visits, out hits, out _);
+
+    /// <summary><see cref="TileWant(ReadOnlySpan{TileOp}, ReadOnlySpan{int}, int, int, int, in RectF, float, float, float, out int, out int)"/>
+    /// that also returns the tile's PAINTED rect (<paramref name="paint"/>, the tile's own px: 0..W × 0..H): the union of
+    /// the footprints of the ops it folds, clip scopes left out, cut by the tile. The replay paints nothing outside it, so
+    /// the composite places only that part of the tile. Empty = the tile paints nothing.</summary>
+    public static ulong TileWant(ReadOnlySpan<TileOp> ops, ReadOnlySpan<int> openScopes, int segment, int segStart, int segEnd,
+        in RectF tilePx, float scale, float originX, float originY, out int visits, out int hits, out RectF paint)
     {
         visits = 0; hits = 0;
+        float px0 = float.MaxValue, py0 = float.MaxValue, px1 = float.MinValue, py1 = float.MinValue;
         ulong h = Fold(Basis, 0x5E6UL + (ulong)(uint)segment);
         for (int i = 0; i < openScopes.Length; i++)
         {
             int k = openScopes[i];
             if ((uint)k >= (uint)ops.Length) continue;
             visits++;
-            if (Hits(in ops[k], in tilePx, scale, originX, originY)) { h = Fold(h, ops[k].Hash); hits++; }
+            if (Hits(in ops[k], in tilePx, scale, originX, originY))
+            {
+                h = Fold(h, ops[k].Hash); hits++;
+                if (!ops[k].Clip) Grow(in ops[k], in tilePx, scale, originX, originY, ref px0, ref py0, ref px1, ref py1);
+            }
         }
         for (int i = FirstAtOrAfter(ops, segStart); i < ops.Length && ops[i].Pos < segEnd; i++)
         {
             visits++;
-            if (Hits(in ops[i], in tilePx, scale, originX, originY)) { h = Fold(h, ops[i].Hash); hits++; }
+            if (Hits(in ops[i], in tilePx, scale, originX, originY))
+            {
+                h = Fold(h, ops[i].Hash); hits++;
+                if (!ops[i].Clip) Grow(in ops[i], in tilePx, scale, originX, originY, ref px0, ref py0, ref px1, ref py1);
+            }
         }
+        paint = px1 > px0 && py1 > py0 ? new RectF(px0 - tilePx.X, py0 - tilePx.Y, px1 - px0, py1 - py0) : default;
         return h == 0 ? 1UL : h;
+    }
+
+    /// <summary>Grow the painted extent by a hit op's footprint cut by the tile (an infinite footprint: the whole tile).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Grow(in TileOp op, in RectF tilePx, float scale, float ox, float oy, ref float x0, ref float y0, ref float x1, ref float y1)
+    {
+        RectF r = op.Bounds.IsInfinite ? tilePx : ToTilePx(op.Bounds, scale, ox, oy);
+        x0 = MathF.Min(x0, MathF.Max(r.X, tilePx.X)); y0 = MathF.Min(y0, MathF.Max(r.Y, tilePx.Y));
+        x1 = MathF.Max(x1, MathF.Min(r.Right, tilePx.Right)); y1 = MathF.Max(y1, MathF.Min(r.Bottom, tilePx.Bottom));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
