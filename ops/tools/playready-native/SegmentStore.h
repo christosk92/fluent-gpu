@@ -8,7 +8,8 @@
 // runs out. This store replaces both with what mpv's `--demuxer-max-back-bytes` / `--demuxer-max-bytes` express:
 //   * a forward target in PRESENTATION TIME  (`bufferAheadMs`,  default 60 000),
 //   * a retention window in PRESENTATION TIME (`retainBehindMs`, default 30 000),
-//   * a hard cap in BYTES                     (`storeBudgetBytes`, default 32 MiB) that overrides both.
+//   * a hard cap in BYTES                     (`storeBudgetBytes`; the managed side derives it from the selected representation's
+//                                              bitrate, StoreBudgetForBitrate, 16-128 MiB; 0 = 32 MiB) that overrides both.
 //
 // It also owns the two things the seek planner needs and the old code threw away: the ascending KEYFRAME TABLE that
 // `cenc::ParseSegment` fills from the sync samples it already marks, and the BUFFERED RANGE computation a scrub bar
@@ -36,7 +37,9 @@ namespace fgpr {
 
 // ── budget constants (the descriptor's 0 means "take the default") ──────────────────────────────────────────────────
 inline constexpr size_t   kSlabBytes             = 64 * 1024;             // one slab; every pooled buffer is a multiple
-inline constexpr uint64_t kDefaultStoreBudget    = 32ull * 1024 * 1024;   // §3.5 allocation table
+inline constexpr uint64_t kDefaultStoreBudget    = 32ull * 1024 * 1024;   // §3.5 allocation table; what an unknown bitrate gets
+inline constexpr uint64_t kMinStoreBudget        = 16ull * 1024 * 1024;   // F040: the floor of a derived budget
+inline constexpr uint64_t kMaxStoreBudget        = 128ull * 1024 * 1024;  // F040: the ceiling (two live sessions => at most 256 MiB of media)
 inline constexpr int64_t  kDefaultRetainBehindMs = 30000;
 inline constexpr int64_t  kDefaultBufferAheadMs  = 60000;
 inline constexpr int      kKeyframeCap           = 4096;                  // a 4-hour broadcast at a 4 s GOP
@@ -45,6 +48,21 @@ inline constexpr int      kKeyframeCap           = 4096;                  // a 4
 // reordered P frame starts past the running reach of the frame before it; neither is missing media. Half a second is
 // far below any real gap (a whole missing segment is seconds) and far above those artefacts.
 inline constexpr int64_t  kContiguityToleranceMs = 500;
+
+/// F040: the media byte budget one video representation needs to hold the WHOLE configured window (`aheadMs` + `retainMs` of
+/// presentation time) at its declared bandwidth: window seconds x bytes per second x 1.2 headroom (VBR peaks over the declared
+/// average), grossed up by 4/3 because the video track only owns three quarters of the budget (SegmentStore::VideoBudget; the
+/// audio quarter is what an AAC track needs several times over), clamped to [kMinStoreBudget, kMaxStoreBudget]. The pool's idle
+/// scratch is NOT part of it (it has its own cap, SlabPool::Give). Integer math only (headroom x gross-up = 8/5), so the managed
+/// twin (ProtectedVideoSession.StoreBudgetFor) and the tests agree to the byte. An unknown bitrate keeps the 32 MiB default.
+inline uint64_t StoreBudgetForBitrate(int64_t videoBitsPerSecond, int64_t aheadMs, int64_t retainMs)
+{
+    if (videoBitsPerSecond <= 0) return kDefaultStoreBudget;
+    const int64_t window = (aheadMs > 0 ? aheadMs : kDefaultBufferAheadMs) + (retainMs > 0 ? retainMs : kDefaultRetainBehindMs);
+    const uint64_t windowBytes = (uint64_t)window * (uint64_t)videoBitsPerSecond / 8000ull;   // ms x bit/s / 8000 = bytes
+    const uint64_t budget = windowBytes / 5ull * 8ull;                                          // x 1.2 x 4/3
+    return budget < kMinStoreBudget ? kMinStoreBudget : (budget > kMaxStoreBudget ? kMaxStoreBudget : budget);
+}
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  SlabPool — the 64 KiB slab allocation of §3.5, in the only shape a fragmented-MP4 parser can consume.
@@ -889,7 +907,9 @@ struct SegmentStore
 
     int64_t retainBehindMs = kDefaultRetainBehindMs;
     int64_t bufferAheadMs = kDefaultBufferAheadMs;
-    uint64_t budgetBytes = kDefaultStoreBudget;
+    // Atomic since F040: a representation change re-derives it (SetBudget, feeder thread) while the per-stream trim and the
+    // snapshot read it on other threads.
+    std::atomic<uint64_t> budgetBytes{ kDefaultStoreBudget };
 
     // The counted half of the memory budget (FgPrSnapshot.storeBytes). Video and audio are counted separately so the
     // per-stream trim can be told how much of the budget it is over.
@@ -908,8 +928,20 @@ struct SegmentStore
     {
         retainBehindMs = retainMs > 0 ? retainMs : kDefaultRetainBehindMs;
         bufferAheadMs = aheadMs > 0 ? aheadMs : kDefaultBufferAheadMs;
-        budgetBytes = budget > 0 ? budget : kDefaultStoreBudget;
-        pool.Configure(budgetBytes);
+        budgetBytes.store(budget > 0 ? budget : kDefaultStoreBudget, std::memory_order_release);
+        pool.Configure(budgetBytes.load(std::memory_order_acquire));
+    }
+
+    /// F040: a representation change re-derives the budget (StoreBudgetForBitrate, computed by the caller). 0 = unchanged; a value is
+    /// clamped to the derived range. Returns whether the budget moved. Safe from any thread; the trim and the cap gate pick it up on
+    /// their next evaluation (a LOWER budget evicts history behind the playhead first, never forward media).
+    bool SetBudget(uint64_t budget)
+    {
+        if (budget == 0) return false;
+        const uint64_t clamped = budget < kMinStoreBudget ? kMinStoreBudget : (budget > kMaxStoreBudget ? kMaxStoreBudget : budget);
+        if (budgetBytes.exchange(clamped, std::memory_order_acq_rel) == clamped) return false;
+        pool.Configure(clamped);
+        return true;
     }
 
     /// What the demuxed media itself costs the budget: the two tracks' sample lists. The byte CAP is judged on each
@@ -925,8 +957,8 @@ struct SegmentStore
 
     /// Video gets three quarters of the byte budget, audio the rest: an AAC track is an order of magnitude smaller
     /// than the video it accompanies, and splitting the cap evenly would starve the video window for no gain.
-    uint64_t VideoBudget() const { return budgetBytes - budgetBytes / 4; }
-    uint64_t AudioBudget() const { return budgetBytes / 4; }
+    uint64_t VideoBudget() const { const uint64_t b = budgetBytes.load(std::memory_order_acquire); return b - b / 4; }
+    uint64_t AudioBudget() const { return budgetBytes.load(std::memory_order_acquire) / 4; }
 };
 
 }   // namespace fgpr

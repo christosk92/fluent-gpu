@@ -54,6 +54,11 @@ Every native event and every lifecycle decision goes to `ProtectedVideoRuntime.L
 The protected source descriptor may carry a catalog of stable video representation IDs.
 `FgPrSessionSelectRepresentation` switches rung; the snapshot reports downloaded bytes, cumulative transfer time,
 forward buffer and the active representation, and `FgPrEvent_Representation` reports an applied switch.
+A switch needs no init GET for a rung the session has already parsed (the opening one, an earlier switch's, or one asked for with
+`FgPrSessionPrefetchInit`: the managed session asks for the rungs next to the one playing), and `FgPrSessionSelectRepresentation`
+carries the store budget derived for the new rung (`storeBudgetBytes`, 16-128 MiB from the rung's bandwidth). While a track's forward
+buffer is below two segments the feeder keeps two segment GETs per track in flight (appended in order); the throughput estimate
+charges overlapping GETs their union, not their sum.
 
 `Auto` starts from the manifest's conservative representation, estimates throughput from completed downloads, and
 switches only at a media-segment keyframe boundary. Downshifts are immediate; upgrades require buffer headroom and two

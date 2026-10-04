@@ -1244,7 +1244,7 @@ static void Test_C28_PoolCapAndMediaBytes()
     store->pool.Give(std::move(scratch));
     CHECK_EQ(store->MediaBytes(), (uint64_t)15);
     CHECK(store->Bytes() > store->MediaBytes());
-    CHECK_EQ(store->VideoBudget() + store->AudioBudget(), store->budgetBytes);
+    CHECK_EQ(store->VideoBudget() + store->AudioBudget(), store->budgetBytes.load());
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -2800,6 +2800,102 @@ static void Test_N54_RetiredHandles()
     }
 }
 
+/// F041 - a track pipelines a second GET only while its forward buffer is below the low watermark, never for a seek plan, never
+/// without byte-budget room, and never past the end of the track or the forward target.
+static void Test_O55_PipelinedGets()
+{
+    using namespace fgpr::plan;
+    // The watermark: two segments, capped at half the forward target, never below one segment, 0 when the length is unknown.
+    CHECK_EQ(PipelineLowWatermarkMs(4000, 60000), (int64_t)8000);
+    CHECK_EQ(PipelineLowWatermarkMs(4000, 10000), (int64_t)5000);    // half of a short target
+    CHECK_EQ(PipelineLowWatermarkMs(4000, 4000), (int64_t)4000);     // but never under one segment
+    CHECK_EQ(PipelineLowWatermarkMs(0, 60000), (int64_t)0);
+
+    // Depth: two below the watermark, one at or above it, one for a seek plan or without room.
+    CHECK_EQ(PipelineDepth(0, 8000, false, true), 2);
+    CHECK_EQ(PipelineDepth(7999, 8000, false, true), 2);
+    CHECK_EQ(PipelineDepth(8000, 8000, false, true), 1);
+    CHECK_EQ(PipelineDepth(0, 8000, true, true), 1);
+    CHECK_EQ(PipelineDepth(0, 8000, false, false), 1);
+    CHECK_EQ(PipelineDepth(0, 0, false, true), 1);                   // unknown segment length
+    CHECK_EQ(kMaxGetsPerTrack, 2);
+
+    // The second segment: the one after, while it exists and starts inside the forward target.
+    CHECK_EQ(PipelinedNext(3, 100, 4000, 60000), 4);
+    CHECK_EQ(PipelinedNext(14, 100, 4000, 60000), -1);               // 15 * 4000 = 60000: at the target, not inside it
+    CHECK_EQ(PipelinedNext(13, 100, 4000, 60000), 14);
+    CHECK_EQ(PipelinedNext(99, 100, 4000, 1000000), -1);             // idx + 1 == endIndex: nothing past the end
+    CHECK_EQ(PipelinedNext(-1, 100, 4000, 60000), -1);
+    CHECK_EQ(PipelinedNext(3, 100, 0, 60000), -1);
+    CHECK_EQ(PipelinedNext(INT32_MAX, INT32_MAX, 4000, INT64_MAX), -1);
+}
+
+/// F041 - the throughput clock charges overlapping GETs their UNION: the sum of the charges is the busy wall-clock time, so
+/// bytes / charged ms is the link's aggregate rate, and sequential GETs are charged their full duration exactly as before.
+static void Test_P56_BusyClockChargesTheUnion()
+{
+    using fgpr::plan::BusyClock;
+    {
+        BusyClock c;   // sequential: each GET charged what it took
+        CHECK_EQ(c.Charge(1000, 1100), (uint64_t)100);
+        CHECK_EQ(c.Charge(1150, 1250), (uint64_t)100);
+        CHECK_EQ(c.Charge(5000, 5040), (uint64_t)40);
+    }
+    {
+        BusyClock c;   // two GETs sharing the link, each at half speed: 200 ms of wire time for the pair, not 400
+        const uint64_t a = c.Charge(0, 200);
+        const uint64_t b = c.Charge(0, 200);
+        CHECK_EQ(a + b, (uint64_t)200);
+    }
+    {
+        BusyClock c;   // staggered pipeline: A [0,100], B [20,110] -> the union is [0,110]
+        CHECK_EQ(c.Charge(0, 100), (uint64_t)100);
+        CHECK_EQ(c.Charge(20, 110), (uint64_t)10);
+    }
+    {
+        BusyClock c;   // a short GET entirely inside an earlier one's interval adds no time (its bytes still count)
+        CHECK_EQ(c.Charge(0, 100), (uint64_t)100);
+        CHECK_EQ(c.Charge(30, 60), (uint64_t)0);
+        CHECK_EQ(c.Charge(100, 140), (uint64_t)40);
+    }
+    {
+        BusyClock c;   // a backwards interval is clamped, never underflows
+        CHECK_EQ(c.Charge(500, 400), (uint64_t)0);
+    }
+}
+
+/// F040 - the store budget follows the representation: (ahead + retain) x bitrate x 1.2, grossed up for the video slice (3/4 of
+/// the budget), clamped to [16, 128] MiB; an unknown bitrate keeps 32 MiB. The managed twin (ProtectedVideoSession.StoreBudgetFor)
+/// is pinned to the same numbers in the Windows tests.
+static void Test_Q57_StoreBudgetFollowsTheRepresentation()
+{
+    using fgpr::StoreBudgetForBitrate;
+    const uint64_t MiB = 1024ull * 1024;
+    CHECK_EQ(StoreBudgetForBitrate(0, 60000, 30000), fgpr::kDefaultStoreBudget);
+    CHECK_EQ(StoreBudgetForBitrate(500000, 60000, 30000), 16 * MiB);               // 90 s at 0.5 Mbps ~ 9 MB: the floor
+    CHECK_EQ(StoreBudgetForBitrate(5000000, 60000, 30000), (uint64_t)90000000);    // 90 s x 625000 B/s = 56.25 MB x 1.6
+    CHECK_EQ(StoreBudgetForBitrate(20000000, 60000, 30000), 128 * MiB);            // 4K: the ceiling
+    CHECK_EQ(StoreBudgetForBitrate(5000000, 0, 0), (uint64_t)90000000);            // zero window = the 60 s / 30 s defaults
+    CHECK(StoreBudgetForBitrate(2000000, 60000, 30000) < StoreBudgetForBitrate(4000000, 60000, 30000));   // monotonic in the bitrate
+
+    // The video slice of the derived budget really holds the window: 3/4 of 90 MB >= 56.25 MB x 1.2.
+    CHECK(StoreBudgetForBitrate(5000000, 60000, 30000) / 4 * 3 >= (uint64_t)67500000);
+
+    // SetBudget: 0 changes nothing, a value is clamped, an unchanged value reports no move, and the slices follow.
+    auto store = std::make_shared<fgpr::SegmentStore>();
+    store->Configure(30000, 60000, 32 * MiB);
+    CHECK(!store->SetBudget(0));
+    CHECK_EQ(store->budgetBytes.load(), 32 * MiB);
+    CHECK(store->SetBudget(90000000));
+    CHECK_EQ(store->budgetBytes.load(), (uint64_t)90000000);
+    CHECK_EQ(store->VideoBudget() + store->AudioBudget(), (uint64_t)90000000);
+    CHECK(!store->SetBudget(90000000));
+    CHECK(store->SetBudget(1));                                                     // clamped up to the floor
+    CHECK_EQ(store->budgetBytes.load(), fgpr::kMinStoreBudget);
+    CHECK(store->SetBudget((uint64_t)1 << 40));                                     // clamped down to the ceiling
+    CHECK_EQ(store->budgetBytes.load(), fgpr::kMaxStoreBudget);
+}
+
 int main()
 {
     struct TestCase { const char* name; void (*fn)(); };
@@ -2874,6 +2970,9 @@ int main()
         { "N52_FrameCounters", Test_N52_FrameCounters },
         { "N53_RenderedFrameWatch", Test_N53_RenderedFrameWatch },
         { "N54_RetiredHandles", Test_N54_RetiredHandles },
+        { "O55_PipelinedGets", Test_O55_PipelinedGets },
+        { "P56_BusyClockChargesTheUnion", Test_P56_BusyClockChargesTheUnion },
+        { "Q57_StoreBudgetFollowsTheRepresentation", Test_Q57_StoreBudgetFollowsTheRepresentation },
     };
 
     const int failBefore = g_fail;

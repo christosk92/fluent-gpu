@@ -123,6 +123,14 @@ public sealed class VideoSurfaceRegistry
     /// session reads it through <see cref="VideoBinding.WindowHandle"/> to tie output protection to that window's monitor.</summary>
     public nuint WindowHandle { get; set; }
 
+    /// <summary>Reports the monitor this registry's window is on and whether it is fullscreen there (F089), for the stream sizing
+    /// (<see cref="VideoStreamSizing"/>). The host sets it once at construction; unset (headless, tests) reads as
+    /// <c>default</c>: no monitor size, so a stream is never upscaled. UI thread only.</summary>
+    public Func<VideoDisplay>? DisplayProvider { get; set; }
+
+    /// <summary>The current <see cref="VideoDisplay"/> (<c>default</c> when no <see cref="DisplayProvider"/> is set).</summary>
+    public VideoDisplay Display => DisplayProvider?.Invoke() ?? default;
+
     /// <summary>Which window this registry belongs to, for the logs only: 0 is the main window, 1, 2, ... a detached pop-out (the same
     /// target id its <c>[render.pace]</c> <c>child=</c> token and <c>[detached] attach</c> line carry). The host sets it when the child
     /// is attached. With <see cref="VideoBinding.Token"/> it names WHICH slot of WHICH window wrote a stream size or a pump (F235): two
@@ -832,6 +840,11 @@ public readonly struct VideoBinding
     /// <summary>Which window the surface is presented in, for the logs: 0 main, 1, 2, ... a pop-out (see
     /// <see cref="VideoSurfaceRegistry.HostOrdinal"/>); 0 for an inert binding.</summary>
     public int HostOrdinal => _registry?.HostOrdinal ?? 0;
+
+    /// <summary>The monitor this binding's window is on and whether it is fullscreen (F089): what the stream sizing needs to
+    /// upscale in Media Foundation rather than DirectComposition. <c>default</c> (monitor unknown) for an inert binding or a
+    /// host that reports none. UI thread only.</summary>
+    public VideoDisplay Display => _registry?.Display ?? default;
 
     /// <summary>The live surface id — <see cref="VideoSurfaceId.IsNone"/> until the host creates the child visual.</summary>
     public IReadSignal<VideoSurfaceId> Surface => _registry?.Surface(Token) ?? s_none;

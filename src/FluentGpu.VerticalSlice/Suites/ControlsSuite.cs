@@ -52,6 +52,7 @@ static partial class ControlsSuite
         VideoAspectChangeChecks(strings);
         UseVideoEffectChecks(strings);
         VideoInactivePumpChecks();
+        StayMountedPresenterChecks(strings);
         MediaPlayerElementChecks(strings);
         ControlsChecks(strings);
         RecipeChecks(strings);

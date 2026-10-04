@@ -2291,10 +2291,14 @@ public sealed partial class AppHost : IDisposable
     // this it kept painting + RenderMotion-presenting a window nobody can see, on the render thread shared with the main window.
     private CloakParkGate _cloakGate;
     private bool _cloakParked;
-    // PRIMARY host only (F118, UI thread): a fullscreen, active detached child covers this window completely
-    // (WindowCoverPolicy), so it parks exactly like a minimized one. No window message announces the cover going away unless the
-    // child's own state changes, but a cloak-style poll keeps the un-park prompt whatever the reason.
+    // Any host (F118, UI thread): the window is completely covered, so it parks exactly like a minimized one. Two causes feed it
+    // (UpdateCoverPark): a fullscreen, active detached child over the PRIMARY host (WindowCoverPolicy.Covers), and, for any window,
+    // the union of the opaque top-level windows above it (WindowCoverPolicy.CoveredByWindows over the backend's win-event-driven
+    // IPlatformWindow.CopyOccluderRectsPx). The backend wakes the loop on the events, and a cloak-style poll backs the un-park up.
     private bool _coverParked;
+    private long _occlusionEpochSeen;      // the IPlatformWindow.OcclusionEpoch the cached OS verdict was computed for (0 = never / untracked)
+    private bool _occludedByWindows;       // the cached OS-level verdict: covered by the union of the windows above it
+    private RectF[]? _occluderRects;       // reused buffer for IPlatformWindow.CopyOccluderRectsPx (WindowCoverPolicy.MaxOccluders)
     // A cloak-parked child polls at this period: DWM raises no message when a window is un-cloaked, so unlike a minimized or
     // hidden window (whose restore IS a message) nothing would ever wake a loop that blocked until one.
     private const int CloakPollMs = 250;
@@ -2302,6 +2306,10 @@ public sealed partial class AppHost : IDisposable
     // (DetachedRevealGate). While pending the host is exempt from the hidden-window park (and the production gate), so its own
     // first frame can land in the hidden window; TryRevealDetached shows the window exactly once. False on every other host.
     private bool _revealPending;
+    // Detached CHILD only (F110, UI thread): the pop-out was PARKED warm (IDetachedVideoWindow.Park): hidden by the app's request
+    // and kept alive for reuse, not closing. The host parks through the ordinary hidden-window gate (IsOsParked); this flag only
+    // says the hide is deliberate, so the handle reports IsParked and Unpark knows the host is reusable. Cleared by Unpark.
+    private bool _warmParked;
     private bool _revealTopmost;          // the always-on-top state to apply when the window is shown (kept current by the handle's SetTopmost)
     private long _revealDeadlineQpc;
     private long _openStartQpc;           // the QPC the open began (OpenDetachedWindow entry): FirstPresentMs counts from here
@@ -2311,6 +2319,9 @@ public sealed partial class AppHost : IDisposable
     private long _firstPresentQpc;
     private double _firstVideoBindMs = -1;
     private bool _firstVideoBindReported;
+    // F110/F215: a warm-reused pop-out whose applier had already bound a surface keeps that bind (the parked slot stays bound), so no
+    // NEW first bind will ever land; its time-to-first-video is the reveal, which is when the held picture becomes visible.
+    private bool _bindCarriedOver;
     // The pop-out open cost split (F110): window and host-ctor stages are stamped by OpenDetachedWindow, the frame and present
     // stages when the reveal lands. OnRevealed is the handle's callback (cleared after it fires, like OnClosed).
     internal DetachedOpenTiming OpenTiming;
@@ -2715,15 +2726,81 @@ public sealed partial class AppHost : IDisposable
     internal void PollFirstVideoBind()
     {
         if (_firstVideoBindReported || _openStartQpc == 0) return;
-        long bindQpc = Volatile.Read(ref _videoApplier)?.FirstBindQpc ?? 0;
-        if (bindQpc == 0) return;
+        double bindMs;
+        if (_bindCarriedOver)
+        {
+            if (_revealPending) return;   // the held picture is not visible before the reveal
+            bindMs = Math.Max(0.0, OpenTiming.FirstPresentMs);
+        }
+        else
+        {
+            long bindQpc = Volatile.Read(ref _videoApplier)?.FirstBindQpc ?? 0;
+            if (bindQpc == 0) return;
+            bindMs = Math.Max(0.0, QpcToMs(bindQpc - _openStartQpc));
+        }
         _firstVideoBindReported = true;
-        _firstVideoBindMs = Math.Max(0.0, QpcToMs(bindQpc - _openStartQpc));
+        _firstVideoBindMs = bindMs;
         Diag.Line(string.Create(CultureInfo.InvariantCulture,
             $"[detached] first.video.bind hwnd={_window.Handle.Value:X} ms={_firstVideoBindMs:F1} afterRevealMs={(OpenTiming.FirstPresentMs > 0.0 ? _firstVideoBindMs - OpenTiming.FirstPresentMs : -1.0):F1}"));
         var cb = OnFirstVideoBound;
         OnFirstVideoBound = null;
         cb?.Invoke(_firstVideoBindMs);
+    }
+
+    /// <summary>Parent, UI thread (F110): park a live, revealed pop-out warm instead of closing it. Leaves fullscreen first (the
+    /// platform restores the windowed rect), delivers a pending settled-bounds change, then hides the window: the child host
+    /// parks through the ordinary hidden-window gate (no reconcile, layout, record or present) while its tree and swapchain stay
+    /// alive, so a reopen skips the window, swapchain and mount cost and the close skips the teardown WaitForGpu. The child stays
+    /// in <see cref="_detachedHosts"/> (the parent's Dispose and the reaper still own it). Returns false when it cannot be parked.</summary>
+    internal bool ParkDetachedChild(AppHost child)
+    {
+        if (child._warmParked) return !child._window.IsClosed;
+        if (child._window.IsClosed || child._revealPending || child.RenderFailed || !_detachedHosts.Contains(child)) return false;
+        var w = child._window;
+        if (w.IsFullscreen) w.SetFullscreen(false);
+        child.FlushPendingBoundsChange();
+        child._warmParked = true;
+        w.Hide();
+        Diag.Line(string.Create(CultureInfo.InvariantCulture, $"[detached] park hwnd={w.Handle.Value:X}"));
+        return true;
+    }
+
+    /// <summary>Parent, UI thread (F110): reuse a parked pop-out for a new open. Applies the request's restored bounds (clamped into
+    /// the work area of the monitor nearest to it, exactly as a fresh open does) and always-on-top state, retitles the window and
+    /// re-arms the reveal gate, so the window is shown on the child's next frame (its swapchain already presented, so the gate
+    /// opens at once) and <see cref="OnRevealed"/> fires then. The parked tree is reused as it is. Returns false when the child is
+    /// not parked or is no longer reusable (the caller builds a new one).</summary>
+    internal bool UnparkDetachedChild(AppHost child, DetachedWindowRequest request)
+    {
+        if (!child._warmParked || child._window.IsClosed || child.RenderFailed || !_detachedHosts.Contains(child)) return false;
+        var w = child._window;
+        var restored = request.InitialBoundsPx;
+        if (restored.W > 1f && restored.H > 1f)
+        {
+            var work = _app.GetWorkArea(new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f));
+            if (!work.IsInfinite)
+            {
+                float rw = MathF.Min(restored.W, work.W), rh = MathF.Min(restored.H, work.H);
+                float rx = MathF.Min(MathF.Max(restored.X, work.X), work.X + work.W - rw);
+                float ry = MathF.Min(MathF.Max(restored.Y, work.Y), work.Y + work.H - rh);
+                w.SetBoundsPx(new RectF(rx, ry, rw, rh));
+            }
+            else w.SetBoundsPx(restored);
+        }
+        w.SetTitle(child._strings.Intern(request.Title));
+        w.SetTopmost(request.AlwaysOnTop);
+        child._warmParked = false;
+        // A fresh open re-measures time-to-first-video (and re-fires OnFirstVideoBound, which the app sets again on reuse) from the
+        // new open start; a bind the parked applier already holds is not re-stamped, so it counts from the reveal (PollFirstVideoBind).
+        child._firstVideoBindReported = false;
+        child._firstVideoBindMs = -1;
+        child._bindCarriedOver = (Volatile.Read(ref child._videoApplier)?.FirstBindQpc ?? 0) != 0;
+        // From here the host is exempt from the hidden-window park (like a fresh open) until TryRevealDetached shows the window
+        // after its next frame; the stale last frame of the previous session is all the swapchain holds until that frame presents.
+        child.BeginDetachedReveal(request.AlwaysOnTop, Stopwatch.GetTimestamp(), 0.0, 0.0);
+        child.RequestFullRepaintOnce();
+        Diag.Line(string.Create(CultureInfo.InvariantCulture, $"[detached] unpark hwnd={w.Handle.Value:X}"));
+        return true;
     }
 
     /// <summary>Track a freshly built detached child so <see cref="TickDetachedHosts"/> ticks and reaps it. The pop-out shares
@@ -3098,6 +3175,10 @@ public sealed partial class AppHost : IDisposable
         // INCIDENT 2026-09: reads/wires the CHILD host's RenderFailed latch/event (SubmitPresentOnRenderThread's
         // catch + DrainChildRenderSources, both on _child) — same indirection as OnClosed/BoundsChanged above.
         public bool RenderFailed => _child.RenderFailed;
+        // F110: warm reuse. The handle only forwards; the parent owns the child list and the platform calls.
+        public bool IsParked => _child._warmParked && IsOpen;
+        public bool Park() => _parent.ParkDetachedChild(_child);
+        public bool Unpark(DetachedWindowRequest request) => _parent.UnparkDetachedChild(_child, request);
         public Action? OnRenderFailed { get => _renderFailedCallback; set { _child.OnRenderFailed -= _renderFailedCallback; _renderFailedCallback = value; if (value != null) _child.OnRenderFailed += value; } }
         private Action? _renderFailedCallback;
     }
@@ -4029,6 +4110,7 @@ public sealed partial class AppHost : IDisposable
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
         if (window.Handle.Kind == NativeHandleKind.Hwnd) _videoSurfaces.WindowHandle = (nuint)window.Handle.Value;   // protected video ties output protection to THIS window (main or pop-out)
+        _videoSurfaces.DisplayProvider = () => new FluentGpu.Media.VideoDisplay(window.MonitorSizePx, window.IsFullscreen);   // F089: the stream is sized against THIS window's monitor
         _frameTime = frameTime ?? (_isHeadless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
         // Timer clock: headless rides the deterministic accumulated frame delta (gates pump frames); a real window uses
         // the monotonic wall clock so a due time survives a fully-blocked WaitForWork (the clamped anim delta would drift).
@@ -4741,10 +4823,11 @@ public sealed partial class AppHost : IDisposable
         // An unrevealed pop-out (created hidden, F115) is neither hidden-parked nor cloak-parked: its first frame has to paint into
         // the hidden window for the reveal to have anything to show.
         if (_isDetachedChild && !_revealPending) _cloakParked = _cloakGate.Advance(_window.IsCloaked, _timers.NowMs);
-        // The primary window parks while a fullscreen pop-out covers it (F118): the DXGI occlusion latch does not fire for a
-        // flip-model composition swapchain another top-level covers, so without this it kept recording and presenting invisible
-        // frames on the render thread it shares with the pop-out. Sampled after the relay, like the cloak.
-        if (!_isDetachedChild) UpdateCoverPark();
+        // A window parks while other windows completely cover it (F118): the DXGI occlusion latch does not fire for a flip-model
+        // composition swapchain another top-level covers, so without this it kept recording and presenting invisible frames on the
+        // render thread it shares with the pop-out (a fullscreen pop-out over the primary window, or any other window over either).
+        // Sampled after the relay, like the cloak.
+        UpdateCoverPark();
         bool minimized = (windowStatus.Parked && !_revealPending) || _cloakParked || _coverParked;   // "minimized" below means PARKED: minimized, hidden OR cloaked (E2 — identical cost)
         // InputHooks.WindowOccluded — HERE, above the park and idle gates, so it is published on EVERY frame and not only
         // the ones that reach Paint (an occlusion edge on an idle host would otherwise never be heard). A change schedules
@@ -4991,27 +5074,56 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Minimized or hidden — the states whose restore is a window message (unlike a cloak, which raises none).</summary>
     private bool IsOsParked => !_revealPending && new WindowStatus(_window.State, _window.IsVisible).Parked;
 
-    /// <summary>Primary host, UI thread, once per <see cref="RunFrame"/>: re-derive <see cref="_coverParked"/> from the live
-    /// detached children (F118). Only a FULLSCREEN child is ever measured (a field read), so a host with no pop-out, or with a
-    /// windowed or snapped one, pays nothing; the two <c>GetWindowRect</c> reads happen only for a fullscreen child. The verdict
-    /// is <see cref="WindowCoverPolicy.Covers"/>: fullscreen AND active (an alt-tab away un-parks at once) AND on screen AND its
-    /// rect contains this window's, so a main window on another monitor, or spanning two, is never parked. Logs the edges only.</summary>
+    /// <summary>Any host, UI thread, once per <see cref="RunFrame"/>: re-derive <see cref="_coverParked"/> from the two coverage
+    /// causes (F118). (1) The primary host's live detached children: only a FULLSCREEN child is ever measured (a field read), so a
+    /// host with no pop-out, or with a windowed or snapped one, pays nothing; the verdict is <see cref="WindowCoverPolicy.Covers"/>:
+    /// fullscreen AND active (an alt-tab away un-parks at once) AND on screen AND its rect contains this window's, so a main
+    /// window on another monitor, or spanning two, is never parked. (2) The OS (<see cref="OsOcclusionCovers"/>): the union of the
+    /// opaque top-level windows above this one, recomputed only when the backend's occlusion epoch moved. Logs the edges only.</summary>
     private void UpdateCoverPark()
     {
-        bool covered = false;
-        for (int i = 0; i < _detachedHosts.Count && !covered; i++)
+        bool popOut = false;
+        for (int i = 0; i < _detachedHosts.Count && !popOut; i++)
         {
             var child = _detachedHosts[i];
             var w = child._window;
             if (w.IsClosed || !w.IsFullscreen) continue;
-            covered = WindowCoverPolicy.Covers(childFullscreen: true, childActive: w.IsActive,
+            popOut = WindowCoverPolicy.Covers(childFullscreen: true, childActive: w.IsActive,
                 childVisible: !child._revealPending && !child.IsParked, w.OuterBoundsPx, _window.OuterBoundsPx);
         }
+        // Always read (not short-circuited by the pop-out cause): it keeps the epoch / cached verdict current across a pop-out cover.
+        bool windows = OsOcclusionCovers();
+        bool covered = popOut || windows;
         if (covered == _coverParked) return;
         _coverParked = covered;
-        Diag.Line(covered
-            ? "[detached] main window covered by a fullscreen pop-out: parked"
-            : "[detached] main window uncovered: unparked");
+        Diag.Line(string.Create(CultureInfo.InvariantCulture,
+            $"[occlusion] hwnd={_window.Handle.Value:X} {(covered ? "covered: parked" : "uncovered: unparked")} by={(popOut ? "fullscreen-pop-out" : windows ? "windows" : "none")}"));
+    }
+
+    /// <summary>UI thread (F118): is this window completely hidden behind the opaque top-level windows above it? The backend's
+    /// win-event hooks bump <see cref="IPlatformWindow.OcclusionEpoch"/> (and wake the loop) whenever the set, the Z-order or the
+    /// geometry of top-level windows may have changed, so the Z-order walk and the rect test run only then; between events the
+    /// cached verdict stands, so an idle covered window costs one counter read per frame. Never covered while it is not on screen
+    /// anyway (minimized, hidden, cloaked: their own park gates), while a pop-out waits for its reveal or is parked warm, or when
+    /// the backend does not track occlusion (epoch 0). Uncovering is seen on the same frame the event woke the loop.</summary>
+    private bool OsOcclusionCovers()
+    {
+        var w = _window;
+        long epoch = w.OcclusionEpoch;
+        if (epoch == 0) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }
+        if (_revealPending || _warmParked) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }   // re-evaluated on the first frame it counts
+        if (epoch == _occlusionEpochSeen) return _occludedByWindows;
+        _occlusionEpochSeen = epoch;
+        bool covered = false;
+        var target = w.OuterBoundsPx;
+        if (!w.IsClosed && w.IsVisible && w.State != WindowState.Minimized && !w.IsCloaked && target.W > 1f && target.H > 1f)
+        {
+            _occluderRects ??= new RectF[WindowCoverPolicy.MaxOccluders];
+            int n = w.CopyOccluderRectsPx(_occluderRects);
+            covered = n > 0 && WindowCoverPolicy.CoveredByWindows(target, new ReadOnlySpan<RectF>(_occluderRects, 0, n));
+        }
+        _occludedByWindows = covered;
+        return covered;
     }
 
     /// <summary>Raised on the UI thread when the window's placement or visibility changed since the previous frame —

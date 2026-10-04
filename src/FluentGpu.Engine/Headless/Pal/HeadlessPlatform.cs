@@ -249,6 +249,33 @@ public sealed class HeadlessWindow : IPlatformWindow
     /// <summary>Settable (test seam): the OS compositor cloaks the window (another virtual desktop). False by default.</summary>
     public bool IsCloaked { get; set; }
 
+    private RectF[] _occluders = [];
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.OcclusionEpoch"/>
+    /// <remarks>0 (untracked, so the host never parks for being covered) until a test calls <see cref="SetOccluders"/>.</remarks>
+    public long OcclusionEpoch { get; private set; }
+
+    /// <summary>Test seam (F118): the opaque top-level windows above this one (physical px), as the OS would report them. Bumps
+    /// <see cref="OcclusionEpoch"/>, like a win-event hook callback, so the host re-evaluates on its next frame.</summary>
+    public void SetOccluders(params RectF[] rects)
+    {
+        _occluders = rects;
+        OcclusionEpoch++;
+    }
+
+    /// <summary>How many times the host asked for the occluders (test seam): the verdict is cached per epoch, so a quiet window must
+    /// not ask again.</summary>
+    public int OccluderQueries { get; private set; }
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.CopyOccluderRectsPx"/>
+    public int CopyOccluderRectsPx(Span<RectF> into)
+    {
+        OccluderQueries++;
+        int n = Math.Min(_occluders.Length, into.Length);
+        for (int i = 0; i < n; i++) into[i] = _occluders[i];
+        return n;
+    }
+
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Hide"/>
     public void Hide() => IsVisible = false;
 

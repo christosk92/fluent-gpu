@@ -36,6 +36,9 @@ namespace FluentGpu.Hosting;
 /// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
 /// <item><c>video-nv12</c> — both media engines (clear and protected) output NV12 instead of the forced BGRA when the
 /// output's overlay probe reports NV12 support (F249, A/B arm, default off).</item>
+/// <item><c>playready-sl2000</c> — the protected runtime never probes hardware PlayReady SL3000 (the <c>.3000</c> key system with a
+/// "3000" video capability) and asks for the software SL2000 CDM it always did. Without it the runtime probes SL3000 and falls back to
+/// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
 /// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
 /// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
 /// </list>
@@ -93,6 +96,12 @@ public static class EngineSwitches
     /// both modes. A HYPOTHESIS arm, default off, decided by the owner's PresentMon A/B (<c>MsBetweenDisplayChange</c> and the
     /// PresentMode column, switch on vs off), not by this flag's existence.</summary>
     public static bool VideoOverlay;
+
+    /// <summary>Skip the PlayReady SL3000 probe (F022, <c>--fg playready-sl2000</c>): the protected runtime's CDM is the software SL2000 request
+    /// it has always made. The default (false) probes the hardware key system first - SL3000 is used only where the machine grants it,
+    /// otherwise the runtime falls back to SL2000 - and the negotiated level is logged once per runtime. Read once, when the native runtime
+    /// is created: set it (the command line) before the first protected open.</summary>
+    public static bool ForcePlayReadySl2000;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -167,6 +176,7 @@ public static class EngineSwitches
             case "gpu-timing": GpuPassTiming = true; return true;
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
+            case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
             default: return false;
         }
     }

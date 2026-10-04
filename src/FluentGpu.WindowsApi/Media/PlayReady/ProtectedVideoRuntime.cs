@@ -209,6 +209,11 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         _rebuildCooldownMs = Math.Max(0, rebuildCooldownMs);
     }
 
+    /// <summary>F022: the security policy handed to the native runtime before its create. Probing hardware SL3000 (with the native
+    /// fall back to SL2000 on a machine that cannot grant it) is the default; <paramref name="forceSl2000"/>
+    /// (<c>--fg playready-sl2000</c>) keeps the software request the runtime has always made. Pure.</summary>
+    internal static int ChooseSecurityPolicy(bool forceSl2000) => forceSl2000 ? PrNative.SecurityForce2000 : PrNative.SecurityProbe3000;
+
     /// <summary><see cref="AdapterLuidProvider"/>'s answer; 0 when none is installed or it throws.</summary>
     private static long ProviderAdapterLuid()
     {
@@ -366,6 +371,9 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                     // overlay probe said NV12 can take a plane (an unprobed output, or the switch off, keeps BGRA).
                     VideoOutputFormat outputFormat = VideoOverlayCaps.ChooseOutputFormat(FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput, VideoOverlayCaps.Latest);
                     _native.SetVideoOutputFormat((int)outputFormat);
+                    // F022: the PlayReady security level is read once too. Default: probe hardware SL3000 and fall back to SL2000
+                    // (native logs the negotiated level); `--fg playready-sl2000` forces the software request.
+                    _native.SetSecurityPolicy(ChooseSecurityPolicy(FluentGpu.Hosting.EngineSwitches.ForcePlayReadySl2000));
                     hr = _native.RuntimeCreate(_storePath, GCHandle.ToIntPtr(_self), luid, out rt);
                 }
                 catch (Exception e)
@@ -1517,6 +1525,10 @@ internal interface IPrRuntimeNative
     /// <summary><c>FgPrRuntimeSetVideoOutputFormat</c> (F249): the media engine's output format for the runtime the NEXT
     /// <see cref="RuntimeCreate"/> brings up - 0 = BGRA (the default), 1 = NV12 (<see cref="VideoOutputFormat"/>).</summary>
     void SetVideoOutputFormat(int format);
+    /// <summary><c>FgPrRuntimeSetSecurityPolicy</c> (F022): the PlayReady security level the runtime the NEXT <see cref="RuntimeCreate"/>
+    /// brings up asks for - <see cref="PrNative.SecurityProbe3000"/> (the default: probe hardware SL3000, fall back to SL2000) or
+    /// <see cref="PrNative.SecurityForce2000"/>.</summary>
+    void SetSecurityPolicy(int policy);
     /// <summary><c>FgPrRuntimeDestroy</c>.</summary>
     void RuntimeDestroy(ulong runtime);
     /// <summary><c>FgPrLicenseAcquire</c> with the runtime's relay thunk and <paramref name="ctx"/>.</summary>
@@ -1541,11 +1553,11 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
     /// protected open, so it is reported as unavailable up front instead.</summary>
     internal static readonly string[] RequiredExports =
     [
-        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetVideoOutputFormat",
+        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetVideoOutputFormat", "FgPrRuntimeSetSecurityPolicy",
         "FgPrLicenseAcquire", "FgPrLicenseState", "FgPrLicenseRelease",
         "FgPrSessionCreate", "FgPrSessionPrefetch", "FgPrSessionAttach", "FgPrSessionDetach", "FgPrSessionDestroy",
         "FgPrSessionPlay", "FgPrSessionPause", "FgPrSessionSeek", "FgPrSessionSetVolume", "FgPrSessionSetRate",
-        "FgPrSessionSetStreamSize", "FgPrSessionPlaceOpmWindow", "FgPrSessionSelectRepresentation", "FgPrSessionSnapshot",
+        "FgPrSessionSetStreamSize", "FgPrSessionPlaceOpmWindow", "FgPrSessionSelectRepresentation", "FgPrSessionPrefetchInit", "FgPrSessionSnapshot",
         "FgPrSessionGetKeyframes", "FgPrSessionGetBuffered", "FgPrSessionGetInitProtection",
         "FgPrProbeFile",
     ];
@@ -1597,6 +1609,7 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
     }
 
     public void SetVideoOutputFormat(int format) => PrNative.FgPrRuntimeSetVideoOutputFormat(format);
+    public void SetSecurityPolicy(int policy) => PrNative.FgPrRuntimeSetSecurityPolicy(policy);
 
     public void RuntimeDestroy(ulong runtime) => PrNative.FgPrRuntimeDestroy(runtime);
 

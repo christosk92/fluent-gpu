@@ -88,6 +88,14 @@ internal static unsafe partial class PrNative
     /// <summary>SetCurrentTimeEx(APPROXIMATE) — present the keyframe ≤ target (a scrub preview).</summary>
     internal const int SeekKeyframe = 1;
 
+    // ── security policy (FgPrSecurityPolicy, F022) ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Probe hardware SL3000 first (the <c>.3000</c> key system + a "3000" video capability) and fall back to SL2000 when the
+    /// machine cannot grant it — the default.</summary>
+    internal const int SecurityProbe3000 = 0;
+    /// <summary>Never probe: the software SL2000 request the runtime has always made (<c>--fg playready-sl2000</c>).</summary>
+    internal const int SecurityForce2000 = 2000;
+
     /// <summary>"Let the native side find the keyframe itself" — the planner has no table yet.</summary>
     internal const long NoKeyframeHint = -1;
 
@@ -190,6 +198,12 @@ internal static unsafe partial class PrNative
     [LibraryImport(LibraryName)]
     internal static partial int FgPrRuntimeSetVideoOutputFormat(int format);
 
+    /// <summary>F022: which PlayReady security level the NEXT runtime's CDM asks for (<see cref="SecurityProbe3000"/> or
+    /// <see cref="SecurityForce2000"/>). Process-wide, read once when the runtime is created, so it is set BEFORE
+    /// <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int FgPrRuntimeSetSecurityPolicy(int policy);
+
     // ── license ────────────────────────────────────────────────────────────────────────────────────────────────────
 
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
@@ -243,9 +257,14 @@ internal static unsafe partial class PrNative
     [LibraryImport(LibraryName)]
     internal static partial int FgPrSessionPlaceOpmWindow(ulong rt, ulong s, ulong hostWindow, int left, int top, int right, int bottom);
 
+    /// <summary><paramref name="storeBudgetBytes"/> (F040): the store budget derived for the new rung (0 = unchanged).</summary>
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
     internal static partial int FgPrSessionSelectRepresentation(ulong rt, ulong s, int index, string initUrl,
-        string @base, string prefix, string suffix, int retainMs);
+        string @base, string prefix, string suffix, int retainMs, long storeBudgetBytes);
+
+    /// <summary>F036: ask the feeder to fetch and parse a rung's init segment ahead of a switch to it.</summary>
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int FgPrSessionPrefetchInit(ulong rt, ulong s, string initUrl);
 
     [LibraryImport(LibraryName)]
     internal static partial int FgPrSessionSnapshot(ulong rt, ulong s, Snapshot* @out);
@@ -322,8 +341,12 @@ internal interface IPrSessionNative
     int SessionPlaceOpmWindow(ulong runtime, ulong session, ulong hostWindow, int left, int top, int right, int bottom);
     /// <summary><paramref name="retainMs"/>: negative appends after the last buffered segment (nothing discarded), 0 lands
     /// at the boundary after the playhead, positive lands that many ms ahead of the playhead.</summary>
+    /// <param name="storeBudgetBytes">F040: the segment-store budget derived for the new rung (0 = leave it).</param>
     int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
-                                    string? prefix, string? suffix, int retainMs);
+                                    string? prefix, string? suffix, int retainMs, long storeBudgetBytes);
+    /// <summary><c>FgPrSessionPrefetchInit</c> (F036): have the feeder fetch and parse <paramref name="initUrl"/> (a rung the session
+    /// may switch to next) alongside normal feeding, so the switch needs no init GET. Non-blocking.</summary>
+    int SessionPrefetchInit(ulong runtime, ulong session, string initUrl);
     /// <summary><c>FgPrSessionSnapshot</c>; <paramref name="snapshot"/> is written only on success.</summary>
     int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot);
     /// <summary>Fills <paramref name="into"/>; returns the TOTAL keyframe count (negative = HRESULT).</summary>
@@ -398,8 +421,10 @@ internal sealed unsafe class PrSessionNative : IPrSessionNative
     public int SessionPlaceOpmWindow(ulong runtime, ulong session, ulong hostWindow, int left, int top, int right, int bottom)
         => PrNative.FgPrSessionPlaceOpmWindow(runtime, session, hostWindow, left, top, right, bottom);
     public int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
-                                           string? prefix, string? suffix, int retainMs)
-        => PrNative.FgPrSessionSelectRepresentation(runtime, session, index, initUrl, baseUrl!, prefix!, suffix!, retainMs);
+                                           string? prefix, string? suffix, int retainMs, long storeBudgetBytes)
+        => PrNative.FgPrSessionSelectRepresentation(runtime, session, index, initUrl, baseUrl!, prefix!, suffix!, retainMs, storeBudgetBytes);
+    public int SessionPrefetchInit(ulong runtime, ulong session, string initUrl)
+        => PrNative.FgPrSessionPrefetchInit(runtime, session, initUrl);
 
     public int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot)
     {

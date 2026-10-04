@@ -6,8 +6,8 @@
 // mfpmp.exe. A licence step for a prepared NEXT video that was queued just ahead of a user's switch made the switch's
 // attach, LOADEDMETADATA, Handle and FIRSTFRAMEREADY items wait behind those round trips. Engine/transport work (attach,
 // detach, seek, engine events) now goes on the Engine lane and drains ahead of the Maintenance lane (licence work of
-// OTHER rows). The attaching or attached session's own licence is exempt: the attach verb starts it (StartAcquisition)
-// before anything else, and its relay result runs on the Engine lane while a session binds the KID.
+// OTHER rows). The attaching or attached session's own licence is exempt: the attach verb queues its StartAcquisition on
+// the Engine lane right after the attach's SetSource, and its relay result runs on the Engine lane while a session binds the KID.
 //
 // STARVATION BOUND. Maintenance work is never starved: while it waits, at most kMaintenanceEveryN consecutive Engine
 // items run before ONE Maintenance item does. Engine items are short (a verb or an event); the bound is by item count so

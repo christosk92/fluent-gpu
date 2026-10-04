@@ -277,4 +277,70 @@ struct WaitGate
     /// An attach or detach: the next source starts with no wait and nothing to report.
     void Reset() { waiting = false; sinceMs = 0; }
 };
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  Pipelined segment GETs and the throughput clock (F041).
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// One outstanding GET per track made every refill (after a seek or a representation switch) pay a full RTT + time-to-first-byte
+// per segment before the next request could start. Shaka's SegmentPrefetch and ExoPlayer's chunk sampling both keep the NEXT chunk
+// in flight while the current one lands. While a track's contiguous forward buffer is below a low watermark it may now keep TWO
+// GETs outstanding; once the buffer is healthy it is back to one (a second concurrent GET only shares the link, it adds nothing).
+// The two are appended strictly in segment order (the second waits for the first), so the store never sees a gap.
+
+/// The most GETs one track may have outstanding.
+constexpr int kMaxGetsPerTrack = 2;
+
+/// The forward buffer below which a track pipelines: two segments, but never more than half the forward target (a short target
+/// must not pipeline for the whole of its window). 0 when the segment length is not known yet.
+inline int64_t PipelineLowWatermarkMs(int64_t segLenMs, int64_t bufferAheadMs)
+{
+    if (segLenMs <= 0) return 0;
+    int64_t w = 2 * segLenMs;
+    const int64_t half = bufferAheadMs / 2;
+    if (half > 0 && w > half) w = half;
+    return w < segLenMs ? segLenMs : w;   // at least one segment: below that the buffer is genuinely empty
+}
+
+/// How many GETs this track may have outstanding for this plan. `capRoom` is whether the byte budget has room for a second segment
+/// on top of what is held; a SEEK plan is never pipelined (ApplyPendingSeek needs the target segment only, and the plan right after
+/// it, with an empty buffer, pipelines).
+inline int PipelineDepth(int64_t contiguousAheadMs, int64_t lowWatermarkMs, bool seekPlan, bool capRoom)
+{
+    if (seekPlan || !capRoom || lowWatermarkMs <= 0) return 1;
+    return contiguousAheadMs < lowWatermarkMs ? kMaxGetsPerTrack : 1;
+}
+
+/// The segment a pipelined second GET fetches: the one after `idx`, when it exists (before `endIndex`) and the plan still wants it
+/// (its start inside the forward target, `wantEndMs`). -1 = nothing to pipeline.
+inline int32_t PipelinedNext(int32_t idx, int32_t endIndex, int32_t segLenMs, int64_t wantEndMs)
+{
+    if (idx < 0 || segLenMs <= 0 || idx == INT32_MAX) return -1;
+    const int32_t next = idx + 1;
+    if (next >= endIndex) return -1;
+    if ((int64_t)next * (int64_t)segLenMs >= wantEndMs) return -1;
+    return next;
+}
+
+/// The throughput clock. The ABR's estimate is bytes / elapsed over the session's cumulative counters, and each completed GET adds
+/// ITS OWN bytes and ITS OWN duration. GETs that overlap on the wire (a video and an audio segment, or a pipelined pair) share the
+/// link, so summing their durations would make the estimate read a fraction of the real speed (two GETs each at half speed: 2B
+/// bytes over 4T summed ms = B/2T, against a real 2B/2T). Each GET is therefore charged only the part of its transfer interval not
+/// already charged to an earlier one: the charges of GETs handled in order add up to the length of the UNION of their intervals, so
+/// bytes / charged ms is the link's aggregate rate. Sequential GETs are charged their full duration, exactly as before. (A GET
+/// handled out of completion order can be charged a little less than its share; the estimate then errs high by that sliver.)
+struct BusyClock
+{
+    uint64_t busyUntilMs = 0;   // the end of the latest transfer charged so far
+
+    /// The ms to charge for a GET whose body transferred over [startMs, endMs].
+    uint64_t Charge(uint64_t startMs, uint64_t endMs)
+    {
+        if (endMs < startMs) endMs = startMs;
+        const uint64_t from = startMs > busyUntilMs ? startMs : busyUntilMs;
+        const uint64_t charged = endMs > from ? endMs - from : 0;
+        if (endMs > busyUntilMs) busyUntilMs = endMs;
+        return charged;
+    }
+};
+
 } // namespace fgpr::plan

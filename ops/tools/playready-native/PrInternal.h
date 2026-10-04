@@ -344,6 +344,9 @@ struct HttpFetchTiming
     uint64_t headerMs = 0;    // connect + TLS + TTFB (diagnostic only; never folded into the throughput estimate)
     uint64_t transferMs = 0;  // response-body transfer
     uint64_t bytes = 0;
+    // F041: when the body read began (GetTickCount64). [bodyStartMs, bodyStartMs + transferMs] is this GET's transfer interval, which
+    // is what lets the throughput clock (plan::BusyClock) charge GETs that overlap on the wire for their UNION, not their sum. 0 = unknown.
+    uint64_t bodyStartMs = 0;
     // THROUGHPUT HYGIENE. Set from HttpResponseMessage::Source() the moment the response headers arrive (HttpFetch::
     // OnHeaders): true means the WinRT HTTP cache answered this request itself — no bytes crossed the network, and
     // `transferMs`/`headerMs` measure a cache lookup, not a transfer. Never inferred from `transferMs == 0`: a fast
@@ -503,6 +506,7 @@ class HttpFetch : public std::enable_shared_from_this<HttpFetch>
             timing.fromStore = resp.Source() == WWH::HttpResponseMessageSource::Cache;
             status = (int)resp.StatusCode();
             m_bodyStartMs = GetTickCount64();
+            timing.bodyStartMs = m_bodyStartMs;
             ReadOp readOp = resp.Content().ReadAsBufferAsync();
             bool cancelNow = false;
             {
@@ -589,6 +593,8 @@ struct Runtime
     std::wstring storePath;
     int64_t adapterLuid = 0;             // (HighPart << 32) | LowPart of the adapter the D3D11 device is created on; 0 = default
     int32_t videoOutputFormat = 0;       // FgPrVideoOutput the engine is created with (Reg().videoOutputFormat as of the create; F249)
+    int32_t securityPolicy = 0;          // FgPrSecurityPolicy the CDM is created under (Reg().securityPolicy as of the create; F022)
+    int32_t securityLevel = 2000;        // runtime thread: the PlayReady security level the CDM was provisioned at (2000 or 3000; F022)
     int64_t createdQpc = 0;
     WorkQueue queue;
     std::thread thread;
@@ -630,6 +636,9 @@ struct Runtime
     /// input may make PMP reject the ITA proxy for another KID, so the default stays one trusted input per attach until
     /// the on-box check (two KIDs, then a re-attach) has passed. Runtime thread only.
     bool trustedInputReuse = false;
+    /// FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 (read once at bring-up; F217): the attach verb starts its own licence's key session BEFORE
+    /// CompleteAttach (the old order) instead of queueing it right after the SetSource. Runtime thread only.
+    bool licenseBeforeAttach = false;
 
     /// The session whose source the engine is playing — or is about to play, while its init segments are still on the
     /// wire (PrSession.cpp CompleteAttach). Written on the runtime thread, read by the notify sink on MF threads.
@@ -690,7 +699,7 @@ struct License
     std::atomic<int32_t> restriction{ 0 }; // the output restriction last reported (MF_MEDIAKEY_STATUS value, 0 = none)
     std::atomic<bool> releaseRequested{ false };
     std::atomic<bool> closed{ false };
-    std::atomic<bool> started{ false };    // StartAcquisition ran (once): the attach verb starts its own licence ahead of itself
+    std::atomic<bool> started{ false };    // StartAcquisition ran (once): the attach verb queues its own licence right after its SetSource
 };
 
 /// The feeder's wake-up. Separate from Session and held by `shared_ptr` because the CencMediaStream demand hook holds
@@ -751,7 +760,9 @@ struct Session
     int32_t prefetchSegments = 0;                 // feedMx   segment containing `prefetchAroundMs` (resolved at plan time)
     bool prefetchAnnounce = false;                // feedMx — a Prefetch is owed an FgPrEvent_Buffered even if nothing is fetched
     std::shared_ptr<HttpFetch> inflightVideo, inflightAudio;   // feedMx — what a seek cancels
+    std::vector<std::shared_ptr<HttpFetch>> inflightExtra;     // feedMx — the pipelined SECOND GETs of a job (F041); a seek always cancels them
     int inflightVideoIndex = -1;                  // feedMx
+    std::vector<std::wstring> initPrefetchRequests;            // feedMx — init URLs of likely next rungs (FgPrSessionPrefetchInit) the feeder fetches and parses (F036)
     int32_t videoEndIndex = INT_MAX, audioEndIndex = INT_MAX;  // feedMx — first index a track answered 404/410 for at or beyond
                                                                //   the segment count (cleared by a seek / structural reset)
     struct RepresentationRequest
@@ -759,6 +770,7 @@ struct Session
         bool pending = false;
         int32_t index = -1;
         int32_t retainMs = -1;                    // < 0 = append after the buffered end; >= 0 = land that far ahead of the playhead
+        uint64_t storeBudget = 0;                 // F040: the byte budget derived for this rung (0 = unchanged); raised at the request, lowered at the splice
         std::wstring initUrl, base, prefix, suffix;
     } rep;                                        // feedMx
 
@@ -833,6 +845,7 @@ struct Registry
     std::mutex mx;
     std::shared_ptr<Runtime> runtime;                                   // one per process
     std::atomic<int32_t> videoOutputFormat{ 0 };                        // FgPrVideoOutput for the NEXT runtime (FgPrRuntimeSetVideoOutputFormat; F249)
+    std::atomic<int32_t> securityPolicy{ 0 };                           // FgPrSecurityPolicy for the NEXT runtime (FgPrRuntimeSetSecurityPolicy; F022; 0 = probe SL3000)
     std::unordered_map<uint64_t, std::shared_ptr<Session>> sessions;
 };
 

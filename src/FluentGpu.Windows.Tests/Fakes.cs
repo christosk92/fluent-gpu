@@ -469,6 +469,7 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     private readonly List<(string Kid, ulong License)> _acquired = new();
     private readonly List<long> _luids = new();
     private readonly List<int> _formatsAtCreate = new();
+    private readonly List<int> _policiesAtCreate = new();
     private readonly HashSet<ulong> _live = new();                 // key sessions the "native table" still holds
     private readonly Dictionary<ulong, int> _states = new();       // FgPrLicenseState overrides (a kill, an expiry)
     private ulong _nextHandle = 0x100;
@@ -499,6 +500,11 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     public int LastVideoOutputFormat { get; private set; }
     public int[] VideoOutputFormatsAtCreate { get { lock (_gate) return _formatsAtCreate.ToArray(); } }
 
+    /// <summary>The security policy the runtime asked for before its last create (<c>FgPrRuntimeSetSecurityPolicy</c>; 0 = probe SL3000, 2000 = force
+    /// SL2000) - the value in force at each <see cref="RuntimeCreate"/>, in order, and the last one set (0 until a set).</summary>
+    public int LastSecurityPolicy { get; private set; }
+    public int[] SecurityPoliciesAtCreate { get { lock (_gate) return _policiesAtCreate.ToArray(); } }
+
     /// <summary>Completes on the first <see cref="RuntimeDestroy"/> — a test awaits it with a bounded timeout instead of
     /// polling the runtime's warm-idle teardown (which runs on a timer thread).</summary>
     public TaskCompletionSource Destroyed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -524,6 +530,11 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
         lock (_gate) LastVideoOutputFormat = format;
     }
 
+    public void SetSecurityPolicy(int policy)
+    {
+        lock (_gate) LastSecurityPolicy = policy;
+    }
+
     public int RuntimeCreate(string storePath, nint ctx, long adapterLuid, out ulong runtime)
     {
         lock (_gate)
@@ -533,6 +544,7 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
             LastAdapterLuid = adapterLuid;
             _luids.Add(adapterLuid);
             _formatsAtCreate.Add(LastVideoOutputFormat);
+            _policiesAtCreate.Add(LastSecurityPolicy);
             if (CreateHr < 0)
             {
                 runtime = 0;
@@ -694,12 +706,22 @@ internal sealed class FakeSessionNative : IPrSessionNative
     }
     /// <summary>The retain window of the last <see cref="SessionSelectRepresentation"/> (-1 = append at the buffer end).</summary>
     public int LastRetainMs { get; private set; } = -1;
+    /// <summary>The store budget of the last <see cref="SessionSelectRepresentation"/> (F040; 0 = the caller left it unchanged).</summary>
+    public long LastStoreBudgetBytes { get; private set; }
+    /// <summary>The init URLs <see cref="SessionPrefetchInit"/> was asked for, in order (F036).</summary>
+    public readonly List<string> PrefetchedInits = new();
 
     public int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
-                                           string? prefix, string? suffix, int retainMs)
+                                           string? prefix, string? suffix, int retainMs, long storeBudgetBytes)
     {
-        lock (_gate) LastRetainMs = retainMs;
+        lock (_gate) { LastRetainMs = retainMs; LastStoreBudgetBytes = storeBudgetBytes; }
         return Record($"rep:{session}:{index}");
+    }
+
+    public int SessionPrefetchInit(ulong runtime, ulong session, string initUrl)
+    {
+        lock (_gate) PrefetchedInits.Add(initUrl);
+        return Record($"initprefetch:{session}:{initUrl}");
     }
 
     // The pump's hot calls record nothing: the allocation gate measures them.

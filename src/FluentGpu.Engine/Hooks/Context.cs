@@ -207,6 +207,28 @@ public interface IDetachedVideoWindow
     /// anything and never will again. Default false so a backend without the concept (or a handle backed by a host
     /// that predates this member) reads as healthy forever, matching prior behavior.</summary>
     bool RenderFailed => false;
+
+    /// <summary>F110: true while the window is PARKED warm (<see cref="Park"/>): hidden, its host stopped producing, its content
+    /// still mounted and its swapchain still alive, waiting for <see cref="Unpark"/> (or <see cref="Close"/>). A parked window is
+    /// still <see cref="IsOpen"/>. Default false (a backend without warm reuse never parks).</summary>
+    bool IsParked => false;
+
+    /// <summary>F110: hide the window and PARK its host instead of closing it (Win32 <c>SW_HIDE</c>: no frames are produced, no
+    /// present is made; the child host, its mounted tree and its swapchain stay alive), so the next open can reuse it with
+    /// <see cref="Unpark"/> and skip the window, swapchain and tree construction. A fullscreen window leaves fullscreen first,
+    /// so it comes back windowed at the rect the user last chose, and a pending settled-bounds change is delivered
+    /// (<see cref="BoundsChanged"/>) before it hides. Returns false when the window cannot be parked (still waiting for its
+    /// reveal, its render path failed, closed, or the backend has no warm reuse): the caller closes it instead. Idempotent
+    /// while parked. UI thread. Closing a parked window (<see cref="Close"/>) disposes it normally; the owner decides when.</summary>
+    bool Park() => false;
+
+    /// <summary>F110: bring a parked window back for a new open. Applies the request's restored bounds (clamped into a visible
+    /// monitor's work area), always-on-top state and title, then re-arms the reveal gate: the window is shown on the next child
+    /// frame (<see cref="OnRevealed"/> fires then, so set it after this call returns, as after an open), and the host resumes
+    /// producing. The request's <see cref="DetachedWindowRequest.Content"/> is ignored: the parked tree is reused, so it must
+    /// follow live signals rather than capture values. Returns false when the window is not parked or cannot be reused (the
+    /// caller opens a new one). UI thread.</summary>
+    bool Unpark(DetachedWindowRequest request) => false;
     /// <summary>Fired once, on the render thread, the instant <see cref="RenderFailed"/> latches. The owner should
     /// treat this like <see cref="OnClosed"/>'s sibling — typically marshal to the UI thread and close the pop-out
     /// (it can no longer present) rather than leave a frozen/blank window around. Default no-op.</summary>

@@ -697,6 +697,23 @@ public interface IPlatformWindow : IDisposable
     /// parks while this holds (<see cref="CloakParkGate"/>); the primary window does not read it. Default false.</summary>
     bool IsCloaked => false;
 
+    /// <summary>F118: a counter that changes whenever the set, the Z-order or the geometry of the top-level windows on this
+    /// desktop may have changed (Win32: bumped from <c>SetWinEventHook</c> callbacks on the UI thread: foreground, minimize,
+    /// show/hide/reorder, location change, cloak/uncloak of a top-level window), so a host re-asks
+    /// <see cref="CopyOccluderRectsPx"/> only when it moved. 0 means the backend does not track occlusion (the default:
+    /// headless, or a failed hook), and the host never parks the window for being covered. The backend also wakes the host's
+    /// loop (<see cref="Wake"/>) when it changes, so an un-cover is seen at once even by a parked host that blocks on messages.
+    /// Reading it may install the hooks (once, on the calling UI thread).</summary>
+    long OcclusionEpoch => 0;
+
+    /// <summary>F118: copy into <paramref name="into"/> the visible bounds (physical virtual-screen px) of the OPAQUE top-level
+    /// windows that sit ABOVE this one in Z-order and intersect it: visible, not minimized, not cloaked, and neither layered
+    /// nor click-through (a window that may show what is behind it never counts as covering). The window's own process is
+    /// included (a pop-out is a window like any other). Returns the count written (at most <c>into.Length</c>; anything
+    /// beyond is dropped, which can only under-report coverage); 0 when nothing covers it or the backend cannot say. The input
+    /// of <see cref="FluentGpu.Hosting.WindowCoverPolicy.CoveredByWindows"/>. UI thread.</summary>
+    int CopyOccluderRectsPx(Span<RectF> into) => 0;
+
     /// <summary>The per-window IME/text-services seam (composition events, candidate-window placement).</summary>
     IPlatformTextInput TextInput { get; }
 
@@ -720,6 +737,10 @@ public interface IPlatformWindow : IDisposable
     void ToggleMaximize() { }
     /// <summary>True while the client occupies the current monitor with window chrome removed.</summary>
     bool IsFullscreen => false;
+    /// <summary>The full size, in physical px, of the monitor this window is on (the whole monitor, not the work area), or
+    /// empty when unknown (headless, a backend with no per-monitor query). The video stream sizing reads it (with
+    /// <see cref="IsFullscreen"/>) to upscale a stream in Media Foundation up to the monitor instead of in DirectComposition.</summary>
+    FluentGpu.Media.SizeI MonitorSizePx => default;
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }

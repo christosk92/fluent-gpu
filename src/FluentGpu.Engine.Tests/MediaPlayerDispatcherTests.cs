@@ -25,6 +25,9 @@ public sealed class MediaPlayerDispatcherTests
         public int Posted;
         public readonly int UiThreadId = Environment.CurrentManagedThreadId;
         public void Post(Action a) { Interlocked.Increment(ref Posted); _q.Enqueue(a); }
+        /// <summary>Runs what is still queued: OpenAsync no longer waits for the post that connects the session, so it can
+        /// complete with that post (and the state pump it asks for) still pending.</summary>
+        public void Drain() { while (_q.TryDequeue(out var a)) a(); }
         public void PumpUntil(Task done, int timeoutMs = 10_000)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -78,6 +81,7 @@ public sealed class MediaPlayerDispatcherTests
             var open = player.OpenAsync(MediaSource.FromFile("x.flac")).AsTask();
             ui.PumpUntil(open);
             open.GetAwaiter().GetResult();
+            ui.Drain();   // the connecting post is not awaited by the open
 
             Assert.True(ui.Posted >= 2, $"core writes must hop to the captured poster (posted {ui.Posted})");
             Assert.Equal(PlaybackState.Ready, player.State.Peek());

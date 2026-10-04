@@ -485,7 +485,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         // turn. The linked token is what the backend and the subtitle fetch observe; the generation gates every publish.
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         int generation = SupersedeOpen(cts);
-        IMediaSession? unclaimed = null;   // the opened session, until the connect post below has taken ownership of it
+        IMediaSession? unclaimed = null;   // the opened session, until the claim below has taken ownership of it
         bool claimed = false;
         try
         {
@@ -530,9 +530,10 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
 
             // The Opening publish is posted WITHOUT waiting for the UI thread (backend.OpenAsync starts now, not a frame
             // later) and is generation-tagged, so a superseded open never publishes it. The posts run in order: this one,
-            // then the single post below that connects the session.
+            // then the single post below that connects the session. Its task is kept: the success path awaits it ONLY when the
+            // core still shows the previous source's error (see below), so the common path pays no UI round trip.
             TimeSpan startAt = opts.StartPosition;
-            _ = OnUiAsync(() =>
+            ValueTask opening = OnUiAsync(() =>
             {
                 if (!IsCurrentOpen(generation)) return;
                 _core.SetError(null);
@@ -557,44 +558,61 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             {
                 var session = await backend.OpenAsync(source, opts, cts.Token).ConfigureAwait(false);
                 unclaimed = session;
-                // Start the session NOW, on this thread, before any UI hop: a session whose real work is native (the
-                // protected attach: segment fetch, licence) no longer waits for the post that connects its signals. Only
-                // while this open is still current, atomically with the generation check: a stale session must never start
-                // (a protected attach detaches whichever session is live on the native engine).
+                // Start AND claim the session NOW, on this thread, before any UI hop: a session whose real work is native (the
+                // protected attach: segment fetch, licence) no longer waits for the post that connects its signals, and the
+                // caller's PlayAsync/SetVolume right after OpenAsync reaches it (every session accepts a transport verb before
+                // its sink is connected and replays it at ConnectSignals). Only while this open is still current, atomically
+                // with the generation check: a stale session must never start (a protected attach detaches whichever session
+                // is live on the native engine), and a Stop/DisposeAsync either supersedes first (the session stays unclaimed
+                // and the finally below disposes it) or runs after the claim and takes the session out of _session itself.
                 bool live;
                 lock (_openGate)
                 {
                     live = IsCurrentOpen(generation);
-                    if (live) session.Start();
-                }
-                if (!live) return;   // superseded while opening: the finally below disposes the session, unconnected
-                // backend.OpenAsync resumes on whatever thread completed the open — a pool/native worker thread, once
-                // ConfigureAwait(false) has dropped the original sync context. Session assignment, pump-source wiring,
-                // and ConnectSignals's handful of signal writes into MediaPlayerCore all mutate state whose sole writer
-                // must be the UI thread (MediaPlayerCore's threading doc / spec §12), so the whole mutation is ONE post
-                // (also carrying the external-subtitle reset) rather than applied here in place. It is awaited so that
-                // OpenAsync completing still means "the session is connected": a caller's PlayAsync/SetVolume right after
-                // it must reach the session. The generation is re-checked inside the post — the authoritative check.
-                await OnUiAsync(() =>
-                {
-                    // Check and claim under the gate: a Stop/DisposeAsync from another thread either supersedes first (the
-                    // session stays unclaimed) or runs after the claim and takes the session out of _session itself.
-                    lock (_openGate)
+                    if (live)
                     {
-                        if (!IsCurrentOpen(generation)) return;
+                        session.Start();   // first: a Start that throws leaves the session unclaimed, so the finally disposes it
                         _session = session;
                         claimed = true;
                     }
-                    _currentKind = kind;
-                    AttachVideoPumpSource(session);
-                    session.ConnectSignals(_sink);
-                    session.SetRate(_core.Rate.Peek());
-                    _captionTracks.Clear();   // the previous source's sidecar tracks (the subtitle load re-adds this source's)
-                    _activeCaptions = null;
-                    _core.SetActiveCue(null);
-                    RequestVideoPump();
-                }).ConfigureAwait(false);
+                }
+                if (!live) return;   // superseded while opening: the finally below disposes the session, unconnected
+                // backend.OpenAsync resumes on whatever thread completed the open — a pool/native worker thread, once
+                // ConfigureAwait(false) has dropped the original sync context. Pump-source wiring and ConnectSignals's handful
+                // of signal writes into MediaPlayerCore all mutate state whose sole writer must be the UI thread
+                // (MediaPlayerCore's threading doc / spec §12), so they are ONE post (also carrying the external-subtitle
+                // reset). It is NOT awaited: OpenAsync returning no longer costs a UI-frame round trip, so the caller's PlayAsync
+                // is not delayed by one. The post is generation-tagged and re-checks both the generation and that this session is
+                // still the live one (a Stop/Close/newer open took it out of _session) — the authoritative check — and it
+                // publishes its own failure, since nobody awaits it. It runs after the Opening post above, in order.
+                _ = OnUiAsync(() =>
+                {
+                    if (!IsCurrentOpen(generation) || !ReferenceEquals(Volatile.Read(ref _session), session)) return;
+                    try
+                    {
+                        _currentKind = kind;
+                        AttachVideoPumpSource(session);
+                        session.ConnectSignals(_sink);
+                        session.SetRate(_core.Rate.Peek());
+                        _captionTracks.Clear();   // the previous source's sidecar tracks (the subtitle load re-adds this source's)
+                        _activeCaptions = null;
+                        _core.SetActiveCue(null);
+                        RequestVideoPump();
+                    }
+                    catch (Exception ex)
+                    {
+                        _core.SetError(SourceError(source, ex));
+                        _core.SetState(PlaybackState.Failed);
+                    }
+                });
                 if (!claimed) return;
+                // The Opening post is also what clears the PREVIOUS source's Error/Failed (the UI thread is the core's only
+                // writer). Callers read Error right after this await (Wavee: `if (player.Error.Peek() is { } err) ReportFault`),
+                // so while that stale error is still on the core, wait for the post (it runs first in the queue); otherwise an
+                // in-place retry after a fault would read the old error and fault a good open. Normally the core is clean and
+                // OpenAsync returns without waiting for a frame.
+                if (_core.Error.Peek() is not null || _core.State.Peek() == PlaybackState.Failed)
+                    await opening.ConfigureAwait(false);
                 // Sidecar subtitles load AFTER the open has finished, detached: the session is already running, so a slow or
                 // unreachable subtitle host must not hold OpenAsync (and the Play that follows it) open for its timeout.
                 if (source.ExternalSubtitles.Count > 0) StartExternalSubtitles(source, opts.Network, generation, ct);
@@ -608,9 +626,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 // A superseded open's failure is not the player's: only the current open publishes.
                 if (!IsCurrentOpen(generation)) return;
                 // Same off-UI-thread hazard as above: this catch arm can run on a pool thread (an exception from
-                // backend.OpenAsync, or rethrown from the OnUiAsync-marshaled block above), so the error/state publish
-                // is marshaled too rather than written from here directly.
-                var error = new MediaError(MediaErrorCategory.Source, ex.Message, null, new MediaLocus(null, source, null, null, null), MediaRecovery.Retryable);
+                // backend.OpenAsync), so the error/state publish is marshaled too rather than written from here directly.
+                var error = SourceError(source, ex);
                 await OnUiAsync(() =>
                 {
                     if (!IsCurrentOpen(generation)) return;
@@ -627,6 +644,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             cts.Dispose();
         }
     }
+
+    private static MediaError SourceError(MediaSource source, Exception ex)
+        => new(MediaErrorCategory.Source, ex.Message, null, new MediaLocus(null, source, null, null, null), MediaRecovery.Retryable);
 
     // Advances the open generation (so every older open becomes stale) and installs the next open's token source, cancelling
     // the previous one. A newer open passes its own source; Stop and DisposeAsync pass null. Returns the new generation.
@@ -765,7 +785,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         // An open still in flight must not reconnect a session after the close: it is superseded, so its session is disposed.
         SupersedeOpen(null);
         IMediaSession? old = null;
-        // The session swap is the UI thread's (PumpVideo reads _session there), exactly like OpenCoreAsync's assignment.
+        // The session swap is the UI thread's (PumpVideo reads _session there). OpenCoreAsync claims _session on the opening thread
+        // under _openGate instead, so this reads whatever is live at this turn.
         await OnUiAsync(() =>
         {
             DetachVideoPumpSource();

@@ -921,6 +921,29 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// uncloaked - the safe direction: a window that cannot be asked is never parked.</summary>
     public bool IsCloaked => DwmGetCloakedAttribute((nint)_hwnd, DwmwaCloaked, out int cloaked, sizeof(int)) >= 0 && cloaked != 0;
 
+    // F118: per-window occlusion. The process-wide win-event hooks (Win32WindowOcclusion) are installed on the first read of
+    // OcclusionEpoch (the host reads it every frame, on the UI thread, which pumps the messages the hooks are delivered through)
+    // and released with the last window. 0 = not asked yet, 1 = installed, 2 = unavailable (the host then never parks for a cover).
+    private Action? _occlusionWake;
+    private int _occlusionHooks;
+
+    /// <inheritdoc cref="IPlatformWindow.OcclusionEpoch"/>
+    public long OcclusionEpoch
+    {
+        get
+        {
+            if (_occlusionHooks == 0)
+            {
+                _occlusionWake ??= Wake;
+                _occlusionHooks = Win32WindowOcclusion.Acquire(_occlusionWake) ? 1 : 2;
+            }
+            return _occlusionHooks == 1 ? Win32WindowOcclusion.ConsumeEpoch() : 0;
+        }
+    }
+
+    /// <inheritdoc cref="IPlatformWindow.CopyOccluderRectsPx"/>
+    public int CopyOccluderRectsPx(Span<RectF> into) => Win32WindowOcclusion.CopyOccluders((nint)_hwnd, into);
+
     /// <inheritdoc cref="IPlatformWindow.CloseRequested"/>
     public Func<CloseReason, bool>? CloseRequested { get; set; }
 
@@ -959,6 +982,21 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public bool IsActive => _active;
 
     public bool IsFullscreen => _fullscreen;
+
+    /// <summary>The whole monitor this window is nearest to (<c>rcMonitor</c>, not the work area), in physical px; empty when
+    /// the OS cannot say. One <c>MonitorFromWindow</c> + <c>GetMonitorInfoW</c> per call: read from the video pump (a coalesced
+    /// UI turn), never per frame.</summary>
+    public FluentGpu.Media.SizeI MonitorSizePx
+    {
+        get
+        {
+            MONITORINFO mi = default;
+            mi.cbSize = (uint)sizeof(MONITORINFO);
+            HMONITOR monitor = MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST);
+            if (monitor == HMONITOR.NULL || !GetMonitorInfoW(monitor, &mi)) return default;
+            return new FluentGpu.Media.SizeI(mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top);
+        }
+    }
 
     public void SetFullscreen(bool fullscreen)
     {
@@ -1739,6 +1777,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     public void Dispose()
     {
+        if (_occlusionHooks == 1 && _occlusionWake is not null) Win32WindowOcclusion.Release(_occlusionWake);
+        _occlusionHooks = 2;
         Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + free the CCW before the HWND dies
         _dropReg = null;
         _dm?.Dispose();   // DManip: Stop/RemoveEventHandler/Disable/Abandon/Deactivate + Release all + free the sink CCW (needs a live HWND for Deactivate)

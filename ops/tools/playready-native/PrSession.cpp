@@ -154,6 +154,20 @@ struct FeederState
     // completed/rejected one) resets it.
     int32_t switchMinBoundary = 0;
     int32_t switchBoundaryReqIndex = -1;
+    // F036: the parsed VIDEO init segment of every representation this session has seen, by URL - the opening rung's, every rung a
+    // switch fetched, and every likely next rung the managed side asked to have prefetched (FgPrSessionPrefetchInit). A switch to a
+    // cached rung needs no init GET at all (it used to cost one serial round trip on the feeder at EVERY switch, ping-pong included).
+    std::unordered_map<std::wstring, cenc::InitInfo> initCache;
+    // The prefetch GETs begun and not yet parsed: harvested without blocking (PumpInitPrefetch), or adopted by the switch that wants
+    // that very URL while it is still on the wire.
+    struct InitPrefetch
+    {
+        std::wstring url;
+        std::shared_ptr<fgpr::HttpFetch> fetch;
+    };
+    std::vector<InitPrefetch> initFetches;
+    // F041: charges each finished GET its share of the link time (overlapping GETs charge their union, not their sum).
+    fgpr::plan::BusyClock busy;
 };
 
 enum class JobResult { Idle, Progress, Backoff };
@@ -364,13 +378,14 @@ static void InstallDemandHooks(Session& s, CencMediaSource* source)
 /// only then reads the in-flight GETs under feedMx, so either it sees these GETs and cancels them, or it ran first and
 /// the flag is visible here - a GET begun just as the destroy looked can never go unnoticed and run to completion.
 static void PublishInflight(Session& s, const std::shared_ptr<fgpr::HttpFetch>& video, const std::shared_ptr<fgpr::HttpFetch>& audio,
-                            int videoIndex)
+                            int videoIndex, const std::vector<std::shared_ptr<fgpr::HttpFetch>>& extra = {})
 {
     bool stopping = false;
     {
         std::lock_guard<std::mutex> g(s.feedMx);
         s.inflightVideo = video;
         s.inflightAudio = audio;
+        s.inflightExtra = extra;
         s.inflightVideoIndex = videoIndex;
         stopping = s.feedStop.load(std::memory_order_acquire);
     }
@@ -378,6 +393,60 @@ static void PublishInflight(Session& s, const std::shared_ptr<fgpr::HttpFetch>& 
     {
         if (video) video->Cancel();
         if (audio) audio->Cancel();
+        for (auto const& e : extra) if (e) e->Cancel();
+    }
+}
+
+/// F041: fold one finished GET into the session's throughput counters (the ABR's input): its bytes and its share of the link time
+/// (plan::BusyClock - GETs that overlap on the wire charge their union, not their sum, so a pipelined pair or a video + audio pair
+/// does not read as half the real speed). A GET the WinRT HTTP cache answered itself is not throughput and is skipped.
+static void ChargeDownload(Session& s, FeederState& st, const fgpr::HttpFetchTiming& t)
+{
+    if (t.fromStore) return;
+    const uint64_t ms = t.bodyStartMs != 0 ? st.busy.Charge(t.bodyStartMs, t.bodyStartMs + t.transferMs) : t.transferMs;
+    s.bytesDownloaded.fetch_add(t.bytes, std::memory_order_acq_rel);
+    s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, ms), std::memory_order_acq_rel);
+}
+
+// ── the parsed-init cache (F036) ─────────────────────────────────────────────────────────────────────────────────────
+/// Parse a finished init GET for the VIDEO track into the cache. The cached entry, or null when the GET failed, was cancelled, or
+/// is not a usable init (nothing is cached for it: the switch that needs it fetches again and reports the real status).
+static const cenc::InitInfo* CacheInit(FeederState& st, const std::wstring& url, fgpr::HttpFetch& f)
+{
+    if (f.cancelled || f.status != 200 || f.body.empty()) return nullptr;
+    cenc::InitInfo info;
+    if (!cenc::ParseInit(f.body, info, cenc::TrackPick::Video)) return nullptr;
+    return &st.initCache.insert_or_assign(url, std::move(info)).first->second;
+}
+
+/// F036: begin the init GETs the managed side asked for (FgPrSessionPrefetchInit: the rungs next to the one playing, the likely
+/// targets of the next switch) and parse the ones that have landed. NON-blocking and called at the top of every job, so the init
+/// GETs ride alongside normal feeding instead of ahead of it; a prefetch still on the wire when a switch wants its URL is adopted by
+/// the switch (RunRepresentationSwitch). At most four are outstanding; an unreadable one is simply not cached.
+static void PumpInitPrefetch(Session& s, FeederState& st)
+{
+    std::vector<std::wstring> requests;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        requests.swap(s.initPrefetchRequests);
+    }
+    for (std::wstring const& url : requests)
+    {
+        if (url.empty() || st.initCache.find(url) != st.initCache.end()) continue;
+        bool inFlight = false;
+        for (auto const& p : st.initFetches) if (p.url == url) { inFlight = true; break; }
+        if (inFlight) continue;
+        if (st.initFetches.size() >= 4) break;
+        st.initFetches.push_back(FeederState::InitPrefetch{ url, fgpr::HttpFetch::Begin(url, s.headers, s.store) });
+    }
+    for (size_t i = 0; i < st.initFetches.size(); )
+    {
+        FeederState::InitPrefetch& p = st.initFetches[i];
+        if (!p.fetch->IsDone()) { i++; continue; }
+        const bool cached = CacheInit(st, p.url, *p.fetch) != nullptr;
+        fgpr::RaiseLog(s.handle, "[cenc-feed] init prefetch " + fgpr::Narrow(p.url) + (cached ? " cached" : " unusable (HTTP " + std::to_string(p.fetch->status) + ") - a switch to it fetches its own"));
+        p.fetch->ReleaseBody();
+        st.initFetches.erase(st.initFetches.begin() + (ptrdiff_t)i);
     }
 }
 
@@ -401,7 +470,7 @@ static bool WaitForMediaFoundation(Session& s)
 }
 
 // Both init GETs are begun together (they used to be two serial round trips before the first media byte).
-static JobResult FetchInits(const std::shared_ptr<Session>& sp)
+static JobResult FetchInits(const std::shared_ptr<Session>& sp, FeederState& st)
 {
     Session& s = *sp;
     std::wstring videoUrl, audioUrl;
@@ -495,6 +564,7 @@ static JobResult FetchInits(const std::shared_ptr<Session>& sp)
         return JobResult::Idle;
     }
     InstallDemandHooks(s, source.get());
+    st.initCache.insert_or_assign(videoUrl, info);   // F036: switching back to the opening rung needs no init GET either
     {
         std::lock_guard<std::mutex> g(s.feedMx);
         if (s.kidHex.empty())
@@ -534,22 +604,51 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         st.switchBoundaryReqIndex = req.index;
     }
 
-    auto initFetch = fgpr::HttpFetch::Begin(req.initUrl, s.headers, s.store);
-    PublishInflight(s, initFetch, nullptr, -3);   // a seek cancels it; the switch then stays PENDING, not rejected
-    initFetch->Wait();
+    // F036: THE INIT. A rung whose init this session has already parsed (the opening one, one an earlier switch fetched, one the
+    // managed side asked to have prefetched) needs no GET - the switch used to pay one serial round trip here every time. A
+    // prefetch of exactly this URL that is still on the wire is adopted instead of starting a second GET for it.
+    cenc::InitInfo nextInfo;
+    bool initParsed = false;
+    int initStatus = 200;
+    if (auto cachedInit = st.initCache.find(req.initUrl); cachedInit != st.initCache.end())
     {
-        std::lock_guard<std::mutex> g(s.feedMx);
-        s.inflightVideo = nullptr;
-        s.inflightVideoIndex = -1;
+        nextInfo = cachedInit->second;
+        initParsed = true;
+        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch init cached (" + fgpr::Narrow(req.initUrl) + ") - no init GET");
     }
-    if (s.feedStop.load(std::memory_order_acquire)) return JobResult::Idle;
-    if (initFetch->cancelled)
+    else
     {
-        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch init fetch cancelled - switch still pending");
-        return JobResult::Progress;
+        std::shared_ptr<fgpr::HttpFetch> initFetch;
+        for (size_t i = 0; i < st.initFetches.size(); i++)
+            if (st.initFetches[i].url == req.initUrl)
+            {
+                initFetch = st.initFetches[i].fetch;
+                st.initFetches.erase(st.initFetches.begin() + (ptrdiff_t)i);
+                break;
+            }
+        if (!initFetch) initFetch = fgpr::HttpFetch::Begin(req.initUrl, s.headers, s.store);
+        PublishInflight(s, initFetch, nullptr, -3);   // a seek cancels it; the switch then stays PENDING, not rejected
+        initFetch->Wait();
+        {
+            std::lock_guard<std::mutex> g(s.feedMx);
+            s.inflightVideo = nullptr;
+            s.inflightVideoIndex = -1;
+        }
+        if (s.feedStop.load(std::memory_order_acquire)) return JobResult::Idle;
+        if (initFetch->cancelled)
+        {
+            fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch init fetch cancelled - switch still pending");
+            return JobResult::Progress;
+        }
+        initStatus = initFetch->status;
+        if (const cenc::InitInfo* parsed = CacheInit(st, req.initUrl, *initFetch))
+        {
+            nextInfo = *parsed;
+            initParsed = true;
+        }
+        initFetch->ReleaseBody();
     }
 
-    cenc::InitInfo nextInfo;
     cenc::InitInfo currentInfo;
     winrt::com_ptr<CencMediaStream> video;
     int64_t refMs = 0, wantEndMs = 0;
@@ -560,15 +659,13 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         video = VideoStreamLocked(s);
         ReferenceLocked(s, refMs, wantEndMs, seekPlan);
     }
-    const bool compatible = initFetch->status == 200 && !initFetch->body.empty() &&
-                            cenc::ParseInit(initFetch->body, nextInfo, cenc::TrackPick::Video) &&
+    const bool compatible = initParsed &&
                             nextInfo.timescale == currentInfo.timescale &&
                             memcmp(nextInfo.kid, currentInfo.kid, sizeof(currentInfo.kid)) == 0;
-    initFetch->ReleaseBody();
     if (!compatible || !video)
     {
         fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch rejected: init/KID/timescale incompatible (HTTP " +
-                                 std::to_string(initFetch->status) + ")");
+                                 std::to_string(initStatus) + ")");
         clearIfCurrent();
         return JobResult::Progress;
     }
@@ -622,6 +719,11 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         s.segSuffix = req.suffix;
         s.videoInfo = nextInfo;
         s.rep.pending = false;
+        // F040: the byte budget follows the representation being downloaded. Raised when the request arrived (the new segments need
+        // the room before they land); a LOWER one takes effect here, once the new rung really is the one being fetched.
+        if (req.storeBudget != 0 && s.store->SetBudget(req.storeBudget))
+            fgpr::RaiseLog(s.handle, "[cenc-feed] store budget -> " + std::to_string(s.store->budgetBytes.load()) + " bytes for representation " +
+                                     std::to_string(req.index));
         // A new representation is a new URL space: a 4xx latch from the OLD one must not end the new one before
         // it has even been tried. INT_MAX is Session's own unlatched default (see its declaration).
         s.videoEndIndex = INT_MAX;
@@ -674,11 +776,7 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
     uint64_t ticks = st.ticks[kVideo];
     cenc::ParseSegment(segFetch->body, nextInfo, more, ticks, &keyframes);
     segFetch->ReleaseBody();
-    if (!segFetch->timing.fromStore)   // the WinRT HTTP cache answered this GET itself: not real throughput
-    {
-        s.bytesDownloaded.fetch_add(segFetch->timing.bytes, std::memory_order_acq_rel);
-        s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, segFetch->timing.transferMs), std::memory_order_acq_rel);
-    }
+    ChargeDownload(s, st, segFetch->timing);   // F041: its own bytes and its share of the link time (a cache-answered GET is skipped inside)
 
     if (more.empty() || !more[0].keyframe)
     {
@@ -756,7 +854,8 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         std::lock_guard<std::mutex> g(s.feedMx);
         wantInits = s.wantInits;
     }
-    if (!s.initsLoaded.load(std::memory_order_acquire)) return wantInits ? FetchInits(sp) : JobResult::Idle;
+    if (!s.initsLoaded.load(std::memory_order_acquire)) return wantInits ? FetchInits(sp, st) : JobResult::Idle;
+    PumpInitPrefetch(s, st);   // F036: start the likely next rungs' init GETs, harvest the ones that landed (never blocks)
 
     // A representation switch waits for a pending seek (the seek is what the user is looking at).
     Session::RepresentationRequest rep;
@@ -770,6 +869,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
     int64_t refMs = 0, wantEndMs = 0;
     bool seekPlan = false;
     TrackPlan vp, ap;
+    int32_t vp2 = -1, ap2 = -1;   // F041: the pipelined second segment per track, -1 = none
     winrt::com_ptr<CencMediaStream> video, audio;
     std::wstring vBase, vPrefix, vSuffix;
     uint64_t seekSeq = 0;
@@ -814,7 +914,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         // behind it yields to forward demand even inside the retention window. Without the reserve a 1080p store
         // filled to exactly the budget with 30 s of history, the cap refused every fetch, and playback starved
         // forever at the end of the buffer (2026-09-22).
-        const uint64_t reserveCap = s.store->budgetBytes / 4;
+        const uint64_t reserveCap = s.store->budgetBytes.load(std::memory_order_acquire) / 4;
         auto reserveFor = [&](int track, uint64_t floorBytes) {
             const uint64_t want = st.maxSegBytes[track] + st.maxSegBytes[track] / 2;
             return std::min<uint64_t>(std::max<uint64_t>(want, floorBytes), reserveCap);
@@ -846,9 +946,28 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
             fgpr::RaiseLog(s.handle, std::string("[cenc-feed] byte cap ") + (capHolds ? "holds" : "released") +
                                      ": video=" + std::to_string(s.store->videoBytes.load(std::memory_order_relaxed)) + "/" + std::to_string(s.store->VideoBudget()) +
                                      " audio=" + std::to_string(s.store->audioBytes.load(std::memory_order_relaxed)) + "/" + std::to_string(s.store->AudioBudget()) +
-                                     " pool=" + std::to_string(s.store->pool.PooledBytes()) + " budget=" + std::to_string(s.store->budgetBytes) +
+                                     " pool=" + std::to_string(s.store->pool.PooledBytes()) + " budget=" + std::to_string(s.store->budgetBytes.load()) +
                                      " videoAheadMs=" + std::to_string(video ? video->ContiguousAheadMs() : 0) +
                                      " maxSeg=" + std::to_string(st.maxSegBytes[kVideo]) + "/" + std::to_string(st.maxSegBytes[kAudio]));
+        }
+        // F041: below the low watermark a track keeps a SECOND GET in flight (the segment after the planned one), when the plan still
+        // wants it, it is not already buffered, and the byte budget has room for two segments. Never for a seek plan.
+        if (!seekPlan)
+        {
+            const int32_t segLen = s.SegLenMs();
+            const int64_t lowWatermarkMs = fgpr::plan::PipelineLowWatermarkMs(segLen, s.store->bufferAheadMs);
+            auto secondGet = [&](int track, const TrackPlan& plan, CencMediaStream* stream, int32_t endIndex, uint64_t held, uint64_t budget) -> int32_t {
+                if (plan.idx < 0 || !stream) return -1;
+                const uint64_t segBytes = std::max<uint64_t>(st.maxSegBytes[track], 1ull << 20);   // unknown until one has landed: assume 1 MiB
+                const bool room = held + 2 * segBytes <= budget;
+                if (fgpr::plan::PipelineDepth(stream->ContiguousAheadMs(), lowWatermarkMs, false, room) < fgpr::plan::kMaxGetsPerTrack) return -1;
+                const int32_t next = fgpr::plan::PipelinedNext(plan.idx, endIndex, segLen, wantEndMs);
+                if (next < 0) return -1;
+                if (CoverageAt(stream, (int64_t)next * segLen + segLen / 2).startMs >= 0) return -1;   // already buffered: nothing to fetch
+                return next;
+            };
+            vp2 = secondGet(kVideo, vp, video.get(), std::min(count, s.videoEndIndex), s.store->videoBytes.load(std::memory_order_relaxed), s.store->VideoBudget());
+            if (audio) ap2 = secondGet(kAudio, ap, audio.get(), std::min(count, s.audioEndIndex), s.store->audioBytes.load(std::memory_order_relaxed), s.store->AudioBudget());
         }
         // Commit the candidate guard ONLY for a plan that survives the byte cap: a plan the byte cap discards must
         // not have moved the floor (the incident this replaces committed the floor and then sometimes threw the
@@ -945,22 +1064,38 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
     // flushes both streams, which would erase the track that had already landed and refetch it, over and over for as
     // long as a scrub stays inside one segment. (A non-seek job hit by a seek to exactly its in-flight segment can still
     // cost one refetch of its early-appended track; the seek-plan job that follows joins both tracks and settles.)
-    // One segment per track per job stays deliberate: a second concurrent video GET would halve every fetch's measured
-    // transfer rate, and bytesDownloaded / downloadElapsedMs (the ABR's throughput input) sum per-fetch times, so the
-    // estimate would read half the real link speed.
+    // F041, second half: while a track's contiguous forward buffer is below the low watermark (after a seek or a representation
+    // switch, the moments a refill pays a full RTT + time-to-first-byte per segment) it keeps TWO GETs in flight, the planned
+    // segment and the one after it (`vp2` / `ap2`, planned above). A track's GETs are appended strictly in segment order - the
+    // second waits for the first, whichever lands first - so the store never sees a gap, and a failed first GET drops the second.
+    // Throughput stays right because each finished GET is charged its OWN bytes and its share of the link time (ChargeDownload,
+    // plan::BusyClock): GETs that overlap on the wire charge their union, so two GETs at half speed each no longer read as half
+    // the link, which is what the duration-weighted ABR estimate would otherwise be fed.
     auto waitSet = std::make_shared<fgpr::FetchWaitSet>();
-    std::shared_ptr<fgpr::HttpFetch> vf, af;
-    if (vp.idx >= 0) vf = fgpr::HttpFetch::Begin(SegmentUrl(vBase, vPrefix, vSuffix, s, vp.idx), s.headers, s.store, waitSet);
-    if (ap.idx >= 0) af = fgpr::HttpFetch::Begin(SegmentUrl(s.audioSegBase, s.audioSegPrefix, s.audioSegSuffix, s, ap.idx), s.headers, s.store, waitSet);
-    PublishInflight(s, vf, af, vp.idx >= 0 ? vp.idx : ap.idx);
+    struct Get
+    {
+        std::shared_ptr<fgpr::HttpFetch> f;
+        int32_t idx = -1;
+    };
+    std::vector<Get> vq, aq;   // ascending segment order, head first
+    if (vp.idx >= 0) vq.push_back(Get{ fgpr::HttpFetch::Begin(SegmentUrl(vBase, vPrefix, vSuffix, s, vp.idx), s.headers, s.store, waitSet), vp.idx });
+    if (vp.idx >= 0 && vp2 >= 0) vq.push_back(Get{ fgpr::HttpFetch::Begin(SegmentUrl(vBase, vPrefix, vSuffix, s, vp2), s.headers, s.store, waitSet), vp2 });
+    if (ap.idx >= 0) aq.push_back(Get{ fgpr::HttpFetch::Begin(SegmentUrl(s.audioSegBase, s.audioSegPrefix, s.audioSegSuffix, s, ap.idx), s.headers, s.store, waitSet), ap.idx });
+    if (ap.idx >= 0 && ap2 >= 0) aq.push_back(Get{ fgpr::HttpFetch::Begin(SegmentUrl(s.audioSegBase, s.audioSegPrefix, s.audioSegSuffix, s, ap2), s.headers, s.store, waitSet), ap2 });
+    {
+        std::vector<std::shared_ptr<fgpr::HttpFetch>> extra;
+        if (vq.size() > 1) extra.push_back(vq[1].f);
+        if (aq.size() > 1) extra.push_back(aq[1].f);
+        PublishInflight(s, vq.empty() ? nullptr : vq[0].f, aq.empty() ? nullptr : aq[0].f, vp.idx >= 0 ? vp.idx : ap.idx, extra);
+    }
 
     bool landed = false;
     bool grew = false;   // any track whose coverage actually extended — the SPIN BRAKE below reads this
     int nextBackoff = 0;
     auto handleTrack = [&](int t, const std::shared_ptr<fgpr::HttpFetch>& f, int32_t idx, const cenc::InitInfo& info,
-                           const winrt::com_ptr<CencMediaStream>& stream) {
-        if (!f) return;
-        if (f->cancelled) { f->ReleaseBody(); return; }   // a newer seek (or teardown): the plan is rebuilt
+                           const winrt::com_ptr<CencMediaStream>& stream) -> bool {
+        if (!f) return false;
+        if (f->cancelled) { f->ReleaseBody(); return false; }   // a newer seek (or teardown): the plan is rebuilt
         if (!f->Ok())
         {
             f->ReleaseBody();
@@ -983,7 +1118,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
                     st.feedStalled = true;
                     Raise(s.handle, FgPrEvent_FeedStalled, idx, f->status);
                 }
-                return;
+                return false;
             }
             // A 404 / 410 at or beyond the segment count (or with no count to bound it) ends the track at this index.
             // Audio running out while video has not ends the audio stream cleanly, so the presentation still ends on
@@ -998,7 +1133,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
             fgpr::RaiseLog(s.handle, std::string("[cenc-feed] ") + (t == kVideo ? "video" : "audio") + " seg#" +
                                      std::to_string(idx) + " HTTP " + std::to_string(f->status) + " - end of " +
                                      (t == kVideo ? "video" : "audio") + " feed at this index");
-            return;
+            return false;
         }
         st.failIdx[t] = -1;
         st.failCount[t] = 0;
@@ -1009,16 +1144,12 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         const int produced = cenc::ParseSegment(f->body, info, more, ticks, t == kVideo ? &keyframes : nullptr);
         f->ReleaseBody();
         if (f->timing.bytes > st.maxSegBytes[t]) st.maxSegBytes[t] = f->timing.bytes;   // the next fetch's reserve
-        if (!f->timing.fromStore)   // the WinRT HTTP cache answered this GET itself: not real throughput
-        {
-            s.bytesDownloaded.fetch_add(f->timing.bytes, std::memory_order_acq_rel);
-            s.downloadElapsedMs.fetch_add(std::max<uint64_t>(1, f->timing.transferMs), std::memory_order_acq_rel);
-        }
+        ChargeDownload(s, st, f->timing);   // F041: this GET's own bytes and its share of the link time
         if (produced <= 0 || more.empty())
         {
             fgpr::RaiseLog(s.handle, std::string("[cenc-feed] ") + (t == kVideo ? "video" : "audio") + " seg#" +
                                      std::to_string(idx) + " demuxed no samples");
-            return;
+            return false;
         }
         // The segment-length rule (see the top of this file): measure once, from the first parsed segment.
         if (t == kVideo && s.segmentLengthMs.load(std::memory_order_acquire) <= 0 && info.timescale > 0)
@@ -1059,7 +1190,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
             fgpr::RaiseLog(s.handle, std::string("[cenc-feed] ") + (t == kVideo ? "video" : "audio") + " seg#" +
                                      std::to_string(idx) + " landed after the seek flush (planned under seq=" +
                                      std::to_string(seekSeq) + ") - dropped");
-            return;
+            return false;
         }
         if (t == kVideo)
         {
@@ -1074,9 +1205,10 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         const bool wasUncovered = covBefore < 0;
         if ((wasUncovered && covAfter >= 0) || (!wasUncovered && covAfter > covBefore)) grew = true;
         fgpr::plan::Landed(st.guard[t], idx, covAfter);
+        return true;
     };
     {
-        // Clears what a seek cancels once both GETs are handled - or when a handler throws.
+        // Clears what a seek cancels once every GET is handled - or when a handler throws.
         struct InflightClear
         {
             Session& owner;
@@ -1085,27 +1217,47 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
                 std::lock_guard<std::mutex> g(owner.feedMx);
                 owner.inflightVideo = nullptr;
                 owner.inflightAudio = nullptr;
+                owner.inflightExtra.clear();
                 owner.inflightVideoIndex = -1;
             }
         } inflightClear{ s };
-        bool videoPending = vf != nullptr, audioPending = af != nullptr;
-        while (videoPending || audioPending)
+        // What is left of a track's queue once its head did not land (or the session is stopping): cancel what is still on the wire,
+        // give back the buffer of one that already finished (only a FINISHED GET's body is safe to touch).
+        auto dropQueued = [](std::vector<Get>& q) {
+            for (Get& g : q)
+            {
+                if (g.f->IsDone()) g.f->ReleaseBody();
+                else g.f->Cancel();
+            }
+            q.clear();
+        };
+        while (!vq.empty() || !aq.empty())
         {
-            // A seek plan joins both GETs (video is then handled before audio): see the F041 note above the fetch.
+            // A seek plan joins the heads of both tracks (video is then handled before audio): see the F041 note above the fetch.
             waitSet->WaitUntil([&] {
-                const bool videoReady = !videoPending || vf->IsDone();
-                const bool audioReady = !audioPending || af->IsDone();
-                return seekPlan ? (videoReady && audioReady) : ((videoPending && videoReady) || (audioPending && audioReady));
+                const bool videoReady = vq.empty() || vq.front().f->IsDone();
+                const bool audioReady = aq.empty() || aq.front().f->IsDone();
+                return seekPlan ? (videoReady && audioReady) : ((!vq.empty() && videoReady) || (!aq.empty() && audioReady));
             });
             if (s.feedStop.load(std::memory_order_acquire))
             {
-                // Teardown cancels what is on the wire; make sure of the one that is still going and append nothing.
-                if (videoPending) vf->Cancel();
-                if (audioPending) af->Cancel();
+                // Teardown cancels what is on the wire; make sure of the ones that are still going and append nothing.
+                dropQueued(vq);
+                dropQueued(aq);
                 return JobResult::Idle;
             }
-            if (videoPending && vf->IsDone()) { videoPending = false; handleTrack(kVideo, vf, vp.idx, videoInfo, video); }
-            else { audioPending = false; handleTrack(kAudio, af, ap.idx, audioInfo, audio); }
+            if (!vq.empty() && vq.front().f->IsDone())
+            {
+                const Get head = std::move(vq.front());
+                vq.erase(vq.begin());
+                if (!handleTrack(kVideo, head.f, head.idx, videoInfo, video)) dropQueued(vq);   // a gap must never reach the store
+            }
+            else if (!aq.empty() && aq.front().f->IsDone())
+            {
+                const Get head = std::move(aq.front());
+                aq.erase(aq.begin());
+                if (!handleTrack(kAudio, head.f, head.idx, audioInfo, audio)) dropQueued(aq);
+            }
         }
     }
     SettleFeedStall(s, st);   // a retry that landed (or a track that latched its end) may have ended the stall
@@ -1187,6 +1339,7 @@ static void FeederMain(std::shared_ptr<Session> sp)
             if (r != JobResult::Progress) break;
         }
     }
+    for (auto const& p : st.initFetches) if (p.fetch) p.fetch->Cancel();   // F036: an init prefetch still on the wire dies with its session
     if (SUCCEEDED(hrCo)) CoUninitialize();
 }
 
@@ -1641,13 +1794,16 @@ static void DestroyInternal(Runtime& rt, const std::shared_ptr<Session>& sp)
     // overlap the feeder. (A GET begun after this read sees feedStop in PublishInflight and cancels itself.)
     s.feedStop.store(true, std::memory_order_release);
     std::shared_ptr<fgpr::HttpFetch> v, a;
+    std::vector<std::shared_ptr<fgpr::HttpFetch>> extra;
     {
         std::lock_guard<std::mutex> g(s.feedMx);
         v = s.inflightVideo;
         a = s.inflightAudio;
+        extra = s.inflightExtra;
     }
     if (v) v->Cancel();
     if (a) a->Cancel();
+    for (auto const& e : extra) if (e) e->Cancel();
     s.Kick();
     rt.reaper.Reap(std::move(s.feeder), [sp] { FinishDestroy(*sp); });
 }
@@ -1950,7 +2106,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionCreate(FgPrRuntime rtHandle, 
                              " start=" + std::to_string((long long)s.startPositionMs.load()) + "ms" +
                              " paused=" + (s.startPaused ? "1" : "0") +
                              " window=-" + std::to_string((long long)s.store->retainBehindMs) + "/+" +
-                             std::to_string((long long)s.store->bufferAheadMs) + "ms budget=" + std::to_string(s.store->budgetBytes));
+                             std::to_string((long long)s.store->bufferAheadMs) + "ms budget=" + std::to_string(s.store->budgetBytes.load()));
     *out = sp->handle;
     return S_OK;
 }
@@ -2019,9 +2175,12 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         // lic == 0 is legal: clear content, or a key already usable through another session's license.
         s.license = lic;
         if (lic) fgpr::LicenseBind(lic, +1);
-        // This session's own licence starts ahead of its attach (CreateSession/GenerateRequest before CreateTrustedInput): only
-        // other rows' licence work yields to the engine lane. The queued Maintenance StartAcquisition is then a no-op.
-        if (lic) fgpr::LicenseStartIfPending(rt, lic);
+        // F217: this session's own licence is NOT started here any more. CreateSession + GenerateRequest are a PMP round trip
+        // (37-126 ms) and ran inline ahead of CompleteAttach, so SetSource queued behind licence work; it now follows the
+        // attach below as its own Engine-lane item (still ahead of other rows' Maintenance work). The engine waits for the
+        // key on its own (the licence state / key status), never for queue position. FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 keeps
+        // the old order (the key session exists before CreateTrustedInput) as a kill switch.
+        if (lic && rt.licenseBeforeAttach) fgpr::LicenseStartIfPending(rt, lic);
         rt.attachGen.fetch_add(1, std::memory_order_acq_rel);   // before `attached` names the session: see Runtime::attachGen
         rt.attached.store(s.handle, std::memory_order_release);
         s.attachPending = true;
@@ -2056,6 +2215,15 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         }
         RequestInitsAndStream(s, priorInitFailure);   // the early kick already ran unless the inits had failed before this attach
         CompleteAttach(rt, sp);   // at once when the inits are already parsed; otherwise the feeder completes it
+        // F217: the acquisition goes after the SetSource, as the next Engine item (engine events already queued run first; a
+        // switch whose inits are still on the wire starts it now, overlapping the GET). `s.license` is 0 when CompleteAttach
+        // just detached a failed attach, and the item is a no-op for a licence another path already started or closed. If
+        // nothing here runs it, the Maintenance item FgPrLicenseAcquire posted still starts it.
+        if (s.license != 0 && !rt.licenseBeforeAttach)
+        {
+            const uint64_t ownLicense = s.license;
+            PostToRuntime(s, [ownLicense](Runtime& r) { fgpr::LicenseStartIfPending(r, ownLicense); });
+        }
     });
 }
 
@@ -2167,6 +2335,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rtHandle, Fg
         // keyframe at or before the target, audio from any sample, with contiguous coverage past it.
         bool buffered = false;
         std::shared_ptr<fgpr::HttpFetch> cancelVideo, cancelAudio;
+        std::vector<std::shared_ptr<fgpr::HttpFetch>> cancelExtra;   // F041: a job's pipelined second GETs are read-ahead of the OLD position
         int32_t targetSegment = SegmentOfUnclamped(s, kf >= 0 ? kf : targetMs);
         {
             std::lock_guard<std::mutex> g(s.feedMx);
@@ -2189,6 +2358,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rtHandle, Fg
                     cancelVideo = s.inflightVideo;
                     cancelAudio = s.inflightAudio;
                 }
+                if (s.inflightVideoIndex != -2) cancelExtra = s.inflightExtra;   // (-2 = the init GETs, which carry none)
                 if (video) video->MarkIncomplete();
                 if (audio) audio->MarkIncomplete();
                 // FLUSH, in this same critical section (the feeder plans under feedMx, so it never sees a half-flushed
@@ -2216,6 +2386,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rtHandle, Fg
         }
         if (cancelVideo) cancelVideo->Cancel();
         if (cancelAudio) cancelAudio->Cancel();
+        for (auto const& extra : cancelExtra) if (extra) extra->Cancel();
         fgpr::RaiseLog(s.handle, "[cenc-feed] seek prefetch requested ms=" + std::to_string((long long)targetMs) +
                                  " at segment index " + std::to_string(targetSegment) + " (seq=" + std::to_string(seq) + ")");
         s.Kick();
@@ -2293,15 +2464,25 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
 __declspec(dllexport) int32_t __stdcall FgPrSessionSelectRepresentation(FgPrRuntime rtHandle, FgPrSession sh, int32_t index,
                                                                         const wchar_t* initUrl, const wchar_t* base,
                                                                         const wchar_t* prefix, const wchar_t* suffix,
-                                                                        int32_t retainMs)
+                                                                        int32_t retainMs, int64_t storeBudgetBytes)
 {
     if (!initUrl || !*initUrl) return E_INVALIDARG;
     std::shared_ptr<Session> sp = fgpr::SessionFor(rtHandle, sh);
     if (!sp) return E_HANDLE;
+    // F040: the store budget re-derived for the new rung. A HIGHER one takes effect now (the new rung's segments need the room before
+    // they land); a lower one waits for the splice (the feeder's commitSessionFields), so a downswitch never trims history early.
+    const uint64_t budget = storeBudgetBytes > 0 ? (uint64_t)storeBudgetBytes : 0;
+    if (budget != 0 && sp->store && budget > sp->store->budgetBytes.load(std::memory_order_acquire))
+    {
+        if (sp->store->SetBudget(budget))
+            fgpr::RaiseLog(sp->handle, "[cenc-feed] store budget raised to " + std::to_string(sp->store->budgetBytes.load()) +
+                                       " bytes for representation " + std::to_string(index));
+    }
     {
         std::lock_guard<std::mutex> g(sp->feedMx);
         sp->rep.pending = true;
         sp->rep.index = index;
+        sp->rep.storeBudget = budget;
         sp->rep.retainMs = retainMs < 0 ? -1 : std::min<int32_t>(retainMs, 600000);
         sp->rep.initUrl = initUrl;
         sp->rep.base = CopyW(base);
@@ -2309,6 +2490,19 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSelectRepresentation(FgPrRunt
         sp->rep.suffix = suffix && *suffix ? std::wstring(suffix) : std::wstring(L".m4s");
     }
     sp->Kick();
+    return S_OK;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrSessionPrefetchInit(FgPrRuntime rtHandle, FgPrSession sh, const wchar_t* initUrl)
+{
+    if (!initUrl || !*initUrl) return E_INVALIDARG;
+    std::shared_ptr<Session> sp = fgpr::SessionFor(rtHandle, sh);
+    if (!sp) return E_HANDLE;
+    {
+        std::lock_guard<std::mutex> g(sp->feedMx);
+        sp->initPrefetchRequests.emplace_back(initUrl);
+    }
+    sp->Kick();   // the feeder begins the GET at the top of its next job; it never blocks feeding for it
     return S_OK;
 }
 

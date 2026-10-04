@@ -191,7 +191,7 @@ internal sealed class RecordingMediaSession : IMediaSession
     private readonly TaskCompletionSource _disposeGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _disposeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _holdDispose;
-    private int _start, _connect, _pause, _dispose;
+    private int _start, _connect, _pause, _dispose, _play;
 
     public RecordingMediaSession(string name, Action<string>? log) { Name = name; _log = log; }
 
@@ -199,6 +199,7 @@ internal sealed class RecordingMediaSession : IMediaSession
     public int StartCount => Volatile.Read(ref _start);
     public int ConnectCount => Volatile.Read(ref _connect);
     public int PauseCount => Volatile.Read(ref _pause);
+    public int PlayCount => Volatile.Read(ref _play);
     public int DisposeCount => Volatile.Read(ref _dispose);
     /// <summary>Completes when <c>DisposeAsync</c> was entered.</summary>
     public Task DisposeStarted => _disposeStarted.Task;
@@ -207,7 +208,7 @@ internal sealed class RecordingMediaSession : IMediaSession
 
     public void Start() { Interlocked.Increment(ref _start); _log?.Invoke("start"); }
     public void ConnectSignals(MediaSignalSink sink) { Interlocked.Increment(ref _connect); _log?.Invoke("connect"); }
-    public ValueTask PlayAsync() => ValueTask.CompletedTask;
+    public ValueTask PlayAsync() { Interlocked.Increment(ref _play); return ValueTask.CompletedTask; }
     public ValueTask PauseAsync() { Interlocked.Increment(ref _pause); return ValueTask.CompletedTask; }
     public ValueTask SeekAsync(TimeSpan to, SeekMode mode) => ValueTask.CompletedTask;
     public void SetRate(double rate) { }

@@ -947,13 +947,17 @@ above it. It is now a runtime with handles, spine unchanged:
   the license is replaced) and is retried once, after a jittered pause, on a transport failure, a timeout or a 5xx / 408 / 429;
   a joined Pending row logs its age. Gates: `LicenseCachePolicyTests`, `ProtectedRuntimeTests`, `ProtectedRuntimeEventTests`,
   `ProtectedLicenseLifecycleTests`, and `FeedTests` (`H37_LicensePolicy`).
-- **`FgPrSession` (managed `ProtectedVideoSession`, one per source).** A `CencMediaSource` over a byte-capped
-  (32 MiB), time-windowed (30 s behind / 60 s ahead) `SegmentStore`, opened AT `MediaOpenOptions.StartPosition`.
-  **The byte cap wins over the window.** Video gets 24 MiB and audio 8 MiB of the 32 MiB, and the feeder's cap gate
-  and the per-stream trim judge each track against that same slice (the idle download-buffer pool is not media and has
-  its own cap, twice the largest segment). At roughly 3 Mbps and up the video slice holds less than 90 s, so history
-  behind the playhead shrinks first (it yields to the next fetch's reserve) and a backward seek inside 30 s can still
-  need the network. The trim is keyframe-aligned (what is kept starts on a sync sample, up to one GOP more or less
+- **`FgPrSession` (managed `ProtectedVideoSession`, one per source).** A `CencMediaSource` over a byte-capped,
+  time-windowed (30 s behind / 60 s ahead) `SegmentStore`, opened AT `MediaOpenOptions.StartPosition`.
+  **The byte budget follows the selected representation (F040).** It is derived from the rung's declared bandwidth
+  (`ProtectedVideoSession.StoreBudgetFor`, twin `fgpr::StoreBudgetForBitrate`): the whole window at that bitrate, x 1.2
+  headroom, grossed up 4/3 for the video track's three-quarter slice, clamped to 16-128 MiB (32 MiB when no bandwidth is
+  declared), and re-derived at every representation change (`FgPrSessionSelectRepresentation`'s `storeBudgetBytes`: a
+  higher budget at once, a lower one when the rung is spliced in). **The byte cap still wins over the window** when it
+  clamps: video gets three quarters and audio a quarter, and the feeder's cap gate and the per-stream trim judge each
+  track against that same slice (the idle download-buffer pool is not media and has its own cap, twice the largest
+  segment). Above about 7.4 Mbps of video the 128 MiB ceiling holds less than 90 s, so history behind the playhead
+  shrinks first (it yields to the next fetch's reserve) and a backward seek inside 30 s can need the network. The trim is keyframe-aligned (what is kept starts on a sync sample, up to one GOP more or less
   than the byte rule alone would keep) and anchored on the playhead rather than the delivery cursor.
   **An unbuffered seek flushes the stream** (`FlushForSeek`: samples, cursor and byte ledger reset, delivery held until
   the reposition) so the target segment lands in an empty buffer, a fetch planned before the flush is dropped, and
@@ -988,8 +992,12 @@ above it. It is now a runtime with handles, spine unchanged:
   constriction follow the monitor the picture is on, a pop-out included; the window also follows its host when it moves with no pump (a drag, a same-DPI monitor hop,
   maximize / restore: an out-of-context `EVENT_OBJECT_LOCATIONCHANGE` hook on the window's own thread re-derives the screen rect from the last placement). Hardening with no measured effect on Spotify's licences (and Firefox ships without it):
   a window that cannot be created never fails a video, and `FG_PLAYREADY_NO_OPM_WINDOW=1` restores the old wiring. The runtime also logs the negotiated key
-  system and the granted CDM configuration once (`[eme-cdm] negotiated key system=...`); the security level itself is not reported by any MF API - with no
-  robustness requested it is the CDM's default (software, SL2000), and SL3000 is deliberately not requested. Prefetch
+  system and the granted CDM configuration once (`[eme-cdm] negotiated key system=...`); the security level itself is not reported by any MF API, so it is
+  decided by the request (F022): the bring-up PROBES hardware SL3000 first (`com.microsoft.playready.recommendation.3000`,
+  `IsTypeSupported` for H.264, an access request whose video capability carries `MF_EME_ROBUSTNESS` = "3000") and falls back to
+  the software SL2000 request (`.recommendation`, empty capabilities) on ANY failure of it; the provisioned level is logged once
+  (`[eme-cdm] negotiated security level: SL2000|SL3000`). `--fg playready-sl2000` (`EngineSwitches.ForcePlayReadySl2000`, passed to
+  `FgPrRuntimeSetSecurityPolicy` before the create) skips the probe. Prefetch
   (`IPreparableBackend`) fetches init + 2 segments at the start position, video ∥ audio;
   `ProtectedMediaBackend.PrepareAtAsync(source, position)` prepares the CURRENT track at a carried position. Seek is
   flush-not-recreate, applied immediately on the runtime thread (or from the parallel fetch's completion); the

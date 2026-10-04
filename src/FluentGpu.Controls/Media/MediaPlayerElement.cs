@@ -1446,7 +1446,7 @@ public sealed class MediaPlayerElement : Component
         if (motion)
         {
             NoteGeometryMotion();
-            if (!audioOnly && VideoStreamSizing.Serves(cached, natural, videoRect, s))
+            if (!audioOnly && VideoStreamSizing.Serves(cached, natural, videoRect, s, b.Display))
             {
                 b.Place(videoRect);
                 b.SetVisible(active && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty and the frame has video here (checked above); AND the session's per-attach readiness

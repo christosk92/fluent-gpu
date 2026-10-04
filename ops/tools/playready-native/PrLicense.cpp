@@ -476,7 +476,7 @@ struct CdmSessionCallbacks : public IMFContentDecryptionModuleSessionCallbacks
 static void StartAcquisition(fgpr::Runtime& rt, const std::shared_ptr<fgpr::License>& lic)
 {
     if (lic->closed.load(std::memory_order_acquire)) return;
-    // Once: the attach verb starts its own licence ahead of itself, and the Maintenance item posted by FgPrLicenseAcquire is then a no-op.
+    // Once: the attach verb queues its own licence (Engine lane) right after its SetSource, and the Maintenance item posted by FgPrLicenseAcquire is then a no-op.
     if (lic->started.exchange(true, std::memory_order_acq_rel)) return;
     // F226: how long this item sat in the runtime queue (acquire posted -> running): behind bring-up on a cold switch, ~0 warm.
     const int64_t waitedMs = fgpr::MsSinceQpc(lic->acquireQpc);

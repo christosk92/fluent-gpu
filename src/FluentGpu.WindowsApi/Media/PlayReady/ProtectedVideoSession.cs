@@ -31,14 +31,21 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 public sealed class ProtectedVideoSession : IProtectedVideoPlayer
 {
     /// <summary>Retention window behind the playhead (presentation time). A backward seek inside it is served from the
-    /// buffer with no fetch only while the byte cap leaves that history: the cap overrides the window, so above roughly
-    /// 3 Mbps (the video's 24 MiB slice holds less than 30 s + the look-ahead) less is retained. A seek the buffer does
-    /// not hold flushes it and refetches from the target.</summary>
+    /// buffer with no fetch. The store budget is derived from the selected representation's bandwidth
+    /// (<see cref="StoreBudgetFor"/>) so the whole window fits; only above the 128 MiB ceiling (about 7.4 Mbps of video at the
+    /// default 30 s + 60 s window), or under an explicit smaller <see cref="ProtectedVideoRequest.StoreBudgetBytes"/>, does the byte
+    /// cap override the window and retain less. A seek the buffer does not hold flushes it and refetches from the target.</summary>
     public const long DefaultRetainBehindMs = 30_000;
     /// <summary>Forward buffering target.</summary>
     public const long DefaultBufferAheadMs = 60_000;
-    /// <summary>The per-session segment-store cap (≤ 2 live sessions ⇒ ≤ 64 MiB of counted media bytes).</summary>
+    /// <summary>The segment-store cap when no video bitrate is known (≤ 2 live sessions ⇒ ≤ 64 MiB of counted media bytes). A session
+    /// whose selected representation declares a bandwidth derives its own (<see cref="StoreBudgetFor"/>), and re-derives it at every
+    /// representation change.</summary>
     public const long DefaultStoreBudgetBytes = 32L << 20;
+    /// <summary>The floor of a derived store budget (F040).</summary>
+    public const long MinStoreBudgetBytes = 16L << 20;
+    /// <summary>The ceiling of a derived store budget (F040): two live sessions hold at most 256 MiB of media.</summary>
+    public const long MaxStoreBudgetBytes = 128L << 20;
     /// <summary>What a prepare fetches for a not-yet-attached session: init + two segments (8 s on a 4 s grid) at the
     /// start position, both streams.</summary>
     public const int DefaultPrefetchSegments = 2;
@@ -98,6 +105,9 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private long _startCorrectionMs;        // EvCanPlay.a: how far behind the carried start the engine clock was (the second source Start's price)
     private long _firstFrameQpc;            // EvFirstFrame.b: native's QPC at FIRSTFRAMEREADY
     private int _budgetLogged;              // 1 once switch.budget was written: one line per session, never per re-attach
+    private int _neighbourInitsRequested;   // 1 once the opening rung's neighbours' init prefetch was asked (F036): once per session
+    private readonly object _initPrefetchGate = new();
+    private System.Collections.Generic.HashSet<string>? _initPrefetched;   // F036: init URLs already asked of native, guarded by _initPrefetchGate
 
     // The store's window around the playhead: written by the Buffered event (a prepared session is never pumped, and its
     // prepare decides readiness from this) and refreshed by every pump from the snapshot.
@@ -156,8 +166,38 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
 
     private static long StartMsOf(ProtectedVideoRequest request) => (long)Math.Max(0, request.StartPosition.TotalMilliseconds);
 
+    /// <summary>F040: the media byte budget one video representation needs to hold the WHOLE configured window
+    /// (<paramref name="bufferAheadMs"/> + <paramref name="retainBehindMs"/> of presentation time) at its declared bandwidth: window
+    /// seconds x bytes per second x 1.2 headroom (VBR peaks over the declared average), grossed up by 4/3 because the video track owns
+    /// three quarters of the store (the audio quarter is several times what an AAC track needs), clamped to
+    /// [<see cref="MinStoreBudgetBytes"/>, <see cref="MaxStoreBudgetBytes"/>]. Idle pool scratch is not part of it. Integer math only
+    /// (headroom x gross-up = 8/5) so it agrees to the byte with the native twin (<c>fgpr::StoreBudgetForBitrate</c>, SegmentStore.h).
+    /// An unknown bitrate (<paramref name="videoBitsPerSecond"/> &lt;= 0) keeps <see cref="DefaultStoreBudgetBytes"/>; a window of 0
+    /// means the 60 s / 30 s defaults. Pure.</summary>
+    internal static long StoreBudgetFor(long videoBitsPerSecond, long bufferAheadMs, long retainBehindMs)
+    {
+        if (videoBitsPerSecond <= 0) return DefaultStoreBudgetBytes;
+        long window = (bufferAheadMs > 0 ? bufferAheadMs : DefaultBufferAheadMs) + (retainBehindMs > 0 ? retainBehindMs : DefaultRetainBehindMs);
+        long windowBytes = window * Math.Min(videoBitsPerSecond, 1_000_000_000L) / 8000;   // ms x bit/s / 8000 = bytes
+        long budget = windowBytes / 5 * 8;                                                   // x 1.2 x 4/3
+        return Math.Clamp(budget, MinStoreBudgetBytes, MaxStoreBudgetBytes);
+    }
+
+    /// <summary>The declared bandwidth (bit/s) of the representation <paramref name="request"/> opens on (its init URL names it), 0 when the
+    /// request has no catalog or the rung is not in it.</summary>
+    private static long OpeningBitrateOf(ProtectedVideoRequest request)
+    {
+        ProtectedTrackDescriptor? track = FindDefaultVideoTrack(request.Catalog);
+        if (track is null || request.InitUrl is null) return 0;
+        for (int i = 0; i < track.Representations.Count; i++)
+            if (string.Equals(track.Representations[i].InitUrl, request.InitUrl, StringComparison.Ordinal))
+                return track.Representations[i].Quality.Bitrate;
+        return 0;
+    }
+
     /// <summary>The native open descriptor for <paramref name="request"/>: the defaults a request leaves at zero (a
-    /// stride of 1, the 30 s / 60 s / 32 MiB window), the normalised KID, the clamped start position. Pure.</summary>
+    /// stride of 1, the 30 s / 60 s window, a store budget derived from the opening representation's bandwidth), the normalised KID,
+    /// the clamped start position. Pure.</summary>
     internal static PrOpenDescription DescribeOpen(ProtectedVideoRequest request, string? kid) => new()
     {
         InitUrl = request.InitUrl,
@@ -180,7 +220,9 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         StartPaused = request.StartPaused,
         RetainBehindMs = request.RetainBehindMs > 0 ? request.RetainBehindMs : DefaultRetainBehindMs,
         BufferAheadMs = request.BufferAheadMs > 0 ? request.BufferAheadMs : DefaultBufferAheadMs,
-        StoreBudgetBytes = request.StoreBudgetBytes > 0 ? request.StoreBudgetBytes : DefaultStoreBudgetBytes,
+        StoreBudgetBytes = request.StoreBudgetBytes > 0
+            ? request.StoreBudgetBytes
+            : StoreBudgetFor(OpeningBitrateOf(request), request.BufferAheadMs, request.RetainBehindMs),
     };
 
     /// <summary>
@@ -422,6 +464,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             return;
         }
         Volatile.Write(ref _attached, 1);
+        // F036: once per session, the init segments of the rungs next to the one it opened on are fetched and parsed alongside normal
+        // feeding, so the first quality switch needs no init GET (the opening rung's own init is cached natively when it is parsed).
+        if (Interlocked.Exchange(ref _neighbourInitsRequested, 1) == 0)
+        {
+            int opening = OpeningRepresentationIndex();
+            if (opening >= 0) PrefetchNeighbourInits(opening);
+        }
         _streamW = -1; _streamH = -1;   // a fresh SetSource: the stream size must be re-asserted
         _opmHost = 0;                    // ... and so must the OPM window's placement
 
@@ -499,12 +548,75 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
                 LogVideo($"representation.fail key={_logKey} id={representationId} reason=no-init-url");
                 return ValueTask.CompletedTask;
             }
+            // F040: the store budget follows the rung (an explicit request budget is the caller's and is left alone: 0 = unchanged).
+            long budget = _request.StoreBudgetBytes > 0 ? 0 : StoreBudgetFor(rep.Quality.Bitrate, _request.BufferAheadMs, _request.RetainBehindMs);
             int hr = _native.SessionSelectRepresentation(_rt.Handle, _s, i, initUrl, rep.SegmentBaseUrl,
-                rep.SegmentPrefix, rep.SegmentSuffix, retainMs < 0 ? IProtectedVideoPlayer.AppendAtBufferEnd : retainMs);
+                rep.SegmentPrefix, rep.SegmentSuffix, retainMs < 0 ? IProtectedVideoPlayer.AppendAtBufferEnd : retainMs, budget);
             if (hr < 0) LogVideo($"representation.fail key={_logKey} id={representationId} hr=0x{unchecked((uint)hr):X8}");
+            else PrefetchNeighbourInits(i);   // F036: the next switch is likely one of this rung's neighbours
             return ValueTask.CompletedTask;   // EvRepresentationQueued reports the splice, EvRepresentation the picture
         }
         throw new ArgumentOutOfRangeException(nameof(representationId));
+    }
+
+    /// <summary>F036: the index of the representation the session opened on (its init URL), -1 when there is no catalog or it is not in it.</summary>
+    private int OpeningRepresentationIndex()
+    {
+        if (_videoTrack is null || _request.InitUrl is null) return -1;
+        for (int i = 0; i < _videoTrack.Representations.Count; i++)
+            if (string.Equals(_videoTrack.Representations[i].InitUrl, _request.InitUrl, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    /// <summary>F036: the rungs next to <paramref name="current"/> in bandwidth order - the nearest lower and the nearest higher, -1 when
+    /// there is none - which are the likely targets of the next ABR switch (the controller steps one rung at a time). Pure.</summary>
+    internal static (int Lower, int Higher) NeighbourRungs(System.Collections.Generic.IReadOnlyList<ProtectedRepresentationDescriptor> reps, int current)
+    {
+        if ((uint)current >= (uint)reps.Count) return (-1, -1);
+        int lower = -1, higher = -1;
+        int cur = reps[current].Quality.Bitrate;
+        for (int i = 0; i < reps.Count; i++)
+        {
+            if (i == current) continue;
+            int b = reps[i].Quality.Bitrate;
+            if (b < cur || (b == cur && i < current))
+            {
+                if (lower < 0 || b > reps[lower].Quality.Bitrate) lower = i;
+            }
+            else if (higher < 0 || b < reps[higher].Quality.Bitrate) higher = i;
+        }
+        return (lower, higher);
+    }
+
+    /// <summary>F036: ask native to fetch and parse the init segments of the rungs next to <paramref name="currentIndex"/> (each URL at
+    /// most once per session; native also ignores one it has cached or has on the wire).</summary>
+    private void PrefetchNeighbourInits(int currentIndex)
+    {
+        if (_disposed || _s == 0 || _videoTrack is not { Representations.Count: > 1 } track) return;
+        (int lower, int higher) = NeighbourRungs(track.Representations, currentIndex);
+        lock (_initPrefetchGate)   // the rung in use already has its init parsed natively: never ask for it
+        {
+            _initPrefetched ??= new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+            if ((uint)currentIndex < (uint)track.Representations.Count) _initPrefetched.Add(track.Representations[currentIndex].InitUrl);
+        }
+        PrefetchInit(track, lower);
+        PrefetchInit(track, higher);
+    }
+
+    private void PrefetchInit(ProtectedTrackDescriptor track, int index)
+    {
+        if (index < 0 || track.Representations[index].InitUrl is not { Length: > 0 } url) return;
+        lock (_initPrefetchGate)
+        {
+            _initPrefetched ??= new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+            if (!_initPrefetched.Add(url)) return;
+        }
+        int hr = _native.SessionPrefetchInit(_rt.Handle, _s, url);
+        if (hr < 0)
+        {
+            lock (_initPrefetchGate) _initPrefetched?.Remove(url);   // ask again at the next opportunity
+            LogVideo($"init.prefetch.fail key={_logKey} rep={track.Representations[index].Id} hr=0x{unchecked((uint)hr):X8}");
+        }
     }
 
     /// <inheritdoc/>

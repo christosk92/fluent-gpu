@@ -1,5 +1,5 @@
 // PrRuntime.cpp — the process-lifetime PlayReady runtime: FgPrRuntimeCreateOnAdapter / FgPrRuntimeDestroy / FgPrRuntimeUptimeMs /
-// FgPrRuntimeSetVideoOutputFormat.
+// FgPrRuntimeSetVideoOutputFormat / FgPrRuntimeSetSecurityPolicy.
 //
 // WHAT MOVED HERE, AND WHY IT IS DONE ONCE (wavee-0.3-video-engine-implementation.md §1.3, §3.1.1). The one-shot
 // FgPlayReadyRunEx did CoInitializeEx + MFStartup, D3D11CreateDevice + the DXGI manager, CreateAndPrepareCdm (which
@@ -87,11 +87,14 @@ struct DesktopPmpHostApp : winrt::implements<DesktopPmpHostApp, IMFPMPHostApp>
 };
 
 // What the CDM granted (F022). The security level a PlayReady CDM provisions is not a number any Media Foundation API reports:
-// it follows the robustness the access request carried (none here: the video capabilities are empty, so the CDM's own default
-// applies - software, SL2000 - and hardware, SL3000, would need the `.3000` key system and a "3000" video capability, which
-// is deliberately NOT asked for: a stricter output-protection regime and no speed). Until now nothing recorded what was
-// negotiated, so a box that had quietly landed on a different level looked the same in the log. The granted configuration the
-// CDM hands back (capabilities, and the robustness inside them when it filled one in) is the nearest thing to an answer.
+// it follows the robustness the access request carried. Two plans exist (CreateAndPrepareCdm's `hardware`): the SL3000 PROBE
+// - the `.3000` key system with one video capability whose MF_EME_ROBUSTNESS is "3000" (Chromium's hardware-secure request,
+// media_foundation_cdm_util.cc) - and the SL2000 plan, the long-standing one: `.recommendation` with EMPTY capabilities, so
+// the CDM's own default applies (software). The runtime tries the probe first (default; `--fg playready-sl2000` skips it) and
+// falls back to the SL2000 plan when ANY step of it fails, so a machine without hardware PlayReady behaves exactly as before.
+// The level that was provisioned is logged once per runtime and kept in Runtime::securityLevel: until now nothing recorded
+// what was negotiated, so a box that had quietly landed on a different level looked the same in the log. The granted
+// configuration the CDM hands back (capabilities, and the robustness inside them when it filled one in) is the evidence.
 static bool SameKey(const PROPERTYKEY& a, const PROPERTYKEY& b) { return a.pid == b.pid && IsEqualGUID(a.fmtid, b.fmtid); }
 
 static const char* EmeKeyName(const PROPERTYKEY& k)
@@ -172,7 +175,7 @@ static std::string DescribePropertyStore(IPropertyStore* store, int depth)
 
 /// Log, once per runtime (CreateAndPrepareCdm runs once per runtime), the key system the access object negotiated and the
 /// configuration the CDM granted for the access request this file sent.
-static void LogNegotiatedCdm(const wchar_t* requestedKeySystem, IMFContentDecryptionModuleAccess* access)
+static void LogNegotiatedCdm(const wchar_t* requestedKeySystem, IMFContentDecryptionModuleAccess* access, bool hardware)
 {
     std::string keySystem = "?";
     LPWSTR granted = nullptr;
@@ -186,15 +189,18 @@ static void LogNegotiatedCdm(const wchar_t* requestedKeySystem, IMFContentDecryp
         store->Release();
     }
     LogLine("[eme-cdm] negotiated key system=" + keySystem + " (requested " + fgpr::Narrow(std::wstring(requestedKeySystem)) +
-            "); granted configuration " + config + "; robustness requested: none, so the security level is the CDM's own default "
-            "(presumably software, SL2000 - no Media Foundation API reports it; hardware SL3000 is deliberately not requested)");
+            "); granted configuration " + config + "; " +
+            (hardware ? "robustness requested: 3000 (hardware, SL3000)"
+                      : "robustness requested: none, so the security level is the CDM's own default (software, SL2000 - no Media Foundation API reports it)"));
 }
 
 // Create + prepare the modern CDM (factory4 -> CDM factory -> access -> CDM with explicit store path -> SetPMPHostApp).
 // Faithful to the PROVEN ProbeSetPmpHostAppInUwp sequence, but returns the CDM kept alive for the media engine.
 // `failHr` receives the HRESULT of the step that failed (the runtime reports it as FgPrEvent_RuntimeFailed).
+// `hardware` (F022) asks for SL3000: the caller passes the `.3000` key system, this adds the IsTypeSupported pre-check and a
+// video capability with robustness "3000" to the access request. False is the long-standing SL2000 request, byte for byte.
 static IMFContentDecryptionModule* CreateAndPrepareCdm(const wchar_t* keySystem, const std::wstring& storePath,
-                                                       HRESULT* failHr)
+                                                       HRESULT* failHr, bool hardware)
 {
     auto hx = [](HRESULT h){ std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
     IMFMediaEngineClassFactory* baseFactory = nullptr;
@@ -209,15 +215,43 @@ static IMFContentDecryptionModule* CreateAndPrepareCdm(const wchar_t* keySystem,
         GUID iidCdmFac = __uuidof(IMFContentDecryptionModuleFactory);
         if (FAILED(hr = factory4->CreateContentDecryptionModuleFactory(keySystem, iidCdmFac, (void**)&cdmFactory)) || !cdmFactory) { LogLine("[eme-cdm] CreateCdmFactory hr=" + hx(hr)); if (SUCCEEDED(hr)) hr = E_NOINTERFACE; break; }
 
+        if (hardware)
+        {
+            // F022 probe, step 2 (step 1 was the factory itself: a machine that does not know the `.3000` key system fails above):
+            // does the factory claim H.264 for it. A refusal is the normal answer on a box without hardware PlayReady, not an error.
+            const BOOL supported = cdmFactory->IsTypeSupported(keySystem, L"video/mp4;codecs=\"avc1.640028\"");
+            LogLine(std::string("[eme-cdm] SL3000 probe: IsTypeSupported(") + fgpr::Narrow(std::wstring(keySystem)) + ", avc1) = " + (supported ? "yes" : "no"));
+            if (!supported) { hr = HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED); break; }
+        }
+
         IPropertyStore* cfg = nullptr; PSCreateMemoryPropertyStore(IID_PPV_ARGS(&cfg));
         if (!cfg) { hr = E_OUTOFMEMORY; break; }
         auto setVecBstr = [&](const PROPERTYKEY& key, const wchar_t* one){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); BSTR* arr=(BSTR*)CoTaskMemAlloc(sizeof(BSTR)); arr[0]=SysAllocString(one); pv.vt=VT_VECTOR|VT_BSTR; pv.cabstr.cElems=1; pv.cabstr.pElems=arr; cfg->SetValue(key,pv); PropVariantClear(&pv); };
         auto setVecUI4x2 = [&](const PROPERTYKEY& key, ULONG a, ULONG b){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); ULONG* arr=(ULONG*)CoTaskMemAlloc(sizeof(ULONG)*2); arr[0]=a; arr[1]=b; pv.vt=VT_VECTOR|VT_UI4; pv.caul.cElems=2; pv.caul.pElems=arr; cfg->SetValue(key,pv); PropVariantClear(&pv); };
         auto setUI4      = [&](const PROPERTYKEY& key, ULONG v){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); pv.vt=VT_UI4; pv.ulVal=v; cfg->SetValue(key,pv); };
         auto setEmptyVec = [&](const PROPERTYKEY& key){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); pv.vt=VT_VECTOR|VT_VARIANT; pv.capropvar.cElems=0; cfg->SetValue(key,pv); };
+        // The hardware request's one video capability: a property store carrying MF_EME_ROBUSTNESS = "3000", as Chromium builds it.
+        auto setHardwareVideoCapability = [&]() -> bool {
+            IPropertyStore* capability = nullptr; PSCreateMemoryPropertyStore(IID_PPV_ARGS(&capability));
+            if (!capability) return false;
+            PROPVARIANT robustness; memset(&robustness,0,sizeof(robustness)); robustness.vt=VT_BSTR; robustness.bstrVal=SysAllocString(L"3000");
+            const HRESULT hrSet = capability->SetValue(MF_EME_ROBUSTNESS, robustness);
+            PropVariantClear(&robustness);
+            PROPVARIANT* elems = (PROPVARIANT*)CoTaskMemAlloc(sizeof(PROPVARIANT));
+            if (FAILED(hrSet) || !elems) { if (elems) CoTaskMemFree(elems); capability->Release(); return false; }
+            PropVariantInit(&elems[0]); elems[0].vt=VT_UNKNOWN; elems[0].punkVal=capability;   // the array owns the reference
+            PROPVARIANT pv; memset(&pv,0,sizeof(pv)); pv.vt=VT_VECTOR|VT_VARIANT; pv.capropvar.cElems=1; pv.capropvar.pElems=elems;
+            const HRESULT hrVec = cfg->SetValue(MF_EME_VIDEOCAPABILITIES, pv);   // copies; the clear below releases ours
+            PropVariantClear(&pv);
+            return SUCCEEDED(hrVec);
+        };
         setVecBstr(MF_EME_INITDATATYPES, L"cenc");
         setEmptyVec(MF_EME_AUDIOCAPABILITIES);
-        setEmptyVec(MF_EME_VIDEOCAPABILITIES);
+        if (hardware)
+        {
+            if (!setHardwareVideoCapability()) { cfg->Release(); hr = E_FAIL; break; }
+        }
+        else setEmptyVec(MF_EME_VIDEOCAPABILITIES);
         setUI4(MF_EME_DISTINCTIVEID, MF_MEDIAKEYS_REQUIREMENT_OPTIONAL);
         setUI4(MF_EME_PERSISTEDSTATE, MF_MEDIAKEYS_REQUIREMENT_OPTIONAL);
         // Both session types stay DECLARED — this is the CDM configuration every on-box proof ran with. Only TEMPORARY
@@ -230,7 +264,7 @@ static IMFContentDecryptionModule* CreateAndPrepareCdm(const wchar_t* keySystem,
         hr = cdmFactory->CreateContentDecryptionModuleAccess(keySystem, &cfgArr, 1, &cdmAccess);
         cfg->Release();
         if (FAILED(hr) || !cdmAccess) { LogLine("[eme-cdm] CreateCdmAccess hr=" + hx(hr)); if (SUCCEEDED(hr)) hr = E_NOINTERFACE; break; }
-        LogNegotiatedCdm(keySystem, cdmAccess);
+        LogNegotiatedCdm(keySystem, cdmAccess, hardware);
 
         IPropertyStore* cdmProps = nullptr; PSCreateMemoryPropertyStore(IID_PPV_ARGS(&cdmProps));
         if (!cdmProps) { hr = E_OUTOFMEMORY; break; }
@@ -510,6 +544,17 @@ static bool TrustedInputReuseRequested()
     return n == 1 && value[0] == L'1';
 }
 
+/// FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 restores the pre-F217 order: the attach verb runs its own licence's CreateSession +
+/// GenerateRequest (a PMP round trip) BEFORE CompleteAttach, so the CDM session exists when CreateTrustedInput runs. Off by
+/// default: SetSource goes first and the acquisition follows it as the next runtime-queue item. A kill switch for a box where the
+/// trusted input turns out to need its key session to exist first (the CDM "associates the session with the trusted input").
+static bool LicenseBeforeAttachRequested()
+{
+    wchar_t value[4] = {};
+    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_LICENSE_BEFORE_ATTACH", value, (DWORD)(sizeof(value) / sizeof(value[0])));
+    return n == 1 && value[0] == L'1';
+}
+
 /// FG_PLAYREADY_NO_OPM_WINDOW=1 leaves the engine without the virtual OPM window (F264): the pre-change engine wiring, as a kill
 /// switch for a box where the window turns out to matter. Off by default.
 static bool OpmWindowDisabled()
@@ -583,8 +628,26 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // ── CDM (proven S_FALSE SetPMPHostApp) + protection manager. ────────────────────────────────────────────────────
     CreateDirectoryW(rt.storePath.c_str(), nullptr);
     HRESULT cdmHr = E_FAIL;
-    IMFContentDecryptionModule* cdm = CreateAndPrepareCdm(L"com.microsoft.playready.recommendation", rt.storePath, &cdmHr);
+    IMFContentDecryptionModule* cdm = nullptr;
+    // F022: the SL3000 probe. Default on (FgPrSecurity_Probe3000): the `.3000` key system with a "3000" video capability is asked for
+    // first, and the SL2000 plan below - the long-standing request - is the fallback for ANY failure of it (no hardware PlayReady
+    // on this machine, a refused capability, a CDM that will not prepare). Forced off with FgPrSecurity_Force2000 (`--fg playready-sl2000`).
+    if (rt.securityPolicy != FgPrSecurity_Force2000)
+    {
+        HRESULT probeHr = E_FAIL;
+        cdm = CreateAndPrepareCdm(L"com.microsoft.playready.recommendation.3000", rt.storePath, &probeHr, /*hardware*/ true);
+        if (cdm) rt.securityLevel = 3000;
+        else LogLine("[eme-cdm] SL3000 not available (hr=" + hx(probeHr) + ") - falling back to SL2000");
+    }
+    else LogLine("[eme-cdm] SL3000 probe disabled (--fg playready-sl2000) - SL2000");
+    if (!cdm)
+    {
+        cdm = CreateAndPrepareCdm(L"com.microsoft.playready.recommendation", rt.storePath, &cdmHr, /*hardware*/ false);
+        rt.securityLevel = 2000;
+    }
     if (!cdm) { LogLine("[cenc] CDM creation failed hr=" + hx(cdmHr)); return cdmHr; }
+    LogLine("[eme-cdm] negotiated security level: SL" + std::to_string(rt.securityLevel) +
+            (rt.securityLevel >= 3000 ? " (hardware key system)" : " (software key system)"));
     rt.cdm.attach(cdm);
 
     try
@@ -660,6 +723,8 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     if (ItaPreflightRequested()) fgpr::RuntimeItaPreflight(rt);
     rt.trustedInputReuse = TrustedInputReuseRequested();
     LogLine(std::string("[runtime] trusted input: ") + (rt.trustedInputReuse ? "one per CDM (reused across attaches)" : "one per attach"));
+    rt.licenseBeforeAttach = LicenseBeforeAttachRequested();
+    LogLine(std::string("[runtime] attach order: ") + (rt.licenseBeforeAttach ? "licence acquisition BEFORE SetSource (FG_PLAYREADY_LICENSE_BEFORE_ATTACH)" : "SetSource first, licence acquisition after it"));
     return S_OK;
 }
 
@@ -1008,6 +1073,7 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreateOnAdapter(const wchar_t
         rt->storePath = storePath;
         rt->adapterLuid = adapterLuid;
         rt->videoOutputFormat = fgpr::Reg().videoOutputFormat.load(std::memory_order_acquire);
+        rt->securityPolicy = fgpr::Reg().securityPolicy.load(std::memory_order_acquire);
         rt->createdQpc = fgpr::QpcNow();
         rt->thread = std::thread(RuntimeThreadMain, rt);
     }
@@ -1088,6 +1154,12 @@ __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime handle)
 __declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format)
 {
     fgpr::Reg().videoOutputFormat.store(format == FgPrVideoOutput_Nv12 ? FgPrVideoOutput_Nv12 : FgPrVideoOutput_Bgra, std::memory_order_release);
+    return S_OK;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t policy)
+{
+    fgpr::Reg().securityPolicy.store(policy == FgPrSecurity_Force2000 ? FgPrSecurity_Force2000 : FgPrSecurity_Probe3000, std::memory_order_release);
     return S_OK;
 }
 

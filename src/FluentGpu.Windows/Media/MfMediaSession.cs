@@ -679,7 +679,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             {
                 var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
                 VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, applied,
-                    (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs());
+                    (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs(), binding.Display);
                 if (!step.Request.IsEmpty)
                 {
                     _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);

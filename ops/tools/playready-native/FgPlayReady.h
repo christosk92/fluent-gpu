@@ -148,6 +148,13 @@ enum FgPrVideoOutput
     FgPrVideoOutput_Nv12 = 1,     // NV12 - the decoder's own format: no per-frame NV12 -> BGRA video-processor pass, and a YUV overlay plane can take it
 };
 
+/// FgPrRuntimeSetSecurityPolicy values: which PlayReady security level the runtime's CDM asks for (F022).
+enum FgPrSecurityPolicy
+{
+    FgPrSecurity_Probe3000 = 0,   // probe hardware SL3000 first (`.recommendation.3000` + a "3000" video capability), fall back to SL2000 (the default)
+    FgPrSecurity_Force2000 = 2000,// never probe: the software SL2000 request the runtime has always made
+};
+
 // ── descriptors ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The source of one session. `structSize` MUST be sizeof(FgPrOpenDesc): a mismatch is E_INVALIDARG (the old
@@ -188,7 +195,7 @@ typedef struct FgPrOpenDesc
     int32_t startPaused;                // 1 = open paused at startPositionMs and raise FirstFrame (FrameStep) without playing
     int64_t retainBehindMs;             // time-based retention behind the playhead (0 ⇒ 30 000)
     int64_t bufferAheadMs;              // forward buffering target (0 ⇒ 60 000)
-    int64_t storeBudgetBytes;           // the SegmentStore cap for THIS session (0 ⇒ 32 MiB)
+    int64_t storeBudgetBytes;           // the SegmentStore cap for THIS session (0 ⇒ 32 MiB; the managed side derives it from the opening rung's bandwidth, 16-128 MiB, and re-derives it per FgPrSessionSelectRepresentation)
 } FgPrOpenDesc;
 
 /// One atomic read of a session's observable state — the same shape the managed VideoEngineSnapshot has, so the
@@ -269,6 +276,14 @@ __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime rt);
 /// parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale build (RequiredExports) instead of being
 /// called with arguments it would misread. Always returns S_OK.
 __declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format);
+
+/// F022: choose the PlayReady security level (FgPrSecurityPolicy) the NEXT runtime's CDM asks for. Process-wide and READ ONCE, when
+/// FgPrRuntimeCreateOnAdapter starts the bring-up: call it BEFORE the create. The default (and any unknown value) is FgPrSecurity_Probe3000:
+/// the bring-up asks for the `.3000` key system with a "3000" video capability and falls back to the software SL2000 request when the
+/// machine cannot grant it; the level that was provisioned is logged (`[eme-cdm] negotiated security level`). FgPrSecurity_Force2000
+/// skips the probe. A separate export, not a new parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale
+/// build (RequiredExports). Always returns S_OK.
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t policy);
 
 // ── license cache (KID-keyed; the runtime owns the CDM; key sessions stay open until Expired or Release) ─────────────
 
@@ -356,10 +371,20 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionPlaceOpmWindow(FgPrRuntime rt
 ///         representation's buffer past the landing point (an upswitch that should show soon).
 /// FgPrEvent_RepresentationQueued reports the splice (the downloading index), FgPrEvent_Representation the moment the
 /// decoder is handed the new representation's first sample (the active index).
+/// `storeBudgetBytes` (F040) is the segment-store byte budget derived for the new rung from its bandwidth (the window of
+/// bufferAheadMs + retainBehindMs at that bitrate, 16-128 MiB; 0 = leave the budget as it is). A higher budget applies at once, a
+/// lower one when the rung's first segment is spliced in. The init segment of a rung the session has already parsed (the opening
+/// one, an earlier switch's, a FgPrSessionPrefetchInit's) is not fetched again.
 __declspec(dllexport) int32_t __stdcall FgPrSessionSelectRepresentation(FgPrRuntime rt, FgPrSession s, int32_t index,
                                                                         const wchar_t* initUrl, const wchar_t* base,
                                                                         const wchar_t* prefix, const wchar_t* suffix,
-                                                                        int32_t retainMs);
+                                                                        int32_t retainMs, int64_t storeBudgetBytes);
+
+/// F036: ask the session to fetch and parse the init segment of a representation it may switch to next (the rungs beside the one
+/// playing), so the switch itself needs no init GET. Non-blocking: the feeder begins the GET alongside normal feeding and caches the
+/// parsed init by URL; asking for a URL already cached or already on the wire is a no-op. A failed or unusable GET is simply not
+/// cached (the switch then fetches its own and reports the real status). Safe to call repeatedly and from any thread.
+__declspec(dllexport) int32_t __stdcall FgPrSessionPrefetchInit(FgPrRuntime rt, FgPrSession s, const wchar_t* initUrl);
 
 /// One atomic read of the session's state. `out->structSize` must be sizeof(FgPrSnapshot).
 __declspec(dllexport) int32_t __stdcall FgPrSessionSnapshot(FgPrRuntime rt, FgPrSession s, FgPrSnapshot* out);

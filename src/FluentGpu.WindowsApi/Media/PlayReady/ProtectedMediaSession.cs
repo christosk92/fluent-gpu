@@ -651,7 +651,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             if (VideoStreamSizing.IsLaidOut(videoRect))
             {
                 VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
-                    pv == ProtectedVideoState.Playing, ClockMs());
+                    pv == ProtectedVideoState.Playing, ClockMs(), binding.Display);
                 if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
