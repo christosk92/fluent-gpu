@@ -49,6 +49,8 @@ static class MediaSeamSuite
         CommandCoalesceCheck();
         CommandLastWinsTransportCheck();
         WakeCoalesceCheck();
+        RequestWakeCoalesceCheck();
+        MultiProducerNoTearCheck();
     }
 
     // ── gate.media.seam.snapshot-alloc-free ───────────────────────────────────────────────────────────────────────
@@ -209,5 +211,88 @@ static class MediaSeamSuite
         Check("gate.media.seam.wake-coalesce — N posts before BeginDrain wake exactly once, and a post during/after drain wakes exactly once more",
             wokeOnceBeforeDrain && noExtraWakeFromDrainItself && wokeOnceMoreAfterDrainStart,
             $"wakeCount={wakeCount} beforeDrain={wokeOnceBeforeDrain} drainItself={noExtraWakeFromDrainItself} afterDrain={wokeOnceMoreAfterDrainStart}");
+    }
+
+    // ── gate.media.seam.request-wake-coalesce ─────────────────────────────────────────────────────────────────────
+
+    static void RequestWakeCoalesceCheck()
+    {
+        var q = new VideoEngineCommandQueue();
+        int wakeCount = 0;
+        q.Wake = () => Interlocked.Increment(ref wakeCount);
+
+        // A burst of native-event wakes wakes exactly once, and a command post inside the same drain cycle rides the same gate.
+        for (int i = 0; i < 50; i++) q.RequestWake();
+        q.Post(VideoCommandKind.Seek, a: 1);
+        bool onceForBurst = wakeCount == 1;
+
+        q.BeginDrain();
+        q.RequestWake();
+        q.RequestWake();
+        q.Post(VideoCommandKind.Volume, a: 0.5);
+        bool onceMoreAfterDrain = wakeCount == 2;
+
+        // A bare RequestWake carries no payload: nothing becomes pending.
+        var q2 = new VideoEngineCommandQueue();
+        q2.RequestWake();
+        bool noPayload = !q2.TryTake(VideoCommandKind.Seek, out _, out _, out _, out _)
+                         && !q2.TryTake(VideoCommandKind.Transport, out _, out _, out _, out _);
+
+        Check("gate.media.seam.request-wake-coalesce — event wakes and command posts share one gate: a burst wakes once per drain cycle, with no payload",
+            onceForBurst && onceMoreAfterDrain && noPayload,
+            $"wakeCount={wakeCount} burst={onceForBurst} afterDrain={onceMoreAfterDrain} noPayload={noPayload}");
+    }
+
+    // ── gate.media.seam.multi-producer ────────────────────────────────────────────────────────────────────────────
+
+    static void MultiProducerNoTearCheck()
+    {
+        const int Producers = 4, PostsEach = 200_000;
+        var q = new VideoEngineCommandQueue();
+        var tags = new object[Producers];
+        for (int p = 0; p < Producers; p++) tags[p] = new object();
+
+        long tears = 0, duplicates = 0, takes = 0;
+        int running = Producers;
+        var consumer = new Thread(() =>
+        {
+            var last = new int[Producers];   // last sequence taken per producer (strictly increasing, or it was applied twice)
+            Array.Fill(last, -1);
+            while (true)
+            {
+                if (!q.TryTake(VideoCommandKind.Seek, out double a, out int i, out int j, out object? obj))
+                {
+                    if (Volatile.Read(ref running) == 0) break;
+                    Thread.Yield();
+                    continue;
+                }
+                takes++;
+                // Payload from producer p, post n: a == n, i == n, j == p, obj == tags[p]. Anything else is a mix of two posts.
+                int p = j;
+                if ((uint)p >= Producers || !ReferenceEquals(obj, tags[p]) || a != i) { tears++; continue; }
+                if (i <= last[p]) duplicates++;
+                last[p] = i;
+            }
+        }) { IsBackground = true };
+
+        var producers = new Thread[Producers];
+        for (int p = 0; p < Producers; p++)
+        {
+            int id = p;
+            producers[p] = new Thread(() =>
+            {
+                for (int n = 0; n < PostsEach; n++) q.Post(VideoCommandKind.Seek, a: n, i: n, j: id, obj: tags[id]);
+                Interlocked.Decrement(ref running);
+            }) { IsBackground = true };
+        }
+
+        consumer.Start();
+        foreach (Thread t in producers) t.Start();
+        foreach (Thread t in producers) t.Join();
+        consumer.Join();
+
+        Check("gate.media.seam.multi-producer — concurrent Post from several threads never tears a payload and never applies one twice",
+            tears == 0 && duplicates == 0 && takes > 0,
+            $"takes={takes} tears={tears} duplicates={duplicates}");
     }
 }

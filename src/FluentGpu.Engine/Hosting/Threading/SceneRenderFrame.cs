@@ -85,8 +85,11 @@ internal sealed class SceneRenderFrame
             // presenting it anyway would latch its "content has presented" reveal evidence on a 1×1 (creation-size)
             // surface — a revealed popup window with nothing in it.
             bool placed = !target.WindowBoundsDip.IsEmpty || !target.BoundsDip.IsEmpty;
-            _popups[i] = new(target.Root, new(origin.X, origin.Y), target.Swapchain, target.Window,
-                target.DrawList, target.Recording, target.Swapchain?.SizePx ?? default, placed);
+            // The SLOT travels, not its swapchain: under a render thread the swapchain is created (and released) by that thread
+            // through the popup mailbox, so it may not exist yet when this publication is captured. RecordPopups resolves it
+            // (and its size) on the render thread when it records.
+            _popups[i] = new(target.Root, new(origin.X, origin.Y), target, target.Window,
+                target.DrawList, target.Recording, placed);
         }
         _popups.AsSpan(_popupCount).Clear();
     }
@@ -107,8 +110,11 @@ internal sealed class SceneRenderFrame
     internal double DiagSceneMs, DiagConfigMs, DiagImagesMs, DiagAnimMs;
 
     /// <summary>Record this publication into the render thread's slice arenas and lay out its composite plan (the scene
-    /// turn of the three-way render turn). <paramref name="commands"/> is left empty — the slices ARE the frame.</summary>
-    internal SceneRecordStats Record(DrawList commands, SpanTable spans, SliceRecorder slices, bool publicationGap)
+    /// turn of the three-way render turn). <paramref name="commands"/> is left empty — the slices ARE the frame.
+    /// <para><paramref name="slices"/> null = a STANDALONE record (a detached child, which presents through its own swapchain's
+    /// direct route): no slice is cut, every pose is baked, and the whole frame lands in <paramref name="commands"/> as ONE
+    /// stream for <c>SubmitDrawList</c>.</para></summary>
+    internal SceneRecordStats Record(DrawList commands, SpanTable spans, SliceRecorder? slices, bool publicationGap)
     {
         PublicationGap = publicationGap;
         var options = Options;
@@ -129,13 +135,13 @@ internal sealed class SceneRenderFrame
         for (int i = 0; i < _popupCount; i++)
         {
             ref readonly var popup = ref _popups[i];
-            if (popup.Swapchain is not { } swapchain || popup.Root.IsNull || !Scene.IsLive(popup.Root)) continue;
+            if (popup.Slot.Swapchain is not { } swapchain || popup.Root.IsNull || !Scene.IsLive(popup.Root)) continue;   // null: not created yet / already released
             if (!popup.Placed) continue;   // no placement yet ⇒ nothing to paint (and nothing to reveal on)
             popup.Recording.CopyConfigurationFrom(Scene.Recording);
             popup.Recording.RecordSubtree(Scene, popup.Commands, Images, Options.Focus, Options.ScrollThumb,
                 Options.ScrollTrack, Options.TextEdit, popup.Root, popup.Origin);
             device.SubmitDrawList(popup.Commands.Bytes, popup.Commands.SortKeys,
-                new FrameInfo(popup.Size, scale, ColorF.Transparent) { ImageClockMs = imageClockMs }, swapchain);
+                new FrameInfo(swapchain.SizePx, scale, ColorF.Transparent) { ImageClockMs = imageClockMs }, swapchain);
             swapchain.Present();
             // The open motion starts on the frame the popup's content is actually ON its composition surface — the
             // swapchain's own report, not the fact that Present() was called: a backend stands down for a covered /
@@ -178,8 +184,8 @@ internal sealed class SceneRenderFrame
         }
     }
 
-    private readonly record struct PopupRecordingTarget(NodeHandle Root, Point2 Origin, ISwapchain? Swapchain,
-        IPlatformPopupWindow Window, DrawList Commands, SceneRecordingContext Recording, Size2 Size, bool Placed);
+    private readonly record struct PopupRecordingTarget(NodeHandle Root, Point2 Origin, PopupWindowSlot Slot,
+        IPlatformPopupWindow Window, DrawList Commands, SceneRecordingContext Recording, bool Placed);
 
     private static void Copy<T>(ReadOnlySpan<T> source, ref T[] destination, out int count)
     {

@@ -96,7 +96,7 @@ public sealed class SceneFramePublisher
 
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
-                         bool suppressVsync = false)
+                         bool suppressVsync = false, bool settlePresent = false)
     {
         if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -128,6 +128,7 @@ public sealed class SceneFramePublisher
             SortLen = sort.Length,
             Submit = submit with { RepaintDamage = region, PublishSequence = seq, CarriedFromSeq = carriedFrom },
             SuppressVsync = suppressVsync,
+            SettlePresent = settlePresent,
         };
         Volatile.Write(ref _slotStates[free], ((long)seq << 2) | Published);
         Volatile.Write(ref _publishedToken, ((long)seq << 2) | (uint)free);
@@ -169,7 +170,7 @@ public sealed class SceneFramePublisher
     internal ulong PublishScene(SceneStore scene, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
-        bool suppressVsync)
+        bool suppressVsync, bool settlePresent = false)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -221,6 +222,7 @@ public sealed class SceneFramePublisher
             TargetEpoch = Volatile.Read(ref _targetEpoch),
             Submit = submit with { PublishSequence = seq, CarriedFromSeq = carriedFrom, RepaintDamage = repaint },
             SuppressVsync = suppressVsync,
+            SettlePresent = settlePresent,
         };
         _publishSeq = seq;
         Volatile.Write(ref _slotStates[slot], ((long)seq << 2) | Published);

@@ -64,6 +64,28 @@ public sealed class RenderThreadLifecycleTests
         }
     }
 
+    // F102: fgpu-render is the deadline thread of the whole process (record, composite, submit, present for every window), so
+    // it runs above the Normal-priority decode workers and ThreadPool continuations it shares the cores with. The submit
+    // callback runs ON the render thread, so it reads the thread's own priority.
+    [Fact]
+    public void RenderThread_RunsAtAboveNormalPriority_ForItsLifetime()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        ThreadPriority seen = ThreadPriority.Lowest;
+        string? name = null;
+        var rt = new RenderThread(seam, _ => { seen = Thread.CurrentThread.Priority; name = Thread.CurrentThread.Name; }, async: false);
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);
+            rt.DrainSync();   // force-sync: the turn (and its writes) complete before DrainSync returns
+            Assert.Equal("fgpu-render", name);
+            Assert.Equal(ThreadPriority.AboveNormal, seen);
+        }
+        finally { rt.Dispose(); }
+    }
+
     // The present-slot take (IGpuDevice.TryTakePresentSlot) must be paid BEFORE the frame is chosen — the whole point
     // of the latency fix: the presented state is then the freshest one that existed when the slot opened, instead of one
     // aged by the wait (the historical order waited inside submit, AFTER the acquire, which on a GPU costing most of a
@@ -422,6 +444,53 @@ public sealed class RenderThreadLifecycleTests
             Assert.Equal(2, submits);
             Assert.Equal(0, ticks);
             Assert.Equal(0, rt.SkippedTicks);
+        }
+        finally { rt.Dispose(); }
+    }
+
+    // F207: the UI's park rendezvous must not wait out a present-slot wait. The fake take blocks like the real device's 1 s
+    // liveness wait - until the slot opens (never, here) OR the park-request event fires - and answers false WITHOUT taking
+    // the credit when the park request ended it. Quiesce must then return as soon as the loop reaches its gate, the aborted
+    // turn must have presented nothing (nothing to undo, nothing retaken), and after Resume the still-pending publication
+    // presents on a fresh take.
+    [Fact]
+    public void Quiesce_InterruptsABlockedSlotTake_AndTheAbortedTurnPresentsNothing()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        int submits = 0, takes = 0;
+        using var entered = new ManualResetEventSlim(false);
+        RenderThread? rt = null;
+        rt = new RenderThread(seam, _ => Interlocked.Increment(ref submits), async: false,
+                              takePresentSlot: _ =>
+                              {
+                                  if (Interlocked.Increment(ref takes) != 1) return true;   // the turn after Resume takes its credit at once
+                                  entered.Set();
+                                  bool aborted = rt!.ParkRequested.WaitOne(10_000);
+                                  return !aborted;   // false = the park request ended the wait and nothing was taken
+                              });
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);
+            rt.WakeAsync();
+            Assert.True(entered.Wait(5_000), "the render thread never reached the blocked slot take");
+
+            var sw = Stopwatch.StartNew();
+            rt.Quiesce();
+            sw.Stop();
+            try
+            {
+                Assert.True(sw.ElapsedMilliseconds < 1_000, $"Quiesce must not wait out the slot take; took {sw.ElapsedMilliseconds} ms");
+                Assert.Equal(0, Volatile.Read(ref submits));   // the aborted turn presented nothing
+                Assert.Equal(1, Volatile.Read(ref takes));     // and did not retake the slot behind the UI's back
+                Assert.Equal(1L, rt.QuiesceCount);
+                Assert.True(rt.QuiesceWaitMsMax > 0.0 && rt.QuiesceWaitMsMax < 1_000.0, $"QuiesceWaitMsMax={rt.QuiesceWaitMsMax}");
+            }
+            finally { rt.Resume(); }
+
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref submits) == 1, 5_000), "the pending publication never presented after Resume");
+            Assert.False(rt.ParkRequested.WaitOne(0), "the gate must consume the park request");
         }
         finally { rt.Dispose(); }
     }

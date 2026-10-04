@@ -37,6 +37,9 @@ public static class ThreadGuard
         t_role = role;
     }
 
+    /// <summary>True when the CURRENT thread is the bound UI thread (a non-throwing probe for diagnostics that must count, not fail).</summary>
+    internal static bool IsUiThread => t_role == ThreadRole.Ui;
+
     [Conditional("FGGUARD")] public static void AssertUi()     { if (t_role != ThreadRole.Ui)     ThrowWrongThread(ThreadRole.Ui); }
     [Conditional("FGGUARD")] public static void AssertRender() { if (t_role != ThreadRole.Render) ThrowWrongThread(ThreadRole.Render); }
     [Conditional("FGGUARD")] public static void AssertWorkerOrRender() { if (t_role is not (ThreadRole.Worker or ThreadRole.Render)) ThrowWrongThread(ThreadRole.Worker); }

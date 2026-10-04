@@ -77,6 +77,7 @@ public static class SuiteRegistry
         new("media-seam", "media-seam", MediaSeamSuite.Run),
         new("continuity", "continuity", VisualContinuityChecks.Run),
         new("detached-render", "detached-render", FluentGpu.VerticalSlice.Suites.DetachedRenderResilienceSuite.Run),
+        new("detached-pacing", "detached-pacing", FluentGpu.VerticalSlice.Suites.DetachedPacingSuite.Run),   // F094/F097: a pop-out's motion is not the parent's present; per-target pacing evidence and queue depth
     ];
 
     public static IEnumerable<SuiteEntry> Filter(string? suiteSpec)

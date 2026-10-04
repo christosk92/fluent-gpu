@@ -35,7 +35,7 @@
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
     <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
     <!-- M5: the protected-video types (ProtectedVideoRuntime + its license relay / LicenseCachePolicy / ProtectedMediaSession /
-         ProtectedMediaBackend / DashManifestParser) live in WindowsApi, whose internals are visible to this assembly; the
+         ProtectedMediaBackend / DashDescriptorMapper) live in WindowsApi, whose internals are visible to this assembly; the
          routing, relay, cache and session tests reference them directly. -->
     <ProjectReference Include="..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
   </ItemGroup>

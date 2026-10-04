@@ -37,13 +37,16 @@ public interface IVideoPresenter
     /// <c>IDCompositionDevice::CreateSurfaceFromHandle</c> and binds it as the child visual's content. Phase 1
     /// (DRM-free) passes an UNPROTECTED handle; the DRM phase passes a PROTECTED handle here — and NOTHING else in
     /// this seam or the renderer changes. This is the single DRM attach point.
+    /// <para>Returns <see langword="true"/> only when the handle is now the surface's content. On failure it returns
+    /// <see langword="false"/> after DROPPING the previous content (a stale frame of an earlier source must never stay on
+    /// screen under a new one), and the caller keeps the handle unbound and retries on a later drain.</para>
     /// </summary>
-    void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);
+    bool BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);
 
     /// <summary>
-    /// Position/clip the child visual to <paramref name="deviceRect"/> (device px) at draw order <paramref name="z"/>.
-    /// Queued for the frame's <see cref="Commit"/>; the matching hole-punch in the UI back buffer is the source of
-    /// truth for the visible rect. <paramref name="opacity"/> is retained metadata (the graded reveal is done UI-side).
+    /// Position/clip the child visual to <paramref name="deviceRect"/> (device px) at draw order <paramref name="z"/>
+    /// (higher Z composites above lower Z, always below the UI visual). Queued for the frame's <see cref="Commit"/>; the
+    /// matching hole-punch in the UI back buffer is the source of truth for the visible rect. <paramref name="opacity"/> is retained metadata (the graded reveal is done UI-side).
     /// </summary>
     void Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z);
 
@@ -51,7 +54,8 @@ public interface IVideoPresenter
     /// UniformToFill can place an oversized, centered frame and crop it to the element without distortion.</summary>
     void SetViewport(VideoSurfaceId id, RectF deviceRect) { }
 
-    /// <summary>Show/hide the child visual (queued for the next <see cref="Commit"/>).</summary>
+    /// <summary>Show/hide the child visual (queued for the next <see cref="Commit"/>). Hiding removes the visual from the
+    /// composition tree rather than clipping it to nothing; showing re-inserts it at its Z with its content still bound.</summary>
     void SetVisible(VideoSurfaceId id, bool visible);
 
     /// <summary>

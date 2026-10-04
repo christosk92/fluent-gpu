@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
+using FluentGpu.Pal;
 using FluentGpu.WindowsApi.Media.PlayReady;
 using Xunit;
 
@@ -345,6 +346,26 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
     }
 
     [Fact]
+    public void AnErrorAFreshRuntimeCures_PublishesARetryableNonDrmError_CarryingTheHresult()
+    {
+        var (session, core, player) = NewSession();
+        int hr = unchecked((int)0x887A0005);   // DXGI_ERROR_DEVICE_REMOVED
+        player.ErrorHr = hr;
+        player.ErrorNeedsRuntimeRebuild = true;
+        player.SetError("The protected-video runtime was reset (0x887A0005); reopen the video.");
+        player.SetState(ProtectedVideoState.Error);
+
+        session.PumpVideo(default, Rect, 1f);
+
+        MediaError? error = core.Error.Peek();
+        Assert.NotNull(error);
+        Assert.Equal(MediaRecovery.Retryable, error!.Recovery);   // the owner reopens it, never "your license failed"
+        Assert.NotEqual(MediaErrorCategory.Drm, error.Category);
+        Assert.Equal(hr, (int)error.UnderlyingCode!.Value);
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+    }
+
+    [Fact]
     public async Task Dispose_StopsAndDisposesThePlayer_Unsubscribes_AndSilencesTheTransport()
     {
         var (session, _, player) = NewSession();
@@ -395,6 +416,7 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         player.HasSurface = true;
         player.SurfaceHandle = 0xBEEF;
         player.SetNaturalSize(3840, 2160);
+        player.FirstFrameEpoch = 1;
         player.SetState(ProtectedVideoState.Loading);
 
         session.PumpVideo(binding, Rect, 1f);
@@ -429,6 +451,108 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         player.HasSurface = false;
         session.PumpVideo(NewBinding(new VideoSurfaceRegistry()), Rect, 1f);    // no swap chain produced yet
         Assert.Equal(0, player.SetStreamSizeCalls);
+    }
+
+    [Fact]
+    public void PumpVideo_BeforeTheFirstFrameOfThisAttach_PlacesTheSurfaceButNeverShowsIt()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;                       // the swap chain exists (LOADEDMETADATA) ...
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.SetState(ProtectedVideoState.Loading);   // ... but its first frame has not landed: it holds the PREVIOUS source's picture
+
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.Equal(new SizeI(1280, 720), player.LastStreamSize);   // sized and placed already, so the first frame lands in place
+        Assert.Equal(Rect, presenter.LastPlaceRect);
+        Assert.False(presenter.LastVisible);
+        Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
+        Assert.IsType<VideoDelivery.CompositedSurface>(session.Video);
+
+        player.FirstFrameEpoch = 1;                     // FIRSTFRAMEREADY of this attach
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.True(presenter.LastVisible);
+        Assert.NotEqual(default(VideoSurfaceId), core.VideoSurface.Peek());
+    }
+
+    [Fact]
+    public void PumpVideo_ASecondAttachWithoutItsFirstFrame_HidesTheSlotAgain()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+        Assert.True(presenter.LastVisible);
+
+        player.HasFirstFrame = false;                   // re-attached: FirstFrameEpoch still holds the old attach's value
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.False(presenter.LastVisible);
+        Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
+    }
+
+    [Fact]
+    public void PumpVideo_WhenTheSurfaceIsDetached_HidesTheSlotAndWithdrawsTheVideoSurface()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+        Assert.True(presenter.LastVisible);
+        Assert.NotEqual(default(VideoSurfaceId), core.VideoSurface.Peek());
+
+        player.HasSurface = false;                      // another session's attach detached this one natively
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.False(presenter.LastVisible);
+        Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
+        Assert.Equal(VideoDelivery.None, session.Video);
+    }
+
+    [Fact]
+    public void PumpVideo_ANaturalSizeGrow_RaisesTheStreamSize_WhenTheDestinationCanShowIt()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        VideoBinding binding = NewBinding(registry);
+        var big = new RectF(0, 0, 1920, 1080);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        player.SetNaturalSize(1280, 720);               // the opening rung
+        session.PumpVideo(binding, big, 1f);
+        Assert.Equal(new SizeI(1280, 720), player.LastStreamSize);
+
+        player.SetNaturalSize(1920, 1080);              // ABR upgraded: FORMATCHANGE reported the bigger frame
+        session.PumpVideo(binding, big, 1f);
+
+        Assert.Equal(new SizeI(1920, 1080), player.LastStreamSize);   // not pinned to the opening rung's swap chain
+        Assert.Equal(2, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(1920, 1080), core.SurfaceGeometry.Peek().Content);
     }
 
     [Fact]
@@ -475,14 +599,28 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         => Assert.Equal(1_234, ProtectedMediaSession.ExtrapolatePositionMs(1_234, 1_000, playing: false, 1.0, 1_000 + Stopwatch.Frequency));
 
     [Theory]
-    [InlineData(1.0, 2_000L)]
-    [InlineData(2.0, 3_000L)]
-    [InlineData(0.5, 1_500L)]
+    [InlineData(1.0, 1_400L)]
+    [InlineData(2.0, 1_800L)]
+    [InlineData(0.5, 1_200L)]
     public void ExtrapolatePositionMs_Playing_AddsElapsedTimesRate(double rate, long expected)
     {
         const long sampledAt = 5_000_000;
         Assert.Equal(expected,
+            ProtectedMediaSession.ExtrapolatePositionMs(1_000, sampledAt, playing: true, rate, sampledAt + Stopwatch.Frequency * 2 / 5));
+    }
+
+    [Theory]
+    [InlineData(1.0, 1_500L)]
+    [InlineData(2.0, 2_000L)]
+    [InlineData(0.5, 1_250L)]
+    public void ExtrapolatePositionMs_StopsAtTheCap_WhenNoNewSampleArrives(double rate, long expected)
+    {
+        // F030: a clock that stopped without the state saying so (TIMEUPDATE went quiet) must not run on from a stale sample.
+        const long sampledAt = 5_000_000;
+        Assert.Equal(expected,
             ProtectedMediaSession.ExtrapolatePositionMs(1_000, sampledAt, playing: true, rate, sampledAt + Stopwatch.Frequency));
+        Assert.Equal(expected,
+            ProtectedMediaSession.ExtrapolatePositionMs(1_000, sampledAt, playing: true, rate, sampledAt + Stopwatch.Frequency * 60));
     }
 
     [Fact]

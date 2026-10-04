@@ -121,6 +121,44 @@ public sealed class MfMediaSessionTests
     }
 
     [Fact]
+    public void WaitingWhilePlaying_PublishesRebufferingBuffering_UntilTheStallEnds()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.DurationSeconds = 60; Pump(s);
+        _ = s.PlayAsync(); eng.Playing = true; Pump(s);
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+
+        eng.Waiting = true;                 // MF WAITING: Playing stays true across a starvation
+        Pump(s);
+        Assert.Equal(PlaybackState.Buffering, core.State.Peek());
+        Assert.True(core.Buffering.Peek().IsBuffering);
+        Assert.Equal(BufferingReason.Rebuffering, core.Buffering.Peek().Reason);
+
+        eng.Waiting = false;                // PLAYING / CANPLAY / playhead progress cleared it
+        Pump(s);
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.False(core.Buffering.Peek().IsBuffering);
+    }
+
+    [Fact]
+    public void WaitingWhilePlaying_StopsProjectingThePositionForward()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.DurationSeconds = 60; Pump(s);
+        _ = s.PlayAsync(); eng.Playing = true; eng.CurrentTimeSeconds = 10; Pump(s);
+
+        eng.Waiting = true;                 // republishes the snapshot (a fresh PositionTimestamp) with position 10
+        System.Threading.Thread.Sleep(80);  // a stall long enough that a projected clock would visibly run ahead
+        Pump(s);
+        Assert.Equal(10.0, core.Position.Peek().TotalSeconds, 3);   // frozen with the frame
+
+        eng.Waiting = false;
+        System.Threading.Thread.Sleep(80);
+        Pump(s);
+        Assert.True(core.Position.Peek().TotalSeconds > 10.04);     // projection resumes with the playback
+    }
+
+    [Fact]
     public void Metadata_PublishesSizeDurationCommands_AndBecomesReady()
     {
         var (s, core, eng) = NewSession(startPaused: true);
@@ -311,13 +349,98 @@ public sealed class MfMediaSessionTests
         s.PumpVideo(binding, Rect, 1f);       // identical host work is not a repaint
         Assert.False(eng.Commands.TryTakeRepaint());
 
-        eng.RaiseStateChanged();               // MF worker event -> one coalesced caller request
+        eng.RaiseStateChanged();               // MF worker event -> one coalesced caller request, but NOT a repaint
         Assert.Equal(1, requested);
         s.PumpVideo(binding, Rect, 1f);
-        Assert.True(eng.Commands.TryTakeRepaint());
+        Assert.False(eng.Commands.TryTakeRepaint());
 
         s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f); // geometry invalidates once
         Assert.True(eng.Commands.TryTakeRepaint());
+    }
+
+    [Fact]
+    public void Repaint_IsOwedAfterAPausedSeekCompletes_AndNeverPostedWhilePlaying()
+    {
+        var (s, _, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());        // the initial hand-off
+
+        eng.Seeking = true; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(eng.Commands.TryTakeRepaint());       // a seek in flight owes nothing yet
+        eng.Seeking = false; eng.SeekedCount = 1; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());        // the landed paused frame is repainted once
+
+        // A fast paused seek: SEEKING and SEEKED both land between two pumps, so the Seeking flag is never observed. The
+        // SEEKED counter still moves, so the landed frame is repainted.
+        eng.SeekedCount = 2; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(eng.Commands.TryTakeRepaint());       // and only once
+
+        eng.Playing = true; eng.Seeking = true; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        eng.Seeking = false; eng.SeekedCount = 3; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(eng.Commands.TryTakeRepaint());       // MF presents its own frames while Playing
+        eng.Playing = false; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());        // the owed repaint is paid at the first non-Playing pump
+    }
+
+    [Fact]
+    public void Surface_IsNotPublishedAtBind_OnlyOnceThisSourcesFirstFrameLands()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, Rect, 1f);                    // handle bound, no frame yet
+        Assert.True(core.VideoSurface.Peek().IsNone);
+        Assert.Equal(0, s.FirstFrameEpoch);
+
+        eng.FirstFrameTimestamp = 12345; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(core.VideoSurface.Peek().IsNone);
+        Assert.Equal(1, s.FirstFrameEpoch);
+
+        s.PumpVideo(binding, Rect, 1f);                    // one-shot per session
+        Assert.Equal(1, s.FirstFrameEpoch);
+    }
+
+    [Fact]
+    public void Surface_IsDroppedByAPresentationEpochBump_AndRepublishedOnTheRebind()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xAAAA; eng.FirstFrameTimestamp = 7;
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(core.VideoSurface.Peek().IsNone);
+
+        eng.Handle = 0;                                    // the rebuilt swap chain has no handle yet
+        eng.RaiseFormatChange();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(core.VideoSurface.Peek().IsNone);      // the poster covers until the next handle
+
+        eng.Handle = 0xBBBB;
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(core.VideoSurface.Peek().IsNone);     // same source, first frame already seen: back at the rebind
+    }
+
+    [Fact]
+    public void ConnectSignals_ResetsASurfaceTheSinkStillHeldFromAPreviousSession()
+    {
+        var core = new MediaPlayerCore();
+        var sink = new MediaSignalSink(core);
+        sink.VideoSurface(new VideoSurfaceId(1));          // what the previous session of an in-place Switch left behind
+
+        new MfMediaSession(new FakeVideoEngine(), 0, new MediaOpenOptions()).ConnectSignals(sink);
+
+        Assert.True(core.VideoSurface.Peek().IsNone);
     }
 
     [Fact]

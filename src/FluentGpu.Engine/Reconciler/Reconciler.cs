@@ -653,6 +653,22 @@ public sealed partial class TreeReconciler
         effect.RunNow();
     }
 
+    /// <summary>Unmount the whole component tree (host Dispose): dispose the root render-effect, run the root component's
+    /// hook cleanups, then unmount every node (component scopes, bindings, image pins, keep-alive pages). The scene itself
+    /// is left to the host's teardown. Idempotent; without it nothing ever disposed the root effect, so a closed host
+    /// stayed reachable from every process-lifetime signal its components subscribed to.</summary>
+    public void UnmountRoot()
+    {
+        var effect = _rootEffect;
+        _rootEffect = null;
+        if (effect is null && _root is null) return;
+        effect?.Dispose();
+        if (_root is { } root) { _root = null; root.Unmount(); }
+        var sceneRoot = _scene.Root;
+        if (!sceneRoot.IsNull && _scene.IsLive(sceneRoot)) UnmountSubtree(sceneRoot);
+        _oldRoot = null;
+    }
+
     private void RunRoot(Component root)
     {
         _renderCount++;

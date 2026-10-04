@@ -73,7 +73,7 @@ sealed class TargetSampleGpuDevice : IGpuDevice
     }
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx) { }
     public bool SupportsComposite => true;
-    public void SubmitComposite(in CompositeFrame frame)
+    public void SubmitComposite(in CompositeFrame frame, ISwapchain target)
     {
         for (int i = 0; i < frame.RasterDone.Length; i++) frame.RasterDone[i] = 1;
         if (_primary is not null) SubmitDrawList(default, default, in frame.Info, _primary);

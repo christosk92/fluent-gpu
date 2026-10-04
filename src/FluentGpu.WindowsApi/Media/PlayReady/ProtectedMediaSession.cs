@@ -37,7 +37,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
 
     private MediaSignalSink? _sink;
     private bool _disposed;
-    private bool _started;
+    private int _started;
     private bool _playRequested;
     private double _rate = 1.0;
 
@@ -65,12 +65,24 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private readonly ProtectedTrackDescriptor? _videoTrack;
     private readonly QualityVariant[] _qualityVariants = Array.Empty<QualityVariant>();
     private readonly AdaptiveBitrateController? _abr;
-    private int _policyMaxHeight = int.MaxValue;
+    // The viewport cap THIS session last committed to the shared controller (int.MaxValue = none yet), plus the pending
+    // LOWER cap being timed. The policy cap lives on the controller only; the session never reads a cap back as policy.
     private int _viewportMaxHeight = int.MaxValue;
+    private int _viewportLowerCandidate;
+    private long _viewportLowerSinceTicks;
     private QualitySelection _qualitySelection = QualitySelection.Auto;
-    private QualityVariant? _activeQuality;
+    private QualityVariant? _activeQuality;               // the rung ON SCREEN (published to the player)
+    private string? _downloadingQualityId;                // the rung the downloader is on: the ABR's baseline
     private string? _pendingRepresentationId;
     private long _pendingRepresentationTicks;
+    // Switch pacing (AbrSwitchGate): the minimum interval between ABR-initiated switches, and the rule that a forced probe
+    // is judged only on samples from its own rung. _probeRungId is the rung that probe stepped to.
+    private readonly AbrSwitchGate _gate = new();
+    private string? _probeRungId;
+    // A viewport RAISE (entering fullscreen) is the one upswitch that should show soon: the next upswitch inside the window
+    // keeps only ViewportUpswitchRetainMs of the old representation's buffer instead of appending after all of it.
+    private bool _viewportRaised;
+    private long _viewportRaiseTicks;
     private long _lastBytesDownloaded;
     private long _lastDownloadElapsedMs;
     private long _lastGrowthTicks;
@@ -103,9 +115,12 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             for (int i = 0; i < _qualityVariants.Length; i++)
                 _qualityVariants[i] = _videoTrack.Representations[i].Quality;
             _abr = opts.Abr as AdaptiveBitrateController ?? new AdaptiveBitrateController();
-            _policyMaxHeight = _abr.MaxHeight;
+            // The controller is shared across sources: keep its throughput history and policy cap, drop the previous
+            // source's ladder position, probe/climb state and viewport cap.
+            _abr.ResetForNewSource();
             _qualitySelection = _abr.Selection;
             _activeQuality = FindInitialQuality(_videoTrack, request.InitUrl);
+            _downloadingQualityId = _activeQuality?.Id;
             for (int i = 0; i < _qualityVariants.Length; i++)
                 if (string.Equals(_qualityVariants[i].Id, _activeQuality?.Id, StringComparison.Ordinal))
                 { _abr.SeedCurrent(i); break; }
@@ -151,13 +166,19 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     public static MediaErrorCategory StartFailureCategory(ProtectedVideoPhase phase)
         => phase == ProtectedVideoPhase.Buffering ? MediaErrorCategory.Network : MediaErrorCategory.Drm;
 
+    /// <summary>The longest, in wall-clock ms, a native position sample is extrapolated forward: about two TIMEUPDATE
+    /// intervals (the runtime samples the engine clock at least every ~200 ms while it runs). A clock that has stopped
+    /// without the state saying so (a stall whose WAITING never came, or a TIMEUPDATE that went quiet) therefore drifts
+    /// the published position by at most this much, instead of running on forever from a stale sample.</summary>
+    public const long MaxExtrapolationMs = 500;
+
     /// <summary>The position to publish: the native sample, extrapolated by the time since it was taken × rate while the
     /// clock runs (the clear path's rule — a pump between two native samples reports a moving playhead, not a
-    /// stair-step). Pure.</summary>
+    /// stair-step), for at most <see cref="MaxExtrapolationMs"/> of wall-clock time past the sample. Pure.</summary>
     public static long ExtrapolatePositionMs(long sampleMs, long sampleTimestamp, bool playing, double rate, long nowTimestamp)
     {
         if (!playing || sampleTimestamp == 0 || nowTimestamp <= sampleTimestamp) return Math.Max(0, sampleMs);
-        double elapsedMs = (nowTimestamp - sampleTimestamp) * 1000.0 / Stopwatch.Frequency;
+        double elapsedMs = Math.Min((nowTimestamp - sampleTimestamp) * 1000.0 / Stopwatch.Frequency, MaxExtrapolationMs);
         return Math.Max(0, sampleMs + (long)(elapsedMs * rate));
     }
 
@@ -165,7 +186,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     public void ConnectSignals(MediaSignalSink sink)
     {
         _sink = sink;
-        sink.PlayRequested(!_opts.StartPaused);
+        // The play intent is the session's own (an early PlayAsync may have raised it before the sink connected); it equals
+        // !StartPaused until then.
+        sink.PlayRequested(_playRequested);
         sink.State(PlaybackState.Opening);
         _publishedState = PlaybackState.Opening;
         // The carried start position is published at once: the seek bar never shows 0:00 for a source opening at 1:23.
@@ -173,7 +196,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         PublishCatalog(sink);
         StartOnce();
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
-            RequestRepresentation(initialPin);
+            RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
         RequestPump();
     }
 
@@ -185,10 +208,21 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         try { PumpRequested?.Invoke(); } catch { }
     }
 
+    /// <summary>
+    /// Begins the native open (prepare + attach) WITHOUT a sink: <c>MediaPlayer</c> calls this on the opening thread the
+    /// moment <c>OpenAsync</c> returns the session, so the segment fetch and licence work no longer wait for the UI hop
+    /// that connects the signals. Idempotent and safe from any thread (<see cref="ConnectSignals"/> and
+    /// <see cref="PlayAsync"/> call the same once-only start). A session disposed before the call never starts.
+    /// <para>Off-UI-thread safety: the start only arms the deadline timer and calls <c>_player.Start</c> (native session
+    /// calls plus pump requests, which the session may always raise from a worker thread). It touches no sink and no UI
+    /// state, and the deferred-start continuation already runs the same <c>Attach</c> from a pool thread.</para>
+    /// </summary>
+    public void Start() => StartOnce();
+
     private void StartOnce()
     {
-        if (_started) return;
-        _started = true;
+        if (_disposed) return;
+        if (Interlocked.Exchange(ref _started, 1) != 0) return;
         _startTicks = Environment.TickCount64;
         _lastGrowthTicks = _startTicks;
         _startDeadline = new Timer(static s => ((ProtectedMediaSession)s!).OnStartDeadline(), this,
@@ -223,7 +257,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _playRequested = true;
         _settledPlayIntent = false;
         _sink?.PlayRequested(true);
-        if (!_started) StartOnce();
+        StartOnce();
         return _player.PlayAsync();
     }
 
@@ -313,9 +347,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         {
             _pendingRepresentationId = id;
             _pendingRepresentationTicks = Environment.TickCount64;
+            _gate.EndProbe();   // a pin ends any probe: the user's rung is not a verdict on the link
+            _gate.NoteSwitch(_pendingRepresentationTicks);
             try
             {
-                await _player.SelectVideoRepresentationAsync(id).ConfigureAwait(false);
+                await _player.SelectVideoRepresentationAsync(id, PinRetainMs).ConfigureAwait(false);
             }
             catch
             {
@@ -335,23 +371,90 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     /// on any bandwidth. A viewport is a hint about what is worth downloading, not a licence to starve the ladder.</summary>
     private const int MinViewportCapHeight = 720;
 
+    /// <summary>How long a LOWER viewport cap must hold unchanged before it is committed. A fullscreen exit animates
+    /// through many heights; a cap that follows each one samples a surface mid-resize. Raising is never delayed.</summary>
+    private const long ViewportLowerSettleMs = 1_500;
+
     /// <inheritdoc/>
-    public void SetAdaptiveViewportHeight(int height)
+    public void SetAdaptiveViewportHeight(int height) => ApplyViewportHeight(height, Environment.TickCount64);
+
+    /// <summary>The viewport-cap policy behind <see cref="SetAdaptiveViewportHeight"/>, with the clock passed in so the
+    /// settle is testable. The height is floored at <see cref="MinViewportCapHeight"/> and quantised UP to a ladder height
+    /// (so 1012 px and 1080 px fullscreen are the same cap). The first cap and every RAISE commit at once; a LOWER cap
+    /// commits only after it has been the requested cap for <see cref="ViewportLowerSettleMs"/>.</summary>
+    internal void ApplyViewportHeight(int height, long nowTicks)
     {
-        if (_abr is null) return;
+        AdaptiveBitrateController? abr = _abr;
         // Zero/negative is "not laid out yet"; a height during an in-flight representation switch describes a surface
-        // mid-replacement — neither is a real viewport.
-        if (height <= 0 || _pendingRepresentationId is not null) return;
-        _viewportMaxHeight = Math.Max(height, MinViewportCapHeight);
-        _abr.MaxHeight = Math.Min(_policyMaxHeight, _viewportMaxHeight);
+        // mid-replacement — neither is a real viewport. A pending switch also restarts any lower-cap timer, so the
+        // switch itself never counts towards "stable".
+        if (abr is null || _disposed || height <= 0) return;
+        if (_pendingRepresentationId is not null) { _viewportLowerCandidate = 0; return; }
+        int cap = QuantiseViewportCap(Math.Max(height, MinViewportCapHeight));
+        if (_viewportMaxHeight == int.MaxValue || cap >= _viewportMaxHeight)
+        {
+            CommitViewportCap(abr, cap, nowTicks);
+            return;
+        }
+        if (cap != _viewportLowerCandidate)
+        {
+            _viewportLowerCandidate = cap;
+            _viewportLowerSinceTicks = nowTicks;
+            return;
+        }
+        if (nowTicks - _viewportLowerSinceTicks >= ViewportLowerSettleMs) CommitViewportCap(abr, cap, nowTicks);
+    }
+
+    private void CommitViewportCap(AdaptiveBitrateController abr, int cap, long nowTicks)
+    {
+        if (_viewportMaxHeight != int.MaxValue && cap > _viewportMaxHeight)
+        {
+            _viewportRaised = true;
+            _viewportRaiseTicks = nowTicks;
+        }
+        _viewportMaxHeight = cap;
+        _viewportLowerCandidate = 0;
+        abr.ViewportMaxHeight = cap;
+    }
+
+    /// <summary>The smallest ladder height at or above <paramref name="height"/>; the tallest rung when the surface is
+    /// taller than every rung; the raw height when no rung declares a resolution.</summary>
+    private int QuantiseViewportCap(int height)
+    {
+        int atOrAbove = int.MaxValue, tallest = 0;
+        for (int i = 0; i < _qualityVariants.Length; i++)
+        {
+            int rung = _qualityVariants[i].Resolution.Height;
+            if (rung > tallest) tallest = rung;
+            if (rung >= height && rung < atOrAbove) atOrAbove = rung;
+        }
+        if (atOrAbove != int.MaxValue) return atOrAbove;
+        return tallest > 0 ? tallest : height;
+    }
+
+    /// <summary>
+    /// The typed error for a protected session that ended in <see cref="ProtectedVideoState.Error"/>. A failure a fresh runtime
+    /// cures (the runtime was replaced after a device removal/reset or a hardware-DRM context reset, or never came up) is
+    /// <see cref="MediaRecovery.Retryable"/> in a NON-DRM category with the HRESULT as <see cref="MediaError.UnderlyingCode"/>:
+    /// the owner reopens the source in place instead of telling the user their license failed. Anything else keeps the
+    /// historical <see cref="MediaErrorCategory.Drm"/> + <see cref="MediaRecovery.NeedsLicense"/>. Pure.
+    /// </summary>
+    internal static MediaError ProtectedFailure(string? message, int hr, bool needsRuntimeRebuild, MediaLocus? locus)
+    {
+        if (needsRuntimeRebuild || ProtectedRuntimeFaults.IsRuntimeReset(hr))
+            return new MediaError(MediaErrorCategory.Output,
+                message ?? $"The protected video pipeline was reset (0x{unchecked((uint)hr):X8}).",
+                hr != 0 ? hr : null, locus, MediaRecovery.Retryable);
+        return new MediaError(MediaErrorCategory.Drm,
+            message ?? "Protected playback failed (CDM/license).", null, locus, MediaRecovery.NeedsLicense);
     }
 
     /// <inheritdoc/>
     public void SetAdaptiveMaxHeight(int height)
     {
         if (_abr is null) return;
-        _policyMaxHeight = height > 0 ? height : int.MaxValue;
-        _abr.MaxHeight = Math.Min(_viewportMaxHeight, _policyMaxHeight);
+        // POLICY only: the viewport cap is a separate controller input and the effective cap is min(policy, viewport).
+        _abr.PolicyMaxHeight = height > 0 ? height : int.MaxValue;
     }
 
     // ── the UI-thread pump ─────────────────────────────────────────────────────────────────────────────────────────
@@ -364,7 +467,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
 
         _player.Pump(binding);
         ProtectedVideoState pv = _player.State.Value;
-        UpdateAdaptiveState(sink);
+        UpdateAdaptiveState(sink, Environment.TickCount64);
 
         // 1. Terminal error → typed MediaError, published once. Never a silent drop.
         if (pv == ProtectedVideoState.Error)
@@ -373,8 +476,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             {
                 _errorPublished = true;
                 DisarmStartDeadline();
-                sink.Error(new MediaError(MediaErrorCategory.Drm,
-                    _player.Error.Value ?? "Protected playback failed (CDM/license).", null, _locus, MediaRecovery.NeedsLicense));
+                sink.Error(ProtectedFailure(_player.Error.Value, _player.ErrorHr, _player.ErrorNeedsRuntimeRebuild, _locus));
                 Publish(sink, PlaybackState.Failed);
             }
             return;
@@ -388,11 +490,13 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             DisarmStartDeadline();
         }
         // 2a. The player's VideoSurface signal — what MediaPlayerElement's poster/hole gate reads (framePresented):
-        //     non-None once THIS source has presented a frame and still has a surface, None before that. No real
-        //     backend wrote this signal until 2026-09-22 (only the headless scripted player did), so the poster never
-        //     dropped and the video hole was never punched: every placement showed the letterbox fill — black — over
-        //     a perfectly good picture. Value-gated here so a steady pump publishes nothing.
-        var surfaceNow = _lastFirstFrameEpoch != 0 && _player.HasSurface ? new VideoSurfaceId(1) : default;
+        //     non-None once THIS attach has presented a frame and still has a surface, None before that and again the
+        //     moment the surface is detached. No real backend wrote this signal until 2026-09-22 (only the headless
+        //     scripted player did), so the poster never dropped and the video hole was never punched: every placement
+        //     showed the letterbox fill — black — over a perfectly good picture. Value-gated here so a steady pump
+        //     publishes nothing.
+        bool presenting = _player.HasFirstFrame && _player.HasSurface;
+        var surfaceNow = presenting ? new VideoSurfaceId(1) : default;
         if (surfaceNow != _publishedSurface)
         {
             _publishedSurface = surfaceNow;
@@ -442,15 +546,22 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
 
         // 4. The composited surface (already bound by the player's pump): size the STREAM to what the destination can
         //    show — the same rule as the clear path, so a 4K rung in a 640-px card allocates 640-px buffers — and place it.
+        //    It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
+        //    previous source's last frame until the new one decodes, and a detached slot would show another session's.
         if (binding.IsValid && _player.HasSurface)
         {
             SizeI content = VideoStreamSizing.ContentSizeFor(_naturalSize, videoRect, scale);
             _player.SetStreamSize(content);
             binding.SetContentSize(content);
             binding.Place(videoRect);
-            binding.SetVisible(true);
+            PlaceOutputProtection(binding, videoRect, scale);
+            binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
             sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
                 { Token = binding.Token });
+        }
+        else if (binding.IsValid)
+        {
+            binding.SetVisible(false);   // detached (or not produced yet): never leave a stale slot showing
         }
 
         // 5. State + position. A seek holds the published target until the Seeked event, then the landed position
@@ -484,6 +595,27 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         }
     }
 
+    /// <summary>Keep the runtime's hidden OPM window over the video (F264): the placed rect in device pixels of the presenting
+    /// window's client area. An inert binding, or a registry that was never told its window (headless), places nothing.</summary>
+    private void PlaceOutputProtection(in VideoBinding binding, RectF videoRect, float scale)
+    {
+        nuint host = binding.WindowHandle;
+        if (host == 0) return;
+        (int left, int top, int right, int bottom) = OutputProtectionRect(videoRect, scale);
+        _player.PlaceOutputProtectionWindow(host, left, top, right, bottom);
+    }
+
+    /// <summary>The video rect (DIP) in device pixels, pixel rule R: X, Y, Right and Bottom each rounded independently,
+    /// midpoints away from zero, so two neighbours never differ from the DComp rect by more than the rounding itself. Pure.</summary>
+    internal static (int Left, int Top, int Right, int Bottom) OutputProtectionRect(RectF videoRect, float scale)
+    {
+        float s = scale <= 0f ? 1f : scale;
+        return ((int)MathF.Round(videoRect.X * s, MidpointRounding.AwayFromZero),
+                (int)MathF.Round(videoRect.Y * s, MidpointRounding.AwayFromZero),
+                (int)MathF.Round(videoRect.Right * s, MidpointRounding.AwayFromZero),
+                (int)MathF.Round(videoRect.Bottom * s, MidpointRounding.AwayFromZero));
+    }
+
     private void PublishCatalog(MediaSignalSink sink)
     {
         sink.ResetTracks();
@@ -502,10 +634,12 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         }
     }
 
-    private void UpdateAdaptiveState(MediaSignalSink sink)
+    /// <summary>One ABR tick at clock <paramref name="now"/> (ms): fold the throughput sample, follow the on-screen and
+    /// downloading rungs, and — at most once a second, never while a switch is pending — decide. The clock is passed in so
+    /// the gate's intervals are testable.</summary>
+    internal void UpdateAdaptiveState(MediaSignalSink sink, long now)
     {
         if (_videoTrack is null || _abr is null || _qualityVariants.Length == 0) return;
-        long now = Environment.TickCount64;
         long bytes = _player.BytesDownloaded;
         long downloadMs = _player.DownloadElapsedMs;
 
@@ -545,14 +679,17 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             _lastGrowthTicks = now;
         }
 
+        // Two representation ids, because a switch no longer takes effect at once. ON SCREEN (active) is what the quality
+        // label and the natural size follow; DOWNLOADING is what the ABR judges against and what clears the pending gate
+        // (Media3 compares with the last QUEUED chunk's format). A switch appended behind 40 s of old video is downloading
+        // within a second and on screen 40 s later, and neither the pending timeout nor the controller may wait for the
+        // second.
         string? activeId = _player.ActiveVideoRepresentationId;
+        string? downloadingId = _player.DownloadingVideoRepresentationId ?? activeId;
         if (activeId is not null && !string.Equals(activeId, _activeQuality?.Id, StringComparison.Ordinal)
             && FindRepresentation(_videoTrack, activeId) is { } active)
         {
             _activeQuality = active.Quality;
-            for (int i = 0; i < _qualityVariants.Length; i++)
-                if (string.Equals(_qualityVariants[i].Id, activeId, StringComparison.Ordinal))
-                { _abr.SeedCurrent(i); break; }
             if (string.Equals(_pendingRepresentationId, activeId, StringComparison.Ordinal)) _pendingRepresentationId = null;
             sink.QualitySelection(_qualitySelection, _activeQuality);
             // A profile with no declared resolution must not publish an empty natural size mid-playback: that flips the
@@ -560,45 +697,108 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             if (!active.Quality.Resolution.IsEmpty) sink.NaturalSize(active.Quality.Resolution);
             else _player.LogDiagnostic($"representation '{activeId}' has no declared resolution — keeping the previous natural size");
         }
+        int downloadingIndex = IndexOfVariant(downloadingId);
+        if (downloadingIndex >= 0 && !string.Equals(downloadingId, _downloadingQualityId, StringComparison.Ordinal))
+        {
+            _downloadingQualityId = downloadingId;
+            _abr.SeedCurrent(downloadingIndex);
+            if (string.Equals(_pendingRepresentationId, downloadingId, StringComparison.Ordinal)) _pendingRepresentationId = null;
+            _gate.ProbeLanded(_abr.ThroughputSamples);
+        }
 
         if (_pendingRepresentationId is not null && now - _pendingRepresentationTicks > RepresentationPendingTimeoutMs)
         {
-            _player.LogDiagnostic($"representation '{_pendingRepresentationId}' never became active within " +
+            _player.LogDiagnostic($"representation '{_pendingRepresentationId}' never became downloading within " +
                                   $"{RepresentationPendingTimeoutMs}ms — releasing the ABR gate");
             _pendingRepresentationId = null;
+        }
+        // A probe whose switch is no longer pending and whose rung is not being downloaded never happened (rejected by
+        // native, failed, timed out): it is neither a success nor a failure, and nothing may wait for its evidence.
+        if (_gate.ProbeUnjudged && _pendingRepresentationId is null
+            && !string.Equals(_downloadingQualityId, _probeRungId, StringComparison.Ordinal))
+        {
+            _gate.EndProbe();
+            _abr.DeclineLastDecision(Math.Max(0, IndexOfVariant(_downloadingQualityId)));
         }
 
         if (!_qualitySelection.IsAuto || now - _lastAbrTicks < 1_000) return;
         _lastAbrTicks = now;
+        // F139: no decision while a switch is still on its way. The controller writes its pick into its own state before
+        // native has applied anything, so deciding again here compared a pick that did not exist yet and reverted a forced
+        // probe one second after it was requested, before a single byte of its rung had been measured.
+        if (_pendingRepresentationId is not null) return;
         long bufferedMs = Math.Max(0, _player.ForwardBufferedMs);
+        if (_gate.HoldForProbeEvidence(_abr.ThroughputSamples, bufferedMs)) return;
+        QualityVariant downloading = (downloadingIndex >= 0 ? _qualityVariants[downloadingIndex] : _activeQuality)
+                                     ?? _qualityVariants[0];
+        // Inside the minimum switch interval only a decision that could be an emergency, or a cap, is worth asking the
+        // controller for: a refused pick would have to be reverted and would reset the votes it had just counted.
+        if (!_gate.IntervalElapsed(now) && bufferedMs >= _gate.EmergencyBufferMs
+            && downloading.Resolution.Height <= _abr.MaxHeight) return;
         int chosen = _abr.Choose(_qualityVariants, TimeSpan.FromMilliseconds(bufferedMs));
         QualityVariant pick = _qualityVariants[Math.Clamp(chosen, 0, _qualityVariants.Length - 1)];
+        if (string.Equals(pick.Id, downloading.Id, StringComparison.Ordinal)) return;
 
-        if (!string.Equals(pick.Id, _activeQuality?.Id, StringComparison.Ordinal)
-            && !string.Equals(pick.Id, _pendingRepresentationId, StringComparison.Ordinal))
+        AbrDecisionReason reason = _abr.LastDecisionReason;
+        bool isDecrease = pick.Bitrate < downloading.Bitrate;
+        if (!_gate.Allows(now, isDecrease, bufferedMs, reason))
         {
-            // Always-on, and only on an actual rung change: the sample that fed the estimate, both EWMAs, the buffer,
-            // the cap and WHY — the one line that explains an "Auto · 240p" from a field log with no repro.
-            _player.LogDiagnostic(
-                $"abr sample={_lastSampleBytes}B/{_lastSampleMs}ms={_lastSampleKbps:F0}kbps " +
-                $"fast={_abr.FastKbps:F0} slow={_abr.SlowKbps:F0} n={_abr.ThroughputSamples} " +
-                $"buffer={bufferedMs}ms cap={(_abr.MaxHeight == int.MaxValue ? "none" : _abr.MaxHeight.ToString())} " +
-                $"active={_activeQuality?.Id ?? "-"} -> idx={chosen} id={pick.Id} " +
-                $"{pick.Resolution.Width}x{pick.Resolution.Height}@{pick.Bitrate} why={_abr.LastDecisionReason}");
-            RequestRepresentation(pick.Id);
+            _abr.DeclineLastDecision(Math.Max(0, IndexOfVariant(downloading.Id)));
+            return;
         }
+
+        // A decrease or a cap change appends after everything buffered (nothing discarded). An upswitch right after a
+        // viewport raise keeps only ViewportUpswitchRetainMs, so the sharper picture shows soon.
+        int retainMs = IProtectedVideoPlayer.AppendAtBufferEnd;
+        if (_viewportRaised)
+        {
+            if (!isDecrease && now - _viewportRaiseTicks <= ViewportRaiseRetainWindowMs) retainMs = ViewportUpswitchRetainMs;
+            if (!isDecrease) _viewportRaised = false;
+        }
+        // Always-on, and only on an actual rung change: the sample that fed the estimate, both EWMAs, the buffer,
+        // the cap and WHY — the one line that explains an "Auto · 240p" from a field log with no repro.
+        _player.LogDiagnostic(
+            $"abr sample={_lastSampleBytes}B/{_lastSampleMs}ms={_lastSampleKbps:F0}kbps " +
+            $"fast={_abr.FastKbps:F0} slow={_abr.SlowKbps:F0} n={_abr.ThroughputSamples} " +
+            $"buffer={bufferedMs}ms cap={(_abr.MaxHeight == int.MaxValue ? "none" : _abr.MaxHeight.ToString())} " +
+            $"active={_activeQuality?.Id ?? "-"} downloading={downloading.Id} -> idx={chosen} id={pick.Id} " +
+            $"{pick.Resolution.Width}x{pick.Resolution.Height}@{pick.Bitrate} why={reason} retain={retainMs}ms");
+        if (reason == AbrDecisionReason.ForcedProbe)
+        {
+            _probeRungId = pick.Id;
+            _gate.BeginProbe();
+        }
+        RequestRepresentation(pick.Id, retainMs, now);
     }
 
-    /// <summary>How long a requested-but-unacknowledged representation blocks further ABR decisions.</summary>
+    /// <summary>How long a requested-but-unacknowledged representation blocks further ABR decisions. Acknowledged when
+    /// native reports the representation as DOWNLOADING (spliced into the buffer), which is a segment fetch away, not
+    /// when its picture reaches the screen.</summary>
     private const int RepresentationPendingTimeoutMs = 12_000;
 
-    private void RequestRepresentation(string id)
+    /// <summary>The forward buffer an upswitch keeps after a viewport raise, and how long after the raise it applies.</summary>
+    private const int ViewportUpswitchRetainMs = 25_000;
+    private const long ViewportRaiseRetainWindowMs = 15_000;
+
+    /// <summary>A manual pin lands at the boundary right after the playhead: the user asked for that rung NOW.</summary>
+    private const int PinRetainMs = 0;
+
+    private int IndexOfVariant(string? id)
+    {
+        if (id is null) return -1;
+        for (int i = 0; i < _qualityVariants.Length; i++)
+            if (string.Equals(_qualityVariants[i].Id, id, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    private void RequestRepresentation(string id, int retainMs, long now)
     {
         _pendingRepresentationId = id;
-        _pendingRepresentationTicks = Environment.TickCount64;
+        _pendingRepresentationTicks = now;
+        _gate.NoteSwitch(now);
         try
         {
-            ValueTask pending = _player.SelectVideoRepresentationAsync(id);
+            ValueTask pending = _player.SelectVideoRepresentationAsync(id, retainMs);
             if (!pending.IsCompletedSuccessfully) _ = ObserveSwitchAsync(pending, id);
         }
         catch { _pendingRepresentationId = null; }

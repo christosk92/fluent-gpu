@@ -48,6 +48,7 @@ static class HooksSuite
         FrameClockPublishChecks.Run(strings);
         FrameClockPollerCensusChecks.Run(strings);
         FrameClockPollersSeenChecks.Run(strings);
+        InactiveThrottleChecks.Run(strings);
         ReuseGuardChecks(strings);
         KeyIgnoredInSingleChildSlotChecks(strings);
         PropsChannelChecks(strings);

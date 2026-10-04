@@ -319,6 +319,99 @@ public sealed class ProtectedVideoSessionTests
     }
 
     [Fact]
+    public void MapNativeState_APlayingSourceTheEngineIsWaitingFor_IsBufferingWhateverTheStoreSays()
+    {
+        // F030: WAITING / STALLED stop the clock with data still buffered and readyState 4 (a key wait, a decoder stall).
+        Assert.Equal(ProtectedVideoState.Buffering,
+            ProtectedVideoSession.MapNativeState(PrNative.StatePlaying, attached: true, firstFrame: true, licenseUsable: true, bufferedAheadMs: 12_000, readyState: 4, waiting: true));
+        Assert.Equal(ProtectedVideoState.Playing,
+            ProtectedVideoSession.MapNativeState(PrNative.StatePlaying, attached: true, firstFrame: true, licenseUsable: true, bufferedAheadMs: 12_000, readyState: 4, waiting: false));
+        // Waiting only matters for a source that is playing with a frame up: a paused one stays paused, a loading one loading.
+        Assert.Equal(ProtectedVideoState.Paused,
+            ProtectedVideoSession.MapNativeState(PrNative.StatePaused, attached: true, firstFrame: true, licenseUsable: true, bufferedAheadMs: 12_000, readyState: 4, waiting: true));
+        Assert.Equal(ProtectedVideoState.Playing,
+            ProtectedVideoSession.MapNativeState(PrNative.StatePlaying, attached: true, firstFrame: false, licenseUsable: true, bufferedAheadMs: 12_000, readyState: 4, waiting: true));
+    }
+
+    [Fact]
+    public void Pump_AnEngineWaitingEvent_ReadsAsBufferingUntilItResumes()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        int pumps = 0;
+        s.PumpRequested += () => Interlocked.Increment(ref pumps);
+        s.Start(s.Request);
+        rig.Event(s, PrNative.EvFirstFrame, 0);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1280, Height = 720,
+            PositionMs = 9_000, DurationMs = 60_000, BufferedAheadMs = 20_000,
+        };
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Playing, s.State.Peek());
+
+        int before = Volatile.Read(ref pumps);
+        rig.Event(s, PrNative.EvWaiting, 9_000);
+        Assert.True(Volatile.Read(ref pumps) > before);                        // the event asks for a pump
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Buffering, s.State.Peek());           // readyState 4 and 20 s buffered, and still buffering
+
+        rig.Event(s, PrNative.EvResumed, 9_400);
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Playing, s.State.Peek());
+    }
+
+    [Fact]
+    public void Pump_AWaitFromAnEarlierAttach_DoesNotBufferTheNextOne()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        s.Start(s.Request);
+        rig.Event(s, PrNative.EvFirstFrame, 0);
+        rig.Event(s, PrNative.EvWaiting, 9_000);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1280, Height = 720,
+            PositionMs = 9_000, DurationMs = 60_000, BufferedAheadMs = 20_000,
+        };
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Buffering, s.State.Peek());
+
+        // Native clears its wait at detach and attach without an event; the managed flag is scoped to the attach.
+        s.Stop();
+        s.Start(s.Request);
+        rig.Event(s, PrNative.EvFirstFrame, 9_000);
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Playing, s.State.Peek());
+    }
+
+    [Fact]
+    public void Pump_AFeedStallWithNothingBuffered_IsBuffering_AndWithDataAheadIsNot()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        s.Start(s.Request);
+        rig.Event(s, PrNative.EvFirstFrame, 0);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1280, Height = 720,
+            PositionMs = 9_000, DurationMs = 60_000, BufferedAheadMs = 12_000,
+        };
+
+        rig.Event(s, PrNative.EvFeedStalled, 5, 503);                          // seg#5 is failing, 12 s are still buffered
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Playing, s.State.Peek());             // the stall is invisible until the buffer drains
+
+        rig.Sessions.Snapshot.BufferedAheadMs = 0;                             // it drained, with readyState still reading 4
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Buffering, s.State.Peek());
+
+        rig.Event(s, PrNative.EvFeedRecovered);                                // a retry landed
+        s.Pump(default);
+        Assert.Equal(ProtectedVideoState.Playing, s.State.Peek());
+    }
+
+    [Fact]
     public void Pump_ALicenseFailure_PublishesTheRelaysOwnWords()
     {
         using var rig = new Rig();
@@ -380,6 +473,90 @@ public sealed class ProtectedVideoSessionTests
         rig.Event(s, PrNative.EvFirstFrame, 0);
         Assert.Equal(2, s.FirstFrameEpoch);
         Assert.Equal(2, rig.Sessions.CountOf("attach"));
+    }
+
+    [Fact]
+    public void HasFirstFrame_IsTrueOnlyBetweenThisAttachsFirstFrameAndItsStop()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request());
+        Assert.False(s.HasFirstFrame);
+
+        s.Start(s.Request);
+        Assert.False(s.HasFirstFrame);                                         // attached, nothing decoded yet
+
+        rig.Event(s, PrNative.EvFirstFrame, 0);
+        Assert.True(s.HasFirstFrame);
+
+        s.Stop();
+        Assert.False(s.HasFirstFrame);                                         // FirstFrameEpoch stays 1; this does not
+
+        s.Start(s.Request);
+        Assert.Equal(1, s.FirstFrameEpoch);
+        Assert.False(s.HasFirstFrame);                                         // the swap chain holds the OLD picture until ...
+
+        rig.Event(s, PrNative.EvFirstFrame, 0);
+        Assert.True(s.HasFirstFrame);                                          // ... this attach's own first frame
+    }
+
+    [Fact]
+    public void Pump_ANativeDetach_DropsTheSurfaceEvenWhileTheSessionThinksItIsAttached()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        s.Start(s.Request);
+        rig.Event(s, PrNative.EvFirstFrame, 0);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1280, Height = 720, DurationMs = 60_000,
+        };
+        s.Pump(default);
+        Assert.True(s.HasSurface);
+
+        // Another session's attach replaced this one on the shared engine: native zeroed the handle and raised Detached.
+        // The managed side never called Stop, so only the snapshot tells it.
+        rig.Sessions.Snapshot.Handle = 0;
+        rig.Event(s, PrNative.EvDetached);
+        s.Pump(default);
+        Assert.False(s.HasSurface);
+
+        // A re-attach publishes a fresh handle: the surface comes back with it, no matter when the late Detached landed.
+        rig.Sessions.Snapshot.Handle = 0xCAFE;
+        s.Pump(default);
+        Assert.True(s.HasSurface);
+    }
+
+    [Fact]
+    public void Pump_ANaturalSizeChange_ReassertsTheStreamSize_SoALargerRungIsNotPinnedToTheOpeningOne()
+    {
+        using var rig = new Rig();
+        using ProtectedVideoSession s = rig.Create(Request(paused: false));
+        int pumps = 0;
+        s.PumpRequested += () => Interlocked.Increment(ref pumps);
+        s.Start(s.Request);
+        rig.Sessions.Snapshot = new PrNative.Snapshot
+        {
+            State = PrNative.StatePlaying, ReadyState = 4, Handle = 0xBEEF, Width = 1280, Height = 720, DurationMs = 60_000,
+        };
+        s.Pump(default);
+        s.SetStreamSize(new SizeI(1280, 720));
+        s.SetStreamSize(new SizeI(1280, 720));
+        Assert.Equal(1, rig.Sessions.CountOf("size"));                         // value-gated: one native call per real change
+
+        // FORMATCHANGE after an ABR upgrade: native stores the new natural size in the snapshot and raises SizeChanged.
+        int before = Volatile.Read(ref pumps);
+        rig.Sessions.Snapshot.Width = 1920;
+        rig.Sessions.Snapshot.Height = 1080;
+        rig.Event(s, PrNative.EvSizeChanged, 1920, 1080);
+        Assert.True(Volatile.Read(ref pumps) > before);                        // the event asks for a pump
+        s.Pump(default);
+
+        Assert.Equal(new Size2(1920, 1080), s.NaturalSize.Peek());
+        s.SetStreamSize(new SizeI(1280, 720));                                 // the same derived size still reaches native once
+        Assert.Equal(2, rig.Sessions.CountOf("size"));
+        s.SetStreamSize(new SizeI(1920, 1080));                                // and a larger one is raised
+        Assert.Equal(3, rig.Sessions.CountOf("size"));
+        Assert.Contains($"size:{s.Handle}:1920x1080", rig.Sessions.Calls);
     }
 
     [Fact]

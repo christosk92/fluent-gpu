@@ -140,6 +140,26 @@ inline void Landed(Guard& g, int32_t idx, int64_t covEndAfter)
 }
 
 
+/// The forward-window threshold the demand hook is re-armed at once the planner says SATISFIED (F037).
+///
+/// The planner measures "ahead" from a reference (the playhead, lifted to the delivery cursor) against `bufferAheadMs`;
+/// the hook measures contiguous ahead from the delivery cursor on every delivered sample. Re-arming the hook at the full
+/// `bufferAheadMs` therefore left a window - the cursor's lead over the reference plus the position's staleness, a few
+/// tenths of a second out of every segment cycle - in which the hook said "below target" and the planner said "satisfied":
+/// every delivered sample (about 80 a second) woke the feeder for a plan that fetched nothing. ExoPlayer's load control
+/// avoids it with hysteresis (start loading below minBuffer, stop at maxBuffer); this is the same: after a satisfied plan
+/// the next wake is one segment of playback away, never closer than the target allows.
+///
+/// `aheadFromCursorMs` is the track's contiguous reach from its own cursor (CencMediaStream::ContiguousAheadMs), the
+/// hook's own measure. Never above `bufferAheadMs` (a track holding far more than the target still wakes at the target)
+/// and never below 1 (0 means "the store's bufferAheadMs" to SetDemandBelowMs).
+inline int64_t DemandBelowWhenSatisfied(int64_t aheadFromCursorMs, int64_t bufferAheadMs, int32_t segLenMs)
+{
+    const int64_t lowered = aheadFromCursorMs - (segLenMs > 0 ? (int64_t)segLenMs : 0);
+    const int64_t below = lowered < bufferAheadMs ? lowered : bufferAheadMs;
+    return below > 1 ? below : 1;
+}
+
 /// A covered range that reaches the presentation's duration (within `toleranceMs` — the last segment's samples end a
 /// frame or two short of the manifest's rounded duration) has nothing left to fetch: the stream is COMPLETE, and the
 /// planner's "satisfied" answer (cov.endMs >= wantEndMs, wantEndMs clamped to the duration) must say so, or a stream
@@ -150,4 +170,111 @@ inline bool ReachesEnd(int64_t covEndMs, int64_t durationMs, int64_t toleranceMs
     if (durationMs <= 0 || covEndMs < 0) return false;
     return covEndMs + toleranceMs >= durationMs;
 }
+
+/// The native side's OWN SetCurrentTime (the carried start position applied to the engine timeline at attach, or the
+/// fallback correction at CANPLAY): nobody on the managed side is waiting for its SEEKED, so that SEEKED is swallowed -
+/// but never a USER seek's. The seek is tagged with the user seekSeq current when it was issued.
+///   * A user seek issued to the engine afterwards cancels the tag (HTML5 seeking semantics: a new seek aborts the one in
+///     flight, so the single SEEKED that follows belongs to the user's), so a stale tag can never swallow it.
+///   * A SEEKED that finds the tag still set is the internal one. It clears the native `seeking` flag unless a user seek
+///     has been posted since (seekSeq moved) - that seek still owns the flag and its own SEEKED follows.
+struct InternalSeek
+{
+    bool pending = false;
+    uint64_t userSeq = 0;
+
+    struct Verdict
+    {
+        bool internal = false;        // swallow: do not raise FgPrEvent_Seeked
+        bool clearsSeeking = true;    // reset the native `seeking` flag
+    };
+
+    void Issue(uint64_t currentUserSeq) { pending = true; userSeq = currentUserSeq; }
+    void Cancel() { pending = false; }
+
+    Verdict OnSeeked(uint64_t currentUserSeq)
+    {
+        if (!pending) return Verdict{ false, true };
+        pending = false;
+        return Verdict{ true, currentUserSeq == userSeq };
+    }
+};
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  A segment GET that failed: stall and retry, or the end of the track (F035).
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// A transient failure (a dropped connection, a 5xx, a 200 with no body) and any 4xx but "this segment does not exist"
+// used to latch the track's end index after three quick retries (3.5 s), truncating the presentation for the rest of
+// the session. Neither reference engine ends a presentation on a segment failure (ExoPlayer's load-error policy and
+// Shaka's streaming engine both back off and retry). The feeder now treats a failure as a STALL: it retries with a
+// capped exponential back-off for as long as the plan keeps asking for that segment (the playhead, or the look-ahead
+// window, still needs it), and a seek or any structural reset starts the count afresh.
+
+/// The back-off before the first retry, and the longest wait between two retries.
+constexpr int kFeedRetryBaseMs = 500;
+constexpr int kFeedRetryMaxMs = 8000;
+
+/// The wait before retry number `failCount` (1 = the first consecutive failure of one segment): 0.5 s, 1 s, 2 s, 4 s,
+/// then 8 s for as long as it keeps failing.
+inline int RetryDelayMs(int failCount)
+{
+    if (failCount < 1) failCount = 1;
+    int ms = kFeedRetryBaseMs;
+    for (int i = 1; i < failCount && ms < kFeedRetryMaxMs; i++) ms *= 2;
+    return ms < kFeedRetryMaxMs ? ms : kFeedRetryMaxMs;
+}
+
+/// Whether a failed GET of segment `idx` ends the track. Only an answer of "no such segment" (404 / 410) can, and only
+/// AT or BEYOND the manifest's segment count: a 404 inside the manifest is a CDN or signed-URL problem, not the end.
+/// `segmentCount` is the presentation's effective count; INT32_MAX means unknown (neither the descriptor nor the
+/// duration gave one), where the missing segment IS the only end signal there is, so a 404 / 410 latches as it always
+/// did. Every other status (401 / 403 / 408 / 429 / 5xx, a transport failure with status 0, an empty 200) is a stall.
+inline bool EndsTrack(int status, int32_t idx, int32_t segmentCount)
+{
+    if (status != 404 && status != 410) return false;
+    return segmentCount == INT32_MAX || idx >= segmentCount;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  The engine said WAITING (F030).
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// MF_MEDIA_ENGINE_EVENT_WAITING / STALLED / BUFFERINGSTARTED mean the playback clock stopped for want of data (a feeder
+// underrun, a key wait, a decoder stall) while the engine still reads "Playing". The snapshot alone cannot say so, so
+// the runtime thread keeps this flag and raises an event on each EDGE. The flag clears on PLAYING, SEEKED,
+// BUFFERINGENDED, or a TIMEUPDATE whose position moved on from where the wait began (the clock is running again).
+struct WaitGate
+{
+    /// How far past the wait's own position a TIMEUPDATE must read to prove the clock runs again: more than the jitter
+    /// between the WAITING notification and the clock's last tick, far less than a TIMEUPDATE interval.
+    static constexpr int64_t kAdvanceMs = 50;
+
+    bool waiting = false;
+    int64_t sinceMs = 0;   // the position the wait began at
+
+    /// The engine started waiting at `positionMs`. True only on the edge (already waiting: nothing new to report).
+    bool Enter(int64_t positionMs)
+    {
+        if (waiting) return false;
+        waiting = true;
+        sinceMs = positionMs;
+        return true;
+    }
+
+    /// PLAYING, SEEKED or BUFFERINGENDED. True only when it ends a wait.
+    bool Clear()
+    {
+        if (!waiting) return false;
+        waiting = false;
+        return true;
+    }
+
+    /// A TIMEUPDATE at `positionMs`. True only when it ends a wait (the position advanced past where it began).
+    bool OnTimeUpdate(int64_t positionMs)
+    {
+        return waiting && positionMs >= sinceMs + kAdvanceMs ? Clear() : false;
+    }
+
+    /// An attach or detach: the next source starts with no wait and nothing to report.
+    void Reset() { waiting = false; sinceMs = 0; }
+};
 } // namespace fgpr::plan

@@ -100,16 +100,36 @@ public sealed partial class AnimEngine
         return r <= 0 ? (ushort)0 : (r >= CadenceMaxPeriodMs ? CadenceMaxPeriodMs : (ushort)r);
     }
 
+    /// <summary>Test seam for the weak-GPU tier (<c>GpuProfile.IsWeak</c> is ALWAYS false headlessly, so the cap could
+    /// otherwise never be exercised): <c>null</c> (production) reads the process-global profile.</summary>
+    internal bool? WeakTierForTest { get; set; }
+
+    private bool WeakTier => WeakTierForTest ?? GpuProfile.IsWeak;
+
     /// <summary>The row's period in ms with <see cref="Cadence.Default"/> resolved against the LIVE
-    /// <see cref="DefaultLoopHz"/>. <c>0</c> = display rate.</summary>
+    /// <see cref="DefaultLoopHz"/>, then (for a LOOPING row) clamped by the weak-tier cap (<see cref="TierCadenceCap"/>) -
+    /// resolved LATE like the default, so the tier published at device init reaches rows seeded before it. <c>0</c> = display
+    /// rate. This is the ONE place a period is read for the advance gate, the wake census and the render-thread capture, so
+    /// the UI loop and the compositor can never disagree about a capped row.</summary>
     private int ResolvedPeriodMs(int slot)
     {
+        int ms;
         ushort p = _cadencePeriodMs[slot];
-        if (p != CadenceDefaultSentinel) return p;
-        float hz = DefaultLoopHz;
-        if (hz <= 0f) return 0;                                   // uncapped policy ⇒ default loops run at display rate
-        int ms = (int)MathF.Round(1000f / hz);
-        return ms <= 0 ? 0 : (ms >= CadenceMaxPeriodMs ? CadenceMaxPeriodMs : ms);
+        if (p != CadenceDefaultSentinel) ms = p;
+        else
+        {
+            float hz = DefaultLoopHz;
+            if (hz <= 0f) ms = 0;                                 // uncapped policy ⇒ default loops run at display rate
+            else
+            {
+                ms = (int)MathF.Round(1000f / hz);
+                ms = ms <= 0 ? 0 : (ms >= CadenceMaxPeriodMs ? CadenceMaxPeriodMs : ms);
+            }
+        }
+        AnimFlags f = _slab.At(slot).Flags;
+        return (f & AnimFlags.Loop) != 0
+            ? TierCadenceCap.LoopPeriodMs(ms, WeakTier, (f & AnimFlags.TierUncapped) != 0)
+            : ms;
     }
 
     // ── the wake answer: min(next-due) over the live rows ─────────────────────────────────────────

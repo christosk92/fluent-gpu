@@ -179,4 +179,102 @@ public sealed class VideoSurfaceGeometryTests
         Edges4 bars = MediaPlayerElement.LetterboxInsets(card, honest);
         Assert.Equal((GrownH - RailW * 9f / 16f) * 0.5f, bars.Top, P);
     }
+
+    // ── whole-pixel placement (rule R: round X, Y, Right, Bottom independently, midpoint away from zero) ──────────────
+
+    [Fact]
+    public void SnapToDevicePixels_RoundsEveryEdgeIndependently()
+    {
+        // Right (110.7) and Bottom (70.8) round on their own: the width is 111 - 10 = 101, NOT round(100.3) = 100.
+        RectF snapped = VideoSurfaceRegistry.SnapToDevicePixels(new RectF(10.4f, 20.6f, 100.3f, 50.2f));
+        Assert.Equal(new RectF(10f, 21f, 101f, 50f), snapped);
+    }
+
+    [Fact]
+    public void SnapToDevicePixels_MidpointRoundsAwayFromZero()
+    {
+        // Banker's rounding would give 0 / 2 / 2 / 2; away-from-zero gives 1 / 2 / 2 / 3.
+        Assert.Equal(new RectF(1f, 2f, 1f, 1f),
+            VideoSurfaceRegistry.SnapToDevicePixels(new RectF(0.5f, 1.5f, 1f, 1f)));
+        // Negative edges (an oversized crop frame overflowing left/up) round away from zero too.
+        Assert.Equal(new RectF(-1f, -2f, 2f, 1f),
+            VideoSurfaceRegistry.SnapToDevicePixels(new RectF(-0.5f, -1.5f, 1f, 1f)));
+    }
+
+    [Fact]
+    public void SnapToDevicePixels_RectsSharingAFractionalEdgeSnapToTheSameBoundary()
+    {
+        var left = new RectF(0f, 0f, 100.4f, 50f);
+        var right = new RectF(100.4f, 0f, 99.6f, 50f);
+        RectF a = VideoSurfaceRegistry.SnapToDevicePixels(left);
+        RectF b = VideoSurfaceRegistry.SnapToDevicePixels(right);
+        Assert.Equal(100f, a.Right);
+        Assert.Equal(a.Right, b.X);   // no gap and no overlap between the two snapped rects
+    }
+
+    [Fact]
+    public void SnapToDevicePixels_LeavesWholePixelRectsUntouched()
+    {
+        var r = new RectF(12f, 34f, 320f, 180f);
+        Assert.Equal(r, VideoSurfaceRegistry.SnapToDevicePixels(r));
+    }
+
+    [Fact]
+    public void FitVideoRectSnapped_IsBitIdenticalAtScaleOneWhenTheFitIsAlreadyWholePixels()
+    {
+        var area = new RectF(0, 0, 400, 180);
+        var natural = new SizeI(1920, 1080);
+        Assert.Equal(MediaPlayerElement.FitVideoRect(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0),
+            MediaPlayerElement.FitVideoRectSnapped(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, 1f));
+    }
+
+    [Theory]
+    [InlineData(1.25f)]
+    [InlineData(1.5f)]
+    public void FitVideoRectSnapped_AndHoleInsets_LandOnTheRegistrysDeviceBoundary(float scale)
+    {
+        var area = new RectF(0, 0, 400, 300);
+        var natural = new SizeI(1920, 1080);   // 400x225 centred: a fractional top/bottom edge at both scales
+        RectF fit = MediaPlayerElement.FitVideoRect(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, scale);
+        RectF registrySnap = VideoSurfaceRegistry.SnapToDevicePixels(MediaPlayerElement.ToDeviceRect(fit, scale));
+
+        // The snapped fit's DEVICE edges are whole pixels and are exactly the boundary the registry snaps the raw fit to.
+        RectF snappedDip = MediaPlayerElement.FitVideoRectSnapped(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, scale);
+        RectF snappedDev = MediaPlayerElement.ToDeviceRect(snappedDip, scale);
+        Assert.Equal(MathF.Round(snappedDev.X), snappedDev.X, 3);
+        Assert.Equal(MathF.Round(snappedDev.Y), snappedDev.Y, 3);
+        Assert.Equal(MathF.Round(snappedDev.Right), snappedDev.Right, 3);
+        Assert.Equal(MathF.Round(snappedDev.Bottom), snappedDev.Bottom, 3);
+        Assert.Equal(registrySnap.X, snappedDev.X, 3);
+        Assert.Equal(registrySnap.Y, snappedDev.Y, 3);
+        Assert.Equal(registrySnap.Right, snappedDev.Right, 3);
+        Assert.Equal(registrySnap.Bottom, snappedDev.Bottom, 3);
+
+        // The hole the element lays out (area minus the letterbox insets) snaps, in the registry's drain, to that same
+        // boundary — so the UI hole's erase rect and the video visual share every edge.
+        Edges4 insets = MediaPlayerElement.HoleInsets(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, scale);
+        var hole = new RectF(area.X + insets.Left, area.Y + insets.Top,
+            area.W - insets.Left - insets.Right, area.H - insets.Top - insets.Bottom);
+        RectF holeSnap = VideoSurfaceRegistry.SnapToDevicePixels(MediaPlayerElement.ToDeviceRect(hole, scale));
+        Assert.Equal(registrySnap, holeSnap);
+    }
+
+    [Fact]
+    public void Drain_PlacesTheVideoAtWholeDevicePixels_AtAFractionalScale()
+    {
+        var (s, _, e) = NewSession();
+        VideoBinding binding = NewBinding(out VideoSurfaceRegistry registry);
+        e.MetadataLoaded = true; e.NativeW = 640; e.NativeH = 360; e.Handle = 0xF00D;
+        var rectDip = new RectF(10.3f, 7.1f, 321f, 180.5f);
+        binding.SetViewport(rectDip);
+        s.PumpVideo(binding, rectDip, 1.5f);
+
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1.5f);
+        Assert.Equal(VideoSurfaceRegistry.SnapToDevicePixels(MediaPlayerElement.ToDeviceRect(rectDip, 1.5f)),
+            presenter.LastPlaceRect);
+        Assert.Equal(MathF.Round(presenter.LastPlaceRect.X), presenter.LastPlaceRect.X);
+        Assert.Equal(MathF.Round(presenter.LastPlaceRect.Right), presenter.LastPlaceRect.Right);
+        Assert.Equal(MathF.Round(presenter.LastViewport.Bottom), presenter.LastViewport.Bottom);
+    }
 }

@@ -179,11 +179,18 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     /// <summary>The first swapchain created (the window's) — the gates' door to its occlusion / stand-down seams.</summary>
     public HeadlessSwapchain? PrimarySwapchain => _primarySwapchain;
 
+    private readonly List<HeadlessSwapchain> _createdSwapchains = new(2);
+
+    /// <summary>Every swapchain this device created, in creation order (index 0 is the primary): a gate's door to the target
+    /// a given host presented into.</summary>
+    public IReadOnlyList<HeadlessSwapchain> CreatedSwapchains => _createdSwapchains;
+
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {
         if (_renderConfined) ThreadGuard.AssertRenderOwner();
         var sc = new HeadlessSwapchain(desc.SizePx, _renderConfined) { PresentStandDown = desc.DesktopAcrylic && StandDownPopupPresents };
         _primarySwapchain ??= sc;
+        _createdSwapchains.Add(sc);
         return sc;
     }
 
@@ -468,8 +475,34 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
     {
         if (_throwOnNextSubmit.Remove(target, out var armedEx)) throw armedEx;
+        LastDirectTarget = target;
+        DirectSubmitCount++;
         SubmitDrawList(drawList, sortKeys, in ctx);
     }
+
+    /// <summary>The swapchain of the most recent targeted <c>SubmitDrawList</c> (the DIRECT route a detached pop-out and a
+    /// windowed popup present through); null before any.</summary>
+    public ISwapchain? LastDirectTarget { get; private set; }
+
+    /// <summary>Completed targeted <c>SubmitDrawList</c> calls (the direct route; composite turns are
+    /// <see cref="CompositeFrameCount"/>).</summary>
+    public int DirectSubmitCount { get; private set; }
+
+    // Per-swapchain present-queue depth (IGpuDevice.SetPresentQueueDepth(ISwapchain, int)): a headless device has no queue to
+    // resize, so this only records what each target was last set to (1..2 like the D3D12 policy bound) for the routing gates —
+    // MaxFrameLatency stays 1 so the deterministic PresentQpc = FrameQpc + 2·refresh contract holds.
+    private readonly Dictionary<ISwapchain, int> _presentQueueDepths = new();
+
+    public int SetPresentQueueDepth(ISwapchain target, int depth)
+    {
+        int want = Math.Clamp(depth, 1, 2);
+        _presentQueueDepths[target] = want;
+        return want;
+    }
+
+    /// <summary>The present-queue depth <paramref name="target"/> was last set to (1 before any set): a test seam for "a child's
+    /// depth policy retargets the child's swapchain and never the primary's".</summary>
+    public int PresentQueueDepthOf(ISwapchain target) => _presentQueueDepths.TryGetValue(target, out int d) ? d : 1;
 
     public void Dispose() { }
 }
@@ -496,6 +529,21 @@ public sealed class HeadlessSwapchain : ISwapchain
         PresentCount++;
     }
 
+    /// <summary>Test seam: model a full present queue - while set, <see cref="PresentNoWait"/> is REFUSED (nothing presented)
+    /// and counted in <see cref="RefusedPresents"/>, as the real backend does on DXGI_ERROR_WAS_STILL_DRAWING.</summary>
+    public bool RefusePresentNoWait { get; set; }
+
+    /// <summary>Non-blocking presents refused while <see cref="RefusePresentNoWait"/> was set.</summary>
+    public int RefusedPresents { get; private set; }
+
+    /// <inheritdoc/>
+    public bool PresentNoWait()
+    {
+        if (RefusePresentNoWait) { RefusedPresents++; return false; }
+        Present();
+        return true;
+    }
+
     /// <inheritdoc/>
     public bool HasPresentedContent => PresentCount > 0;
     public void Dispose() { if (_renderConfined) ThreadGuard.AssertRenderOwner(); }
@@ -515,6 +563,16 @@ public sealed class HeadlessSwapchain : ISwapchain
     /// count so the existing gate keeps reading it off the device.</summary>
     public int HintSettlePresentCount { get; private set; }
     public void HintSettlePresent() => HintSettlePresentCount++;
+
+    /// <summary>Test seam (F101): how many times the host completed the settle sync, and the last blocking flag it passed
+    /// (true only for an inline UI-thread present; a render-thread present never blocks).</summary>
+    public int CompleteSettlePresentCount { get; private set; }
+    public bool LastSettleBlocked { get; private set; }
+    public void CompleteSettlePresent(bool blockUntilComposed)
+    {
+        CompleteSettlePresentCount++;
+        LastSettleBlocked = blockUntilComposed;
+    }
 
     // Windowed desktop-acrylic popup chrome (the real D3D12 backend drives Windows.UI.Composition; headless captures the
     // parameters so the cross-seam wiring — content rect, open direction, closedRatio, corner — is verifiable).

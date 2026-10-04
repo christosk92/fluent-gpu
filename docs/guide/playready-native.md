@@ -32,7 +32,7 @@ Design context: [`docs/design/subsystems/media-pipeline.md`](../design/subsystem
 | Handle | Lifetime | Holds |
 |---|---|---|
 | `FgPrRuntime` | process; destroyed 30 s after its last session | MF, the D3D11 video device + DXGI manager, ONE `IMFMediaEngine` (windowless swap chain), ONE CDM + PMP host, the MTA runtime thread |
-| `FgPrLicense` | per KID; until expired or LRU-evicted (8) | an open TEMPORARY CDM key session |
+| `FgPrLicense` | per KID; until expired, killed (a dead key status), stale (Pending > 8 s) or LRU-evicted (8; native raises `FgPrEvent_LicenseEvicted`) | an open TEMPORARY CDM key session |
 | `FgPrSession` | per source | a `CencMediaSource` over a byte-capped, time-windowed `SegmentStore` |
 
 A host that wants a fast song→video switch does three things, all non-blocking:
@@ -121,6 +121,7 @@ that hold it.
 |---|---|
 | `LicenseCachePolicyTests` | reuse / join / re-acquire, expiry guard, eviction, completion and expiry acceptance, `LicenseKeyId` on hostile PSSH boxes |
 | `ProtectedRuntimeTests`, `ProtectedRuntimeEventTests` | the runtime over `IPrRuntimeNative` fakes: bring-up, the relay, buffered waits, warm-idle teardown, license events |
+| `ProtectedRuntimeRecoveryTests` | the idle teardown standing down, a poisoned runtime replaced under a keep-alive, the retryable session error with the HRESULT, the renderer's adapter LUID reaching the native create |
 | `ProtectedVideoSessionTests` | `ProtectedVideoSession` over an `IPrSessionNative` fake: the open descriptor, attach, prefetch, pump (incl. zero allocation), seek, teardown |
 | `ProtectedSessionTests`, `DrmTests` | `ProtectedMediaSession` over a fake player, and the backend's prepare → open hand-off |
 | `CencDemuxTests` | the REAL DLL's demuxer via `FgPrProbeFile` over `Fixtures/video` — skipped when the DLL beside the test assembly is missing or stale |

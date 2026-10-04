@@ -103,7 +103,29 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     public IReadSignal<VideoSurfaceId> VideoSurface => _core.VideoSurface;
 
     /// <inheritdoc/>
-    public void PumpVideo(VideoBinding binding, FluentGpu.Foundation.RectF videoRect, float scale) { /* no composited surface headlessly */ }
+    public void PumpVideo(VideoBinding binding, FluentGpu.Foundation.RectF videoRect, float scale)
+    {
+        PumpVideoCalls++;
+        LastPumpVideoRect = videoRect;   // no composited surface headlessly: the rect the element asked to place is all there is to observe
+        if (NaturalSizeOnNextPump is { } learned)
+        {
+            // A real session learns (or changes) the natural size INSIDE its pump (first metadata, FORMATCHANGE, an ABR
+            // rung of another aspect). One-shot, so the element's same-pump refit pass sees a settled size.
+            NaturalSizeOnNextPump = null;
+            _core.SetNaturalSize(learned);
+        }
+    }
+
+    /// <summary>The destination rect the element passed to the most recent <see cref="PumpVideo"/>.</summary>
+    public FluentGpu.Foundation.RectF LastPumpVideoRect { get; private set; }
+
+    /// <summary>When set, the NEXT <see cref="PumpVideo"/> publishes this natural size from inside the pump (and clears
+    /// it), the way a composited session does on first metadata or an aspect-changing format change.</summary>
+    public SizeI? NaturalSizeOnNextPump { get; set; }
+
+    /// <summary>How many times the element's full pump ran <see cref="PumpVideo"/> — the probe a gate reads to prove a
+    /// geometry-only turn (a drag or resize frame) never reaches the session publish.</summary>
+    public int PumpVideoCalls { get; private set; }
 
     /// <summary>The underlying core (for tests/hosts that need the sink or setters).</summary>
     public MediaPlayerCore Core => _core;
@@ -131,6 +153,9 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     }
 
     /// <inheritdoc/>
+    /// <remarks>This double owns no session, decoder or clock thread, so there is nothing to release: Stop only rewinds
+    /// the virtual clock and goes Idle (a following <see cref="Pump"/> stays Idle until the next open), matching what the
+    /// real facade's Stop looks like through the signals.</remarks>
     public void Stop()
     {
         if (_disposed) return;

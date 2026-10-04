@@ -114,9 +114,32 @@ public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
     FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default);
 
+/// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
+/// revealed once its first frame has presented, so the four stages are separate costs and only the first two are paid
+/// synchronously inside the open call. All milliseconds; <see cref="FirstFrameMs"/> and <see cref="FirstPresentMs"/> are
+/// known only once the window was revealed (see <see cref="IDetachedVideoWindow.OnRevealed"/>), and are 0 before.
+/// <list type="bullet">
+/// <item><see cref="WindowCreateMs"/>: native window creation and placement (everything up to the host constructor).</item>
+/// <item><see cref="HostCtorMs"/>: the child host constructor (swapchain creation, scene and reconciler setup, mount).</item>
+/// <item><see cref="FirstFrameMs"/>: the child's first <c>RunFrame</c> (the full reconcile, layout and record).</item>
+/// <item><see cref="FirstPresentMs"/>: wall time from the start of the open until the first present was observed on the UI
+/// thread (it contains the three stages above plus any render-thread wait).</item>
+/// </list>
+/// <see cref="TimedOut"/> is true when the window was shown by the reveal timeout instead of by a presented frame.</summary>
+public readonly record struct DetachedOpenTiming(
+    double WindowCreateMs, double HostCtorMs, double FirstFrameMs, double FirstPresentMs, bool TimedOut);
+
 /// <summary>A live handle to a detached video window (see <see cref="InputHooks.OpenDetachedWindow"/>).</summary>
 public interface IDetachedVideoWindow
 {
+    /// <summary>The open-cost split. Only <see cref="DetachedOpenTiming.WindowCreateMs"/> and
+    /// <see cref="DetachedOpenTiming.HostCtorMs"/> are filled while the window is still hidden; the rest arrives with
+    /// <see cref="OnRevealed"/>. Default: all zero (a backend that does not measure).</summary>
+    DetachedOpenTiming OpenTiming => default;
+    /// <summary>Fired once, on the UI thread, when the window has been revealed (shown after its first present, or by the reveal
+    /// timeout), with the full <see cref="DetachedOpenTiming"/>. Set it right after the open call returns: the reveal happens on
+    /// a later frame. Default: ignored.</summary>
+    Action<DetachedOpenTiming>? OnRevealed { get => null; set { } }
     /// <summary>True until the window is closed/reaped.</summary>
     bool IsOpen { get; }
     /// <summary>Toggle persistent always-on-top.</summary>
@@ -274,8 +297,9 @@ public sealed class InputHooks
     public event Action? WindowMoveSizeEndedObserved;
     public void NotifyWindowMoveSizeEnded() => WindowMoveSizeEndedObserved?.Invoke();
     /// <summary>Open a movable/resizable, always-on-top DETACHED video window hosting the request's content in its OWN
-    /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (headless, the
-    /// async render path, or a backend without secondary swapchains). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>
+    /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (a child host,
+    /// headless, or a backend without secondary swapchains; the async render path is NOT a reason - the pop-out presents
+    /// through the parent's render thread). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>
     public Func<DetachedWindowRequest, IDetachedVideoWindow?>? OpenDetachedWindow;
     /// <summary>Whether <see cref="OpenDetachedWindow"/> would actually succeed right now (a child host, headless, or a
     /// backend without secondary swapchains all say no). An affordance can PREFLIGHT with this instead of discovering the

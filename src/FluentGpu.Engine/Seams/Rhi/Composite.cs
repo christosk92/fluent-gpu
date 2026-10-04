@@ -144,6 +144,10 @@ public readonly ref struct CompositeFrame
     /// and placed (consumed only through a retained group / self-blur / backdrop result), and trimming it would composite
     /// nothing where the table believes current pixels are (gpu-renderer.md §13.1g).</summary>
     public readonly ReadOnlySpan<int> TrimSurfaces;
+    /// <summary>The identity of the <see cref="SliceTable"/> this frame's surface numbers belong to (<see cref="SliceTable.OwnerId"/>;
+    /// 0 = unstamped, e.g. a hand-built test frame). A backend's tile pool is indexed by those numbers alone, so it records the
+    /// first owner after a (re)build and flags any other owner compositing into the same pool.</summary>
+    public readonly int OwnerToken;
 
     public CompositeFrame(in FrameInfo info, ReadOnlySpan<SliceRow> slices, ReadOnlySpan<byte> sliceStreams,
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
@@ -154,12 +158,13 @@ public readonly ref struct CompositeFrame
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
         PresentParams present, ReadOnlySpan<SliceSpan> sliceSpans,
         ReadOnlySpan<PushLayerCmd> itemLayers, Span<byte> rasterDone, ReadOnlySpan<PushLayerCmd> itemInherited = default,
-        Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default)
+        Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default,
+        int ownerToken = 0)
     {
         Info = info; Slices = slices; SliceStreams = sliceStreams; Rasters = rasters; Placements = placements;
         Items = items; Present = present; SliceSpans = sliceSpans;
         ItemLayers = itemLayers; RasterDone = rasterDone; ItemInherited = itemInherited;
-        RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces;
+        RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces; OwnerToken = ownerToken;
     }
 
     /// <summary>The <paramref name="k"/>-th (0 or 1) distributed ancestor fade of item <paramref name="i"/> (default when
@@ -224,11 +229,17 @@ public partial interface IGpuDevice
     bool SupportsComposite => false;
 
     /// <summary>Render thread: raster <see cref="CompositeFrame.Rasters"/> into their surfaces (CLEAR→STORE render pass
-    /// each), composite <see cref="CompositeFrame.Items"/> into the primary back buffer in one CLEAR→STORE pass, and
+    /// each), composite <see cref="CompositeFrame.Items"/> into the PRIMARY back buffer in one CLEAR→STORE pass, and
     /// take <see cref="CompositeFrame.Present"/> for the primary swapchain's next <see cref="ISwapchain.Present"/> (used
     /// only when the swap effect allows partial presentation). Default: not supported — call only when
-    /// <see cref="SupportsComposite"/> is true.</summary>
-    void SubmitComposite(in CompositeFrame frame)
+    /// <see cref="SupportsComposite"/> is true.
+    /// <para><paramref name="target"/> is the swapchain the caller is presenting this turn. The composite route owns ONE
+    /// device-wide tile pool and draws only into the primary, so D3D12 REJECTS (throws) any other target (the headless model only when its
+    /// <c>RejectNonPrimaryComposite</c> is set): a detached
+    /// pop-out that reached here would draw its UI into the main window's back buffer, spend the main window's frame
+    /// latency credit and overwrite the main window's retained tiles. Secondary swapchains take
+    /// <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo, ISwapchain)"/>.</para></summary>
+    void SubmitComposite(in CompositeFrame frame, ISwapchain target)
         => throw new NotSupportedException(BackendName + " does not implement SubmitComposite (retained tiles, P2).");
 
     /// <summary>The group-surface cache of the most recent <see cref="SubmitComposite"/> (render thread; read right after

@@ -25,6 +25,7 @@
 #include <d3d11.h>
 #include <d3d11_1.h>
 #include <dxgi1_3.h>
+#include <dxgi1_4.h>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -64,9 +65,12 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Media.Protection.h>
 #include <winrt/Windows.Web.Http.h>
+#include <winrt/Windows.Web.Http.Filters.h>
 #include <winrt/Windows.Web.Http.Headers.h>
 
 #include "FgPlayReady.h"
+#include "EventRing.h"
+#include "OpmWindow.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -179,23 +183,25 @@ inline std::wstring NormalizeKidHex(const wchar_t* hex)
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-//  Events — the ONE log path.
+//  Events — the ONE log path, through a native ring.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// The sink is process-wide because there is one runtime per process (a second FgPrRuntimeCreate returns the existing
-// handle). `inflight` is what makes FgPrRuntimeDestroy safe against the managed side freeing its GCHandle the moment
-// Destroy returns: Destroy clears `cb` and then waits for every call that already read it to come back.
+// Raise / RaiseLog never call managed code. They copy the event (POD plus the text) into EventRing.h's queue and return;
+// ONE native notifier thread drains it into the managed callback in batches. So the runtime thread stays purely native
+// (a managed GC or the app's log sink can no longer stall SetSource / Play / UpdateVideoStream), and an MF or CDM thread
+// - CencMediaStream::RequestSample logs under the stream's m_mx - never waits on managed code. The only call native makes
+// into managed synchronously is the licence relay (FgPrLicenseCallback), which is a different callback and returns at once.
+//
+// The sink is process-wide because there is one runtime per process (a second FgPrRuntimeCreateOnAdapter returns the existing
+// handle). What makes FgPrRuntimeDestroy safe against the managed side freeing its GCHandle the moment Destroy returns is
+// EventRing::Stop: it delivers whatever is still queued, joins the notifier, and rejects later pushes, so no call into the
+// callback is in flight or can start once it returns.
 // The callback is held as an integer: std::atomic over a FUNCTION pointer type leans on the atomic<T*> specialization
 // with a function type for T, which is not something to discover at build time on one of two architectures.
 struct EventSink
 {
     std::atomic<uintptr_t> cb{ 0 };
     std::atomic<void*> ctx{ nullptr };
-    std::atomic<int32_t> inflight{ 0 };
-    // The destroy-time drain waits on this instead of sleeping: a callback that finishes while a drain is pending
-    // notifies it. `draining` is set BEFORE the waiter checks `inflight`, so a finish that races the check is never lost.
-    std::atomic<bool> draining{ false };
-    std::mutex drainMx;
-    std::condition_variable drainCv;
+    EventRing ring{ FgPrEvent_Log };
 
     void Set(FgPrEventCallback callback, void* context)
     {
@@ -203,6 +209,9 @@ struct EventSink
         cb.store(reinterpret_cast<uintptr_t>(callback), std::memory_order_release);
     }
     FgPrEventCallback Get() const { return reinterpret_cast<FgPrEventCallback>(cb.load(std::memory_order_acquire)); }
+
+    /// The notifier thread's delivery: one queued event into the managed callback. Runs on the notifier, no lock held.
+    static void Deliver(void* /*self*/, const RingEvent& e);
 };
 
 inline EventSink& Sink()
@@ -211,17 +220,28 @@ inline EventSink& Sink()
     return *sink;
 }
 
-inline void Raise(uint64_t handle, int32_t ev, int64_t a = 0, int64_t b = 0, const wchar_t* text = nullptr)
+inline void EventSink::Deliver(void* /*self*/, const RingEvent& e)
 {
     EventSink& sink = Sink();
-    sink.inflight.fetch_add(1, std::memory_order_acquire);
-    FgPrEventCallback cb = sink.Get();
-    if (cb) cb(sink.ctx.load(std::memory_order_acquire), handle, ev, a, b, text ? text : L"");
-    if (sink.inflight.fetch_sub(1, std::memory_order_acquire) == 1 && sink.draining.load(std::memory_order_acquire))
-    {
-        std::lock_guard<std::mutex> g(sink.drainMx);
-        sink.drainCv.notify_all();
-    }
+    FgPrEventCallback callback = sink.Get();
+    if (callback) callback(sink.ctx.load(std::memory_order_acquire), e.handle, e.ev, e.a, e.b, e.text.c_str());
+}
+
+/// Start the notifier: call after Set(), before anything can raise. Idempotent while running.
+inline void SinkStart() { Sink().ring.Start(&EventSink::Deliver, nullptr); }
+
+/// Flush the ring into the callback, stop the notifier, and clear the callback. Nothing is delivered after this returns.
+inline void SinkStop()
+{
+    EventSink& sink = Sink();
+    sink.ring.Stop();
+    sink.cb.store(0, std::memory_order_release);
+    sink.ctx.store(nullptr, std::memory_order_release);
+}
+
+inline void Raise(uint64_t handle, int32_t ev, int64_t a = 0, int64_t b = 0, const wchar_t* text = nullptr)
+{
+    Sink().ring.Push(handle, ev, a, b, text, /*droppable*/ false);
 }
 
 inline void RaiseLog(uint64_t handle, const std::string& line)
@@ -233,11 +253,11 @@ inline void RaiseLog(uint64_t handle, const std::string& line)
     if (n > 0 || line.empty())
     {
         stackBuf[n > 0 ? n : 0] = L'\0';
-        Raise(handle, FgPrEvent_Log, 0, 0, stackBuf);
+        Sink().ring.Push(handle, FgPrEvent_Log, 0, 0, stackBuf, /*droppable*/ true);
         return;
     }
     std::wstring w = Widen(line);
-    Raise(handle, FgPrEvent_Log, 0, 0, w.c_str());
+    Sink().ring.Push(handle, FgPrEvent_Log, 0, 0, w.c_str(), /*droppable*/ true);
 }
 
 }   // namespace fgpr
@@ -249,6 +269,9 @@ inline void LogLine(const std::string& s) { fgpr::RaiseLog(0, s); }
 // The demuxer + IMFMediaSource (it includes SegmentStore.h right after `namespace cenc` closes).
 #include "CencMediaSource.h"
 #include "SegmentStore.h"
+#include "FeedPlan.h"
+#include "HandoverPolicy.h"
+#include "WorkQueue.h"
 
 namespace fgpr {
 
@@ -268,59 +291,16 @@ inline uint64_t NewHandle(HandleKind kind)
 inline bool IsKind(uint64_t h, HandleKind kind) { return h != 0 && (h >> 56) == (uint64_t)kind; }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-//  WorkQueue — the runtime thread's event-driven queue (the shape of the managed VideoMediaEngine.WakeEngine).
+//  WorkQueue (WorkQueue.h) — the runtime thread's two-lane queue: engine/transport work ahead of licence work.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// A condition variable over a deque. The thread blocks INDEFINITELY when there is nothing to do — there is no timed
-// wait of any kind. Position is sampled when the media engine itself says time moved (MF_MEDIA_ENGINE_EVENT_TIMEUPDATE,
-// PrRuntime.cpp), which is what replaces the old 80 ms keep-alive that re-asserted transport and re-presented frames.
-class WorkQueue
+/// The runtime thread's ThrowHandler: a work item that threw is logged, never fatal to the thread. Called from inside the
+/// queue's catch block, so `throw;` re-raises the exception being handled.
+inline void LogWorkItemFailure()
 {
-  public:
-    bool Post(std::function<void()> fn)
-    {
-        {
-            std::lock_guard<std::mutex> g(m_mx);
-            if (m_stopped) return false;
-            m_items.push_back(std::move(fn));
-        }
-        m_cv.notify_one();
-        return true;
-    }
-
-    /// Block until work arrives and run everything queued. False once stopped AND drained.
-    bool RunOnce()
-    {
-        std::deque<std::function<void()>> batch;
-        {
-            std::unique_lock<std::mutex> lk(m_mx);
-            m_cv.wait(lk, [this] { return m_stopped || !m_items.empty(); });
-            batch.swap(m_items);
-            if (m_stopped && batch.empty()) return false;
-        }
-        for (auto& fn : batch)
-        {
-            try { fn(); }
-            catch (winrt::hresult_error const& e) { RaiseLog(0, "[runtime] work item threw hr=" + Hex(e.code().value)); }
-            catch (...) { RaiseLog(0, "[runtime] work item threw"); }
-        }
-        return true;
-    }
-
-    void Stop()
-    {
-        {
-            std::lock_guard<std::mutex> g(m_mx);
-            m_stopped = true;
-        }
-        m_cv.notify_all();
-    }
-
-  private:
-    std::mutex m_mx;
-    std::condition_variable m_cv;
-    std::deque<std::function<void()>> m_items;
-    bool m_stopped = false;
-};
+    try { throw; }
+    catch (winrt::hresult_error const& e) { RaiseLog(0, "[runtime] work item threw hr=" + Hex(e.code().value)); }
+    catch (...) { RaiseLog(0, "[runtime] work item threw"); }
+}
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  HTTP — the shared client and a cancellable, two-phase GET.
@@ -330,12 +310,28 @@ class WorkQueue
 // no TLS session cache, so every segment paid a fresh connect + full handshake — six serial handshakes before the first
 // frame. WinRT's HttpClient is agile and safe to share across the feeder and the MTA loop. Deliberately leaked: a
 // static WinRT object destroyed during DLL/CRT teardown would run its release on an already-torn-down apartment.
+//
+// NO WININET CACHE (F044). The default client's filter reads and writes the user's INetCache, so every multi-MB media
+// segment was also written to disk during playback (cache bloat and disk churn) although the session keeps its own
+// store: the SegmentStore is the cache. The cache also answered a repeated GET of one URL at ~0 ms, which is what hid
+// the refetch livelock (F034) and poisoned the throughput estimate (HttpFetchTiming::fromStore); the livelock is gone,
+// and with both behaviours at NoCache a segment is always a real transfer. The cache behaviour is per filter, not per
+// request, and nothing else in this DLL uses the client, so init segments (small, refetched only per attach or switch)
+// share it.
+inline WWH::Filters::HttpBaseProtocolFilter MakeNoCacheFilter()
+{
+    WWH::Filters::HttpBaseProtocolFilter filter;
+    filter.CacheControl().ReadBehavior(WWH::Filters::HttpCacheReadBehavior::NoCache);
+    filter.CacheControl().WriteBehavior(WWH::Filters::HttpCacheWriteBehavior::NoCache);
+    return filter;
+}
+
 inline WWH::HttpClient& SessionHttpClient()
 {
     // Constructed once into static storage and never destroyed: a WinRT projection object released during CRT/DLL
     // teardown would call into an apartment that no longer exists.
     alignas(WWH::HttpClient) static unsigned char storage[sizeof(WWH::HttpClient)];
-    static WWH::HttpClient* client = ::new (static_cast<void*>(storage)) WWH::HttpClient();
+    static WWH::HttpClient* client = ::new (static_cast<void*>(storage)) WWH::HttpClient(MakeNoCacheFilter());
     return *client;
 }
 
@@ -353,7 +349,9 @@ struct HttpFetchTiming
     // CDN edge can legitimately answer in under a millisecond, and THAT is real throughput. This is what the
     // production incident actually was — the guard bug's repeated identical GETs for the same segment URL were being
     // answered out of that cache at ~0 ms, which is what poisoned the ABR estimate at ~1.3 Gbps. Every place that
-    // folds `bytes`/`transferMs` into Session::bytesDownloaded / downloadElapsedMs must check this first.
+    // folds `bytes`/`transferMs` into Session::bytesDownloaded / downloadElapsedMs must check this first. (The shared
+    // client now runs with the cache at NoCache - SessionHttpClient - so this stays false in practice; the check is the
+    // guard that keeps a future filter change from silently poisoning the estimate again.)
     bool fromStore = false;
 };
 
@@ -374,6 +372,28 @@ inline void ApplyRequestHeaders(WWH::HttpRequestMessage const& req, const std::w
         if (!name.empty()) try { req.Headers().TryAppendWithoutValidation(winrt::hstring(name), winrt::hstring(value)); } catch (...) {}
     }
 }
+
+/// What a waiter blocks on to learn that ANY of several fetches finished (F041): each fetch begun with the set signals it
+/// from Complete, and the waiter re-evaluates its own predicate (HttpFetch::IsDone) under the set's mutex. Lock order is
+/// set.mx -> a fetch's m_mx (the predicate); a fetch signals only after releasing its own lock, so the two never invert.
+struct FetchWaitSet
+{
+    std::mutex mx;
+    std::condition_variable cv;
+
+    void Signal()
+    {
+        { std::lock_guard<std::mutex> g(mx); }   // the waiter's predicate-check-to-wait window is closed under this lock
+        cv.notify_all();
+    }
+
+    template <class Pred>
+    void WaitUntil(Pred pred)
+    {
+        std::unique_lock<std::mutex> lk(mx);
+        cv.wait(lk, pred);
+    }
+};
 
 /// One GET, started and completed through WinRT completion handlers rather than a blocking `.get()`.
 ///
@@ -401,12 +421,16 @@ class HttpFetch : public std::enable_shared_from_this<HttpFetch>
     HttpFetchTiming timing;
     std::vector<uint8_t> body;       // taken from the session's SlabPool; give it back with ReleaseBody
 
+    /// `notify`, when given, is signalled the moment this fetch completes (success, failure or cancellation), so a caller
+    /// with several fetches in flight can act on whichever finishes first instead of waiting for them in a fixed order.
     static std::shared_ptr<HttpFetch> Begin(const std::wstring& url, const std::wstring& headers,
-                                            std::shared_ptr<SegmentStore> store)
+                                            std::shared_ptr<SegmentStore> store,
+                                            std::shared_ptr<FetchWaitSet> notify = nullptr)
     {
         auto f = std::make_shared<HttpFetch>();
         f->url = url;
         f->m_store = std::move(store);
+        f->m_notify = std::move(notify);   // before the request is on the wire: Complete reads it from any thread
         try
         {
             WWH::HttpRequestMessage req{ WWH::HttpMethod::Get(), winrt::Windows::Foundation::Uri{ winrt::hstring(url) } };
@@ -446,6 +470,13 @@ class HttpFetch : public std::enable_shared_from_this<HttpFetch>
     {
         std::unique_lock<std::mutex> lk(m_mx);
         m_cv.wait(lk, [this] { return m_done; });
+    }
+
+    /// Whether the fetch has completed. Once true the result fields (status, hr, cancelled, timing, body) are safe to read.
+    bool IsDone()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_done;
     }
 
     bool Ok() const { return !cancelled && status == 200 && !body.empty(); }
@@ -532,6 +563,7 @@ class HttpFetch : public std::enable_shared_from_this<HttpFetch>
             resp = std::move(m_response);
         }
         m_cv.notify_all();
+        if (m_notify) m_notify->Signal();
     }
 
     std::mutex m_mx;
@@ -541,6 +573,7 @@ class HttpFetch : public std::enable_shared_from_this<HttpFetch>
     winrt::Windows::Foundation::IAsyncInfo m_current{ nullptr };
     WWH::HttpResponseMessage m_response{ nullptr };
     std::shared_ptr<SegmentStore> m_store;
+    std::shared_ptr<FetchWaitSet> m_notify;
     uint64_t m_headerStartMs = 0;
     uint64_t m_bodyStartMs = 0;
 };
@@ -553,6 +586,7 @@ struct Runtime
 {
     uint64_t handle = 0;
     std::wstring storePath;
+    int64_t adapterLuid = 0;             // (HighPart << 32) | LowPart of the adapter the D3D11 device is created on; 0 = default
     int64_t createdQpc = 0;
     WorkQueue queue;
     std::thread thread;
@@ -564,6 +598,10 @@ struct Runtime
     // ── touched on the runtime thread ONLY ──────────────────────────────────────────────────────────────────────────
     bool comInitialized = false;
     bool mfStarted = false;
+    /// MFStartup has returned (set by BringUp, early in the bring-up). The feeder builds its Media Foundation source as
+    /// soon as the init segments land - possibly before the runtime thread is up (the early kick at FgPrSessionAttach) -
+    /// and waits on this, never on the whole bring-up.
+    std::atomic<bool> mfReady{ false };
     winrt::com_ptr<ID3D11Device> d3d;
     winrt::com_ptr<IMFDXGIDeviceManager> dxgiManager;
     UINT resetToken = 0;
@@ -577,15 +615,42 @@ struct Runtime
     winrt::com_ptr<IMFMediaEngineNeedKeyNotify> needKey;
     bool itaPreflightDone = false;
 
+    /// The hidden virtual window handed to the engine as MF_MEDIA_ENGINE_OPM_HWND (F264). Started by BringUp BEFORE the engine
+    /// is created and stopped by TearDown AFTER it is shut down (both on the runtime thread); FgPrSessionPlaceOpmWindow moves it
+    /// from the UI thread (OpmWindow is internally synchronized). A runtime whose window could not be created simply has none.
+    OpmWindow opm;
+
+    /// The CDM-scope IMFTrustedInput (PrSession.cpp CompleteAttach), held only when `trustedInputReuse` is on: created by
+    /// the first protected attach, handed to every later source, released with the CDM (PrRuntime.cpp TearDown; a CDM
+    /// reset is a whole new Runtime, so there is no other reset point). Runtime thread only.
+    winrt::com_ptr<IMFTrustedInput> trustedInput;
+    /// FG_PLAYREADY_TRUSTED_INPUT_REUSE=1 (read once at bring-up). OFF by default: a second source over the same trusted
+    /// input may make PMP reject the ITA proxy for another KID, so the default stays one trusted input per attach until
+    /// the on-box check (two KIDs, then a re-attach) has passed. Runtime thread only.
+    bool trustedInputReuse = false;
+
     /// The session whose source the engine is playing — or is about to play, while its init segments are still on the
     /// wire (PrSession.cpp CompleteAttach). Written on the runtime thread, read by the notify sink on MF threads.
     std::atomic<uint64_t> attached{ 0 };
 
+    /// Bumped on the runtime thread (release) just before `attached` is set to a new session. The notify sink stamps each
+    /// engine event with the value it read BEFORE it read `attached`, and the event is dropped when the stamp is no longer
+    /// current: an event queued for an earlier attach (of this session or another) never lands on a later one, even when
+    /// the same session handle is attached again.
+    std::atomic<uint64_t> attachGen{ 0 };
+
     /// The session whose CencMediaSource the engine currently HOLDS (the last successful SetSource), which outlives
-    /// `attached` when a successor's attach is still waiting for its init segments: the old source stays loaded (paused)
-    /// until the successor's own SetSource replaces it, so no empty SetSource ever races the successor's load. Runtime
-    /// thread only.
+    /// `attached` after a detach: the old source stays loaded (paused) until a successor's own SetSource replaces it, so no
+    /// empty SetSource ever races the successor's load, or until the grace armed in `releaseGate` runs out and it is
+    /// unloaded. Runtime thread only.
     uint64_t engineSource = 0;
+
+    /// The armed unload of `engineSource` (PrSession.cpp ScheduleEngineRelease). Runtime thread only.
+    handover::ReleaseGate releaseGate;
+
+    /// Joins destroyed sessions' feeder threads off the runtime thread (PrSession.cpp DestroyInternal); drained before
+    /// Media Foundation is shut down and shut down by FgPrRuntimeDestroy.
+    handover::FeederReaper reaper;
 
     bool Ready() const { return bringUp.load(std::memory_order_acquire) == S_OK && !shuttingDown.load(std::memory_order_acquire); }
     int64_t UptimeMs() const { return MsSinceQpc(createdQpc); }
@@ -616,8 +681,10 @@ struct License
     std::atomic<int64_t> expiresInMs{ 0 };
     std::atomic<int64_t> lastUseQpc{ 0 };  // LRU
     std::atomic<int32_t> bindCount{ 0 };   // attached sessions using this KID — never evicted, never closed while > 0
+    std::atomic<int32_t> restriction{ 0 }; // the output restriction last reported (MF_MEDIAKEY_STATUS value, 0 = none)
     std::atomic<bool> releaseRequested{ false };
     std::atomic<bool> closed{ false };
+    std::atomic<bool> started{ false };    // StartAcquisition ran (once): the attach verb starts its own licence ahead of itself
 };
 
 /// The feeder's wake-up. Separate from Session and held by `shared_ptr` because the CencMediaStream demand hook holds
@@ -679,11 +746,13 @@ struct Session
     bool prefetchAnnounce = false;                // feedMx — a Prefetch is owed an FgPrEvent_Buffered even if nothing is fetched
     std::shared_ptr<HttpFetch> inflightVideo, inflightAudio;   // feedMx — what a seek cancels
     int inflightVideoIndex = -1;                  // feedMx
-    int32_t videoEndIndex = INT_MAX, audioEndIndex = INT_MAX;  // feedMx — first index a track answered 4xx for
+    int32_t videoEndIndex = INT_MAX, audioEndIndex = INT_MAX;  // feedMx — first index a track answered 404/410 for at or beyond
+                                                               //   the segment count (cleared by a seek / structural reset)
     struct RepresentationRequest
     {
         bool pending = false;
         int32_t index = -1;
+        int32_t retainMs = -1;                    // < 0 = append after the buffered end; >= 0 = land that far ahead of the playhead
         std::wstring initUrl, base, prefix, suffix;
     } rep;                                        // feedMx
 
@@ -694,6 +763,8 @@ struct Session
     int32_t seekMode = FgPrSeekMode_Exact;        // feedMx
     int64_t seekKeyframeMs = -1;                  // feedMx
     bool seekNeedsFetch = false;                  // feedMx — registered as the feeder's next target
+    uint64_t flushSeq = 0;                        // feedMx — the seek that last FLUSHED the streams (an unbuffered seek);
+                                                  //   a fetch planned under an older seq must not splice into the flushed buffer
     int64_t seekPostedQpc = 0;                    // runtime thread
 
     // ── attach / transport (runtime thread) ─────────────────────────────────────────────────────────────────────────
@@ -702,7 +773,9 @@ struct Session
     int64_t attachPostedQpc = 0;
     bool metadataSeen = false;
     bool startCorrectionDone = false;
-    int32_t internalSeeks = 0;                    // SEEKED events owed to a native-issued seek (not raised as FgPrEvent_Seeked)
+    fgpr::plan::InternalSeek internalSeek;        // a native-issued SetCurrentTime whose SEEKED is not raised as FgPrEvent_Seeked
+    fgpr::plan::WaitGate waitGate;                // the engine's WAITING state (FgPrEvent_Waiting / FgPrEvent_Resumed edges)
+    int64_t startCorrectionMs = 0;                // how far behind the carried start the engine clock was at CANPLAY (0 = adopted it)
     bool wantPlay = true;                         // the transport level to apply at attach / after a paused open
     std::atomic<int64_t> volumeMicro{ 1000000 };
     std::atomic<int64_t> rateMicro{ 1000000 };
@@ -718,7 +791,7 @@ struct Session
     std::atomic<uint64_t> swapchainHandle{ 0 };
     std::atomic<int32_t> width{ 0 }, height{ 0 };
     std::atomic<int32_t> seeking{ 0 };
-    std::atomic<int32_t> activeRepresentation{ -1 };
+    // (the representation indices - on screen / downloading - live in the SegmentStore, written by the video stream)
     std::atomic<int64_t> positionMs{ 0 };
     std::atomic<int64_t> positionQpc{ 0 };
     std::atomic<int64_t> durationMs{ 0 };
@@ -789,12 +862,14 @@ void RuntimeItaPreflight(Runtime& rt);                    // runtime thread: the
 
 // PrLicense.cpp
 void LicenseBind(uint64_t license, int delta);            // attach (+1) / detach (-1); closes a released KID at 0
+void LicenseStartIfPending(Runtime& rt, uint64_t license);   // runtime thread: run the not-yet-started acquisition now (the attach verb)
 std::shared_ptr<License> LicenseByHandle(uint64_t license);
 void LicensesShutdown(Runtime& rt);                       // runtime thread, FgPrRuntimeDestroy: close every key session
 
 // PrSession.cpp
 winrt::com_ptr<::IUnknown> SessionSourceForUrl(const wchar_t* url);   // the scheme handler's resolver (any thread)
 void SessionPublishHandle(Runtime& rt, Session& s, bool reRaise);      // runtime thread
+void SessionOnFormatChange(Runtime& rt, Session& s);                   // runtime thread: a size report, never a re-publication
 void SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow);    // runtime thread
 void SessionOnCanPlay(Runtime& rt, Session& s);                        // runtime thread
 void SessionsShutdown(Runtime& rt);                                    // runtime thread, FgPrRuntimeDestroy

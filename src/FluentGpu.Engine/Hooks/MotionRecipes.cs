@@ -173,6 +173,10 @@ public static class MotionRecipes
             // EVERY frame, so every decoded album-art texture uploads on the very next frame at max cadence. Seed a
             // FLAT, non-looping opacity that settles to Done on the next tick — the placeholder holds full opacity and
             // the frame loop can idle between decodes so uploads coalesce. Discrete GPUs keep the full shimmer below.
+            // This stays a per-recipe gate ON PURPOSE, unlike the cadence of every other perpetual source: the engine's
+            // central weak-tier cap (TierCadenceCap, applied where a loop's cadence resolves) only LENGTHENS a loop's
+            // period to 30 Hz, which would still hold a wake and an upload window open 30x a second for a placeholder;
+            // this recipe removes the loop altogether, the stricter weak-tier policy the cap sits underneath.
             anim.Keyframes(node, AnimChannel.Opacity,
                 [new Keyframe(0f, 1f), new Keyframe(1f, 1f)], 1f, loop: false);
             return;

@@ -57,6 +57,7 @@ static class IdleWakePresentChecks
         ElidedTurnBetweenPresents(strings);
         AsyncRaceOrdering(strings);
         LiveGapStillCounted(strings);
+        TimersSeenNamesTheOwner(strings);
     }
 
     private static void IdleToScroll(StringTable strings)
@@ -198,5 +199,33 @@ static class IdleWakePresentChecks
         Check("gate.wake-present.live-gap-counted two back-to-back live presents ~3 refresh periods apart with no no-present turn between them DO count the real misses (≥ 2), unlike an idle/elided gap",
             missedAfter - missedBefore >= 2,
             $"missedBefore={missedBefore} missedAfter={missedAfter} delta={missedAfter - missedBefore}");
+    }
+
+    /// <summary>F242: the host's frame drain feeds the timer fire census. A due timer armed under an owner type pops in a real
+    /// <c>RunFrame</c> (Paint drains the queue) and the census the <c>[wake]</c> line prints as <c>timersSeen=</c> names that owner
+    /// with its fire count, then the next window starts empty - the anonymous <c>timer=N</c> bit alone could not say whose it was.</summary>
+    private static void TimersSeenNamesTheOwner(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("idle-wake-timers-seen", new Size2(240, 240), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
+
+        host.RunFrame();
+        host.TimersForTest.ResetFireCensus();
+        int fires = 0;
+        host.TimersForTest.Schedule(host.FrameClockMsForTest - 1000.0, 0, _ => fires++, typeof(IdleWakePresentChecks));
+        host.RunFrame();                                      // Paint drains the overdue timer
+        var sb = new System.Text.StringBuilder();
+        host.TimersForTest.AppendTimersSeen(sb);
+        string seen = sb.ToString();
+        host.TimersForTest.ResetFireCensus();
+        var empty = new System.Text.StringBuilder();
+        host.TimersForTest.AppendTimersSeen(empty);
+
+        Check("gate.wake-census.timers-seen a host timer armed under an owner type and drained by a real RunFrame is named with its fire count in the census (timersSeen=…Owner×1), and a reset opens an empty window",
+            fires == 1 && seen.Contains("IdleWakePresentChecks×1", StringComparison.Ordinal) && empty.ToString() == " | timersSeen=0",
+            $"fires={fires} seen='{seen}' afterReset='{empty}'");
     }
 }

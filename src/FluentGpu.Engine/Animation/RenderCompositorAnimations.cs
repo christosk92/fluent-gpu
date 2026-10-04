@@ -51,7 +51,37 @@ public sealed class RenderCompositorAnimations
     private int _count;
     private bool _paused;
     private double _pausedAtMs;
+    // The device scale a PixelSnap row rounds against: refreshed from the adopted scene at the top of Adopt/Tick (Pause reuses
+    // the last one — its evaluation is the same instant the loop last posed).
+    private float _deviceScale = 1f;
+    // The shared phase of PixelSnap rows (F239): one clock per EFFECTIVE period (the row's cadence period, or the loop floor
+    // when that is longer), decided once per evaluation instant, so every row with that period re-samples on the SAME render
+    // ticks whatever instant each was seeded at. A fixed array keeps the steady Tick allocation-free (gate.compositor-alloc);
+    // a clock is never cleared (a stale period is simply never asked again), and a full table recycles round-robin - only a
+    // phase re-lock for the rows on the recycled period.
+    private struct PeriodClock
+    {
+        public float PeriodMs;
+        public double LastAdvanceMs;   // the instant this clock last advanced
+        public double DecidedAtMs;     // the latest instant a decision was made for
+        public bool Advanced;          // that decision
+    }
+    private const int ClockSlots = 8;
+    private readonly PeriodClock[] _clocks = new PeriodClock[ClockSlots];
+    private int _clockCount;
+    private int _clockEvict;
     public bool HasActive { get; private set; }
+    /// <summary>Is a live (posing, not Done) row something OTHER than a perpetual loop — a one-shot or a spring: a hover
+    /// fade, an enter transition, a retarget? False with <see cref="HasActive"/> true means only loops are live, which
+    /// is the one motion the host may throttle in a background window (<see cref="LoopFloorMs"/>): a one-shot is short
+    /// and the user is, at that moment, interacting with the window.</summary>
+    public bool HasNonLoopActive { get; private set; }
+    /// <summary>Floor, in ms, on the re-sample period of every perpetual loop row (0 = none) — the render-side twin of
+    /// <c>AppHost.InactiveFrameIntervalMs</c>: a background window's marquee/shimmer is not worth the panel rate. It can
+    /// only LENGTHEN a row's own cadence period, and one-shot rows never read it. Written by the host on the render
+    /// thread (the thread that evaluates the rows); an in-between value is harmless — a loop is analytic, so holding a
+    /// sample longer never accumulates drift.</summary>
+    public float LoopFloorMs { get; set; }
     /// <summary>Did this tick change ANY pixels — a posed value that moved, a row that finished, or a row that
     /// disappeared or parked? False means the compositor produced a byte-identical scene, which is what lets the host
     /// elide the whole record+submit rather than only the present. <c>Done</c> is part of it because the feedback
@@ -66,6 +96,7 @@ public sealed class RenderCompositorAnimations
         _pausedAtMs = nowMs;
         _paused = true;
         HasActive = false;
+        HasNonLoopActive = false;
     }
 
     public void Resume(double nowMs)
@@ -73,11 +104,14 @@ public sealed class RenderCompositorAnimations
         if (!_paused) return;
         double parkedMs = Math.Max(0, nowMs - _pausedAtMs);
         HasActive = false;
+        HasNonLoopActive = false;
         for (int i = 0; i < _count; i++)
         {
             _states[i].AnchorNowMs += parkedMs;
             if (_states[i].StartPending && !double.IsNaN(_states[i].HoldNowMs)) _states[i].HoldNowMs += parkedMs;
-            HasActive |= !_states[i].Done && !_states[i].Parked;
+            bool live = !_states[i].Done && !_states[i].Parked;
+            HasActive |= live;
+            HasNonLoopActive |= live && !_states[i].Desired.Row.Has(AnimFlags.Loop);
         }
         _lastTickMs = 0;   // the pause is not a frame interval
         _paused = false;
@@ -86,6 +120,7 @@ public sealed class RenderCompositorAnimations
     public void Adopt(CompositorAnimationSnapshot desired, SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
+        _deviceScale = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
         double capturedAtMs = _paused ? Math.Min(desired.CapturedAtMs, _pausedAtMs) : desired.CapturedAtMs;
         SceneRecordingSnapshot.Grow(ref _nextStates, desired.Count);
         SceneRecordingSnapshot.Grow(ref _feedback, desired.Count);
@@ -185,6 +220,7 @@ public sealed class RenderCompositorAnimations
     public void Tick(SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
+        _deviceScale = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
         // The steady render interval going INTO this tick — the reference a pending-start row held on this tick caps its
         // first advance against. 0 = unknown (the first tick, or a gap longer than any frame — an idle render thread).
         if (!_paused && nowMs > _lastTickMs)
@@ -196,6 +232,7 @@ public sealed class RenderCompositorAnimations
         scene.BeginCompositorOverlay();
         _accumulators.Clear();
         HasActive = false;
+        HasNonLoopActive = false;
         // A revert queued by Adopt is a real change even if no row moves this tick.
         ChangedThisTick = _revertedCount > 0;
         for (int i = 0; i < _count; i++)
@@ -225,7 +262,9 @@ public sealed class RenderCompositorAnimations
                     accumulator.Acc.Fold(row.Channel, state.Value, replace: true);
                     accumulator.Changed |= changed;   // any channel of this node moving damages the node once
                 }
-                HasActive |= !_paused && !state.Done;
+                bool live = !_paused && !state.Done;
+                HasActive |= live;
+                HasNonLoopActive |= live && !row.Has(AnimFlags.Loop);
             }
             _feedback[i] = new(row.Node, row.Channel, state.Desired.Instance, state.Desired.Revision,
                 state.Value, state.Velocity, MathF.Max(0, state.ElapsedMs), MathF.Max(0, -state.ElapsedMs), state.Done);
@@ -252,7 +291,35 @@ public sealed class RenderCompositorAnimations
         HoldNowMs = double.NaN,
     };
 
-    private static void Evaluate(ref State state, double nowMs, float refIntervalMs)
+    /// <summary>Did the shared clock of <paramref name="periodMs"/> advance at <paramref name="nowMs"/>? Decided once per
+    /// instant (every row of the period asks at the same <c>nowMs</c> within a tick, and Adopt's pre-pose asks again at the
+    /// tick's own instant): due when a period minus <see cref="AnimEngine.CadenceSlackMs"/> has passed since the clock's
+    /// last advance, or it never advanced. An instant EARLIER than one already decided (a parking row sampled at its
+    /// capture time) is answered "not advanced" without disturbing that decision.</summary>
+    private bool ClockAdvanced(float periodMs, double nowMs)
+    {
+        int index = -1;
+        for (int i = 0; i < _clockCount; i++)
+            if (_clocks[i].PeriodMs == periodMs) { index = i; break; }
+        if (index < 0)
+        {
+            if (_clockCount < ClockSlots) index = _clockCount++;
+            else { index = _clockEvict; _clockEvict = (_clockEvict + 1) % ClockSlots; }
+            _clocks[index] = new PeriodClock
+            {
+                PeriodMs = periodMs, LastAdvanceMs = double.NegativeInfinity, DecidedAtMs = double.NegativeInfinity,
+            };
+        }
+        ref var clock = ref _clocks[index];
+        if (nowMs == clock.DecidedAtMs) return clock.Advanced;
+        if (nowMs < clock.DecidedAtMs) return false;
+        clock.Advanced = nowMs - clock.LastAdvanceMs >= periodMs - AnimEngine.CadenceSlackMs;
+        if (clock.Advanced) clock.LastAdvanceMs = nowMs;
+        clock.DecidedAtMs = nowMs;
+        return clock.Advanced;
+    }
+
+    private void Evaluate(ref State state, double nowMs, float refIntervalMs)
     {
         if (state.Parked || state.Done) return;
         // PENDING START (AnimFlags.StartPending — a structural enter/exit the UI just seeded): the first render frame to
@@ -276,10 +343,23 @@ public sealed class RenderCompositorAnimations
         // re-sampled only when its period has elapsed; in between its Value/ElapsedMs are HELD, so a 30Hz shimmer
         // steps at 30Hz even though the compositor is posing at panel rate for something else. Sampling stays
         // analytical/absolute, so holding costs nothing and skipping never accumulates drift.
-        ushort periodMs = state.Desired.PeriodMs;
-        if (periodMs > 0)
+        //
+        // Two refinements, both on perpetual-loop / pixel-snapped rows only. LoopFloorMs lengthens a loop's period while the
+        // window is in the background (F241). A PixelSnap row (a marquee) is due when its PERIOD'S shared clock advanced at
+        // this instant (ClockAdvanced) - not "a period after its own last sample" - so two such rows with the same period
+        // step on the SAME render tick whatever instant each was seeded at; their pixel changes then share one present
+        // (F239) rather than alternating ticks. The clock uses the same relative rule (a period minus the slack since its
+        // own last advance), so render ticks spaced about one period apart neither drop a sample nor double one.
+        float periodMs = state.Desired.PeriodMs;
+        if (LoopFloorMs > periodMs && state.Desired.Row.Has(AnimFlags.Loop)) periodMs = LoopFloorMs;
+        bool snap = state.Desired.Row.Has(AnimFlags.PixelSnap);
+        if (periodMs > 0f)
         {
-            if (state.LastAdvanceMs > 0d && nowMs - state.LastAdvanceMs < periodMs - AnimEngine.CadenceSlackMs) return;
+            if (snap)
+            {
+                if (!ClockAdvanced(periodMs, nowMs) && state.LastAdvanceMs > 0d) return;   // a row that never sampled poses at once
+            }
+            else if (state.LastAdvanceMs > 0d && nowMs - state.LastAdvanceMs < periodMs - AnimEngine.CadenceSlackMs) return;
             state.LastAdvanceMs = nowMs;
         }
         state.ElapsedMs = state.AnchorElapsedMs + (float)Math.Max(0, nowMs - state.AnchorNowMs);
@@ -297,9 +377,10 @@ public sealed class RenderCompositorAnimations
         if (row.Has(AnimFlags.Loop)) progress -= MathF.Floor(progress);
         else if (progress >= 1) { progress = 1; state.Done = true; }
         else progress = MathF.Max(0, progress);
-        state.Value = state.Desired.Keys.Length >= 2
+        float sampled = state.Desired.Keys.Length >= 2
             ? AnimEngine.Sample(state.Desired.Keys, progress)
             : row.Gen.FromV + (row.To - row.Gen.FromV) * Easings.Ease((Easing)(byte)row.Gen.EaseId, progress);
+        state.Value = snap ? AnimEngine.SnapToDevicePx(sampled, _deviceScale) : sampled;
         state.Velocity = 0; // The existing eased/keyframe engine carries velocity only for analytical springs.
     }
 

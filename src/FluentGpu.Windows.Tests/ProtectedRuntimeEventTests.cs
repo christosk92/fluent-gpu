@@ -96,6 +96,125 @@ public sealed class ProtectedRuntimeEventTests
         ulong eventHandle, bool accepted)
         => Assert.Equal(accepted, LicenseCachePolicy.AcceptExpiry(rowExists, state, rowHandle, eventHandle));
 
+    // ── every key status maps (F045) ─────────────────────────────────────────────────────────────────────────────────
+
+    private static int DeadHr(int status) => unchecked((int)(0x80048000u + (uint)status));
+
+    [Fact]
+    public void AUsableKeyThatTheCdmRevokes_TurnsTheRowFailed_WithAMessage_AndTheNextEnsureReacquires()
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 5, 0, Kid(1));
+        Assert.Equal(LicenseCacheState.Usable, h.Runtime.LicenseStateFor(Kid(1)));
+
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseRevoked, DeadHr(6), 6, Kid(1));   // MF_MEDIAKEY_STATUS_RELEASED
+
+        Assert.Equal(LicenseCacheState.Failed, h.Runtime.LicenseStateFor(Kid(1)));
+        string? why = h.Runtime.LicenseFailureFor(Kid(1));
+        Assert.Contains("revoked", why);
+        Assert.Contains("80048006", why);
+
+        // Native evicted the dead key session when it raised the event; the next ensure issues a fresh challenge.
+        h.Native.NativeCloses(lic);
+        Assert.Equal(LicenseCacheState.Pending, h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null));
+        Assert.Equal(2, h.Native.AcquireCount);
+        Assert.Equal(new[] { lic }, h.Native.Released);
+        Assert.NotEqual(lic, h.Runtime.LicenseHandleFor(Kid(1)));
+    }
+
+    [Theory]
+    [InlineData(3)]   // MF_MEDIAKEY_STATUS_OUTPUT_NOT_ALLOWED
+    [InlineData(5)]   // MF_MEDIAKEY_STATUS_INTERNAL_ERROR
+    [InlineData(6)]   // MF_MEDIAKEY_STATUS_RELEASED
+    public void ARevocation_OfAnyDeadStatus_FailsTheRow_WithThatStatusesHresult(int status)
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 5, 0, Kid(1));
+
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseRevoked, DeadHr(status), status, Kid(1));
+
+        Assert.Equal(LicenseCacheState.Failed, h.Runtime.LicenseStateFor(Kid(1)));
+        Assert.Contains(DeadHr(status).ToString("X8"), h.Runtime.LicenseFailureFor(Kid(1)));
+    }
+
+    [Fact]
+    public void ARevocationNamingAnotherKeySession_OrNoRow_LeavesTheLiveRowUsable_AndNeverAdoptsByKid()
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 5, 0, Kid(1));
+
+        h.Runtime.OnNativeEvent(lic + 1000, PrNative.EvLicenseRevoked, DeadHr(5), 5, Kid(1));   // a predecessor's key session
+        h.Runtime.OnNativeEvent(0, PrNative.EvLicenseRevoked, DeadHr(5), 5, Kid(1));            // no handle
+        h.Runtime.OnNativeEvent(0xDEAD, PrNative.EvLicenseRevoked, DeadHr(5), 5, Kid(2));       // no such row
+
+        Assert.Equal(LicenseCacheState.Usable, h.Runtime.LicenseStateFor(Kid(1)));
+        Assert.Null(h.Runtime.LicenseFailureFor(Kid(1)));
+        Assert.Equal(LicenseCacheState.None, h.Runtime.LicenseStateFor(Kid(2)));
+    }
+
+    [Fact]
+    public void ARevocationRacingTheHandleAssignment_IsNotAdoptedOntoTheRowByKid()
+    {
+        using var h = new Harness();
+        // Inside the acquire the row has no handle yet: a revocation (which is about a key session that WAS usable) must not
+        // adopt itself onto it the way a usable / failed completion may.
+        h.Native.DuringAcquire = (_, kid) => h.Runtime.OnNativeEvent(0x7777, PrNative.EvLicenseRevoked, DeadHr(5), 5, kid);
+
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+
+        Assert.Equal(LicenseCacheState.Pending, h.Runtime.LicenseStateFor(Kid(1)));
+        Assert.NotEqual(0x7777ul, h.Runtime.LicenseHandleFor(Kid(1)));
+    }
+
+    [Fact]
+    public void ARevocationForAFailedRow_IsNotReapplied()
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseFailed, unchecked((int)0x8004C600), 0, Kid(1));
+
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseRevoked, DeadHr(5), 5, Kid(1));
+
+        Assert.Contains("8004C600", h.Runtime.LicenseFailureFor(Kid(1)));   // the first failure's words stay
+    }
+
+    [Theory]
+    [InlineData(7, 0)]   // OUTPUT_RESTRICTED in force
+    [InlineData(2, 0)]   // OUTPUT_DOWNSCALED in force
+    [InlineData(0, 7)]   // lifted again
+    public void AnOutputRestriction_NeverChangesTheRowOrEvictsIt(int status, int previous)
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 5, 0, Kid(1));
+
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseRestricted, status, previous, Kid(1));
+        h.Runtime.OnNativeEvent(0xDEAD, PrNative.EvLicenseRestricted, status, previous, Kid(1));   // no such key session: ignored
+
+        Assert.Equal(LicenseCacheState.Usable, h.Runtime.LicenseStateFor(Kid(1)));
+        Assert.Equal(lic, h.Runtime.LicenseHandleFor(Kid(1)));
+        Assert.Equal(0, h.Native.ReleaseCount);
+    }
+
+    [Theory]
+    // rowExists, state, rowHandle, eventHandle → accepted
+    [InlineData(true, LicenseCacheState.Usable, 7ul, 7ul, true)]
+    [InlineData(true, LicenseCacheState.Pending, 7ul, 7ul, true)]
+    [InlineData(true, LicenseCacheState.Failed, 7ul, 7ul, false)]
+    [InlineData(true, LicenseCacheState.Usable, 7ul, 8ul, false)]
+    [InlineData(false, LicenseCacheState.Usable, 7ul, 7ul, false)]
+    public void AcceptRevocation_MirrorsTheExpiryRule_ForTheFailedKeyStatuses(bool rowExists, LicenseCacheState state, ulong rowHandle,
+        ulong eventHandle, bool accepted)
+        => Assert.Equal(accepted, LicenseCachePolicy.AcceptRevocation(rowExists, state, rowHandle, eventHandle));
+
     // ── buffered waits ───────────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -161,6 +280,50 @@ public sealed class ProtectedRuntimeEventTests
         Assert.True(await wait.WaitAsync(Bound, Ct));
     }
 
+    // ── events from the native notifier thread (F014 / F192) ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ABatchDeliveredFromTheNotifierThread_AppliesInOrder_AndCompletesTheWait()
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        Task<bool> wait = h.Runtime.WaitBufferedAsync(7, CancellationToken.None);
+
+        // The native ring hands events over from ONE notifier thread, in the order they were raised. Order is what makes a
+        // revocation land on the row the usable event just made usable.
+        await Task.Run(() =>
+        {
+            h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 5, 0, Kid(1));
+            h.Runtime.OnNativeEvent(7, PrNative.EvBuffered, 4_000, 0, null);
+            h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseRevoked, DeadHr(6), 6, Kid(1));
+        }, Ct);
+
+        Assert.True(await wait.WaitAsync(Bound, Ct));
+        Assert.Equal(LicenseCacheState.Failed, h.Runtime.LicenseStateFor(Kid(1)));
+        Assert.Contains("revoked", h.Runtime.LicenseFailureFor(Kid(1)));
+    }
+
+    [Fact]
+    public void EventsFlushedAfterTheRuntimeIsDestroyed_FindNothingAndChangeNothing()
+    {
+        using var h = new Harness();
+        h.Runtime.EnsureLicense(Pssh, Kid(1), relay: null);
+        ulong lic = h.Runtime.LicenseHandleFor(Kid(1));
+        h.Runtime.Dispose();
+
+        // FgPrRuntimeDestroy flushes the native ring before it returns, so events for tables the managed side has already
+        // cleared still arrive: a license row, a session, a device-removed error. None of them may throw or resurrect state.
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseUsable, 5, 0, Kid(1));
+        h.Runtime.OnNativeEvent(lic, PrNative.EvLicenseRevoked, DeadHr(6), 6, Kid(1));
+        h.Runtime.OnNativeEvent(7, PrNative.EvError, 2, unchecked((int)0x887A0005), null);
+        h.Runtime.OnNativeEvent(7, PrNative.EvDetached, 0, 0, null);
+        h.Runtime.OnNativeEvent(7, PrNative.EvBuffered, 4_000, 0, null);
+
+        Assert.Equal(LicenseCacheState.None, h.Runtime.LicenseStateFor(Kid(1)));
+        Assert.Equal(0, h.Runtime.PendingBufferedWaits);
+    }
+
     // ── the native component ─────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -169,7 +332,7 @@ public sealed class ProtectedRuntimeEventTests
         Assert.Null(PrRuntimeNative.FirstMissingExport(_ => true));
         Assert.Equal("FgPrSessionGetInitProtection",
             PrRuntimeNative.FirstMissingExport(name => name != "FgPrSessionGetInitProtection"));
-        Assert.Equal("FgPrRuntimeCreate", PrRuntimeNative.FirstMissingExport(name => name.StartsWith("FgPlayReady", StringComparison.Ordinal)));
+        Assert.Equal("FgPrRuntimeCreateOnAdapter", PrRuntimeNative.FirstMissingExport(name => name.StartsWith("FgPlayReady", StringComparison.Ordinal)));
     }
 
     [Fact]

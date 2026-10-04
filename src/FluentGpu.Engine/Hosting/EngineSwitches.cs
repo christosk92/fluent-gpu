@@ -30,6 +30,8 @@ namespace FluentGpu.Hosting;
 /// <item><c>opaque</c> — an opaque HWND swapchain instead of the DWM Mica composition (A/B arm).</item>
 /// <item><c>no-precise-wait</c> — the frame wait falls back from the high-resolution waitable timer.</item>
 /// <item><c>no-vsync</c> — present at sync-interval 0 (diagnose present cap vs frame cost).</item>
+/// <item><c>present-nowait</c> — a detached pop-out presents with DXGI_PRESENT_DO_NOT_WAIT and re-presents a refused frame on
+/// a later turn instead of ever blocking the shared render thread in Present (A/B arm, default off).</item>
 /// <item><c>gpu-timing</c> — start with the pass-granular GPU timeline on (<c>AppHost.GpuPassTimingEnabled</c>, the
 /// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
 /// </list>
@@ -66,6 +68,12 @@ public static class EngineSwitches
     public static bool NoVsync;
     /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
     public static bool GpuPassTiming;
+    /// <summary>Non-blocking secondary present (F085, <c>--fg present-nowait</c>): a detached pop-out's Present carries
+    /// DXGI_PRESENT_DO_NOT_WAIT, and a frame DXGI refuses (DXGI_ERROR_WAS_STILL_DRAWING) stays owed and is re-presented on a
+    /// later turn - the shared render thread never waits inside a secondary window's Present. A HYPOTHESIS arm, default off:
+    /// the child's present slot is already probed without waiting (F090), so the default is decided by PresentMon
+    /// (MsBetweenDisplayChange) on both HWNDs with the pop-out playing, not by this flag's existence.</summary>
+    public static bool NonBlockingSecondaryPresent;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -136,6 +144,7 @@ public static class EngineSwitches
             case "opaque": OpaqueWindow = true; return true;
             case "no-precise-wait": PreciseWait = false; return true;
             case "no-vsync": NoVsync = true; return true;
+            case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
             default: return false;
         }

@@ -32,4 +32,11 @@ public struct RenderFrame
     /// cheap tear-free hand-off (the <c>keepAlive</c> path). Applied on the render thread just before submit so the
     /// vsync-suppress (a ComPtr touch) is render-thread-confined.</summary>
     public bool SuppressVsync;
+
+    /// <summary>This frame is a resize SETTLE frame (<c>resized &amp;&amp; keepAlive</c>): arm the swapchain's settle hint
+    /// (<see cref="ISwapchain.HintSettlePresent"/>) on the thread that presents THIS frame, just before its submit. It rides the
+    /// publication like <see cref="SuppressVsync"/> instead of being a flag the UI thread pokes into render-owned state, so a
+    /// render turn presenting an earlier publication can never consume it, and a frame the render side elides never leaves
+    /// it standing for an unrelated later present.</summary>
+    public bool SettlePresent;
 }

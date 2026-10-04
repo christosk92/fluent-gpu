@@ -11,7 +11,15 @@
 // directions: KeyMessage hands the challenge up and RETURNS; the managed side calls FgPrLicenseDeliver later, from any
 // thread, and Update() runs as a work item on the runtime thread; USABLE is reported when KeyStatusChanged says so.
 // There is no poll and no wait anywhere in this file.
+//
+// LIFECYCLE (LicensePolicy.h holds the pure rules). A license is Pending until the CDM says USABLE; a Pending license
+// older than kPendingDeadlineMs is STALE and is replaced rather than joined. A key that later goes INTERNAL_ERROR /
+// RELEASED / OUTPUT_NOT_ALLOWED is killed (FgPrEvent_LicenseFailed while pending, FgPrEvent_LicenseRevoked once it was
+// usable) and evicted, so the next FgPrLicenseAcquire re-issues it; OUTPUT_RESTRICTED / OUTPUT_DOWNSCALED raise
+// FgPrEvent_LicenseRestricted. THIS table is the single eviction authority: when its LRU closes a key to admit a ninth
+// KID it raises FgPrEvent_LicenseEvicted, and the managed cache drops that row.
 #include "PrInternal.h"
+#include "LicensePolicy.h"
 
 using fgpr::Raise;
 
@@ -193,37 +201,89 @@ static void PostClose(std::shared_ptr<fgpr::License> lic)
     std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(lic->runtime);
     if (!rt) return;   // the runtime's teardown closes everything still in the table
     fgpr::Runtime* raw = rt.get();
-    if (!rt->queue.Post([raw, lic] { (void)raw; CloseLicense(*lic); })) CloseLicense(*lic);
+    if (!rt->queue.Post([raw, lic] { (void)raw; CloseLicense(*lic); }, fgpr::Lane::Maintenance)) CloseLicense(*lic);
+}
+
+/// Take a license out of the table and close its key session, unless an attached session still decrypts with it: then
+/// it is only marked, and LicenseBind closes it at the last detach (a key still bound is never closed under a decoder).
+static void EvictLicense(const std::shared_ptr<fgpr::License>& lic)
+{
+    if (lic->bindCount.load(std::memory_order_acquire) > 0)
+    {
+        lic->releaseRequested.store(true, std::memory_order_release);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> g(Table().mx);
+        auto& v = Table().entries;
+        v.erase(std::remove(v.begin(), v.end(), lic), v.end());
+    }
+    PostClose(lic);
+}
+
+/// A key status says this license will never decrypt again (INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED): fail it ONCE
+/// from Pending or Usable, say so, and evict it so the next FgPrLicenseAcquire for the KID issues a fresh one. A pending
+/// license reports the ordinary LicenseFailed; a usable one reports LicenseRevoked (the managed side deliberately ignores
+/// a LicenseFailed that follows a usable license: that is a late renewal round trip, which leaves the key in place).
+static void KillLicense(const std::shared_ptr<fgpr::License>& lic, int32_t status)
+{
+    const int32_t hr = fgpr::licensing::DeadHr(status);
+    int32_t prev = lic->state.load(std::memory_order_acquire);
+    do { if (prev != 0 && prev != 1) return; }
+    while (!lic->state.compare_exchange_weak(prev, hr, std::memory_order_acq_rel));
+    LogLine("[cdm] license kid=" + fgpr::Narrow(lic->kidHex) + " DEAD key status=" + std::to_string(status) + " hr=" +
+            fgpr::Hex(hr) + (prev == 1 ? " (was usable)" : " (was pending)") + " after " +
+            std::to_string((long long)fgpr::MsSinceQpc(lic->acquireQpc)) + "ms");
+    if (prev == 0) Raise(lic->handle, FgPrEvent_LicenseFailed, (int64_t)hr, 0, lic->kidHex.c_str());
+    else Raise(lic->handle, FgPrEvent_LicenseRevoked, (int64_t)hr, (int64_t)status, lic->kidHex.c_str());
+    EvictLicense(lic);
 }
 
 // Read the key statuses and publish the transition. Runs on the CDM thread (KeyStatusChanged) and on the runtime
 // thread (right after Update). USABLE is the ONLY thing that makes a license usable: right after a SUCCESSFUL Update()
 // the key status is legitimately still pending — KeyStatusChanged fires a beat later — so a pending status is never an
-// error here.
-static void QueryKeyStatus(fgpr::License& lic)
+// error here. Every other MF_MEDIAKEY_STATUS is mapped too (LicensePolicy.h): the three that kill a key fail and evict
+// the license, the two output restrictions raise their own event, EXPIRED expires it.
+static void QueryKeyStatus(const std::shared_ptr<fgpr::License>& licPtr)
 {
+    fgpr::License& lic = *licPtr;
     winrt::com_ptr<IMFContentDecryptionModuleSession> session = lic.KeySession();
     if (!session) return;
     MFMediaKeyStatus* st = nullptr; UINT n = 0;
     if (FAILED(session->GetKeyStatuses(&st, &n)) || !st) return;
     std::string text;
-    bool usable = false, expired = false;
+    fgpr::licensing::KeyStatusSummary sum;
     for (UINT i = 0; i < n; i++)
     {
         if (i) text += ",";
         text += std::to_string((int)st[i].eMediaKeyStatus);
-        // MF_MEDIAKEY_STATUS_USABLE == 0
-        if (st[i].eMediaKeyStatus == MF_MEDIAKEY_STATUS_USABLE) usable = true;
-        if (st[i].eMediaKeyStatus == MF_MEDIAKEY_STATUS_EXPIRED) expired = true;
+        sum.Add((int32_t)st[i].eMediaKeyStatus);
         if (st[i].pbKeyId) CoTaskMemFree(st[i].pbKeyId);   // the caller owns every key id AND the array
     }
     CoTaskMemFree(st);
     LogLine("[cdm] KeyStatusChanged kid=" + fgpr::Narrow(lic.kidHex) + " -> status=" + (n ? text : std::string("<empty>")));
 
-    if (usable)
+    // An output restriction is reported on the edge (and its lifting), never per status batch.
+    const int32_t prevRestriction = lic.restriction.exchange(sum.restriction, std::memory_order_acq_rel);
+    if (prevRestriction != sum.restriction)
     {
-        const int32_t prev = lic.state.exchange(1, std::memory_order_acq_rel);
-        if (prev == 1) return;
+        LogLine("[cdm] license kid=" + fgpr::Narrow(lic.kidHex) + " output restriction status=" +
+                std::to_string(sum.restriction) + " (was " + std::to_string(prevRestriction) + ")");
+        Raise(lic.handle, FgPrEvent_LicenseRestricted, (int64_t)sum.restriction, (int64_t)prevRestriction, lic.kidHex.c_str());
+    }
+
+    const fgpr::licensing::KeyAction action = fgpr::licensing::NextAction(sum, lic.state.load(std::memory_order_acquire));
+    if (action == fgpr::licensing::KeyAction::Kill)
+    {
+        KillLicense(licPtr, sum.deadStatus);
+        return;
+    }
+    if (action == fgpr::licensing::KeyAction::BecomeUsable)
+    {
+        // A dead (failed) license is never revived by a racing status batch; a usable one is not announced twice.
+        int32_t prev = lic.state.load(std::memory_order_acquire);
+        do { if (prev < 0 || prev == 1) return; }
+        while (!lic.state.compare_exchange_weak(prev, 1, std::memory_order_acq_rel));
         // Expiry as the CDM exposes it: ms since the Unix epoch, NaN when the license carries none (0 = unknown).
         double expiration = 0.0;
         int64_t expiresIn = 0;
@@ -238,14 +298,12 @@ static void QueryKeyStatus(fgpr::License& lic)
                 "ms expiresInMs=" + std::to_string((long long)expiresIn));
         Raise(lic.handle, FgPrEvent_LicenseUsable, ms, expiresIn, lic.kidHex.c_str());
     }
-    else if (expired)
+    else if (action == fgpr::licensing::KeyAction::BecomeExpired)
     {
-        const int32_t prev = lic.state.load(std::memory_order_acquire);
-        if (prev == 0 || prev == 1)
-        {
-            lic.state.store(2, std::memory_order_release);
-            Raise(lic.handle, FgPrEvent_LicenseExpired, 0, 0, lic.kidHex.c_str());
-        }
+        int32_t prev = lic.state.load(std::memory_order_acquire);
+        do { if (prev != 0 && prev != 1) return; }
+        while (!lic.state.compare_exchange_weak(prev, 2, std::memory_order_acq_rel));
+        Raise(lic.handle, FgPrEvent_LicenseExpired, 0, 0, lic.kidHex.c_str());
     }
 }
 
@@ -277,7 +335,14 @@ static void ApplyLicense(fgpr::Runtime& rt, const std::shared_ptr<fgpr::License>
         FailLicense(*lic, hu);
         return;
     }
-    QueryKeyStatus(*lic);
+    QueryKeyStatus(lic);
+}
+
+/// The lane for a licence result: an attached session already binds this KID and its first frame waits on the Update, so
+/// the result runs with the engine items; a licence nobody is attached to yields to them.
+static fgpr::Lane LicenseLane(const fgpr::License& lic)
+{
+    return lic.bindCount.load(std::memory_order_acquire) > 0 ? fgpr::Lane::Engine : fgpr::Lane::Maintenance;
 }
 
 static void __stdcall DeliverThunk(void* deliverCtx, const uint8_t* license, int32_t licenseLen, int32_t hr)
@@ -303,12 +368,12 @@ static void __stdcall DeliverThunk(void* deliverCtx, const uint8_t* license, int
         // old relay path surfaced for "no license body" when the managed side reported success with nothing in it.
         const HRESULT failure = FAILED(hr) ? (HRESULT)hr : (HRESULT)0x80704005;
         LogLine("[cdm] managed relay produced no license kid=" + fgpr::Narrow(lic->kidHex) + " hr=" + fgpr::Hex(failure));
-        rt->queue.Post([lic, failure] { FailLicense(*lic, failure); });
+        rt->queue.Post([lic, failure] { FailLicense(*lic, failure); }, LicenseLane(*lic));
         return;
     }
     // ONE copy out of the managed buffer (§3.5: one byte[] per challenge) — the caller's memory is not ours after return.
     std::vector<uint8_t> bytes(license, license + (size_t)licenseLen);
-    rt->queue.Post([raw, lic, bytes] { ApplyLicense(*raw, lic, bytes); });
+    rt->queue.Post([raw, lic, bytes] { ApplyLicense(*raw, lic, bytes); }, LicenseLane(*lic));
 }
 
 // The session KeyMessage (CDM thread). The PlayReady KeyMessage is a UTF-16 XML envelope:
@@ -394,7 +459,7 @@ struct CdmSessionCallbacks : public IMFContentDecryptionModuleSessionCallbacks
     HRESULT __stdcall KeyStatusChanged() override
     {
         std::shared_ptr<fgpr::License> lic = fgpr::LicenseByHandle(m_license);
-        if (lic && !lic->closed.load(std::memory_order_acquire)) QueryKeyStatus(*lic);
+        if (lic && !lic->closed.load(std::memory_order_acquire)) QueryKeyStatus(lic);
         return S_OK;
     }
 };
@@ -405,6 +470,8 @@ struct CdmSessionCallbacks : public IMFContentDecryptionModuleSessionCallbacks
 static void StartAcquisition(fgpr::Runtime& rt, const std::shared_ptr<fgpr::License>& lic)
 {
     if (lic->closed.load(std::memory_order_acquire)) return;
+    // Once: the attach verb starts its own licence ahead of itself, and the Maintenance item posted by FgPrLicenseAcquire is then a no-op.
+    if (lic->started.exchange(true, std::memory_order_acq_rel)) return;
     if (!rt.Ready() || !rt.cdm)
     {
         const HRESULT bring = (HRESULT)rt.bringUp.load(std::memory_order_acquire);
@@ -433,6 +500,13 @@ static void StartAcquisition(fgpr::Runtime& rt, const std::shared_ptr<fgpr::Lice
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Cross-TU.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+void fgpr::LicenseStartIfPending(Runtime& rt, uint64_t license)
+{
+    std::shared_ptr<License> lic = LicenseByHandle(license);
+    if (!lic || lic->runtime != rt.handle) return;
+    StartAcquisition(rt, lic);
+}
 
 void fgpr::LicenseBind(uint64_t license, int delta)
 {
@@ -512,7 +586,9 @@ __declspec(dllexport) int32_t __stdcall FgPrLicenseAcquire(FgPrRuntime rtHandle,
     }
 
     std::shared_ptr<fgpr::License> lic;
-    std::vector<std::shared_ptr<fgpr::License>> dropped;
+    std::vector<std::shared_ptr<fgpr::License>> dropped;   // replaced by this acquisition (same KID, dead or stale): no event
+    std::shared_ptr<fgpr::License> evicted;                // the LRU victim of a full table: the managed cache is told
+    std::string staleNote;                                 // logged once the table lock is released
     {
         std::lock_guard<std::mutex> g(Table().mx);
         auto& v = Table().entries;
@@ -521,15 +597,27 @@ __declspec(dllexport) int32_t __stdcall FgPrLicenseAcquire(FgPrRuntime rtHandle,
             auto const& e = *it;
             if (e->runtime != rtHandle || e->kidHex != kidHex) continue;
             const int32_t st = e->state.load(std::memory_order_acquire);
-            if (st == 0 || st == 1)
+            // A Pending license older than the deadline is stale (a relay that hung, a CDM that never reported a status):
+            // joining it would fail this open exactly as it failed the last one.
+            const bool stalePending = st == 0 && fgpr::licensing::PendingStale(fgpr::MsSinceQpc(e->acquireQpc));
+            if ((st == 0 && !stalePending) || st == 1)
             {
                 // Cached usable or already pending: never a second challenge for the same KID.
                 e->lastUseQpc.store(fgpr::QpcNow(), std::memory_order_release);
                 *out = e->handle;
                 return S_OK;
             }
-            if (e->bindCount.load(std::memory_order_acquire) > 0) { *out = e->handle; return S_OK; }   // expired but in use: the session owns the recovery
-            dropped.push_back(e);   // failed or expired and unused: replaced by a fresh acquisition
+            if (st == 2 && e->bindCount.load(std::memory_order_acquire) > 0) { *out = e->handle; return S_OK; }   // expired but in use: the session owns the recovery
+            if (stalePending) staleNote = "[cdm] license kid=" + fgpr::Narrow(kidHex) + " pending for " +
+                                          std::to_string((long long)fgpr::MsSinceQpc(e->acquireQpc)) + "ms: replaced by a fresh acquisition";
+            if (e->bindCount.load(std::memory_order_acquire) > 0)
+            {
+                // Dead or stale but an attached session still holds it: it closes at that session's detach, and this
+                // KID gets a fresh license beside it (never a key closed under a decoder).
+                e->releaseRequested.store(true, std::memory_order_release);
+                continue;
+            }
+            dropped.push_back(e);   // failed, stale or expired and unused: replaced by a fresh acquisition
             v.erase(it);
             break;
         }
@@ -548,7 +636,7 @@ __declspec(dllexport) int32_t __stdcall FgPrLicenseAcquire(FgPrRuntime rtHandle,
                     victim = i;
             }
             if (victim == v.size()) return HRESULT_FROM_WIN32(ERROR_TOO_MANY_OPEN_FILES);   // all 8 KIDs are in use
-            dropped.push_back(v[victim]);
+            evicted = v[victim];
             v.erase(v.begin() + (ptrdiff_t)victim);
         }
         lic = std::make_shared<fgpr::License>();
@@ -562,10 +650,18 @@ __declspec(dllexport) int32_t __stdcall FgPrLicenseAcquire(FgPrRuntime rtHandle,
         lic->lastUseQpc.store(lic->acquireQpc, std::memory_order_release);
         v.push_back(lic);
     }
+    if (!staleNote.empty()) LogLine(staleNote);
     for (auto const& d : dropped) PostClose(d);
+    if (evicted)
+    {
+        // The single eviction authority: the managed cache drops this row on the event (it no longer evicts live rows).
+        LogLine("[cdm] license kid=" + fgpr::Narrow(evicted->kidHex) + " evicted (table full) to admit kid=" + fgpr::Narrow(kidHex));
+        Raise(evicted->handle, FgPrEvent_LicenseEvicted, 0, 0, evicted->kidHex.c_str());
+        PostClose(evicted);
+    }
 
     fgpr::Runtime* raw = rt.get();
-    if (!rt->queue.Post([raw, lic] { StartAcquisition(*raw, lic); }))
+    if (!rt->queue.Post([raw, lic] { StartAcquisition(*raw, lic); }, fgpr::Lane::Maintenance))
     {
         FailLicense(*lic, MF_E_SHUTDOWN);
     }
@@ -578,6 +674,9 @@ __declspec(dllexport) int32_t __stdcall FgPrLicenseState(FgPrRuntime rtHandle, F
     if (!fgpr::RuntimeFor(rtHandle)) return E_HANDLE;
     std::shared_ptr<fgpr::License> lic = fgpr::LicenseByHandle(license);
     if (!lic || lic->runtime != rtHandle) return E_HANDLE;
+    // Asking is using: the managed cache probes a handle right before it hands it to an attach, and that attach must
+    // not find the key evicted by a ninth KID in the window before the session binds it.
+    lic->lastUseQpc.store(fgpr::QpcNow(), std::memory_order_release);
     return lic->state.load(std::memory_order_acquire);
 }
 
@@ -586,16 +685,5 @@ __declspec(dllexport) void __stdcall FgPrLicenseRelease(FgPrRuntime rtHandle, Fg
     if (!fgpr::RuntimeFor(rtHandle)) return;
     std::shared_ptr<fgpr::License> lic = fgpr::LicenseByHandle(license);
     if (!lic || lic->runtime != rtHandle) return;
-    if (lic->bindCount.load(std::memory_order_acquire) > 0)
-    {
-        // An attached session still decrypts with this key: keep it, and close it when the last one detaches.
-        lic->releaseRequested.store(true, std::memory_order_release);
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> g(Table().mx);
-        auto& v = Table().entries;
-        v.erase(std::remove(v.begin(), v.end(), lic), v.end());
-    }
-    PostClose(lic);
+    EvictLicense(lic);   // an attached session still decrypting with this key keeps it until the last one detaches
 }

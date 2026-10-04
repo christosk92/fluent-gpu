@@ -116,9 +116,26 @@ public sealed class MediaPlayerCore
 
     // ── setters (value-gated; the sole-writer surface) ───────────────────────────────────────────────────────────────
 
+    /// <summary>Debug-only sole-writer tripwire (also the engine half of the off-UI-write audit): a core write from a
+    /// thread-pool thread that is not the bound UI thread means a caller skipped its marshal (MediaPlayer.OnUiAsync) and the
+    /// UI-confined reactive runtime is being mutated off-thread. Counts instead of throwing: headless harnesses and tests
+    /// legitimately drive a core from threads that were never role-bound. Erased from Release like every <c>Diag</c> probe.</summary>
+    [System.Diagnostics.Conditional("DEBUG"), System.Diagnostics.Conditional("FLUENTGPU_DIAG")]
+    private static void NoteWrite()
+    {
+        if (!System.Threading.Thread.CurrentThread.IsThreadPoolThread || global::FluentGpu.Hosting.Threading.ThreadGuard.IsUiThread) return;
+        System.Threading.Interlocked.Increment(ref s_offUiCoreWrites);
+        global::FluentGpu.Foundation.Diag.Count("media", "offUiCoreWrite");
+    }
+
+    private static long s_offUiCoreWrites;
+    /// <summary>Test seam: core writes observed off the UI thread (always 0 in Release, where the probe is erased).</summary>
+    internal static long OffUiCoreWrites => System.Threading.Interlocked.Read(ref s_offUiCoreWrites);
+
     /// <summary>Set the playback state (recomputes the derived signals). A recoverable stall never becomes Failed.</summary>
     public void SetState(PlaybackState state)
     {
+        NoteWrite();
         _state.Value = state;
         if (state is PlaybackState.Opening or PlaybackState.Buffering)
         {
@@ -142,6 +159,7 @@ public sealed class MediaPlayerCore
     /// <summary>Set the play-intent signal (recomputes derived).</summary>
     public void SetPlayRequested(bool requested)
     {
+        NoteWrite();
         _playRequested.Value = requested;
         RecomputeDerived();
     }
@@ -149,6 +167,7 @@ public sealed class MediaPlayerCore
     /// <summary>Set the suppression reason (recomputes derived).</summary>
     public void SetSuppression(SuppressionReason reason)
     {
+        NoteWrite();
         _suppression.Value = reason;
         RecomputeDerived();
     }
@@ -159,6 +178,7 @@ public sealed class MediaPlayerCore
     /// scrub value. Value-gated.</summary>
     public void SetPosition(TimeSpan position)
     {
+        NoteWrite();
         _position.Value = position;                        // authoritative, exact
         _positionSeconds.Value = (float)position.TotalSeconds;   // lossy UI projection
         if (NowPlaying.Enabled)
@@ -166,9 +186,9 @@ public sealed class MediaPlayerCore
     }
 
     /// <summary>Set the media duration (TimeSpan.MinValue == unknown/live).</summary>
-    public void SetDuration(TimeSpan duration) => _duration.Value = duration;
+    public void SetDuration(TimeSpan duration) { NoteWrite(); _duration.Value = duration; }
     /// <summary>Set the buffer health.</summary>
-    public void SetBuffer(BufferHealth buffer) => _buffer.Value = buffer;
+    public void SetBuffer(BufferHealth buffer) { NoteWrite(); _buffer.Value = buffer; }
     public void SetBuffering(BufferingInfo buffering) => _buffering.Value = buffering;
     public void SetTimeline(TimelineInfo timeline) => _timeline.Value = timeline;
     /// <summary>Set the video natural size.</summary>
@@ -186,11 +206,11 @@ public sealed class MediaPlayerCore
     public void SetStatistics(PlaybackStatistics statistics) => _statistics.Value = statistics;
     public void SetActiveCue(TimedCue? cue) => _activeCue.Value = cue;
     /// <summary>Set (or clear with null) the typed error.</summary>
-    public void SetError(MediaError? error) => _error.Value = error;
+    public void SetError(MediaError? error) { NoteWrite(); _error.Value = error; }
     /// <summary>Set the muted state.</summary>
     public void SetMuted(bool muted) => _muted.Value = muted;
     /// <summary>Set the composited-video surface id.</summary>
-    public void SetVideoSurface(VideoSurfaceId id) => _videoSurface.Value = id;
+    public void SetVideoSurface(VideoSurfaceId id) { NoteWrite(); _videoSurface.Value = id; }
     /// <summary>Set the available-commands bitset.</summary>
     public void SetCommands(MediaCommandFlags flags) => Commands.Set(flags);
 
@@ -331,6 +351,9 @@ public sealed class MediaSignalSink
     }
     /// <summary>Reset tracks before publishing a new source's manifest/backend discovery.</summary>
     public void ResetTracks() => _core.Tracks.Reset();
+    /// <summary>True while a text track is selected (a sidecar the facade auto-selected, or a forced backend track), so a
+    /// late-arriving catalog can register its own text tracks without taking the selection from it.</summary>
+    public bool HasSelectedText => _core.Tracks.SelectedText.Peek() is not null;
     /// <summary>Publish one backend-discovered selectable track.</summary>
     public MediaTrack Track(int id, TrackKind kind, string? language, string label, TrackRole role,
         MediaContentType codec, bool selected = false)

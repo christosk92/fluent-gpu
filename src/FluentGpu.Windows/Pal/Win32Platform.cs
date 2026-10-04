@@ -793,18 +793,26 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // and the OS drop-effect cursor, which WM_DROPFILES cannot. Best-effort: null on a non-STA thread / if it fails
         // (the window then receives no OS drops). Revoked in Dispose. (RegisterDragDrop SUPPRESSES WM_DROPFILES.)
         // Drop points enter the engine as layout DIP, so the px→DIP divide must use the EFFECTIVE scale (DPI × zoom).
-        _dropReg = Win32DropTarget.Register(_hwnd, () => _scale <= 0f ? 1f : _scale);
+        // F110: a window that opts out (WindowDesc.SkipDropAndTouchpad - the video pop-out) skips the OLE registration and the
+        // DirectManipulation viewport below; both stay null, which every reader and Dispose already treat as "not registered".
+        _dropReg = desc.SkipDropAndTouchpad ? null : Win32DropTarget.Register(_hwnd, () => _scale <= 0f ? 1f : _scale);
 
         // The DirectManipulation touchpad CONTACT producer: emits a Begin/Sample/End ScrollSource.Touchpad contact stream
         // from real PT_TOUCHPAD contacts — no OS inertia is configured; the fling is authored by the engine from the
         // contact ring at the lift. Created AFTER the drop target so COM is already STA-init'd. Null on failure ⇒ the
         // touchpad wheel-fallback contact stream (WheelClassifier rule 1) owns the touchpad.
-        _dm = Win32DirectManipulation.TryCreate(this, _hwnd);
+        _dm = desc.SkipDropAndTouchpad ? null : Win32DirectManipulation.TryCreate(this, _hwnd);
 
         // A minimal UIA root provider for the window (served via WM_GETOBJECT) + the live-region announcer the app reaches
         // through InputHooks.Announce. Best-effort a11y: a null/failed provider just means no screen-reader announcements.
         _uiaProvider = UiaProviderCcw.Create((nint)_hwnd);
-        FluentGpu.Hooks.InputHooks.Current.Default.Announce = AnnounceUia;
+        // Process-wide seam, first live window wins: a pop-out / secondary window must not take the announcer over from the main
+        // window (and, below, must not null it on close). Dispose releases it only when THIS window still owns it.
+        if (FluentGpu.Hooks.InputHooks.Current.Default.Announce is null)
+        {
+            _announceDelegate = AnnounceUia;
+            FluentGpu.Hooks.InputHooks.Current.Default.Announce = _announceDelegate;
+        }
     }
 
     /// <summary>Desired-client → window-rect outsets. Standard frame: <c>AdjustWindowRectEx</c>. Custom frame: the
@@ -857,6 +865,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public bool Composited => _composited;
     public bool SizedInModalLoop => _sizedInMoveSizeLoop;
     public Action? PaintRequested { get; set; }
+    /// <summary>Raised on every keep-alive beat of THIS window's modal move/size loop (see <see cref="IPlatformWindow.ModalLoopTick"/>):
+    /// the host repaints the OTHER windows of the process from it, since this loop starves the frame loop that normally ticks them.</summary>
+    public Action? ModalLoopTick { get; set; }
 
     /// <summary>True = skip this modal WM_SIZE paint (non-composited edge-resize throttle).</summary>
     private bool ThrottleModalResizePaint()
@@ -901,6 +912,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// <summary>The live <c>WS_VISIBLE</c> style — not a field mirrored from <see cref="Show"/>/<see cref="Hide"/>, so a
     /// window an app shows through its own <c>ShowWindow</c> call is never left parked.</summary>
     public bool IsVisible => IsWindowVisible(_hwnd) != 0;
+
+    private const uint DwmwaCloaked = 14;   // DWMWA_CLOAKED
+    [LibraryImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    private static partial int DwmGetCloakedAttribute(nint hwnd, uint attr, out int value, uint size);
+
+    /// <summary>The live <c>DWMWA_CLOAKED</c> state (another virtual desktop, a shell transition). A failed query reads
+    /// uncloaked - the safe direction: a window that cannot be asked is never parked.</summary>
+    public bool IsCloaked => DwmGetCloakedAttribute((nint)_hwnd, DwmwaCloaked, out int cloaked, sizeof(int)) >= 0 && cloaked != 0;
 
     /// <inheritdoc cref="IPlatformWindow.CloseRequested"/>
     public Func<CloseReason, bool>? CloseRequested { get; set; }
@@ -1712,6 +1731,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _compositorClock?.SetWindowPeriodQpc(_displayRefreshPeriodQpc);
     }
 
+    private Action<string, bool>? _announceDelegate;   // the exact delegate this window installed on InputHooks.Default (identity-compared on Dispose)
+
     /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
     /// <see cref="FluentGpu.Hooks.InputHooks"/>.Announce. Best-effort; a no-op when no assistive tech is listening.</summary>
     internal void AnnounceUia(string text, bool assertive) => Win32Uia.Announce(_uiaProvider, text, assertive);
@@ -1731,7 +1752,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (_presentAckEvent != HANDLE.NULL) { CloseHandle(_presentAckEvent); _presentAckEvent = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
-        if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }
+        if (_uiaProvider != null)
+        {
+            _uiaProvider = null;
+            var hooks = FluentGpu.Hooks.InputHooks.Current.Default;
+            if (_announceDelegate is not null && ReferenceEquals(hooks.Announce, _announceDelegate)) hooks.Announce = null;
+            _announceDelegate = null;
+        }
         if (_self.IsAllocated) _self.Free();
     }
 
@@ -1840,8 +1867,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // Live video is the ONE exemption from the composited full defer: with no frames the DComp child
                     // keeps its pre-resize rect while the frame moves under it, so the picture lags the window. Fall
                     // through to the throttled paint so the hole and the child are recomputed together.
-                    if (_composited && !_hasLiveVideo) return true;
-                    if (!ThrottleModalResizePaint()) PaintRequested?.Invoke();
+                    if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();
+                    // The peers beat even when this window defers its own paint (F093): the loop's timer can be starved by
+                    // the mouse-input peeking, and the other windows must not freeze with it. The host throttles the round.
+                    ModalLoopTick?.Invoke();
                     return true;
                 }
                 PaintRequested?.Invoke();
@@ -1940,10 +1969,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
                     // keep-alives so ambient animation can advance without flooding the modal loop.
                     if (_inMoveSizeLoop) _moveLoopTicks++;
-                    if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo) return true;
-                    if (_inMoveSizeLoop && ThrottleModalTickPaint()) return true;
-                    if (_inMoveSizeLoop) _moveLoopPaints++;
-                    PaintRequested?.Invoke();
+                    if (!(_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo)
+                        && !(_inMoveSizeLoop && ThrottleModalTickPaint()))
+                    {
+                        if (_inMoveSizeLoop) _moveLoopPaints++;
+                        PaintRequested?.Invoke();
+                    }
+                    // Every beat of the loop, painted or deferred, also ticks the OTHER windows (F093): the loop suspends the
+                    // frame loop that ticks them, so without this the main window freezes while a pop-out is dragged, and the
+                    // pop-outs while the main window is. The host throttles the round and paints only (never a frame).
+                    if (_inMoveSizeLoop) ModalLoopTick?.Invoke();
                     return true;
                 }
                 if ((nuint)wParam == LiftTimerId)

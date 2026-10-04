@@ -935,8 +935,15 @@ public sealed partial class SliceRecorder
     private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds; }
     /// <summary>A video hole a segment punched: its rect (slot space DIP, cut by the in-stream clips) and where its composite
     /// erase goes relative to that segment (<see cref="VideoHoleErase.Order"/> — on the tile, before it; inside an inline
-    /// group layer, after it).</summary>
-    private struct ScanVideo { public int Seg; public RectF Rect; public VideoEraseOrder Order; }
+    /// group layer, after it). The composite erase must be the SAME shape and strength as the in-tile punch (F078), so the scan
+    /// also keeps the hole's own uncut rect (<see cref="Hole"/>), its per-corner radii in window DIP (<see cref="Radii"/>, scaled
+    /// by the placing transform), its erase strength (<see cref="Strength"/> = VideoReady x Opacity, the factor the in-tile
+    /// DestOut multiplies) and the innermost in-stream rounded clip open at the op (<see cref="RoundRect"/>/<see cref="RoundR"/>).</summary>
+    private struct ScanVideo
+    {
+        public int Seg; public RectF Rect; public VideoEraseOrder Order;
+        public RectF Hole; public CornerRadius4 Radii; public float Strength; public RectF RoundRect; public float RoundR;
+    }
     private struct ScanFade { public int Seg; public RectF Rect; public float Start, End; }
 
     private ulong[] _scanGen = new ulong[32];
@@ -1064,12 +1071,22 @@ public sealed partial class SliceRecorder
                         if (op == DrawOp.DrawVideo)
                         {
                             var v = MemoryMarshal.Read<DrawVideoCmd>(p);
-                            RectF wr = v.Transform.TransformBounds(v.Dst);
-                            if (!top.IsInfinite) wr = wr.Intersect(top);
+                            RectF hole = v.Transform.TransformBounds(v.Dst);
+                            RectF wr = top.IsInfinite ? hole : hole.Intersect(top);
                             if (v.VideoReady > 0f && v.Opacity > 0f && !wr.IsEmpty)
                             {
                                 if (videos == _scanVideos[s].Length) Array.Resize(ref _scanVideos[s], videos * 2);
-                                _scanVideos[s][videos++] = new ScanVideo { Seg = marks, Rect = wr, Order = VideoHoleErase.Order(layers.InGroup) };
+                                // The radii ride the node-local rect, so the placing transform's scale carries them to window DIP.
+                                float rs = MathF.Sqrt(MathF.Abs(v.Transform.M11 * v.Transform.M22 - v.Transform.M12 * v.Transform.M21));
+                                _scanVideos[s][videos++] = new ScanVideo
+                                {
+                                    Seg = marks, Rect = wr, Order = VideoHoleErase.Order(layers.InGroup),
+                                    Hole = hole,
+                                    Radii = new CornerRadius4(v.Radii.TopLeft * rs, v.Radii.TopRight * rs, v.Radii.BottomRight * rs, v.Radii.BottomLeft * rs),
+                                    Strength = Math.Clamp(v.VideoReady, 0f, 1f) * Math.Clamp(v.Opacity, 0f, 1f),
+                                    RoundRect = round, RoundR = roundR,
+                                };
+                                WarnFadedVideo(v.Opacity);
                             }
                         }
                         else if (op == DrawOp.DrawImage)
@@ -1096,6 +1113,18 @@ public sealed partial class SliceRecorder
         _scanVideoCount[s] = videos;
         _scanFadeCount[s] = fades;
         _scanInline[s] = inline;
+    }
+
+    private static int s_fadedVideoWarned;
+
+    /// <summary>Debug guard (F078): a DrawVideo recorded with opacity below 1. The composite erase now follows the opacity, but
+    /// the DirectComposition video visual has no opacity of its own and stays at full strength, so the video would show at 100%
+    /// through a partly faded card. One loud line per process; Wavee avoids opacity ancestors of a video hole by convention.</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void WarnFadedVideo(float opacity)
+    {
+        if (opacity >= 0.999f || Interlocked.Exchange(ref s_fadedVideoWarned, 1) != 0) return;
+        FluentGpu.Foundation.Diag.Line($"[video] DrawVideo recorded with opacity {opacity:0.##} < 1: the video visual cannot fade, so the video stays at full strength under a faded hole (gpu-renderer.md 7.3)");
     }
 
     private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds)
@@ -1133,8 +1162,9 @@ public sealed partial class SliceRecorder
         public bool HasLayer;
         public PushLayerCmd Layer;   // window DIP, at the posed offset
         public RectF InnerClip;      // blur source (window DIP)
-        public RectF Rect;           // backdrop / video rect (window DIP)
-        public CornerRadius4 Radii;  // backdrop radii (DIP)
+        public RectF Rect;           // backdrop / video rect (window DIP; a video's is the part cut to the composite clip)
+        public RectF Hole;           // video: the hole's own rect, uncut (window DIP) - what its radii round
+        public CornerRadius4 Radii;  // backdrop / video-hole radii (DIP)
         public AcrylicRecipe Acrylic;
         public float Alpha;
         public Inherit Dist;         // the distributed ancestor edge fades this item carries (segments and groups)
@@ -1271,8 +1301,18 @@ public sealed partial class SliceRecorder
             if (wr.IsEmpty) continue;
             ref Plan ve = ref NewPlan(PlanKind.Video);
             ve.Slot = slot; ve.Rect = wr;
+            // F078: the erase carries the hole's own shape and strength, like the in-tile punch it pairs with.
+            ve.Hole = Offset(sv.Hole, accDx, accDy);
+            ve.Radii = sv.Radii;
+            ve.Alpha = sv.Strength;
+            if (sv.RoundR > 0f) { ve.RoundRect = Offset(sv.RoundRect, accDx, accDy); ve.RoundR = sv.RoundR; }
             if (_videoRectCount < _videoRects.Length) _videoRects[_videoRectCount++] = wr;
             MixRect(ref _compositeHash, wr);
+            Mix(ref _compositeHash, sv.Strength);
+            MixRect(ref _compositeHash, ve.Hole);
+            Mix(ref _compositeHash, sv.Radii.TopLeft); Mix(ref _compositeHash, sv.Radii.TopRight);
+            Mix(ref _compositeHash, sv.Radii.BottomRight); Mix(ref _compositeHash, sv.Radii.BottomLeft);
+            if (sv.RoundR > 0f) { MixRect(ref _compositeHash, ve.RoundRect); Mix(ref _compositeHash, sv.RoundR); }
         }
     }
 
@@ -1829,9 +1869,29 @@ public sealed partial class SliceRecorder
                         default, 0f, e.Acrylic, 0, ScalePx(e.Rect, scale)), default, default, in e);
                     continue;
                 case PlanKind.Video:
-                    AddItem(new CompositeItem(-1, CompositeKind.EraseVideoHole, Affine2D.Identity, 1f, ScalePx(e.Rect, scale),
-                        default, default, 0f, default, 0), default, default, in e);
+                {
+                    // F078 + pixel rule R (F073): the erase quad is the hole's rect cut to the composite clip, each edge rounded
+                    // to the nearest device pixel (the same rule the DirectComposition video rect uses, so the erase and the
+                    // video share one edge); its strength is the punch's (VideoReady x opacity); and its shape is the hole's own
+                    // rounded rect (per-corner radii) - or, when the hole is square, the in-stream rounded clip it sits under.
+                    RectF erasePx = WholePx(ScalePx(e.Rect, scale));
+                    if (erasePx.IsEmpty) continue;
+                    RectF roundPx = default;
+                    CornerRadius4 radiiPx = default;
+                    if (e.Radii.TopLeft > 0f || e.Radii.TopRight > 0f || e.Radii.BottomRight > 0f || e.Radii.BottomLeft > 0f)
+                    {
+                        roundPx = WholePx(ScalePx(e.Hole, scale));
+                        radiiPx = new CornerRadius4(e.Radii.TopLeft * scale, e.Radii.TopRight * scale, e.Radii.BottomRight * scale, e.Radii.BottomLeft * scale);
+                    }
+                    else if (e.RoundR > 0f)
+                    {
+                        roundPx = RoundPx(e.RoundRect, e.RoundR, scale);
+                        radiiPx = RadiiPx(e.RoundR, scale);
+                    }
+                    AddItem(new CompositeItem(-1, CompositeKind.EraseVideoHole, Affine2D.Identity, e.Alpha, erasePx,
+                        radiiPx, default, 0f, default, 0, roundPx), default, default, in e);
                     continue;
+                }
             }
 
             // ── a segment ──
@@ -1994,7 +2054,8 @@ public sealed partial class SliceRecorder
             _rasters.AsSpan(0, _rasterCount), _placements.AsSpan(0, _placementCount), _items.AsSpan(0, _itemCount), present,
             _frameSpans.AsSpan(0, _frameSpanCount), _itemLayers.AsSpan(0, _itemCount),
             _rasterDone.AsSpan(0, _rasterCount), _itemInherited.AsSpan(0, 2 * _itemCount),
-            EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces);   // the textures the table released (§13.1g)
+            EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces,   // the textures the table released (§13.1g)
+            table.OwnerId);
     }
 
     private void AddItem(in CompositeItem item, in PushLayerCmd layer, in Inherit dist, in Plan e)
@@ -2065,6 +2126,18 @@ public sealed partial class SliceRecorder
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static RectF ScalePx(in RectF r, float scale) => r.IsEmpty ? default : new RectF(r.X * scale, r.Y * scale, r.W * scale, r.H * scale);
+
+    /// <summary>Pixel rule R: a device-px rect with X, Y, Right and Bottom each rounded to the nearest whole pixel
+    /// independently (<see cref="MidpointRounding.AwayFromZero"/>) - NOT origin + size, which would let a fractional origin
+    /// move the far edge by a pixel. The rule the DirectComposition video rect applies too, so the composite erase and the
+    /// video visual below it cover the same pixels. A rect thinner than half a pixel rounds to empty.</summary>
+    internal static RectF WholePx(in RectF px)
+    {
+        if (px.IsEmpty) return default;
+        float x0 = MathF.Round(px.X, MidpointRounding.AwayFromZero), y0 = MathF.Round(px.Y, MidpointRounding.AwayFromZero);
+        float x1 = MathF.Round(px.Right, MidpointRounding.AwayFromZero), y1 = MathF.Round(px.Bottom, MidpointRounding.AwayFromZero);
+        return x1 > x0 && y1 > y0 ? new RectF(x0, y0, x1 - x0, y1 - y0) : default;
+    }
 
     /// <summary>A composite clip in device px, snapped OUT to whole pixels (the scissor a direct replay would set);
     /// unbounded → empty (no clip).</summary>

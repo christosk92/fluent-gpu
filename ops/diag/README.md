@@ -110,8 +110,13 @@ launcher records the exact list in `manifest.json` (`engineSwitches` = name → 
 | `diag` | **yes** | **never in a feel session** | engine `Diag` on with its stderr sink — see below |
 | `mem` / `mem=N`, `alloc`, `alloc-types` | no | off | memory census every N s (default 5) / allocation probes — separate runs |
 
-Always on, nothing to enable: the `[wake]` census (one line per 30 s: fps, the reconciled / layout-only /
-record-only split, `skipMiss`, the kept/sole wake-reason roster), the per-frame `RenderFrameCensus` (repaint set,
+Always on, nothing to enable: the `[wake]` census (one line per 30 s: fps, `reconciledOrLaidOut` (frames that
+reconciled or laid out; NOT presents), the reconciled / layout-only / record-only split, `skipMiss`, the kept/sole
+wake-reason roster, `pollersSeen=` and `timersSeen=` (owner component x fires of the host timers), `uiPresents=` (what
+the UI frames that published were for: timer / poller / reconcile / layout / signal / other) and, from the render
+thread, `renderPresents=` (fresh / anim / scroll / crossfade / other) with `recordedPresents` vs `compositePresents`);
+the `[render.pace]` worst-present split (`stage rec sub fence lat pres video other`, with the blocking phase named
+`blocker=`; `slot` is the present-slot take that precedes the turn); the per-frame `RenderFrameCensus` (repaint set,
 span reuse, capture, the device's per-submit counters, the retained-tile census) and the tile census the Wavee
 Diagnostics **Tiles** card reads. The per-component `[render-census]` line is the runtime property
 `AppHost.RenderCensus` (set in code — the Wavee Diagnostics page), not a switch.

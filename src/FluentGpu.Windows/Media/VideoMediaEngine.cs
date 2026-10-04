@@ -53,10 +53,16 @@ namespace FluentGpu.Media.Windows;
 /// </summary>
 public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 {
-    private const uint MFSTARTUP_FULL_ = 0;
     private const int S_OK = 0;
+    private const int EFail = unchecked((int)0x80004005);
     // MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED — what a failed SetSource is reported as.
     private const uint MfMediaEngineErrSrcNotSupported = 4;
+    // MF_MEDIA_ENGINE_ERR_DECODE — what a removed D3D11 device is reported as (the session maps it to a Retryable Decode error).
+    private const uint MfMediaEngineErrDecode = 3;
+    // HTML5 readyState HAVE_FUTURE_DATA: at or above it playback can continue, so a STALLED download alone is not a stall.
+    private const uint HaveFutureData = 3;
+    // How far the playhead must move past where a stall began before it counts as playing again with no PLAYING / CANPLAY.
+    private const double WaitProgressSeconds = 0.25;
     // The MIME type MF names an HLS master playlist by (Apple's registered type).
     private const string HlsMimeType = "application/vnd.apple.mpegurl";
     // MFMEDIASOURCE_CHARACTERISTICS.MFMEDIASOURCE_IS_LIVE.
@@ -74,20 +80,29 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private static readonly Action s_wakeSignal = static () => { };
 
     // ── Owned only on the engine (MTA) thread ──────────────────────────────────────────────────────────────────────
+    // The shared D3D11 video device + DXGI manager (MfVideoDevice: one per adapter LUID, process-wide) and OUR lease on it. _d3d
+    // and _dxgiManager are BORROWED from the lease — never Released here; the lease also keeps MFStartup alive for this engine.
+    private SharedDeviceCache<MfVideoDevice>.Lease? _videoLease;
     private ID3D11Device* _d3d;
     private IMFDXGIDeviceManager* _dxgiManager;
     private IMFMediaEngine* _engine;
     private IMFMediaEngineEx* _engineEx;
+    // Owns the GCHandle to this engine; our reference to it is dropped in DisposeCom, MF's own frees it (see the CCW).
     private MediaEngineNotifyCcw* _notify;
-    private GCHandle _selfHandle;
-    private bool _mfStarted;
     // Probed ONCE on the engine thread right after the engine exists (a static capability of this machine's Media
     // Foundation install — it cannot change per source), so callers never pay a round-trip to ask.
     private volatile bool _canPlayHls;
-    // Set when bring-up (Start's CreateEngine) failed. Sticky for this instance's lifetime — MfMediaPlayer.LeaseEngine
+    // Set when bring-up (Start's CreateEngine) failed, or when the engine's D3D11 device was found removed (a TDR, driver
+    // update or adapter change — see CheckDeviceRemoved). Sticky for this instance's lifetime — MfMediaPlayer.LeaseEngine
     // discards a Faulted engine and builds a fresh one; DrainCommands/RefreshAndPublishSnapshot keep running against
-    // null COM pointers (every call below is null-checked), so the loop stays alive and Dispose() still joins cleanly.
+    // null COM pointers after a failed bring-up (every call below is null-checked), so the loop stays alive and Dispose()
+    // still joins cleanly.
     private volatile bool _faulted;
+    // Engine thread only: the D3D11 device was found removed (GetDeviceRemovedReason != S_OK). Logged once.
+    private bool _deviceRemoved;
+    // Raised on an MF worker by a native ERROR / RESOURCELOST; consumed by RefreshAndPublishSnapshot, which asks the device
+    // (a COM call that must stay on the engine thread) whether it was removed.
+    private int _deviceProbePending;
 
     // ── Engine-thread scheduling ────────────────────────────────────────────────────────────────────────────────────
     private Thread? _thread;
@@ -100,17 +115,28 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private readonly VideoEngineCommandQueue _commands = new();
 
     // ── Per-source event state (set on MF worker threads via OnEngineEvent; read only on the engine thread inside
-    // RefreshAndPublishSnapshot) — reset by DrainCommands' SetSource handling at the start of each new source. ─────────
+    // RefreshAndPublishSnapshot) — reset by ResetPerSourceState on a Detach and at the start of each new source. ──────
     private volatile bool _metadataLoaded;
     private volatile bool _canPlay;
     private volatile bool _playing;
     private volatile bool _seeking;
     private volatile bool _ended;
     private volatile bool _error;
+    // MF raised WAITING for this source after it first had enough data (CANPLAY / PLAYING): playback is intended but the
+    // engine is starved. Cleared by PLAYING, CANPLAY, PAUSE, ENDED or the playhead moving past _waitAnchorPos. Published as
+    // VideoEngineFlags.Waiting only while _playing — see RefreshAndPublishSnapshot.
+    private volatile bool _waiting;
+    // A STALLED (download stall) event is only a hint: refresh promotes it to _waiting when the engine's own ready state
+    // confirms playback cannot continue (< HAVE_FUTURE_DATA).
+    private volatile bool _stalledHint;
+    // Counts stalls (Interlocked: MF workers) so the engine thread re-anchors its progress check for EACH stall, even two
+    // that land between refreshes.
+    private int _waitingSerial;
     private volatile uint _errorCode;
     private volatile int _errorHr;
-    // Latched true once MF reports this source as live (non-finite duration, or MFMEDIASOURCE_IS_LIVE) — NEVER cleared
-    // within a source (only DrainCommands' SetSource reset clears it, for the NEXT source).
+    // Latched true once MF reports this source as live (+Infinity duration, or MFMEDIASOURCE_IS_LIVE — only judged after
+    // LOADEDMETADATA, see EngineLivenessRule: GetDuration is NaN before metadata and after a detach, which is "not known
+    // yet", never "live") — NEVER cleared within a source (only ResetPerSourceState clears it, for the NEXT source).
     private volatile bool _liveLatched;
     // Bumped on every PRESENTATION-affecting event: a native FORMATCHANGE/RESOURCELOST, AND a SetSource (a new source
     // invalidates whatever swap-chain handle the old one produced just as surely as a resource loss does). Interlocked
@@ -132,7 +158,27 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private nuint _cachedHandle;
     private int _handleQueriedForEpoch = -1;   // presentation epoch the cached handle was last queried at; -1 = never
     private double _cachedDuration;
-    private double _lastRate = 1.0;            // tracked from the last applied Rate command (no COM read-back)
+    private double _lastRate = 1.0;            // the last Rate command applied; re-applied after every SetSource, and the
+                                               // published fallback while there is no engine to read the rate back from
+    // A source is set (SetSource drained, no Detach since). While false the engine is parked warm-idle: nothing
+    // time-sensitive to refresh, so it polls at ParkedRefreshMs regardless of the (reset) per-source bits.
+    private bool _hasSource;
+    // One post-metadata-NaN diagnostic per source (the policy question EngineLivenessRule documents).
+    private bool _nanAfterMetadataLogged;
+    // Engine thread only: the last refresh found LOADEDMETADATA REAL — the event bit AND the engine's own ready state
+    // agree. The bit alone is set on an MF worker with no source tag, so a late event of the PREVIOUS source can set it
+    // right after a reset; nothing per-source (size, handle, Playing/Ended, first frame) is trusted before this holds.
+    private bool _metadataTrusted;
+    // Engine thread only: the stall serial the progress check is anchored to, and the playhead at that moment.
+    private int _waitAnchorSerial = -1;
+    private double _waitAnchorPos;
+    // Stopwatch timestamp of the FIRST FRAME of the current source (FIRSTFRAMEREADY, then LOADEDDATA, then PLAYING as the
+    // fallbacks when MF raises none of the earlier ones — a paused open raises no PLAYING); 0 until it lands. Written on MF workers (CompareExchange: first writer wins) and cleared by
+    // ResetPerSourceState, published as VideoEngineSnapshot.FirstFrameTimestamp for the session's surface publish.
+    private long _firstFrameTicks;
+    // SEEKED events of the current source (Interlocked: MF workers). Counted, not a flag, so a paused seek whose SEEKING and
+    // SEEKED coalesce into one refresh still moves a published value — see VideoEngineSnapshot.SeekedCount.
+    private int _seekedCount;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
 
@@ -155,11 +201,15 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     /// <inheritdoc/>
     public void Start()
     {
-        _thread = new Thread(ThreadMain) { IsBackground = true, Name = "VideoMediaEngine" };
+        // F102: AboveNormal so Play/Seek/UpdateVideoStream commands are not queued behind image-decode bursts on a busy box
+        // (MF decodes and presents on its own MMCSS work-queue threads; this thread only issues and polls).
+        _thread = new Thread(ThreadMain) { IsBackground = true, Name = "VideoMediaEngine", Priority = ThreadPriority.AboveNormal };
         _thread.SetApartmentState(ApartmentState.MTA);
         _thread.Start();
     }
 
+    // The queue's own gate decides whether a wake is already outstanding (commands and native MF events share it); this
+    // is only the primitive it invokes once per drain cycle.
     private void WakeEngine()
     {
         // TryAdd never blocks (unbounded collection) and is safe even before the thread exists or after CompleteAdding
@@ -196,18 +246,21 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         DisposeCom();
     }
 
-    private int RefreshIntervalMs() => !_metadataLoaded || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
+    private int RefreshIntervalMs() => !_hasSource ? ParkedRefreshMs : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
 
     private int CreateEngine()
     {
         int hr;
-        if ((hr = MFStartup(MF_VERSION_(), MFSTARTUP_FULL_)) < 0) return Log("MFStartup", hr);
-        _mfStarted = true;
+        // Lease the process-wide video device for the renderer's adapter: the first engine (or the first after an adapter change
+        // or device removal) creates it and runs MFStartup; every later bring-up reuses it, so a rebuild costs only the engine.
+        var lease = MfVideoDevice.Acquire();
+        if (lease == null) return EFail;
+        _videoLease = lease;
+        _d3d = lease.Device.D3d;
+        _dxgiManager = lease.Device.Manager;
 
-        if ((hr = CreateD3D11AndManager()) < 0) return hr;
-
-        _selfHandle = GCHandle.Alloc(this);
-        _notify = MediaEngineNotifyCcw.Create(GCHandle.ToIntPtr(_selfHandle));
+        // The CCW owns this GCHandle from here: it is freed when the struct's last reference goes (MediaEngineNotifyCcw.ReleaseRef).
+        _notify = MediaEngineNotifyCcw.Create(GCHandle.ToIntPtr(GCHandle.Alloc(this)));
 
         IMFAttributes* attrs = null;
         IMFMediaEngineClassFactory* factory = null;
@@ -259,73 +312,6 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         return S_OK;
     }
 
-    private int CreateD3D11AndManager()
-    {
-        ID3D11DeviceContext* ctx = null;
-        uint flags = (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT
-                   | (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
-
-        // Land decode on the SAME adapter the D3D12 renderer chose (GpuAdapterInfo, published at device init). On a
-        // hybrid machine the D3D11 default adapter can be the OTHER GPU. No texture sharing (DComp surface handle
-        // only) — this is decode/present locality, not interop correctness. Cold path on the MTA engine thread.
-        // Fallbacks: LUID unset or enum failure ⇒ the historical default-adapter path, unchanged.
-        IDXGIAdapter1* adapter = null;
-        if (FluentGpu.Rhi.D3D12.GpuAdapterInfo.TryGetAdapterLuid(out LUID renderLuid))
-        {
-            IDXGIFactory4* factory = null;
-            if ((int)CreateDXGIFactory2(0, __uuidof<IDXGIFactory4>(), (void**)&factory) >= 0 && factory != null)
-            {
-                if ((int)factory->EnumAdapterByLuid(renderLuid, __uuidof<IDXGIAdapter1>(), (void**)&adapter) < 0)
-                    adapter = null;
-                factory->Release();
-            }
-        }
-
-        // Explicit adapter REQUIRES D3D_DRIVER_TYPE_UNKNOWN (HARDWARE + adapter is E_INVALIDARG).
-        ID3D11Device* d3d = null;
-        int hr = D3D11CreateDevice((IDXGIAdapter*)adapter,
-                                   adapter != null ? D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE,
-                                   HMODULE.NULL, flags, null, 0, 7 /*D3D11_SDK_VERSION*/, &d3d, null, &ctx);
-        if (adapter != null && (hr < 0 || d3d == null))
-        {
-            // Pinned adapter refused a D3D11 device (driver quirk / feature gap): fall back rather than fail video —
-            // decode on the wrong GPU beats no decode.
-            Diag.Line($"[video.d3d11] adapter-pinned D3D11CreateDevice failed hr=0x{(uint)hr:X8}; falling back to default adapter");
-            hr = D3D11CreateDevice(null, D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE, HMODULE.NULL, flags,
-                                   null, 0, 7 /*D3D11_SDK_VERSION*/, &d3d, null, &ctx);
-            adapter->Release(); adapter = null;
-        }
-        bool pinned = adapter != null;
-        if (adapter != null) adapter->Release();
-        if (hr < 0 || d3d == null) return Log("D3D11CreateDevice", hr);
-        // ALWAYS-ON line (once per engine creation, never per frame): WHICH GPU decodes — the field evidence that
-        // a hybrid machine decodes and renders on the same adapter.
-        Diag.Line($"[video.d3d11] decodeAdapter={(pinned ? $"pinned-to-render-luid 0x{renderLuid.HighPart:X8}:{renderLuid.LowPart:X8}" : "default")}");
-        _d3d = d3d;
-        if (ctx != null) ctx->Release();
-
-        // Mark multithread-protected. REQUIRED when the D3D11 device is shared with Media Foundation — MF drives the
-        // device from its own worker threads and without this it deadlocks during source resolution (the hang the M3
-        // probe misdiagnosed as a driver bug). ID3D10Multithread vtable: 0-2 IUnknown, 3 Enter, 4 Leave,
-        // 5 SetMultithreadProtected(BOOL)->BOOL, 6 GetMultithreadProtected. Use slot 5 (an earlier version wrongly
-        // called slot 3 = Enter, which is why protection was never actually enabled).
-        Guid iidMt = new(0x9b7e4e00, 0x342c, 0x4106, 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0);
-        void* mt = null;
-        if (d3d->QueryInterface(&iidMt, &mt) >= 0 && mt != null)
-        {
-            var setProt = (delegate* unmanaged[MemberFunction]<void*, int, int>)(*(void***)mt)[5];
-            setProt(mt, 1);
-            ((IUnknown*)mt)->Release();
-        }
-
-        uint resetToken = 0;
-        IMFDXGIDeviceManager* dm = null;
-        if ((hr = MFCreateDXGIDeviceManager(&resetToken, &dm)) < 0 || dm == null) return Log("MFCreateDXGIDeviceManager", hr);
-        if ((hr = dm->ResetDevice((IUnknown*)d3d, resetToken)) < 0) { dm->Release(); return Log("IMFDXGIDeviceManager::ResetDevice", hr); }
-        _dxgiManager = dm;
-        return S_OK;
-    }
-
     // ── Commands (engine thread only) ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Drain every pending command slot and apply it as the raw COM call it used to be issued from inside an
@@ -341,33 +327,39 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     {
         VideoEngineCommandQueue c = _commands;
 
-        if (c.TryTake(VideoCommandKind.Detach, out _, out _, out _, out _))
+        // Both are taken up front: a Detach drained together with the NEXT source's SetSource (the warm-engine switch)
+        // must not unload the old source first — the new SetSource replaces it in one step, and the extra
+        // SetSource(null) only provokes EMPTIED/ABORT events the new source then has to outrun.
+        bool detach = c.TryTake(VideoCommandKind.Detach, out _, out _, out _, out _);
+        bool setSource = c.TryTake(VideoCommandKind.SetSource, out _, out int epoch, out _, out object? urlObj);
+
+        if (detach)
         {
             // Release-time source unload (the engine returning warm to MfMediaPlayer's pool). Some MF builds fail a
-            // null SetSource; tolerated — there is no session left listening to a detached engine.
-            if (_engineEx != null)
+            // null SetSource; tolerated — there is no session left listening to a detached engine. Skipped when a
+            // SetSource follows in this very drain (see above); ReturnEngine alone still releases the source.
+            if (_engineEx != null && !setSource)
             {
                 int hr = _engineEx->SetSource(null);
                 if (hr < 0) Log("SetSource(null) [detach]", hr);
             }
             if (_engine != null) _engine->Pause();
+            // The source is gone: drop every per-source bit (GetDuration is NaN with no source, which must not re-latch
+            // as live) and park the loop. _faulted and _committedSourceEpoch stay, so a late snapshot is still dropped by
+            // the session's SourceEpoch guard.
+            ResetPerSourceState();
+            _hasSource = false;
+            _lastRate = 1.0;   // a parked engine carries no rate; the next session posts its own
         }
 
-        if (c.TryTake(VideoCommandKind.SetSource, out _, out int epoch, out _, out object? urlObj))
+        if (setSource)
         {
             string url = (string)urlObj!;
             _committedSourceEpoch = epoch;
-            // Reset every per-source bit: a warm engine reused across a switch must not let the PREVIOUS source's
-            // event state (Ended, an old error, a stale live latch) leak into the new one.
-            _metadataLoaded = false; _canPlay = false; _playing = false; _seeking = false; _ended = false;
-            _error = false; _errorCode = 0; _errorHr = 0;
-            _liveLatched = false;
-            _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
-            _cachedHandle = 0; _handleQueriedForEpoch = -1;
-            _cachedDuration = 0;
-            // A new source invalidates whatever swap-chain handle the old one produced, exactly like a native
-            // FORMATCHANGE/RESOURCELOST — bump the same epoch so a consumer re-queries it.
-            Interlocked.Increment(ref _presentationEpoch);
+            // A warm engine reused across a switch must not let the PREVIOUS source's event state (Ended, an old error,
+            // a stale live latch) leak into the new one.
+            ResetPerSourceState();
+            _hasSource = true;
 
             if (_engineEx != null)
             {
@@ -377,6 +369,15 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                 {
                     Log("SetSource", hr);
                     _error = true; _errorCode = MfMediaEngineErrSrcNotSupported; _errorHr = hr;
+                    // A removed device fails every source the same way; if that is the cause, fault the engine (and report the
+                    // device loss instead of a bad source) so the next lease rebuilds it rather than reusing it.
+                    CheckDeviceRemoved("SetSource");
+                }
+                else
+                {
+                    // MF can drop a rate set while the topology loads and falls back to the DEFAULT rate on Play, so the
+                    // rate the session asked for is re-asserted against the new source (the session also re-posts it).
+                    ApplyRate(_lastRate);
                 }
             }
             else
@@ -410,7 +411,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         if (c.TryTake(VideoCommandKind.Rate, out double rate, out _, out _, out _))
         {
             _lastRate = rate;
-            if (_engine != null) _engine->SetPlaybackRate(rate);
+            ApplyRate(rate);
         }
 
         if (c.TryTake(VideoCommandKind.Volume, out double volume, out _, out _, out _))
@@ -445,6 +446,38 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         }
     }
 
+    // Both rates: the DEFAULT rate is what the engine reverts to when Play() runs after a pause or seek (Chromium sets
+    // both for the same reason), so SetPlaybackRate alone silently falls back to 1.0.
+    private void ApplyRate(double rate)
+    {
+        if (_engine == null) return;
+        int hr = _engine->SetDefaultPlaybackRate(rate);
+        if (hr < 0) Log("SetDefaultPlaybackRate", hr);
+        hr = _engine->SetPlaybackRate(rate);
+        if (hr < 0) Log("SetPlaybackRate", hr);
+    }
+
+    // Reset every bit that describes the CURRENT source — shared by Detach (the source is unloaded) and SetSource (a new
+    // one replaces it). Deliberately leaves _faulted (sticky bring-up failure) and _committedSourceEpoch (the caller
+    // decides what epoch is published) alone.
+    private void ResetPerSourceState()
+    {
+        _metadataLoaded = false; _canPlay = false; _playing = false; _seeking = false; _ended = false;
+        _error = false; _errorCode = 0; _errorHr = 0;
+        _waiting = false; _stalledHint = false;
+        _liveLatched = false;
+        _nanAfterMetadataLogged = false;
+        _metadataTrusted = false;
+        Interlocked.Exchange(ref _firstFrameTicks, 0);
+        Interlocked.Exchange(ref _seekedCount, 0);
+        _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
+        _cachedHandle = 0; _handleQueriedForEpoch = -1;
+        _cachedDuration = 0;
+        // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
+        // FORMATCHANGE/RESOURCELOST — bump the same epoch so a consumer re-queries it.
+        Interlocked.Increment(ref _presentationEpoch);
+    }
+
     // ── Snapshot (engine thread only) ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Direct COM reads — this IS the engine thread, so nothing here waits for anything. Builds the POD
@@ -452,32 +485,34 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     /// changed since the last raise (position-only changes are coalesced to ~1 Hz — see the class doc comment).</summary>
     private void RefreshAndPublishSnapshot()
     {
+        if (Interlocked.Exchange(ref _deviceProbePending, 0) != 0) CheckDeviceRemoved("engine event");
+        uint readyState = _engine != null ? _engine->GetReadyState() : 0;
+        // LOADEDMETADATA is trusted only once the engine itself reports HAVE_METADATA (see _metadataTrusted).
+        bool metadata = _metadataLoaded && readyState >= EngineLivenessRule.HaveMetadata;
+        if (metadata && !_metadataTrusted)
+        {
+            // Crossing into HAVE_METADATA: a size or handle cached before it described whatever the engine held then.
+            _naturalQueriedForEpoch = -1;
+            _handleQueriedForEpoch = -1;
+        }
+        _metadataTrusted = metadata;
+
         VideoEngineFlags flags = VideoEngineFlags.None;
         if (_faulted) flags |= VideoEngineFlags.Faulted;
-        if (_metadataLoaded) flags |= VideoEngineFlags.MetadataLoaded;
+        if (metadata) flags |= VideoEngineFlags.MetadataLoaded;
         if (_canPlay) flags |= VideoEngineFlags.CanPlay;
-        if (_playing) flags |= VideoEngineFlags.Playing;
+        if (_playing && metadata) flags |= VideoEngineFlags.Playing;   // PLAYING / ENDED mean nothing before the source's own metadata
         if (_seeking) flags |= VideoEngineFlags.Seeking;
-        if (_ended) flags |= VideoEngineFlags.Ended;
+        if (_ended && metadata) flags |= VideoEngineFlags.Ended;
         if (_error) flags |= VideoEngineFlags.Error;
 
-        uint readyState = 0;
         double duration = 0, position = 0;
         double seekStart = 0, seekEnd = 0;
 
         if (_engine != null)
         {
-            readyState = _engine->GetReadyState();
-
             double d = _engine->GetDuration();
-            if (double.IsFinite(d))
-            {
-                if (d > 0 && _cachedDuration <= 0) _cachedDuration = d;   // never regress a known duration back to 0
-            }
-            else
-            {
-                _liveLatched = true;   // a non-finite duration IS live — latch it, never clear within this source
-            }
+            if (double.IsFinite(d) && d > 0 && _cachedDuration <= 0) _cachedDuration = d;   // never regress a known duration back to 0
             duration = _cachedDuration;
 
             double t = _engine->GetCurrentTime();
@@ -485,12 +520,24 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 
             if (_engineEx != null)
             {
-                uint characteristics;
-                if (_engineEx->GetResourceCharacteristics(&characteristics) >= 0 && (characteristics & MediaSourceIsLive) != 0)
-                    _liveLatched = true;
-
-                if (_metadataLoaded)
+                if (metadata)
                 {
+                    // Liveness is judged only now: before metadata (and with no source) GetDuration is NaN, which means
+                    // "not known yet". One-way latch per source.
+                    if (!_liveLatched)
+                    {
+                        uint characteristics;
+                        bool charIsLive = _engineEx->GetResourceCharacteristics(&characteristics) >= 0 && (characteristics & MediaSourceIsLive) != 0;
+                        if (EngineLivenessRule.IsLive(_metadataLoaded, readyState, d, charIsLive)) _liveLatched = true;
+                        else if (double.IsNaN(d) && readyState >= EngineLivenessRule.HaveMetadata && !_nanAfterMetadataLogged)
+                        {
+                            // Policy: NaN after metadata is NOT live. Report it once per source so a live HLS build that
+                            // answers this way (and would now show as VOD) shows up in the field instead of silently.
+                            _nanAfterMetadataLogged = true;
+                            Diag.Event("media.live", "nan-after-metadata");
+                        }
+                    }
+
                     // Seekable range (the DVR window for a live source; its END is the live edge). Re-read every tick —
                     // for a live source it slides forward continuously. The IMFMediaTimeRange this call creates never
                     // leaves this thread and is released before returning.
@@ -529,8 +576,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                     }
 
                     // Swap-chain handle — same one-query-per-epoch discipline (a steady-state playing video costs zero
-                    // extra marshaled reads here once both are answered for the current epoch).
-                    if (_handleQueriedForEpoch != epoch)
+                    // extra marshaled reads here once both are answered for the current epoch). A video whose handle
+                    // came back 0 (the swap chain is not ready yet at this refresh) is retried on the next one instead
+                    // of freezing at 0 for the epoch, like the native path's "not ready yet"; an audio-only source
+                    // (empty size) has no handle to wait for.
+                    if (_handleQueriedForEpoch != epoch || (_cachedHandle == 0 && _naturalW != 0 && _naturalH != 0))
                     {
                         HANDLE h;
                         _cachedHandle = _engineEx->GetVideoSwapchainHandle(&h) >= 0 ? (nuint)(nint)h : 0;
@@ -540,8 +590,25 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             }
         }
 
+        // A STALLED hint counts only when the engine's own ready state agrees playback cannot continue.
+        if (_stalledHint)
+        {
+            _stalledHint = false;
+            if (readyState < HaveFutureData && CanStall) { Interlocked.Increment(ref _waitingSerial); _waiting = true; }
+        }
+        // A stall ends on the PLAYING / CANPLAY events (they clear the bit), or here, when the playhead has moved on from
+        // where this stall began: the progress check covers MF builds that resume without either event.
+        if (_waiting)
+        {
+            int serial = Volatile.Read(ref _waitingSerial);
+            if (serial != _waitAnchorSerial) { _waitAnchorSerial = serial; _waitAnchorPos = position; }
+            else if (position > _waitAnchorPos + WaitProgressSeconds) _waiting = false;
+        }
+        if (_waiting && _playing && metadata) flags |= VideoEngineFlags.Waiting;
+
         if (_naturalQueriedForEpoch == Volatile.Read(ref _presentationEpoch)) flags |= VideoEngineFlags.NaturalSizeKnown;
         if (_liveLatched) flags |= VideoEngineFlags.LiveSource;
+        long firstFrame = metadata ? Volatile.Read(ref _firstFrameTicks) : 0;
 
         var snap = new VideoEngineSnapshot
         {
@@ -554,12 +621,14 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             DurationSeconds = duration,
             PositionSeconds = position,
             PositionTimestamp = Stopwatch.GetTimestamp(),
-            PlaybackRate = _lastRate,
+            PlaybackRate = ReadPlaybackRate(),
             SeekableStart = seekStart,
             SeekableEnd = seekEnd,
             SwapchainHandle = _cachedHandle,
             ErrorCode = _errorCode,
             ErrorHr = _errorHr,
+            FirstFrameTimestamp = firstFrame,
+            SeekedCount = Volatile.Read(ref _seekedCount),
         };
         _snapshot.Publish(snap);
 
@@ -571,7 +640,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             snap.NaturalW != _lastPublished.NaturalW || snap.NaturalH != _lastPublished.NaturalH ||
             snap.DurationSeconds != _lastPublished.DurationSeconds ||
             snap.SeekableStart != _lastPublished.SeekableStart || snap.SeekableEnd != _lastPublished.SeekableEnd ||
+            snap.PlaybackRate != _lastPublished.PlaybackRate ||
             snap.SwapchainHandle != _lastPublished.SwapchainHandle ||
+            snap.FirstFrameTimestamp != _lastPublished.FirstFrameTimestamp ||
+            snap.SeekedCount != _lastPublished.SeekedCount ||
             snap.ErrorCode != _lastPublished.ErrorCode;
 
         long now = snap.PositionTimestamp;
@@ -581,6 +653,15 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _lastPublished = snap;
         _lastRaiseTicks = now;
         try { StateChanged?.Invoke(); } catch { }
+    }
+
+    // The rate the engine is ACTUALLY running at (a rate MF dropped or reverted shows here); the last applied command only
+    // while there is no engine or it answers something unusable.
+    private double ReadPlaybackRate()
+    {
+        if (_engine == null) return _lastRate;
+        double r = _engine->GetPlaybackRate();
+        return double.IsFinite(r) && r > 0 ? r : _lastRate;
     }
 
     /// <inheritdoc/>
@@ -601,33 +682,94 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         switch ((MF_MEDIA_ENGINE_EVENT)ev)
         {
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA: _metadataLoaded = true; break;
-            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_CANPLAY: _canPlay = true; break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_CANPLAY: _canPlay = true; _waiting = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PLAY: _ended = false; break;
-            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PLAYING: _playing = true; _canPlay = true; _ended = false; break;
-            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PAUSE: _playing = false; break;
+            // Events carry no source tag, so a late PLAYING / ENDED of the PREVIOUS source can land right after a reset: a
+            // new source can legitimately raise neither before its own LOADEDMETADATA, and they are dropped until then.
+            // Known residue: the gate reads the RAW _metadataLoaded bit, so a late LOADEDMETADATA followed by a late PLAYING
+            // of the previous source can still leave the raw _playing / first-frame stamp set. They are published only once
+            // the refresh trusts metadata (ready state >= HAVE_METADATA — the new source's own), so it surfaces as, at
+            // worst, a premature Playing flag at that moment; MF's next PAUSE / the session's Transport post corrects it.
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PLAYING:
+                if (!_metadataLoaded) break;
+                _playing = true; _canPlay = true; _ended = false; _waiting = false;
+                // Frames are flowing: the LAST first-frame fallback (after FIRSTFRAMEREADY and LOADEDDATA; first writer wins).
+                Interlocked.CompareExchange(ref _firstFrameTicks, Stopwatch.GetTimestamp(), 0);
+                break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY:
+                if (_metadataLoaded) Interlocked.CompareExchange(ref _firstFrameTicks, Stopwatch.GetTimestamp(), 0);
+                break;
+            // HAVE_CURRENT_DATA: the frame at the current position is decoded. The engine never calls SetPreload, so a PAUSED
+            // open may get no FIRSTFRAMEREADY and never raises PLAYING; this is the fallback that still lets the poster drop
+            // (Chromium sets up its frame here; Gecko's OnLoadedData calls OnLoadedFirstFrame for the same reason).
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_LOADEDDATA:
+                if (_metadataLoaded) Interlocked.CompareExchange(ref _firstFrameTicks, Stopwatch.GetTimestamp(), 0);
+                break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PAUSE: _playing = false; _waiting = false; break;
+            // Starvation: the engine ran out of data to present. Only after this source first had enough (CANPLAY / PLAYING) —
+            // a WAITING while the source is still loading or seeking is the normal opening / seek path, which the session
+            // already shows as Opening / Buffering(Seeking). The bit is set here and cleared by PLAYING / CANPLAY / PAUSE /
+            // ENDED, or by the engine thread seeing the playhead move (RefreshAndPublishSnapshot).
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_WAITING:
+                if (CanStall) { Interlocked.Increment(ref _waitingSerial); _waiting = true; }
+                else relevant = false;
+                break;
+            // A download stall is NOT necessarily a playback stall (the buffer may still hold seconds of data): only a hint,
+            // judged by the engine thread against the ready state.
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_STALLED:
+                if (CanStall) _stalledHint = true;
+                else relevant = false;
+                break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKING: _seeking = true; break;
-            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKED: _seeking = false; break;
-            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
-            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKED: _seeking = false; Interlocked.Increment(ref _seekedCount); break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: if (_metadataLoaded) { _ended = true; _playing = false; _waiting = false; } break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR:
+                _error = true; _errorCode = (uint)p1; _errorHr = (int)p2;
+                Volatile.Write(ref _deviceProbePending, 1);   // an error after a TDR looks like any other; the engine thread asks the device
+                break;
             // The PRESENTATION itself changed underneath the engine, with no transport transition to ride in on:
             // FORMATCHANGE is an ABR variant switch (a NEW decoded frame size), RESOURCELOST is the swap chain going
             // away and being rebuilt. Both bump the monotonic epoch RefreshAndPublishSnapshot compares against to
             // decide whether to re-query the natural size / swap-chain handle.
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
+                Interlocked.Increment(ref _presentationEpoch);
+                break;
+            // RESOURCELOST can also be the device itself going away: the engine thread checks it (CheckDeviceRemoved).
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
                 Interlocked.Increment(ref _presentationEpoch);
+                Volatile.Write(ref _deviceProbePending, 1);
                 break;
             default: relevant = false; break;
         }
         // EventNotify runs on an MF worker. Set the bits, then ask for exactly one coalesced out-of-cadence refresh —
-        // the SAME wake path a posted command uses (VideoEngineCommandQueue's own interlocked coalescing), so a burst
-        // of native events between two engine-thread turns produces at most one extra wake, not one per event. Never
-        // raise StateChanged here: only RefreshAndPublishSnapshot does, AFTER the corresponding Publish, so a consumer
-        // woken by the event is guaranteed to read at least the state that caused it.
-        if (relevant) WakeEngine();
+        // through the SAME gate a posted command uses (VideoEngineCommandQueue.RequestWake), so a burst of native events
+        // between two engine-thread turns produces at most one extra wake, not one per event. Never raise StateChanged
+        // here: only RefreshAndPublishSnapshot does, AFTER the corresponding Publish, so a consumer woken by the event is
+        // guaranteed to read at least the state that caused it.
+        if (relevant) _commands.RequestWake();
     }
 
-    private static uint MF_VERSION_() => (uint)MF.MF_VERSION;
+    // A stall is only meaningful for a source that has already had enough data to play (see the WAITING case).
+    private bool CanStall => (_canPlay || _playing) && !_ended;
+
+    // Engine thread only. Asks the D3D11 device MF decodes on whether it was removed (TDR, driver update, adapter change —
+    // MF then errors or keeps handing out a swap chain that never presents, on every later source). If so the engine is
+    // marked Faulted, with an error snapshot, so MfMediaPlayer.LeaseEngine rebuilds it at the next open instead of reusing a
+    // dead one; the session that is playing on it sees a Retryable decode error. Always-on, once per engine.
+    private bool CheckDeviceRemoved(string what)
+    {
+        if (_deviceRemoved) return true;
+        if (_d3d == null) return false;
+        int reason = (int)_d3d->GetDeviceRemovedReason();
+        if (reason == 0) return false;
+        _deviceRemoved = true;
+        _faulted = true;
+        // Retire the shared device so the next lease creates a fresh one instead of handing out the dead one again.
+        _videoLease?.MarkRemoved();
+        _error = true; _errorCode = MfMediaEngineErrDecode; _errorHr = reason;
+        Diag.Line($"[video.d3d11] device removed ({what}) reason=0x{(uint)reason:X8}; engine faulted, the next lease rebuilds it");
+        return true;
+    }
 
     private static int Log(string what, int hr)
     {
@@ -640,14 +782,21 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // a safe no-op.
     private void DisposeCom()
     {
+        // Stop delivering to us BEFORE the engine goes away (Chromium's order): an EventNotify already on an MF worker
+        // returns without touching this instance.
+        if (_notify != null) MediaEngineNotifyCcw.Shutdown(_notify);
         if (_engine != null) _engine->Shutdown();
         if (_engineEx != null) { _engineEx->Release(); _engineEx = null; }
         if (_engine != null) { _engine->Release(); _engine = null; }
-        if (_dxgiManager != null) { _dxgiManager->Release(); _dxgiManager = null; }
-        if (_d3d != null) { _d3d->Release(); _d3d = null; }
-        if (_notify != null) { MediaEngineNotifyCcw.Destroy(_notify); _notify = null; }
-        if (_selfHandle.IsAllocated) _selfHandle.Free();
-        if (_mfStarted) { MFShutdown(); _mfStarted = false; }
+        // Borrowed from the shared device (MfVideoDevice): drop the pointers only, the lease below gives them back.
+        _dxgiManager = null;
+        _d3d = null;
+        // Drop only OUR reference. MF may still hold the callback (its final release can land on one of its workers after
+        // Shutdown returns), so the struct and the GCHandle are freed by whoever releases last, never here.
+        if (_notify != null) { MediaEngineNotifyCcw.ReleaseRef(_notify); _notify = null; }
+        // Last: the device (and MFStartup) may only go away once this engine's COM objects are released. The device itself
+        // lingers for the next engine; it is destroyed here only when this was its last lease and it was retired.
+        if (_videoLease != null) { _videoLease.Dispose(); _videoLease = null; }
     }
 
     /// <inheritdoc/>
@@ -663,12 +812,23 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 /// owning <see cref="VideoMediaEngine"/> so the <c>[UnmanagedCallersOnly]</c> thunk (which cannot close over instance
 /// state) routes events back to the instance. Mirrors the vtable pattern in
 /// <c>src/FluentGpu.Windows/Interop/Win32DropTarget.cs</c>.
+/// <para><b>Lifetime (com-interop.md §4.3).</b> A real COM refcount: the engine holds one reference (<see cref="Create"/>
+/// starts at 1, dropped in <c>DisposeCom</c> through <see cref="ReleaseRef"/>), Media Foundation holds its own, and the
+/// native struct and the <see cref="GCHandle"/> are freed by WHOEVER RELEASES LAST (<see cref="ReleaseRef"/> reaching 0).
+/// MF's final release can land on one of its workers after <c>Shutdown</c> returned, so freeing earlier would make that
+/// release (or an in-flight <c>EventNotify</c>) touch freed memory. <see cref="Shutdown"/> is the gate that stops
+/// callbacks reaching a disposing engine; it never frees anything.</para>
 /// </summary>
 internal unsafe struct MediaEngineNotifyCcw
 {
     public void** Vtbl;    // COM "this" vptr (first field)
     public int Rc;
-    public nint Owner;     // GCHandle.ToIntPtr(owner)
+    public nint Owner;     // GCHandle.ToIntPtr(owner); freed with the struct, when Rc reaches 0
+    public int IsShutdown; // set once by Shutdown(): EventNotify then returns S_OK without calling back into the owner
+
+    // Structs created and not yet freed — what the lifetime tests assert (a leak or an early free shows as a wrong count).
+    private static int s_live;
+    internal static int LiveInstances => Volatile.Read(ref s_live);
 
     private static readonly void** _vtbl = Build();
     private static void** Build()
@@ -684,10 +844,29 @@ internal unsafe struct MediaEngineNotifyCcw
     public static MediaEngineNotifyCcw* Create(nint owner)
     {
         var p = (MediaEngineNotifyCcw*)NativeMemory.Alloc((nuint)sizeof(MediaEngineNotifyCcw));
-        p->Vtbl = _vtbl; p->Rc = 1; p->Owner = owner;
+        p->Vtbl = _vtbl; p->Rc = 1; p->Owner = owner; p->IsShutdown = 0;
+        Interlocked.Increment(ref s_live);
         return p;
     }
-    public static void Destroy(MediaEngineNotifyCcw* p) => NativeMemory.Free(p);
+
+    /// <summary>Stop forwarding events to the owner (call BEFORE the engine is shut down). Frees nothing.</summary>
+    internal static void Shutdown(MediaEngineNotifyCcw* p) => Volatile.Write(ref p->IsShutdown, 1);
+
+    internal static uint AddRefCore(MediaEngineNotifyCcw* p) => (uint)Interlocked.Increment(ref p->Rc);
+
+    /// <summary>Drop one reference; the one that reaches zero frees the owner's <see cref="GCHandle"/> and the struct.
+    /// Callable from managed code (the owner dropping its own reference) and from the COM <c>Release</c> thunk.</summary>
+    internal static uint ReleaseRef(MediaEngineNotifyCcw* p)
+    {
+        int rc = Interlocked.Decrement(ref p->Rc);
+        if (rc == 0)
+        {
+            if (p->Owner != 0) GCHandle.FromIntPtr(p->Owner).Free();
+            NativeMemory.Free(p);
+            Interlocked.Decrement(ref s_live);
+        }
+        return (uint)rc;
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
     private static int QueryInterface(MediaEngineNotifyCcw* self, Guid* riid, void** ppv)
@@ -698,12 +877,13 @@ internal unsafe struct MediaEngineNotifyCcw
         *ppv = null; return unchecked((int)0x80004002);
     }
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
-    private static uint AddRef(MediaEngineNotifyCcw* self) => (uint)Interlocked.Increment(ref self->Rc);
+    private static uint AddRef(MediaEngineNotifyCcw* self) => AddRefCore(self);
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
-    private static uint Release(MediaEngineNotifyCcw* self) => (uint)Interlocked.Decrement(ref self->Rc);
+    private static uint Release(MediaEngineNotifyCcw* self) => ReleaseRef(self);
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
     private static int EventNotify(MediaEngineNotifyCcw* self, uint ev, nuint p1, uint p2)
     {
+        if (Volatile.Read(ref self->IsShutdown) != 0) return 0;   // the owner is disposing: nothing left to tell it
         try
         {
             var h = GCHandle.FromIntPtr(self->Owner);

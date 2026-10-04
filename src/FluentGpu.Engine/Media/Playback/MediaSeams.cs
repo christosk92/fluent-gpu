@@ -92,8 +92,12 @@ public sealed record DrmConfig(DrmSystem System, string? LicenseServerUri = null
 }
 
 /// <summary>An EME-shaped license request (spec §9.2): the CDM emitted a challenge; the app relays it to a license
-/// server and returns the <see cref="LicenseResponse"/>. Headlessly testable — no CDM required to exercise the relay.</summary>
-public sealed record LicenseRequest(DrmSystem System, ReadOnlyMemory<byte> Challenge, string? KeyId, MediaLocus Locus);
+/// server and returns the <see cref="LicenseResponse"/>. Headlessly testable — no CDM required to exercise the relay.
+/// <para><paramref name="Cancel"/> ends the attempt: the runtime cancels it when the attempt stalls past its timeout or the
+/// license it belongs to was replaced. A relay that ignores it still works, but leaves its POST running until the HTTP stack
+/// gives up; one that honours it (and throws <see cref="OperationCanceledException"/>) frees the connection at once.</para></summary>
+public sealed record LicenseRequest(DrmSystem System, ReadOnlyMemory<byte> Challenge, string? KeyId, MediaLocus Locus,
+                                    CancellationToken Cancel = default);
 
 /// <summary>The license blob returned to the CDM (spec §9.2).</summary>
 public sealed record LicenseResponse(ReadOnlyMemory<byte> License);
@@ -445,6 +449,12 @@ public interface IMediaSession : IAsyncDisposable
 {
     /// <summary>Connect the signal sink the backend writes state INTO (backend → engine, marshaled to the safe context).</summary>
     void ConnectSignals(MediaSignalSink sink);
+    /// <summary>The early-start seam: <c>MediaPlayer</c> calls it on the opening thread as soon as the backend returns the
+    /// session, BEFORE any UI hop and before <see cref="ConnectSignals"/>, so a session whose real work is native (the
+    /// protected attach) begins it without waiting for the signal wiring. Idempotent and callable from any thread; the
+    /// sink is not connected yet, so it must not write signals. Default: a no-op, so a session that starts in
+    /// <see cref="ConnectSignals"/> (or at construction) is unaffected.</summary>
+    void Start() { }
     /// <summary>Resume.</summary>
     ValueTask PlayAsync();
     /// <summary>Pause.</summary>

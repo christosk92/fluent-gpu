@@ -44,6 +44,7 @@ public sealed class HostTimerQueue
         public long Seq;            // monotonic tiebreaker → a total order among equal due times (deterministic)
         public long Gen;
         public Action<long> Callback;
+        public Type? Owner;         // the component type that armed it (wake census: timersSeen); null = unattributable
     }
 
     private Entry[] _heap;
@@ -79,14 +80,91 @@ public sealed class HostTimerQueue
 
     /// <summary>Arm a timer to fire <paramref name="callback"/> at <paramref name="dueMs"/> (this queue's clock), tagged
     /// with <paramref name="gen"/>. The callback is invoked with the entry's generation so the owner can no-op a stale
-    /// fire (cancel/re-arm/unmount bumped the generation). Grows the backing array only when full (cold).</summary>
-    public void Schedule(double dueMs, long gen, Action<long> callback)
+    /// fire (cancel/re-arm/unmount bumped the generation). Grows the backing array only when full (cold).
+    /// <paramref name="owner"/> names who armed it for the <c>[wake]</c> census's <c>timersSeen=</c> (the hooks pass their
+    /// component's type); omitted, the callback target's type stands in, so a timer is never anonymous in the census.</summary>
+    public void Schedule(double dueMs, long gen, Action<long> callback, Type? owner = null)
     {
         if (callback is null) return;
         if (_count == _heap.Length) Array.Resize(ref _heap, _heap.Length * 2);
         int i = _count++;
-        _heap[i] = new Entry { DueMs = dueMs, Seq = _seq++, Gen = gen, Callback = callback };
+        _heap[i] = new Entry { DueMs = dueMs, Seq = _seq++, Gen = gen, Callback = callback, Owner = owner ?? callback.Target?.GetType() };
         SiftUp(i);
+    }
+
+    // ── Fire census (the [wake] line's timersSeen=) ──────────────────────────────────────────────────────────────────
+    // The wake census can only say "a timer was due" (WakeReasons.Timer); this names WHO, in the shape of pollersSeen: every
+    // owner type whose timer fired this census window, with its fire count. A fixed table filled in first-seen order (no
+    // allocation, no LINQ, a handful of reference compares per fire) and cleared by the census after each report. A fire is
+    // counted when the entry pops, whether or not its generation guard then makes the callback a no-op.
+    private const int MaxTimerOwners = 12;
+    private readonly Type?[] _fireOwners = new Type?[MaxTimerOwners];
+    private readonly long[] _fireCounts = new long[MaxTimerOwners];
+    private int _fireOwnerCount;
+    private long _fireUnowned, _fireOverflow;
+
+    private void NoteFire(Type? owner)
+    {
+        if (owner is null) { _fireUnowned++; return; }
+        for (int i = 0; i < _fireOwnerCount; i++)
+            if (ReferenceEquals(_fireOwners[i], owner)) { _fireCounts[i]++; return; }
+        if (_fireOwnerCount < MaxTimerOwners)
+        {
+            _fireOwners[_fireOwnerCount] = owner;
+            _fireCounts[_fireOwnerCount] = 1;
+            _fireOwnerCount++;
+        }
+        else _fireOverflow++;
+    }
+
+    /// <summary>Fires counted since the last <see cref="ResetFireCensus"/> (all owners, the unattributed and the overflow).</summary>
+    public long FiresInWindow
+    {
+        get
+        {
+            long total = _fireUnowned + _fireOverflow;
+            for (int i = 0; i < _fireOwnerCount; i++) total += _fireCounts[i];
+            return total;
+        }
+    }
+
+    /// <summary>Append <c>timersSeen=N:Owner×fires,…</c> (or <c>timersSeen=0</c>): every timer owner that fired in the current
+    /// window. <c>?</c> is a timer nothing could attribute, <c>+</c> the fires of owners past the table's capacity. Report
+    /// cadence only, UI thread.</summary>
+    internal void AppendTimersSeen(System.Text.StringBuilder sb)
+    {
+        int distinct = _fireOwnerCount + (_fireUnowned > 0 ? 1 : 0) + (_fireOverflow > 0 ? 1 : 0);
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $" | timersSeen={distinct}");
+        if (distinct == 0) return;
+        sb.Append(':');
+        bool first = true;
+        for (int i = 0; i < _fireOwnerCount; i++)
+        {
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(_fireOwners[i]!.Name).Append(System.Globalization.CultureInfo.InvariantCulture, $"×{_fireCounts[i]}");
+        }
+        if (_fireUnowned > 0)
+        {
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"?×{_fireUnowned}");
+        }
+        if (_fireOverflow > 0)
+        {
+            if (!first) sb.Append(',');
+            sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"+×{_fireOverflow}");
+        }
+    }
+
+    /// <summary>Open a fresh census window (the owner slots are reused, the counts zeroed).</summary>
+    internal void ResetFireCensus()
+    {
+        Array.Clear(_fireOwners);
+        Array.Clear(_fireCounts);
+        _fireOwnerCount = 0;
+        _fireUnowned = 0;
+        _fireOverflow = 0;
     }
 
     /// <summary>Eagerly drop every heap entry tagged with <paramref name="gen"/>. Lazy cancel (generation bump alone)
@@ -146,6 +224,7 @@ public sealed class HostTimerQueue
                 SiftDown(0);
             }
             else _heap[0] = default;
+            NoteFire(e.Owner);
             e.Callback(e.Gen);           // may re-Schedule (interval/debounce) — guarded above
         }
     }

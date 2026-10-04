@@ -124,6 +124,18 @@ internal sealed unsafe class SliceCompositor : IDisposable
         K[16] = rectPx.X; K[17] = rectPx.Y; K[18] = rectPx.Right; K[19] = rectPx.Bottom;
     }
 
+    /// <summary>A rounded clip with a radius PER CORNER (top-left, top-right, bottom-right, bottom-left), for the video-hole
+    /// erase (F078): the hole's own rounded rect, not the uniform <see cref="RoundClip"/>. It rides the feather's constants
+    /// (K[5], K[6]) - selected by a NEGATIVE feather flag, K[3].y = -1 - so it is exclusive with <see cref="Feather"/>, which an
+    /// erase never uses. Combines with <see cref="RoundClip"/> (a separate flag and rect).</summary>
+    public void CornerClip(in RectF rectPx, in CornerRadius4 radiiPx)
+    {
+        if (rectPx.W <= 0f || rectPx.H <= 0f) return;
+        K[13] = -1f;
+        K[20] = rectPx.X; K[21] = rectPx.Y; K[22] = rectPx.Right; K[23] = rectPx.Bottom;
+        K[24] = radiiPx.TopLeft; K[25] = radiiPx.TopRight; K[26] = radiiPx.BottomRight; K[27] = radiiPx.BottomLeft;
+    }
+
     /// <summary>The analytic edge feather (target px — the caller translates it into the target's space).</summary>
     public void Feather(in EdgeFeather f)
     {

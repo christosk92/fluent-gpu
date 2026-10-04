@@ -2232,6 +2232,51 @@ public sealed partial class SceneStore : ISceneBackend
         return true;
     }
 
+    /// <summary>The window-space rect a node actually PAINTS at: its local W/H run through the FULL affine walk the
+    /// recorder composes (parent chain, each node's <c>ChildShift</c>, then <c>LocalTransform</c> about the node's
+    /// <c>OriginX/OriginY</c>) and boxed. <see cref="AbsoluteRect"/> folds only the translation part, so under a scaled
+    /// ancestor (a scale-in entrance, a connected/page transition, a zoom FLIP) it describes a rect that is not where the
+    /// node is drawn. Anything that must LINE UP with painted pixels, such as a composited video visual placed against
+    /// the punched hole, needs this one. A rotation/skew yields the axis-aligned bounding box (a DirectComposition
+    /// placement can express an axis-aligned scale only). A translation-only chain returns exactly what
+    /// <see cref="AbsoluteRect"/> does (the same sums, in the same order), so no existing placement moves a bit.
+    /// Zero-alloc.</summary>
+    public RectF AbsoluteTransformedRect(NodeHandle h)
+        => AbsoluteTransformedRect(h, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
+
+    /// <summary><see cref="AbsoluteTransformedRect(NodeHandle)"/> for an explicit LOCAL size instead of the node's laid-out
+    /// W/H: a <see cref="SizeMode.Reveal"/> ancestor presents <c>PresentedW</c>/<c>PresentedH</c> while its bounds stay
+    /// final, and a clip walk wants the presented extent mapped through the same transform.</summary>
+    public RectF AbsoluteTransformedRect(NodeHandle h, float width, float height)
+    {
+        if (TryAbsoluteRectTranslationOnly(h, out RectF plain))
+            return new RectF(plain.X, plain.Y, width, height);
+        return WorldAffine(h).TransformBounds(new RectF(0f, 0f, width, height));
+    }
+
+    // node-local -> window affine, composed exactly like the recorder / ConnectedAnimation.WorldTransform: parent world,
+    // the parent's ChildShift, the node's origin, then its LocalTransform about (OriginX*W, OriginY*H). Depth-bounded
+    // recursion over a handful of ancestors; no allocation.
+    private Affine2D WorldAffine(NodeHandle n)
+    {
+        int i = (int)n.Raw.Index;
+        NodeHandle parent = Parent(n);
+        Affine2D world = Affine2D.Identity;
+        if (!parent.IsNull)
+        {
+            world = WorldAffine(parent);
+            world = world.Translate(_paint[parent.Raw.Index].ChildShiftX, _paint[parent.Raw.Index].ChildShiftY);
+        }
+        world = world.Translate(_bounds[i].X, _bounds[i].Y);
+        Affine2D local = _paint[i].LocalTransform;
+        if (!local.IsIdentity)
+        {
+            float ox = _bounds[i].W * _paint[i].OriginX, oy = _bounds[i].H * _paint[i].OriginY;
+            world = world.Translate(ox, oy).Multiply(local).Translate(-ox, -oy);
+        }
+        return world;
+    }
+
     /// <summary>Same origin walk as <see cref="AbsoluteRect"/> (window-space = summed origin up the parent chain) but
     /// LAYOUT bounds only — no compositor <c>LocalTransform</c>/<c>ChildShiftX/Y</c> folded in. A content-space caller
     /// computing a SCROLL target (offsets live in content space == layout space) needs this: <see cref="AbsoluteRect"/>

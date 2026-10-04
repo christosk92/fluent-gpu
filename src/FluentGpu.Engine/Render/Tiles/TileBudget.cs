@@ -5,7 +5,7 @@ namespace FluentGpu.Render.Tiles;
 /// <summary>
 /// The retained-tile memory budget (docs/plans/scroll-gpu-retained-tiles-implementation.md §A.6):
 /// <c>TileBudgetBytes = clamp(WindowMultiplier × windowBytes, FloorBytes, CeilingBytes)</c> with the defaults
-/// 5.0 × / 48 MiB / 128 MiB (≈ 78 MiB at 2560×1600) — raised 2026-09-24 from 3.5 × / 32 / 96: the artist page's
+/// 5.0 × / 48 MiB / 128 MiB (≈ 78 MiB at 2560×1600; the weak tier's preset is a 72 MiB ceiling and a 0.15 retained share, <see cref="ApplyTierPreset"/>) — raised 2026-09-24 from 3.5 × / 32 / 96: the artist page's
 /// VISIBLE need (<c>TileCensus.VisibleNeedBytes</c>; ≈ 45 MiB at 1860×1230 by the plan's derivation, the scroll bench's
 /// measurement is recorded in the plan's status note) exceeds the 32 MiB floor the old derivation gave (docs/plans/composite-fade-groups-implementation.md §3, owner decision 1). Every term is
 /// LIVE-TUNABLE from the Diagnostics page / a probe — never an environment variable. <see cref="RetainedShare"/> bounds
@@ -24,12 +24,33 @@ public static class TileBudget
     public const long DefaultCeilingBytes = 128 * MiB;
     public const double DefaultRetainedShare = 0.25;
 
+    /// <summary>The weak-tier (UMA / iGPU) preset (F255): on those parts every tile surface is pinned SYSTEM memory that
+    /// the video decoder and the rest of the process share, and a covered-window scroll needs far less than the discrete
+    /// ceiling (the artist page's visible need is ~45 MiB, under the 48 MiB floor, which the floor still guarantees). The
+    /// ceiling only bites a large window; the retained share bounds the group / blur / backdrop caches that ride on top.
+    /// Applied once at host construction by <see cref="ApplyTierPreset"/>.</summary>
+    public const long WeakCeilingBytes = 72 * MiB;
+    public const double WeakRetainedShare = 0.15;
+
     private static double s_windowMultiplier = DefaultWindowMultiplier;
     private static long s_floorBytes = DefaultFloorBytes;
     private static long s_ceilingBytes = DefaultCeilingBytes;
     private static long s_overrideBytes;
     private static double s_retainedShare = DefaultRetainedShare;
     private static int s_version;
+    private static bool s_weakPreset;
+
+    /// <summary>Select the tier's defaults for the ceiling and the retained share: the weak preset
+    /// (<see cref="WeakCeilingBytes"/>, <see cref="WeakRetainedShare"/>) or the discrete ones, and make
+    /// <see cref="ResetToDefaults"/> restore THAT tier's values. Runs once at host construction, before any frame, so it
+    /// overwrites nothing a live tuning session set; the window multiplier, floor and override are tier-independent.</summary>
+    public static void ApplyTierPreset(bool weak)
+    {
+        Volatile.Write(ref s_weakPreset, weak);
+        Volatile.Write(ref s_ceilingBytes, weak ? WeakCeilingBytes : DefaultCeilingBytes);
+        Volatile.Write(ref s_retainedShare, weak ? WeakRetainedShare : DefaultRetainedShare);
+        Bump();
+    }
 
     /// <summary>The backend's retained derived surfaces (a group surface, a self-blur, an acrylic backdrop kept across turns
     /// under their content key) may hold at most this share of the tile budget (<see cref="RetainedBytesCap"/>): past it
@@ -102,9 +123,10 @@ public static class TileBudget
     {
         Volatile.Write(ref s_windowMultiplier, DefaultWindowMultiplier);
         Volatile.Write(ref s_floorBytes, DefaultFloorBytes);
-        Volatile.Write(ref s_ceilingBytes, DefaultCeilingBytes);
+        bool weak = Volatile.Read(ref s_weakPreset);
+        Volatile.Write(ref s_ceilingBytes, weak ? WeakCeilingBytes : DefaultCeilingBytes);
         Volatile.Write(ref s_overrideBytes, 0);
-        Volatile.Write(ref s_retainedShare, DefaultRetainedShare);
+        Volatile.Write(ref s_retainedShare, weak ? WeakRetainedShare : DefaultRetainedShare);
         Bump();
     }
 

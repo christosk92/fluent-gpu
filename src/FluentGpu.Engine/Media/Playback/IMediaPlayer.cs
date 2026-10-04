@@ -105,7 +105,10 @@ public interface IMediaPlayer : IAsyncDisposable
     ValueTask PlayAsync();
     /// <summary>Pause.</summary>
     ValueTask PauseAsync();
-    /// <summary>Stop (idempotent; → Idle, releases decode residency).</summary>
+    /// <summary>Stop (idempotent): cancels an open still in flight, pauses and RELEASES the current session (decode, clock,
+    /// network and native handles — its disposal finishes in the background and <c>DisposeAsync</c> awaits it), and goes
+    /// <see cref="PlaybackState.Idle"/> with no play intent. Playback needs a new open afterwards; a later
+    /// <see cref="PlayAsync"/> with nothing open only records the intent.</summary>
     void Stop();
     /// <summary>Seek to <paramref name="to"/>.</summary>
     ValueTask SeekAsync(TimeSpan to, SeekMode mode = SeekMode.Accurate);
@@ -142,8 +145,10 @@ public interface IMediaPlayer : IAsyncDisposable
     /// leaves unset (buffering, network, ABR, license relay) fall back to the player's own. An implementation that cannot
     /// honour a start position opens at zero.</summary>
     ValueTask OpenAsync(MediaSource source, MediaOpenOptions options, CancellationToken ct = default) => OpenAsync(source, ct);
-    /// <summary>Enqueue a source to play after the current one.</summary>
+    /// <summary>Append a source to <see cref="Queue"/>. It only queues: nothing is opened, prefetched or prepared ahead of
+    /// time (a host that wants a warm next item prepares it itself).</summary>
     void Enqueue(MediaSource next);
-    /// <summary>Explicitly preroll the next source (spec §8.4).</summary>
+    /// <summary>Append the next source to <see cref="Queue"/> and return a token naming the queued item (spec §8.4). The
+    /// <c>MediaPlayer</c> facade does not preroll it: the token marks the slot, it is not a prepared session.</summary>
     PrepareToken PrepareNext(MediaSource next);
 }

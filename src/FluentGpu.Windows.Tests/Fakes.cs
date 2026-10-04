@@ -65,7 +65,11 @@ internal sealed class FakeVideoEngine : IVideoEngine
     /// <inheritdoc/>
     public void PostDetach() => PostDetachCalls++;
 
-    public void Dispose() => DisposeCalls++;
+    /// <summary>Runs inside <see cref="Dispose"/> before it is counted — a test blocks here to model the real engine's
+    /// slow dispose (the MTA thread join plus MF shutdown) and asserts who waited for it.</summary>
+    public Action? OnDispose;
+
+    public void Dispose() { OnDispose?.Invoke(); DisposeCalls++; }
 
     /// <summary>Republish the fake's current field values as a fresh snapshot (a real timestamp, so position
     /// extrapolation in a test behaves like the real engine's).</summary>
@@ -90,6 +94,8 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public bool IsLiveSource { get => (_s.Flags & VideoEngineFlags.LiveSource) != 0; set => SetFlag(VideoEngineFlags.LiveSource, value); }
     public bool NaturalSizeKnown { get => (_s.Flags & VideoEngineFlags.NaturalSizeKnown) != 0; set => SetFlag(VideoEngineFlags.NaturalSizeKnown, value); }
     public bool Faulted { get => (_s.Flags & VideoEngineFlags.Faulted) != 0; set => SetFlag(VideoEngineFlags.Faulted, value); }
+    /// <summary>Mirrors <see cref="VideoEngineFlags.Waiting"/> (a mid-playback stall: the engine is starved while Playing).</summary>
+    public bool Waiting { get => (_s.Flags & VideoEngineFlags.Waiting) != 0; set => SetFlag(VideoEngineFlags.Waiting, value); }
 
     public uint ErrorCode { get => _s.ErrorCode; set { _s.ErrorCode = value; Publish(); } }
     public int ErrorHr { get => _s.ErrorHr; set { _s.ErrorHr = value; Publish(); } }
@@ -111,6 +117,13 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public uint NativeW { get => _s.NaturalW; set { _s.NaturalW = value; Publish(); } }
     public uint NativeH { get => _s.NaturalH; set { _s.NaturalH = value; Publish(); } }
     public nuint Handle { get => _s.SwapchainHandle; set { _s.SwapchainHandle = value; Publish(); } }
+    /// <summary>The engine's first-frame stamp for the current source (0 until the first frame lands — the real engine
+    /// clears it per source). Setting it publishes a fresh snapshot but does NOT wake the session: pair it with
+    /// <see cref="RaiseStateChanged"/> where the wake matters.</summary>
+    public long FirstFrameTimestamp { get => _s.FirstFrameTimestamp; set { _s.FirstFrameTimestamp = value; Publish(); } }
+    /// <summary>The engine's SEEKED counter (see <see cref="VideoEngineSnapshot.SeekedCount"/>). Setting it publishes a
+    /// fresh snapshot but does NOT wake the session: pair it with <see cref="RaiseStateChanged"/>.</summary>
+    public int SeekedCount { get => _s.SeekedCount; set { _s.SeekedCount = value; Publish(); } }
 
     /// <summary>Model a mid-stream variant switch: bump the presentation epoch and wake the session exactly as a real
     /// FORMATCHANGE/RESOURCELOST would. Does NOT auto-clear <see cref="NaturalSizeKnown"/> — a test modeling "the new
@@ -166,6 +179,7 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
 {
     public readonly List<string> Calls = new();
     public int NextId = 1;
+    public int FailBinds;   // the next N BindSurfaceHandle calls fail (return false), modelling a transient DComp failure
     public VideoSurfaceId LastCreated;
     public nuint LastBoundHandle;
     public RectF LastPlaceRect;
@@ -182,10 +196,17 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
         return id;
     }
 
-    public void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle)
+    public bool BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle)
     {
+        if (FailBinds > 0)
+        {
+            FailBinds--;
+            Calls.Add($"BindFail({id.Value},0x{dcompSurfaceHandle:X})");
+            return false;
+        }
         LastBoundHandle = dcompSurfaceHandle;
         Calls.Add($"Bind({id.Value},0x{dcompSurfaceHandle:X})");
+        return true;
     }
 
     public void Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z)
@@ -251,12 +272,25 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     /// <summary>Every binding token the player was pumped with, in order (0 for an inert/default binding).</summary>
     public readonly List<int> PumpedTokens = new();
     public string? LastSelectedRepresentationId;
+    /// <summary>The retain window of the last <see cref="SelectVideoRepresentationAsync"/> (-1 = append at the buffer end).</summary>
+    public int LastSelectedRetainMs = IProtectedVideoPlayer.AppendAtBufferEnd;
+    /// <summary>Every selection in order: the representation id and the retain window it asked for.</summary>
+    public readonly List<(string Id, int RetainMs)> Selections = new();
+    /// <summary>True (the default): a selection takes effect at once - the active representation becomes the requested one.
+    /// False: the selection is only recorded, and the test moves <see cref="DownloadingVideoRepresentationId"/> /
+    /// <see cref="ActiveVideoRepresentationId"/> itself to model a switch that lands (and shows) later.</summary>
+    public bool ApplySelectionImmediately = true;
 
     public bool SupportsAdaptiveSelection { get; set; }
     public string? ActiveVideoRepresentationId { get; set; }
+    public string? DownloadingVideoRepresentationId { get; set; }
     public bool HasSurface { get; set; }
     public ProtectedVideoPhase Phase { get; set; }
     public long FirstFrameEpoch { get; set; }
+    private bool? _hasFirstFrame;
+    /// <summary>Whether THIS attach has presented its first frame. Unless a test sets it, it follows <see cref="FirstFrameEpoch"/>
+    /// (non-zero = presented); setting it models a detach (false) or a re-attach before its first frame.</summary>
+    public bool HasFirstFrame { get => _hasFirstFrame ?? FirstFrameEpoch != 0; set => _hasFirstFrame = value; }
     public long PositionQpc { get; set; }
     public bool IsSeeking { get; set; }
     public long LastSeekLandedMs { get; set; } = -1;
@@ -271,6 +305,10 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public IReadSignal<long> DurationMs => _durationMs;
     public IReadSignal<Size2> NaturalSize => _naturalSize;
     public IReadSignal<string?> Error => _error;
+    /// <summary>The HRESULT behind <see cref="Error"/> the player reports (0 = none).</summary>
+    public int ErrorHr { get; set; }
+    /// <summary>Whether the scripted <see cref="Error"/> is one a fresh runtime cures (the runtime was replaced).</summary>
+    public bool ErrorNeedsRuntimeRebuild { get; set; }
 
     public event Action? PumpRequested;
 
@@ -352,17 +390,23 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
         return total;
     }
 
-    public ValueTask SelectVideoRepresentationAsync(string representationId)
+    public ValueTask SelectVideoRepresentationAsync(string representationId, int retainMs = IProtectedVideoPlayer.AppendAtBufferEnd)
     {
         SelectRepresentationCalls++;
         LastSelectedRepresentationId = representationId;
-        ActiveVideoRepresentationId = representationId;
+        LastSelectedRetainMs = retainMs;
+        Selections.Add((representationId, retainMs));
+        if (ApplySelectionImmediately) ActiveVideoRepresentationId = representationId;
         return ValueTask.CompletedTask;
     }
 
     public void SetVolume(float volume) => LastVolume = volume;
     public void SetRate(float rate) => LastRate = rate;
     public void SetStreamSize(SizeI size) { SetStreamSizeCalls++; LastStreamSize = size; }
+    /// <summary>Every OPM window placement the session asked for, in order (host window, then the rect in device px).</summary>
+    public readonly List<(nuint Host, int Left, int Top, int Right, int Bottom)> OutputProtectionPlacements = new();
+    public void PlaceOutputProtectionWindow(nuint hostWindow, int left, int top, int right, int bottom)
+        => OutputProtectionPlacements.Add((hostWindow, left, top, right, bottom));
     public void Stop() => StopCalls++;
     public void LogDiagnostic(string message) { lock (_diagnostics) _diagnostics.Add(message); }
 
@@ -387,8 +431,11 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     private readonly List<string> _calls = new();
     private readonly List<ulong> _released = new();
     private readonly List<(string Kid, ulong License)> _acquired = new();
+    private readonly List<long> _luids = new();
+    private readonly HashSet<ulong> _live = new();                 // key sessions the "native table" still holds
+    private readonly Dictionary<ulong, int> _states = new();       // FgPrLicenseState overrides (a kill, an expiry)
     private ulong _nextHandle = 0x100;
-    private int _creates, _destroys, _acquires, _releases;
+    private int _creates, _destroys, _acquires, _releases, _stateProbes;
 
     /// <summary>Whether the "DLL" loads (<see cref="IPrRuntimeNative.IsAvailable"/>).</summary>
     public bool Available { get; set; } = true;
@@ -399,6 +446,16 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     /// <summary>Runs INSIDE <see cref="LicenseAcquire"/> with the handle about to be returned and the KID, before the call
     /// returns — models a license event racing the runtime's handle assignment. May throw to model a native fault.</summary>
     public Action<ulong, string>? DuringAcquire { get; set; }
+    /// <summary>Runs INSIDE <see cref="RuntimeDestroy"/> (after it is recorded, outside the fake's lock) with the runtime handle
+    /// being destroyed - blocks to model the native join, which a racing <c>Acquire</c> must wait out.</summary>
+    public Action<ulong>? DuringDestroy { get; set; }
+    /// <summary>Runs INSIDE <see cref="LicenseState"/> (outside the fake's lock) with the probed handle - may throw to model an
+    /// unanswerable native probe, which must never condemn a license.</summary>
+    public Action<ulong>? DuringStateProbe { get; set; }
+
+    /// <summary>The adapter LUID of the last <see cref="RuntimeCreate"/> (0 = default adapter), and of every create in order.</summary>
+    public long LastAdapterLuid { get; private set; }
+    public long[] AdapterLuids { get { lock (_gate) return _luids.ToArray(); } }
 
     /// <summary>Completes on the first <see cref="RuntimeDestroy"/> — a test awaits it with a bounded timeout instead of
     /// polling the runtime's warm-idle teardown (which runs on a timer thread).</summary>
@@ -408,6 +465,8 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
     public int DestroyCount { get { lock (_gate) return _destroys; } }
     public int AcquireCount { get { lock (_gate) return _acquires; } }
     public int ReleaseCount { get { lock (_gate) return _releases; } }
+    /// <summary>How many times the runtime asked <see cref="LicenseState"/> (the stage-A "does native still hold this handle" probe).</summary>
+    public int StateProbeCount { get { lock (_gate) return _stateProbes; } }
     public ulong LastRuntime { get; private set; }
     public string? LastStorePath { get; private set; }
 
@@ -418,12 +477,14 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
 
     public bool IsAvailable => Available;
 
-    public int RuntimeCreate(string storePath, nint ctx, out ulong runtime)
+    public int RuntimeCreate(string storePath, nint ctx, long adapterLuid, out ulong runtime)
     {
         lock (_gate)
         {
             _creates++;
             LastStorePath = storePath;
+            LastAdapterLuid = adapterLuid;
+            _luids.Add(adapterLuid);
             if (CreateHr < 0)
             {
                 runtime = 0;
@@ -444,6 +505,7 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
             _destroys++;
             _calls.Add("destroy:" + runtime);
         }
+        DuringDestroy?.Invoke(runtime);
         Destroyed.TrySetResult();
     }
 
@@ -460,6 +522,7 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
                 return AcquireHr;
             }
             lic = _nextHandle++;
+            _live.Add(lic);
             _acquired.Add((kid, lic));
             _calls.Add("acquire:" + kid + ":" + lic);
         }
@@ -468,12 +531,39 @@ internal sealed class FakeRuntimeNative : IPrRuntimeNative
         return 0;
     }
 
+    public int LicenseState(ulong runtime, ulong license)
+    {
+        DuringStateProbe?.Invoke(license);
+        lock (_gate)
+        {
+            _stateProbes++;
+            if (_states.TryGetValue(license, out int forced)) return forced;
+            return _live.Contains(license) ? 0 : unchecked((int)0x80070006);   // pending, or E_HANDLE for a key session native no longer holds
+        }
+    }
+
+    /// <summary>Models the native table closing <paramref name="license"/>'s key session (its LRU, an eviction after a kill): the
+    /// handle is unknown from now on, so <see cref="LicenseState"/> answers E_HANDLE. The test raises <c>EvLicenseEvicted</c> itself
+    /// when it wants the event half.</summary>
+    public void NativeCloses(ulong license)
+    {
+        lock (_gate) _live.Remove(license);
+    }
+
+    /// <summary>Makes <see cref="LicenseState"/> answer <paramref name="state"/> for <paramref name="license"/> (negative = failed,
+    /// 2 = expired), whatever the fake otherwise holds.</summary>
+    public void SetLicenseState(ulong license, int state)
+    {
+        lock (_gate) _states[license] = state;
+    }
+
     public void LicenseRelease(ulong runtime, ulong license)
     {
         lock (_gate)
         {
             _releases++;
             _released.Add(license);
+            _live.Remove(license);
             _calls.Add("release:" + license);
         }
     }
@@ -497,6 +587,9 @@ internal sealed class FakeSessionNative : IPrSessionNative
     public int AttachHr { get; set; }
     /// <summary>A negative HRESULT fails <see cref="SessionPrefetch"/>.</summary>
     public int PrefetchHr { get; set; }
+    /// <summary>A negative HRESULT fails <see cref="SessionSnapshot"/> (what a stale handle - a session whose runtime was
+    /// replaced - answers with E_HANDLE); the snapshot is then left untouched.</summary>
+    public int SnapshotHr { get; set; }
     /// <summary>What the last create was given.</summary>
     public PrOpenDescription? LastOpen { get; private set; }
     /// <summary>The snapshot every <see cref="SessionSnapshot"/> returns.</summary>
@@ -542,12 +635,29 @@ internal sealed class FakeSessionNative : IPrSessionNative
     public int SessionSetVolume(ulong runtime, ulong session, double volume) => Record($"volume:{session}:{volume}");
     public int SessionSetRate(ulong runtime, ulong session, double rate) => Record($"rate:{session}:{rate}");
     public int SessionSetStreamSize(ulong runtime, ulong session, int width, int height) => Record($"size:{session}:{width}x{height}");
+    /// <summary>What <see cref="SessionPlaceOpmWindow"/> answers (0 = S_OK posted; 1 = S_FALSE, not the attached session; negative = failed).</summary>
+    public int PlaceOpmHr { get; set; }
+    /// <summary>Every OPM window placement, in order: the session, the host window handle and the client-area rect.</summary>
+    public readonly List<(ulong Session, ulong Host, int Left, int Top, int Right, int Bottom)> OpmPlacements = new();
+    public int SessionPlaceOpmWindow(ulong runtime, ulong session, ulong hostWindow, int left, int top, int right, int bottom)
+    {
+        lock (_gate) OpmPlacements.Add((session, hostWindow, left, top, right, bottom));
+        return Record($"opm:{session}:{hostWindow}:{left},{top},{right},{bottom}", PlaceOpmHr);
+    }
+    /// <summary>The retain window of the last <see cref="SessionSelectRepresentation"/> (-1 = append at the buffer end).</summary>
+    public int LastRetainMs { get; private set; } = -1;
+
     public int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
-                                           string? prefix, string? suffix) => Record($"rep:{session}:{index}");
+                                           string? prefix, string? suffix, int retainMs)
+    {
+        lock (_gate) LastRetainMs = retainMs;
+        return Record($"rep:{session}:{index}");
+    }
 
     // The pump's hot calls record nothing: the allocation gate measures them.
     public int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot)
     {
+        if (SnapshotHr < 0) return SnapshotHr;
         snapshot = Snapshot;
         return 0;
     }

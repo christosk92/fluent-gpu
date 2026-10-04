@@ -219,4 +219,206 @@ public sealed class MediaPlayerElementLogicTests
         Assert.True(crop.W > area.W || crop.H > area.H);
         Assert.False(MediaPlayerElement.PumpClampsOverflow(VideoAspectMode.UniformToFill));
     }
+
+    // ── L2-09: the clamp decision (F126) and the scale-aware hole rect (F129) ─────────────────────────────────────────
+
+    [Fact]
+    public void ExceedsDirectHost_ignores_a_clip_that_only_cuts_a_correctly_laid_out_video()
+    {
+        // The video sits inside its host; a scroller or window edge further up only changes the VIEWPORT, which is not an
+        // input here, so the safety net must not shrink and re-centre the video away from its hole.
+        var host = new RectF(0, 0, 640, 360);
+        Assert.False(MediaPlayerElement.ExceedsDirectHost(new RectF(0, 0, 640, 360), host));
+        Assert.False(MediaPlayerElement.ExceedsDirectHost(new RectF(40, 0, 560, 360), host));
+        Assert.False(MediaPlayerElement.ExceedsDirectHost(new RectF(0.3f, 0, 640f, 360), host));      // sub-half-pixel snap slack
+    }
+
+    [Fact]
+    public void ExceedsDirectHost_fires_when_the_element_pokes_out_of_its_direct_host()
+    {
+        var host = new RectF(100, 50, 320, 180);
+        Assert.True(MediaPlayerElement.ExceedsDirectHost(new RectF(100, 50, 400, 180), host));    // widened past the host
+        Assert.True(MediaPlayerElement.ExceedsDirectHost(new RectF(100, 50, 320, 220), host));    // taller than the host
+        Assert.True(MediaPlayerElement.ExceedsDirectHost(new RectF(90, 50, 320, 180), host));     // shifted out on the left
+        Assert.True(MediaPlayerElement.ExceedsDirectHost(new RectF(100, 40, 320, 180), host));    // shifted out on the top
+    }
+
+    [Fact]
+    public void ExceedsDirectHost_then_clamp_shrinks_uniformly_inside_the_host()
+    {
+        var host = new RectF(0, 0, 320, 180);
+        var video = new RectF(0, 0, 640, 360);
+        Assert.True(MediaPlayerElement.ExceedsDirectHost(video, host));
+        var clamped = MediaPlayerElement.ClampUniformToViewport(video, host);
+        Assert.Equal(320f, clamped.W, 0.01f);
+        Assert.Equal(180f, clamped.H, 0.01f);
+        Assert.False(MediaPlayerElement.ExceedsDirectHost(clamped, host));
+    }
+
+    [Fact]
+    public void RectFromHoleInsets_is_the_plain_inset_rect_when_the_area_is_unscaled()
+    {
+        var layout = new RectF(0, 0, 560, 360);
+        var area = new RectF(30, 20, 560, 360);   // translated only: same size as its layout bounds
+        var rect = MediaPlayerElement.RectFromHoleInsets(area, layout, new Edges4(145, 0, 145, 0));
+        Assert.Equal(new RectF(175, 20, 270, 360), rect);
+    }
+
+    [Fact]
+    public void RectFromHoleInsets_scales_the_insets_under_a_scaled_ancestor()
+    {
+        var layout = new RectF(0, 0, 560, 360);
+        var area = new RectF(0, 0, 280, 180);     // the whole tree painted at half scale
+        var rect = MediaPlayerElement.RectFromHoleInsets(area, layout, new Edges4(145, 0, 145, 0));
+        Assert.Equal(72.5f, rect.X, 0.01f);
+        Assert.Equal(135f, rect.W, 0.01f);
+        Assert.Equal(180f, rect.H, 0.01f);
+    }
+
+    [Fact]
+    public void RectFromHoleInsets_with_an_empty_layout_area_does_not_divide_by_zero()
+    {
+        var rect = MediaPlayerElement.RectFromHoleInsets(new RectF(5, 6, 100, 50), default, default);
+        Assert.Equal(new RectF(5, 6, 100, 50), rect);
+    }
+
+    // ── L2-07: the status overlay (F121) and the pure inputs of the render diet (F123 / F134) ──────────────────────────
+    // Facts, not Theories: StatusOverlayKind is internal, and a public Theory method cannot take it as a parameter.
+
+    private static readonly PlaybackState[] AllStates = Enum.GetValues<PlaybackState>();
+
+    [Fact]
+    public void ChooseStatusOverlay_decorative_or_host_owned_never_shows_anything()
+    {
+        foreach (var state in AllStates)
+            foreach (bool startingUp in new[] { false, true })
+                foreach (bool buffering in new[] { false, true })
+                {
+                    Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+                        MediaPlayerElement.ChooseStatusOverlay(true, false, state, startingUp, 2, buffering, buffering));
+                    // Failure included: a host that owns its loading visuals owns its failure visual too.
+                    Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+                        MediaPlayerElement.ChooseStatusOverlay(false, true, state, startingUp, 2, buffering, buffering));
+                }
+    }
+
+    [Fact]
+    public void ChooseStatusOverlay_failure_wins_over_startup_and_rebuffer()
+    {
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.Failed,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Failed, true, 2, true, true));
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.Failed,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Failed, false, 0, false, false));
+    }
+
+    [Fact]
+    public void ChooseStatusOverlay_startup_ladder_is_silent_until_the_spinner_delay()
+    {
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Opening, true, 0, false, false));
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.Opening,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Opening, true, 1, false, false));
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.Opening,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Buffering, true, 2, true, true));
+    }
+
+    [Fact]
+    public void ChooseStatusOverlay_visible_opening_ring_hands_straight_over_to_the_rebuffer_pill()
+    {
+        // the start just ended with the ring already up (phase >= 1) and a rebuffer follows: no 500 ms of nothing between them
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.Buffering,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Buffering, false, 1, true, false));
+        // the same inputs with no ring up yet: the pill still waits out its own delay
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Buffering, false, 0, true, false));
+        // a ring that is up never conjures a pill when no rebuffer is wanted
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Playing, false, 1, false, false));
+    }
+
+    [Fact]
+    public void ChooseStatusOverlay_rebuffer_pill_waits_out_its_own_delay()
+    {
+        // wanted but the 500 ms has not elapsed: nothing (a pill that flashes for 200 ms reports trouble that did not happen)
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Buffering, false, 0, true, false));
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.Buffering,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Buffering, false, 0, true, true));
+        // the delay flag alone (a stale latch) never mounts it
+        Assert.Equal(MediaPlayerElement.StatusOverlayKind.None,
+            MediaPlayerElement.ChooseStatusOverlay(false, false, PlaybackState.Playing, false, 0, false, true));
+    }
+
+    [Fact]
+    public void BufferingOverlayWanted_seek_and_quality_switch_behind_a_presented_frame_are_silent()
+    {
+        foreach (var reason in new[] { BufferingReason.Seeking, BufferingReason.QualitySwitch })
+        {
+            Assert.False(MediaPlayerElement.BufferingOverlayWanted(false, true, reason, PlaybackState.Buffering, framePresented: true));
+            // the state alone (a protected seek publishes Buffering) is no reason either
+            Assert.False(MediaPlayerElement.BufferingOverlayWanted(false, false, reason, PlaybackState.Buffering, framePresented: true));
+            // with NO picture up the same seek is trouble worth a pill
+            Assert.True(MediaPlayerElement.BufferingOverlayWanted(false, true, reason, PlaybackState.Buffering, framePresented: false));
+        }
+    }
+
+    [Fact]
+    public void BufferingOverlayWanted_real_stalls_and_rebuffers_are_not_silent()
+    {
+        foreach (var reason in new[] { BufferingReason.Rebuffering, BufferingReason.NetworkRecovery, BufferingReason.LiveCatchUp,
+                     BufferingReason.TrackSwitch })
+            Assert.True(MediaPlayerElement.BufferingOverlayWanted(false, true, reason, PlaybackState.Buffering, framePresented: true));
+        Assert.True(MediaPlayerElement.BufferingOverlayWanted(false, false, BufferingReason.None, PlaybackState.Stalled, framePresented: true));
+        Assert.True(MediaPlayerElement.BufferingOverlayWanted(false, false, BufferingReason.None, PlaybackState.Buffering, framePresented: true));
+    }
+
+    [Fact]
+    public void BufferingOverlayWanted_never_during_startup_or_steady_playback()
+    {
+        Assert.False(MediaPlayerElement.BufferingOverlayWanted(true, true, BufferingReason.Rebuffering, PlaybackState.Buffering, framePresented: false));
+        Assert.False(MediaPlayerElement.BufferingOverlayWanted(false, false, BufferingReason.None, PlaybackState.Playing, framePresented: true));
+        Assert.False(MediaPlayerElement.BufferingOverlayWanted(false, false, BufferingReason.None, PlaybackState.Paused, framePresented: true));
+    }
+
+    [Fact]
+    public void QuantizeStatusPercent_steps_by_five_percent_and_flags_unknown()
+    {
+        Assert.Equal(0.0, MediaPlayerElement.QuantizeStatusPercent(0.0), P);
+        Assert.Equal(0.5, MediaPlayerElement.QuantizeStatusPercent(0.52), P);
+        Assert.Equal(0.55, MediaPlayerElement.QuantizeStatusPercent(0.53), P);
+        Assert.Equal(1.0, MediaPlayerElement.QuantizeStatusPercent(0.99), P);
+        Assert.Equal(1.0, MediaPlayerElement.QuantizeStatusPercent(1.0), P);
+        Assert.Equal(-1.0, MediaPlayerElement.QuantizeStatusPercent(-1.0), P);   // the seek-intent "unknown"
+        Assert.Equal(-1.0, MediaPlayerElement.QuantizeStatusPercent(1.5), P);
+        Assert.Equal(-1.0, MediaPlayerElement.QuantizeStatusPercent(double.NaN), P);
+        // sub-notch churn (one appended segment) lands on the SAME value, which is what cuts the leaf's memo off
+        Assert.Equal(MediaPlayerElement.QuantizeStatusPercent(0.401), MediaPlayerElement.QuantizeStatusPercent(0.424), P);
+    }
+
+    [Fact]
+    public void BufferingKeyOf_ignores_percent_and_buffered_amounts()
+    {
+        var a = new BufferingInfo(BufferingReason.Rebuffering, 0.10, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10), false);
+        var b = new BufferingInfo(BufferingReason.Rebuffering, 0.85, TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(10), true);
+        Assert.Equal(MediaPlayerElement.BufferingKeyOf(a), MediaPlayerElement.BufferingKeyOf(b));
+        Assert.NotEqual(MediaPlayerElement.BufferingKeyOf(a),
+            MediaPlayerElement.BufferingKeyOf(new BufferingInfo(BufferingReason.Seeking, 0.10, TimeSpan.Zero, TimeSpan.Zero, false)));
+        Assert.False(MediaPlayerElement.BufferingKeyOf(BufferingInfo.None).IsBuffering);
+        Assert.True(MediaPlayerElement.BufferingKeyOf(a).IsBuffering);
+    }
+
+    [Fact]
+    public void IsVideoReady_needs_video_and_a_state_past_opening()
+    {
+        var video = new SizeI(1920, 1080);
+        Assert.False(MediaPlayerElement.IsVideoReady(video, PlaybackState.Idle));
+        Assert.False(MediaPlayerElement.IsVideoReady(video, PlaybackState.Opening));
+        Assert.True(MediaPlayerElement.IsVideoReady(video, PlaybackState.Buffering));
+        Assert.True(MediaPlayerElement.IsVideoReady(video, PlaybackState.Playing));
+        Assert.False(MediaPlayerElement.IsVideoReady(SizeI.Zero, PlaybackState.Playing));   // audio-only never shows captions over video
+    }
+
+    [Fact]
+    public void CaptionBaseline_keeps_its_bottom_inset()
+        => Assert.Equal(28f, MediaCaptionOverlay.BottomMargin);
 }

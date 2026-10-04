@@ -13,24 +13,41 @@ namespace FluentGpu.Media;
 /// <see cref="CueTrack"/> without reparsing or allocating on the video pump.</summary>
 public static class SubtitleLoader
 {
+    /// <summary>The per-request budget of a sidecar subtitle download when the caller's <see cref="NetworkOptions"/> name no
+    /// <see cref="NetworkOptions.ConnectTimeout"/>. A subtitle is presentation sugar: a slow host must not hold a request open
+    /// for the HTTP client's 100 s backstop.</summary>
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(10);
+
     public static async ValueTask<CueTrack> LoadAsync(HttpClient client, SubtitleSource source,
         NetworkOptions? network, CancellationToken cancellationToken)
     {
         string text;
         if (Uri.TryCreate(source.Uri, UriKind.Absolute, out Uri? uri) && uri.Scheme is "http" or "https")
         {
-            var model = new NetworkRequest { Uri = source.Uri };
-            model = network?.OnRequest?.Invoke(model) ?? model;
-            using var request = new HttpRequestMessage(HttpMethod.Get, model.Uri);
-            for (int i = 0; i < model.Headers.Count; i++)
+            TimeSpan timeout = network?.ConnectTimeout ?? DefaultRequestTimeout;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (timeout > TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan) linked.CancelAfter(timeout);
+            try
             {
-                var (name, value) = model.Headers[i];
-                request.Headers.TryAddWithoutValidation(name, value);
+                var model = new NetworkRequest { Uri = source.Uri };
+                model = network?.OnRequest?.Invoke(model) ?? model;
+                using var request = new HttpRequestMessage(HttpMethod.Get, model.Uri);
+                for (int i = 0; i < model.Headers.Count; i++)
+                {
+                    var (name, value) = model.Headers[i];
+                    request.Headers.TryAddWithoutValidation(name, value);
+                }
+                using HttpResponseMessage response = await client.SendAsync(request,
+                    HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                text = await response.Content.ReadAsStringAsync(linked.Token).ConfigureAwait(false);
             }
-            using HttpResponseMessage response = await client.SendAsync(request,
-                HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            // The budget expiring is a failure of THIS subtitle, not a cancellation of the caller's work: surface it as a
+            // timeout so a loader that treats OperationCanceledException as "the open was superseded" keeps its siblings.
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"Subtitle request timed out after {timeout.TotalSeconds:0.#} seconds.");
+            }
         }
         else text = await File.ReadAllTextAsync(source.Uri, cancellationToken).ConfigureAwait(false);
 

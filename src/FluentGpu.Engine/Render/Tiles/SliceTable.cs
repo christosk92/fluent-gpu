@@ -102,6 +102,14 @@ public sealed partial class SliceTable
     private int _frame = int.MinValue + 1;
     private int _evicted, _rastered, _scheduled, _degradedSlices;
 
+    private static int s_nextOwnerId;
+
+    /// <summary>A process-unique, non-zero identity of this table (stamped on every <c>CompositeFrame.OwnerToken</c>
+    /// built from it). Its surface numbering (<c>0, 1, 2, …</c>) is only meaningful inside ONE backend tile pool, so a
+    /// backend that sees two different owners compositing into the same pool has two hosts overwriting each other's
+    /// retained tiles (a detached child that reached <c>SubmitComposite</c>).</summary>
+    public int OwnerId { get; } = Interlocked.Increment(ref s_nextOwnerId);
+
     public SliceTable(int sliceCap = DefaultSliceCap, int tileCap = DefaultTileCap, int surfaceCap = DefaultSurfaceCap)
     {
         if (sliceCap <= 0) throw new ArgumentOutOfRangeException(nameof(sliceCap));

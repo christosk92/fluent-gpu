@@ -60,6 +60,7 @@ internal interface ITimerControl { void Cancel(); void Restart(); void RestartIn
 internal sealed class TimeoutCell : HookCell, IDisposableCell, ITimerControl
 {
     public HostTimerQueue? Queue;
+    public Type? OwnerType;       // the component that armed it — names the timer in the [wake] census (timersSeen=)
     public long Gen;
     public float Ms;
     public Action? Callback;      // latest closure (overwritten each render — a fresh lambda needs no re-arm)
@@ -70,7 +71,7 @@ internal sealed class TimeoutCell : HookCell, IDisposableCell, ITimerControl
     public TimeoutCell() => Fire = OnFire;
     private void OnFire(long g) { if (g == Gen) Callback?.Invoke(); }
 
-    public void Arm(float ms) { if (Queue is null) return; Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(ms, 0f), Gen, Fire); }
+    public void Arm(float ms) { if (Queue is null) return; Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(ms, 0f), Gen, Fire, OwnerType); }
     public void Cancel() { Queue?.Cancel(Fire); Gen++; }
     public void Restart() { Cancel(); Arm(Ms); }
     public void RestartIn(float ms) { Cancel(); Arm(ms); }
@@ -81,6 +82,7 @@ internal sealed class TimeoutCell : HookCell, IDisposableCell, ITimerControl
 internal sealed class DebounceCell<T> : HookCell, IDisposableCell, IDebounceControl
 {
     public HostTimerQueue? Queue;
+    public Type? OwnerType;
     public long Gen;
     public float Ms;
     public Signal<T> Output = null!;
@@ -93,7 +95,7 @@ internal sealed class DebounceCell<T> : HookCell, IDisposableCell, IDebounceCont
     public DebounceCell() => Fire = OnFire;
     private void OnFire(long g) { if (g == Gen) Output.Value = Source.Peek(); }   // trailing-edge commit
 
-    public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire); }
+    public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire, OwnerType); }
     public void Flush() { Queue?.Cancel(Fire); Gen++; Output.Value = Source.Peek(); }   // commit now + cancel the pending fire
     public void Cancel() { Queue?.Cancel(Fire); Gen++; }
     public void DisposeCell() { Queue?.Cancel(Fire); Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
@@ -102,6 +104,7 @@ internal sealed class DebounceCell<T> : HookCell, IDisposableCell, IDebounceCont
 internal sealed class ThrottleCell<T> : HookCell, IDisposableCell
 {
     public HostTimerQueue? Queue;
+    public Type? OwnerType;
     public long Gen;
     public float Ms;
     public Signal<T> Output = null!;
@@ -129,13 +132,14 @@ internal sealed class ThrottleCell<T> : HookCell, IDisposableCell
         if (!EqualityComparer<T>.Default.Equals(Output.Peek(), Latest)) Output.Value = Latest;   // trailing sample
     }
 
-    public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire); }
+    public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire, OwnerType); }
     public void DisposeCell() { Queue?.Cancel(Fire); Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
 }
 
 internal sealed class IntervalCell : HookCell, IDisposableCell
 {
     public HostTimerQueue? Queue;
+    public Type? OwnerType;
     public long Gen;
     public float Ms;
     public Action? Tick;
@@ -155,7 +159,7 @@ internal sealed class IntervalCell : HookCell, IDisposableCell
         ReArm();   // repeat
     }
 
-    private void ReArm() { Gen++; Armed = true; Queue!.Schedule(Queue.NowMs + MathF.Max(Ms, 1f), Gen, Fire); }
+    private void ReArm() { Gen++; Armed = true; Queue!.Schedule(Queue.NowMs + MathF.Max(Ms, 1f), Gen, Fire, OwnerType); }
 
     /// <summary>Arm when it should be running and isn't; pause (invalidate the pending entry) when it shouldn't.</summary>
     public void Reconcile()
@@ -201,7 +205,7 @@ public sealed partial class RenderContext
         DebounceCell<T> cell;
         if (idx < 0)
         {
-            cell = new DebounceCell<T> { Queue = ResolveTimers(), Source = source, Ms = ms, Output = new Signal<T>(source.Peek()) };
+            cell = new DebounceCell<T> { Queue = ResolveTimers(), OwnerType = Owner?.GetType(), Source = source, Ms = ms, Output = new Signal<T>(source.Peek()) };
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
@@ -233,7 +237,7 @@ public sealed partial class RenderContext
         if (idx < 0)
         {
             var memo = new Memo<T>(Rt, source);
-            cell = new DebounceCell<T> { Queue = ResolveTimers(), Source = memo, OwnedSource = memo, Ms = ms, Output = new Signal<T>(memo.Peek()) };
+            cell = new DebounceCell<T> { Queue = ResolveTimers(), OwnerType = Owner?.GetType(), Source = memo, OwnedSource = memo, Ms = ms, Output = new Signal<T>(memo.Peek()) };
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
@@ -260,7 +264,7 @@ public sealed partial class RenderContext
         ThrottleCell<T> cell;
         if (idx < 0)
         {
-            cell = new ThrottleCell<T> { Queue = ResolveTimers(), Source = source, Ms = ms, Output = new Signal<T>(source.Peek()), Latest = source.Peek() };
+            cell = new ThrottleCell<T> { Queue = ResolveTimers(), OwnerType = Owner?.GetType(), Source = source, Ms = ms, Output = new Signal<T>(source.Peek()), Latest = source.Peek() };
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
@@ -284,7 +288,7 @@ public sealed partial class RenderContext
         if (idx < 0)
         {
             var memo = new Memo<T>(Rt, source);
-            cell = new ThrottleCell<T> { Queue = ResolveTimers(), Source = memo, OwnedSource = memo, Ms = ms, Output = new Signal<T>(memo.Peek()), Latest = memo.Peek() };
+            cell = new ThrottleCell<T> { Queue = ResolveTimers(), OwnerType = Owner?.GetType(), Source = memo, OwnedSource = memo, Ms = ms, Output = new Signal<T>(memo.Peek()), Latest = memo.Peek() };
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
@@ -310,7 +314,7 @@ public sealed partial class RenderContext
         TimeoutCell cell;
         if (idx < 0)
         {
-            cell = new TimeoutCell { Queue = ResolveTimers(), Callback = callback, Ms = ms, Key = deps, HasKey = true };
+            cell = new TimeoutCell { Queue = ResolveTimers(), OwnerType = Owner?.GetType(), Callback = callback, Ms = ms, Key = deps, HasKey = true };
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.Arm(ms);
         }
@@ -337,7 +341,7 @@ public sealed partial class RenderContext
         IntervalCell cell;
         if (idx < 0)
         {
-            cell = new IntervalCell { Queue = ResolveTimers(), Enabled = enabled, Ms = ms, Tick = tick, Active = active.Peek() };
+            cell = new IntervalCell { Queue = ResolveTimers(), OwnerType = Owner?.GetType(), Enabled = enabled, Ms = ms, Tick = tick, Active = active.Peek() };
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.ActiveWatcher = new Effect(Rt, () => cell.SetActive(active.Value));   // subscribe → pause/resume on activation change
             cell.Reconcile();   // initial arm if running

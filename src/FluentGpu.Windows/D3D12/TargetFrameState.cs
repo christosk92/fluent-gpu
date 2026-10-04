@@ -44,7 +44,13 @@ internal sealed unsafe class TargetFrameState
 
     // ── present side (moved from D3D12Device) ────────────────────────────────────────────────────────────────────
     internal bool OccludedLatched, LastPresentStoodDown, SkipLatencyOnce, SkipVsyncOnce, HintSettlePresent;
+    // The last Present(noWait: true) of this target was REFUSED (DXGI_ERROR_WAS_STILL_DRAWING): nothing was queued and the
+    // latency credit is still held. Render-thread-only, reset at the top of every Present.
+    internal bool LastPresentRefused;
     internal double LastFenceWaitMs, LastLatencyWaitMs;
+    // F244: the two halves of the last submit's own waits - a latency-waitable wait paid inside the submit (0 when the credit was
+    // already held) and the back-buffer / ring-slot fence wait. Render-thread-only, written by OpenSubmit.
+    internal double LastSubmitLatencyWaitMs, LastBufferFenceWaitMs;
     internal PresentStats LastPresentStats;
     // Attested statistics (compositor-scroll plan §5.3): after every Present that actually ran on the primary target,
     // SamplePresentStats feeds the ledger DXGI's PAIRED PresentCount/PresentRefreshCount, the present's id and the idle

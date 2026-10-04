@@ -58,6 +58,28 @@ public sealed class MfMediaPlayerTests
     }
 
     [Fact]
+    public async Task Open_NotPaused_PostsPlayWithTheSource_OverwritingTheWarmEnginesLeftoverPause()
+    {
+        var engine = new FakeVideoEngine();
+        var backend = new MfMediaPlayer(() => engine);
+        var first = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/a.mp4"), new MediaOpenOptions { StartPaused = true }, CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        // Dispose = ReturnEngine: a pause is left in the (last-wins) Transport slot, followed by the detach.
+        await first.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        var second = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/b.mp4"), new MediaOpenOptions { StartPaused = false }, CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("http://host/b.mp4", engine.LastSetSourceUrl);
+        Assert.True(engine.Commands.TryTakeTransport(out bool play));
+        Assert.True(play);           // play intent rides with the SetSource, not the first post-metadata pump
+
+        await second.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task OpenAsync_NeverThrowsForAnMfOpenFailure()
     {
         // PostSetSource is fire-and-forget: there is no more blocking bring-up/SetSource HRESULT for OpenAsync to
@@ -168,6 +190,9 @@ public sealed class MfMediaPlayerTests
             .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(2, factoryCalls);                  // the Faulted engine was discarded; a fresh one was built
+        // The discarded engine is torn down off the lock on the pool (LeaseEngine never blocks on its dispose).
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (engines[0].DisposeCalls == 0 && sw.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(10);
         Assert.Equal(1, engines[0].DisposeCalls);        // the old (faulted) engine was actually torn down
         Assert.Equal(1, engines[1].PostSetSourceCalls);  // the NEW engine served the second open
 
@@ -193,5 +218,116 @@ public sealed class MfMediaPlayerTests
 
         await session1.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await session2.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // ── a slow engine dispose never runs on the caller or under the lease lock (F062) ───────────────────────────────
+
+    [Fact]
+    public async Task Open_DiscardingAnIdleFaultedEngine_DoesNotWaitForItsSlowDispose()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var engines = new List<FakeVideoEngine>();
+        var backend = new MfMediaPlayer(() => { var e = new FakeVideoEngine(); engines.Add(e); return e; });
+
+        var session1 = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/a.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        engines[0].Faulted = true;
+        await session1.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));   // returned warm, now idle and faulted
+        engines[0].OnDispose = () => release.Wait(TimeSpan.FromSeconds(10));   // the 2 s join + MFShutdown, modelled
+
+        // The lease that discards the faulted engine must return while that engine's dispose is still blocked: the
+        // dispose is on the pool, not on this thread and not under the lock this call (and every later lease) needs.
+        var session2 = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/b.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, engines[0].DisposeCalls);   // still inside its blocked dispose
+
+        release.Set();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (engines[0].DisposeCalls == 0 && sw.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(10);
+        Assert.Equal(1, engines[0].DisposeCalls);
+
+        await session2.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Open_WhileTheLeasedWarmEngineIsFaulted_TakesTheFreshWarmEngine_AndDisposesTheOrphanOnce()
+    {
+        // Device removal faults the warm engine MID-SESSION (F059), then a second open arrives before that session is
+        // disposed. The rebuild must hand the fresh warm engine to this lease (no extra throwaway), clear the lease flag
+        // that belonged to the replaced engine, and leave the orphan to its own session to dispose — exactly once.
+        using var release = new ManualResetEventSlim(false);
+        int factoryCalls = 0;
+        var engines = new List<FakeVideoEngine>();
+        var backend = new MfMediaPlayer(() => { var e = new FakeVideoEngine(); factoryCalls++; engines.Add(e); return e; });
+
+        var session1 = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/a.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        engines[0].Faulted = true;
+        engines[0].OnDispose = () => release.Wait(TimeSpan.FromSeconds(10));   // the 2 s join + MFShutdown, modelled
+
+        var session2 = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/b.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, factoryCalls);                   // the fresh warm engine served the open: no extra engine
+        Assert.Equal(1, engines[1].PostSetSourceCalls);
+        Assert.Equal(0, engines[0].DisposeCalls);        // still leased by session1: left to that session, not disposed here
+
+        // The orphan's dispose (blocked) must not stall its session's dispose, which is a return on the caller.
+        await session1.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, engines[0].DisposeCalls);
+        Assert.Equal(0, engines[1].PostDetachCalls);     // the orphan's return never touched the fresh warm engine
+
+        // The fresh warm engine's lease is its own: session2's dispose returns it warm.
+        await session2.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, engines[1].PostDetachCalls);
+
+        release.Set();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (engines[0].DisposeCalls == 0 && sw.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(10);
+        Assert.Equal(1, engines[0].DisposeCalls);
+
+        // The lease flag is not stuck: a third open reuses the warm engine with no new engine.
+        var session3 = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/c.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, factoryCalls);
+        Assert.Equal(2, engines[1].PostSetSourceCalls);
+        await session3.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Task.Delay(100);                           // let any (wrong) late dispose land before the final count
+        Assert.Equal(1, engines[0].DisposeCalls);
+    }
+
+    [Fact]
+    public async Task Dispose_OfAThrowawaySession_DoesNotWaitForTheEnginesSlowDispose()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var engines = new List<FakeVideoEngine>();
+        var backend = new MfMediaPlayer(() => { var e = new FakeVideoEngine(); engines.Add(e); return e; });
+
+        var session1 = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/a.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var session2 = await backend   // second CONCURRENT lease: a throwaway engine
+            .OpenAsync(MediaSource.FromUri("http://host/b.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        engines[1].OnDispose = () => release.Wait(TimeSpan.FromSeconds(10));
+
+        // ReturnEngine disposes the throwaway; the session's dispose (any thread, possibly the UI thread) must not block on it.
+        await session2.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, engines[1].DisposeCalls);
+
+        // And the lease lock was free the whole time: a return of the warm session goes straight through.
+        await session1.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, engines[0].PostDetachCalls);
+
+        release.Set();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (engines[1].DisposeCalls == 0 && sw.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(10);
+        Assert.Equal(1, engines[1].DisposeCalls);
     }
 }

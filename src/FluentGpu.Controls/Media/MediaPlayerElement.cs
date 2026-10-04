@@ -88,8 +88,6 @@ public sealed class MediaPlayerElement : Component
     private const float StartupSpinnerDelayMs = 500f;
     /// <summary>Only past this may a DETERMINATE readout appear — before it, a percentage is noise with a number on it.</summary>
     private const float StartupDetailDelayMs = 10_000f;
-    /// <summary>Caption baseline inset from the bottom of the video area with the chrome DOWN.</summary>
-    private const float CaptionBottomMargin = 28f;
     /// <summary>Volume nudge for the Up/Down keys and the wheel (5 points, the universal player step).</summary>
     private const float VolumeStep = 0.05f;
     /// <summary>Transport compaction threshold (DIP): below it, the chips fold into the ⋯ menu.</summary>
@@ -98,12 +96,6 @@ public sealed class MediaPlayerElement : Component
     private const float CompactTransportExitWidth = 460f;
     private bool _transportCompact;
 
-    /// <summary>The caption lift. Transform-only (a FLIP): captions MOVE out of the transport's way, the controls never
-    /// move out of the captions' way. Its own 200 ms, deliberately NOT the chrome's conceal duration: the conceal is a
-    /// 400 ms unattended fade, and a caption that crawls down over 400 ms reads as lag, not as motion.</summary>
-    private static readonly LayoutTransition CaptionMotion = new(
-        TransitionChannels.Position,
-        TransitionDynamics.Tween(200f, Easing.FluentStandard));
     private static readonly LayoutTransition LoadingMotion = new(
         TransitionChannels.Opacity,
         TransitionDynamics.Tween(220f, Easing.SmoothOut),
@@ -183,6 +175,13 @@ public sealed class MediaPlayerElement : Component
     public bool ShowLetterboxBars { get; init; } = true;
     /// <summary>Shown over the video area until the first frame / when audio-only. Null → a default poster.</summary>
     public Element? PosterContent { get; init; }
+    /// <summary>Draw the element's own status overlay (the opening spinner, the Seeking / Buffering / Changing quality
+    /// pill, the failure card) over the picture. Default true. A host that owns its loading and failure visuals (Wavee's
+    /// join poster stacks above the whole element, so a spinner mounted here would animate where nobody can see it, and
+    /// its error line speaks for a failure) sets this false: the element then mounts NO status overlay at all, so no
+    /// timer, ring or enter/exit tween runs for pixels the host covers. A decorative element never has one either.
+    /// Frozen at mount, like every init prop.</summary>
+    public bool ShowStatusOverlay { get; init; } = true;
     /// <summary>The host owns the transport for this session; render none. Used by Wavee's single-TransportOwner rule.
     ///
     /// <para>Distinct from <see cref="AreTransportControlsEnabled"/> = false, which says "this surface has no transport
@@ -313,11 +312,22 @@ public sealed class MediaPlayerElement : Component
     private int _pumpPostQueued;
     (VideoAspectMode Mode, int Aw, int Ah, int Nw, int Nh, int Vw, int Vh, int Rw, int Rh, int Host, int Pres) _loggedPump;
 
+    // Geometry motion (a drag, a resize, an animated placement) pumps only to PLACE the surface; the session publish, the
+    // adaptive-viewport bookkeeping and the [video] pump line wait for the geometry to settle. One trailing timer, armed
+    // once per motion burst, requests the FULL pump GeometrySettleMs after the last moved frame — it is a real timer, so
+    // the final placement is published even when the host has gone idle (nothing else would ever pump again).
+    private const float GeometrySettleMs = 200f;
+    private TimerHandle _settle;
+    private double _geomMotionMs;      // host timer clock of the last geometry-driven pump
+    private bool _settleArmed;
+    private readonly Action _onGeometrySettled;
+
     /// <summary>Create the control's stable delegates once: the UI-post drain reused by every native media event, and the
     /// chrome machine's handlers (the wake, the pointer, the window-move gesture) — so no input allocates a delegate.</summary>
     public MediaPlayerElement()
     {
         _drainPumpRequest = DrainPumpRequest;
+        _onGeometrySettled = OnGeometrySettled;
         _resolveFocusOut = ResolveFocusOut;
         _onWake = OnWake;
         _onMoveSizeEnded = OnMoveSizeEnded;
@@ -340,6 +350,28 @@ public sealed class MediaPlayerElement : Component
     }
 
     private void RequestBindingPump() => _binding.RequestPump();
+
+    /// <summary>Record one geometry-driven pump and make sure the trailing settle timer is armed (once per burst — the
+    /// per-frame cost is two stores, never a timer restart).</summary>
+    private void NoteGeometryMotion()
+    {
+        _geomMotionMs = _settle.NowMs;
+        if (_settleArmed) return;
+        _settleArmed = true;
+        _settle.RestartIn(GeometrySettleMs);
+    }
+
+    /// <summary>The settle timer fired: if the geometry kept moving, wait out the rest of the quiet window; otherwise the
+    /// motion ended, so request the one FULL pump that publishes the settled placement (SurfaceGeometry, the adaptive
+    /// viewport height, the content size for the final rect) and the settled [video] pump line.</summary>
+    private void OnGeometrySettled()
+    {
+        if (!_settleArmed) return;     // also the harmless mount-time fire of the hook's initial arm
+        double quiet = _settle.NowMs - _geomMotionMs;
+        if (quiet < GeometrySettleMs - 1.0) { _settle.RestartIn((float)(GeometrySettleMs - quiet)); return; }
+        _settleArmed = false;
+        _binding.RequestPump();
+    }
 
     // -----------------------------------------------------------------------------------------------------------
     //  The transport chrome's show/hide.
@@ -532,9 +564,12 @@ public sealed class MediaPlayerElement : Component
     }
 
     private Signal<int>? _startupPhase;
+    // The rebuffer overlay's own delay (the startup ladder's 500 ms): true once a rebuffer has outlived it.
+    private Signal<bool>? _bufferingShown;
 
     private void OnStartupSpinnerDue() => _startupPhase?.SetIfChanged(1);
     private void OnStartupDetailDue() => _startupPhase?.SetIfChanged(2);
+    private void OnBufferingSpinnerDue() => _bufferingShown?.SetIfChanged(true);
 
     /// <summary>Mount: settle the startup ladder and let the machine publish its first state and arm its first wake.</summary>
     private void OnMounted()
@@ -588,8 +623,14 @@ public sealed class MediaPlayerElement : Component
     /// <see cref="_moveInFlight"/> makes <see cref="OnMoveSizeEnded"/> release the hold.</summary>
     internal void FeedWindowMoveStarted() { _moveInFlight = true; _vis?.WindowMoveStarted(Now()); Sync(); }
 
+    private int _renderCount;
+    /// <summary>How many times <see cref="Render"/> has run for this instance. A diagnostic read by the render-diet gates
+    /// (buffered-amount churn, resize frames and caption cues must not re-render the element); nothing else reads it.</summary>
+    internal int RenderCount => _renderCount;
+
     public override Element Render()
     {
+        _renderCount++;
         // IsFullscreenPresentation freezes at mount, so this conditional hook is stable for the instance's lifetime.
         var binding = IsFullscreenPresentation ? PresentationBinding : UseVideoSurface();
         _postToUi = UsePost();
@@ -641,12 +682,16 @@ public sealed class MediaPlayerElement : Component
         var natural = Player.NaturalSize.Value;
         var state = Player.State.Value;
         bool playIntent = Player.IsPlayRequested.Value;
-        var bufferingInfo = Player.Buffering.Value;
-        TimedCue? activeCue = Player.ActiveCue.Value;
+        // BufferingInfo is NOT read here: the protected pump republishes it for every appended segment (percent moves each
+        // time), and a raw read made the whole element re-render, reallocating its children, closures and context menu,
+        // for a value Render only uses to decide WHETHER an overlay exists. The memo collapses it to (IsBuffering, Reason)
+        // and cuts the notification off while that is unchanged; the percent the overlay SHOWS is read inside the overlay
+        // leaf (MediaStatusDetail), so only that leaf re-renders. The caption cue is likewise read by its own leaf.
+        var bufferGate = UseComputed(() => BufferingKeyOf(Player.Buffering.Value));
         VideoAspectMode aspect = aspectSig.Value;
         double customAspect = customAspectSig.Value;
         bool audioOnly = IsAudioOnly(natural);
-        bool videoReady = !audioOnly && state is not (PlaybackState.Idle or PlaybackState.Opening);
+        bool videoReady = IsVideoReady(natural, state);
         // PART B (poster-until-first-frame): `videoReady` says only "MF is no longer in Opening" — it says NOTHING
         // about whether a DECODED FRAME has ever reached the compositor. Gating the poster/hole on it alone punches
         // the erase hole (and drops the poster) the instant the state leaves Opening, up to ~1 s before the backend's
@@ -656,7 +701,12 @@ public sealed class MediaPlayerElement : Component
         // every fresh OpenAsync and flipped non-None only once the backend truly has a composited frame to present.
         // No dedicated FirstFrame/FrameReady EVENT exists on the seam; this is the closest (and only) existing signal
         // that answers the question, so `framePresented` — not `videoReady` — is what actually gates the poster/hole.
-        bool framePresented = !audioOnly && !Player.VideoSurface.Value.IsNone;
+        // ...AND readiness is per SLOT, not just per player: a player's VideoSurface stays non-None across the lifetime of
+        // its session, so a freshly mounted element (pop-out open, back to the main window, an uncovered docked card) would
+        // see "presented" at once — and punch its hole and drop its poster before ITS OWN composited child exists (the
+        // registry only creates it once a handle is bound, a frame or two later). The slot's own bound signal gates both.
+        bool slotBound = binding.Bound.Value;
+        bool framePresented = !audioOnly && !Player.VideoSurface.Value.IsNone && slotBound;
         // The hadVideo latch must ALSO key off framePresented, not videoReady: latching on state alone would let the
         // very defect this fixes back in on the FIRST ever open (hadVideo would latch true the instant state left
         // Opening, and `holeActive` below ORs it in — punching an erase hole with nothing yet composited behind it).
@@ -683,7 +733,11 @@ public sealed class MediaPlayerElement : Component
         // Peeked (never .Value) by the pump, so publishing it here does not make the pump a render dependency.
         _isActive = UseIsActive();
 
-        UseEffect(() =>
+        // A LAYOUT effect, not a passive one: passive effects drain at the end of the frame (after PumpPending and the
+        // present), so a pump registered there missed the mount frame and the slot's handle bind ran a frame later — the
+        // window in which a fresh element showed its hole with no video child behind it. Layout effects run before the
+        // frame's pump turn, so the first pump (RegisterPump requests it) lands in the mount frame.
+        UseLayoutEffect(() =>
         {
             if (!binding.IsValid) return (Action?)null;
             int reg = binding.RegisterPump(this, PumpNow);   // engine invokes PumpNow after a coalesced request
@@ -715,7 +769,13 @@ public sealed class MediaPlayerElement : Component
             else if (!fullscreen.Value) binding.TransferOwnershipTo(this);   // auto-tracked on fullscreen
         });
 
-        RectF area = areaBounds.Value;
+        // The area is a Render dependency ONLY for the transport's width tier. Without a transport (Wavee suppresses the
+        // engine's: its own strip lives outside this element) the only other consumer is the hole's Margin below, and
+        // SyncHoleLetterbox already writes that in the SAME solve the area changes in, so subscribing would just schedule
+        // a redundant full re-render one frame behind every resize frame (pop-out live resize, PiP edge drag, splitters).
+        // Peek still hands any re-render (a source switch, an aspect change) the last arranged area for the terminal Margin.
+        bool transportMounted = AreTransportControlsEnabled && !SuppressTransport;
+        RectF area = transportMounted ? areaBounds.Value : areaBounds.Peek();
 
         // ── the chrome machine: ONE pure policy, ONE timer, ONE sync ────────────────────────────────────────────────
         // Buffering, a stall, an ABR quality switch and Opening are deliberately NOT inputs: none of them reveals the
@@ -724,6 +784,7 @@ public sealed class MediaPlayerElement : Component
         // the protected session maps Licensed+Buffering onto PlaybackState.Buffering and ABR switches report
         // BufferingReason.QualitySwitch, so the controls popped up mid-playback with no user input at all.
         _wake = UseTimeout(_onWake, TransportControlsHideDelayMs, DepKey.Empty);   // arms once at mount — harmless (Sync re-arms)
+        _settle = UseTimeout(_onGeometrySettled, GeometrySettleMs, DepKey.Empty);   // the geometry-motion trailing edge (see NoteGeometryMotion)
         // A LOCAL for the lambdas below: the field is nullable, and nullable flow analysis does not carry `??=` into a
         // lambda (CS8602 is an error under TreatWarningsAsErrors).
         var vis = _vis ??= new PlayerChromeVisibility(
@@ -809,7 +870,10 @@ public sealed class MediaPlayerElement : Component
         _startupPhase = startupPhase;
         var startupSpinner = UseTimeout(OnStartupSpinnerDue, StartupSpinnerDelayMs, DepKey.Empty);
         var startupDetail = UseTimeout(OnStartupDetailDue, StartupDetailDelayMs, DepKey.Empty);
-        bool startingUp = !IsDecorative && !videoReady && (playIntent || state is PlaybackState.Opening or PlaybackState.Buffering);
+        // Off for a decorative element and for a host that owns its loading visuals: with no overlay to earn, the ladder's
+        // 500 ms / 10 s timers and the re-renders they cause would only serve pixels the host covers.
+        bool statusEnabled = !IsDecorative && ShowStatusOverlay;
+        bool startingUp = statusEnabled && !videoReady && (playIntent || state is PlaybackState.Opening or PlaybackState.Buffering);
         UseEffect(() =>
         {
             if (startingUp) { startupSpinner.Restart(); startupDetail.Restart(); }
@@ -817,6 +881,30 @@ public sealed class MediaPlayerElement : Component
             return (Action?)null;
         }, startingUp ? 1 : 0);
         int phase = startupPhase.Value;
+
+        // ── mid-play rebuffer ladder: the SAME 500 ms rule as the startup ladder above. A pill that flashes for 200 ms
+        // reports trouble that did not happen, and a seek or quality switch behind a picture that is already up is not
+        // trouble at all (the seek bar's own inline spinner covers a slow seek) — BufferingOverlayWanted says which.
+        BufferingKey bufferNow = bufferGate.Value;
+        bool bufferingWanted = statusEnabled
+            && BufferingOverlayWanted(startingUp, bufferNow.IsBuffering, bufferNow.Reason, state, framePresented);
+        // The render in which the start ends but the opening ring is still up (the ladder's reset runs in the passive drain,
+        // so `phase` still holds the pre-reset value): a start that goes straight on to a rebuffer must not swap a visible
+        // ring for 500 ms of nothing, so the pill takes over at once (see ChooseStatusOverlay).
+        bool ladderHandoff = !startingUp && phase >= 1;
+        var bufferingShown = UseSignal(false);
+        _bufferingShown = bufferingShown;
+        var bufferingSpinner = UseTimeout(OnBufferingSpinnerDue, StartupSpinnerDelayMs, DepKey.Empty);
+        UseEffect(() =>
+        {
+            if (bufferingWanted)
+            {
+                if (ladderHandoff) bufferingShown.SetIfChanged(true);
+                else bufferingSpinner.Restart();
+            }
+            else { bufferingSpinner.Cancel(); bufferingShown.SetIfChanged(false); }
+            return (Action?)null;
+        }, bufferingWanted ? 1 : 0);
 
         void RevealChrome()
         {
@@ -867,6 +955,7 @@ public sealed class MediaPlayerElement : Component
                     Exit = LeaveFullscreen,
                     LetterboxColor = LetterboxColor,
                     CursorAutoHide = CursorAutoHide,
+                    ShowStatusOverlay = ShowStatusOverlay,
                 }),
                 FlyoutPlacement.BottomLeft,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Modal));
@@ -889,16 +978,20 @@ public sealed class MediaPlayerElement : Component
 
         // A terminal failure wins over the opening spinner: otherwise a Failed state with a lingering play intent would
         // keep showing "Starting playback…" forever (the DRM-license-rejected infinite-spinner bug).
-        // Decoration never reports status.
-        Element? statusOverlay = IsDecorative
-            ? null
-            : state == PlaybackState.Failed
-            ? FailedOverlay(Player.Error.Value?.Message)
-            : startingUp
-                ? (phase == 0 ? null : OpeningOverlay(playIntent, phase == 2 ? bufferingInfo.Percent : -1.0))
-                : bufferingInfo.IsBuffering || state is PlaybackState.Buffering or PlaybackState.Stalled
-                    ? BufferingOverlay(bufferingInfo)
-                    : null;
+        // Decoration never reports status, and a host that owns its loading visuals turns the whole overlay off.
+        // The opening and rebuffer overlays are LEAVES (MediaStatusDetail): they read the live percent themselves, so a
+        // buffered-amount tick re-renders the leaf and never this element.
+        StatusOverlayKind statusKind = ChooseStatusOverlay(IsDecorative, !ShowStatusOverlay, state, startingUp, phase,
+            bufferingWanted, bufferingShown.Value || ladderHandoff);
+        Element? statusOverlay = statusKind switch
+        {
+            StatusOverlayKind.Failed => FailedOverlay(Player.Error.Value?.Message),
+            StatusOverlayKind.Opening => Embed.Comp(new StatusProps(statusKind, playIntent, BufferingReason.None, phase == 2),
+                () => new MediaStatusDetail { Player = Player }),
+            StatusOverlayKind.Buffering => Embed.Comp(new StatusProps(statusKind, playIntent, bufferNow.Reason, false),
+                () => new MediaStatusDetail { Player = Player }),
+            _ => null,
+        };
 
         // ── the video stage (a ZStack: children paint in author order) ───────────────────────────────────────────────
         // A FIXED keyed shape that NEVER changes across a source switch — the reconciler patches PROPS on the same
@@ -917,14 +1010,13 @@ public sealed class MediaPlayerElement : Component
         //       never presence: at opacity 1 it fully covers the hole beneath it, so the crossfade seeded below IS
         //       the hand-off between whatever was showing (an outgoing frame across a switch, or nothing yet on the
         //       very first open) and the next ready frame — never a subtree rebuild.
-        //   [3…] status / caption overlays — LATER siblings still, so they repaint over the video. Presence-gated
-        //       (they are genuinely transient), keys preserved.
-        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteRect of the "media-hole" node, so
+        //   [3…] the status overlay — a LATER sibling still, so it repaints over the video. Presence-gated (it is
+        //       genuinely transient), key preserved. Then "media-caption-slot" — ALWAYS mounted, a leaf that owns the
+        //       caption: it reads the active cue itself, so cue changes never re-render this element.
+        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteTransformedRect of the "media-hole" node, so
         // the erased region and the presented video are the same rect BY CONSTRUCTION.
-        TimedCue? captionCue = videoReady ? activeCue : null;
         bool showStatusOverlay = statusOverlay is not null;
-        bool showCaption = captionCue.HasValue;
-        var videoChildren = new Element[(showStage ? 1 : 0) + 2 + (showStatusOverlay ? 1 : 0) + (showCaption ? 1 : 0)];
+        var videoChildren = new Element[(showStage ? 1 : 0) + 2 + (showStatusOverlay ? 1 : 0) + 1];
         int vc = 0;
         if (showStage)
             videoChildren[vc++] = new BoxEl { Key = "media-stage", Grow = 1f, Fill = LetterboxColor, HitTestVisible = false };
@@ -967,8 +1059,15 @@ public sealed class MediaPlayerElement : Component
             };
         // Captions MOVE, controls do not: the caption baseline lifts by the chrome's measured height while the chrome
         // is up and settles back when it hides, animated on the same clock (a transform-only FLIP — no relayout churn).
-        if (showCaption)
-            videoChildren[vc++] = CaptionOverlay(captionCue!.Value, CaptionBottomMargin + (showChrome ? chromeHeight.Value : 0f));
+        // The caption slot is PERMANENTLY mounted (a fixed shape, like the stage/hole/poster): its leaf reads the active
+        // cue and the chrome-height lift itself, so a cue start or clear re-renders the leaf and never this element.
+        videoChildren[vc++] = Embed.Comp(() => new MediaCaptionOverlay
+        {
+            Player = Player,
+            ChromeVisible = chromeVisible,
+            ChromeHeight = chromeHeight,
+            TransportPresent = AreTransportControlsEnabled && !SuppressTransport,
+        }) with { Key = "media-caption-slot" };
 
         var videoArea = new BoxEl
         {
@@ -989,10 +1088,13 @@ public sealed class MediaPlayerElement : Component
                 // below can never do that: a value written during layout only marks stale, so its consumer re-renders
                 // NEXT frame (RenderContext.Measure.cs:18-20) — which is precisely how the picture came to lag the
                 // chrome by a frame (and, when the stale hole overflowed the clipped card, to be squashed by the pump's
-                // overflow net). The signal write stays: the transport's width tier and the caption lift read it.
+                // overflow net). The signal write stays: the transport's width tier reads it (and only while the transport is mounted).
                 SyncHoleLetterbox(b);
                 if (b != areaBounds.Peek()) areaBounds.Value = b;
-                binding.RequestPump();
+                // GEOMETRY-class: a layout-driven rect change (a PiP edge resize, a pop-out live resize, a reflow) is the same
+                // motion as a compositor move, so a frame of it places the surface and stops (PumpVideo and the log line
+                // wait for the settle timer); the pump itself escalates when the downscale cap moves or no size is cached.
+                binding.RequestGeometryPump();
             },   // resize → same-frame letterbox + one settled video placement
             Children = videoChildren,
         };
@@ -1182,7 +1284,13 @@ public sealed class MediaPlayerElement : Component
     /// fit to drift out of alignment at fractional device scale). The viewport stays the whole area: it is what clips a
     /// <see cref="VideoAspectMode.UniformToFill"/> crop or a <see cref="VideoAspectMode.Native"/> 1:1 frame, either of
     /// whose fitted rect deliberately overflows the stage.</para></summary>
-    private void PumpNow(float scale)
+    private void PumpNow(float scale) => PumpCore(scale, refit: false);
+
+    /// <summary>The pump body. <paramref name="refit"/> is set only for the ONE same-pump follow-up that a natural-size
+    /// change inside <see cref="IMediaPlayer.PumpVideo"/> asks for (<see cref="PumpNow"/> never sets it, and the follow-up
+    /// never asks again, so it cannot loop): the hole is still laid out from the PREVIOUS natural size, so the rect comes
+    /// from the fit of the NEW size instead of from the hole node.</summary>
+    private void PumpCore(float scale, bool refit)
     {
         VideoBinding b = _binding;
         if (!b.IsValid) return;
@@ -1192,13 +1300,25 @@ public sealed class MediaPlayerElement : Component
         // nav rail). Decorative clips SKIP the pump while inactive (they must not keep an MF session alive off-screen).
         // Non-decorative player surfaces (PiP / pop-out) still pump: the MF session only advances while pumped, and
         // NaturalSize / duration never publish without it — hiding without pumping is the black Loading poster over audio.
-        if (_isActive is { } act && !act.Peek())
+        // VISIBILITY IS THIS ELEMENT'S DECISION, written LAST on every path: sessions only express readiness (they place
+        // content and bind the handle, they never show the surface), so nothing pumped below can overwrite the hide.
+        // The inactive pump is STATE-ONLY: the inert default binding (IsValid false) makes every session skip its
+        // bind / Place / SetVisible(true) / stream-size step, so position, state, Ended and errors keep publishing while
+        // the slot stays hidden at its last geometry. It must NOT fall through to the placed pump below: a presence-
+        // collapsed surface keeps stale non-zero descendant bounds but is clipped to 0x0 by its own ancestor, so that
+        // path would bail on the empty viewport before ever reaching PumpVideo, and a placed pump from a covered or
+        // handed-off presenter would re-show its visual and fight the active one over the stream size. Uncovering
+        // re-places through the activation pump.
+        bool active = _isActive?.Peek() ?? true;
+        float s = scale <= 0f ? 1f : scale;
+        _lastPumpScale = s;
+        if (!active)
         {
             b.SetVisible(false);
             if (IsDecorative) return;
+            Player.PumpVideo(default, default, s);
+            return;
         }
-        float s = scale <= 0f ? 1f : scale;
-        _lastPumpScale = s;
         var scene = _scene;
         NodeHandle h = _areaRef?.Value ?? default;
         // Non-decorative player surfaces must keep calling PumpVideo even before the area is laid out (remount /
@@ -1207,12 +1327,16 @@ public sealed class MediaPlayerElement : Component
         if (scene is null || h.IsNull || !scene.IsLive(h))
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
+            b.SetVisible(false);    // no laid-out area ⇒ empty viewport
             return;
         }
-        RectF area = scene.AbsoluteRect(h);
+        // The TRANSFORMED rect (full affine walk), not the translation-only AbsoluteRect: under a scaled ancestor the hole is
+        // painted through the whole world transform, and a placement from the unscaled rect would overhang or gap it.
+        RectF area = scene.AbsoluteTransformedRect(h);
         if (area.W <= 0f || area.H <= 0f)
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
+            b.SetVisible(false);
             return;
         }
         SizeI natural = Player.NaturalSize.Peek();
@@ -1230,12 +1354,15 @@ public sealed class MediaPlayerElement : Component
             double customAspect = _customAspectForPump?.Peek() ?? (16.0 / 9.0);
             NodeHandle hole = _holeRef?.Value ?? default;
             bool live = !hole.IsNull && scene.IsLive(hole);
-            videoRect = live ? scene.AbsoluteRect(hole) : default;
+            videoRect = live ? scene.AbsoluteTransformedRect(hole) : default;
             if (live) geom = hole;
             if (!live || videoRect.W <= 0f || videoRect.H <= 0f)
-                videoRect = FitVideoRect(area, natural, mode, customAspect, s);
-            else if (ModeMayOverflow(mode))
+                videoRect = FitVideoRectSnapped(area, natural, mode, customAspect, s);
+            else if (refit || ModeMayOverflow(mode))
             {
+                // REFIT (the natural size changed inside PumpVideo): the hole node is still laid out from the previous
+                // natural size, so its rect is the OLD fit. The new fit is computed from the same insets
+                // SyncHoleLetterbox is about to write as the hole's Margin, so the next layout lands on exactly this rect.
                 // CENTER-CROP and NATIVE are the two modes whose fitted rect deliberately OVERFLOWS the stage: crop
                 // scales the frame until it covers the area, native is simply the frame's own device-pixel size —
                 // either way the excess is clipped (by the viewport, below). The hole node carries that overflow as
@@ -1243,9 +1370,14 @@ public sealed class MediaPlayerElement : Component
                 // margin to zero hands back the stage rect itself — and placing the video at the stage rect scales
                 // the frame DOWN to fit instead of cropping it, which is the overflow mode silently behaving like
                 // Fill/Uniform. Recomputing the fit here is right either way: when the margins do survive layout
-                // this is the same rect the hole already has.
-                videoRect = FitVideoRect(area, natural, mode, customAspect, s);
-                geom = h;   // the rect now derives from the AREA, so follow the area's geometry
+                // this is the same rect the hole already has. Built from the hole's OWN insets (HoleInsets over the
+                // area's parent-relative layout bounds, the value SyncHoleLetterbox writes as the hole's Margin) rather
+                // than a fit snapped against the ABSOLUTE area: the device-pixel snap is not translation-invariant, so
+                // at a fractional absolute origin the two would round an edge differently and leave a one-pixel sliver
+                // between the erased hole and the video.
+                RectF layoutArea = scene.Bounds(h);
+                videoRect = RectFromHoleInsets(area, layoutArea, HoleInsets(layoutArea, natural, mode, customAspect, s));
+                if (ModeMayOverflow(mode)) geom = h;   // the rect now derives from the AREA, so follow the area's geometry
             }
         }
         // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the DComp child on the
@@ -1262,16 +1394,57 @@ public sealed class MediaPlayerElement : Component
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
         if (CornerRadius > 0f)
             b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
-        // Overflow safety net: a layout defect that widens the element past its host must degrade to a SMALLER
-        // video, never to a video composited at a rect that is not on screen (plus an oversized ABR request).
+        // Overflow safety net: a layout defect that widens the element past its DIRECT host must degrade to a SMALLER
+        // video, never to a video composited at a rect that is not on screen (plus an oversized ABR request). It is keyed
+        // to the direct host's laid-out rect and NOT to the clip viewport: a scroller or the window edge cutting a
+        // correctly laid-out player must not shrink and re-centre the video away from its hole. That case is the
+        // viewport's job (SetViewport above crops the full fitted rect, as crop and native do).
         VideoAspectMode pumpMode = _aspectForPump?.Peek() ?? VideoAspectMode.Uniform;
-        if (PumpClampsOverflow(pumpMode)
-            && (videoRect.W > viewport.W + 0.5f || videoRect.H > viewport.H + 0.5f))
-            videoRect = ClampUniformToViewport(videoRect, viewport);
-        LogPump(pumpMode, area, natural, videoRect, viewport, s);
+        if (PumpClampsOverflow(pumpMode))
+        {
+            NodeHandle host = scene.Parent(h);
+            if (!host.IsNull && scene.IsLive(host))
+            {
+                RectF hostRect = scene.AbsoluteTransformedRect(host);
+                if (ExceedsDirectHost(videoRect, hostRect))
+                    videoRect = ClampUniformToViewport(videoRect, hostRect);
+            }
+        }
+        // GEOMETRY-ONLY TURN: this pump was requested only because the rect moved (RequestGeometryPumps — a drag, a resize,
+        // an animated placement), so nothing the session publishes changed: state, buffering, position, cue, the stream
+        // rect and the ABR bookkeeping are all driven by native events and transport commands, which request a FULL pump.
+        // Place the surface and stop — no PumpVideo, no per-frame Position write fanning out to every subscriber. The
+        // cached content size is only valid while it is still the size this rect needs (a pure translation never changes
+        // it; a resize that moves the downscale cap does), otherwise the turn falls through to the full pump so the stream
+        // is never left sized for a stale rect. The settle timer then runs the full pump once the motion has ended.
+        // A surface with no content size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
+        SizeI cached = b.IsGeometryOnlyPump ? b.ContentSize : SizeI.Zero;
+        bool motion = !cached.IsEmpty;
+        if (motion)
+        {
+            NoteGeometryMotion();
+            if (!audioOnly && cached == VideoStreamSizing.ContentSizeFor(natural, videoRect, s))
+            {
+                b.Place(videoRect);
+                b.SetVisible(active && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty and the frame has video here (checked above); AND the session's per-attach readiness
+                return;
+            }
+        }
+        LogPump(pumpMode, area, natural, videoRect, viewport, s, defer: motion || _settleArmed);
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
         Player.PumpVideo(b, videoRect, s);
-        if (audioOnly) b.SetVisible(false);
+        // The first metadata, a FORMATCHANGE or a different-aspect ABR rung publishes a new natural size INSIDE the pump,
+        // but this pump placed against the hole as laid out for the old one: the new frame would be squashed into the old
+        // fit until the next render + layout. Refit and re-place in THIS pump, and write the hole's Margin now so the next
+        // layout lands without waiting for a render. Value-gated (one follow-up at most), so it cannot loop pumps.
+        if (!refit && Player.NaturalSize.Peek() != natural)
+        {
+            SyncHoleLetterbox(scene.Bounds(h));
+            PumpCore(s, refit: true);
+            return;
+        }
+        b.SetVisible(active && !audioOnly && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty here (the early-out above returns hidden); the session publishes readiness (VideoSurface) inside PumpVideo, so a re-attached or detached slot stays hidden until its own first frame
+        if (!audioOnly) NoteSurfacePresented(b);
     }
 
     /// <summary>The SAME-SOLVE letterbox: place the video hole at the fitted rect for <paramref name="area"/> inside the
@@ -1309,8 +1482,12 @@ public sealed class MediaPlayerElement : Component
         scene.Mark(hole, NodeFlags.LayoutDirty);
     }
 
-    void LogPump(VideoAspectMode mode, RectF area, SizeI natural, RectF videoRect, RectF viewport, float scale)
+    void LogPump(VideoAspectMode mode, RectF area, SizeI natural, RectF videoRect, RectF viewport, float scale, bool defer)
     {
+        // Geometry motion changes this tuple every frame: only the settled geometry is worth a line. While a motion burst
+        // is open (settle armed) no pump logs, geometry-only or full alike (a native/transport pump mid-drag would write
+        // unsettled geometry); the trailing settle pump is the only one that logs, so one drag or resize is one Info line.
+        if (defer) return;
         var line = (
             Mode: mode,
             Aw: (int)area.W, Ah: (int)area.H,
@@ -1343,11 +1520,13 @@ public sealed class MediaPlayerElement : Component
         for (NodeHandle p = scene.Parent(node); !p.IsNull && scene.IsLive(p); p = scene.Parent(p))
         {
             if ((scene.Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
-            RectF c = scene.AbsoluteRect(p);
             ref NodePaint pp = ref scene.Paint(p);
-            float cw = float.IsNaN(pp.PresentedW) ? c.W : pp.PresentedW;
-            float ch = float.IsNaN(pp.PresentedH) ? c.H : pp.PresentedH;
-            c = new RectF(c.X, c.Y, cw, ch);
+            RectF lb = scene.Bounds(p);
+            float cw = float.IsNaN(pp.PresentedW) ? lb.W : pp.PresentedW;
+            float ch = float.IsNaN(pp.PresentedH) ? lb.H : pp.PresentedH;
+            // Mapped through the ancestor's full transform (a scaled clipping ancestor clips a scaled rect), with the
+            // presented extent as its local size.
+            RectF c = scene.AbsoluteTransformedRect(p, cw, ch);
             float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
             float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
             rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
@@ -1908,6 +2087,7 @@ public sealed class MediaPlayerElement : Component
         public Action<VideoAspectMode, double>? AspectModeChanged { get; init; }
         public ColorF LetterboxColor { get; init; }
         public CursorAutoHidePolicy CursorAutoHide { get; init; } = CursorAutoHidePolicy.FullscreenOnly;
+        public bool ShowStatusOverlay { get; init; } = true;
 
         public override Element Render()
         {
@@ -1934,6 +2114,7 @@ public sealed class MediaPlayerElement : Component
                         IsFullscreenPresentation = true,
                         ExitFullscreen = Exit,
                         CursorAutoHide = CursorAutoHide,
+                        ShowStatusOverlay = ShowStatusOverlay,
                     }),
                 ],
             };
@@ -2059,7 +2240,7 @@ public sealed class MediaPlayerElement : Component
     internal static Edges4 HoleInsets(RectF area, SizeI natural, VideoAspectMode mode, double customAspect, float scale)
         => area.W <= 0f || IsAudioOnly(natural)
             ? default
-            : LetterboxInsets(area, FitVideoRect(area, natural, mode, customAspect, scale));
+            : LetterboxInsets(area, FitVideoRectSnapped(area, natural, mode, customAspect, scale));
 
     /// <summary>The pump's overflow safety net, as pure geometry: fit <paramref name="videoRect"/> into its
     /// intersection with <paramref name="viewport"/> with ONE scale for both axes, centred on that intersection. The
@@ -2079,6 +2260,27 @@ public sealed class MediaPlayerElement : Component
         if (k >= 1f) return videoRect;                             // already inside: nothing to clamp
         float w = videoRect.W * k, h = videoRect.H * k;
         return new RectF(ix + (iw - w) * 0.5f, iy + (ih - h) * 0.5f, w, h);
+    }
+
+    /// <summary>The clamp decision for the overflow safety net, as pure geometry: true when <paramref name="videoRect"/>
+    /// pokes out of its DIRECT host's laid-out rect by more than half a pixel on any side (the layout-defect case the net
+    /// exists for). A clipping ancestor further up (a scroller, the window edge) is deliberately not an input: cutting a
+    /// correctly laid-out video is the viewport's job and must not shrink it away from its hole.</summary>
+    internal static bool ExceedsDirectHost(RectF videoRect, RectF host)
+        => videoRect.X < host.X - 0.5f || videoRect.Y < host.Y - 0.5f
+        || videoRect.X + videoRect.W > host.X + host.W + 0.5f
+        || videoRect.Y + videoRect.H > host.Y + host.H + 0.5f;
+
+    /// <summary>The video rect (window space) a hole's letterbox <paramref name="insets"/> describe for an area whose
+    /// window-space rect is <paramref name="area"/> and whose LAYOUT bounds are <paramref name="layoutArea"/>. The insets
+    /// are layout units; under a scaled ancestor the window-space area is bigger or smaller than its layout bounds, so each
+    /// inset is scaled by that ratio (exactly 1 on a translation-only chain, so nothing moves there).</summary>
+    internal static RectF RectFromHoleInsets(RectF area, RectF layoutArea, Edges4 insets)
+    {
+        float sx = layoutArea.W > 0f ? area.W / layoutArea.W : 1f;
+        float sy = layoutArea.H > 0f ? area.H / layoutArea.H : 1f;
+        float l = insets.Left * sx, t = insets.Top * sy, r = insets.Right * sx, bt = insets.Bottom * sy;
+        return new RectF(area.X + l, area.Y + t, area.W - l - r, area.H - t - bt);
     }
 
     /// <summary>The per-edge letterbox insets (DIP) that place <paramref name="video"/> inside <paramref name="area"/> —
@@ -2137,9 +2339,9 @@ public sealed class MediaPlayerElement : Component
 
     private static bool Near(double a, double b) => Math.Abs(a - b) < 0.01;
 
-    private static Element BufferingOverlay(BufferingInfo info)
+    private static Element BufferingOverlay(BufferingReason bufferingReason, double percent)
     {
-        string reason = info.Reason switch
+        string reason = bufferingReason switch
         {
             BufferingReason.Seeking => MediaStrings.Seeking,
             BufferingReason.QualitySwitch => MediaStrings.ChangingQuality,
@@ -2149,8 +2351,8 @@ public sealed class MediaPlayerElement : Component
             BufferingReason.Rebuffering => MediaStrings.Buffering,
             _ => MediaStrings.Loading,
         };
-        Element ring = info.Percent is >= 0 and <= 1
-            ? ProgressRing.Determinate((float)info.Percent, 36f)
+        Element ring = percent is >= 0 and <= 1
+            ? ProgressRing.Determinate((float)percent, 36f)
             : ProgressRing.Indeterminate(36f);
         return new BoxEl
         {
@@ -2231,36 +2433,80 @@ public sealed class MediaPlayerElement : Component
         });
     }
 
-    private static Element CaptionOverlay(TimedCue cue, float bottomMargin) => new BoxEl
-    {
-        Key = "media-caption",
-        AlignSelf = FlexAlign.Center,
-        MaxWidth = 880f,
-        Animate = CaptionMotion,
-        Margin = new Edges4(24f, 0f, 24f, bottomMargin),
-        Padding = new Edges4(10f, 5f, 10f, 6f),
-        Corners = Radii.ControlAll,
-        Fill = Tok.MediaScrim with { A = 0.72f },
-        Children =
-        [
-            new TextEl(cue.Text)
-            {
-                Size = Math.Clamp(18f * cue.Style.FontScale, 12f, 40f),
-                Color = cue.Style.ArgbColor == 0 ? Tok.OnMediaPrimary : FromArgb(cue.Style.ArgbColor),
-                Wrap = TextWrap.Wrap,
-            },
-        ],
-    };
+    // ── status overlay: the pure choice, the leaf that shows the live percent, and the memo key ──────────────────────
 
-    // Convert a cue-supplied 0xAARRGGBB color (dynamic subtitle data) to a ColorF via the float ctor — a runtime
-    // conversion, not a hardcoded color constant, so the media element carries no baked color literals.
-    private static ColorF FromArgb(uint argb)
-        => new(((argb >> 16) & 0xFF) / 255f, ((argb >> 8) & 0xFF) / 255f, (argb & 0xFF) / 255f, ((argb >> 24) & 0xFF) / 255f);
+    /// <summary>Which status overlay (if any) the element mounts over the picture.</summary>
+    internal enum StatusOverlayKind : byte { None, Failed, Opening, Buffering }
+
+    /// <summary>What <see cref="Render"/> needs of <see cref="IMediaPlayer.Buffering"/>: WHETHER a rebuffer is in progress
+    /// and WHY, never how far along it is. Equal values cut the memo's notification off, so the per-segment percent
+    /// churn of a protected open never reaches the element.</summary>
+    internal readonly record struct BufferingKey(bool IsBuffering, BufferingReason Reason);
+
+    internal static BufferingKey BufferingKeyOf(BufferingInfo info) => new(info.IsBuffering, info.Reason);
+
+    /// <summary>The overlay choice as pure logic. A decorative element or a host that owns its loading visuals
+    /// (<paramref name="hostOwnsVisuals"/>) has none at all. A terminal failure wins over everything. A start in
+    /// progress shows the opening ladder (nothing for the first 500 ms, <paramref name="startupPhase"/> 0). Otherwise a
+    /// rebuffer earns the pill only once it has outlived its own 500 ms delay, except at the handoff from a start whose
+    /// ring is already up (<paramref name="startupPhase"/> at least 1): the pill replaces the ring at once.</summary>
+    internal static StatusOverlayKind ChooseStatusOverlay(bool decorative, bool hostOwnsVisuals, PlaybackState state,
+        bool startingUp, int startupPhase, bool bufferingWanted, bool bufferingDelayElapsed)
+    {
+        if (decorative || hostOwnsVisuals) return StatusOverlayKind.None;
+        if (state == PlaybackState.Failed) return StatusOverlayKind.Failed;
+        if (startingUp) return startupPhase == 0 ? StatusOverlayKind.None : StatusOverlayKind.Opening;
+        return bufferingWanted && (bufferingDelayElapsed || startupPhase >= 1) ? StatusOverlayKind.Buffering : StatusOverlayKind.None;
+    }
+
+    /// <summary>Should a mid-play buffering state start the rebuffer overlay's delay clock at all. Never during a start
+    /// (the opening ladder owns it). A SEEK or an ABR QUALITY SWITCH behind a picture that is already presented is
+    /// silent: the user asked for it or never asked at all, the picture is up, and the seek bar's inline spinner
+    /// covers a slow seek; a full-surface pill flashing over the frame on every J/L/arrow press (or scrub preview)
+    /// contradicts <see cref="MediaSeekBar"/>'s own contract. A real stall or a network rebuffer is not silent.</summary>
+    internal static bool BufferingOverlayWanted(bool startingUp, bool isBuffering, BufferingReason reason,
+        PlaybackState state, bool framePresented)
+    {
+        if (startingUp) return false;
+        if (!isBuffering && state is not (PlaybackState.Buffering or PlaybackState.Stalled)) return false;
+        return !(framePresented && (reason is BufferingReason.Seeking or BufferingReason.QualitySwitch));
+    }
+
+    /// <summary>The percent an overlay ring shows, in 5% steps (20 notches is as fine as a 36-40 DIP ring can show), or
+    /// -1 (indeterminate) when the backend publishes none. Quantising is what lets the leaf's memo cut off the
+    /// per-segment ticks: a ring that moved on every appended segment re-rendered for no visible change.</summary>
+    internal static double QuantizeStatusPercent(double percent)
+        => percent is >= 0 and <= 1 ? Math.Round(percent * 20.0) / 20.0 : -1.0;
+
+    /// <summary>The leaf's re-pushed inputs (an immutable record, so an unchanged re-push is coalesced).</summary>
+    private sealed record StatusProps(StatusOverlayKind Kind, bool PlayIntent, BufferingReason Reason, bool Determinate);
+
+    /// <summary>The opening / rebuffer overlay as its OWN component: the only subscriber of the live buffering percent.
+    /// The element decides that an overlay exists and why; this leaf reads how far along it is (quantised, behind a memo),
+    /// so a buffered-amount tick re-renders this small subtree and never the whole player element.</summary>
+    private sealed class MediaStatusDetail : Component
+    {
+        public required IMediaPlayer Player { get; init; }
+
+        public override Element Render()
+        {
+            var props = UseProps<StatusProps>();
+            var percent = UseComputed(() => QuantizeStatusPercent(Player.Buffering.Value.Percent));
+            if (props.Kind == StatusOverlayKind.Opening)
+                return OpeningOverlay(props.PlayIntent, props.Determinate ? percent.Value : -1.0);
+            return BufferingOverlay(props.Reason, percent.Value);
+        }
+    }
 
     // ── pure helpers (unit-tested) ───────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Degrade decision: audio-only (no hole-punch) iff the source has no video.</summary>
     internal static bool IsAudioOnly(SizeI natural) => natural.IsEmpty;
+
+    /// <summary>The element's "video is past Opening" test: the source has video and the player has left Idle/Opening.
+    /// Shared by <see cref="Render"/> and the caption leaf so the two can never disagree about when captions may show.</summary>
+    internal static bool IsVideoReady(SizeI natural, PlaybackState state)
+        => !IsAudioOnly(natural) && state is not (PlaybackState.Idle or PlaybackState.Opening);
 
     /// <summary>Fit a <paramref name="natural"/>-sized frame into <paramref name="area"/> (DIP) per <paramref name="stretch"/>.
     /// Returns the placed video rect (DIP), centered. <see cref="MediaStretch.UniformToFill"/> and
@@ -2307,6 +2553,27 @@ public sealed class MediaPlayerElement : Component
         }
     }
 
+    /// <summary><see cref="FitVideoRect(RectF, SizeI, VideoAspectMode, double, float)"/> on the DEVICE pixel grid at
+    /// <paramref name="scale"/>: the hole's edges are the registry's whole-pixel video rect, so the UI hole and the
+    /// composited video share a boundary at every fractional scale (see <see cref="SnapVideoRect"/>).</summary>
+    internal static RectF FitVideoRectSnapped(RectF area, SizeI natural, VideoAspectMode aspectMode, double customAspect,
+        float scale)
+    {
+        RectF fit = FitVideoRect(area, natural, aspectMode, customAspect, scale);
+        return area.W <= 0f || area.H <= 0f || natural.IsEmpty ? fit : SnapVideoRect(fit, scale);
+    }
+
+    /// <summary>Snap a DIP rect so its DEVICE edges are whole pixels: convert to device px at <paramref name="scale"/>, apply
+    /// <see cref="VideoSurfaceRegistry.SnapToDevicePixels"/> (rule R, the SAME rule the registry applies to the placed rect
+    /// and the composite applies to the hole-erase rect), and convert back. A rect whose device edges are already whole
+    /// pixels (scale 1 with integral DIP edges, say) comes back unchanged.</summary>
+    internal static RectF SnapVideoRect(RectF dip, float scale)
+    {
+        float s = scale <= 0f ? 1f : scale;
+        RectF dev = VideoSurfaceRegistry.SnapToDevicePixels(ToDeviceRect(dip, s));
+        return new RectF(dev.X / s, dev.Y / s, dev.W / s, dev.H / s);
+    }
+
     private static VideoAspectMode ToAspectMode(MediaStretch stretch) => stretch switch
     {
         MediaStretch.None => VideoAspectMode.Native,
@@ -2332,6 +2599,39 @@ public sealed class MediaPlayerElement : Component
         int total = (int)t.TotalSeconds;
         int h = total / 3600, m = (total % 3600) / 60, s = total % 60;
         return h > 0 ? $"{h}:{m:D2}:{s:D2}" : $"{m}:{s:D2}";
+    }
+
+    // ── the surface-presented report (a host's make-before-break hand-off between two presenters) ───────────────────
+
+    /// <summary>Raised ONCE on the UI thread, from the pump, when THIS element's own composited surface is bound
+    /// (<see cref="VideoBinding.Bound"/>) and visible: the host created its
+    /// video child visual and bound the player's handle to it (the registry's per-token
+    /// <see cref="VideoBinding.Surface"/> turned non-none and <see cref="VideoBinding.Bound"/> turned true, a bind that can
+    /// fail and retry), while the element is active, placed and showing (the session publishes a surface). A host that moves a
+    /// player from one presenter to another (the main window to a pop-out window) keeps the outgoing presenter mounted
+    /// until the incoming one raises this, so no frame is left with no video composited anywhere. Never raised for an
+    /// audio-only stream; frozen at mount like every init prop.</summary>
+    public Action? SurfacePresented { get; init; }
+
+    private bool _surfacePresentedRaised;
+    private int _surfaceProbePumps;
+    private const int MaxSurfaceProbePumps = 120;   // about two seconds of frames; past it only a native pump re-checks
+
+    /// <summary>Pump-side half of <see cref="SurfacePresented"/>. The presenter drain that creates the child visual runs on
+    /// the render thread AFTER the pump that bound the handle and wakes nobody, and the surface signal is written from
+    /// that thread, so it is only ever PEEKED here (a 4-byte id, never subscribed): the report waits for the surface AND
+    /// the slot's bound flag AND the session's own readiness, the same conditions the element ANDs into its visibility.
+    /// Until all are observed, one follow-up pump per frame re-checks them for a bounded number of pumps.</summary>
+    private void NoteSurfacePresented(in VideoBinding b)
+    {
+        if (SurfacePresented is not { } report || _surfacePresentedRaised) return;
+        if (!b.Surface.Peek().IsNone && b.Bound.Peek() && !Player.VideoSurface.Peek().IsNone)
+        {
+            _surfacePresentedRaised = true;
+            report();
+            return;
+        }
+        if (++_surfaceProbePumps <= MaxSurfaceProbePumps) b.RequestPump();
     }
 }
 

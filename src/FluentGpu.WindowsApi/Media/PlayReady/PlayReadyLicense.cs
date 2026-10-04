@@ -40,9 +40,11 @@ public static class PlayReadyLicense
             if (!string.IsNullOrWhiteSpace(headerName) && headerValue is not null)
                 msg.Headers.TryAddWithoutValidation(headerName, headerValue);
 
-            using var resp = await http.SendAsync(msg).ConfigureAwait(false);
+            // The attempt's token (the runtime's stall timeout, or the license being replaced) ends the POST; a 5xx / transport
+            // failure surfaces as an HttpRequestException, which the runtime retries once.
+            using var resp = await http.SendAsync(msg, request.Cancel).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();   // non-2xx → throws → the runtime's relay records it as the typed DRM error
-            byte[] license = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            byte[] license = await resp.Content.ReadAsByteArrayAsync(request.Cancel).ConfigureAwait(false);
             return new LicenseResponse(license);
         };
     }

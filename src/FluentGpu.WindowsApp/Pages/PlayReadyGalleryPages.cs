@@ -14,14 +14,14 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Protected-video (PlayReady) playback — presented inside the Media Lab ("Custom source · DRM form") ────────────
 
-/// <summary>A prepared, parsed protected source ready to play: the DASH descriptor (from <see cref="DashManifestParser"/>)
+/// <summary>A prepared, parsed protected source ready to play: the DASH descriptor (from <see cref="DashDescriptorMapper"/>)
 /// + the built <c>WithDrm</c> license relay + the entered MPD/license URLs. Handed to a keyed <see cref="ProtectedPlayerView"/>
 /// so each Play remounts a fresh player.</summary>
 sealed record PreparedProtectedSource(int Id, string MpdUrl, string LicenseUrl, DashSourceDescriptor Descriptor,
     Func<LicenseRequest, ValueTask<LicenseResponse>> Relay);
 
 /// <summary>GENERIC protected (PlayReady) playback through the unified Media Playback API: a FORM (MPD URL, license server
-/// URL, an optional custom license header) that, on Play, parses ANY DASH/PlayReady MPD (<see cref="DashManifestParser"/>),
+/// URL, an optional custom license header) that, on Play, parses ANY DASH/PlayReady MPD (<see cref="DashDescriptorMapper"/>),
 /// builds a <c>MediaPlayer</c> routed to <c>MfMediaPlayer</c> + a <c>ProtectedMediaBackend</c> carrying the parsed
 /// descriptor, and a MANAGED <c>WithDrm</c> relay that POSTs the CDM challenge to the entered license server with the
 /// entered header. Prefilled with the Axinom single-key v10 test vector as the default preset. Parse/license failures
@@ -71,7 +71,7 @@ sealed class ProtectedVideoDemo : Component
             string hValue = headerValue.Peek();
             try
             {
-                var desc = await DashManifestParser.ParseAsync(mpdUrl, s_http).ConfigureAwait(false);
+                var desc = await DashDescriptorMapper.ParseAsync(mpdUrl, s_http).ConfigureAwait(false);
                 var relay = PlayReadyLicense.HttpRelay(licUrl, hName, hValue);
                 post(() =>
                 {
