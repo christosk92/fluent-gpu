@@ -167,19 +167,10 @@ public static class MotionRecipes
     public static void SkeletonPulse(this AnimEngine anim, NodeHandle node, float min = 0.5f, float durationMs = 1000f)
     {
         if (Motion.ReducedMotion) return;
-        if (GpuProfile.IsWeak)
-        {
-            // Weak/UMA GPUs (the Adreno DEVICE_HUNG amplifier): a looping opacity breathe keeps the render loop hot
-            // EVERY frame, so every decoded album-art texture uploads on the very next frame at max cadence. Seed a
-            // FLAT, non-looping opacity that settles to Done on the next tick — the placeholder holds full opacity and
-            // the frame loop can idle between decodes so uploads coalesce. Discrete GPUs keep the full shimmer below.
-            // This is a per-recipe choice about a PLACEHOLDER, not a rate cap: the engine has no tier-based cadence ceiling
-            // (a visible loop runs at the display rate; only measured GPU saturation and the OS power cap pace it). What
-            // this recipe removes is the loop itself, so an idle page can sleep between decodes and the uploads coalesce.
-            anim.Keyframes(node, AnimChannel.Opacity,
-                [new Keyframe(0f, 1f), new Keyframe(1f, 1f)], 1f, loop: false);
-            return;
-        }
+        // Every GPU tier gets the same shimmer (owner decision, 2026-10-05). The weak-tier branch that seeded a flat,
+        // non-looping opacity instead (the Adreno DEVICE_HUNG era: a hot render loop made every decoded texture upload on the
+        // next frame) is gone: the upload drain is budgeted per turn now (UploadTurnBudget), the image cache is sized per tier,
+        // and a visible loop is never slowed for the hardware it runs on - only the measured GPU governor may pace it.
         anim.Keyframes(node, AnimChannel.Opacity,
             [new Keyframe(0f, 1f), new Keyframe(0.5f, min, Easing.EaseInOut), new Keyframe(1f, 1f, Easing.EaseInOut)],
             durationMs, loop: true);
