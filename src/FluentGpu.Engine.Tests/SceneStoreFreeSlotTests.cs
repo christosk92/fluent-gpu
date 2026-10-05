@@ -70,6 +70,91 @@ public sealed class SceneStoreFreeSlotTests
         Assert.Equal(survivors.Length + 1, Index(next));
     }
 
+    /// <summary>Random creates and frees against a model of the free set: every create that can reuse a slot takes the
+    /// MINIMUM free index, a create with nothing free takes fresh capacity, and no index is ever live twice.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(7)]
+    [InlineData(42)]
+    public void RandomCreateAndFreeAlwaysReusesTheMinimumFreeIndex(int seed)
+    {
+        var rng = new Random(seed);
+        var scene = new SceneStore(initialCapacity: 16);
+        var live = new List<NodeHandle>();
+        var liveIndices = new HashSet<int>();
+        var free = new SortedSet<int>();
+        int high = 0;
+        for (int step = 0; step < 5000; step++)
+        {
+            if (live.Count == 0 || rng.Next(100) < 55)
+            {
+                var h = scene.CreateNode(1);
+                int expected = free.Count > 0 ? free.Min : high + 1;
+                Assert.Equal(expected, Index(h));
+                if (free.Count > 0) free.Remove(expected); else high = expected;
+                Assert.True(liveIndices.Add(Index(h)), $"index {Index(h)} handed out while live (step {step})");
+                live.Add(h);
+            }
+            else
+            {
+                int at = rng.Next(live.Count);
+                var h = live[at];
+                live[at] = live[^1];
+                live.RemoveAt(live.Count - 1);
+                scene.FreeSubtree(h);
+                liveIndices.Remove(Index(h));
+                free.Add(Index(h));
+            }
+        }
+        foreach (var h in live) Assert.True(scene.IsLive(h));
+        Assert.Equal(live.Count, scene.LiveCount);
+    }
+
+    [Fact]
+    public void ATrimStraddlingTheTargetKeepsTheLowFreeSlotsInOrder()
+    {
+        // Live: 1..20. Free: 5, 9, 13 (below the highest live index) and 21..999 (the tail), so the trim target sits
+        // between the two groups of free slots.
+        var scene = new SceneStore();
+        var nodes = new NodeHandle[1000];
+        for (int i = 1; i < nodes.Length; i++) nodes[i] = scene.CreateNode(1);
+        for (int i = 21; i < nodes.Length; i++) scene.FreeSubtree(nodes[i]);
+        foreach (int i in new[] { 13, 5, 9 }) scene.FreeSubtree(nodes[i]);
+
+        int trimmed = scene.TrimExcessCapacity();
+        Assert.True(trimmed > 0);
+
+        // The free slots below the cut come back lowest first; then fresh capacity right after the highest live index.
+        Assert.Equal(5, Index(scene.CreateNode(1)));
+        Assert.Equal(9, Index(scene.CreateNode(1)));
+        Assert.Equal(13, Index(scene.CreateNode(1)));
+        Assert.Equal(21, Index(scene.CreateNode(1)));
+        for (int i = 1; i <= 20; i++) if (i is not (5 or 9 or 13)) Assert.True(scene.IsLive(nodes[i]));
+    }
+
+    [Fact]
+    public void GrowingWithFreeSlotsPendingKeepsThem()
+    {
+        var scene = new SceneStore(initialCapacity: 16);
+        var nodes = new List<NodeHandle>();
+        while (scene.Capacity == 16) nodes.Add(scene.CreateNode(1));   // fill to the first Grow
+        int grownOnce = scene.Capacity;
+        scene.FreeSubtree(nodes[3]);
+        scene.FreeSubtree(nodes[1]);
+
+        // Two creates reuse the pending slots, lowest first; then push past the next growth.
+        var more = new List<NodeHandle> { scene.CreateNode(1), scene.CreateNode(1) };
+        Assert.Equal(Index(nodes[1]), Index(more[0]));
+        Assert.Equal(Index(nodes[3]), Index(more[1]));
+        scene.FreeSubtree(more[1]);                                     // one free slot pending across the Grow
+        while (scene.Capacity == grownOnce) more.Add(scene.CreateNode(1));
+        Assert.Equal(Index(nodes[3]), Index(more[2]));                  // it was reused before any fresh slot
+        var all = new HashSet<int>();
+        foreach (var n in nodes) if (scene.IsLive(n)) Assert.True(all.Add(Index(n)));
+        foreach (var n in more) if (scene.IsLive(n)) Assert.True(all.Add(Index(n)), $"index {Index(n)} handed out twice");
+        Assert.Equal(scene.LiveCount, all.Count);
+    }
+
     [Fact]
     public void FreeingAViewportDropsItsExtentTable()
     {
