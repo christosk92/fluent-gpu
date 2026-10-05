@@ -2584,7 +2584,7 @@ public sealed partial class AppHost : IDisposable
         bool haveRestored = restored.W > 1f && restored.H > 1f;
         var work = _app.GetWorkArea(haveRestored
             ? new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f)
-            : _window.ClientOriginPx);
+            : OwnerMonitorAnchorPx());
         if (haveRestored)
         {
             if (!work.IsInfinite)
@@ -2745,6 +2745,18 @@ public sealed partial class AppHost : IDisposable
         var cb = OnFirstVideoBound;
         OnFirstVideoBound = null;
         cb?.Invoke(_firstVideoBindMs);
+    }
+
+    /// <summary>The screen point (physical px) that names the monitor THIS window is on, for placing a window it opens: the
+    /// centre of its outer rect, so a window straddling two displays resolves to the one holding most of it (the client
+    /// origin is its top-left corner, which names the neighbour whenever the window hangs over an edge). A minimized window has
+    /// no usable rect (it reads as its parking spot), so it falls back to the client origin, as before.</summary>
+    private Point2 OwnerMonitorAnchorPx()
+    {
+        var outer = _window.OuterBoundsPx;
+        if (_window.State != WindowState.Minimized && outer.W > 1f && outer.H > 1f)
+            return new Point2(outer.X + outer.W * 0.5f, outer.Y + outer.H * 0.5f);
+        return _window.ClientOriginPx;
     }
 
     /// <summary>Parent, UI thread (F110): park a live, revealed pop-out warm instead of closing it. Leaves fullscreen first (the

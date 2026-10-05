@@ -392,6 +392,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const uint WM_GETMINMAXINFO = 0x0024;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int SW_MAXIMIZE = 3;
+    private const int SW_SHOWNOACTIVATE = 4;   // WinUser.h — restores a minimized window to its last size/position without activating it
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
     private const int SW_SHOW = 5, SW_HIDE = 0;
     private const uint WM_QUERYENDSESSION = 0x0011, WM_ENDSESSION = 0x0016;
@@ -1007,6 +1008,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (_fullscreen == fullscreen) return;
         if (fullscreen)
         {
+            // A minimized window has no usable geometry: GetWindowRect reads its (-32000,-32000) parking spot (the "windowed"
+            // rect saved below would send the exit to nowhere, and the monitor sampled from it is whichever one that
+            // point is nearest, not the one the window lives on), and WS_MINIMIZE rides along in the saved style, so the
+            // window would stay iconic — parked, with no picture — under a fullscreen flag. Restore it first (no
+            // activation), THEN sample everything from the real window: the monitor it is on at the moment of the request.
+            if (IsIconic(_hwnd)) ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
             _windowedWasZoomed = IsZoomed(_hwnd);
             _windowedStyle = GetWindowLongPtrW(_hwnd, GWL_STYLE);
             RECT windowedRect = default;
