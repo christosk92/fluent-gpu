@@ -376,16 +376,17 @@ public sealed class RenderThreadPacingTests
                 Assert.True(drain < slot, $"the children drain before the parent's slot wait: {string.Join(",", order)}");
                 Assert.True(slot < present && present < commit, $"slot, present, then the one commit: {string.Join(",", order)}");
             }
-            // A bare wake (no parent work at all) still drains the children and still commits, with no slot wait.
-            order.Clear();
-            var idle = new RenderThread(seam, _ => order.Add("parentPresent"), async: false,
+            // A bare wake (no parent work at all) still drains the children and still commits, with no slot wait. Its own list:
+            // the motion thread above is still live and keeps turning on its backstop, so a shared list raced it.
+            var idleOrder = new List<string>();
+            var idle = new RenderThread(seam, _ => idleOrder.Add("parentPresent"), async: false,
                 needsTick: () => false, tickPeriod: () => PeriodQpc,
-                takePresentSlot: _ => { order.Add("parentSlotWait"); return true; },
-                extraDrain: () => order.Add("childDrain"), postTurn: () => order.Add("commit"));
+                takePresentSlot: _ => { idleOrder.Add("parentSlotWait"); return true; },
+                extraDrain: () => idleOrder.Add("childDrain"), postTurn: () => idleOrder.Add("commit"));
             try
             {
                 idle.DrainSync();
-                Assert.Equal(["childDrain", "commit"], order);
+                Assert.Equal(["childDrain", "commit"], idleOrder);
             }
             finally { idle.Dispose(); }
         }
@@ -476,19 +477,48 @@ public sealed class RenderThreadPacingTests
     }
 
     // A window of smooth motion has nothing to report: it is counted (quiet=N on the next printed line), not printed.
-    [Theory]
-    [InlineData(0, 0, 0, 0, 0, 8.0, false)]
-    [InlineData(1, 0, 0, 0, 0, 8.0, true)]
-    [InlineData(0, 1, 0, 0, 0, 8.0, true)]
-    [InlineData(0, 0, 1, 0, 0, 8.0, true)]
-    [InlineData(0, 0, 0, 1, 0, 8.0, true)]
-    [InlineData(0, 0, 0, 0, 1, 8.0, true)]
-    [InlineData(0, 0, 0, 0, 0, 16.6, false)]
-    [InlineData(0, 0, 0, 0, 0, 16.7, true)]
-    public void PaceWindow_IsPrintedOnlyWhenAnomalous(long missed, long catchUps, long slotTimeouts, long childTimeouts,
-        long slotDrops, double lagMaxMs, bool expected)
-        => Assert.Equal(expected, RenderThread.PaceWindowAnomalous(missed, catchUps, slotTimeouts, childTimeouts, slotDrops,
-            lagMaxMs, refreshMs: 8.333));
+    private static readonly RenderThread.PaceState Smooth = new(GovernorEngaged: false, Decimating: false, Depth: 1);
+
+    private static RenderThread.PaceWindowFacts Quiet(RenderThread.PaceState? state = null) => new(
+        Missed: 0, CatchUps: 0, SlotTimeouts: 0, ChildTimeouts: 0, SlotDrops: 0, Races: 0, Presents: 120,
+        PresentLagMaxMs: 8.0, RefreshMs: 8.333, State: state ?? Smooth);
+
+    [Fact]
+    public void PaceWindow_SmoothMotion_IsQuiet()
+        => Assert.False(RenderThread.PaceWindowAnomalous(Quiet()));
+
+    [Fact]
+    public void PaceWindow_EveryAnomaly_IsPrinted()
+    {
+        var q = Quiet();
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { Missed = 1 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { CatchUps = 1 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { SlotTimeouts = 1 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { ChildTimeouts = 1 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { SlotDrops = 1 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { Races = 1 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { Presents = 0 }));          // frozen motion
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { State = Smooth with { GovernorEngaged = true } }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { State = Smooth with { Decimating = true } }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { State = Smooth with { Depth = 2 } }));
+        Assert.False(RenderThread.PaceWindowAnomalous(q with { PresentLagMaxMs = 16.6 }));
+        Assert.True(RenderThread.PaceWindowAnomalous(q with { PresentLagMaxMs = 16.7 }));
+    }
+
+    [Fact]
+    public void PaceWindow_StateEdges_FirstWindow_AndTheHeartbeat_ArePrinted()
+    {
+        var q = Quiet();
+        Assert.True(RenderThread.ShouldPrintPaceWindow(q, lastPrinted: null, 0, false, false));       // nothing printed yet
+        Assert.False(RenderThread.ShouldPrintPaceWindow(q, Smooth, 0, false, false));                 // quiet, same state
+        // The governor disengaged since the last printed line: the edge back to quiet is itself news.
+        Assert.True(RenderThread.ShouldPrintPaceWindow(q, Smooth with { GovernorEngaged = true }, 3, false, false));
+        Assert.True(RenderThread.ShouldPrintPaceWindow(q, Smooth with { Depth = 2 }, 3, false, false));
+        Assert.False(RenderThread.ShouldPrintPaceWindow(q, Smooth, RenderThread.PaceHeartbeatWindows - 1, false, false));
+        Assert.True(RenderThread.ShouldPrintPaceWindow(q, Smooth, RenderThread.PaceHeartbeatWindows, false, false));
+        Assert.True(RenderThread.ShouldPrintPaceWindow(q, Smooth, 0, hasChildSection: true, false));
+        Assert.True(RenderThread.ShouldPrintPaceWindow(q, Smooth, 0, false, printAll: true));
+    }
 
     [Theory]
     [InlineData(0, 0, "none")]
