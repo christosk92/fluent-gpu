@@ -1545,11 +1545,18 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
 
-    /// <summary>The scroll row of an existing viewport WITHOUT the write-intent ledger mark <see cref="ScrollRef"/> makes.
-    /// For a per-frame writer that usually writes what is already there (the host's frame step): it must call
-    /// <see cref="NoteCaptureChanged"/> itself whenever a captured field actually changed. The row must exist
-    /// (<see cref="HasScroll"/>).</summary>
-    internal ref ScrollState ScrollRefUnledgered(NodeHandle h) => ref _scroll.GetOrAdd((int)h.Raw.Index);
+    /// <summary>READ-ONLY view of an existing viewport's scroll row, without the write-intent ledger mark
+    /// <see cref="ScrollRef"/> makes (every write must still go through <see cref="ScrollRef"/>). For callers that read the
+    /// row every frame. The row must exist (<see cref="HasScroll"/>, asserted); a missing one reads as
+    /// <see cref="ScrollState.Default"/> and is never created.</summary>
+    internal ref readonly ScrollState ScrollRow(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        Debug.Assert(_scroll.Contains(idx), "ScrollRow: the node has no scroll row (guard with HasScroll)");
+        if (!_scroll.Contains(idx)) return ref s_missingScrollRow;
+        return ref _scroll.GetOrAdd(idx);   // an existing row: a lookup, never an add
+    }
+    private static readonly ScrollState s_missingScrollRow = ScrollState.Default;
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
 

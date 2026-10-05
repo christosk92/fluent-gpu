@@ -30,7 +30,7 @@ public sealed partial class AppHost
             if (!_scrollHandles.TryGetValue(idx, out var handle) || !handle.IsBound) continue;
             // A parked viewport is off screen; whatever changed while it was parked is not a jump the user saw.
             if ((_scene.Flags(node) & NodeFlags.Parked) != 0) { handle.JumpWatch = default; continue; }
-            ref readonly ScrollState sc = ref _scene.ScrollRefUnledgered(node);   // read-only: no write-intent ledger mark
+            ref readonly ScrollState sc = ref _scene.ScrollRow(node);   // read-only: no write-intent ledger mark
             ScrollPlan plan = handle.Plan;
             double planPos = plan.Eval(_lastScrollPresentSec, out _, out bool settled);
             int anchor = 0;
