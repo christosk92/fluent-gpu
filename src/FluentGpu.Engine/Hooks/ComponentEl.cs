@@ -43,7 +43,7 @@ public static class Embed
     /// <summary>Embed a stateful child component with no re-pushed props (the child owns its data via its own
     /// state/context/signals).</summary>
     public static ComponentEl Comp<T>(Func<T> factory) where T : Component
-        => new(() => factory(), typeof(T));
+        => new(factory, typeof(T));   // Func<T> converts to Func<Component> (covariant): no wrapper closure per embed
 
     /// <summary>Embed a stateful child component and RE-PUSH <paramref name="props"/> to it on every parent re-render.
     /// The factory runs once (at mount); thereafter a reused instance receives the latest <paramref name="props"/> LIVE
@@ -52,7 +52,7 @@ public static class Embed
     /// re-push is coalesced (no child re-render).</summary>
     public static ComponentEl Comp<T, TProps>(TProps props, Func<T> factory)
         where T : Component where TProps : class
-        => new(() => factory(), typeof(T)) { Props = props };
+        => new(factory, typeof(T)) { Props = props };
 }
 
 /// <summary>Implemented by a component that receives re-pushed props through a SINGLE typed sink instead of the generic

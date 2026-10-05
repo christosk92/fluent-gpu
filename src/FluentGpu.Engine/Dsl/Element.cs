@@ -744,6 +744,10 @@ public sealed record PathEl : Element
 
 public sealed record TextEl(Prop<string> Text) : Element
 {
+    // The rarely-set channels (state colors, wipe, selection, underline, ...) live in one shared copy-on-write TextCold
+    // (TextCold.cs), like BoxEl's blocks: a TextEl is allocated and `with`-copied on every render of every label.
+    private TextCold? _cold;
+    private TextCold Cold => _cold is { } c && ReferenceEquals(c.Owner, this) ? c : (_cold = (_cold ?? TextCold.Default).CloneFor(this));
     public override ushort ElementTypeId => 2;
 
     // Unified channels: Text/Color each take a static value, a Func<T> thunk, or a concrete signal (the positional
@@ -762,15 +766,15 @@ public sealed record TextEl(Prop<string> Text) : Element
     public ushort ResolvedWeight => Weight != 0 ? Weight : Bold ? (ushort)700 : (ushort)400;
     /// <summary>WinUI <c>TextElement.CharacterSpacing</c>: tracking in 1/1000 em (negative = tighter), applied as a
     /// per-glyph trailing advance adjustment after shaping (e.g. Pivot headers use −25).</summary>
-    public float CharSpacing { get; init; }
+    public float CharSpacing { get => (_cold ?? TextCold.Default).CharSpacing; init { if (!EqualityComparer<float>.Default.Equals((_cold ?? TextCold.Default).CharSpacing, value)) Cold.CharSpacing = value; } }
     /// <summary>WinUI <c>TextBlock.LineHeight</c> in DIP (NaN = font-natural); interpreted per <see cref="LineStacking"/>.</summary>
     public float LineHeight { get; init; } = float.NaN;
     /// <summary>WinUI <c>TextBlock.LineStackingStrategy</c> (default MaxHeight — TextBlock_themeresources.xaml:16):
     /// how an explicit <see cref="LineHeight"/> combines with the font-natural line box.</summary>
-    public LineStacking LineStacking { get; init; } = LineStacking.MaxHeight;
+    public LineStacking LineStacking { get => (_cold ?? TextCold.Default).LineStacking; init { if (!EqualityComparer<LineStacking>.Default.Equals((_cold ?? TextCold.Default).LineStacking, value)) Cold.LineStacking = value; } }
     /// <summary>WinUI <c>TextBlock.TextLineBounds</c> (default Full — TextBlock_themeresources.xaml:17): Tight trims
     /// the measured line box to cap-height..baseline so vertical centering is optical (PersonPicture initials).</summary>
-    public TextLineBounds LineBounds { get; init; } = TextLineBounds.Full;
+    public TextLineBounds LineBounds { get => (_cold ?? TextCold.Default).LineBounds; init { if (!EqualityComparer<TextLineBounds>.Default.Equals((_cold ?? TextCold.Default).LineBounds, value)) Cold.LineBounds = value; } }
     /// <summary>Defaults to the live theme's <c>TextFillColorPrimary</c> (WinUI TextBlock default foreground —
     /// dark #FFFFFF / light #E4000000). The semantic brush is bound so text retained inside a stateful control still
     /// follows <c>Tok.Epoch</c> re-themes instead of freezing the construction-time color. This bound default stays
@@ -781,27 +785,27 @@ public sealed record TextEl(Prop<string> Text) : Element
     // "no state color" → the recorder leaves Color/ColorBind untouched. Hover/Pressed ease with the nearest interactive
     // ancestor's progress (the same eased HoverT/PressT that cross-fades the box fill — no per-control animator).
     // Disabled/Focused are steps gated by the ancestor's NodeFlags.Disabled / this node's NodeFlags.Focused.
-    public ColorF HoverColor { get; init; }
-    public ColorF PressedColor { get; init; }
-    public ColorF DisabledColor { get; init; }
-    public ColorF FocusedColor { get; init; }
+    public ColorF HoverColor { get => (_cold ?? TextCold.Default).HoverColor; init { if (!EqualityComparer<ColorF>.Default.Equals((_cold ?? TextCold.Default).HoverColor, value)) Cold.HoverColor = value; } }
+    public ColorF PressedColor { get => (_cold ?? TextCold.Default).PressedColor; init { if (!EqualityComparer<ColorF>.Default.Equals((_cold ?? TextCold.Default).PressedColor, value)) Cold.PressedColor = value; } }
+    public ColorF DisabledColor { get => (_cold ?? TextCold.Default).DisabledColor; init { if (!EqualityComparer<ColorF>.Default.Equals((_cold ?? TextCold.Default).DisabledColor, value)) Cold.DisabledColor = value; } }
+    public ColorF FocusedColor { get => (_cold ?? TextCold.Default).FocusedColor; init { if (!EqualityComparer<ColorF>.Default.Equals((_cold ?? TextCold.Default).FocusedColor, value)) Cold.FocusedColor = value; } }
     /// <summary>WinUI <c>TextDecorations.Underline</c>: the recorder draws the face-metric underline bar (DWrite
     /// underlinePosition/underlineThickness, cached at measure on the scene's TextMeasureCache) under the run, in the
     /// SAME resolved foreground as the glyphs (hover/press ramps + BrushTransition). Single-line frame — per-line
     /// decoration of wrapped runs is the rich-text (SpanTextEl/RichTextBlock) pass. HyperlinkButton drives this from
     /// its HyperlinkUnderlineVisible/HighContrast gate (HyperLinkButton_Partial.cpp:207-212).</summary>
-    public bool Underline { get; init; }
+    public bool Underline { get => (_cold ?? TextCold.Default).Underline; init { if (!EqualityComparer<bool>.Default.Equals((_cold ?? TextCold.Default).Underline, value)) Cold.Underline = value; } }
     /// <summary>WinUI <c>TextDecorations.Strikethrough</c>: the face-metric strikethrough bar (reuses the underline
     /// thickness, the DWrite convention) — e.g. CalendarView blackout dates.</summary>
-    public bool Strikethrough { get; init; }
+    public bool Strikethrough { get => (_cold ?? TextCold.Default).Strikethrough; init { if (!EqualityComparer<bool>.Default.Equals((_cold ?? TextCold.Default).Strikethrough, value)) Cold.Strikethrough = value; } }
     /// <summary>Implicit brush transition for the resting <see cref="Color"/>: a re-render that changes it on this LIVE
     /// node cross-fades over this duration (WinUI BrushTransition, 83ms in templates). NaN = snap.</summary>
-    public float BrushTransitionMs { get; init; } = float.NaN;
+    public float BrushTransitionMs { get => (_cold ?? TextCold.Default).BrushTransitionMs; init { if (!EqualityComparer<float>.Default.Equals((_cold ?? TextCold.Default).BrushTransitionMs, value)) Cold.BrushTransitionMs = value; } }
     /// <summary>Optional left→right glyph WIPE fill (a general text-reveal — the lyrics karaoke uses it): glyphs left of
     /// <see cref="GlyphWipe.Split"/> use <see cref="GlyphWipe.Before"/>, right use <see cref="GlyphWipe.After"/>, with a
     /// soft boundary + optional per-glyph lift. Null = off. Carried in a sparse scene side-table (NOT on the hot paint
     /// struct), emitted as a gradient glyph run; advancing the split per frame is reshape-free.</summary>
-    public GlyphWipe? Wipe { get; init; }
+    public GlyphWipe? Wipe { get => (_cold ?? TextCold.Default).Wipe; init { if (!EqualityComparer<GlyphWipe?>.Default.Equals((_cold ?? TextCold.Default).Wipe, value)) Cold.Wipe = value; } }
 
     /// <summary>Called once when this glyph run is realized into the scene, with its node handle — lets a control drive the
     /// node directly (the lyrics ticker advances THIS run's <see cref="Wipe"/> split per frame on the scene side-table).</summary>
@@ -811,14 +815,14 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// WinUI TextBlock selection is opt-in (TextBlock.cpp:583 IsTextSelectionEnabled property change creates the
     /// selection manager on demand); RichTextBlock turns it on by default (RichTextBlock.cpp:1730). A selectable run
     /// is focusable (Ctrl+C routes to it) and shows the I-beam cursor.</summary>
-    public bool IsTextSelectionEnabled { get; init; }
+    public bool IsTextSelectionEnabled { get => (_cold ?? TextCold.Default).IsTextSelectionEnabled; init { if (!EqualityComparer<bool>.Default.Equals((_cold ?? TextCold.Default).IsTextSelectionEnabled, value)) Cold.IsTextSelectionEnabled = value; } }
     /// <summary>Per-control selection highlight (api-04, WinUI <c>TextBlock.SelectionHighlightColor</c> —
     /// TextBlock.cpp:266/330). A==0 (default) = the engine/theme brush (the system accent,
     /// TextSelectionManager.cpp:52-56 GetDefaultSelectionHighlightColor → GetSystemAccentColor ≡ the host's
     /// TextEditStyle.SelectionFill).</summary>
-    public ColorF SelectionHighlightColor { get; init; }
+    public ColorF SelectionHighlightColor { get => (_cold ?? TextCold.Default).SelectionHighlightColor; init { if (!EqualityComparer<ColorF>.Default.Equals((_cold ?? TextCold.Default).SelectionHighlightColor, value)) Cold.SelectionHighlightColor = value; } }
     public string? FontFamily { get; init; }
-    public DynamicTextKind DynamicText { get; init; }
+    public DynamicTextKind DynamicText { get => (_cold ?? TextCold.Default).DynamicText; init { if (!EqualityComparer<DynamicTextKind>.Default.Equals((_cold ?? TextCold.Default).DynamicText, value)) Cold.DynamicText = value; } }
     /// <summary>Line-break behavior (WinUI TextWrapping): NoWrap / Wrap / WrapWholeWords.</summary>
     public TextWrap Wrap { get; init; } = TextWrap.NoWrap;
     /// <summary>Overflow trimming (WinUI TextTrimming): None / Clip / CharacterEllipsis / WordEllipsis.</summary>
@@ -831,7 +835,7 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// minimizing wraps and avoiding trimming. The largest size that fits wins; if even this floor doesn't fit,
     /// <see cref="Trim"/> ellipsis applies at the floor. Use a font-natural line height (leave <see cref="LineHeight"/>
     /// unset) so the chosen size's spacing scales with it. NaN = off (no auto-fit; the default).</summary>
-    public float MinSize { get; init; } = float.NaN;
+    public float MinSize { get => (_cold ?? TextCold.Default).MinSize; init { if (!EqualityComparer<float>.Default.Equals((_cold ?? TextCold.Default).MinSize, value)) Cold.MinSize = value; } }
 
     // Leaf layout participation. Text needs the same sizing/flex knobs as other leaves so wrapped runs can be
     // constrained by their container instead of contributing their full single-line width to parent measure.
