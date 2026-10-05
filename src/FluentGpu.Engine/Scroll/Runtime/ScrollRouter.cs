@@ -15,6 +15,11 @@ public interface IScrollerQuery
     /// direction <paramref name="sign"/> (+1 toward the content end, -1 toward the start) at <paramref name="tNow"/>,
     /// i.e. its plan's displayed position is not already at that edge (and the axis is scrollable at all).</summary>
     bool CanMove(int vp, bool horizontal, int sign, double tNow);
+
+    /// <summary>Who <paramref name="vp"/> is while it can take input: a nonzero identity (its node generation) while
+    /// the scroller is mounted and on screen, 0 once it is gone (unmounted, parked by a navigation). A latch holds a
+    /// scroller by index across a gesture; this is how the router knows the index still means THAT scroller.</summary>
+    uint Identity(int vp) => 1;
 }
 
 /// <summary>The router's answer: which scroller receives the input, on which axis. <see cref="Vp"/> is -1 when
@@ -44,6 +49,7 @@ public sealed class ScrollRouter
     private readonly double? _wheelLatchSilenceS;
 
     private int _latchVp = -1;          // the HIT scroller the gesture latched on (chaining resolves from here)
+    private uint _latchId;               // its IScrollerQuery.Identity when it latched
     private bool _latchHorizontal;
     private sbyte _latchEdgeSign;        // the direction the latched scroller was ALREADY at the edge of when the gesture began (0 = it could move)
     private double _latchLastT;
@@ -84,6 +90,16 @@ public sealed class ScrollRouter
             return new RouteDecision(NearestMovable(hitScroller, horizontal, sign, tNow), horizontal);
         }
 
+        // A latch whose scroller is gone (the page it scrolled was navigated away from, or freed and its index reused)
+        // can never take input again: drop it. A wheel then latches on what is under the pointer now; the rest of a
+        // contact that lost its scroller is dropped until the next Begin (it never re-targets mid-gesture).
+        if (_latchVp >= 0 && _q.Identity(_latchVp) != _latchId)
+        {
+            bool contact = _latchContact;
+            ResetLatch();
+            if (contact && phase != ScrollGesture.Begin) return new RouteDecision(-1, horizontal);
+        }
+
         // Expire / refresh the latch.
         if (_latchVp >= 0)
         {
@@ -97,6 +113,7 @@ public sealed class ScrollRouter
         {
             if (hitScroller < 0) return new RouteDecision(-1, horizontal);
             _latchVp = hitScroller;
+            _latchId = _q.Identity(hitScroller);
             _latchHorizontal = horizontal;
             _latchEdgeSign = _q.CanMove(hitScroller, horizontal, sign, tNow) ? (sbyte)0 : (sbyte)sign;
             _latchContact = isContact;

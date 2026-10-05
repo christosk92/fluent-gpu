@@ -1349,7 +1349,7 @@ static class ScrollSuite
         host.RunFrame();
 
         window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(198f, 100f), 0, 0));
-        for (int i = 0; i < 40; i++) host.RunFrame();
+        ElapseFrames(host, 40);   // time passes through the lane dwell (no frames owed while it counts)
 
         bool expandedGutter = false, expandedThumb = false;
         foreach (var rect in device.LastRects)
@@ -1361,7 +1361,7 @@ static class ScrollSuite
         bool hoverSettledIdle = !host.HasActiveWork;
 
         window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(260f, 260f), 0, 0));
-        for (int i = 0; i < 30; i++) host.RunFrame();
+        ElapseFrames(host, 30);
 
         bool collapsedGutter = false, collapsedThumb = false;
         foreach (var rect in device.LastRects)
@@ -1371,7 +1371,7 @@ static class ScrollSuite
             collapsedThumb |= r.W <= 3f && r.H >= 30f;   // WinUI resting thumb = 2px visible (8 − 6 stroke)
         }
 
-        for (int i = 0; i < 90; i++) host.RunFrame();
+        ElapseFrames(host, 90);
 
         bool anyScrollbar = false;
         foreach (var rect in device.LastRects)

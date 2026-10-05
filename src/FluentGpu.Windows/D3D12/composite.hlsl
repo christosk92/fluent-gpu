@@ -11,6 +11,9 @@
 //                  K[5..8] = the packed edge feather (rect, band, corner, misc); K[9] = fill colour (premultiplied)
 //                  K[10..13] = a SECOND packed edge feather (a distributed ancestor fade — the coverage is the exact
 //                  product); its misc.y (intensity) = 0 disables it
+//                  PSSample only: K[9] = (max uv.xy, clampOn, 0) — the last WRITTEN texel's centre (a pooled surface is
+//                  larger than what was drawn into it), so the far edges extend the content as the texture clamp does
+//                  at uv 0
 //   blur passes:   K[2] = (srcTexel.xy, dir.xy); K[4..7] = bilinear-folded taps (offset, weight) pairs; K[8].x = count
 //   kawase passes: K[2] = (srcTexel.xy, offset, 0); K[3] = (dst→src uv scale.xy, max uv.xy)
 //   acrylic:       K[2] = sample map; K[3] = (alpha, topFeatherFrac, radius, 0); K[4] = surface rect px;
@@ -63,6 +66,7 @@ float4 PSLoad(V i) : SV_Target
 float4 PSSample(V i) : SV_Target
 {
     float2 uv = (i.pos.xy - K[2].xy) * K[2].zw;
+    if (K[9].z > 0.5) uv = min(uv, K[9].xy);
     return gSrc.SampleLevel(gLinear, uv, 0) * Coverage(i.pos.xy);
 }
 

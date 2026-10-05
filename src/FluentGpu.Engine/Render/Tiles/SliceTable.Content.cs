@@ -16,16 +16,17 @@ public interface ITileContent
     /// <summary>The key the wants of this segment are computed under (0 = none: validity is damage-only).</summary>
     ulong Key { get; }
 
-    /// <summary>The content hash of the tile covering <paramref name="tilePx"/> (slice-space device px; never 0) and the
-    /// number of ops it folds (<paramref name="ops"/>: what the tile draws).</summary>
-    ulong Want(in RectF tilePx, out int ops);
+    /// <summary>The content hash of the tile covering <paramref name="tilePx"/> (slice-space device px; never 0), the
+    /// number of ops it folds (<paramref name="ops"/>: what the tile draws) and the part of the tile they paint
+    /// (<paramref name="paint"/>, tile px; empty = nothing).</summary>
+    ulong Want(in RectF tilePx, out int ops, out RectF paint);
 }
 
 /// <summary>No content known (a bare table in a unit test): validity comes from invalidation calls alone.</summary>
 public readonly struct NoTileContent : ITileContent
 {
     public ulong Key => 0UL;
-    public ulong Want(in RectF tilePx, out int ops) { ops = 0; return 0UL; }
+    public ulong Want(in RectF tilePx, out int ops, out RectF paint) { ops = 0; paint = default; return 0UL; }
 }
 
 // CONTENT-DERIVED TILE VALIDITY (gpu-renderer.md §13.1c, issue #1). A tile's pixels are a pure function of the ops its
@@ -44,6 +45,9 @@ public sealed partial class SliceTable
     private ulong[] _surfWant = [];
     private ulong[] _surfWantKey = [];
     private int[] _surfWantOps = [], _surfRasterOps = [];
+    // The part of its tile each surface paints (tile px), for the want and for the pixels it holds; Full = not known.
+    private RectF[] _surfWantPaint = [], _surfRasterPaint = [];
+    private static readonly RectF FullPaint = new(0f, 0f, TileGrid.W, TileGrid.H);
     private int _contentChecked, _contentCaught;
 
     /// <summary>Constructor tail: the per-surface content arrays.</summary>
@@ -54,6 +58,8 @@ public sealed partial class SliceTable
         _surfWantKey = new ulong[SurfaceCap];
         _surfWantOps = new int[SurfaceCap];
         _surfRasterOps = new int[SurfaceCap];
+        _surfWantPaint = new RectF[SurfaceCap];
+        _surfRasterPaint = new RectF[SurfaceCap];
     }
 
     /// <summary>Resident valid tiles whose want was (re)computed this turn (their segment's key changed).</summary>
@@ -68,12 +74,32 @@ public sealed partial class SliceTable
 
     /// <summary>Store the want of the tile in <paramref name="surface"/> computed under <paramref name="key"/> (a surface
     /// acquired this turn: it rasters in this very submission, for this want).</summary>
-    public void SetSurfaceWant(int surface, ulong key, ulong want, int ops = 0)
+    public void SetSurfaceWant(int surface, ulong key, ulong want, int ops = 0, RectF paint = default)
     {
         if ((uint)surface >= (uint)_surfWant.Length) return;
         _surfWantKey[surface] = key;
         _surfWant[surface] = want;
         _surfWantOps[surface] = ops;
+        _surfWantPaint[surface] = key == 0 ? FullPaint : paint;
+    }
+
+    /// <summary><paramref name="p"/> with its PAINTED part (<see cref="TilePlacement.PaintX0"/>..): the union of what the
+    /// stream now wants the tile to paint and what the pixels its surface holds paint — whichever of the two the composite
+    /// samples (a tile rastered in this submission holds the want), nothing it paints is left out. Rounded out to whole
+    /// px, cut by the surface.</summary>
+    public TilePlacement PlacementPaint(in TilePlacement p)
+    {
+        int s = p.Surface;
+        if ((uint)s >= (uint)_surfWantPaint.Length) return p;
+        RectF a = _surfWantPaint[s], b = _surfRasterPaint[s];
+        float x0, y0, x1, y1;
+        if (a.IsEmpty && b.IsEmpty) { x0 = y0 = x1 = y1 = 0f; }
+        else if (a.IsEmpty) { x0 = b.X; y0 = b.Y; x1 = b.Right; y1 = b.Bottom; }
+        else if (b.IsEmpty) { x0 = a.X; y0 = a.Y; x1 = a.Right; y1 = a.Bottom; }
+        else { x0 = MathF.Min(a.X, b.X); y0 = MathF.Min(a.Y, b.Y); x1 = MathF.Max(a.Right, b.Right); y1 = MathF.Max(a.Bottom, b.Bottom); }
+        short px0 = (short)Math.Clamp((int)MathF.Floor(x0), 0, p.W), py0 = (short)Math.Clamp((int)MathF.Floor(y0), 0, p.H);
+        short px1 = (short)Math.Clamp((int)MathF.Ceiling(x1), px0, p.W), py1 = (short)Math.Clamp((int)MathF.Ceiling(y1), py0, p.H);
+        return p with { PaintX0 = px0, PaintY0 = py0, PaintX1 = px1, PaintY1 = py1 };
     }
 
     /// <summary>A surface was acquired: it holds no pixels and no want yet.</summary>
@@ -85,6 +111,8 @@ public sealed partial class SliceTable
         _surfWant[surface] = 0;
         _surfWantKey[surface] = 0;
         _surfWantOps[surface] = _surfRasterOps[surface] = 0;
+        _surfWantPaint[surface] = FullPaint;   // not known until its want is computed
+        _surfRasterPaint[surface] = default;   // it holds no pixels
     }
 
     /// <summary>The backend completed a raster into <paramref name="surface"/>: its pixels now hold the current want.</summary>
@@ -94,6 +122,7 @@ public sealed partial class SliceTable
         if ((uint)surface >= (uint)_surfWant.Length) return;
         _surfRasterHash[surface] = _surfWant[surface];
         _surfRasterOps[surface] = _surfWantOps[surface];
+        _surfRasterPaint[surface] = _surfWantPaint[surface];
     }
 
     /// <summary><see cref="Request{TContent}"/>'s content check of slab tile <paramref name="t"/> (resident, valid,
@@ -106,10 +135,11 @@ public sealed partial class SliceTable
         ulong k = content.Key;
         int s = _tiles[t].Surface;
         if (k == 0 || (uint)s >= (uint)_surfWantKey.Length || _surfWantKey[s] == k) return;
-        ulong want = content.Want(TileGrid.TileRect(key.Tx, key.Ty), out int ops);
+        ulong want = content.Want(TileGrid.TileRect(key.Tx, key.Ty), out int ops, out RectF paint);
         _surfWantKey[s] = k;
         _surfWant[s] = want;
         _surfWantOps[s] = ops;
+        _surfWantPaint[s] = paint;
         _contentChecked++;
         if (_surfRasterHash[s] == want) return;
         var reason = ops != _surfRasterOps[s] ? InvalidationReason.PrimCount : InvalidationReason.Content;

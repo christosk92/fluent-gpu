@@ -81,6 +81,12 @@ public sealed partial class HeadlessGpuDevice
     /// slices; kind / frame say what each is). Rebuilt per submit, capacity kept.</summary>
     public IReadOnlyList<SliceRow> LastCompositeSlices => _compositeSlices;
 
+    private readonly List<TilePlacement> _compositePlacements = new(64);
+
+    /// <summary>The tile placements of the most recent <see cref="SubmitComposite"/>, with the part of each tile its ops
+    /// paint. Rebuilt per submit, capacity kept.</summary>
+    public IReadOnlyList<TilePlacement> LastCompositePlacements => _compositePlacements;
+
     /// <summary>The frame context of the most recent <see cref="SubmitComposite"/>.</summary>
     public FrameInfo LastCompositeInfo { get; private set; }
 
@@ -123,6 +129,8 @@ public sealed partial class HeadlessGpuDevice
         _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.EndPass, CompositePassTarget.BackBuffer, CompositePassLoad.Clear));
         _compositeSlices.Clear();
         for (int i = 0; i < frame.Slices.Length; i++) _compositeSlices.Add(frame.Slices[i]);
+        _compositePlacements.Clear();
+        for (int i = 0; i < frame.Placements.Length; i++) _compositePlacements.Add(frame.Placements[i]);
 
         PresentParams p = frame.Present;
         _compositeRecords.Add(new CompositeRecord(CompositeRecordKind.StagePresent, DirtyRectCount: p.DirtyRects.Length, HasScroll: p.HasScroll,

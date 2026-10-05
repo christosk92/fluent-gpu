@@ -916,7 +916,19 @@ public sealed partial class SceneRecordingSnapshot
     }
     public bool TryGetTextEdit(NodeHandle node, out TextEditState value) => _textEdit.TryGet((int)node.Raw.Index, out value);
     public bool TryGetSelectionHighlight(NodeHandle node, out ColorF value) => _selectionHighlight.TryGet((int)node.Raw.Index, out value);
-    public bool TryGetGlyphWipe(NodeHandle node, out GlyphWipe value) => _glyphWipe.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGlyphWipe(NodeHandle node, out GlyphWipe value)
+    {
+        if (node.Raw.Index < (uint)Capacity)
+        {
+            int slot = _overlayRow[node.Raw.Index] - 1;
+            if (slot >= 0 && (_overlayRows[slot].Have & HaveWipe) != 0)
+            {
+                value = _overlayRows[slot].Wipe;
+                return true;
+            }
+        }
+        return _glyphWipe.TryGet((int)node.Raw.Index, out value);
+    }
     public bool TryGetGradient(NodeHandle node, out GradientSpec value) => _Gradient.TryGet((int)node.Raw.Index, out value);
     public bool TryGetBorderBrush(NodeHandle node, out GradientSpec value) => _BorderBrush.TryGet((int)node.Raw.Index, out value);
     public bool TryGetHoverGradient(NodeHandle node, out GradientSpec value) => _HoverGradient.TryGet((int)node.Raw.Index, out value);

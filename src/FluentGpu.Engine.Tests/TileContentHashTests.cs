@@ -21,6 +21,40 @@ public sealed class TileContentHashTests
     private static ulong Want(ReadOnlySpan<TileOp> ops, in RectF tile, ReadOnlySpan<int> open = default, int start = 0, int end = int.MaxValue)
         => TileContentHash.TileWant(ops, open, 0, start, end, tile, Scale, 0f, 0f, out _);
 
+    private static RectF Paint(ReadOnlySpan<TileOp> ops, in RectF tile, ReadOnlySpan<int> open = default, int start = 0)
+    {
+        TileContentHash.TileWant(ops, open, 0, start, int.MaxValue, tile, Scale, 0f, 0f, out _, out _, out RectF paint);
+        return paint;
+    }
+
+    [Fact]
+    public void ATilesPaint_IsTheUnionOfItsOpsCutByTheTile_InTilePx()
+    {
+        // two ops in tile A (x 10..210), one straddling into tile B (y 490..530), one only in B
+        TileOp[] ops = [Op(0, 20f, 40f, 11), Op(40, 300f, 40f, 12) with { Bounds = new RectF(600f, 300f, 100f, 40f) }, Op(80, 490f, 40f, 13), Op(120, 700f, 40f, 14)];
+        Assert.Equal(new RectF(10f, 20f, 690f, 492f), Paint(ops, TileA));            // 10..700 × 20..512
+        Assert.Equal(new RectF(10f, 0f, 200f, 228f), Paint(ops, TileB));             // 490..530 → 0..18, 700..740 → 188..228
+    }
+
+    [Fact]
+    public void AClipScope_PaintsNothing_ALayerScope_Does()
+    {
+        TileOp clip = Op(0, 0f, 512f, 5, scope: true) with { Bounds = new RectF(0f, 0f, 1024f, 512f), Clip = true };
+        TileOp layer = Op(0, 0f, 512f, 5, scope: true) with { Bounds = new RectF(0f, 100f, 1024f, 50f) };
+        TileOp fill = Op(40, 20f, 40f, 11);
+        Assert.Equal(new RectF(10f, 20f, 200f, 40f), Paint([clip, fill], TileA));
+        Assert.Equal(new RectF(10f, 20f, 200f, 40f), Paint([clip, fill], TileA, [0], start: 40));   // open at the segment start
+        Assert.Equal(new RectF(0f, 20f, 1024f, 130f), Paint([layer, fill], TileA));
+    }
+
+    [Fact]
+    public void AnInfiniteFootprint_PaintsTheWholeTile_AndNoOp_PaintsNothing()
+    {
+        TileOp inf = new() { Pos = 0, Bounds = RectF.Infinite, Hash = 3 };
+        Assert.Equal(new RectF(0f, 0f, TileGrid.W, TileGrid.H), Paint([inf], TileA));
+        Assert.True(Paint([Op(0, 700f, 40f, 14)], TileA).IsEmpty);
+    }
+
     [Fact]
     public void AnOpBeyondTheTile_NeverChangesItsWant()
     {

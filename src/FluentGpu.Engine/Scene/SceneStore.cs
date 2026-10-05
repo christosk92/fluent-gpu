@@ -1096,6 +1096,17 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool TryGetGlyphWipe(NodeHandle h, out GlyphWipe w) => _glyphWipes.TryGet((int)h.Raw.Index, out w);
 
+    /// <summary>Move the split of a node's existing <see cref="GlyphWipe"/> (the <c>AnimChannel.GlyphWipeSplit</c> side table
+    /// on the UI-owned path). A node without a wipe has nothing to move.</summary>
+    public void SetGlyphWipeSplit(NodeHandle h, float split)
+    {
+        int idx = (int)h.Raw.Index;
+        if (!_glyphWipes.TryGet(idx, out var w)) return;
+        _glyphWipes.GetOrAdd(idx) = w with { Split = split < 0f ? 0f : (split > 1f ? 1f : split) };
+        _flags[idx] |= NodeFlags.PaintDirty;
+        MarkRecordDirty(idx);
+    }
+
     /// <summary>Swap a text node's span-run id with ownership accounting (the scene row owns one table ref plus one
     /// StringTable ref per span family — mirroring the <c>paint.Text</c> discipline). Reconciler rewrite path; the
     /// free path releases via <see cref="ReleaseSpanRun"/>.</summary>

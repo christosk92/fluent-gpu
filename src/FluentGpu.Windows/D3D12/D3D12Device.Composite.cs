@@ -22,8 +22,9 @@ namespace FluentGpu.Rhi.D3D12;
 //   3. COMPOSITE — ONE CLEAR→STORE pass on the back buffer: the clear colour, then every item in painter order —
 //      whole-pixel tile placements (an exact texel Load × alpha × analytic feather × sdRoundRect clip), region / group /
 //      blur surfaces, acrylic, DestOut video holes.
-// The frame presents WHOLE: the FLIP_DISCARD swapchain refuses partial presentation (Present1 dirty rects are
-// DXGI_ERROR_INVALID_CALL), so the composite's PresentParams stay a host-side census, not a DXGI hint.
+// The primary target is FLIP_SEQUENTIAL and presents PARTIALLY when it can (D3D12Device.PartialPresent.cs): the composite
+// pass then PRESERVES the back buffer and recomposites only the repaint rects, and Present1 carries the dirty rects. The
+// whole-frame route (CLEAR load, full present) stays for every frame whose history cannot be trusted.
 public sealed unsafe partial class D3D12Device
 {
     public bool SupportsComposite => true;
@@ -139,19 +140,33 @@ public sealed unsafe partial class D3D12Device
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
-        PrepareRange(in frame, 0, frame.Items.Length);
+        PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
         ID3D12Resource* backBuffer = sc.BackBuffers[f.FrameIndex];
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = sc.RtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtv.ptr += f.FrameIndex * _rtvSize;
-        // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on a
-        // tiler it is a per-bin fast clear instead of a full-window quad.
-        BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
-        BindCompositor((int)_w, (int)_h);
-        if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+        // Partial present (D3D12Device.PartialPresent.cs): what changed since this back buffer last received a frame.
+        PpComputeDirty(in frame, sc);
+        PpPlanRepaint(sc, f);
+        if (_ppPartial)
+        {
+            // PRESERVE: the buffer already holds every pixel outside the repaint rects; each rect is cleared and recomposited.
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Preserve);
+            BindCompositor((int)_w, (int)_h);
+            PpCompositeRects(in frame);
+        }
+        else
+        {
+            // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on
+            // a tiler it is a per-bin fast clear instead of a full-window quad.
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
+            BindCompositor((int)_w, (int)_h);
+            if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+        }
         EndPassIfOpen();
+        PpEndFrame(sc, f);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
 
         _surfaces.EndFrame();
@@ -185,7 +200,7 @@ public sealed unsafe partial class D3D12Device
         if (_renderPassesLogged) return;
         _renderPassesLogged = true;
         D3D12SideQueues.QueryRenderPassesTier(_device, out D3D12_RENDER_PASS_TIER tier);
-        Diag.Line($"[d3d12.present] renderPassesTier={(int)tier} composite=retained-tiles tile={TileGrid.W}x{TileGrid.H} canonicalViewport={CanonicalViewport} present=whole-frame(FLIP_DISCARD)");
+        Diag.Line($"[d3d12.present] renderPassesTier={(int)tier} composite=retained-tiles tile={TileGrid.W}x{TileGrid.H} canonicalViewport={CanonicalViewport} present=partial(FLIP_SEQUENTIAL, Present1 dirty rects)");
     }
 
     // ── rows / items bookkeeping ──────────────────────────────────────────────────────────────────────────────────
@@ -706,9 +721,10 @@ public sealed unsafe partial class D3D12Device
         if (hit >= 0)
         {
             _frameBlurCacheHits++; _offBlurHits++;
-            _itemSurface[i] = hit; _itemDown[i] = hitDown; _itemRegion[i] = region;
+            _itemSurface[i] = hit; _itemDown[i] = hitDown; _itemRegion[i] = region; _itemKey[i] = key;
             return;
         }
+        _itemKey[i] = key;   // the content key the partial-present diff signs this surface with
         int bs = AssembleBlurSource(in it, in src, in region, 0, 0, placed, (int)it.Transform.Dx, (int)it.Transform.Dy);
         FinishBlur(i, bs, in region, it.BlurSigma);
         if (_itemSurface[i] >= 0) _surfaces.Retain(_itemSurface[i], key, _itemDown[i], RetainedCap());
@@ -856,7 +872,11 @@ public sealed unsafe partial class D3D12Device
         // The frosted backdrop is retained keyed by everything beneath it (§A.5 — composite-only turns keep it): the
         // items before it (kind, placement, alpha, clip, feather, every tile surface + raster serial), the clear colour,
         // the region and the chain. A turn that moved or re-rastered nothing beneath re-uses it.
-        ulong key = BackdropKey(in frame, i, l, t, r, b, iters, offset, out bool cacheable);
+        // An opaque item below covering the whole region: the mini-composite starts at it, with no clear (D3D12Device.Occlusion.cs)
+        int cover = CoverFrom(i, new PixelRect(l, t, r, b));
+        int from = Math.Max(cover, 0);
+        ulong key = BackdropKey(in frame, i, from, l, t, r, b, iters, offset, out bool cacheable);
+        _itemKey[i] = cacheable ? key : 0UL;   // 0 = re-blurred from scratch: the partial-present diff treats it as changed
         if (cacheable)
         {
             int hit = _surfaces!.FindRetained(key, fence, out _);
@@ -871,13 +891,13 @@ public sealed unsafe partial class D3D12Device
         lv[0] = _surfaces!.AcquireScratch(w, h, fence);
         if (lv[0] < 0) return;
         ScratchBarrier(lv[0], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        BeginPass(_surfaces.ScratchRtv(lv[0]), w, h, PassLoad.Clear);
+        BeginPass(_surfaces.ScratchRtv(lv[0]), w, h, cover >= 0 ? PassLoad.Discard : PassLoad.Clear);
         BindCompositor(_surfaces.ScratchW(lv[0]), _surfaces.ScratchH(lv[0]));
         _compositor!.Scissor(_cmdList, 0, 0, w, h);
         _compositor.Begin(0f, 0f, w, h);
         _compositor.Color(frame.Info.Clear);
-        _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
-        DrawRange(in frame, 0, i, l, t, w, h, i);
+        if (cover < 0) _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);   // else the occluder writes every pixel
+        DrawRange(in frame, from, i, l, t, w, h, i);
         EndPassIfOpen();
         ScratchBarrier(lv[0], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
@@ -904,7 +924,7 @@ public sealed unsafe partial class D3D12Device
     /// degraded segment elsewhere no longer makes every backdrop uncacheable. Two shapes can carry pixels from OUTSIDE the
     /// region into it and are keyed unscoped: an earlier backdrop overlapping the region (its blur sampled its own region),
     /// and a group overlapping it (its surface may be blurred over its whole footprint).</para></summary>
-    private ulong BackdropKey(in CompositeFrame frame, int i, int l, int t, int r, int b, int iters, float offset, out bool cacheable)
+    private ulong BackdropKey(in CompositeFrame frame, int i, int from, int l, int t, int r, int b, int iters, float offset, out bool cacheable)
     {
         cacheable = true;
         if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) { cacheable = false; return 0; }
@@ -913,15 +933,22 @@ public sealed unsafe partial class D3D12Device
         Mix(ref h, (ulong)(uint)iters << 32 | BitConverter.SingleToUInt32Bits(offset));
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(frame.Info.Clear.R) << 32 | BitConverter.SingleToUInt32Bits(frame.Info.Clear.G));
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(frame.Info.Clear.B) << 32 | BitConverter.SingleToUInt32Bits(frame.Info.Clear.A));
+        Mix(ref h, 0xF20E_0000_0000_0000UL | (uint)from);   // the items before an opaque cover of the region draw nothing there
         ReadOnlySpan<CompositeItem> items = frame.Items;
         var region = new PixelRect(l, t, r, b);
         bool scoped = true;
-        for (int k = 0; k < i && k < items.Length; k++)
+        for (int k = from; k < i && k < items.Length; k++)
             if (items[k].Kind == CompositeKind.Backdrop && Overlaps(in _itemRegion[k], in region)) { scoped = false; break; }
         int unscopedEnd = -1;   // items [.., unscopedEnd) sit inside a group that overlaps the region: keyed whole
-        for (int k = 0; k < i && k < items.Length; k++)
+        for (int k = from; k < i && k < items.Length; k++)
         {
             ref readonly CompositeItem it = ref items[k];
+            if (Hidden(k, i))
+            {
+                // hidden under an opaque item below the backdrop: the mini-composite never draws it
+                if (it.Kind == CompositeKind.Group) k = Math.Min(items.Length, k + 1 + it.GroupCount) - 1;
+                continue;
+            }
             bool scope = scoped && k >= unscopedEnd;
             if (scope && !ItemMayPaint(in frame, k, in region))
             {
@@ -997,9 +1024,11 @@ public sealed unsafe partial class D3D12Device
         }
     }
 
-    /// <summary>A tile placement's window-px rect, exactly as <see cref="DrawRange"/> places its quad.</summary>
+    /// <summary>A tile placement's window-px rect, exactly as <see cref="DrawRange"/> places its quad: the part of the tile
+    /// its ops paint (<see cref="TilePlacement.Px0"/>..).</summary>
     private static RectF PlacementRect(in CompositeItem it, in TilePlacement p)
-        => new(it.Transform.Dx + p.Key.Tx * TileGrid.W, it.Transform.Dy + p.Key.Ty * TileGrid.H, p.W, p.H);
+        => new(it.Transform.Dx + p.Key.Tx * TileGrid.W + p.Px0, it.Transform.Dy + p.Key.Ty * TileGrid.H + p.Py0,
+               Math.Max(0, p.Px1 - p.Px0), Math.Max(0, p.Py1 - p.Py0));
 
     private static bool Overlaps(in PixelRect a, in PixelRect b)
         => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
@@ -1042,6 +1071,18 @@ public sealed unsafe partial class D3D12Device
         for (int i = a; i < b && i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
+            if (_frameClipOn && (uint)i < (uint)_itemFoot.Length && !Overlaps(in _itemFoot[i], in _frameClip))
+            {
+                // a partial composite: this item paints nothing inside the current repaint rect
+                if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
+                continue;
+            }
+            if (Hidden(i, b))
+            {
+                // an opaque item this composite draws later covers all its pixels (D3D12Device.Occlusion.cs)
+                if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
+                continue;
+            }
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -1079,10 +1120,16 @@ public sealed unsafe partial class D3D12Device
                     for (int p = 0; p < placed.Length; p++)
                     {
                         if (!_surfaces!.TouchTile(placed[p].Surface, fence)) { _frameLostPlacements++; continue; }
-                        float x0 = it.Transform.Dx + placed[p].Key.Tx * TileGrid.W - ox, y0 = it.Transform.Dy + placed[p].Key.Ty * TileGrid.H - oy;
-                        if (x0 >= tw || y0 >= th || x0 + placed[p].W <= 0f || y0 + placed[p].H <= 0f) continue;
-                        DrawItemQuad(in it, x0, y0, x0 + placed[p].W, y0 + placed[p].H, ox, oy, feathers,
-                            LoadPso(in it), _surfaces.TileSrv(placed[p].Surface));
+                        // only the part of the tile its ops paint (TilePlacement.Paint*): the rest of the surface is transparent
+                        ref readonly TilePlacement tp = ref placed[p];
+                        int px0 = tp.Px0, py0 = tp.Py0, px1 = tp.Px1, py1 = tp.Py1;
+                        if (px1 <= px0 || py1 <= py0) continue;
+                        float x0 = it.Transform.Dx + tp.Key.Tx * TileGrid.W - ox + px0, y0 = it.Transform.Dy + tp.Key.Ty * TileGrid.H - oy + py0;
+                        float x1 = x0 + (px1 - px0), y1 = y0 + (py1 - py0);
+                        if (x0 >= tw || y0 >= th || x1 <= 0f || y1 <= 0f) continue;
+                        DrawItemQuad(in it, x0, y0, x1, y1, ox, oy, feathers,
+                            LoadPso(in it), _surfaces.TileSrv(tp.Surface),
+                            srcOx: px0, srcOy: py0);
                     }
                     break;
                 }
@@ -1126,9 +1173,20 @@ public sealed unsafe partial class D3D12Device
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.LoadScreen : SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
         else
+        {
+            // A low-resolution boundary's surface is pooled (often larger than the region): its far edges clamp to the last
+            // WRITTEN texel, as the sampler's clamp already does at uv 0 — the upsampled layer ends where its region ends on
+            // all four sides, instead of fading into the cleared texels past its right and bottom edges.
+            float clampU = 0f, clampV = 0f;
+            if (it.LowResDown > 1)
+            {
+                clampU = ((region.Right - region.Left) / down - 0.5f) / _surfaces!.ScratchW(s);
+                clampV = ((region.Bottom - region.Top) / down - 0.5f) / _surfaces.ScratchH(s);
+            }
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces!.ScratchSrv(s), sample: true,
-                1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)));
+                1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+        }
     }
 
     /// <summary>One item quad (target px): a texel Load whose source origin is the quad's top-left, or — with
@@ -1137,7 +1195,8 @@ public sealed unsafe partial class D3D12Device
     /// (<see cref="FeatherQuadSplit"/>): the interior piece draws WITHOUT the feather (it is exactly 1 there — the same
     /// pixels), only the strips around it evaluate it.</summary>
     private void DrawItemQuad(in CompositeItem it, float x0, float y0, float x1, float y1, int ox, int oy, bool feathers,
-        SliceCompositor.Pso pso, D3D12_GPU_DESCRIPTOR_HANDLE srv, bool sample = false, float sampleSx = 0f, float sampleSy = 0f)
+        SliceCompositor.Pso pso, D3D12_GPU_DESCRIPTOR_HANDLE srv, bool sample = false, float sampleSx = 0f, float sampleSy = 0f,
+        float clampU = 0f, float clampV = 0f, int srcOx = 0, int srcOy = 0)
     {
         bool f1 = feathers && !it.Feather.IsNone, f2 = feathers && !it.Feather2.IsNone;
         Span<FeatherPiece> pieces = stackalloc FeatherPiece[FeatherQuadSplit.MaxPieces];
@@ -1167,7 +1226,8 @@ public sealed unsafe partial class D3D12Device
             ref readonly FeatherPiece p = ref pieces[k];
             _compositor!.Begin(p.X0, p.Y0, p.X1, p.Y1);
             if (sample) _compositor.SampleMap(x0, y0, sampleSx, sampleSy);
-            else _compositor.SourceOrigin(p.X0 - x0, p.Y0 - y0);
+            if (clampU > 0f) _compositor.SampleClamp(clampU, clampV);
+            else _compositor.SourceOrigin(p.X0 - x0 + srcOx, p.Y0 - y0 + srcOy);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
             if (p.Feathered)
@@ -1221,9 +1281,20 @@ public sealed unsafe partial class D3D12Device
     private void ItemScissor(in CompositeItem it, int ox, int oy)
     {
         int tw = _compositor!.TargetW, th = _compositor.TargetH;
-        if (IsUnbounded(it.Clip)) { _compositor.Scissor(_cmdList, 0, 0, tw, th); _itemScissor = new PixelRect(0, 0, tw, th); return; }
-        int l = (int)MathF.Floor(it.Clip.X) - ox, t = (int)MathF.Floor(it.Clip.Y) - oy;
-        int r = (int)MathF.Ceiling(it.Clip.Right) - ox, b = (int)MathF.Ceiling(it.Clip.Bottom) - oy;
+        int l, t, r, b;
+        if (IsUnbounded(it.Clip)) { l = 0; t = 0; r = tw; b = th; }
+        else
+        {
+            l = (int)MathF.Floor(it.Clip.X) - ox; t = (int)MathF.Floor(it.Clip.Y) - oy;
+            r = (int)MathF.Ceiling(it.Clip.Right) - ox; b = (int)MathF.Ceiling(it.Clip.Bottom) - oy;
+        }
+        if (_frameClipOn)
+        {
+            // a partial composite: nothing outside the current repaint rect may be touched (that pixel is the previous frame)
+            l = Math.Max(l, _frameClip.Left - ox); t = Math.Max(t, _frameClip.Top - oy);
+            r = Math.Min(r, _frameClip.Right - ox); b = Math.Min(b, _frameClip.Bottom - oy);
+            if (r <= l || b <= t) { l = t = r = b = 0; }
+        }
         _compositor.Scissor(_cmdList, l, t, r, b);
         _itemScissor = new PixelRect(Math.Max(0, l), Math.Max(0, t), Math.Min(tw, r), Math.Min(th, b));
     }
