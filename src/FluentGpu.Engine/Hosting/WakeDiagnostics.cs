@@ -77,18 +77,22 @@ internal sealed class WakeDiagnostics
     private const double ReportSeconds = 30.0;
 
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    // MUST cover every bit in WakeReasons. This was 26 while the enum already had 28, so scrollProducer and
-    // textRepaintPending — a frame-aligned scroll producer and a deferred glyph-atlas flush, EITHER of which can hold
-    // the loop at panel rate — were silently absent from every report this instrument ever printed.
-    private const int ReasonCount = 29;
+    // MUST cover every bit in WakeReasons, and name each bit by its POSITION. This table drifted from the enum twice:
+    // it was 26 entries while the enum had 28 (scrollProducer and textRepaintPending never printed), and later bit 25
+    // was printed as "budgetDeferredVirtuals" (a retired term) while it meant FrameClockPaceable, and bit 29
+    // (FeedbackSettle) was never counted at all. WakeDiagnosticsTests pins the table to the enum, bit by bit.
+    internal const int ReasonCount = 30;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "retired4", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
         "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
-        "frameClockPoller", "videoPumpPending", "warmingVirtuals", "budgetDeferredVirtuals",
-        "scrollProducer", "textRepaintPending", "imageLeftoverDue",
+        "frameClockPoller", "videoPumpPending", "warmingVirtuals", "frameClockPaceable",
+        "scrollProducer", "textRepaintPending", "imageLeftoverDue", "feedbackSettle",
     ];
+
+    /// <summary>The census name of wake bit <paramref name="bit"/> (its position in <see cref="WakeReasons"/>).</summary>
+    internal static string ReasonName(int bit) => s_reasonNames[bit];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake
     private readonly long[] _soleFrames = new long[ReasonCount];     // frames where reason i was the ONLY bit set
@@ -413,7 +417,11 @@ internal sealed class WakeDiagnostics
         _appendRenderCensus(sb);
 
         FluentGpu.Foundation.Diag.Line(sb.ToString());
+        ResetWindow(now);
+    }
 
+    private void ResetWindow(long now)
+    {
         Array.Clear(_reasonFrames);
         Array.Clear(_soleFrames);
         Array.Clear(_uiPresentCause);
