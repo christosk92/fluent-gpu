@@ -151,3 +151,6 @@ tmp/
 tmp_*/
 tmp_saz_*/
 *.saz
+
+# ops/e2e/video-e2e.ps1 run folders (one timestamped folder per run: json/md report, stderr log, copied clip)
+ops/e2e/out/

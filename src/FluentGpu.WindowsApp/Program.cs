@@ -266,6 +266,32 @@ static class Program
             return;
         }
 
+        // Automated end-to-end video test with timings (video-engine-design.html measurement plan): the real gallery host
+        // scrolling a 100k-row list while a detached pop-out plays a clear MP4; baseline / pop-out / UI actions / source
+        // switching / placement churn / pop-out reopen, each with a threshold. `--video-e2e [outDir] [--seconds N]
+        // [--switches N] [--cycles N]`; writes video-e2e.json + video-e2e.md. Exit 0 all PASS, 2 any FAIL, 1 incomplete.
+        // The D3D12 debug layer stays OFF: it would distort the timings being measured.
+        int ve2e = Array.IndexOf(args, "--video-e2e");
+        if (ve2e >= 0)
+        {
+            string ve2eOut = ve2e + 1 < args.Length && !args[ve2e + 1].StartsWith("--")
+                ? args[ve2e + 1] : ".tmp/video-e2e";
+            double ve2eSeconds = 15; int ve2eSwitches = 10, ve2eCycles = 20;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--seconds" && double.TryParse(args[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sec) && sec > 0) ve2eSeconds = sec;
+                if (args[i] == "--switches" && int.TryParse(args[i + 1], out int sw) && sw > 0) ve2eSwitches = sw;
+                if (args[i] == "--cycles" && int.TryParse(args[i + 1], out int cy) && cy > 0) ve2eCycles = cy;
+            }
+            VideoE2EProbe.Args = new VideoE2EProbe.Config(ve2eOut, ve2eSeconds, ve2eSwitches, ve2eCycles);
+            FluentApp.DiagnosticRun = VideoE2EProbe.TryRun;
+            FluentAppHarness.Run(() => new GalleryShell { InitialPage = "video-e2e" },
+                new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true },
+                new HarnessOptions { Frames = frames });
+            Environment.Exit(VideoE2EProbe.ExitCode);
+            return;
+        }
+
         // M0 of the DRM-free video compositing spine: restructured DComp present tree + IVideoPresenter + an
         // engine-owned test surface through the real CreateSurfaceFromHandle path + a graded hole, captured to a PNG
         // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the DComp child is
