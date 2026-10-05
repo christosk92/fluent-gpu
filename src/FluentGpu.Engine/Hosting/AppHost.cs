@@ -903,9 +903,8 @@ public sealed partial class AppHost : IDisposable
     private ImageStatusHandler? _onSharedImageStatus;   // detached child only: its own nodes' per-id completion route (F108); detached in PrepareDispose
     // M5 (adreno-hang-fixes.md): hysteresis/cooldown/grace for _images.EvictToVramPressure — see VramShedPolicy.cs.
     private VramShedPolicy _vramShed;
-    // F255: what this host last fed the device for the weak tier's image-upload budget (FeedUploadPacing). Touched only by the
-    // thread that drains this host's video surfaces (UI in single-thread mode, the render thread otherwise).
-    private bool _fedVideoLive;
+    // F255: the display period this host last fed the device for the weak tier's image-upload budget (FeedUploadPacing). Touched
+    // only by the thread that drains this host's video surfaces (UI in single-thread mode, the render thread otherwise).
     private double _fedUploadPeriodMs;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
@@ -1923,14 +1922,12 @@ public sealed partial class AppHost : IDisposable
             _swapchain.HintGeometryMotionPresent();
     }
 
-    /// <summary>F255: tell the device what the weak tier's image-upload budget depends on, on the thread that drains this
-    /// host's video surfaces. The live-video flag crosses as an EDGE (the device counts the hosts holding a live surface, so a
-    /// pop-out playing video halves the budget the shared render thread stages with, whichever host asks); the display period
-    /// is fed by the primary host only (a child rides the parent's turns) and only when it moves. Zero-alloc.</summary>
+    /// <summary>F255: tell the device the display period the weak tier's image-upload budget is quoted against, on the thread
+    /// that drains this host's video surfaces. Fed by the primary host only (a child rides the parent's turns) and only when it
+    /// moves. A live video surface is deliberately NOT an input: video never lowers what the main window gets per turn
+    /// (owner decision, 2026-10-05). Zero-alloc.</summary>
     private void FeedUploadPacing()
     {
-        bool live = _videoSurfaces.HasLiveSurface;
-        if (live != _fedVideoLive) { _fedVideoLive = live; _device.NoteVideoSurfaceLive(live); }
         if (_isDetachedChild) return;
         double periodMs = RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency;   // the UI-published measured period: safe on either thread
         if (Math.Abs(periodMs - _fedUploadPeriodMs) > 0.05) { _fedUploadPeriodMs = periodMs; _device.SetImageUploadPacing(periodMs); }
@@ -2329,20 +2326,10 @@ public sealed partial class AppHost : IDisposable
     /// continuous motion an energy-saver ceiling is meant to reach.</summary>
     internal const WakeReasons PowerCapNeverPace = GpuGovernorWake.NeverPace & ~WakeReasons.FrameClockPoller;
 
-    /// <summary>Test seam for the weak-GPU tier (<c>GpuProfile.IsWeak</c> is ALWAYS false headlessly): <c>null</c> (production)
-    /// reads the process-global profile. It governs ONE thing: the adaptive GPU governor's engage/release thresholds while a video
-    /// surface is live (<see cref="GpuGovernorWake.Thresholds"/>, F250) — a calibration of a MEASUREMENT (the UI's GPU sample
-    /// excludes the video processor's share of the same GPU), never a cap of its own. There is no tier-based cadence or poller
-    /// ceiling: a visible loop runs at the display rate on every tier (motion policy, 2026-10-03).</summary>
-    internal bool? WeakTierForTest { get; set; }
-
-    private bool WeakTier => WeakTierForTest ?? FluentGpu.Foundation.GpuProfile.IsWeak;
-
     /// <summary>Adaptive GPU pacing (default on): when measured whole-frame on-GPU execution proves the panel rate is
     /// unsustainable at this window size, pace continuous motion to a steady <see cref="GpuGovernorFps"/> instead of
-    /// free-running into vblank misses. Measurement-driven and self-releasing (engage at 0.9x the display period, release at
-    /// 0.7x, each capped at <see cref="GpuGovernorEngageMs"/> / <see cref="GpuGovernorReleaseMs"/> — see
-    /// <see cref="GpuGovernorWake.Thresholds"/>), so on a GPU that keeps up it
+    /// free-running into vblank misses. Measurement-driven and self-releasing (engage ≥
+    /// <see cref="GpuGovernorEngageMs"/>, release ≤ <see cref="GpuGovernorReleaseMs"/>), so on a GPU that keeps up it
     /// never engages and costs one EMA update per frame. <c>false</c> removes the governor entirely — the escape hatch
     /// for a capture that must see the raw cadence. Wired from <c>AppOptions.AdaptiveGpuPacing</c>.</summary>
     public bool AdaptiveGpuPacing { get; set; } = true;
@@ -2356,8 +2343,7 @@ public sealed partial class AppHost : IDisposable
     /// Pure apart from its explicit state refs so VerticalSlice can lock the no-fence-fallback, consume-once and
     /// hysteresis laws without a D3D device.</summary>
     internal static bool TryAdvanceAdaptiveGpuGovernor(double executionMs, ulong sequence,
-        ref ulong consumedSequence, ref double emaMs, ref bool engaged,
-        double engageMs = GpuGovernorEngageMs, double releaseMs = GpuGovernorReleaseMs)
+        ref ulong consumedSequence, ref double emaMs, ref bool engaged)
     {
         if (sequence == 0 || sequence == consumedSequence) return false;
         consumedSequence = sequence;
@@ -2372,9 +2358,9 @@ public sealed partial class AppHost : IDisposable
         emaMs = prior * (1.0 - GpuGovernorAlpha) + executionMs * GpuGovernorAlpha;
         if (engaged)
         {
-            if (emaMs <= releaseMs) engaged = false;
+            if (emaMs <= GpuGovernorReleaseMs) engaged = false;
         }
-        else if (emaMs >= engageMs)
+        else if (emaMs >= GpuGovernorEngageMs)
         {
             engaged = true;
         }
@@ -2398,8 +2384,7 @@ public sealed partial class AppHost : IDisposable
     /// retains the current hysteresis decision. Unsupported/invalid/expired evidence clears the decision and its EMA.
     /// The return value alone authorizes the adaptive wait; callers must still apply the input/scroll/grace gates.</summary>
     internal static bool EvaluateAdaptiveGpuSample(in GpuRenderSample sample, long nowQpc,
-        ulong maxSubmitAge, long maxWallAgeTicks, ref ulong consumedSequence, ref double emaMs, ref bool engaged,
-        double engageMs = GpuGovernorEngageMs, double releaseMs = GpuGovernorReleaseMs)
+        ulong maxSubmitAge, long maxWallAgeTicks, ref ulong consumedSequence, ref double emaMs, ref bool engaged)
     {
         if (!IsAdaptiveGpuSampleUsable(in sample, nowQpc, maxSubmitAge, maxWallAgeTicks))
         {
@@ -2409,7 +2394,7 @@ public sealed partial class AppHost : IDisposable
         }
 
         _ = TryAdvanceAdaptiveGpuGovernor(sample.ExecutionMs, sample.Sequence,
-            ref consumedSequence, ref emaMs, ref engaged, engageMs, releaseMs);
+            ref consumedSequence, ref emaMs, ref engaged);
         return engaged;
     }
 
@@ -2418,12 +2403,11 @@ public sealed partial class AppHost : IDisposable
     /// that has never supplied one therefore stays fail-open.</summary>
     internal static bool EvaluateAdaptiveGpuRead(bool sampleAvailable, in GpuRenderSample sample, long nowQpc,
         ulong maxSubmitAge, long maxWallAgeTicks, ref GpuRenderSample cachedSample,
-        ref ulong consumedSequence, ref double emaMs, ref bool engaged,
-        double engageMs = GpuGovernorEngageMs, double releaseMs = GpuGovernorReleaseMs)
+        ref ulong consumedSequence, ref double emaMs, ref bool engaged)
     {
         if (sampleAvailable) cachedSample = sample;
         return EvaluateAdaptiveGpuSample(in cachedSample, nowQpc, maxSubmitAge, maxWallAgeTicks,
-            ref consumedSequence, ref emaMs, ref engaged, engageMs, releaseMs);
+            ref consumedSequence, ref emaMs, ref engaged);
     }
 
     // Adaptive GPU governor: when on-GPU execution genuinely cannot sustain the panel rate at the current size
@@ -2441,9 +2425,6 @@ public sealed partial class AppHost : IDisposable
     private ulong _gpuBoundSampleSequence;  // last completed device sample consumed into the EMA
     private GpuRenderSample _gpuBoundLastSample; // last coherent sample from THIS host's swapchain; TTL-bounded on read contention
     private bool _gpuGovernorEngaged;
-    // Absolute CEILINGS on the engage/release thresholds, not the thresholds themselves: the live pair is a fraction of the
-    // measured display period (GpuGovernorWake.Thresholds) capped by these, so a 60 Hz panel keeps exactly the 10/8 ms it always
-    // had and a faster panel (a 120 Hz period is 8.33 ms) engages at a proportionally smaller execution time instead of never.
     internal const double GpuGovernorEngageMs = 10.0;
     internal const double GpuGovernorReleaseMs = 8.0;   // hysteresis: don't chatter around the engage threshold
     private const double GpuGovernorAlpha = 0.15;
@@ -3543,14 +3524,11 @@ public sealed partial class AppHost : IDisposable
         if (AdaptiveGpuPacing)
         {
             bool sampleAvailable = _swapchain.TryGetGpuRenderSample(out GpuRenderSample executionSample);
-            // Thresholds are fractions of THIS window's measured display period (F250), lower on a weak tier while video plays:
-            // the sample is the UI command list's own timestamp pair, which excludes the MF video processor and DWM
-            // composition that share that GPU, so the same EMA reads further below the true load there.
-            GpuGovernorWake.Thresholds(RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency,
-                WeakTier && _videoSurfaces.HasLiveSurface, out double engageMs, out double releaseMs);
+            // The governor reads THIS window's own GPU execution and nothing else: a live video surface, a pop-out or the GPU
+            // tier never move its thresholds (owner decision, 2026-10-05: video must never lower the main window's frame rate).
             adaptiveGpuWaitEligible = EvaluateAdaptiveGpuRead(sampleAvailable, in executionSample, now,
                 GpuGovernorMaxSubmitAge, GpuGovernorSampleTtlTicks, ref _gpuBoundLastSample,
-                ref _gpuBoundSampleSequence, ref _gpuBoundEma, ref _gpuGovernorEngaged, engageMs, releaseMs);
+                ref _gpuBoundSampleSequence, ref _gpuBoundEma, ref _gpuGovernorEngaged);
         }
         // Parked (minimized or hidden): block until a message — cold maintenance bounds the outer wait, never paints. But
         // an UNCONSUMED park/un-park edge runs one frame now: a window hidden or shown by app code (Hide/Show from a
@@ -7349,9 +7327,6 @@ public sealed partial class AppHost : IDisposable
     private void ReleaseRenderResourcesParked()
     {
         _renderSeam.InvalidateTarget();
-        // F255: a host torn down while holding a live video surface releases its share of the device's live-video count (the
-        // device outlives a pop-out), or the weak tier's upload budget would stay halved for the rest of the session.
-        if (_fedVideoLive) { _fedVideoLive = false; _device.NoteVideoSurfaceLive(false); }
         PurgePopupRenderActions();   // the loop is parked (or gone): no drain can be in flight
         _imageQueue?.RemoveSceneReader(this);
         _renderSeam.ReleaseSceneResources();

@@ -660,7 +660,7 @@ internal sealed class VideoPlacementApplier
         _registry.PostResult(i, s.Intent.Gen, s.SurfaceId.Value, ((_boundBits >> i) & 1) != 0, releaseDone: false);
     }
 
-    // The live-surface flag the window reads (SetHasLiveVideo) and the weak tier's upload budget: created, bound, visible.
+    // The live-surface flag the window reads (SetHasLiveVideo): created, bound, visible.
     private void PublishLive()
     {
         int mask = 0;

@@ -248,7 +248,7 @@ public sealed class VideoSurfaceRegistry
     /// pushes this to the window (<c>IWindow.SetHasLiveVideo</c>) so a composited window carrying video can opt out of
     /// the modal edge-resize paint defer, which would otherwise leave the video child at its pre-resize geometry while
     /// the frame moves under it. The applier publishes the mask after every apply, so it is safe to read from any thread (the
-    /// render thread reads it for the weak tier's upload budget); it describes the last applied frame. O(1), zero-alloc.</summary>
+    /// the window's modal-loop keep-alive reads it); it describes the last applied frame. O(1), zero-alloc.</summary>
     public bool HasLiveSurface => Volatile.Read(ref _liveMask) != 0;
 
     /// <summary>Bind the DirectComposition surface handle produced by a video source (the single DRM attach point).

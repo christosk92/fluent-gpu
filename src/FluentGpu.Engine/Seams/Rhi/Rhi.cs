@@ -172,12 +172,6 @@ public partial interface IGpuDevice : IDisposable
     /// seam stages nothing against a vblank).</summary>
     void SetImageUploadPacing(double displayPeriodMs) { }
 
-    /// <summary>One host's "a live video surface is on screen" edge: <paramref name="live"/> true when the host gains its first
-    /// live surface, false when it loses its last one (or is disposed while holding one). The device counts the hosts that
-    /// are live; while any is, the weak tier halves the image-upload budget so a cover burst cannot crowd the render turns
-    /// that carry the video placement commit. Any thread; edges are balanced per host. Default no-op.</summary>
-    void NoteVideoSurfaceLive(bool live) { }
-
     /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
     /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
     /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless

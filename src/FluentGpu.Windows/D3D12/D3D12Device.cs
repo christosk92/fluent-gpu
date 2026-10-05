@@ -770,30 +770,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// says whether it is being hit.</summary>
     public const int UploadBytesPerTurn = 2 * 1024 * 1024;
 
-    // F255: the weak tier's per-turn budget follows the display period and the live-video state (UploadTurnBudget). Fed by
-    // the host (SetImageUploadPacing / NoteVideoSurfaceLive: any thread), read by DrainImageJobs on the render thread once a
-    // call. The period crosses as the raw bits of a double (0 = unknown); the live count is the number of hosts holding a
-    // live video surface (the pop-out's host counts too).
+    // F255: the weak tier's per-turn budget follows the display period (UploadTurnBudget). Fed by the host
+    // (SetImageUploadPacing: any thread), read by DrainImageJobs on the render thread once a call. The period crosses as the raw
+    // bits of a double (0 = unknown). A live video surface is not an input any more (owner decision, 2026-10-05).
     private long _uploadPeriodMsBits;
-    private int _videoLiveHosts;
 
     /// <inheritdoc/>
     public void SetImageUploadPacing(double displayPeriodMs)
         => System.Threading.Volatile.Write(ref _uploadPeriodMsBits, BitConverter.DoubleToInt64Bits(displayPeriodMs));
 
-    /// <inheritdoc/>
-    public void NoteVideoSurfaceLive(bool live)
-    {
-        if (live) System.Threading.Interlocked.Increment(ref _videoLiveHosts);
-        else System.Threading.Interlocked.Decrement(ref _videoLiveHosts);
-    }
-
     /// <summary>The per-turn staging budget the next <see cref="DrainImageJobs"/> would use (the pure
-    /// <see cref="UploadTurnBudget"/> over the fed period and live-video state). Any thread.</summary>
+    /// <see cref="UploadTurnBudget"/> over the fed period). Any thread.</summary>
     internal int CurrentUploadBudgetBytes()
         => UploadTurnBudget.BytesPerTurn(GpuProfile.IsWeak,
-            BitConverter.Int64BitsToDouble(System.Threading.Volatile.Read(ref _uploadPeriodMsBits)),
-            System.Threading.Volatile.Read(ref _videoLiveHosts) > 0);
+            BitConverter.Int64BitsToDouble(System.Threading.Volatile.Read(ref _uploadPeriodMsBits)));
 
     // The first job that did not fit this turn's UploadBytesPerTurn, carried to the head of the next drain. The queue
     // has no peek/push-back (and belongs to another seam), so the device holds exactly one job; ownership of its pixel
