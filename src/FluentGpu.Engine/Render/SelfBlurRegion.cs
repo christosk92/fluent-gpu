@@ -39,6 +39,15 @@ public static class SelfBlurRegion
         return AcrylicBackdropMath.KernelRadiusTexels(texelSigma) * down;
     }
 
+    /// <summary>The reach of the WHOLE retained-blur pipeline in physical px: how far from an output pixel a source pixel
+    /// can still change it. <see cref="TapRadius"/> is the Gaussian's support; the box-downsample chain and the bilinear
+    /// upsample add their own footprint — a pixel x reads texels [⌊u⌋ − R, ⌊u⌋ + 1 + R] with u = (x + ½)/down − ½,
+    /// i.e. source px within <c>R·down + 1.5·down + ½</c> of it — so this is <c>TapRadius + 2·down + 1</c>. Source
+    /// farther than this from every pixel the blur DRAWS cannot change a drawn pixel: the composite cuts a retained blur's
+    /// source to its composite clip grown by this (<see cref="Tiles.GroupCacheKey.BlurRegions"/>).</summary>
+    public static int SupportRadius(float blurSigma)
+        => TapRadius(blurSigma) + 2 * AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f) + 1;
+
     /// <summary>
     /// Compute the recorder's DIP-space visibility/source geometry from the same physical-pixel tap support used by
     /// <see cref="TapRadius"/>. Pixel boxes convert back OUTWARD by a tiny fraction of one device pixel so a
