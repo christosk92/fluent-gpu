@@ -136,9 +136,10 @@ public sealed class RenderThread : IDisposable
     // the window opened, plus the counter values at the window start. Nothing here allocates; the line does, once a second.
     private long _paceWindowStartQpc, _paceWindowTickSeq, _paceFresh0, _paceMotion0, _paceSkipped0, _paceMissed0, _paceRace0;
     private long _slotWaitSumQpc, _slotWaitMaxQpc, _slotWaitCount, _presentLagMaxQpc;
-    // F215: the detached children's present drain (extraDrain, which runs BEFORE the primary's present decision and so is in no worst present's
-    // work): sum / max / count of its wall time per turn in the window. A pop-out that submits, waits its fence or presents slowly
-    // stalls the PARENT's next turn here, and the line must be able to say so.
+    // F215: the detached children's present drain (extraDrain, which runs BEFORE the primary's present decision and so is in no worst
+    // present's work= - but IS in its lag=): sum / max / count of its wall time per turn in the window. A pop-out that submits, spins
+    // its Stage-B motion fence (up to the device's MotionFenceCapMs, 16 ms) or waits its back-buffer fence does so between the parent's
+    // wake and the parent's slot take, pushing the parent's present later in the SAME tick, and the line must be able to say so.
     private long _childDrainSumQpc, _childDrainMaxQpc, _childDrainCount;
     // Cumulative slot-wait totals for the UI-readable pace snapshot (render thread writes, UI reads — torn-free longs).
     private long _slotWaitTotalCount, _slotWaitTotalQpc, _slotWaitTotalMaxQpc;
@@ -561,7 +562,8 @@ public sealed class RenderThread : IDisposable
     /// worst present's split (wake / slot / work, then the host's phases of that work and the blocking one named:
     /// <see cref="PresentSplit"/>), and the slot catch-up (<see cref="SlotCatchUp"/>): skips in the window, the smoothed frame
     /// cost it compares against the refresh, and whether it is backing off, then <c>childDrain(avg max n)</c>: the wall time of the detached children's present
-    /// drain per turn in the window (F215; it runs before the primary's present decision, so no worst present's work contains it). Every figure up to there is the PRIMARY
+    /// drain per turn in the window (F215; it runs before the primary's present decision, so no worst present's <c>work=</c> contains it, while its
+    /// <c>lag=</c> does: the child's submit, its Stage-B fence spin (up to 16 ms) and its back-buffer fence waits sit before the parent's present). Every figure up to there is the PRIMARY
     /// swapchain's; a trailing <c>child=[t&lt;id&gt;(presents deferred skipped slotWaitAvg/Max lagMax workMax) ...]</c> section carries each
     /// detached pop-out's own (<see cref="ChildPresentPace"/>), present only while a child presented or was deferred in the window.
     /// Allocation only here, on the 1 Hz path; the window resets when motion stops.</summary>

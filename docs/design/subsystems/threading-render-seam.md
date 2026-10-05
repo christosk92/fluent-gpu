@@ -1203,12 +1203,13 @@ thread samples the split only when a present sets a new worst. The Wavee `mem.sa
 `pageFaultsDelta` / `pageFaultsPerSec` (the process counter, soft + hard) so an off-CPU block under high machine memory load
 can be told from DWM / the present queue. A diagnostic only: nothing here is a pacing input.
 
-**What `work=` does not contain: the children's drain (F215).** `_extraDrain` (every detached child's present, then the turn's one
-composition commit) runs AFTER the primary's present, so no worst present's `work=` includes it, yet a pop-out that submits, waits
-its fence or presents slowly delays the PARENT's next turn right there. The `[render.pace]` line therefore ends with
-`childDrain(avg= max= n=)`: the wall time of that call per turn in the 1 s window, stamped with two QPC reads and no allocation. A
-parent `work=` far above `run=` with a small `childDrain` is not the pop-out; a large `childDrain` max names it, and the `child=` tail
-says which child. The pop-out's open is timed the same way: `[detached] reveal ... renderPresentMs=` (the render thread's own stamp
+**What `work=` does not contain: the children's drain (F215, order AS-BUILT 2026-10-05).** `_extraDrain` (every detached child's
+present on its own swapchain) runs BEFORE the primary's present decision, so no worst present's `work=` includes it — but the
+worst present's `lag=` (tick → done) DOES: a pop-out that submits, spins its Stage-B motion fence (up to `MotionFenceCapMs`, 16 ms)
+or waits its back-buffer fence sits between the parent's wake and the parent's slot take, and pushes the parent's present later
+in the same tick. The `[render.pace]` line therefore ends with `childDrain(avg= max= n=)`: the wall time of that call per turn in
+the 1 s window, stamped with two QPC reads and no allocation. A parent `lag=` far above `wake= + slot= + work=` with a large
+`childDrain` max IS the pop-out, and the `child=` tail says which child; a small `childDrain` clears it. The pop-out's open is timed the same way: `[detached] reveal ... renderPresentMs=` (the render thread's own stamp
 of the child's first successful present, against `firstPresentMs`, when the UI noticed it) and `[detached] first.video.bind ms=` (the
 first surface handle the child's presenter accepted, `VideoPlacementApplier.FirstBindQpc`: the picture, not just the frame).
 
@@ -1247,10 +1248,13 @@ swapchain, so it shows only through a hole the UI punches after the slot's `Boun
 calls `VideoSurfaceRegistry.StructuralWake`, wired to `RenderThread.WakeForVideo` (any thread, the child's to its PARENT's loop),
 so the drain runs with no UI publication. The hint `VideoPlacementApplier.HasStructuralWork` makes a clean call O(1); a presenter that cannot attach yet
 (`IVideoPresenter.CanAttachSurfaces`, false until its first Present binds the DComp graph) is left to the first coupled drain.
-The coupled applies (`DrainVideoForPresentTurn`) now only APPLY (`IVideoPresenter.ApplyPending`) and the turn's ONE device commit
+The coupled applies (`DrainVideoForPresentTurn`) now only APPLY (`IVideoPresenter.ApplyPending`); the device commit
 (`IGpuDevice.CommitVideoComposition`, then `VideoPlacementApplier.PublishCommitted` per host: readiness is published only after
-the commit) is made at the end of `DrainChildRenderSources`, after the parent and every child drained, so the shared
-`IDCompositionDevice` is flushed once per turn instead of once per window. A present that stood down (`LastPresentStoodDown`)
+the commit) is made in two places, each right after the present whose hole it belongs with: a detached child that presented with
+placement work applied commits inside `DrainChildRenderSources`, right after ITS flip (`VideoPlacementApplier.HasUncommittedApply`;
+a MOVE of an on-screen surface committed even earlier, Stage B), and the parent's work lands in the loop's post-turn
+(`CommitVideoTurnAfterPresent`), after the parent's present decision. The children drain BEFORE that decision (F241, see below),
+and the parent's slot wait between the two can cross a vblank, which is why the child does not wait for the post-turn commit. A present that stood down (`LastPresentStoodDown`)
 applies releases only (`VideoApplyScope.ReleasesOnly`): its placements stay pending for the next real present. An UNPACED turn's slot take
 is the liveness form bounded at `max(2 x refresh, 34 ms)` (`RenderThread.UnpacedSlotBoundMs`, passed as a negative timeout;
 -1 stays the backend's 1 s) and proceeds with the credit held, so a minimized / cloaked primary whose presents never retire costs
@@ -1258,37 +1262,34 @@ two refreshes instead of a second; every such timeout is counted (`IGpuDevice.Sl
 `[render.pace]`) and one rate-limited `[d3d12.present] slot liveness timeout` line names the primary's HWND state, queue depth and
 present counters. Measure with PresentMon on both HWNDs (the bounded take may move the block into `Present`, a hypothesis).
 
-**A background window is throttled on every autonomous wake, and a covered one parks (F241 / F239, AS-BUILT 2026-10).** The
-render thread and the device queue are shared by every window of the process, so a window nobody is looking at must not keep
-producing and presenting at the panel rate ahead of the pop-out the user is watching. `InactiveFrameIntervalMs` (33) used to
-floor only the `Anim`/`Caret` cadence wait; it now covers the other autonomous wakes too, on both threads:
 
-- **UI loop.** `RecommendedWaitMsCore`'s `HostWaitKind.InactiveThrottle` branch paces a non-active window whose work is only a
-  `FrameClock.Tick` poller and/or a scroll animation that is not user-driven (`!AnyUserScrollMoving`: a scrollbar fade, a
-  programmatic smooth scroll) at the floor (a slower row keeps its own period). Everything input-driven stays exempt by
-  construction because it sets another bit (`FrameNeeded`, `ScrollProducer`, `DragActive`, popups, images, video pumps), as does
-  a due `Timer` (it fires at its own interval, the verifier's correction to the finding) and a row due now (a one-shot fade).
-- **Render loop rows.** `AppHost.PublishRenderMotionPolicy` mirrors two facts UI to render once per frame: the throttle floor
-  (`!IsActive`) and the primary swapchain's `IsOccluded`. While the floor is set and the host's render motion is nothing but
-  perpetual loop rows (`RenderCompositorAnimations.HasNonLoopActive` false, the scroll poser idle, no image reveal),
-  `RenderLoopThrottleMs` (the min over this host and its detached children; one display-rate source keeps the whole loop at the
-  tick) lets `RenderThread` sleep out the interval on its wake event instead of waking every vblank (`SleepOutMotionThrottle`),
-  then discards the display tick that went stale during the sleep so the throttled present lands on a fresh vblank,
-  skip a motion turn that lands inside the interval (`MotionThrottleSkips`), and a child's drain skips its motion re-present the
-  same way. A fresh publication, an owed present and any one-shot are never held back. Loop rows also lengthen their own period
-  to the floor (`RenderCompositorAnimations.LoopFloorMs`), so a turn something else woke re-poses an identical frame the host
-  elides.
-- **Occlusion parks like minimize.** A host whose swapchain reports occluded (covered by the other window, or cloaked) pauses its
-  render motion through the same `Pause`/`Resume` the minimize edge uses (rows re-anchor on resume, a loop continues from where it
-  stopped). The UI's existing occlusion probe still forces one full repaint every `OcclusionProbeIntervalMs`, so the
-  un-occlusion is heard and the mirror clears.
-- **Marquees.** A `PixelSnap` keyframe row (`AnimFlags.PixelSnap`, `UseKeyframes(..., pixelSnap: true)`) rounds each sample to a
-  whole device pixel and, render-side, re-samples when its period's shared clock advances (one clock per effective period, decided once per instant, with the cadence
-  rule's slack so ticks one period apart neither drop nor double a sample), so two marquees step on the same
-  render tick whatever instant each was seeded at. `Marquee` derives its cadence from its speed in device px/s (30 Hz for about a
-  pixel per sample, 60 Hz above `FastStepPxPerSec`), parks (glides home) while its window is inactive or occluded
-  (`Style.ParkInBackground`; a hover-driven scroll is never parked), and `Style.SyncCycle` gives sibling ping-pong rows one cycle length. Wavee scrolls the player-bar
-  title and artist line on hover only on a weak GPU or beside a live video.
+**No window is throttled for losing focus; a covered one parks; a pop-out is served first (F241 / F239, AS-BUILT 2026-10-05).**
+The audit proposed a background-window throttle (`InactiveFrameIntervalMs` on every autonomous wake, `HostWaitKind.InactiveThrottle`,
+`RenderLoopThrottleMs` / `SleepOutMotionThrottle` on the render loop, `RenderCompositorAnimations.LoopFloorMs` on loop rows) and a
+static weak-tier cadence cap (`TierCadenceCap`, `HostWaitKind.TierPaced`). None of it is built: the owner's motion policy
+(2026-10-03) forbids slowing VISIBLE motion for focus, for the GPU tier or for what plays beside it. What is built instead:
+
+- **The children drain first.** `RenderThread.Loop` runs `extraDrain` (`DrainChildRenderSources`: each detached child's
+  non-blocking slot probe, record, submit and present on its own swapchain, plus the child's deferred-placement commit) BEFORE
+  `PresentTurn`, so a pop-out's present never queues behind the primary's slot take — the one blocking step of a turn (up to a
+  vblank while paced, the liveness bound when the queue is full). Nothing is paced: the parent's present is delayed only by the
+  child's record + submit (`childDrain` on `[render.pace]`), and an unfocused main window keeps its display-rate motion.
+  `postTurn` (`CommitVideoTurnAfterPresent`) is the parent's commit. Pinned by `RenderThreadPacingTests.ChildrenDrain_...` and,
+  through the real `AppHost` callbacks on a headless host (`AppHost.InstallRenderThreadForTest`), by `RenderTurnCommitWiringTests`.
+- **Occlusion parks like minimize; focus parks nothing.** `AppHost.PublishRenderMotionPolicy` mirrors ONE fact UI to render: the
+  primary swapchain's `IsOccluded`. A host whose swapchain reports occluded (covered by the other window, or cloaked) pauses its
+  render motion through the same `Pause`/`Resume` the minimize edge uses; the occlusion probe still forces one full repaint every
+  `OcclusionProbeIntervalMs`, so the un-occlusion is heard and the mirror clears. `IsActive` is not read by any pacing path
+  (gates `gate.motion.no-focus-throttle`, `gate.motion.occlusion-mirrors-to-render`).
+- **Marquees glide.** The row takes the display cadence (null) and sub-pixel samples, like every other row — no 30/60 Hz cadence,
+  no device-pixel snap (the audit's `PixelSnap` variant was dropped by the owner on 2026-10-05 and the feature deleted). A marquee
+  parks (glides home) only while its window is covered or cloaked (`Marquee.Style.ParkWhenOccluded`, reads
+  `InputHooks.WindowOccluded`; a hover-driven scroll is never parked); `Style.SyncCycle` gives sibling ping-pong rows one cycle
+  length. Wavee scrolls the player-bar title and artist line with `Trigger = Always` on every tier and beside a video.
+- **The GPU governor is the one GPU-based throttle, and it measures the main window alone.** Its engage/release thresholds are
+  the fixed 10 / 8 ms on the host's own whole-frame GPU execution sample; a live video surface, a pop-out or the GPU tier never
+  move them (the audit's period-relative, weak-tier-with-video pair, F250, was withdrawn: video must never lower the main
+  window's frame rate). The image-upload drain's per-turn budget likewise no longer halves while video is live.
 
 **Why depth 2 was withdrawn.** `FRAME_COUNT - 1` = 2 (AS-BUILT 2026-08) was chosen to buy one frame of
 CPU/GPU run-ahead so a frame costing slightly over one refresh would not quantize to half rate at 144/165
