@@ -212,6 +212,8 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
 
     public BoxEl? Owner;
 
+    public LayoutTransition? Animate;
+
     public float OffsetX;
     public float OffsetY;
     public float ScaleX = 1f;
@@ -262,7 +264,8 @@ EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
             && EqualityComparer<EasingSpec>.Default.Equals(HoverEasing, o.HoverEasing)
             && EqualityComparer<EasingSpec>.Default.Equals(PressEasing, o.PressEasing)
             && EqualityComparer<float>.Default.Equals(BrushTransitionMs, o.BrushTransitionMs)
-            && EqualityComparer<bool>.Default.Equals(CounterScale, o.CounterScale);
+            && EqualityComparer<bool>.Default.Equals(CounterScale, o.CounterScale)
+            && EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate);
     }
 
     public override bool Equals(object? obj) => Equals(obj as BoxColdMotion);
