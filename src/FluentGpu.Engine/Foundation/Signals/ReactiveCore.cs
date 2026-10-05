@@ -119,7 +119,7 @@ public abstract class Computation : IDisposable
 
     internal readonly ReactiveRuntime Runtime;
 
-    private readonly List<ISignalSource> _sources = new();   // what this read last run
+    private RefList<ISignalSource> _sources;   // what this read last run
     private List<Action>? _cleanups;                          // onCleanup callbacks
     private List<Computation>? _owned;                        // nested computations created during this run
     private readonly Computation? _owner;                    // who disposes us when they re-run/dispose

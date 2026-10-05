@@ -100,7 +100,7 @@ public static partial class IconButton
                 }),
             ],
         };
-        icon = parts.Apply(PartIcon, icon) with { Children = icon.Children };
+        if (parts is not null) icon = parts.Apply(PartIcon, icon) with { Children = icon.Children };   // no parts: nothing to re-assert, skip the copy
         var root = new BoxEl
         {
             Width = s.Size, Height = s.Height ?? s.Size, Direction = 0, Role = AutomationRole.Button,
@@ -123,7 +123,7 @@ public static partial class IconButton
             Children = [icon],
         };
         // Parts: restyle anything (fills, corners, size…); the click mechanics and the icon mount always win.
-        return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
+        return parts is null ? root : parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
     }
 
     /// <summary>E12b (home-redesign-remediation.md §2 E12/§3.2): a BOUND-enabled overload — <paramref name="isEnabled"/>
