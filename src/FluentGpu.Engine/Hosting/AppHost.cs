@@ -3818,6 +3818,25 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Test-only: the render seam's publication counter (moves once per published scene).</summary>
     internal ulong ScenePublishSeqForTest => _renderSeam.PublishSeq;
 
+    /// <summary>Test-only: the publication key a frame would compare now (default record options), and whether the gate
+    /// would match it against the last publication — the allocation-free comparison the no-op skip makes every frame.</summary>
+    internal bool NoopKeyMatchesForTest()
+    {
+        var key = BuildPublicationKey(default, _window.ClientSizePx);
+        return _noopPublications.Matches(in key, _uiCoverage);
+    }
+
+    /// <summary>Test-only: the <c>published=</c> census since the last call (why each publication could not be skipped).</summary>
+    internal string NoopBlockedCensusForTest()
+    {
+        var sb = new System.Text.StringBuilder();
+        _noopPublications.AppendBlockedWindow(sb);
+        return sb.ToString();
+    }
+
+    /// <summary>Test-only: invalidate the render target (what a resize / DPI change / device recovery does to the seam).</summary>
+    internal void InvalidateRenderTargetForTest() => _renderSeam.InvalidateTarget();
+
     /// <summary>Test-only: captures that kept their slot's image snapshot (no image input moved since that slot's last one).</summary>
     internal int ImageCapturesReusedForTest => _renderSeam.ImageCapturesReused;
 
@@ -3836,6 +3855,9 @@ public sealed partial class AppHost : IDisposable
     {
         if (_paintWake == UnknownPaintWake || !NoopPublicationGate.WakeAllowsSkip(_paintWake)) return NoopPublicationBlock.Wake;
         if (_lastPublishedSceneSeq == 0 || !_everLaidOut || !_repaintTargetValid || _revealPending) return NoopPublicationBlock.Target;
+        // An armed frame capture (RequestFrameCapture) completes on the render thread's next COMPOSITED present, and only a
+        // publication (or render-side motion) reaches that turn: a settled scene must publish once for it.
+        if (Volatile.Read(ref _evCaptureArmed) != 0) return NoopPublicationBlock.Capture;
         if (resized || keepAlive || reconciled || layoutNeeded) return NoopPublicationBlock.Structure;
         if (transformWrote) return NoopPublicationBlock.Transform;
         if (imageContentChanged) return NoopPublicationBlock.Images;
@@ -3852,6 +3874,39 @@ public sealed partial class AppHost : IDisposable
         lock (_popupActionLock) { if (_popupActionsIn.Count != 0 || _ownResizePending) return NoopPublicationBlock.Overlay; }
         return NoopPublicationBlock.None;
     }
+
+#if DEBUG || FLUENTGPU_DIAG
+    // DEBUG self-check of the elide path: every NoopParityInterval-th elision (and the first) re-captures the store in full into
+    // a scratch snapshot and compares it with the snapshot the newest publication carried. Equal is the definition of a sound
+    // skip; a mismatch means some store write escaped the ledger HasUnpublishedChanges reads. It is reported, the gate is
+    // reset, and this frame publishes, so the pixels are right either way. Compiled out of Release, like the capture parity.
+    private const int NoopParityInterval = 16;
+    private Scene.SceneRecordingSnapshot? _noopParityScratch;
+    private long _noopParityCounter;
+    internal int NoopParityVerifications { get; private set; }
+    internal int NoopParityFailures { get; private set; }
+
+    private bool VerifyNoopPublication()
+    {
+        if (_noopParityCounter++ % NoopParityInterval != 0) return true;
+        if (_renderSeam.NewestCapturedScene is not { } newest) return true;
+        NoopParityVerifications++;
+        var scratch = _noopParityScratch ??= new Scene.SceneRecordingSnapshot();
+        scratch.Capture(_scene, default);   // no popup roots: a frame with popup windows never reaches the elide
+        bool equal = scratch.EqualsForParity(newest.Scene, out string mismatch);
+        scratch.ReleaseResources();
+        if (equal) return true;
+        NoopParityFailures++;
+        _noopPublications.Invalidate();
+        Console.Error.WriteLine("[fg-noop-parity] a publication the gate would elide differs from the last one published ("
+            + mismatch + "): some store write bypassed the capture ledger. Publishing this frame.");
+        return false;
+    }
+#else
+    internal int NoopParityVerifications => 0;
+    internal int NoopParityFailures => 0;
+    private static bool VerifyNoopPublication() => true;
+#endif
 
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
@@ -4943,13 +4998,6 @@ public sealed partial class AppHost : IDisposable
         // idle turn below: the wait stays the display-tick wait (RecommendedWaitMs still sees the hold), so input latency is
         // unchanged — any real input ends the wait and arrives with its own bits set.
         bool warmCadenceOnly = wake == WakeReasons.WarmCadence && inputKindMask == 0 && clicks == 0 && !drainedPosts;
-        if (warmCadenceOnly)
-        {
-            _warmCadenceIdleTurns++;
-            // Headless time IS the frame clock (one fixed step per painted frame), so a turn that no longer paints must still
-            // let the hold's time pass, as the wall clock does under a real window, or the hold would never expire there.
-            if (_isHeadless) _frameClockMs += _frameTime.NextDeltaMs();
-        }
 
         if (wake == WakeReasons.None || warmCadenceOnly)   // == !HasActiveWork, without a second ComputeWakeReasons
         {
@@ -4964,6 +5012,15 @@ public sealed partial class AppHost : IDisposable
                 // NEXT active frame (which may be seconds away at rest) to be released. Async gate off only — under
                 // Async/ForceSync the render thread owns every device touch and reclaims on its own turns instead.
                 if (!_asyncActive) _device.ReclaimCompletedUploads();
+                if (warmCadenceOnly)
+                {
+                    _warmCadenceIdleTurns++;
+                    // Headless time IS the frame clock (one fixed step per painted frame), so a warm turn that no longer
+                    // paints must still let the hold's time pass, as the wall clock does under a real window, or the hold
+                    // would never expire there. Here only: a turn whose decode completed falls through to Paint, which
+                    // advances the clock itself.
+                    if (_isHeadless) _frameClockMs += _frameTime.NextDeltaMs();
+                }
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 // Genuinely idle — no active work, no completed image (the deep-idle case: streak/idleAgo in the
                 // [wake] census). Nothing was owed a present during this stretch; stamp so the NEXT present (the
@@ -5906,6 +5963,7 @@ public sealed partial class AppHost : IDisposable
                 var block = NoopPublicationCandidate(resized, keepAlive, reconciled, layoutNeeded, transformWrote, imageContentChanged);
                 if (block == NoopPublicationBlock.None && !_noopPublications.Matches(in publicationKey, _uiCoverage))
                     block = NoopPublicationBlock.Key;
+                if (block == NoopPublicationBlock.None && !VerifyNoopPublication()) block = NoopPublicationBlock.Parity;
                 if (block == NoopPublicationBlock.None)
                 {
                     skipSubmit = true;

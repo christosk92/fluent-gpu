@@ -439,6 +439,20 @@ public sealed class SceneFramePublisher
 
     internal SceneRenderFrame Scene(in RenderFrame frame) => _scenes[frame.ArenaIndex]!;
 
+    /// <summary>UI thread: the slot snapshot of the newest scene publication (the highest capture baseline), or null before
+    /// the first. Read-only use while the renderer may hold it: the consumer never writes a slot's captured columns.</summary>
+    internal SceneRenderFrame? NewestCapturedScene
+    {
+        get
+        {
+            int best = -1;
+            for (int i = 0; i < _scenes.Length; i++)
+                if (_scenes[i] is not null && _sceneCaptureSeq[i] != 0 && (best < 0 || _sceneCaptureSeq[i] > _sceneCaptureSeq[best]))
+                    best = i;
+            return best < 0 || _sceneCaptureSeq[best] != _publishSeq ? null : _scenes[best];
+        }
+    }
+
     /// <summary>Captures, across all slots, that kept the slot's image snapshot instead of rebuilding it (tests / diagnostics).</summary>
     internal int ImageCapturesReused
     {

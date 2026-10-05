@@ -29,7 +29,7 @@ internal readonly record struct PublicationKey(
 /// window for the <c>[wake]</c> census (<c>published=</c>), so "why did this idle-looking stretch keep publishing" has an answer.</summary>
 internal enum NoopPublicationBlock
 {
-    None, Wake, Target, Structure, Transform, Images, SceneChange, Retiring, Overlay, Device, Scroll, Key,
+    None, Wake, Target, Capture, Structure, Transform, Images, SceneChange, Retiring, Overlay, Device, Scroll, Key, Parity,
 }
 
 /// <summary>
@@ -72,9 +72,10 @@ internal sealed class NoopPublicationGate
     /// <summary>Count one elided publication.</summary>
     public void NoteElided() => Elided++;
 
-    private const int BlockCount = (int)NoopPublicationBlock.Key + 1;
+    private const int BlockCount = (int)NoopPublicationBlock.Parity + 1;
     private static readonly string[] s_blockNames =
-        ["none", "wake", "target", "structure", "transform", "images", "sceneChange", "retiring", "overlay", "device", "scroll", "key"];
+        ["none", "wake", "target", "capture", "structure", "transform", "images", "sceneChange", "retiring", "overlay", "device",
+         "scroll", "key", "parity"];
     private readonly long[] _blocked = new long[BlockCount];
 
     /// <summary>Count one publication that went ahead, by the clause that required it.</summary>
@@ -103,6 +104,7 @@ internal sealed class NoopPublicationGate
         _valid = true;
     }
 
-    /// <summary>Forget the last publication: the next frame publishes whatever it holds.</summary>
+    /// <summary>Forget the last publication: the next frame publishes whatever it holds (the DEBUG elide self-check's
+    /// response to a divergence, AppHost.VerifyNoopPublication).</summary>
     public void Invalidate() => _valid = false;
 }

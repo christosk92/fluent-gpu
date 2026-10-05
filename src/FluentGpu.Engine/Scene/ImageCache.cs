@@ -143,7 +143,7 @@ public sealed class ImageCache
     private sealed class Entry
     {
         public SourceKey Key;
-        // The six fields ImageRecordingSnapshot copies (State, W, H, TextureMs, RevealMs, SwapHoldUntilMs) are properties
+        // The fields ImageRecordingSnapshot copies (State, W, H, TextureMs, RevealMs, SwapHoldUntilMs, Transition) are properties
         // so EVERY write bumps RecordingInputSerial: a publication whose snapshot inputs did not move can then be proven
         // unchanged in O(1) instead of re-copying every referenced entry (SceneRenderFrame.Capture) or publishing at all
         // (the host's no-op publication skip). The setters are the only write path; nothing takes a ref to these.
@@ -160,7 +160,9 @@ public sealed class ImageCache
         // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
         public float TextureMs { get => _textureMs; set { _textureMs = value; NoteRecordingInputChanged(); } }
         private float _textureMs = float.NaN;
-        public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
+        // the placeholder→image reveal (duration + easing); set at request. Its easing is a recording input (see State).
+        public ImageTransition Transition { get => _transition; set { _transition = value; NoteRecordingInputChanged(); } }
+        private ImageTransition _transition;
         // Duration of the CURRENT reveal. Normally Transition.DurationMs; shortened to ShortRevealMs for a warm re-landing
         // (BeginReveal). Every deadline/progress read uses THIS, so a shortened reveal keeps the wake bookkeeping exact.
         public float RevealMs { get => _revealMs; set { _revealMs = value; NoteRecordingInputChanged(); } }
