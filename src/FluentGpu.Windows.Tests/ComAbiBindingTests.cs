@@ -261,6 +261,10 @@ public sealed unsafe class ComAbiBindingTests
             // FLIP_DISCARD (the engine's swap effect) refuses PARTIAL presentation outright: after a full present, a
             // Present1 carrying dirty rects is DXGI_ERROR_INVALID_CALL. This is why the composite presents whole frames
             // (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
+            // Drain the direct queue before the swapchain goes: WARP's Present copies (d3d10warp Task_Copy) run on the queue
+            // after Present1 returns, and releasing the swapchain under them is the test-host access violation
+            // (dxgi!CDXGISwapChain::~CDXGISwapChain freeing the buffers Task_Copy still reads).
+            Assert.True(Gen.ID3D12CommandQueueVtbl.Signal(directQ, fence, 4) >= 0); WaitFence(fence, 4);
             Release(ref swap);
             Assert.True(factory->QueryInterface(__uuidof<IDXGIFactory2>(), (void**)&f2) >= 0);
             try
@@ -281,10 +285,16 @@ public sealed unsafe class ComAbiBindingTests
             Assert.Equal(0, Gen.IDXGISwapChain1Vtbl.Present1(swap, 0, 0, &full));
             Assert.Equal(unchecked((int)0x887A0001), Gen.IDXGISwapChain1Vtbl.Present1(swap, 0, 0, &partial));
 
+            Assert.True(Gen.ID3D12CommandQueueVtbl.Signal(directQ, fence, 5) >= 0); WaitFence(fence, 5);   // same drain before the finally releases it
             Assert.Equal(0, (int)device->GetDeviceRemovedReason());
         }
         finally
         {
+            // Non-throwing drain for the exception path: the swapchain below must never be released under a queued WARP present.
+            if (directQ != null && fence != null && Gen.ID3D12CommandQueueVtbl.Signal(directQ, fence, 6) >= 0)
+            {
+                try { WaitFence(fence, 6); } catch (Xunit.Sdk.XunitException) { }
+            }
             Release(ref swap);
             Release(ref directList); Release(ref directAlloc); Release(ref target); Release(ref rtvHeap);
             Release(ref copyList); Release(ref copyAlloc);
