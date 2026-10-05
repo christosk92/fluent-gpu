@@ -245,14 +245,14 @@ public static class FrameLedgerCsv
     public static string Audio(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Audio.Length * 80);
-        sb.AppendLine("seq,ms,deviceWrites,bufferDrained,xruns,xrunFrames,paddingMinFrames,paddingMinMs,bufferFrames,rate");
+        sb.AppendLine("seq,ms,deviceWrites,deviceUnderruns,xruns,xrunFrames,paddingMinFrames,paddingMinMs,bufferFrames,rate");
         LedgerAudioSample prev = default;
         for (int i = 0; i < s.Audio.Length; i++)
         {
             ref readonly var r = ref s.Audio[i];
             sb.Append(r.Seq).Append(','); T(sb, s.Ms(r.Qpc));
             // Deltas since the previous sample (the first row: since the counters began).
-            sb.Append(r.DeviceWritesTotal - prev.DeviceWritesTotal).Append(',').Append(r.BufferDrainedTotal - prev.BufferDrainedTotal).Append(',')
+            sb.Append(r.DeviceWritesTotal - prev.DeviceWritesTotal).Append(',').Append(r.DeviceUnderrunsTotal - prev.DeviceUnderrunsTotal).Append(',')
               .Append(r.XrunsTotal - prev.XrunsTotal).Append(',').Append(r.XrunFramesTotal - prev.XrunFramesTotal).Append(',')
               .Append(r.PaddingMinFrames).Append(',');
             T(sb, r.PaddingMinFrames >= 0 && r.Rate > 0 ? r.PaddingMinFrames * 1000.0 / r.Rate : double.NaN);

@@ -20,7 +20,7 @@ namespace FluentGpu.Hosting;
 /// submit while pass timing is on. Producer: the render thread (it polls the swapchain after each turn).</item>
 /// <item><b>Memory</b> (<see cref="LedgerMemorySample"/>): working set, private bytes, managed heap, VRAM, image cache, glyph atlas at
 /// <see cref="MemoryIntervalMs"/> on the ledger's own sampler thread (an idle loop parked in its wait is still sampled).</item>
-/// <item><b>Audio</b> (<see cref="LedgerAudioSample"/>): the audio health counters at the same cadence: buffer-drained edges and
+/// <item><b>Audio</b> (<see cref="LedgerAudioSample"/>): the audio health counters at the same cadence: device underruns and
 /// the window's minimum endpoint padding apart from app-side xruns (<see cref="FluentGpu.Media.AudioHealth"/>).</item>
 /// </list>
 /// <para><b>Cost.</b> Off (the default): a static bool read per RunFrame and per render turn gates every ledger read and record; what
@@ -325,7 +325,7 @@ public static class FrameLedger
                 var a = FluentGpu.Media.AudioHealth.Sample();
                 var ar = new LedgerAudioSample
                 {
-                    Seq = (ulong)audioRing.Count, Qpc = s.Qpc, DeviceWritesTotal = a.DeviceWrites, BufferDrainedTotal = a.BufferDrainedEdges,
+                    Seq = (ulong)audioRing.Count, Qpc = s.Qpc, DeviceWritesTotal = a.DeviceWrites, DeviceUnderrunsTotal = a.DeviceUnderruns,
                     XrunsTotal = a.Xruns, XrunFramesTotal = a.XrunFrames, PaddingMinFrames = a.PaddingMinFrames,
                     BufferFrames = a.BufferFrames, Rate = a.Rate,
                 };

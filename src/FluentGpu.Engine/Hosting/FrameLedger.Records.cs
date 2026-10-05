@@ -241,16 +241,16 @@ public struct LedgerMemorySample
     public int Reserved2;
 }
 
-/// <summary>The audio health counters (<see cref="FluentGpu.Media.AudioHealth"/>) at the memory cadence: buffer-drained edges (the
-/// endpoint buffer was found empty at a write after holding audio at the previous one) apart from app-side xruns (the feed
-/// thread's ring ran empty). A drained edge says audio ran out at the endpoint; it does not say whose fault it was.</summary>
+/// <summary>The audio health counters (<see cref="FluentGpu.Media.AudioHealth"/>) at the memory cadence: device underruns (the sink's
+/// own <c>IBufferedAudioSink.DeviceUnderruns</c> decisions, summed over devices) apart from app-side xruns (the feed thread's ring ran
+/// empty), and how close the endpoint came to dry.</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct LedgerAudioSample
 {
     public ulong Seq;
     public long Qpc;
-    /// <summary>Cumulative: device writes, buffer-drained edges, app-side xrun incidents, frames those xruns lost.</summary>
-    public long DeviceWritesTotal, BufferDrainedTotal, XrunsTotal, XrunFramesTotal;
+    /// <summary>Cumulative: device writes, device underruns, app-side xrun incidents, frames those xruns lost.</summary>
+    public long DeviceWritesTotal, DeviceUnderrunsTotal, XrunsTotal, XrunFramesTotal;
     /// <summary>The lowest endpoint padding (queued frames) any write saw since the previous sample (-1 = no write).</summary>
     public int PaddingMinFrames;
     public int BufferFrames, Rate, Reserved;
