@@ -670,12 +670,66 @@ public sealed class RenderThread : IDisposable
         RenderPaceHostState host = _paceHost?.Invoke() ?? default;
         string child = _childPaceReport?.Invoke() ?? "";
         long childTimeouts = host.NonPrimaryLatencyTimeouts - _paceChildTimeouts0;
+        // Quiet windows are counted, not printed: a second of motion that presented, missed no tick, raced nothing, needed no
+        // catch-up, timed no slot out, ran ungoverned at queue depth 1 without decimation and kept every present within two
+        // refresh periods has nothing to report, and printing it anyway was one formatted line (and its strings) per second
+        // for as long as anything moved. A window whose pacing STATE differs from the last printed line's prints too (an edge
+        // back to quiet is news), and every PaceHeartbeatWindows-th quiet window prints as a heartbeat. The next printed line
+        // carries the count (quiet=N); `--fg pace` prints every window as before.
+        var facts = new PaceWindowFacts(
+            Missed: _missedMotionTicks - _paceMissed0, CatchUps: _catchUpSkips - _paceCatchUp0,
+            SlotTimeouts: host.SlotLivenessTimeouts - _paceSlotTimeouts0, ChildTimeouts: childTimeouts,
+            SlotDrops: slotDrops - _paceSlotDrops0, Races: _raceHits - _paceRace0,
+            Presents: (_freshPresents - _paceFresh0) + (_motionPresents - _paceMotion0),
+            PresentLagMaxMs: Math.Max(_presentLagMaxQpc, _childDrainMaxQpc) * toMs, RefreshMs: PeriodQpc() * toMs,
+            State: new PaceState(host.GovernorEngaged, clock?.Decimating ?? false, host.PresentQueueDepth));
+        if (!ShouldPrintPaceWindow(in facts, _pacePrinted, _paceQuietWindows, child.Length != 0, EngineSwitchesPaceLog))
+        {
+            _paceQuietWindows++;
+            _paceWindowStartQpc = 0;
+            return;
+        }
+        _pacePrinted = facts.State;
+        long quiet = _paceQuietWindows;
+        _paceQuietWindows = 0;
         string timeoutTarget = PaceTimeoutTarget(host.SlotLivenessTimeouts - _paceSlotTimeouts0, childTimeouts);
         double childDrainAvg = _childDrainCount == 0 ? 0 : _childDrainSumQpc * toMs / _childDrainCount;
         FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} timeoutTarget={timeoutTarget} childWaitMax={host.NonPrimaryLatencyWaitMaxMs:F2} childTimeouts={childTimeouts} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)} childDrain(avg={childDrainAvg:F2} max={_childDrainMaxQpc * toMs:F2} n={_childDrainCount}){child}"));
+            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} timeoutTarget={timeoutTarget} childWaitMax={host.NonPrimaryLatencyWaitMaxMs:F2} childTimeouts={childTimeouts} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)} childDrain(avg={childDrainAvg:F2} max={_childDrainMaxQpc * toMs:F2} n={_childDrainCount}) quiet={quiet}{child}"));
         _paceWindowStartQpc = 0;   // next turn opens a fresh window
     }
+
+    private long _paceQuietWindows;   // quiet [render.pace] windows since the last printed line
+    private PaceState? _pacePrinted;  // the pacing state the last printed line reported (null: none printed yet)
+    private static bool EngineSwitchesPaceLog => FluentGpu.Hosting.EngineSwitches.PaceLog;
+
+    /// <summary>Quiet <c>[render.pace]</c> windows between heartbeat lines (~30 s of smooth motion).</summary>
+    internal const int PaceHeartbeatWindows = 30;
+
+    /// <summary>The pacing STATE of a window: whether the GPU governor is engaged, whether the display clock decimates, and
+    /// the present-queue depth. A change of any of these since the last printed line is itself worth a line.</summary>
+    internal readonly record struct PaceState(bool GovernorEngaged, bool Decimating, int Depth);
+
+    /// <summary>One <c>[render.pace]</c> window's counters, as the print decision reads them.</summary>
+    internal readonly record struct PaceWindowFacts(long Missed, long CatchUps, long SlotTimeouts, long ChildTimeouts,
+        long SlotDrops, long Races, long Presents, double PresentLagMaxMs, double RefreshMs, PaceState State);
+
+    /// <summary>Whether a window is anomalous on its own: a missed motion tick, a catch-up skip, a liveness slot timeout
+    /// (primary or child), a display-clock slot drop, a present race, NO present at all while motion was live (frozen
+    /// motion), the governor engaged, a decimating clock, a present queue deeper than one, or a present (or a detached
+    /// child's drain) that took more than two refresh periods. Pure; the tests pin it.</summary>
+    internal static bool PaceWindowAnomalous(in PaceWindowFacts f)
+        => f.Missed > 0 || f.CatchUps > 0 || f.SlotTimeouts > 0 || f.ChildTimeouts > 0 || f.SlotDrops > 0 || f.Races > 0
+           || f.Presents == 0 || f.State.GovernorEngaged || f.State.Decimating || f.State.Depth > 1
+           || f.PresentLagMaxMs > 2.0 * f.RefreshMs;
+
+    /// <summary>Whether a window gets a line: <c>--fg pace</c>, a child section to report, an anomalous window, a pacing
+    /// state that differs from the last printed line's (or no line printed yet), or the heartbeat after
+    /// <see cref="PaceHeartbeatWindows"/> quiet windows. Pure; the tests pin it.</summary>
+    internal static bool ShouldPrintPaceWindow(in PaceWindowFacts f, PaceState? lastPrinted, long quietSincePrinted,
+        bool hasChildSection, bool printAll)
+        => printAll || hasChildSection || PaceWindowAnomalous(in f) || lastPrinted != f.State
+           || quietSincePrinted >= PaceHeartbeatWindows;
 
     /// <summary>Which swapchain's liveness-bounded slot waits timed out in a pace window (F235): <c>none</c>, <c>primary</c> (the
     /// main window), <c>child</c> (a pop-out or popup, whose blocking wait runs on this shared thread) or <c>both</c>. Pure.</summary>

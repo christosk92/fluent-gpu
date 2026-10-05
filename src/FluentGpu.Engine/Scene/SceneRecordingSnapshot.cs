@@ -135,6 +135,11 @@ public sealed partial class SceneRecordingSnapshot
     /// Reachability is still walked, and image readiness/reveal metadata is still refreshed by the caller.</summary>
     public int ResourceReferenceRowsScanned { get; private set; }
 
+    /// <summary>Whether the last capture rebuilt <see cref="ReferencedImageIds"/> (every full capture does; an incremental one
+    /// only when an identity, generation or traversal order changed). False means the id set is exactly the one this
+    /// snapshot's previous capture held — which lets the caller keep that capture's image snapshot when no image input moved.</summary>
+    public bool LastCaptureRebuiltResourceReferences { get; private set; } = true;
+
     /// <summary>Nodes whose columns this capture actually COPIED - every reachable node on a full capture, only the
     /// changed ones on an incremental one. This (not <see cref="CapturedNodeCount"/>) is the number
     /// <c>FrameStats.CapturedNodes</c> reports: it is the work the publication did, and on a coast frame it is a
@@ -319,6 +324,7 @@ public sealed partial class SceneRecordingSnapshot
         // Retain identities on pure paint/lyric changes. A changed identity, generation or traversal order falls
         // back to the original captured-order derivation, preserving both de-duplication and ownership semantics.
         if (_resourceReferencesDirty) RebuildResourceReferences();
+        LastCaptureRebuiltResourceReferences = _resourceReferencesDirty;
 
         // Scrollbar chrome: rebuilt for the captured scrollable set (collected during the walk) — keyed by the
         // SCROLLER's index, a handful of entries, so a full rebuild is the only correct cheap option.

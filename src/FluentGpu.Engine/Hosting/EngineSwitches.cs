@@ -16,6 +16,7 @@ namespace FluentGpu.Hosting;
 /// <list type="bullet">
 /// <item><c>diag</c> — engine <see cref="Diag"/> on (compiled-in builds) with its sink on stderr, plus the boot trace.</item>
 /// <item><c>fps</c> — the periodic <c>[fps]</c> line.</item>
+/// <item><c>pace</c> — every 1 Hz <c>[render.pace]</c> window, not only the anomalous ones.</item>
 /// <item><c>alloc</c> / <c>alloc-types</c> — per-segment allocation probes / the process-global allocation-type listener.</item>
 /// <item><c>mem</c> or <c>mem=N</c> — interval memory census every N seconds (default 5).</item>
 /// <item><c>resize</c>, <c>motion</c>, <c>layout</c>, <c>layout-overflow</c>, <c>layout-verify</c> — their printouts.</item>
@@ -53,6 +54,8 @@ public static class EngineSwitches
 {
     public static bool DiagConsole;
     public static bool FpsLog;
+    /// <summary>Print every <c>[render.pace]</c> window (<c>--fg pace</c>); by default only anomalous ones are printed.</summary>
+    public static bool PaceLog;
     public static bool AllocDiag;
     public static bool AllocTypes;
     /// <summary>Interval memory census period in seconds; 0 = off.</summary>
@@ -145,6 +148,7 @@ public static class EngineSwitches
                 Diag.Enabled = Diag.CompiledIn;
                 return true;
             case "fps": FpsLog = true; return true;
+            case "pace": PaceLog = true; return true;
             case "alloc": AllocDiag = true; return true;
             case "alloc-types": AllocTypes = true; return true;
             case "mem":

@@ -648,6 +648,7 @@ public sealed partial class SceneStore : ISceneBackend
 
     private void CaptureRemovalExtent(NodeHandle node)
     {
+        _mutationStamp = _publishSeq + 1;   // a removal is a captured change (the snapshot copies the ledger)
         if (_removedCount >= RemovalLedgerCap) { _removedOverflow = true; _removedOverflowStamp = _publishSeq + 1; return; }
         RectF abs = AbsoluteRect(node);
         ref NodePaint p = ref _paint[(int)node.Raw.Index];
@@ -857,6 +858,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_overlays.Count >= MaxOverlays) { var old = _overlays[0]; _overlays.RemoveAt(0); FreeSubtree(old); }
         _flags[node.Raw.Index] |= NodeFlags.ConnectedOverlay;
         _overlays.Add(node);
+        NoteCaptureChanged((int)node.Raw.Index);   // the overlay band and the node's flags are captured
     }
 
     /// <summary>Drop a node from the overlay band (does NOT free it — the caller owns its lifetime).</summary>
@@ -865,6 +867,7 @@ public sealed partial class SceneStore : ISceneBackend
         for (int i = _overlays.Count - 1; i >= 0; i--)
             if (_overlays[i] == node) { _overlays.RemoveAt(i); break; }
         if (IsLive(node)) _flags[node.Raw.Index] &= ~NodeFlags.ConnectedOverlay;
+        _mutationStamp = _publishSeq + 1;   // the overlay band is captured (a dead node has no row to ledger)
     }
 
     /// <summary>Count of connected-animation overlays currently flying (the host keeps painting while &gt; 0).</summary>
@@ -1345,6 +1348,12 @@ public sealed partial class SceneStore : ISceneBackend
     public ulong PublishSeq => _publishSeq;
     public void NotePublished(ulong seq) => _publishSeq = seq;
 
+    /// <summary>True while any record-dirty bit is still set — retained until a publication carrying it is consumed
+    /// (<see cref="ClearRecordDirty(ulong)"/>). The host keeps publishing while bits remain, so the renderer's snapshot sheds
+    /// them as it did before the no-op publication skip existed (a stale bit would re-damage its band on every render-side
+    /// motion turn).</summary>
+    internal bool HasRecordDirtyLedger => _recordDirtyWroteCount > 0;
+
     /// <summary>Retire each self/descendant transform/content contribution the render thread has adopted
     /// (stamp ≤ <paramref name="consumedSeq"/>), keeping newer contributions. A snapshot carries the union of deltas
     /// since the last CONSUMED publication without a fresh child retaining old ancestor self damage.
@@ -1573,6 +1582,12 @@ public sealed partial class SceneStore : ISceneBackend
         return ref s;
     }
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
+
+    /// <summary>The scroll row of an existing viewport WITHOUT the write-intent ledger mark <see cref="ScrollRef"/> makes.
+    /// For a per-frame writer that usually writes what is already there (the host's frame step): it must call
+    /// <see cref="NoteCaptureChanged"/> itself whenever a captured field actually changed. The row must exist
+    /// (<see cref="HasScroll"/>).</summary>
+    internal ref ScrollState ScrollRefUnledgered(NodeHandle h) => ref _scroll.GetOrAdd((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
 
