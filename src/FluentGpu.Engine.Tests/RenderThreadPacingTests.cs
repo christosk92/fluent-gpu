@@ -356,25 +356,50 @@ public sealed class RenderThreadPacingTests
         var seam = new SceneFramePublisher();
         var display = new VirtualDisplay();
         byte[] one = [1];
+        // The motion thread keeps turning on its own backstop between the DrainSync calls, so a turn can be in flight when
+        // the test looks: the log is appended under a lock and judged per COMPLETE turn (childDrain … commit), never by
+        // first occurrences in a list a turn was half-way through.
         var order = new List<string>();
-        var rt = new RenderThread(seam, _ => order.Add("parentPresent"), async: false,
+        var gate = new object();
+        void Log(string e) { lock (gate) order.Add(e); }
+        var rt = new RenderThread(seam, _ => Log("parentPresent"), async: false,
             needsTick: () => true, ownMotion: () => true,
-            tick: () => order.Add("parentMotion"), tickPeriod: () => PeriodQpc, displayClock: display,
-            takePresentSlot: _ => { order.Add("parentSlotWait"); Thread.Sleep(20); return true; },   // a slow primary slot
-            extraDrain: () => order.Add("childDrain"), postTurn: () => order.Add("commit"));
+            tick: () => Log("parentMotion"), tickPeriod: () => PeriodQpc, displayClock: display,
+            takePresentSlot: _ => { Log("parentSlotWait"); Thread.Sleep(20); return true; },   // a slow primary slot
+            extraDrain: () => Log("childDrain"), postTurn: () => Log("commit"));
         try
         {
             for (int k = 0; k < 4; k++)
             {
-                order.Clear();
-                display.Now = k;
+                lock (gate) order.Clear();
+                display.Now = k * 100;
                 if (k % 2 == 1) seam.Publish(one, default, default);   // alternate fresh parent publications and motion re-presents
                 rt.DrainSync();
-                int drain = order.IndexOf("childDrain"), slot = order.IndexOf("parentSlotWait"), commit = order.IndexOf("commit");
-                int present = Math.Max(order.IndexOf("parentPresent"), order.IndexOf("parentMotion"));
-                Assert.True(drain >= 0 && slot >= 0 && present >= 0 && commit >= 0, string.Join(",", order));
-                Assert.True(drain < slot, $"the children drain before the parent's slot wait: {string.Join(",", order)}");
-                Assert.True(slot < present && present < commit, $"slot, present, then the one commit: {string.Join(",", order)}");
+                string[] log;
+                lock (gate) log = order.ToArray();
+                // A backstop turn already in flight can take the new tick's present before the drained turn starts (which then
+                // finds the tick spent): offer a fresh tick until one whole presenting turn is in the log. Bounded.
+                for (int retry = 1; retry < 10 && !HasWholePresentTurn(log); retry++)
+                {
+                    display.Now = k * 100 + retry;
+                    rt.DrainSync();
+                    lock (gate) log = order.ToArray();
+                }
+                int complete = 0;
+                for (int start = Array.IndexOf(log, "childDrain"); start >= 0; start = Array.IndexOf(log, "childDrain", start + 1))
+                {
+                    int commit = Array.IndexOf(log, "commit", start);
+                    if (commit < 0) break;                                       // a turn still in flight: not judged
+                    var turn = log.AsSpan(start, commit - start + 1).ToArray();
+                    if (Array.IndexOf(turn, "childDrain", 1) >= 0) continue;     // began mid-turn (cleared under it): not judged
+                    int slot = Array.IndexOf(turn, "parentSlotWait");
+                    int present = Math.Max(Array.IndexOf(turn, "parentPresent"), Array.IndexOf(turn, "parentMotion"));
+                    if (present < 0) continue;   // a backstop turn on an already-presented tick: drain + commit, nothing to order
+                    complete++;
+                    Assert.True(slot > 0, $"the children drain before the parent's slot wait: {string.Join(",", turn)}");
+                    Assert.True(slot < present && present < turn.Length - 1, $"slot, present, then the one commit: {string.Join(",", turn)}");
+                }
+                Assert.True(complete >= 1, string.Join(",", log));
             }
             // A bare wake (no parent work at all) still drains the children and still commits, with no slot wait. Its own list:
             // the motion thread above is still live and keeps turning on its backstop, so a shared list raced it.
@@ -391,6 +416,21 @@ public sealed class RenderThreadPacingTests
             finally { idle.Dispose(); }
         }
         finally { rt.Dispose(); display.Dispose(); }
+    }
+
+    /// <summary>Whether <paramref name="log"/> holds one whole turn (childDrain … commit) that presented.</summary>
+    private static bool HasWholePresentTurn(string[] log)
+    {
+        for (int start = Array.IndexOf(log, "childDrain"); start >= 0; start = Array.IndexOf(log, "childDrain", start + 1))
+        {
+            int commit = Array.IndexOf(log, "commit", start);
+            if (commit < 0) return false;
+            int next = Array.IndexOf(log, "childDrain", start + 1);
+            if (next >= 0 && next < commit) continue;
+            for (int i = start; i < commit; i++)
+                if (log[i] is "parentPresent" or "parentMotion") return true;
+        }
+        return false;
     }
 
     // F244: the worst present's work is split into the host's phases and the blocking one is named. The host's stamps arrive through
