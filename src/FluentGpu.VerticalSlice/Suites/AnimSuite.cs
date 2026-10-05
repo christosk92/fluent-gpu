@@ -4048,57 +4048,66 @@ static class AnimSuite
               onGrid && peakQ > 10f && distinct > 5 && displayLoop,
               $"onGrid={onGrid} peak={peakQ:0.##} distinct={distinct} displayLoop={displayLoop}");
 
-        // M5d: parked in the BACKGROUND — an unfocused window, then a covered one, glides the marquee home and holds it there;
-        // foregrounding it again resumes the scroll. ParkInBackground = false opts out.
+        // M5d: motion policy (2026-10-03). An UNFOCUSED but visible window keeps its marquee scrolling — focus is not a motion
+        // policy; a COVERED (occluded / cloaked) window glides it home and holds it there, and uncovering it resumes the
+        // scroll. ParkWhenOccluded = false opts out of the covered half (M5e).
         var deviceP = new HeadlessGpuDevice();
         var probeP = new MarqueePingPongProbe();
         var windowP = new HeadlessWindow(new WindowDesc("marquee-park", new Size2(220, 120), 1f)); windowP.Show();
         using var hostP = new AppHost(app, windowP, deviceP, new HeadlessFontSystem(strings), strings, probeP);
         float peakP = 0f;
         for (int i = 0; i < 60 && peakP <= 20f; i++) { hostP.RunFrame(); peakP = MaxAbsTrackX(hostP, hostP.Scene.Root); }
-        windowP.IsActive = false;                                              // another window takes focus
-        float afterBlur = float.NaN;
-        for (int i = 0; i < 60; i++) { hostP.RunFrame(); afterBlur = MaxAbsTrackX(hostP, hostP.Scene.Root); }   // > the 450 ms glide
-        float heldMax = 0f;
-        for (int i = 0; i < 30; i++) { hostP.RunFrame(); heldMax = MathF.Max(heldMax, MaxAbsTrackX(hostP, hostP.Scene.Root)); }
-        windowP.IsActive = true;
-        float resumedPeak = 0f;
-        for (int i = 0; i < 90; i++) { hostP.RunFrame(); resumedPeak = MathF.Max(resumedPeak, MaxAbsTrackX(hostP, hostP.Scene.Root)); }
+        windowP.IsActive = false;                                              // another window takes focus: this one is still on screen
+        float unfocusedPeak = 0f;
+        int unfocusedDistinct = 0; float lastU = float.NaN;
+        for (int i = 0; i < 60; i++)
+        {
+            hostP.RunFrame();
+            float v = MaxAbsTrackX(hostP, hostP.Scene.Root);
+            unfocusedPeak = MathF.Max(unfocusedPeak, v);
+            if (v != lastU) { unfocusedDistinct++; lastU = v; }
+        }
         deviceP.PrimarySwapchain!.Occluded = true;                             // now covered by another window
-        for (int i = 0; i < 60; i++) hostP.RunFrame();
-        float afterCover = MaxAbsTrackX(hostP, hostP.Scene.Root);
+        float afterCover = float.NaN;
+        for (int i = 0; i < 60; i++) { hostP.RunFrame(); afterCover = MaxAbsTrackX(hostP, hostP.Scene.Root); }   // > the 450 ms glide
         float coveredMax = 0f;
         for (int i = 0; i < 30; i++) { hostP.RunFrame(); coveredMax = MathF.Max(coveredMax, MaxAbsTrackX(hostP, hostP.Scene.Root)); }
-        Check("M5d. a marquee parks (glides home, stays home) while its window is unfocused or covered, and resumes when foregrounded",
-              peakP > 20f && afterBlur < 0.5f && heldMax < 0.5f && resumedPeak > 10f && afterCover < 0.5f && coveredMax < 0.5f,
-              $"peak={peakP:0.##} afterBlur={afterBlur:0.###} heldMax={heldMax:0.###} resumedPeak={resumedPeak:0.##} afterCover={afterCover:0.###} coveredMax={coveredMax:0.###}");
+        deviceP.PrimarySwapchain!.Occluded = false;                            // uncovered (still unfocused)
+        float resumedPeak = 0f;
+        for (int i = 0; i < 90; i++) { hostP.RunFrame(); resumedPeak = MathF.Max(resumedPeak, MaxAbsTrackX(hostP, hostP.Scene.Root)); }
+        Check("M5d. a marquee keeps scrolling while its window is merely unfocused, parks (glides home, stays home) while the window is covered, and resumes when uncovered",
+              peakP > 20f && unfocusedPeak > 10f && unfocusedDistinct > 5 && afterCover < 0.5f && coveredMax < 0.5f && resumedPeak > 10f,
+              $"peak={peakP:0.##} unfocusedPeak={unfocusedPeak:0.##} unfocusedDistinct={unfocusedDistinct} afterCover={afterCover:0.###} coveredMax={coveredMax:0.###} resumedPeak={resumedPeak:0.##}");
 
-        // M5f: a HOVER-driven scroll is user input and is never parked: in an unfocused window a not-hovered title stays home,
-        // the same title scrolls while hovered (the player bar's Hover mode, pop-out focused), and glides home on hover-leave.
+        // M5f: a HOVER-driven scroll is user input and is never parked, covered window or not: a not-hovered Hover-mode title
+        // stays home, the same title scrolls while hovered, and glides home on hover-leave.
+        var deviceH = new HeadlessGpuDevice();
         var probeH = new MarqueeHoverHomeProbe();
         var windowH = new HeadlessWindow(new WindowDesc("marquee-park-hover", new Size2(220, 120), 1f)); windowH.Show();
-        using var hostH = new AppHost(app, windowH, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probeH);
+        using var hostH = new AppHost(app, windowH, deviceH, new HeadlessFontSystem(strings), strings, probeH);
         for (int i = 0; i < 8; i++) hostH.RunFrame();
-        windowH.IsActive = false;                                              // another window has focus
+        deviceH.PrimarySwapchain!.Occluded = true;                             // covered
         float idleH = 0f;
         for (int i = 0; i < 30; i++) { hostH.RunFrame(); idleH = MathF.Max(idleH, MaxAbsTrackX(hostH, hostH.Scene.Root)); }
-        probeH.Hovered.Value = true;                                           // the pointer enters the unfocused window's title
+        probeH.Hovered.Value = true;                                           // the pointer enters the title
         float hoverPeak = 0f;
         for (int i = 0; i < 120 && hoverPeak <= 20f; i++) { hostH.RunFrame(); hoverPeak = MaxAbsTrackX(hostH, hostH.Scene.Root); }
         probeH.Hovered.Value = false;
         float afterLeave = float.NaN;
         for (int i = 0; i < 60; i++) { hostH.RunFrame(); afterLeave = MaxAbsTrackX(hostH, hostH.Scene.Root); }
-        Check("M5f. a hover-driven marquee in an unfocused window still scrolls under the pointer (and rests when it leaves)",
+        Check("M5f. a hover-driven marquee in a covered window still scrolls under the pointer (and rests when it leaves)",
               idleH < 0.5f && hoverPeak > 20f && afterLeave < 0.5f,
               $"idle={idleH:0.###} hoverPeak={hoverPeak:0.##} afterLeave={afterLeave:0.###}");
 
+        var deviceN = new HeadlessGpuDevice();
         var probeN = new MarqueeNoParkProbe();
         var windowN = new HeadlessWindow(new WindowDesc("marquee-nopark", new Size2(220, 120), 1f)); windowN.Show();
-        using var hostN = new AppHost(app, windowN, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probeN);
-        windowN.IsActive = false;
+        using var hostN = new AppHost(app, windowN, deviceN, new HeadlessFontSystem(strings), strings, probeN);
+        for (int i = 0; i < 4; i++) hostN.RunFrame();
+        deviceN.PrimarySwapchain!.Occluded = true;
         float noParkPeak = 0f;
         for (int i = 0; i < 90; i++) { hostN.RunFrame(); noParkPeak = MathF.Max(noParkPeak, MaxAbsTrackX(hostN, hostN.Scene.Root)); }
-        Check("M5e. Style.ParkInBackground = false keeps an unfocused window's marquee scrolling",
+        Check("M5e. Style.ParkWhenOccluded = false keeps a covered window's marquee scrolling",
               noParkPeak > 10f, $"peak={noParkPeak:0.##}");
     }
 
@@ -5179,7 +5188,7 @@ sealed class FlipCellProbe : Component
     }
 }
 
-/// <summary>The M5e root: the M3 ping-pong column with <c>ParkInBackground = false</c>.</summary>
+/// <summary>The M5e root: the M3 ping-pong column with <c>ParkWhenOccluded = false</c>.</summary>
 sealed class MarqueeNoParkProbe : Component
 {
     public override Element Render() => new BoxEl
@@ -5191,7 +5200,7 @@ sealed class MarqueeNoParkProbe : Component
                 new Marquee.Style
                 {
                     FontSize = 14f, StartDelayMs = 0f, Speed = 200f, Mode = Marquee.ScrollMode.PingPong,
-                    Trigger = Marquee.TriggerMode.Always, ParkInBackground = false,
+                    Trigger = Marquee.TriggerMode.Always, ParkWhenOccluded = false,
                 }),
         ],
     };

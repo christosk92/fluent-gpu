@@ -51,13 +51,14 @@ public static class Marquee
         public ScrollMode Mode { get; init; } = ScrollMode.Loop;
         public TriggerMode Trigger { get; init; } = TriggerMode.Always;
         public bool Enabled { get; init; } = true;
-        /// <summary>Park the scroll while the window is in the BACKGROUND - not the focused window, or covered/cloaked
+        /// <summary>Park the scroll while nothing of the window is on screen - covered by another window, cloaked or minimized
         /// (<see cref="InputHooks.WindowOccluded"/>). Parking glides the content home (the same return a deactivated trigger
-        /// makes) and frees the loop row: an unattended title nobody can read must not hold a render wake and a present at
-        /// 30-60 Hz for the whole song (F239). The scroll resumes from its start when the window is foregrounded again.
-        /// A scroll the pointer drives (<see cref="TriggerMode.Hover"/> with the pointer over it) is never parked.
-        /// Default on; set false for a marquee that must keep moving behind another window (an ambient display).</summary>
-        public bool ParkInBackground { get; init; } = true;
+        /// makes) and frees the loop row: a title nobody CAN see must not hold a render wake and a present for the whole song
+        /// (F239). The scroll resumes from its start when the window is uncovered. Focus is deliberately NOT a condition: an
+        /// unfocused but visible window keeps its title moving at the display rate (motion policy, 2026-10-03 - the engine
+        /// never slows visible motion for losing focus). A scroll the pointer drives (<see cref="TriggerMode.Hover"/> with the
+        /// pointer over it) is never parked. Default on; set false for a marquee that must keep moving while covered.</summary>
+        public bool ParkWhenOccluded { get; init; } = true;
         /// <summary>With <see cref="ScrollMode.PingPong"/> and a positive <see cref="CycleMs"/>: every row takes the SAME
         /// cycle length (<see cref="StartDelayMs"/> + <see cref="EndPauseMs"/> + 2 x <see cref="CycleMs"/>) whatever its own
         /// tail, a short tail simply resting longer at its ends. Sibling lines (a title over an artist line) then start,
@@ -178,14 +179,12 @@ internal sealed class MarqueeScroller : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
-        // A background window's marquee is read by nobody: park it (glide home) while the window is not the focused one or is
-        // covered/cloaked. Both reads subscribe, so a focus flip or an occlusion edge re-renders this scroller and re-seeds
-        // the track through the same `paused` edge a deactivated trigger uses. A scroll the pointer is DRIVING (Hover mode,
-        // pointer over it) is never parked: it is user input, and the unfocused window's cut-off title must stay readable.
-        _ = hooks.WindowChromeEpoch?.Value;
+        // A covered / cloaked window's marquee is seen by nobody: park it (glide home) while the window is occluded. The read
+        // subscribes, so an occlusion edge re-renders this scroller and re-seeds the track through the same `paused` edge a
+        // deactivated trigger uses. Focus is NOT read: an unfocused but visible window keeps scrolling at the display rate.
+        // A scroll the pointer is DRIVING (Hover mode, pointer over it) is never parked: it is user input.
         bool hoverDriven = Sty.Trigger == Marquee.TriggerMode.Hover && Hovered.Value;
-        bool background = Sty.ParkInBackground && !hoverDriven
-            && (!(hooks.IsWindowActive?.Invoke() ?? true) || hooks.WindowOccluded?.Value == true);
+        bool covered = Sty.ParkWhenOccluded && !hoverDriven && hooks.WindowOccluded?.Value == true;
 
         float cw = ContainerW.Value;
         float tw = TextW.Value;
@@ -198,7 +197,7 @@ internal sealed class MarqueeScroller : Component
             _ => true,
         };
         bool canScroll = Sty.Enabled && overflow && !Motion.ReducedMotion;
-        bool paused = canScroll && (!active || background);
+        bool paused = canScroll && (!active || covered);
 
         var scrollerHost = UseRef(NodeHandle.Null);
         UseLayoutEffect(() => { scrollerHost.Value = Context.HostNode; }, DepKey.Empty);
