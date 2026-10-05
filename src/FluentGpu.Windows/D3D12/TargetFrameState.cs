@@ -39,6 +39,7 @@ internal sealed unsafe class TargetFrameState
     internal int StencilDepth;
     internal readonly List<bool> StencilScopeMasked = new(8);
     internal bool StencilDsvBound;
+    internal long StencilLastUseMs;   // wall clock the DSV was last bound: the idle release's clock (TrimIdleResources)
 
     // Volatile: read from the UI thread (IGpuDevice.TextRepaintPending) — "this frame was not faithful, repaint fully".
     internal volatile bool TextRepaintPending;

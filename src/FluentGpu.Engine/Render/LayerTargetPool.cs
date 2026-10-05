@@ -9,14 +9,14 @@ namespace FluentGpu.Render;
 ///
 /// Those boxes cluster in the few-hundred-pixel range, where next-power-of-two wastes up to 4x area — and on a UMA
 /// adapter every wasted texel is pinned host memory. So this bucket is LINEAR in 64-px steps up to
-/// <see cref="LinearCeiling"/> and only then falls back to powers of two:
+/// <see cref="LinearCeiling"/> and in 128-px steps above it (never a power of two: a 2304 px scratch used to become
+/// 4096 wide — 1.8x on that axis alone, 3.2x the area for a full-width band on a 1.5x display):
 ///
-///   px  &lt;= 2048 : ceil to a multiple of 64  (64, 128, 192, ... 2048)
-///   px  &gt;  2048 : next power of two          (4096, 8192, ...)        — few very large buckets
+///   px  &lt;= 2048 : ceil to a multiple of 64   (64, 128, 192, ... 2048)
+///   px  &gt;  2048 : ceil to a multiple of 128  (2176, 2304, ... 16384)
 ///
-/// The ceiling is 2048 rather than something small because the po2 step that matters most is the one that straddles a
-/// typical window WIDTH: at 1195 px the po2 ladder jumps to 2048 — a 1.7x waste on that axis alone. Linear to 2048
-/// makes that same band 1216 px wide.
+/// The ceiling stays 2048 only to keep the small-box ladder fine; the large ladder is still linear, so a typical window
+/// width (1195 px -> 1216) and a high-DPI one (2304 -> 2304) both land within one step of the content.
 ///
 /// Reuse is preserved despite the finer granularity because every scratch lease is BEST-FIT >= the bucket (the SMALLEST
 /// free slot that fits), so a finer ladder shrinks the surface a COLD lease creates without fragmenting the WARM free
@@ -34,15 +34,16 @@ public static class LayerTargetBucket
     /// the class remarks on why a po2 step at 1195 -&gt; 2048 cancelled the saving for a full-width band.</summary>
     public const int LinearCeiling = 2048;
 
+    /// <summary>The linear step used above <see cref="LinearCeiling"/>.</summary>
+    public const int HighStep = 128;
+
     /// <summary>Bucket one dimension. Monotone non-decreasing, always &gt;= <paramref name="px"/>, always &gt;=
     /// <see cref="MinDim"/>.</summary>
     public static int Dim(int px)
     {
         if (px <= MinDim) return MinDim;
         if (px <= LinearCeiling) return (px + (LinearStep - 1)) / LinearStep * LinearStep;
-        int b = LinearCeiling;
-        while (b < px) b <<= 1;
-        return b;
+        return (px + (HighStep - 1)) / HighStep * HighStep;
     }
 
     /// <summary>Bytes a B8G8R8A8 target of these dimensions occupies (the census/budget unit).</summary>
@@ -85,6 +86,19 @@ public static class LayerTargetTrim
 
     /// <summary>The trim window for the running adapter tier.</summary>
     public static int IdleFrames(bool weak) => weak ? IdleFramesWeak : IdleFramesStrong;
+
+    /// <summary>Wall-clock idle window of a FREE scratch slot on the idle path (<c>SurfacePool.TrimIdle</c>), where no frame
+    /// counter advances: 2 s on a weak (UMA) adapter, 10 s on a discrete one — the same windows as <see cref="IdleFrames"/>
+    /// at ~60 Hz.</summary>
+    public static long IdleMs(bool weak) => weak ? 2_000 : 10_000;
+
+    /// <summary>Byte cap on the FREE (unleased, unretained) scratch the pool keeps warm: a full-window group surface at
+    /// 2560x1600 is 16 MiB, so this keeps two of them (or many small ones) for instant reuse and returns the rest. Weak
+    /// adapters keep 32 MiB, strong ones 128 MiB.</summary>
+    public static long FreeScratchCapBytes(bool weak) => weak ? 32L * 1024 * 1024 : 128L * 1024 * 1024;
+
+    /// <summary>Is a slot idle on the wall clock? (<paramref name="nowMs"/> and <paramref name="lastUseMs"/> share a clock.)</summary>
+    public static bool IsIdleFor(long nowMs, long lastUseMs, bool weak) => nowMs - lastUseMs >= IdleMs(weak);
 
     /// <summary>May a retired resource be Released now? The frame fence must have passed its last recorded use — the
     /// deferred-reclaim convention (threading-render-seam.md). This is the ONLY gate on the actual release; the
