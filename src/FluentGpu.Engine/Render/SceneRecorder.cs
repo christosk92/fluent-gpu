@@ -4010,7 +4010,23 @@ internal sealed class SceneRecordingContext
 
     private bool TryResolveEdgeFade(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, bool maybeSparsePaint, out EdgeFadeSpec ef)
     {
-        if (maybeSparsePaint && scene.TryGetEdgeFade(node, out ef) && !ef.IsNone) return true;          // explicit, any element
+        if (maybeSparsePaint && scene.TryGetEdgeFade(node, out ef) && !ef.IsNone)                      // explicit, any element
+        {
+            // An overflow cue reads its content's POSED translate (summed down the first-child chain): on the render thread
+            // that is this tick's compositor pose, so the fade moves on the same frame as the content it cues (the content's
+            // pose change re-walks this node through the ancestor trail).
+            if (ef.OverflowTail > 0f)
+            {
+                float tx = 0f;
+                int depth = 0;
+                for (var c = scene.FirstChild(node); !c.IsNull && scene.IsLive(c) && depth < EdgeFadeSpec.OverflowChainDepth;
+                     c = scene.FirstChild(c), depth++)
+                    tx += scene.Paint(c).LocalTransform.Dx;
+                ef = ef.ResolveOverflow(tx);
+                return !ef.IsNone;
+            }
+            return true;
+        }
         if ((flags & NodeFlags.Scrollable) != 0 && scene.TryGetScroll(node, out var sc)
             && sc.AutoEdgeFade && sc.AutoEdgeFadeBand > 0.5f)
         {

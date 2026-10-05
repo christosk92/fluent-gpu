@@ -363,6 +363,48 @@ public readonly record struct EdgeFadeSpec(
     /// element; anywhere else the fade never applies.</summary>
     public bool WhileStuck { get; init; }
 
+    /// <summary>An OVERFLOW CUE over horizontally translated content (a marquee's moving line): &gt; 0 = how far (DIP) the
+    /// content runs past this element's right edge at translate 0. The left/right bands then feather only an edge with
+    /// content hidden past it, ramped by how much is hidden there — <see cref="ResolveOverflow"/> of the content's POSED
+    /// <c>TranslateX</c>, resolved by the recorder on the turn that poses it. The content's translate is the sum down this
+    /// element's FIRST-CHILD chain (at most <see cref="OverflowChainDepth"/> nodes, so a component anchor between the
+    /// element and its moving root is transparent). A translate animated on the render thread therefore moves the fade
+    /// with it on the same frame, with no UI render and no lag; the alternative (mirroring the translate into a signal
+    /// and re-rendering a new spec) re-rendered the element at the UI's frame rate and drew the fade a frame or more
+    /// behind the text. 0 = off (the authored bands as they are).</summary>
+    public float OverflowTail { get; init; }
+
+    /// <summary>How many nodes down the first-child chain an <see cref="OverflowTail"/> cue sums the content's translate.</summary>
+    public const int OverflowChainDepth = 4;
+
+    /// <summary>The distance (DIP) over which an <see cref="OverflowTail"/> band ramps from nothing to its authored depth —
+    /// the same runway a scroll viewport's automatic edge fade uses.</summary>
+    public const float OverflowRunway = 24f;
+
+    /// <summary>This spec with its left/right bands resolved for a first child posed at <paramref name="childTranslateX"/>
+    /// (DIP; negative = scrolled toward the tail): an edge feathers only while more than ½ DIP of content is hidden past it,
+    /// at its authored band times min(1, hidden / <see cref="OverflowRunway"/>). Top/bottom pass through as authored. A spec
+    /// without <see cref="OverflowTail"/> is returned unchanged. Pure, so the recorder and the tests agree on it.</summary>
+    public EdgeFadeSpec ResolveOverflow(float childTranslateX)
+    {
+        if (OverflowTail <= 0f) return this;
+        float hiddenLeft = MathF.Max(0f, -childTranslateX);
+        float hiddenRight = MathF.Max(0f, OverflowTail - hiddenLeft);
+        EdgeMask edges = Edges & EdgeMask.Vertical;
+        float left = 0f, right = 0f;
+        if ((Edges & EdgeMask.Left) != 0 && hiddenLeft > 0.5f)
+        {
+            edges |= EdgeMask.Left;
+            left = BandLeft * MathF.Min(1f, hiddenLeft / OverflowRunway);
+        }
+        if ((Edges & EdgeMask.Right) != 0 && hiddenRight > 0.5f)
+        {
+            edges |= EdgeMask.Right;
+            right = BandRight * MathF.Min(1f, hiddenRight / OverflowRunway);
+        }
+        return this with { Edges = edges, BandLeft = left, BandRight = right, OverflowTail = 0f };
+    }
+
     public static EdgeFadeSpec Horizontal(float band = 24f) => new(EdgeMask.Horizontal, band);
     public static EdgeFadeSpec Vertical(float band = 24f) => new(EdgeMask.Vertical, band);
     public static EdgeFadeSpec Perimeter(float band = 24f) => new(EdgeMask.All, band);
