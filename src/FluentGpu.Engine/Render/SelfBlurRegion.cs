@@ -48,6 +48,14 @@ public static class SelfBlurRegion
     public static int SupportRadius(float blurSigma)
         => TapRadius(blurSigma) + 2 * AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f) + 1;
 
+    /// <summary>Does a blur of <paramref name="blurSigma"/> run on the SAME texel grid with the same kernel when its source is
+    /// rastered at 1/<paramref name="down"/> (a low-resolution repaint boundary) and blurred there at σ/down? True when the
+    /// low-res blur's own downsample lands where the full-resolution schedule's does (down · factor(σ/down) = factor(σ)):
+    /// the two routes then differ only in how each texel's first down×down block is formed.</summary>
+    public static bool LowResBlurOnSameGrid(float blurSigma, int down)
+        => down >= 1 && blurSigma > 0f
+           && down * AcrylicBackdropMath.DownsampleFactor(blurSigma / down, 1f) == AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f);
+
     /// <summary>
     /// Compute the recorder's DIP-space visibility/source geometry from the same physical-pixel tap support used by
     /// <see cref="TapRadius"/>. Pixel boxes convert back OUTWARD by a tiny fraction of one device pixel so a

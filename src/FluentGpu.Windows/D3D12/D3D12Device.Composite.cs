@@ -494,6 +494,103 @@ public sealed unsafe partial class D3D12Device
         _surfaces.Retain(s, key, d, RetainedCap());
     }
 
+    /// <summary>A self-blurred LOW-RESOLUTION repaint boundary (BoxEl.RasterScale + Blur — the visualizer's cloud layer, a
+    /// blurred backdrop field): its blur source replayed ONCE at 1/d into one scratch and blurred there at σ/d, instead of
+    /// rastered at full resolution into tile-sized chunks, assembled into a full-resolution scratch and box-downsampled
+    /// back down. The blur's own schedule is a 2× box chain to 1/<c>DownsampleFactor(σ)</c> before its Gaussian, so for
+    /// d ≤ that factor both routes blur on the SAME texel grid (the region's top-left sits on the slice grid, a multiple of
+    /// every d) with the same kernel (σ/d at 1/(d·down′) is σ at 1/down); they differ only in how a texel's first d×d
+    /// block is formed — rasterized at the block's centre instead of averaged from d×d full-resolution samples — which is
+    /// exactly what RasterScale asks for ("only for SOFT content whose look survives the upsample"). Measured on the
+    /// visualizer's clouds (σ 40, d 4), readback against the full-resolution route: ≤ 1/255 per blurred texel; a texel
+    /// straddling the source's cut edge (beyond the clip's reach, or the layer's bound) can differ more, as it holds that
+    /// d×d block's content whole. A d past the blur's own factor (or one whose grids would not meet) takes the
+    /// full-resolution route. Retained under a content key like <see cref="PrepareLowRes"/>, so a still blurred field costs
+    /// one upsample quad.</summary>
+    private void PrepareLowResBlur(in CompositeFrame frame, int i, in SliceRow row)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        int d = it.LowResDown;
+        if (!SelfBlurRegion.LowResBlurOnSameGrid(it.BlurSigma, d))
+        {
+            PrepareDirectBlur(in frame, i, in row);
+            return;
+        }
+        BlurRegions(in it, out PixelRect src, out PixelRect region);
+        if (src.IsEmpty || region.IsEmpty) return;
+        int tx = (int)it.Transform.Dx, ty = (int)it.Transform.Dy;
+        int x0 = FloorDiv(region.Left - tx + row.Frame.OriginX, d), y0 = FloorDiv(region.Top - ty + row.Frame.OriginY, d);
+        int l = x0 * d - row.Frame.OriginX + tx, t = y0 * d - row.Frame.OriginY + ty;
+        // the low-res texel grid must be the blur's own: the region's top-left on it (always, for a slice origin and a
+        // region on the 64-px slice grid — else the full-resolution route keeps the blur's phase)
+        if (l != region.Left || t != region.Top) { PrepareDirectBlur(in frame, i, in row); return; }
+        int w = (region.Right - l + d - 1) / d, h = (region.Bottom - t + d - 1) / d;
+        if (w <= 0 || h <= 0) return;
+        _frameDirectRegions++;
+
+        ulong key = 0xB10D_0000_0000_0001UL;
+        Mix(ref key, (ulong)(uint)l << 32 | (uint)t); Mix(ref key, (ulong)(uint)w << 32 | (uint)h);
+        Mix(ref key, (ulong)(uint)(src.Left - l) << 32 | (uint)(src.Top - t)); Mix(ref key, (ulong)(uint)(src.Right - l) << 32 | (uint)(src.Bottom - t));
+        Mix(ref key, (ulong)(uint)d << 32 | BitConverter.SingleToUInt32Bits(_frameScale));
+        Mix(ref key, (ulong)BitConverter.SingleToUInt32Bits(it.BlurSigma));
+        Mix(ref key, (ulong)BitConverter.SingleToUInt32Bits(row.Frame.ResidualX) << 32 | BitConverter.SingleToUInt32Bits(row.Frame.ResidualY));
+        MixBytes(ref key, frame.PrefixOf(in row));
+        MixBytes(ref key, frame.StreamOf(in row));
+        ulong fence = _fenceValue + 1;
+        var damage = frame.Info.RepaintDamage;
+        bool damaged = DamageReaches(in damage, in region);
+        if (!damaged)
+        {
+            int hit = _surfaces!.FindRetained(key, fence, out int hitDown);
+            if (hit >= 0)
+            {
+                _frameBlurCacheHits++;
+                _itemSurface[i] = hit; _itemDown[i] = hitDown; _itemRegion[i] = region; _itemKey[i] = key;
+                return;
+            }
+        }
+        int s = _surfaces!.AcquireScratch(w, h, fence);
+        if (s < 0) return;
+        ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var rtv = _surfaces.ScratchRtv(s);
+        BeginPass(rtv, w, h, PassLoad.Clear);
+        float full = _frameScale;
+        _frameScale = full / d;   // the replay maps stream DIPs at the reduced scale (restored below)
+        try
+        {
+            ReplaySegment(in frame, in row, -x0, -y0, w, h, rtv, new RectF(-1e7f, -1e7f, 2e7f, 2e7f));
+        }
+        finally { _frameScale = full; }
+        // The full-resolution route clears everything outside the blur's source; texels wholly outside it are cleared here
+        // (a texel straddling its edge keeps its content — the edge is the clip's reach or the layer's own bound).
+        int sl = (src.Left - l) / d, st = (src.Top - t) / d;
+        int sr = Math.Min(w, (src.Right - l + d - 1) / d), sb = Math.Min(h, (src.Bottom - t + d - 1) / d);
+        BindCompositor(_surfaces.ScratchW(s), _surfaces.ScratchH(s));
+        ClearLowRes(0, 0, w, st);
+        ClearLowRes(0, sb, w, h);
+        ClearLowRes(0, st, sl, sb);
+        ClearLowRes(sr, st, w, sb);
+        EndPassIfOpen();
+        ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        InvalidateCmdState();
+        int result = BlurSurface(s, w, h, it.BlurSigma / d, out int down);
+        if (result != s) _surfaces.ReleaseScratch(s);
+        // a damage-forced re-render may have new pixels under byte-identical commands: the key the backdrops above see must
+        // change with it (PrepareLowRes)
+        _itemSurface[i] = result; _itemDown[i] = d * down; _itemRegion[i] = region;
+        _itemKey[i] = damaged ? key ^ (fence * 0x9E3779B97F4A7C15UL) | 1UL : key;
+        if (result >= 0) _surfaces.Retain(result, key, d * down, RetainedCap());
+
+        void ClearLowRes(int cl, int ct, int cr, int cb)
+        {
+            if (cr <= cl || cb <= ct) return;
+            _compositor!.Scissor(_cmdList, cl, ct, cr, cb);
+            _compositor.Begin(cl, ct, cr, cb);
+            _compositor.Color(new ColorF(0f, 0f, 0f, 0f));
+            _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
+        }
+    }
+
     // ── F6 feedback trails ─────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>One feedback boundary's trail between frames: the retained-surface key of its last advance, the content key
     /// that advance consumed, how many settle advances remain, and when it last advanced (a resume after a long gap clears
@@ -673,7 +770,21 @@ public sealed unsafe partial class D3D12Device
         ref readonly SliceRow row = ref frame.Slices[r];
         bool blur = it.BlurSigma > 0f;
         if (it.IsFeedback && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareFeedback(in frame, i, in row); return; }
-        if (it.LowResDown > 1 && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareLowRes(in frame, i, in row); return; }
+        if (it.LowResDown > 1 && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+        {
+            if (blur) PrepareLowResBlur(in frame, i, in row);
+            else PrepareLowRes(in frame, i, in row);
+            return;
+        }
+        PrepareDirectBlur(in frame, i, in row);
+    }
+
+    /// <summary>The degraded route proper (see <see cref="PrepareDirect"/>): the segment replayed into transient tile-grid
+    /// chunks at full resolution, assembled and blurred when it self-blurs.</summary>
+    private void PrepareDirectBlur(in CompositeFrame frame, int i, in SliceRow row)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        bool blur = it.BlurSigma > 0f;
         PixelRect src = default, region = default;
         if (blur) BlurRegions(in it, out src, out region);
         PixelRect area = blur ? src : ItemRegion(in it, 0);

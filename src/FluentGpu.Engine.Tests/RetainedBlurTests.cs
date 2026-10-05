@@ -58,4 +58,14 @@ public sealed class RetainedBlurTests
         GroupCacheKey.BlurRegions(BlurLeaf(0f, 0f, default, new RectF(120f, 2000f, 300f, 80f)), 1200, 1100, out PixelRect unbounded, out _);
         Assert.Equal(new PixelRect(120, 2000, 420, 2080), unbounded);
     }
+
+    [Fact]
+    public void ALowResBlur_RunsOnTheFullResolutionGrid_OnlyWhenItsDownsampleLandsThere()
+    {
+        Assert.True(SelfBlurRegion.LowResBlurOnSameGrid(40f, 4));    // the visualizer's clouds: 4 × 4 = 16
+        Assert.True(SelfBlurRegion.LowResBlurOnSameGrid(18f, 4));    // 4 × 2 = 8
+        Assert.True(SelfBlurRegion.LowResBlurOnSameGrid(9f, 2));     // 2 × 2 = 4
+        Assert.False(SelfBlurRegion.LowResBlurOnSameGrid(6f, 4));    // the blur itself stops at 1/2: a 1/4 grid is coarser
+        Assert.False(SelfBlurRegion.LowResBlurOnSameGrid(100f, 4));  // the full schedule clamps at 1/16, the low-res one would not
+    }
 }
