@@ -36,8 +36,12 @@ public sealed partial class SceneStore : ISceneBackend
     internal int RecordingNodeCount => _high;
     // spine
     private uint[] _gen;
-    private int[] _nextFree;
-    private int _freeHead;
+    // Free slots, as a binary MIN-heap of indices over [0, _freeCount): CreateNode always reuses the LOWEST free index, so
+    // the live set packs toward the bottom of the slab and TrimExcessCapacity can give the all-free tail back once a big
+    // page goes away. A LIFO list handed the most recently freed index straight back — after a 13k-node playlist those
+    // are the HIGH ones — so the survivors stayed scattered up there and the slab kept its session high-water for good.
+    private int[] _freeHeap;
+    private int _freeCount;
     private int _high = 1;     // index 0 reserved = null
 
     // Exit-animation orphans: nodes removed from the logical tree but kept LIVE (drawing) until their exit animation
@@ -308,7 +312,7 @@ public sealed partial class SceneStore : ISceneBackend
         int capacity = initialCapacity;
         if (capacity < 4) capacity = 4;
         _gen = new uint[capacity];
-        _nextFree = new int[capacity];
+        _freeHeap = new int[capacity];
         _parent = new int[capacity];
         _firstChild = new int[capacity];
         _lastChild = new int[capacity];
@@ -377,7 +381,7 @@ public sealed partial class SceneStore : ISceneBackend
     public NodeHandle CreateNode(ushort elementTypeId)
     {
         int idx;
-        if (_freeHead != 0) { idx = _freeHead; _freeHead = _nextFree[idx]; }
+        if (_freeCount != 0) idx = PopLowestFree();
         else { if (_high >= _gen.Length) Grow(); idx = _high++; }
 
         if (_gen[idx] == 0) _gen[idx] = 1;
@@ -490,6 +494,9 @@ public sealed partial class SceneStore : ISceneBackend
             _authoredHandles.Remove(idx);
         }
         _grids.Remove(idx);
+        // A viewport's measured row extents are keyed by its index like every side-table here: the next node to reuse the
+        // slot must start from its own estimates, not the freed list's row heights (and the table must not outlive it).
+        if (_extents.Count != 0) _extents.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
         if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
         // Scroll-linked effect rows are index-keyed: a freed slot must not hand its effects (or its engaged signals) to
@@ -554,10 +561,41 @@ public sealed partial class SceneStore : ISceneBackend
         _recordDirtyDescendant[idx] = 0;
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
-        _nextFree[idx] = _freeHead;
-        _freeHead = idx;
+        PushFree(idx);
         LiveCount--;
         unchecked { CapacityRevision++; }
+    }
+
+    // ── the free heap (see _freeHeap) ──
+    private void PushFree(int idx)
+    {
+        int i = _freeCount++;
+        while (i > 0)
+        {
+            int parent = (i - 1) >> 1;
+            if (_freeHeap[parent] <= idx) break;
+            _freeHeap[i] = _freeHeap[parent];
+            i = parent;
+        }
+        _freeHeap[i] = idx;
+    }
+
+    private int PopLowestFree()
+    {
+        int lowest = _freeHeap[0];
+        int last = _freeHeap[--_freeCount];
+        int i = 0;
+        while (true)
+        {
+            int child = 2 * i + 1;
+            if (child >= _freeCount) break;
+            if (child + 1 < _freeCount && _freeHeap[child + 1] < _freeHeap[child]) child++;
+            if (_freeHeap[child] >= last) break;
+            _freeHeap[i] = _freeHeap[child];
+            i = child;
+        }
+        if (_freeCount > 0) _freeHeap[i] = last;
+        return lowest;
     }
 
     // ── Repaint-damage removal ledger (gpu-renderer.md §13.1) ───────────────────────────────────────────────────────
@@ -2466,7 +2504,7 @@ public sealed partial class SceneStore : ISceneBackend
     /// the set can never drift between them.</summary>
     private void ResizeColumns(int n)
     {
-        Array.Resize(ref _gen, n); Array.Resize(ref _nextFree, n);
+        Array.Resize(ref _gen, n); Array.Resize(ref _freeHeap, n);
         Array.Resize(ref _parent, n); Array.Resize(ref _firstChild, n); Array.Resize(ref _lastChild, n);
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
@@ -2508,8 +2546,8 @@ public sealed partial class SceneStore : ISceneBackend
         if (cap <= FloorCap) return 0;
 
         // Free indices below _high are exactly the freelist members; build the set (transient — idle-time only).
-        var free = new HashSet<int>();
-        for (int f = _freeHead; f != 0; f = _nextFree[f]) free.Add(f);
+        var free = new HashSet<int>(_freeCount);
+        for (int i = 0; i < _freeCount; i++) free.Add(_freeHeap[i]);
 
         // Highest LIVE index: scan down from the high-water, skipping freed slots. (Every index in [1,_high) was
         // allocated at least once, so below-high ⇒ live XOR free; H=0 ⇒ no live nodes at all.)
@@ -2528,13 +2566,12 @@ public sealed partial class SceneStore : ISceneBackend
         ResizeColumns(newCap);
         _high = target;                                       // the tail above H is gone; fresh capacity [target,newCap) is reachable via _high++
 
-        // Rebuild the freelist keeping only entries that survive the trim (index < the new _high). Built from the
-        // pre-captured `free` set (NOT by walking the just-resized _nextFree — entries ≥ newCap are now out of bounds).
+        // Rebuild the free heap keeping only entries that survive the trim (index < the new _high). Built from the
+        // pre-captured `free` set (NOT from the just-resized _freeHeap — it was cut to newCap positions).
         // Freed slots in [target, newCap) become plain fresh capacity (reachable via _high++); slots ≥ newCap are gone.
-        int newHead = 0;
+        _freeCount = 0;
         foreach (int f in free)
-            if (f < target) { _nextFree[f] = newHead; newHead = f; }
-        _freeHead = newHead;
+            if (f < target) PushFree(f);
 
         unchecked { CapacityRevision++; }
         return cap - newCap;
