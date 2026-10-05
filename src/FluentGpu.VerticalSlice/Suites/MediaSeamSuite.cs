@@ -49,6 +49,9 @@ static class MediaSeamSuite
         CommandCoalesceCheck();
         CommandLastWinsTransportCheck();
         WakeCoalesceCheck();
+        RequestWakeCoalesceCheck();
+        MultiProducerNoTearCheck();
+        StatePumpNoElementCheck();
     }
 
     // ── gate.media.seam.snapshot-alloc-free ───────────────────────────────────────────────────────────────────────
@@ -209,5 +212,163 @@ static class MediaSeamSuite
         Check("gate.media.seam.wake-coalesce — N posts before BeginDrain wake exactly once, and a post during/after drain wakes exactly once more",
             wokeOnceBeforeDrain && noExtraWakeFromDrainItself && wokeOnceMoreAfterDrainStart,
             $"wakeCount={wakeCount} beforeDrain={wokeOnceBeforeDrain} drainItself={noExtraWakeFromDrainItself} afterDrain={wokeOnceMoreAfterDrainStart}");
+    }
+
+    // ── gate.media.seam.request-wake-coalesce ─────────────────────────────────────────────────────────────────────
+
+    static void RequestWakeCoalesceCheck()
+    {
+        var q = new VideoEngineCommandQueue();
+        int wakeCount = 0;
+        q.Wake = () => Interlocked.Increment(ref wakeCount);
+
+        // A burst of native-event wakes wakes exactly once, and a command post inside the same drain cycle rides the same gate.
+        for (int i = 0; i < 50; i++) q.RequestWake();
+        q.Post(VideoCommandKind.Seek, a: 1);
+        bool onceForBurst = wakeCount == 1;
+
+        q.BeginDrain();
+        q.RequestWake();
+        q.RequestWake();
+        q.Post(VideoCommandKind.Volume, a: 0.5);
+        bool onceMoreAfterDrain = wakeCount == 2;
+
+        // A bare RequestWake carries no payload: nothing becomes pending.
+        var q2 = new VideoEngineCommandQueue();
+        q2.RequestWake();
+        bool noPayload = !q2.TryTake(VideoCommandKind.Seek, out _, out _, out _, out _)
+                         && !q2.TryTake(VideoCommandKind.Transport, out _, out _, out _, out _);
+
+        Check("gate.media.seam.request-wake-coalesce — event wakes and command posts share one gate: a burst wakes once per drain cycle, with no payload",
+            onceForBurst && onceMoreAfterDrain && noPayload,
+            $"wakeCount={wakeCount} burst={onceForBurst} afterDrain={onceMoreAfterDrain} noPayload={noPayload}");
+    }
+
+    // ── gate.media.seam.multi-producer ────────────────────────────────────────────────────────────────────────────
+
+    static void MultiProducerNoTearCheck()
+    {
+        const int Producers = 4, PostsEach = 200_000;
+        var q = new VideoEngineCommandQueue();
+        var tags = new object[Producers];
+        for (int p = 0; p < Producers; p++) tags[p] = new object();
+
+        long tears = 0, duplicates = 0, takes = 0;
+        int running = Producers;
+        var consumer = new Thread(() =>
+        {
+            var last = new int[Producers];   // last sequence taken per producer (strictly increasing, or it was applied twice)
+            Array.Fill(last, -1);
+            while (true)
+            {
+                if (!q.TryTake(VideoCommandKind.Seek, out double a, out int i, out int j, out object? obj))
+                {
+                    if (Volatile.Read(ref running) == 0) break;
+                    Thread.Yield();
+                    continue;
+                }
+                takes++;
+                // Payload from producer p, post n: a == n, i == n, j == p, obj == tags[p]. Anything else is a mix of two posts.
+                int p = j;
+                if ((uint)p >= Producers || !ReferenceEquals(obj, tags[p]) || a != i) { tears++; continue; }
+                if (i <= last[p]) duplicates++;
+                last[p] = i;
+            }
+        }) { IsBackground = true };
+
+        var producers = new Thread[Producers];
+        for (int p = 0; p < Producers; p++)
+        {
+            int id = p;
+            producers[p] = new Thread(() =>
+            {
+                for (int n = 0; n < PostsEach; n++) q.Post(VideoCommandKind.Seek, a: n, i: n, j: id, obj: tags[id]);
+                Interlocked.Decrement(ref running);
+            }) { IsBackground = true };
+        }
+
+        consumer.Start();
+        foreach (Thread t in producers) t.Start();
+        foreach (Thread t in producers) t.Join();
+        consumer.Join();
+
+        Check("gate.media.seam.multi-producer — concurrent Post from several threads never tears a payload and never applies one twice",
+            tears == 0 && duplicates == 0 && takes > 0,
+            $"takes={takes} tears={tears} duplicates={duplicates}");
+    }
+
+    // ── gate.media.seam.state-pump-no-element (F132) ──────────────────────────────────────────────────────────────
+
+    /// <summary>A video session with a split pump: counts each half and publishes a duration from its state half.</summary>
+    private sealed class StatePumpProbeSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
+    {
+        public int StatePumps, GeometryPumps;
+        public TimeSpan Duration;
+        private MediaSignalSink? _sink;
+        public event Action? PumpRequested;
+        public void Raise() => PumpRequested?.Invoke();
+        public void ConnectSignals(MediaSignalSink sink) { _sink = sink; sink.State(PlaybackState.Opening); }
+        public void PumpVideo(VideoBinding binding, RectF videoRect, float scale) { StatePumps++; GeometryPumps++; }
+        public void PumpState() { StatePumps++; if (Duration > TimeSpan.Zero) _sink?.Duration(Duration); }
+        public void PumpGeometry(VideoBinding binding, RectF videoRect, float scale) => GeometryPumps++;
+        public ValueTask PlayAsync() => ValueTask.CompletedTask;
+        public ValueTask PauseAsync() => ValueTask.CompletedTask;
+        public ValueTask SeekAsync(TimeSpan to, SeekMode mode) => ValueTask.CompletedTask;
+        public void SetRate(double rate) { }
+        public void SetVolume(double volume) { }
+        public void SetMuted(bool muted) { }
+        public VideoDelivery Video => VideoDelivery.None;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StatePumpProbeBackend(IMediaSession session) : IMediaBackend
+    {
+        public MediaCapabilities Capabilities { get; } = new(SupportsVideo: true, SupportsAudioGraph: false, SupportsDrm: false);
+        public ValueTask<IMediaSession> OpenAsync(MediaSource source, MediaOpenOptions opts, CancellationToken ct)
+            => ValueTask.FromResult(session);
+    }
+
+    /// <summary>The media control plane belongs to the PLAYER: a session's pump request runs the player's own coalesced
+    /// UI-thread state pump (state, duration, position, errors), with no MediaPlayerElement and no binding anywhere, while
+    /// the element's PumpVideo is the geometry half only.</summary>
+    static void StatePumpNoElementCheck()
+    {
+        FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Ui);
+        var prior = HostDispatch.Current;
+        var posts = new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        HostDispatch.Current = posts.Enqueue;   // this thread plays the UI thread: posts queue until the gate drains them
+        try
+        {
+            var session = new StatePumpProbeSession();
+            var player = MediaPlayer.Build().WithBackend(MediaKind.MfVideoOrFile, new StatePumpProbeBackend(session)).Build();
+            Task open = player.OpenAsync(MediaSource.FromFile("a.mp4")).AsTask();
+            var sw = Stopwatch.StartNew();
+            while (!open.IsCompleted && sw.ElapsedMilliseconds < 5000)
+            {
+                while (posts.TryDequeue(out Action? post)) post();
+                Thread.Sleep(1);
+            }
+            while (posts.TryDequeue(out Action? connectPost)) connectPost();   // the state pump the connect asked for
+
+            int baseline = session.StatePumps;
+            session.Duration = TimeSpan.FromSeconds(90);
+            session.Raise();                                    // the engine thread's event
+            bool notInline = session.StatePumps == baseline;
+            while (posts.TryDequeue(out Action? post)) post();
+            bool ran = session.StatePumps == baseline + 1 && player.Duration.Peek() == TimeSpan.FromSeconds(90);
+
+            for (int i = 0; i < 25; i++) session.Raise();
+            bool coalesced = posts.Count == 1;                  // one queued turn for a burst of 25 requests
+            while (posts.TryDequeue(out Action? post)) post();
+
+            int geometry = session.GeometryPumps;
+            player.PumpVideo(default, default, 1f);             // the element's call: geometry only
+            bool geometryOnly = session.GeometryPumps == geometry + 1 && session.StatePumps == baseline + 2;
+
+            Check("gate.media.seam.state-pump-no-element — a session's pump request runs the PLAYER's coalesced state pump with no element or binding; PumpVideo is the geometry half only",
+                open.IsCompleted && notInline && ran && coalesced && geometryOnly,
+                $"opened={open.IsCompleted} notInline={notInline} ran={ran} coalesced={coalesced} geometryOnly={geometryOnly} statePumps={session.StatePumps} geometryPumps={session.GeometryPumps}");
+        }
+        finally { HostDispatch.Current = prior; }
     }
 }

@@ -3985,6 +3985,127 @@ static class AnimSuite
               restBefore < 0.5f && peak > 20f && leftBandWhileOut > 0.5f && monotone && glided && last < 0.5f
               && leftBandEnd <= 0.001f && rightBandEnd > 0.5f,
               $"rest={restBefore:0.##} peak={peak:0.##} outFrames={outFrames - 1} leftOut={leftBandWhileOut:0.##} monotone={monotone} glided={glided} last={last:0.###} leftEnd={leftBandEnd:0.##} rightEnd={rightBandEnd:0.##}");
+
+        MarqueeQuantiseChecks(app, strings);
+    }
+
+    /// <summary>F239: the player-bar marquee is a perpetual compositor loop; unquantised at 60 Hz it moved the text half a
+    /// pixel per sample and damaged the whole window every other refresh, for the whole song, in every window.</summary>
+    static void MarqueeQuantiseChecks(HeadlessPlatformApp app, StringTable strings)
+    {
+        // M5a: the travel time the bar's style resolves to (the Speed floor for a short tail, the CycleMs cap for a long one)
+        // is what the row traverses. There is no speed-derived sampling rate and no pixel snap: the row is a display-cadence
+        // loop that glides (M5c), like every other row.
+        var barStyle = new Marquee.Style
+        {
+            Speed = 18f, CycleMs = 14_000f, EndPauseMs = 3_000f, StartDelayMs = 2_000f,
+            Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Always, SyncCycle = true,
+        };
+        float slowMs = MarqueeScroller.TravelMs(barStyle, 100f);    // 100 DIP tail: 18 DIP/s (the Speed floor) -> 5.56 s
+        float fastMs = MarqueeScroller.TravelMs(barStyle, 500f);    // 500 DIP tail: capped to the 14 s cycle
+        bool travelFromStyle = Near(slowMs, 100f / 18f * 1000f, 1f) && Near(fastMs, 14_000f, 0.01f);
+        Check("M5a. the marquee's travel time follows its style (Speed floor, CycleMs cap)",
+              travelFromStyle, $"slowMs={slowMs:0.#} fastMs={fastMs:0.#}");
+
+        // M5b: SyncCycle gives the title and the artist line ONE cycle length whatever their tails, so they leave the head
+        // together and finish the cycle together; without it each row has its own length and they drift out of phase.
+        var synced = new MarqueeScroller { Sty = barStyle };
+        var (keysA, durA, _) = synced.BuildTrack(false, true, 0f, 100f);
+        var (keysB, durB, _) = synced.BuildTrack(false, true, 0f, 400f);
+        var free = new MarqueeScroller { Sty = barStyle with { SyncCycle = false } };
+        var (_, freeA, _) = free.BuildTrack(false, true, 0f, 100f);
+        var (_, freeB, _) = free.BuildTrack(false, true, 0f, 400f);
+        bool shared = Near(durA, durB, 0.01f) && Near(durA, 2000f + 3000f + 2f * 14_000f, 0.01f)
+            && Near(keysA[1].Offset, keysB[1].Offset, 1e-5f) && Near(keysA[^1].Offset, 1f, 1e-6f) && Near(keysB[^1].Offset, 1f, 1e-6f)
+            && keysA[2].Offset <= keysA[3].Offset && keysB[2].Offset <= keysB[3].Offset;
+        Check("M5b. SyncCycle gives every ping-pong row the same cycle length (rows leave the head together); without it the lengths differ",
+              shared && !Near(freeA, freeB, 1f),
+              $"sync: {durA:0.#}/{durB:0.#} head {keysA[1].Offset:0.####}/{keysB[1].Offset:0.####}; free: {freeA:0.#}/{freeB:0.#}");
+
+        // M5c: behavioural — the row is a DISPLAY-RATE loop (the scheduler's census counts it) with no sub-display cadence of
+        // its own, and it GLIDES: at a 2x device scale its samples are not stepped to the device-pixel grid (at least one pose
+        // sits between pixels), exactly as on main.
+        var probeQ = new MarqueePingPongProbe();
+        var windowQ = new HeadlessWindow(new WindowDesc("marquee-px", new Size2(220, 120), 2f)); windowQ.Show();
+        using var hostQ = new AppHost(app, windowQ, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probeQ);
+        bool offGrid = false, displayLoop = false;
+        int distinct = 0;
+        float lastV = float.NaN, peakQ = 0f;
+        for (int i = 0; i < 90; i++)
+        {
+            hostQ.RunFrame();
+            float v = MaxAbsTrackX(hostQ, hostQ.Scene.Root);
+            float px = v * 2f;
+            if (MathF.Abs(px - MathF.Round(px)) > 1e-3f) offGrid = true;
+            if (v != lastV) { distinct++; lastV = v; }
+            peakQ = MathF.Max(peakQ, v);
+            displayLoop |= hostQ.Animation.DisplayRateLoopCount >= 1;
+        }
+        Check("M5c. a marquee on a 2x window is a display-cadence loop that glides (sub-pixel samples, not stepped to the device grid) and travels",
+              offGrid && peakQ > 10f && distinct > 5 && displayLoop,
+              $"offGrid={offGrid} peak={peakQ:0.##} distinct={distinct} displayLoop={displayLoop}");
+
+        // M5d: motion policy (2026-10-03). An UNFOCUSED but visible window keeps its marquee scrolling — focus is not a motion
+        // policy; a COVERED (occluded / cloaked) window glides it home and holds it there, and uncovering it resumes the
+        // scroll. ParkWhenOccluded = false opts out of the covered half (M5e).
+        var deviceP = new HeadlessGpuDevice();
+        var probeP = new MarqueePingPongProbe();
+        var windowP = new HeadlessWindow(new WindowDesc("marquee-park", new Size2(220, 120), 1f)); windowP.Show();
+        using var hostP = new AppHost(app, windowP, deviceP, new HeadlessFontSystem(strings), strings, probeP);
+        float peakP = 0f;
+        for (int i = 0; i < 60 && peakP <= 20f; i++) { hostP.RunFrame(); peakP = MaxAbsTrackX(hostP, hostP.Scene.Root); }
+        windowP.IsActive = false;                                              // another window takes focus: this one is still on screen
+        float unfocusedPeak = 0f;
+        int unfocusedDistinct = 0; float lastU = float.NaN;
+        for (int i = 0; i < 60; i++)
+        {
+            hostP.RunFrame();
+            float v = MaxAbsTrackX(hostP, hostP.Scene.Root);
+            unfocusedPeak = MathF.Max(unfocusedPeak, v);
+            if (v != lastU) { unfocusedDistinct++; lastU = v; }
+        }
+        deviceP.PrimarySwapchain!.Occluded = true;                             // now covered by another window
+        float afterCover = float.NaN;
+        for (int i = 0; i < 60; i++) { hostP.RunFrame(); afterCover = MaxAbsTrackX(hostP, hostP.Scene.Root); }   // > the 450 ms glide
+        float coveredMax = 0f;
+        for (int i = 0; i < 30; i++) { hostP.RunFrame(); coveredMax = MathF.Max(coveredMax, MaxAbsTrackX(hostP, hostP.Scene.Root)); }
+        deviceP.PrimarySwapchain!.Occluded = false;                            // uncovered (still unfocused)
+        float resumedPeak = 0f;
+        for (int i = 0; i < 90; i++) { hostP.RunFrame(); resumedPeak = MathF.Max(resumedPeak, MaxAbsTrackX(hostP, hostP.Scene.Root)); }
+        Check("M5d. a marquee keeps scrolling while its window is merely unfocused, parks (glides home, stays home) while the window is covered, and resumes when uncovered",
+              peakP > 20f && unfocusedPeak > 10f && unfocusedDistinct > 5 && afterCover < 0.5f && coveredMax < 0.5f && resumedPeak > 10f,
+              $"peak={peakP:0.##} unfocusedPeak={unfocusedPeak:0.##} unfocusedDistinct={unfocusedDistinct} afterCover={afterCover:0.###} coveredMax={coveredMax:0.###} resumedPeak={resumedPeak:0.##}");
+
+        // M5f: a HOVER-driven scroll is user input and is never parked, covered window or not: a not-hovered Hover-mode title
+        // stays home, the same title scrolls while hovered, and glides home on hover-leave.
+        var deviceH = new HeadlessGpuDevice();
+        var probeH = new MarqueeHoverHomeProbe();
+        var windowH = new HeadlessWindow(new WindowDesc("marquee-park-hover", new Size2(220, 120), 1f)); windowH.Show();
+        using var hostH = new AppHost(app, windowH, deviceH, new HeadlessFontSystem(strings), strings, probeH);
+        for (int i = 0; i < 8; i++) hostH.RunFrame();
+        deviceH.PrimarySwapchain!.Occluded = true;                             // covered
+        float idleH = 0f;
+        for (int i = 0; i < 30; i++) { hostH.RunFrame(); idleH = MathF.Max(idleH, MaxAbsTrackX(hostH, hostH.Scene.Root)); }
+        probeH.Hovered.Value = true;                                           // the pointer enters the title
+        float hoverPeak = 0f;
+        for (int i = 0; i < 120 && hoverPeak <= 20f; i++) { hostH.RunFrame(); hoverPeak = MaxAbsTrackX(hostH, hostH.Scene.Root); }
+        probeH.Hovered.Value = false;
+        float afterLeave = float.NaN;
+        for (int i = 0; i < 60; i++) { hostH.RunFrame(); afterLeave = MaxAbsTrackX(hostH, hostH.Scene.Root); }
+        Check("M5f. a hover-driven marquee in a covered window still scrolls under the pointer (and rests when it leaves)",
+              idleH < 0.5f && hoverPeak > 20f && afterLeave < 0.5f,
+              $"idle={idleH:0.###} hoverPeak={hoverPeak:0.##} afterLeave={afterLeave:0.###}");
+
+        var deviceN = new HeadlessGpuDevice();
+        var probeN = new MarqueeNoParkProbe();
+        var windowN = new HeadlessWindow(new WindowDesc("marquee-nopark", new Size2(220, 120), 1f)); windowN.Show();
+        using var hostN = new AppHost(app, windowN, deviceN, new HeadlessFontSystem(strings), strings, probeN);
+        for (int i = 0; i < 4; i++) hostN.RunFrame();
+        deviceN.PrimarySwapchain!.Occluded = true;
+        float noParkPeak = 0f;
+        for (int i = 0; i < 90; i++) { hostN.RunFrame(); noParkPeak = MathF.Max(noParkPeak, MaxAbsTrackX(hostN, hostN.Scene.Root)); }
+        Check("M5e. Style.ParkWhenOccluded = false keeps a covered window's marquee scrolling",
+              noParkPeak > 10f, $"peak={noParkPeak:0.##}");
     }
 
     static float MaxEdgeFadeLeftBand(SceneStore s, NodeHandle n)
@@ -5062,6 +5183,24 @@ sealed class FlipCellProbe : Component
             ],
         };
     }
+}
+
+/// <summary>The M5e root: the M3 ping-pong column with <c>ParkWhenOccluded = false</c>.</summary>
+sealed class MarqueeNoParkProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 150f, Height = 40f, Direction = 1, AlignItems = FlexAlign.Stretch,
+        Children =
+        [
+            Marquee.Of("This is a very long track title that should overflow and scroll",
+                new Marquee.Style
+                {
+                    FontSize = 14f, StartDelayMs = 0f, Speed = 200f, Mode = Marquee.ScrollMode.PingPong,
+                    Trigger = Marquee.TriggerMode.Always, ParkWhenOccluded = false,
+                }),
+        ],
+    };
 }
 
 /// <summary>The M4b root: the M3 ping-pong column, but HOVER-triggered through the external <c>scrollWhen</c> gate (the

@@ -44,6 +44,15 @@ static partial class ControlsSuite
         MediaCardEngineChecks(strings);
         VideoHoleChecks(strings);
         VideoChromeOverHoleChecks(strings);
+        VideoOverlayVerdictChecks(strings);
+        VideoSlotReadinessChecks();
+        VideoPlacementChecks();
+        MediaPlayerElementRendersChecks(strings);
+        GeometryOnlyPumpChecks(strings);
+        VideoAspectChangeChecks(strings);
+        UseVideoEffectChecks(strings);
+        VideoInactivePumpChecks();
+        StayMountedPresenterChecks(strings);
         MediaPlayerElementChecks(strings);
         ControlsChecks(strings);
         RecipeChecks(strings);
@@ -9840,8 +9849,8 @@ static partial class ControlsSuite
             bool fillCoversArea = stageRect.W > 0f && Near(fillRect.X, stageRect.X) && Near(fillRect.Y, stageRect.Y)
                 && Near(fillRect.W, stageRect.W) && Near(fillRect.H, stageRect.H);
 
-            RectF expected = FluentGpu.Controls.Media.MediaPlayerElement.FitVideoRect(
-                stageRect, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
+            RectF expected = FluentGpu.Controls.Media.MediaPlayerElement.FitVideoRectSnapped(
+                stageRect, natural, VideoAspectMode.Uniform, 16.0 / 9.0, 1f);
             bool fitted = holes == 1 && Near(recordedHole.X, expected.X) && Near(recordedHole.Y, expected.Y)
                 && Near(recordedHole.W, expected.W) && Near(recordedHole.H, expected.H)
                 // the scene node the pump reads and the rect the recorder erased are the SAME rect

@@ -39,7 +39,8 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     private static ICompositorDesktopInterop* s_deskInterop;
     private static ICompositorInterop* s_interop;
 
-    private static void EnsureCompositor()
+    // UI thread: D3D12Device.PrepareSwapchainCreate calls this before a popup's swapchain is created on the render thread.
+    internal static void EnsureCompositor()
     {
         if (s_comp != null) return;
         if (!s_roInit) { RoInitialize(RO_INIT_TYPE.RO_INIT_SINGLETHREADED); s_roInit = true; }

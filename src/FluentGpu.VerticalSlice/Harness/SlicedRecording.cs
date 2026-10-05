@@ -19,6 +19,11 @@ sealed class SlicedRecording
     public readonly SliceRecorder Slices = new();
     public readonly SliceTable Tiles = new(256, 64, 64);
     public readonly HeadlessGpuDevice Device = new();
+    // The composite route draws into the device's PRIMARY swapchain (the first one created): this recording owns a device of its
+    // own, so it creates that one target up front and presents every composite against it.
+    readonly ISwapchain _target;
+
+    public SlicedRecording() => _target = Device.CreateSwapchain(new SwapchainDesc(default, new Size2(1920f, 1080f)));
 
     public SceneRecordStats Record(SceneStore scene, DrawList dl, SpanTable? spans = null, float width = 1920f, float height = 1080f)
     {
@@ -27,7 +32,7 @@ sealed class SlicedRecording
         if (snapshot is null) return stats;
         var info = new FrameInfo(new Size2(width, height), 1f, default, RepaintDamage: stats.RepaintDamage);
         var frame = Slices.BuildComposite(Tiles, snapshot, in info, 0, stats.RepaintDamage, withStreams: true);
-        Device.SubmitComposite(in frame);
+        Device.SubmitComposite(in frame, _target);
         Slices.EndComposite(Tiles, frame.RasterDone);
         dl.Reset();
         var composed = Device.LastComposedStream;

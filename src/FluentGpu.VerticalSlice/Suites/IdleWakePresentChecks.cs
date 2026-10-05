@@ -57,6 +57,8 @@ static class IdleWakePresentChecks
         ElidedTurnBetweenPresents(strings);
         AsyncRaceOrdering(strings);
         LiveGapStillCounted(strings);
+        TimersSeenNamesTheOwner(strings);
+        VideoOnlyWakeSkipsTheScenePublication(strings);
     }
 
     private static void IdleToScroll(StringTable strings)
@@ -198,5 +200,84 @@ static class IdleWakePresentChecks
         Check("gate.wake-present.live-gap-counted two back-to-back live presents ~3 refresh periods apart with no no-present turn between them DO count the real misses (≥ 2), unlike an idle/elided gap",
             missedAfter - missedBefore >= 2,
             $"missedBefore={missedBefore} missedAfter={missedAfter} delta={missedAfter - missedBefore}");
+    }
+
+    /// <summary>F098: a wake whose only reason is a coalesced video pump publishes no scene. The host runs the pump; when it wrote
+    /// nothing a frame must carry the turn ends there (a quiet turn: no capture, no post), and when it wrote only registry intents
+    /// their snapshot is parked for the render thread's early video drain instead of a publication (the publish sequence does not
+    /// move). A headless host has no render thread, so the gate switches the video-only turn on through the test seam and reads the
+    /// parked post itself; the threaded drain is covered by the render-thread tests.</summary>
+    private static void VideoOnlyWakeSkipsTheScenePublication(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("idle-wake-video-only", new Size2(240, 240), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
+
+        host.RunFrame();
+        int settle = 0;
+        for (; settle < 200 && host.HasActiveWork; settle++) host.RunFrame();
+        bool wentIdle = !host.HasActiveWork;
+
+        var reg = host.VideoSurfaces;
+        int token = reg.Acquire();
+        reg.Place(token, new RectF(0f, 0f, 100f, 60f));
+        int pumps = 0;
+        uint contentW = 0;
+        reg.RegisterPump(token, host, _ => { pumps++; reg.SetContentSize(token, contentW, 1080u); });   // registering requests the first pump
+        host.RunFrame();                                       // baseline: an ordinary frame pumps and publishes the table
+        for (int i = 0; i < 50 && host.HasActiveWork; i++) host.RunFrame();
+        bool baselineIdle = !host.HasActiveWork;
+        ulong publishedBefore = host.PublishSequence;
+
+        host.VideoOnlyTurnInlineForTest = true;
+        contentW = 1920u;
+        reg.RequestPump(token);
+        var wake = host.CurrentWakeReasons;
+        var f = host.RunFrame();                               // the pump wrote only the content size: a video-only post
+        var parked = new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+        bool took = host.TryTakeVideoOnlyForTest(parked, out int count);
+        bool carried = took && count == 1 && parked[0].Token == token && parked[0].ContentW == 1920u && parked[0].ContentH == 1080u;
+        bool noPublication = host.PublishSequence == publishedBefore && !f.Rendered && host.VideoOnlyPosts == 1;
+        int pumpsAfterPost = pumps;
+
+        reg.RequestPump(token);                                // the pump writes the same size again: nothing to carry
+        var q = host.RunFrame();
+        bool quiet = host.PublishSequence == publishedBefore && !q.Rendered && host.VideoOnlyQuietTurns == 1
+            && host.VideoOnlyPosts == 1 && !host.TryTakeVideoOnlyForTest(parked, out _) && pumps == pumpsAfterPost + 1;
+
+        Check("gate.wake-present.video-only a wake whose only reason is a coalesced video pump publishes no scene: a pump that wrote registry intents parks their snapshot (no publication, publish sequence unmoved), and one that wrote nothing is a quiet turn with no capture and no post",
+            wentIdle && baselineIdle && wake == WakeReasons.VideoPumpPending && carried && noPublication && quiet,
+            $"wentIdle={wentIdle}(settle={settle}) baselineIdle={baselineIdle} wake={wake} took={took} count={count} carried={carried} noPublication={noPublication} " +
+            $"published={host.PublishSequence}/{publishedBefore} posts={host.VideoOnlyPosts} quiet={quiet}({host.VideoOnlyQuietTurns}) pumps={pumps}");
+    }
+
+    /// <summary>F242: the host's frame drain feeds the timer fire census. A due timer armed under an owner type pops in a real
+    /// <c>RunFrame</c> (Paint drains the queue) and the census the <c>[wake]</c> line prints as <c>timersSeen=</c> names that owner
+    /// with its fire count, then the next window starts empty - the anonymous <c>timer=N</c> bit alone could not say whose it was.</summary>
+    private static void TimersSeenNamesTheOwner(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("idle-wake-timers-seen", new Size2(240, 240), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
+
+        host.RunFrame();
+        host.TimersForTest.ResetFireCensus();
+        int fires = 0;
+        host.TimersForTest.Schedule(host.FrameClockMsForTest - 1000.0, 0, _ => fires++, typeof(IdleWakePresentChecks));
+        host.RunFrame();                                      // Paint drains the overdue timer
+        var sb = new System.Text.StringBuilder();
+        host.TimersForTest.AppendTimersSeen(sb);
+        string seen = sb.ToString();
+        host.TimersForTest.ResetFireCensus();
+        var empty = new System.Text.StringBuilder();
+        host.TimersForTest.AppendTimersSeen(empty);
+
+        Check("gate.wake-census.timers-seen a host timer armed under an owner type and drained by a real RunFrame is named with its fire count in the census (timersSeen=…Owner×1), and a reset opens an empty window",
+            fires == 1 && seen.Contains("IdleWakePresentChecks×1", StringComparison.Ordinal) && empty.ToString() == " | timersSeen=0",
+            $"fires={fires} seen='{seen}' afterReset='{empty}'");
     }
 }

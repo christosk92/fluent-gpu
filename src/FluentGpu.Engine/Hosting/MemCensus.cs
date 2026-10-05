@@ -130,7 +130,7 @@ internal sealed class MemCensus
     private long _lastSampleTicks;
 
     // Growth tracking: the previous numeric vector + a per-metric "consecutive increases" streak.
-    private const int MetricCount = 28;
+    private const int MetricCount = 32;
     private readonly long[] _prev = new long[MetricCount];
     private readonly int[] _grewStreak = new int[MetricCount];
     private bool _havePrev;
@@ -169,7 +169,9 @@ internal sealed class MemCensus
 
         var gc = GC.GetGCMemoryInfo();
         long workingSet = Environment.WorkingSet;
+        long handles = ProcessHandleCount();
         var s = new CensusSnapshot(_host);
+        var media = FluentGpu.Media.MediaCensus.Capture();   // F197: the media stack's named owners (engines, protected sessions, prepared, runtime)
 
         // Pack the growth-tracked numerics into the fixed vector, compute streaks.
         int k = 0;
@@ -199,8 +201,12 @@ internal sealed class MemCensus
         _cur[k++] = s.ScrollAnimActive;
         _cur[k++] = s.PopupWindows;
         _cur[k++] = workingSet;
+        _cur[k++] = handles;                     // growth-tracked: a leaked NT handle (a swap-chain handle per source switch, F198) climbs
         _cur[k++] = s.PixelPoolRetainedBytes;   // growth-tracked; self-quiets at ≤cap
         _cur[k++] = s.PixelPoolPeakBytes;        // growth-tracked; monotone during warmup, then flat (expected)
+        _cur[k++] = media.VideoEngines;          // growth-tracked: an engine per rebuild that is never disposed climbs here (F197)
+        _cur[k++] = media.ProtectedSessions;
+        _cur[k++] = media.ProtectedStoreBytes;
         // k == MetricCount
 
         if (_havePrev)
@@ -215,7 +221,7 @@ internal sealed class MemCensus
             $"  gc      heap={Mb(gc.HeapSizeBytes)} committed={Mb(gc.TotalCommittedBytes)} gen0={GC.CollectionCount(0)} gen1={GC.CollectionCount(1)} gen2={GC.CollectionCount(2)} alloc={allocRateKb:0.0}KB/s\n");
         // Metric slots per line are contiguous in the packed vector (see the assignment order above) — pass a
         // (start,count) range so the grow-flag scan stays allocation-free.
-        Line(sb, "  proc    ", $"workingSet={Mb(workingSet)}", 25, 1);
+        Line(sb, "  proc    ", $"workingSet={Mb(workingSet)} handles={(handles >= 0 ? handles.ToString(CultureInfo.InvariantCulture) : "n/a")}", 25, 2);
         Line(sb, "  scene   ", $"live={s.SceneLive} cap={s.SceneCapacity} orphans={s.SceneOrphans} sticky={s.SceneSticky} scroll={s.SceneScrollState} brush={s.SceneBrushAnims}", 0, 6);
         Line(sb, "  strings ", $"map={s.StringMap} pendReclaim={s.StringPendingReclaim} idHighWater={s.StringIdHighWater}", 6, 3);
         sb.Append(CultureInfo.InvariantCulture,
@@ -225,7 +231,10 @@ internal sealed class MemCensus
         Line(sb, "  recon   ", $"components={s.Components} nodeBindings={s.NodeBindings} virtuals={s.VirtualBoundaries} providers={s.Providers}", 15, 4);
         Line(sb, "  anim    ", $"tracks={s.AnimTracks} displayRateLoops={s.AnimDisplayRateLoops} transitions={s.AnimTransitions} interact={s.InteractActive} scroll={s.ScrollAnimActive}", 19, 5);
         Line(sb, "  host    ", $"popupWindows={s.PopupWindows}", 24, 1);
-        Line(sb, "  pixpool ", $"retained={Mb(s.PixelPoolRetainedBytes)} peak={Mb(s.PixelPoolPeakBytes)} cap={Mb(s.PixelPoolCapBytes)}", 26, 2);
+        Line(sb, "  pixpool ", $"retained={Mb(s.PixelPoolRetainedBytes)} peak={Mb(s.PixelPoolPeakBytes)} cap={Mb(s.PixelPoolCapBytes)}", 27, 2);
+        // Named media owners. The protected decode runs inside mfpmp.exe (another process), so none of it is in this line or in the
+        // working set above: the segment store is CPU memory in THIS process, the swap chains / D3D11 devices are VRAM on the adapter.
+        Line(sb, "  media   ", $"{media.Format()} storeMB={Mb(media.ProtectedStoreBytes)}", 29, 3);
 
         if (_host.GpuResources is { } gpuRes)
         {
@@ -249,6 +258,18 @@ internal sealed class MemCensus
             if (_grewStreak[i] >= 3) { grew = true; break; }
         if (grew) sb.Append(" ↑GROW");
         sb.Append('\n');
+    }
+
+    /// <summary>The process's open kernel handle count (<see cref="Process.HandleCount"/>, the quantity Win32
+    /// <c>GetProcessHandleCount</c> answers), or -1 where the platform does not answer. Read once per census interval, never per frame.</summary>
+    private static long ProcessHandleCount()
+    {
+        try
+        {
+            using var proc = Process.GetCurrentProcess();
+            return proc.HandleCount;
+        }
+        catch (Exception) { return -1; }
     }
 
     private static string Mb(long bytes) => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.0}MB");

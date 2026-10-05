@@ -44,7 +44,16 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // belongs to a LATER session sharing a warm-reused engine — either way, nothing here is safe to act on.
     private readonly int _sourceEpoch;
     private readonly MediaOpenOptions _opts;
-    private readonly AdaptiveManifest? _manifest;
+    // The parsed catalog. Null until it is known: MfMediaPlayer posts the source switch FIRST and loads the manifest in
+    // parallel, so it normally arrives late through AttachManifest (and a live one is replaced on its update period). Written
+    // only on the UI thread (ConnectSignals / the pump, via AdoptPendingManifest); volatile because the off-thread in-band cue
+    // loader reads it.
+    private volatile AdaptiveManifest? _manifest;
+    // A manifest AttachManifest handed over from any thread, waiting for the UI thread to adopt it (last one wins).
+    private AdaptiveManifest? _pendingManifest;
+    // Cancelled when the session is disposed: work that outlives the open (the manifest load and live refresh) ties itself to
+    // this. Never disposed: it owns no timer or registration once cancelled, and a late Lifetime read must not throw.
+    private readonly CancellationTokenSource _lifetime = new();
     // Returns the engine warm to MfMediaPlayer's pool (pause + detach — no teardown) instead of disposing it. Null only
     // in tests that construct a session directly; every production session (MfMediaPlayer.OpenAsync) supplies one.
     private readonly Action<IVideoEngine>? _release;
@@ -69,27 +78,50 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private int _presentationEpoch;
     private TimeSpan _duration = TimeSpan.Zero;
     private nuint _handle;
+    private bool _forceRebind;   // the presentation epoch moved: the next bind must wrap the handle again even if its value is unchanged
     private VideoSurfaceId _publishedSurface;   // last value handed to sink.VideoSurface (PublishSurface)
+    // The engine published a nonzero FirstFrameTimestamp for THIS session's source epoch (see FirstFrameEpoch).
+    private bool _firstFrameSeen;
+    private long _firstFrameEpoch;
+    // The engine's SeekedCount as of the last pump: a change is a finished seek, which owes a repaint if paused. A counter,
+    // not the Seeking flag's falling edge — the pump coalesces to one per frame, so a fast paused seek whose SEEKING and
+    // SEEKED both land inside one frame never shows the flag at all.
+    private int _seekedSeen;
 
-    /// <summary>The player's VideoSurface signal — what MediaPlayerElement's poster/hole gate reads: non-None while
-    /// a swap chain is bound for the live presentation, None otherwise. No real backend wrote this signal until
-    /// 2026-09-22 (only the headless scripted player did), so the poster never dropped and the hole was never punched.
-    /// Value-gated: a steady pump publishes nothing.</summary>
+    /// <summary>Bumped (once, to 1) the first time this session observes the engine's first frame of ITS OWN source
+    /// (<see cref="VideoEngineSnapshot.FirstFrameTimestamp"/> != 0 on a snapshot of this session's source epoch); 0 until
+    /// then. The clear-path twin of the protected session's per-attach first-frame epoch: a host that decides "the new
+    /// video is presenting" reads this instead of inferring it from size state a PREVIOUS source left behind. Written by
+    /// the pump on the UI thread; <see cref="Volatile"/> so any thread reads a current value.</summary>
+    public long FirstFrameEpoch => Volatile.Read(ref _firstFrameEpoch);
+
+    /// <summary>The player's VideoSurface signal — what MediaPlayerElement's poster/hole gate reads: non-None only while
+    /// a swap chain is bound AND this source's first frame has landed (the engine's first-frame stamp), None otherwise —
+    /// binding the handle alone shows whatever the swap chain still holds, which on a warm engine is the previous
+    /// video's last frame. No real backend wrote this signal until 2026-09-22 (only the headless scripted player did),
+    /// so the poster never dropped and the hole was never punched. Value-gated: a steady pump publishes nothing.</summary>
     private void PublishSurface(MediaSignalSink sink, VideoSurfaceId id)
     {
         if (id == _publishedSurface) return;
         _publishedSurface = id;
         sink.VideoSurface(id);
     }
-    // The size (px) the video stream was last sized to inside MF's own swap chain — the (capped) NATURAL frame size,
-    // NOT the destination rect: MF renders the full frame 1:1 into its swap chain and DirectComposition performs the
-    // fit — see the §3 comment in PumpVideo.
-    private int _streamW, _streamH;
+    // Decides the size (px) the video stream is rendered at inside MF's own swap chain — a BUCKET of the natural frame size
+    // (natural x {1, 3/4, 1/2, 1/3}), NOT the destination rect: MF renders the frame 1:1 into its swap chain and
+    // DirectComposition performs the fit — see the §3 comment in PumpVideo. It also holds the compositor's content size at
+    // the previous value until the engine echoes the new size as applied (VideoEngineSnapshot.StreamW/H).
+    private readonly VideoStreamSizeGate _sizeGate = new();
+    // Re-pumps the session once a settle window or an echo wait ends (the pump is event-driven and nothing else would).
+    private Timer? _sizeRetry;
+    // The clock the size gate's settle window and echo timeout read; a test replaces it to step time.
+    internal Func<long> ClockMs { get; set; } = static () => Environment.TickCount64;
     private PlaybackState _publishedState = PlaybackState.Opening;
     // The last command bitset actually pushed to the sink. Value-gated here so re-computing every pump costs a
     // comparison and publishes nothing when nothing changed.
     private MediaCommandFlags _publishedCommands;
     private bool _errorPublished;
+    // The renderer frame counters last handed to sink.Statistics (F066); -1 = nothing published yet.
+    private long _statsRendered = -1, _statsDropped = -1;
     private bool _seeking;
     // Native DComp auto-presents decoded frames. This flag asks for a Repaint command only for an initial/reconfigured
     // hand-off or a real media-engine event, never once per host frame.
@@ -101,7 +133,6 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // In-band (manifest-declared) subtitle rendering: track-id → its adaptation, the loaded cue timeline, and the
     // last published cue. The cue timeline is built OFF-thread and swapped in as a whole (reference write); the pump
     // (UI thread) only ever reads a fully-built CueTrack. Unrelated to the engine seam — unchanged.
-    private static readonly HttpClient s_subtitleHttp = new();
     private readonly Dictionary<int, AdaptiveTrackGroup> _textGroups = new();
     private volatile CueTrack? _inbandCues;
     private int _cueEpoch;
@@ -129,7 +160,11 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // The engine's own self-refresh keeps the snapshot fresh (no poll timer here any more): a discrete transition
     // wakes this via StateChanged, and a live/resolving/playing source keeps refreshing itself on the engine thread's
     // own cadence — both paths converge on requesting one settled UI-thread pump.
-    private void OnEngineStateChanged() => RequestPump();
+    // Never a repaint request: the engine raises for every flag edge and for its ~1 Hz position tick, and an all-NULL
+    // UpdateVideoStream per raise is needless work that can displace MF's own scheduled present. _repaintPending is set
+    // only by the edges that really need one (first bind, a new handle, this source's first frame, a StreamRect change,
+    // a finished paused seek).
+    private void OnEngineStateChanged() => RequestPump(repaint: false);
 
     /// <summary>The caller DECLARED this source live (<see cref="SourceLiveness.Live"/>). Distinct from the engine's own
     /// latched <see cref="VideoEngineFlags.LiveSource"/> bit: only a DECLARED live source suppresses the duration
@@ -147,7 +182,9 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         {
             SourceLiveness.Vod => false,
             SourceLiveness.Live => true,
-            _ => (snap.Flags & VideoEngineFlags.LiveSource) != 0,
+            // Defence in depth for the engine's own metadata gate: a LiveSource bit without MetadataLoaded is never trusted
+            // (it would turn a VOD resume into a seek to the live edge).
+            _ => (snap.Flags & (VideoEngineFlags.LiveSource | VideoEngineFlags.MetadataLoaded)) == (VideoEngineFlags.LiveSource | VideoEngineFlags.MetadataLoaded),
         };
     }
 
@@ -170,10 +207,50 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         sink.PlayRequested(_playRequested);
         sink.State(PlaybackState.Opening);
         _publishedState = PlaybackState.Opening;
+        // A new session starts with no presented surface whatever the sink still holds from a previous one (the value gate
+        // in PublishSurface never sends a session's initial default, so the reset has to be explicit).
+        sink.VideoSurface(default);
+        // The previous source's tracks go now, whether or not a manifest is here yet (a pending or failed one must not leave
+        // them listed). This is the ONLY reset: the session is the sole track publisher at connect time, and the catalog
+        // below (or a late one, adopted by the pump) only registers tracks, so sidecars the player adds in between survive.
+        sink.ResetTracks();
+        // A manifest that landed before the signals were connected is the catalog this announces; a later one is adopted by
+        // the pump (AttachManifest).
+        AdoptPendingManifest(out _);
         PublishManifestCatalog(sink);
-        // If StartPosition was requested, seek before the first frame (applied once the source resolves too).
+        // StartPosition: posted AFTER the SetSource in the engine's drain order, and MF accepts SetCurrentTime before the
+        // source has loaded — so it is not re-posted at metadata.
         if (_opts.StartPosition > TimeSpan.Zero) _engine.Commands.Post(VideoCommandKind.Seek, a: _opts.StartPosition.TotalSeconds);
         RequestPump();
+    }
+
+    /// <summary>Hand over the parsed catalog of an adaptive source that loaded AFTER the session started (any thread):
+    /// <see cref="MfMediaPlayer"/> posts the source switch first and loads the manifest in parallel, and re-fetches a live one
+    /// on its update period. The next pump adopts it on the UI thread: the FIRST manifest publishes the catalog (tracks,
+    /// qualities, geometry, colour, timeline) and the command bits, registering its tracks BESIDE any the core lists by then
+    /// (sidecar subtitles added since connect keep their selection and sync offsets; only <see cref="ConnectSignals"/> resets
+    /// tracks); a replacement only refreshes the timeline (a live edge that keeps moving) and the commands, leaving the tracks
+    /// the user has already selected alone. Last attach wins.</summary>
+    internal void AttachManifest(AdaptiveManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (_disposed) return;
+        Volatile.Write(ref _pendingManifest, manifest);
+        RequestPump(repaint: false);
+    }
+
+    /// <summary>Cancelled when this session is disposed.</summary>
+    internal CancellationToken Lifetime => _lifetime.Token;
+
+    // UI thread. Moves a pending manifest into place; firstCatalog is true when it is the session's first (the catalog has
+    // never been published from a manifest), false for a refresh of one already adopted.
+    private bool AdoptPendingManifest(out bool firstCatalog)
+    {
+        firstCatalog = false;
+        if (Interlocked.Exchange(ref _pendingManifest, null) is not { } manifest) return false;
+        firstCatalog = _manifest is null;
+        _manifest = manifest;
+        return true;
     }
 
     /// <inheritdoc/>
@@ -311,7 +388,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             {
                 // HLS: the master only names the rendition; its media playlist carries the segment URIs.
                 var mediaUri = new Uri(playlist);
-                string text = await s_subtitleHttp.GetStringAsync(mediaUri).ConfigureAwait(false);
+                string text = await MediaHttp.Shared.GetStringAsync(mediaUri).ConfigureAwait(false);
                 AdaptiveManifest media = HlsManifestParser.ParseMedia(text, mediaUri, rep.Quality);
                 if (media.TrackGroups.Count > 0 && media.TrackGroups[0].Representations.Count > 0)
                     segments = media.TrackGroups[0].Representations[0].Segments;
@@ -340,7 +417,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                     if (epoch != _cueEpoch || _disposed) return;   // selection superseded / torn down
                     if (loaded[i]) continue;
                     string vtt;
-                    try { vtt = await s_subtitleHttp.GetStringAsync(segments[i].Uri).ConfigureAwait(false); }
+                    try { vtt = await MediaHttp.Shared.GetStringAsync(segments[i].Uri).ConfigureAwait(false); }
                     catch (HttpRequestException) { loaded[i] = true; loadedCount++; continue; }   // one missing segment is not fatal
                     loaded[i] = true; loadedCount++;
                     // One-time WebVTT sniff on the FIRST segment actually fetched (windowing means i is not 0-first):
@@ -385,14 +462,52 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     public void PumpVideo(VideoBinding binding, RectF videoRect, float scale)
     {
         if (_disposed || _sink is null) return;
-        var sink = _sink;
+        // ONE seqlock read for the whole turn — wait-free, alloc-free, never torn — shared by both halves.
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch) return;   // stale or superseded: see PumpState
+        PumpStateCore(_sink, in snap);
+        PumpGeometryCore(_sink, in snap, binding, videoRect, scale);
+    }
 
+    /// <inheritdoc/>
+    public void PumpState()
+    {
+        if (_disposed || _sink is null) return;
         // ONE seqlock read for this whole turn — wait-free, alloc-free, never torn.
         VideoEngineSnapshot snap = _engine.Snapshot;
         // Stale (the engine hasn't drained our SetSource yet) or superseded (a LATER session reused this warm engine):
         // either way nothing below is safe to act on. The next pump — requested by the engine's own StateChanged once
         // it catches up — retries.
         if (snap.SourceEpoch != _sourceEpoch) return;
+        PumpStateCore(_sink, in snap);
+    }
+
+    /// <inheritdoc/>
+    public void PumpGeometry(VideoBinding binding, RectF videoRect, float scale)
+    {
+        if (_disposed || _sink is null || !binding.IsValid) return;
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch) return;
+        PumpGeometryCore(_sink, in snap, binding, videoRect, scale);
+    }
+
+    // The STATE half of the pump (F132): everything this session publishes without a surface — the manifest catalog, errors,
+    // the first-frame stamp, metadata (natural size, duration, commands), state, buffering, position, cues and the live
+    // timeline. It needs no element and writes only through the sink, so MediaPlayer runs it on every pump request whether
+    // or not anything is mounted.
+    private void PumpStateCore(MediaSignalSink sink, in VideoEngineSnapshot snap)
+    {
+        // 0. A manifest that finished loading since the last pump, adopted here on the UI thread (the sink's sole writer).
+        if (AdoptPendingManifest(out bool firstCatalog))
+        {
+            if (firstCatalog) PublishManifestCatalog(sink);
+            else PublishLiveTimeline(sink, TimeSpan.FromSeconds(snap.PositionSeconds));
+            if (_metaReady) PublishCommands(sink, snap, EngineLiveFor(snap));
+        }
+
+        // 0a. Rendered/dropped-frame health (F066), before the error gate so the counters of a source that failed (or was judged hung)
+        // are still on the signal the diagnostics read.
+        PublishStatistics(sink, in snap);
 
         // 1. Terminal error — map the MF media-engine error code to a typed MediaError (published once). Never a silent drop.
         if ((snap.Flags & VideoEngineFlags.Error) != 0)
@@ -404,6 +519,18 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 Publish(sink, PlaybackState.Failed);
             }
             return;
+        }
+
+        // 1a. First frame of THIS source (the engine resets the stamp per source and a snapshot of another epoch never
+        // gets here): the one-shot FirstFrameEpoch bump, and the readiness §3 publishes the surface on.
+        bool firstFrame = snap.FirstFrameTimestamp != 0;
+        if (firstFrame && !_firstFrameSeen)
+        {
+            _firstFrameSeen = true;
+            Interlocked.Increment(ref _firstFrameEpoch);
+            // On a paused open the first-bind repaint ran before this frame was decoded, and no per-raise repaint follows
+            // any more: present the frame the poster is about to drop onto (the §3 Playing gate defers it while MF presents).
+            Volatile.Write(ref _repaintPending, 1);
         }
 
         bool metadataLoaded = (snap.Flags & VideoEngineFlags.MetadataLoaded) != 0;
@@ -430,6 +557,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         {
             _presentationEpoch = snap.PresentationEpoch;
             _handle = 0;
+            _forceRebind = true;   // MF may hand back the SAME handle value for a rebuilt swap chain; the registry's value gate would drop it
             PublishSurface(sink, default);   // the old swap chain is gone with its presentation; the poster covers until the next handle
             Volatile.Write(ref _repaintPending, 1);
         }
@@ -478,47 +606,8 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 _naturalSize = answered;
                 sink.NaturalSize(_naturalSize);
                 PublishCommands(sink, snap, engineLive);
-                _streamW = 0; _streamH = 0;               // the stream is sized FROM the natural size — re-assert it
+                // The stream is sized FROM the natural size: the size gate sees the change and re-asserts it at once (§3).
                 Volatile.Write(ref _repaintPending, 1);   // the hand-off below can now report a real surface
-            }
-        }
-
-        // 3. Composited-surface handoff (Path A) — the single (DRM-free here) bind point. Value-gated all the way down.
-        if (binding.IsValid && _metaReady)
-        {
-            if (_handle == 0)
-            {
-                _handle = snap.SwapchainHandle;
-                if (_handle != 0) Volatile.Write(ref _repaintPending, 1);
-            }
-            if (_handle != 0)
-            {
-                binding.Bind(_handle);
-                PublishSurface(sink, new VideoSurfaceId(1));   // frames follow the handle at once on the clear path
-
-                // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
-                // fit — the same contract the protected/PlayReady path has always used. The stream is sized to the
-                // natural frame size, capped at what the destination can actually show (below), so a 4K frame in a
-                // 640-px card does not allocate 4K buffers. Both numbers move together, so the ratio — the thing the
-                // fit depends on — is preserved exactly.
-                SizeI content = ContentSizeFor(_naturalSize, videoRect, scale);
-                if (content.Width != _streamW || content.Height != _streamH)
-                {
-                    _engine.Commands.Post(VideoCommandKind.StreamRect, i: content.Width, j: content.Height);
-                    _streamW = content.Width; _streamH = content.Height;
-                    Volatile.Write(ref _repaintPending, 1);
-                }
-                binding.SetContentSize(content);
-                binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
-                binding.SetVisible(true);
-                // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
-                // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
-                // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
-                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
-                    new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
-                    { Token = binding.Token });
-                if (Interlocked.Exchange(ref _repaintPending, 0) != 0)
-                    _engine.Commands.Post(VideoCommandKind.Repaint);
             }
         }
 
@@ -531,7 +620,9 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         if (_metaReady)
         {
             double posSeconds = snap.PositionSeconds;
-            if ((snap.Flags & VideoEngineFlags.Playing) != 0)
+            // No projection while the engine is starved: the frame and the sampled position are frozen, and a clock running
+            // ahead of them would creep the seek bar and snap it back at the next refresh.
+            if ((snap.Flags & (VideoEngineFlags.Playing | VideoEngineFlags.Waiting)) == VideoEngineFlags.Playing)
                 posSeconds += Stopwatch.GetElapsedTime(snap.PositionTimestamp).TotalSeconds * snap.PlaybackRate;
             if (posSeconds < 0) posSeconds = 0;
             TimeSpan pos = TimeSpan.FromSeconds(posSeconds);
@@ -547,6 +638,79 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         }
         if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(snap.PositionSeconds));
         else if (engineLive && _metaReady) PublishEngineLiveTimeline(sink, snap, TimeSpan.FromSeconds(snap.PositionSeconds));
+    }
+
+    // The GEOMETRY half of the pump (F132): bind the surface handle, size the stream and place the child, for the element
+    // that presents this video. It reads the snapshot the state half last acted on; anything the state half has not adopted
+    // yet (an error, a presentation epoch it has not seen) is left for the next turn, which the same raise requests right
+    // after the state pump. Publishes the surface readiness and the placement report, no state, position or error.
+    private void PumpGeometryCore(MediaSignalSink sink, in VideoEngineSnapshot snap, VideoBinding binding, RectF videoRect, float scale)
+    {
+        if (!binding.IsValid || !_metaReady) return;
+        if ((snap.Flags & (VideoEngineFlags.Error | VideoEngineFlags.MetadataLoaded)) != VideoEngineFlags.MetadataLoaded) return;
+        if (snap.PresentationEpoch != _presentationEpoch) return;
+        bool firstFrame = snap.FirstFrameTimestamp != 0;
+
+        // Composited-surface handoff (Path A) — the single (DRM-free here) bind point. Value-gated all the way down.
+        if (_handle == 0)
+        {
+            _handle = snap.SwapchainHandle;
+            if (_handle != 0) Volatile.Write(ref _repaintPending, 1);
+        }
+        if (_handle != 0)
+        {
+            binding.Bind(_handle, _forceRebind);
+            _forceRebind = false;
+            // Readiness = handle bound AND this source's first frame landed. Binding alone is not it: the swap chain of
+            // a warm engine still holds the PREVIOUS video's last frame (or nothing yet) until the new source presents.
+            PublishSurface(sink, firstFrame ? new VideoSurfaceId(1) : default);
+
+            // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
+            // fit — the same contract the protected/PlayReady path has always used. The stream is sized to a bucket
+            // of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the smallest that still covers the destination),
+            // so a 4K frame in a 640-px card does not allocate 4K buffers and a resize gesture does not re-allocate
+            // the swap chain per layout: a new bucket is requested only once the destination has held still, and the
+            // compositor keeps scaling the PREVIOUS content size until the engine echoes the new one as applied. One
+            // factor on both axes, so the ratio — the thing the fit depends on — is preserved exactly.
+            // An area that is not laid out (the element pumps with an empty rect before it exists, or after it
+            // collapsed) is no destination: it sizes nothing and places nothing (F051), while everything above still
+            // published.
+            if (VideoStreamSizing.IsLaidOut(videoRect))
+            {
+                var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
+                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, applied,
+                    (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs(), binding.Display);
+                if (!step.Request.IsEmpty)
+                {
+                    _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
+                    Diag.Line($"[video] stream.size backend=mf host={binding.HostOrdinal} token={binding.Token} size={step.Request.Width}x{step.Request.Height}");   // F235: which window's slot asked (the gate makes it once per real change)
+                    Volatile.Write(ref _repaintPending, 1);
+                }
+                ArmSizeRetry(step.RetryInMs);
+                SizeI content = step.Content;
+                binding.SetContentSize(content);
+                binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
+                // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
+                // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a
+                // source whose metadata loaded — so an unconditional show can never override a parked player's hide.
+                // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
+                // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
+                // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
+                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
+                    new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
+                    { Token = binding.Token });
+            }
+            // A paused seek that just finished owes a repaint (MF does not present the landed frame by itself).
+            if (snap.SeekedCount != _seekedSeen)
+            {
+                _seekedSeen = snap.SeekedCount;
+                Volatile.Write(ref _repaintPending, 1);
+            }
+            // Never while the engine is Playing — MF presents its own frames, and an all-NULL UpdateVideoStream there
+            // only injects an extra present. The pending request stays armed and is paid at the first non-Playing pump.
+            if ((snap.Flags & VideoEngineFlags.Playing) == 0 && Interlocked.Exchange(ref _repaintPending, 0) != 0)
+                _engine.Commands.Post(VideoCommandKind.Repaint);
+        }
     }
 
     /// <summary>The manifest-derived command bits (quality/track selection, GoLive), or <c>None</c> for a plain
@@ -572,15 +736,31 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             ? MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate
             : MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate | MediaCommandFlags.StepFrame;
 
-    /// <summary>The stream/content size for a destination — owned by <see cref="VideoStreamSizing.ContentSizeFor"/>
-    /// (shared with the protected session so the two backends can never size a surface differently).</summary>
+    /// <summary>The continuous (unbucketed) stream/content size for a destination — owned by
+    /// <see cref="VideoStreamSizing.ContentSizeFor"/>. The session itself sizes the stream through its
+    /// <see cref="VideoStreamSizeGate"/> (buckets, settle, echo), shared with the protected session.</summary>
     internal static SizeI ContentSizeFor(SizeI natural, RectF videoRect, float scale)
         => VideoStreamSizing.ContentSizeFor(natural, videoRect, scale);
 
+    // Asks for one more pump after `ms` (a settle window or an echo wait is pending). The pump is event-driven, so without
+    // this a size decision deferred to "once the geometry is stable" would wait for an unrelated event. Any thread.
+    private void ArmSizeRetry(int ms)
+    {
+        if (ms <= 0 || _disposed) return;
+        _sizeRetry ??= new Timer(static state => ((MfMediaSession)state!).RequestPump(repaint: false), this, Timeout.Infinite, Timeout.Infinite);
+        try { _sizeRetry.Change(ms, Timeout.Infinite); }
+        catch (ObjectDisposedException) { }   // disposed from another thread between the check and here
+    }
+
+    // Registers the manifest's tracks beside whatever the core already lists (it never resets them: ConnectSignals did, and
+    // a catalog that arrives later must keep the sidecar subtitle tracks the player has added since, with their selection and
+    // sync offsets).
     private void PublishManifestCatalog(MediaSignalSink sink)
     {
         if (_manifest is not { } manifest) return;
-        sink.ResetTracks();
+        // A text track is already selected (a sidecar the player auto-selected, whose cues it is rendering): a FORCED manifest
+        // track registers unselected, so the selected track and the rendered captions cannot disagree.
+        bool textTaken = sink.HasSelectedText;
         var qualities = new System.Collections.Generic.List<QualityVariant>();
         int id = 1;
         for (int g = 0; g < manifest.TrackGroups.Count; g++)
@@ -596,7 +776,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             // Captions default OFF (WinUI/web behavior): only a FORCED text track auto-selects. Audio/video keep the
             // manifest default / first-of-kind rule.
             bool selected = kind == TrackKind.Text
-                ? group.IsForced
+                ? group.IsForced && !textTaken
                 : group.IsDefault || !HasSelectedKind(manifest, g, group.Type);
             sink.Track(id, kind, group.Language, LabelOf(group), group.Role,
                 group.Representations[0].Quality.Codec, selected);
@@ -635,6 +815,22 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
 
     private static string LabelOf(AdaptiveTrackGroup group)
         => string.IsNullOrWhiteSpace(group.Language) ? group.Id : $"{group.Language} · {group.Id}";
+
+    /// <summary>Publish the rendered/dropped frame counters. F066: the engine polls FRAMES_RENDERED / FRAMES_DROPPED at its own
+    /// bounded cadence, so the snapshot's counters change at most a couple of times a second; the sink is written only when they do (a steady pump publishes nothing).</summary>
+    private void PublishStatistics(MediaSignalSink sink, in VideoEngineSnapshot snap)
+    {
+        if (snap.FramesRendered == _statsRendered && snap.FramesDropped == _statsDropped) return;
+        if (_statsRendered < 0 && snap.FramesRendered == 0 && snap.FramesDropped == 0) return;   // nothing to say yet: keep Empty
+        _statsRendered = snap.FramesRendered;
+        _statsDropped = snap.FramesDropped;
+        sink.Statistics(StatisticsFrom(in snap));
+    }
+
+    internal static PlaybackStatistics StatisticsFrom(in VideoEngineSnapshot snap)
+        => new(BytesDownloaded: 0, FramesDecoded: snap.FramesRendered + snap.FramesDropped, FramesDropped: snap.FramesDropped,
+               AudioUnderruns: 0, EstimatedThroughputKbps: 0, VideoBitrateKbps: 0, AudioBitrateKbps: 0,
+               StartupTime: TimeSpan.Zero, RebufferTime: TimeSpan.Zero, RebufferCount: 0, FramesRendered: snap.FramesRendered);
 
     /// <summary>Publish the command bitset — core transport + the manifest's selection bits + (for an engine-reported
     /// live source) GoLive and the seekability verdict for its DVR window. Value-gated on the last published set, so
@@ -712,6 +908,9 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         // A seek in flight is surfaced as Buffering(Seeking) — MF keeps `Playing` true across a seek, so without this
         // the transport halts with zero feedback until SEEKED lands.
         if ((snap.Flags & VideoEngineFlags.Seeking) != 0) return PlaybackState.Buffering;
+        // A mid-playback stall (MF WAITING): Playing stays true across it, so without this a rebuffer reports Playing with
+        // a frozen frame. PublishBuffering reports it as Buffering(Rebuffering) (the metadata is ready).
+        if ((snap.Flags & VideoEngineFlags.Waiting) != 0) return PlaybackState.Buffering;
         if ((snap.Flags & VideoEngineFlags.Playing) != 0) return PlaybackState.Playing;
         if (_playRequested) return PlaybackState.Buffering;   // intent to play, engine not yet advancing (re-buffering)
         return _everPlayed ? PlaybackState.Paused : PlaybackState.Ready;
@@ -749,8 +948,10 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         if (_disposed) return ValueTask.CompletedTask;
         _disposed = true;
         _sink = null;
+        _lifetime.Cancel();   // stops the manifest load / live refresh MfMediaPlayer started for this session
         _engine.StateChanged -= OnEngineStateChanged;
         PumpRequested = null;
+        _sizeRetry?.Dispose();
         // Non-blocking, no Task.Run: a warm-pooled engine (the production path — MfMediaPlayer.OpenAsync always
         // supplies a release) is returned via a couple of posts (pause + detach), never joined. Only a session built
         // WITHOUT a release callback (tests only — no production caller constructs one this way) falls back to

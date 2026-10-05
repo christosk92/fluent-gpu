@@ -653,6 +653,22 @@ public sealed partial class TreeReconciler
         effect.RunNow();
     }
 
+    /// <summary>Unmount the whole component tree (host Dispose): dispose the root render-effect, run the root component's
+    /// hook cleanups, then unmount every node (component scopes, bindings, image pins, keep-alive pages). The scene itself
+    /// is left to the host's teardown. Idempotent; without it nothing ever disposed the root effect, so a closed host
+    /// stayed reachable from every process-lifetime signal its components subscribed to.</summary>
+    public void UnmountRoot()
+    {
+        var effect = _rootEffect;
+        _rootEffect = null;
+        if (effect is null && _root is null) return;
+        effect?.Dispose();
+        if (_root is { } root) { _root = null; root.Unmount(); }
+        var sceneRoot = _scene.Root;
+        if (!sceneRoot.IsNull && _scene.IsLive(sceneRoot)) UnmountSubtree(sceneRoot);
+        _oldRoot = null;
+    }
+
     private void RunRoot(Component root)
     {
         _renderCount++;
@@ -2456,7 +2472,8 @@ public sealed partial class TreeReconciler
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
-                    Affine2D next = fx.Read();
+                    Affine2D next = fx.Read();                // read FIRST: the read is what keeps the effect subscribed
+                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the translation this frame
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.LocalTransform == next) return;
                     paint.LocalTransform = next;
@@ -2664,7 +2681,8 @@ public sealed partial class TreeReconciler
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();
+                    float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
+                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
                     ref var li = ref _scene.Layout(node);
                     if (wPrimed && li.Width.Equals(next)) return;
                     wPrimed = true;
@@ -2681,7 +2699,8 @@ public sealed partial class TreeReconciler
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();
+                    float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
+                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
                     ref var li = ref _scene.Layout(node);
                     if (hPrimed && li.Height.Equals(next)) return;
                     hPrimed = true;
@@ -3902,7 +3921,7 @@ public sealed partial class TreeReconciler
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
                     || b.RadialGradientCenter.IsBound || b.GradientMix.IsBound || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound
                     || b.Width.IsBound || b.Height.IsBound
-                    || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
+                    || b.OnRealized is not null || b.OnBoundsChanged is not null || b.FollowRect is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
             case GridEl g:
@@ -5025,6 +5044,7 @@ public sealed partial class TreeReconciler
                 if (b.IsolateLayout) _scene.Mark(node, NodeFlags.LayoutBoundary); else _scene.Unmark(node, NodeFlags.LayoutBoundary);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
+                _scene.SetFollowRect(node, b.FollowRect);   // F169: the engine's post-layout follow pass (SceneStore.Follow.cs)
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);

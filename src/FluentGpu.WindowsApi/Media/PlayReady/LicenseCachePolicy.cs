@@ -44,8 +44,10 @@ public readonly record struct LicenseCacheEntry(string Kid, LicenseCacheState St
 /// The decision half of <see cref="ProtectedVideoRuntime"/>'s license cache, extracted so it is testable with no CDM
 /// and no native call (the engine's <c>LicenseCachePolicyTests</c>). The runtime owns the handles, the CDM key
 /// sessions and the clock; this owns the RULES: reuse / join / re-acquire, when an expiry is close enough to count as
-/// expired, which row a ninth KID evicts, and whether a late <c>LicenseUsable</c> still applies to a row that has
-/// since been evicted or replaced.
+/// expired, when a Pending row is too old to join, which DEAD row a full cache trims, and whether a late
+/// <c>LicenseUsable</c> still applies to a row that has since been evicted or replaced. Which LIVE row a ninth KID evicts is
+/// NOT decided here: the native license table is the single eviction authority (it raises <c>EvLicenseEvicted</c> and the
+/// runtime drops the row), so the two caches can never disagree about which key sessions exist.
 /// <para>Why a cache at all: PlayReady's "proactive acquisition" — the license request is issued the moment a
 /// manifest is known, not when the user asks for the video, so a song→video switch finds the key already usable and
 /// pays no round trip. Keeping the key SESSION open (rather than just the bytes) is what lets the CDM answer an
@@ -61,14 +63,26 @@ public static class LicenseCachePolicy
     /// that dies mid-track, and re-acquiring costs one round trip we are already overlapping with the fetch.</summary>
     public const long ExpiryGuardMs = 10_000;
 
+    /// <summary>How long a row may stay Pending before it is too old to join. A relay that hangs, or a CDM that took the
+    /// license and never reported a key status, would otherwise keep the KID Pending for ever and every retry would join the
+    /// attempt that already failed the open. Below the session's start budget (10 s), so the retry of an open that just
+    /// failed at "Licensing" issues a fresh challenge. The native table applies the same number (<c>kPendingDeadlineMs</c>).</summary>
+    public const long PendingDeadlineMs = 8_000;
+
     /// <summary>What to do about a KID in <paramref name="state"/> right now. <paramref name="expiresAtMs"/> is 0 when
-    /// the CDM did not report an expiry (a non-expiring streaming license), which is treated as "does not expire".</summary>
-    public static LicenseCacheAction Decide(LicenseCacheState state, long expiresAtMs, long nowMs) => state switch
+    /// the CDM did not report an expiry (a non-expiring streaming license), which is treated as "does not expire".
+    /// <paramref name="acquiredMs"/> is when the row was created (0 = unknown, so a Pending row never goes stale): a Pending
+    /// row older than <see cref="PendingDeadlineMs"/> is re-acquired instead of joined.</summary>
+    public static LicenseCacheAction Decide(LicenseCacheState state, long expiresAtMs, long nowMs, long acquiredMs = 0) => state switch
     {
         LicenseCacheState.Usable => IsExpired(expiresAtMs, nowMs) ? LicenseCacheAction.Acquire : LicenseCacheAction.Reuse,
-        LicenseCacheState.Pending => LicenseCacheAction.Await,
+        LicenseCacheState.Pending => IsPendingStale(acquiredMs, nowMs) ? LicenseCacheAction.Acquire : LicenseCacheAction.Await,
         _ => LicenseCacheAction.Acquire,
     };
+
+    /// <summary>Whether a row created at <paramref name="acquiredMs"/> has been Pending for at least
+    /// <see cref="PendingDeadlineMs"/> at <paramref name="nowMs"/>. An <paramref name="acquiredMs"/> of 0 or less means "unknown".</summary>
+    public static bool IsPendingStale(long acquiredMs, long nowMs) => acquiredMs > 0 && nowMs - acquiredMs >= PendingDeadlineMs;
 
     /// <summary>Whether a license with <paramref name="expiresAtMs"/> is expired (or close enough to it) at
     /// <paramref name="nowMs"/>. An <paramref name="expiresAtMs"/> of 0 or less means "no expiry was reported".</summary>
@@ -83,6 +97,8 @@ public static class LicenseCachePolicy
     /// <see cref="LicenseCacheEntry.InUse"/> — an attached session is decoding with that key — is NEVER evicted, and
     /// neither is <paramref name="keepKid"/> (the KID the caller is about to attach), because evicting either closes
     /// the CDM key session under a live decoder.
+    /// <para>The runtime no longer evicts live rows with this (the native table owns the LRU, see
+    /// <see cref="ChooseDeadEviction"/>); it stays as the pure statement of the order the native table follows.</para>
     /// </summary>
     public static int ChooseEviction(ReadOnlySpan<LicenseCacheEntry> entries, string? keepKid)
     {
@@ -99,6 +115,25 @@ public static class LicenseCachePolicy
             if (e.LastUsedMs < lruStamp) { lruStamp = e.LastUsedMs; lru = i; }
         }
         return dead >= 0 ? dead : lru;
+    }
+
+    /// <summary>
+    /// Which DEAD row (Failed or Expired, not in use, not <paramref name="keepKid"/>) a full cache trims to make room, or -1
+    /// when it has room or holds none. Only dead rows: a LIVE row is never evicted from here, because the native license table
+    /// owns eviction (its LRU closes the key session and raises <c>EvLicenseEvicted</c>, and the row goes then). Trimming a dead
+    /// row is bookkeeping, not eviction: nothing a decoder or a later attach could use goes with it.
+    /// </summary>
+    public static int ChooseDeadEviction(ReadOnlySpan<LicenseCacheEntry> entries, string? keepKid)
+    {
+        if (entries.Length < Capacity) return -1;
+        for (int i = 0; i < entries.Length; i++)
+        {
+            LicenseCacheEntry e = entries[i];
+            if (e.InUse) continue;
+            if (keepKid is not null && string.Equals(e.Kid, keepKid, StringComparison.Ordinal)) continue;
+            if (e.State is LicenseCacheState.Failed or LicenseCacheState.Expired) return i;
+        }
+        return -1;
     }
 
     /// <summary>
@@ -119,6 +154,17 @@ public static class LicenseCachePolicy
     /// different dead state.
     /// </summary>
     public static bool AcceptExpiry(bool rowExists, LicenseCacheState rowState, ulong rowHandle, ulong eventHandle)
+        => rowExists && (rowState is LicenseCacheState.Usable or LicenseCacheState.Pending)
+           && rowHandle != 0 && rowHandle == eventHandle;
+
+    /// <summary>
+    /// Whether a <c>LicenseRevoked</c> event applies to a row: the CDM says a key that WAS usable (INTERNAL_ERROR, RELEASED,
+    /// OUTPUT_NOT_ALLOWED) will never decrypt again. Unlike a <c>LicenseFailed</c> after Usable (a late renewal round trip, which
+    /// leaves the key in place and is ignored), this one is about the key itself, so a Usable row turns Failed. A row still
+    /// marked Pending can be revoked too (the usable event may not have been applied yet). It must name the row's own handle:
+    /// a revoked predecessor's key session says nothing about the fresh one.
+    /// </summary>
+    public static bool AcceptRevocation(bool rowExists, LicenseCacheState rowState, ulong rowHandle, ulong eventHandle)
         => rowExists && (rowState is LicenseCacheState.Usable or LicenseCacheState.Pending)
            && rowHandle != 0 && rowHandle == eventHandle;
 }

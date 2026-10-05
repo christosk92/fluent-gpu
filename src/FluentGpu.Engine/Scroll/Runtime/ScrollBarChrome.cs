@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
+using FluentGpu.Scroll.Motion;
 
 namespace FluentGpu.Scroll.Runtime;
 
@@ -215,7 +216,9 @@ public sealed class ScrollBarChrome
         if (changed) _armedSinceTick = true;
     }
 
-    /// <summary>The viewport's shown offset changed this frame (the host's scroll step reports it).</summary>
+    /// <summary>The viewport's shown offset changed this frame - an input-driven move (wheel, keyboard, thumb, touch), reported
+    /// by the dispatcher or by the host's frame step. A viewport whose bar is never drawn is not armed
+    /// (<see cref="BarSuppressed"/>).</summary>
     public void NotifyMoved(int node)
     {
         if (BarSuppressed(node)) return;
@@ -223,6 +226,36 @@ public sealed class ScrollBarChrome
         row.MotionStamp = FrameIndex;
         Arm(node);
         _armedSinceTick = true;
+    }
+
+    /// <summary>The viewport's shown offset changed this frame, reported by the host's frame step with the plan's kind
+    /// (<paramref name="kind"/>): only a USER move (<see cref="UserMoveKind"/>) wakes the chrome by itself. A programmatic move
+    /// (<c>ScrollTo</c>, a lyrics line hand-off, a restored position, a pager) arms it only when the pointer is over the viewport
+    /// (the bar is then something the user is looking at) or the viewport's row is already live (a visible bar keeps tracking the
+    /// content it sits on) - otherwise a scroll nobody touched would run the whole fade-in, 2 s idle dwell and fade-out of a bar
+    /// that is, at best, glimpsed, one frame wake at a time (F238). It never creates a row for the move it declines.</summary>
+    public void NotifyMoved(int node, MotionKind kind)
+    {
+        if (!UserMoveKind(kind) && !_member.Contains(node)
+            && !(_scene.ScrollChrome.TryGet(node, out var live) && live.PointerOver))
+            return;
+        NotifyMoved(node);
+    }
+
+    /// <summary>Is <paramref name="kind"/> a move the USER is making (a wheel notch, a drag, a fling coasting from one, a
+    /// scrollbar thumb)? Everything else - <see cref="MotionKind.Programmatic"/>, an idle plan - is app-driven.</summary>
+    public static bool UserMoveKind(MotionKind kind)
+        => kind is MotionKind.Wheel or MotionKind.Drag or MotionKind.Fling or MotionKind.Thumb;
+
+    /// <summary>Does this viewport never draw its conscious bar - <c>SuppressScrollBar</c> (a paged shelf, the lyrics list) or
+    /// a descendant skeleton region that is loading (<c>LoadingBarSuppressors</c>)? The recorder already declines to paint it
+    /// (<c>SceneRecorder</c>'s bar gate reads the same two fields); the chrome must not tick, and mark paint-dirty, a bar
+    /// nobody will ever see.</summary>
+    private bool BarSuppressed(int node)
+    {
+        NodeHandle h = _scene.HandleAt(node);
+        return !h.IsNull && _scene.IsLive(h) && _scene.TryGetScroll(h, out var sc)
+            && (sc.SuppressBar || sc.LoadingBarSuppressors > 0);
     }
 
     /// <summary>KeepAlive park edge: a parked viewport's bar lands at rest and its row retires.</summary>
@@ -245,13 +278,6 @@ public sealed class ScrollBarChrome
             _advancedAtMs.RemoveAt(i);
         }
         if (_active.Count == 0) _dueAtMs = double.PositiveInfinity;
-    }
-
-    /// <summary>The viewport never draws a bar (a lyrics column, a pager-driven shelf): there is no chrome to run.</summary>
-    private bool BarSuppressed(int node)
-    {
-        NodeHandle h = _scene.HandleAt(node);
-        return !h.IsNull && _scene.IsLive(h) && _scene.TryGetScroll(h, out var sc) && sc.SuppressBar;
     }
 
     private void Arm(int node)

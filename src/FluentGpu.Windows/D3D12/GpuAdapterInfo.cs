@@ -60,6 +60,11 @@ public static class GpuAdapterInfo
     internal static void Publish(LUID luid)
         => Volatile.Write(ref s_adapterLuid, ((long)luid.HighPart << 32) | luid.LowPart);
 
+    /// <summary>The render adapter's LUID packed <c>(HighPart &lt;&lt; 32) | LowPart</c>; 0 until a D3D12 device exists. The
+    /// packed form lets a host that has no D3D types (the protected-video runtime's adapter provider) pin its own device to the
+    /// renderer's adapter.</summary>
+    public static long CurrentAdapterLuid => Volatile.Read(ref s_adapterLuid);
+
     /// <summary>The render adapter's LUID; false until a D3D12 device exists.</summary>
     public static bool TryGetAdapterLuid(out LUID luid)
     {

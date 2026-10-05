@@ -34,6 +34,20 @@ public sealed class SceneFramePublisher
     // published for two frames still needs every delta since ITS baseline, not since the last consumed publication.
     private readonly ulong[] _sceneCaptureSeq = new ulong[3];
     private readonly SceneCapacityReclaimPolicy[] _capacityPolicy = new SceneCapacityReclaimPolicy[3];
+    // F070: the video-surface registry's snapshot each slot's publication carries. Like the command arena it belongs to the SLOT: the
+    // consumer's generation claim keeps the writer out of it for as long as the frame is retained, so a render turn (including an
+    // elided one that re-reads the same publication) always sees the intents of the frame it presents.
+    private readonly FluentGpu.Media.VideoPresentIntent[][] _videoIntents = new FluentGpu.Media.VideoPresentIntent[3][];
+    // F098: the video-only post. A wake whose only work was the video pump changes no pixel of the UI, so it must not capture the scene
+    // or wake the renderer for a record: the UI parks the registry's snapshot HERE instead and wakes the loop's preTurn (the early
+    // video drain), which applies it without a record or a present. ONE latest-wins entry (a snapshot is state); a full publication
+    // carries a newer snapshot and discards it, and a post is made only while no full publication is outstanding, so a post can
+    // never be applied after (or in place of) an older publication's snapshot. Producer: the UI thread. Consumer: the render thread.
+    private readonly Lock _videoOnlyGate = new();
+    private readonly FluentGpu.Media.VideoPresentIntent[] _videoOnly = new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+    private int _videoOnlyCount;
+    private int _videoOnlyPending;   // 1 while a post awaits the consumer (written under _videoOnlyGate, read lock-free by HasVideoOnlyPost)
+    private long _videoOnlyPosts;
     private readonly bool _reverse;
     private long _publishedToken; // generation << 2 | slot; zero means no publication
     private int _consumeIdx = -1; // consumer-private retained claim
@@ -66,6 +80,7 @@ public sealed class SceneFramePublisher
         {
             _cmds[i] = GC.AllocateUninitializedArray<byte>(Math.Max(1, cmdCap), pinned: true);
             _sort[i] = GC.AllocateUninitializedArray<ulong>(Math.Max(1, sortCap), pinned: true);
+            _videoIntents[i] = new FluentGpu.Media.VideoPresentIntent[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
         }
     }
 
@@ -96,11 +111,13 @@ public sealed class SceneFramePublisher
 
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
-                         bool suppressVsync = false)
+                         bool suppressVsync = false, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null)
     {
         if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
         int free = ClaimWriteSlot(seq);
+        int videoCount = video?.SnapshotInto(_videoIntents[free]) ?? 0;
+        if (video is not null) DiscardVideoOnly();   // this publication carries a newer snapshot than any parked post
         if (cmds.Length > _cmds[free].Length)
             _cmds[free] = GC.AllocateUninitializedArray<byte>(NextCap(_cmds[free].Length, cmds.Length), pinned: true);
         if (sort.Length > _sort[free].Length)
@@ -128,6 +145,8 @@ public sealed class SceneFramePublisher
             SortLen = sort.Length,
             Submit = submit with { RepaintDamage = region, PublishSequence = seq, CarriedFromSeq = carriedFrom },
             SuppressVsync = suppressVsync,
+            SettlePresent = settlePresent,
+            VideoIntentCount = videoCount,
         };
         Volatile.Write(ref _slotStates[free], ((long)seq << 2) | Published);
         Volatile.Write(ref _publishedToken, ((long)seq << 2) | (uint)free);
@@ -166,14 +185,76 @@ public sealed class SceneFramePublisher
     public ReadOnlySpan<byte> Bytes(in RenderFrame rf) => _cmds[rf.ArenaIndex].AsSpan(0, rf.ByteLen);
     public ReadOnlySpan<ulong> SortKeys(in RenderFrame rf) => _sort[rf.ArenaIndex].AsSpan(0, rf.SortLen);
 
+    /// <summary>The video-surface snapshot the claimed frame carries (F070): every live slot's intent as of the UI thread's publish,
+    /// stable for as long as the consumer retains the claim. The render thread's only source of video placement.</summary>
+    internal ReadOnlySpan<FluentGpu.Media.VideoPresentIntent> VideoIntents(in RenderFrame rf)
+        => _videoIntents[rf.ArenaIndex].AsSpan(0, rf.VideoIntentCount);
+
+    /// <summary>True while a video-only post (<see cref="TryPostVideoOnly"/>) awaits the render thread. O(1), any thread.</summary>
+    internal bool HasVideoOnlyPost => Volatile.Read(ref _videoOnlyPending) != 0;
+
+    /// <summary>Video-only posts made so far (UI-written, torn-free read): the cheap-wake census, and what a test asserts "no
+    /// publication was needed" against.</summary>
+    internal long VideoOnlyPosts => Volatile.Read(ref _videoOnlyPosts);
+
+    /// <summary>UI thread (F098): park the registry's snapshot for the render thread's early video drain INSTEAD of publishing a
+    /// frame. It is a post, not a publication: no slot is claimed, no scene is captured, <see cref="PublishSeq"/> does not move and
+    /// <see cref="HasPendingFrame"/> stays false, so the renderer is woken for nothing but the video apply. Refused (false, and the
+    /// registry's unpublished-changes flag untouched) before the first publication, and while a full publication is outstanding:
+    /// that frame's own snapshot is the older state, and a post applied around it would reorder against the hole it carries. The
+    /// caller then takes the ordinary publication, which supersedes the post anyway. The caller wakes the render loop.</summary>
+    internal bool TryPostVideoOnly(FluentGpu.Media.VideoSurfaceRegistry video)
+    {
+        if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
+        if (_publishSeq == 0 || HasPendingFrame) return false;
+        lock (_videoOnlyGate)
+        {
+            _videoOnlyCount = video.SnapshotInto(_videoOnly);
+            Volatile.Write(ref _videoOnlyPending, 1);
+        }
+        Interlocked.Increment(ref _videoOnlyPosts);
+        return true;
+    }
+
+    /// <summary>Render thread: take the parked video-only post, if any, into <paramref name="destination"/> (capacity
+    /// <see cref="FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces"/>). False when none is parked, or a full publication has
+    /// superseded it. Exactly-once: a taken post is gone.</summary>
+    internal bool TryTakeVideoOnly(FluentGpu.Media.VideoPresentIntent[] destination, out int count)
+    {
+        lock (_videoOnlyGate)
+        {
+            if (_videoOnlyPending == 0)
+            {
+                count = 0;
+                return false;
+            }
+            count = Math.Min(_videoOnlyCount, destination.Length);
+            Array.Copy(_videoOnly, destination, count);
+            Volatile.Write(ref _videoOnlyPending, 0);
+            return true;
+        }
+    }
+
+    // A full publication's snapshot is newer than any parked post: the post is superseded, never applied after it.
+    private void DiscardVideoOnly()
+    {
+        if (Volatile.Read(ref _videoOnlyPending) == 0) return;
+        lock (_videoOnlyGate) Volatile.Write(ref _videoOnlyPending, 0);
+    }
+
     internal ulong PublishScene(SceneStore scene, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
-        bool suppressVsync)
+        bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
         int slot = ClaimWriteSlot(seq);
+        // F070: the video registry's snapshot rides the publication, taken after the host's phase-7.2 pump and before the slot is
+        // announced. Every publication carries the FULL state of every live slot, so a skipped publication is superseded and a
+        // release / bind is never dropped.
+        int videoCount = video?.SnapshotInto(_videoIntents[slot]) ?? 0;
+        if (video is not null) DiscardVideoOnly();   // this publication carries a newer snapshot than any parked post
         bool freshSlot = _scenes[slot] is null;
         var frame = _scenes[slot] ??= new SceneRenderFrame();
         // Item E: size this slot's snapshot up front on its FIRST capture, same rationale as the SceneStore ctor —
@@ -221,6 +302,8 @@ public sealed class SceneFramePublisher
             TargetEpoch = Volatile.Read(ref _targetEpoch),
             Submit = submit with { PublishSequence = seq, CarriedFromSeq = carriedFrom, RepaintDamage = repaint },
             SuppressVsync = suppressVsync,
+            SettlePresent = settlePresent,
+            VideoIntentCount = videoCount,
         };
         _publishSeq = seq;
         Volatile.Write(ref _slotStates[slot], ((long)seq << 2) | Published);

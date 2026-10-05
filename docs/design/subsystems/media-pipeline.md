@@ -72,7 +72,7 @@ staging block — see §4.6 for the handshake (no GPU readback).
 | `ImageRefTable` (realization slab), `ResidencyManager` LRU/pin bookkeeping, `UseImage` hook cells, request-epoch | **UI thread** | mutated in phases 1/4/8/12 only |
 | `DecodeScheduler` request `Channel`, result MPSC ring, recycled CPU `StagingBlock` slab | **WORKER pool** writes pixels; **render thread** drains the ring | pure decode jobs; touch no Scene/RhiTable/fence |
 | Every `ComPtr` (bucket textures, staging ring, `IDCompositionVisual`), `RhiHandleTable`, GPU fence, deferred-delete ring, `CopyBufferToTexture` | **RENDER thread** | the §2 confinement keystone — UI thread touches ZERO COM |
-| `VideoSurfaceRegistry` arbitration state | **UI thread** | decides; the render thread executes `Place`/`SetVisible` at phase 11 |
+| `VideoSurfaceRegistry` slot table, pump counters, `Surface`/`Bound` signals | **UI thread** | decides; a POD snapshot of it rides every publication (`VideoPresentIntent`), and the render thread's `VideoPlacementApplier` (sole consumer, owner of the presenter-side surface ids / bound handles) executes `Place`/`SetVisible` from THAT snapshot in the turn that presents it (F070 / F183, `threading-render-seam.md` §10). The render thread never reads the registry; it posts surface id / bound / release-complete back through a lock-guarded mailbox the UI thread folds into the signals |
 
 The build-order rule (`hardened-v1-plan.md` §6) applies verbatim: ship **single-thread-correct first**
 (UI thread produces decode requests AND drains results AND uploads, quarantine = 0), then flip the
@@ -752,6 +752,26 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
 > this block promised an atomic priority hand-off for, and the ladder above was never implemented for it — the
 > docked-video work relies on the as-built explicit-transfer contract described next, not on this block.
 
+> **Follow-rect (F169).** A stay-mounted presenter that must cover a hollow reservation elsewhere in the tree (Wavee's docked
+> video overlay over the rail's card) declares `BoxEl.FollowRect`: a thunk answering the reservation node, or Null for "not
+> following". `AppHost` resolves it at phase 7.15, after layout and the animation tick and immediately before the 7.2 geometry
+> scan: `SceneStore.SizeFollowRects` writes the follower's layout size from the target's (re-solving only what it dirtied),
+> then `PlaceFollowRects` writes a paint translation from the target's **painted** `AbsoluteRect`. The follower therefore lands on the
+> reservation in the same frame through resizes and paint-only motion (a rail slide, a page transition) that fire no
+> `OnBoundsChanged` edge, which a signal published from that callback cannot do. While following, the follower's own bound
+> Width/Height/Transform stand down; a freed or Null target leaves the last geometry in place. Scale on an ancestor of the
+> target is not followed (`AbsoluteRect` is translation-only).
+>
+> **Render-owned motion.** Under the default Async host the render thread owns eligible compositor rows (the rail's 300 ms
+> `TranslateX`, page transitions) and the UI-side transform only moves at feedback, so reading it at 7.15 would trail the slide.
+> The follow pass therefore publishes its **anchor set** (follower and target, each with its ancestor chain,
+> `SceneStore.CollectFollowAnchors`) to `AnimEngine.SetFollowAnchors` at the end of 7.15, and `AnimEngine.IsCompositorRow` is false
+> for translate/scale/rotate rows on an anchored node: those rows are UI-ticked (and kept out of the render thread's desired set,
+> `HasUiWork` true) for as long as a follower follows, and go back to the compositor the frame the follower stops. A row in
+> flight hands over from its last feedback pose (a slide that starts the same frame the reservation mounts begins render-owned
+> for that one frame, since the anchors are published after the pass and first apply to the next tick). The cost is that the
+> rail slide runs at UI-frame cadence only while a docked video is following it.
+
 > **As built (2026-07, G5g — the pump/ownership seam).** The rebuilt `MediaPlayerElement` (SPEC-INDEX §2, the
 > unified-media control) turned the registry into the **single-writer video-pump seam**, so that per-frame
 > `Player.PumpVideo`/`SetViewport` no longer runs as a *side effect inside `Render`* (the old anti-pattern) but on
@@ -815,7 +835,8 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
   the priority-arbitration registry automatically resolving a cross-slot hand-off — that registry-driven arbitration
   was never built (see the reconciliation above). **What is as-built:** `Place(token, rect, z)` and
   `SetVisible(token, visible)` are real, generic, **per-slot** primitives, and any single call that changes one is
-  committed on the render thread at phase 11 (`Drain` → `presenter.Commit()`), so no in-flight frame observes a
+  applied on the render thread by the turn that presents the publication carrying it (`VideoPlacementApplier.ApplyTurn`; the
+  same-thread `VideoSurfaceRegistry.Drain` shim does the same for the single-thread host), so no in-flight frame observes a
   torn half-write. But the registry itself does not sequence "new owner in, old owner out" across two slots as one
   atomic unit the way the unbuilt design promised — a caller wanting a hand-off calls `Place`/`SetVisible` on each
   token itself, so a multi-slot hand-off's atomicity is only as good as the caller's own ordering, not a guarantee
@@ -893,19 +914,172 @@ above it. It is now a runtime with handles, spine unchanged:
 - **`FgPrRuntime` (managed `ProtectedVideoRuntime`, one per process).** MF, the D3D11 video device + DXGI manager, ONE
   `IMFMediaEngine` in windowless swap-chain mode, ONE CDM + PMP host, and an MTA runtime thread with an event-driven
   work queue. Reference-counted by live sessions; destroyed `WarmIdleDisposeMs` (30 s) after the last one — the same
-  policy and memory argument as the clear engine's warm lease (§8.3).
+  policy and memory argument as the clear engine's warm lease (§8.3). The idle teardown re-checks, right before it
+  detaches, that no `Acquire` touched the runtime meanwhile (a wanted flag, so an acquire-then-release inside the window
+  stands the teardown down); once the native destroy has begun (it joins the runtime thread, bounded) an acquire can only
+  wait it out and pay a cold bring-up, and `runtime.destroy done` logs how long that took and how many acquires raced it.
+  **A dead runtime is replaced, not handed out.** `FgPrEvent_RuntimeFailed` (bring-up failures arrive only there) and any
+  session or key-session error whose HRESULT is `DRM_E_TEE_INVALID_HWDRM_STATE`, `DRM_OEM_E_ASD_ACTIVE_DISPLAY_FAIL`,
+  `DXGI_ERROR_DEVICE_REMOVED/RESET` or `MF_E_SHUTDOWN` (`ProtectedRuntimeFaults`) POISON it: every live session gets a typed
+  `MediaErrorCategory.Output` / `MediaRecovery.Retryable` error carrying the HRESULT (`UnderlyingCode`), pending prepares
+  end, the old native handle is destroyed off-thread, and the next `Acquire`/`TakeKeepAlive` brings up a fresh runtime even
+  while a keep-alive token is held (the stale references stay counted and pin the new runtime). A BRING-UP failure is not
+  retried for `BringUpRetryCooldownMs` (2 s): a rebuild is MFStartup + D3D11 + the CDM and an `mfpmp.exe`. A verb posted to
+  a runtime whose bring-up failed raises `FgPrEvent_Error(b = bring-up hr)` instead of vanishing.
+  **The D3D11 video device lands on the renderer's adapter**: `FgPrRuntimeCreateOnAdapter` takes the adapter LUID
+  (`ProtectedVideoRuntime.AdapterLuidProvider`, installed by the host from `GpuAdapterInfo`) and creates the device with
+  `EnumAdapterByLuid`, falling back to the default adapter; an idle runtime created for another adapter than the renderer's
+  now is rebuilt by the next open (a playing video is never ended by an adapter switch). Gates: `ProtectedRuntimeRecoveryTests`.
 - **`FgPrLicense` (the KID-keyed cache, `LicenseCachePolicy`).** Eight open TEMPORARY key sessions, LRU, never
   evicting a key a live decoder uses. Acquisition starts at MANIFEST/prepare time (PlayReady proactive
   acquisition); the relay is non-blocking on both sides (the CDM thread hands the challenge up and returns; the
   managed POST `deliver`s later). An attach on a still-pending license is legal — the engine's key-needed path waits.
-- **`FgPrSession` (managed `ProtectedVideoSession`, one per source).** A `CencMediaSource` over a byte-capped
-  (32 MiB), time-windowed (30 s behind / 60 s ahead) `SegmentStore`, opened AT `MediaOpenOptions.StartPosition`.
-  The switch is `FgPrSessionAttach` = one `SetSource` on the warm engine; a detach replaced by another session's
-  attach leaves its (paused) source for that `SetSource` to unload, so two loads never race. Prefetch
+  **Lifecycle (`LicensePolicy.h`, `LicenseCachePolicy`).** Every `MF_MEDIAKEY_STATUS` is mapped: USABLE / EXPIRED as before;
+  INTERNAL_ERROR, RELEASED and OUTPUT_NOT_ALLOWED kill the key (`FgPrEvent_LicenseFailed` while pending,
+  `FgPrEvent_LicenseRevoked` once it was usable) and evict it (an attached session keeps the object until it detaches), so the
+  next acquire re-issues; OUTPUT_RESTRICTED / OUTPUT_DOWNSCALED raise `FgPrEvent_LicenseRestricted` (the key still decrypts;
+  `ProtectedVideoSession.LicenseRestriction` records it); TEE resets still route to the runtime poison path. **The native table
+  is the single eviction authority**: its LRU raises `FgPrEvent_LicenseEvicted` and the managed row goes, the managed cache
+  never evicts a live row (it only trims dead ones), and a cached handle is vouched for by `FgPrLicenseState` before an
+  `EnsureLicense` reuse or an attach (a handle native no longer holds is dropped and re-acquired). **A Pending row has a deadline**
+  (8 s, below the 10 s start budget; native applies the same): after it `Decide` answers Acquire and native replaces the stale
+  entry, cancelling the stalled relay. The relay request carries a per-attempt `CancellationToken` (10 s timeout, cancelled when
+  the license is replaced) and is retried once, after a jittered pause, on a transport failure, a timeout or a 5xx / 408 / 429;
+  a joined Pending row logs its age. Gates: `LicenseCachePolicyTests`, `ProtectedRuntimeTests`, `ProtectedRuntimeEventTests`,
+  `ProtectedLicenseLifecycleTests`, and `FeedTests` (`H37_LicensePolicy`).
+- **`FgPrSession` (managed `ProtectedVideoSession`, one per source).** A `CencMediaSource` over a byte-capped,
+  time-windowed (30 s behind / 60 s ahead) `SegmentStore`, opened AT `MediaOpenOptions.StartPosition`.
+  **The byte budget follows the selected representation (F040).** It is derived from the rung's declared bandwidth
+  (`ProtectedVideoSession.StoreBudgetFor`, twin `fgpr::StoreBudgetForBitrate`): the whole window at that bitrate, x 1.2
+  headroom, grossed up 4/3 for the video track's three-quarter slice, clamped to 16-128 MiB (32 MiB when no bandwidth is
+  declared), and re-derived at every representation change (`FgPrSessionSelectRepresentation`'s `storeBudgetBytes`: a
+  higher budget at once, a lower one when the rung is spliced in). **The byte cap still wins over the window** when it
+  clamps: video gets three quarters and audio a quarter, and the feeder's cap gate and the per-stream trim judge each
+  track against that same slice (the idle download-buffer pool is not media and has its own cap, twice the largest
+  segment). Above about 7.4 Mbps of video the 128 MiB ceiling holds less than 90 s, so history behind the playhead
+  shrinks first (it yields to the next fetch's reserve) and a backward seek inside 30 s can need the network. The trim is keyframe-aligned (what is kept starts on a sync sample, up to one GOP more or less
+  than the byte rule alone would keep) and anchored on the playhead rather than the delivery cursor.
+  **An unbuffered seek flushes the stream** (`FlushForSeek`: samples, cursor and byte ledger reset, delivery held until
+  the reposition) so the target segment lands in an empty buffer, a fetch planned before the flush is dropped, and
+  `Start` begins on the keyframe at or before the target - never on the oldest retained sample; once the target has
+  landed the feeder keeps buffering from the target until the engine confirms the seek. A re-attach whose
+  playhead keyframe was trimmed away resumes at the first buffered keyframe (at most one GOP later).
+  The switch is `FgPrSessionAttach` = one `SetSource` on the warm engine, and the old source is never unloaded in front of
+  it: `FgPrSessionDetach` (and the destroy of the attached session) only PAUSES and arms the unload of the engine's source a
+  250 ms grace out (`Runtime::releaseGate`, the work queue's `PostAfter`; `HandoverPolicy.h`). The successor's Attach arrives
+  inside the grace on a switch (Detach, Destroy, then the Attach at least two UI frames later), cancels the unload and
+  replaces the paused source with its own `SetSource` - the only load - while a Stop with no successor, or a successor that
+  fails before its `SetSource`, still ends in the empty `SetSource` once the grace runs out (and runtime teardown shuts the
+  engine down regardless). A re-attach of the session that owns the loaded source unloads it first, since the fresh source goes
+  in under the same `cenc://` URL. The runtime work queue has two lanes (`WorkQueue.h`): engine/transport items run ahead of
+  licence items (`StartAcquisition`, `ApplyLicense`, `CloseLicense` - PMP round trips), so a warm-keeper licence step queued
+  just before a switch never delays the switch's attach or its engine events (the attaching session's own licence is exempt: the
+  attach verb starts it before `CreateTrustedInput`, and its relay result runs on the engine lane while the KID is bound); a waiting licence item still runs after at most
+  16 engine items, and teardown drains the licence lane first. The protected source's `IMFTrustedInput` is created per attach
+  by default; `FG_PLAYREADY_TRUSTED_INPUT_REUSE=1` holds one per CDM (`Runtime::trustedInput`, released at teardown) - off until
+  validated on a box with two KIDs and a re-attach, and the `[cenc] CreateTrustedInput` / `trusted input REUSED` log lines say
+  which path ran. Engine events carry the attach generation (`Runtime::attachGen`, bumped before `attached`
+  names the session) and an event queued for an earlier attach is dropped, so a late ERROR / PAUSE of the previous load
+  cannot land on the next one even when the same session is attached again. **The feeder is never joined on the runtime
+  thread**: a session's destroy sets `feedStop`, cancels the GETs on the wire and kicks, then hands the thread to a reaper
+  (`FeederReaper`) that joins it and releases the source and download buffers; a GET begun just as the destroy looked is
+  published under `feedMx` together with a `feedStop` check (`PublishInflight`) and cancels itself. The join points are runtime
+  teardown (`SessionsShutdown` drains the reaper before `MFShutdown`) and `FgPrRuntimeDestroy` (shuts the reaper thread down
+  after a successful runtime-thread join, otherwise `~Runtime` -> `~FeederReaper` does, so the host's bounded 2 s wait never blocks on a feeder). Gates: `FeedTests` (`I38_ReleaseGate`, `I39_FeederReaper`). **Output protection (F264, F022)**: bring-up creates a hidden layered virtual window
+  (`OpmWindow.h`, its own message-pump thread) and passes it as `MF_MEDIA_ENGINE_OPM_HWND`, as Chromium does; every protected pump moves it over the
+  video's rect in the presenting window's client area (`VideoSurfaceRegistry.WindowHandle` -> `VideoBinding.WindowHandle` ->
+  `ProtectedMediaSession.PumpVideo` -> `FgPrSessionPlaceOpmWindow`, value-gated, honoured only for the attached session), so HDCP / image
+  constriction follow the monitor the picture is on, a pop-out included; the window also follows its host when it moves with no pump (a drag, a same-DPI monitor hop,
+  maximize / restore: an out-of-context `EVENT_OBJECT_LOCATIONCHANGE` hook on the window's own thread re-derives the screen rect from the last placement). Hardening with no measured effect on Spotify's licences (and Firefox ships without it):
+  a window that cannot be created never fails a video, and `FG_PLAYREADY_NO_OPM_WINDOW=1` restores the old wiring. The runtime also logs the negotiated key
+  system and the granted CDM configuration once (`[eme-cdm] negotiated key system=...`); the security level itself is not reported by any MF API, so it is
+  decided by the request (F022): the bring-up PROBES hardware SL3000 first (`com.microsoft.playready.recommendation.3000`,
+  `IsTypeSupported` for H.264, an access request whose video capability carries `MF_EME_ROBUSTNESS` = "3000") and falls back to
+  the software SL2000 request (`.recommendation`, empty capabilities) on ANY failure of it; the provisioned level is logged once
+  (`[eme-cdm] negotiated security level: SL2000|SL3000`). `--fg playready-sl2000` (`EngineSwitches.ForcePlayReadySl2000`, passed to
+  `FgPrRuntimeSetSecurityPolicy` before the create) skips the probe. Prefetch
   (`IPreparableBackend`) fetches init + 2 segments at the start position, video ∥ audio;
   `ProtectedMediaBackend.PrepareAtAsync(source, position)` prepares the CURRENT track at a carried position. Seek is
   flush-not-recreate, applied immediately on the runtime thread (or from the parallel fetch's completion); the
   demuxer's keyframe table and the buffered ranges are exported for a host seek planner.
+- **ABR caps (`AdaptiveBitrateController`, shared across sources).** The policy cap (`PolicyMaxHeight`: the user's pin,
+  a metered link) and the viewport cap (`ViewportMaxHeight`: the laid-out surface) are separate inputs and the
+  effective cap is their minimum, computed per decision; `MaxHeight` stays as a compat property (set = policy, get =
+  effective). A cap that drops below the CURRENT rung is a `CapDownswitch` to the allowed rung that costs the most
+  without exceeding the current one - never the bottom of the ladder, with no vote and no probe accounting.
+  `ProtectedMediaSession` calls `ResetForNewSource()` on open (ladder position, probe state, the first-climb flag and
+  the viewport cap go; the throughput history and the policy stay). Its viewport cap is floored at 720, quantised UP
+  to a ladder height, raised at once and lowered only after the same lower cap has been requested for 1.5 s (never
+  while a representation switch is pending). Throughput samples are weighted by transfer duration (half-lives 2 s
+  fast / 5 s slow) and the estimate stays the prior until 128 KB have been measured. Gates: `AdaptiveMediaTests`,
+  `ProtectedAbrCapTests`.
+- **Switches keep the buffer (`AdaptiveSwitchPolicyTests`, `ProtectedAbrSwitchTests`, `FeedTests` D29-D33).** A measured
+  downswitch is DEFERRED while the forward buffer holds 25 s or more (`AbrDecisionReason.DeferredDecrease`, returning
+  before the forced probe so none fires while a decrease is indicated); the forced probe is timed (10 s steady, doubling
+  per failed probe) instead of counted in 1 Hz decisions. `AbrSwitchGate` paces `ProtectedMediaSession`: at least 8 s
+  between ABR-initiated switches (a decrease with under 10 s buffered, a cap change and a pin are exempt), no decision
+  at all while a switch is pending, and a forced probe is judged only after its rung is downloading AND one throughput
+  sample has been accepted since. Native lands a switch by default at the END of the buffer (`retainMs` < 0: the first
+  segment not yet buffered, so the truncating splice erases nothing, `removed == 0` and no `CutGen` bump, nothing is
+  refilled); a manual pin passes 0 (the boundary after the playhead) and the first upswitch after a viewport RAISE
+  passes 25 000 (that far ahead of the playhead, the old representation's buffer past it discarded). Because the new
+  representation can now sit a minute ahead of the picture, every buffered sample carries a format generation
+  (`cenc::Sample::repGen`, `fgpr::RepBook`): delivery announces `MEStreamFormatChanged` when the cursor reaches the first
+  sample of a different generation (forwards over the splice, and backwards on a seek into older samples), with a FRESH
+  `MFWrapMediaType` of a newly built clear type set as the descriptor's current type - the live wrapped type is never
+  mutated. Two ids follow from it: `ActiveVideoRepresentationId` is what is ON SCREEN (raised at the crossing as
+  `FgPrEvent_Representation`; the quality label and the natural size follow it; the opening representation is index -1 to
+  native, so crossing back into it reports -1, which the session maps to the rung it opened on once a switch has been shown)
+  and `DownloadingVideoRepresentationId`
+  is the last one spliced in (`FgPrEvent_RepresentationQueued`; the ABR's baseline, and what clears the pending gate). A
+  switch whose landing segment is past the end of the track retargets the stream without splicing. Not done: the init
+  segment is still fetched in series with the landing segment (the old buffer plays on meanwhile, so it costs time to
+  the switch, not a stall), and nothing caches parsed inits per representation.
+  The clear H.264 type (`BuildH264ClearType`, used for the opening type and every representation's format change) is
+  described the way Firefox and Chromium describe theirs: besides FRAME_SIZE, the sequence header and ORIGINAL_4CC it
+  carries `MF_MT_FRAME_RATE` (trex default duration over the media timescale, else the SPS VUI timing), the pixel aspect
+  ratio (`pasp`, else the VUI's sample aspect, else 1:1), the minimum-display and geometric aperture (only when the SPS crop
+  and the container's size agree) and the VUI's primaries, transfer, YUV matrix and nominal range, each only when the stream
+  states it (`cenc::ParseSps`, `ComputeH264TypeAttrs`; both unit-tested in FeedTests). Every build logs one
+  `[cenc-src] H.264 type ...` line with what was applied. This is hygiene and a diagnostic, not a proven latency fix: whether
+  it removes the second swap-chain handle of an open (F261) is read from the `[cenc] FORMATCHANGE native size A -> B` lines.
+  On-box validation per rung is required, because a wrong attribute can break the protected pipeline's topology negotiation.
+- **FORMATCHANGE is a size report; a surface is shown only for the frame of its own attach.** The engine's FORMATCHANGE
+  (the splice's new frame size reaching the decoder) re-reads `GetNativeVideoSize`, stores it in the snapshot and raises
+  `FgPrEvent_SizeChanged`; it calls no `UpdateVideoStream` and re-raises no handle (RESOURCELOST keeps that), so the
+  destination is never changed behind the compositor. The managed pump takes the new natural size, re-asserts its stream
+  size from it (the size gate, below) and so a larger rung is no longer rendered into the opening rung's swap chain.
+  Visibility: `ProtectedMediaSession` shows the slot and publishes `VideoSurface` only on
+  `HasFirstFrame && HasSurface` (first frame of THIS attach and a live handle); before that the swap chain still holds the
+  previous source's last frame, and after a native detach (another session's attach: native zeroes the handle) the slot is
+  hidden again. `HasSurface` follows the snapshot's handle, not the Detached event, so a late event of an old attach cannot
+  clear a newer one.
+- **A failing segment GET is a stall, and an engine WAITING is buffering.** The feeder no longer ends a track after three
+  quick retries or on any 4xx: a transient failure, a 5xx, a 401/403 (an expired signed URL) or a 404 inside the manifest
+  is retried with a capped exponential back-off (0.5 s doubling to 8 s, `plan::RetryDelayMs`) for as long as the plan keeps
+  asking for that segment, and raises `FgPrEvent_FeedStalled` (segment, HTTP status) once, `FgPrEvent_FeedRecovered` when it
+  is over. Only a 404/410 at or beyond the segment count (or with no count at all) latches the track's end index, and a
+  seek or any structural reset (`ResetTrackState`) clears the latch. `MF_MEDIA_ENGINE_EVENT_WAITING` / `STALLED` /
+  `BUFFERINGSTARTED` (while playing, past the first frame, no seek in flight) raise `FgPrEvent_Waiting`, and PLAYING /
+  SEEKED / `BUFFERINGENDED` / a TIMEUPDATE past the wait's position raise `FgPrEvent_Resumed` (`plan::WaitGate`). The managed
+  pump reads a wait, or a feed stall with nothing buffered, as `ProtectedVideoState.Buffering`, and
+  `ExtrapolatePositionMs` runs a native sample forward for at most 500 ms. Not done: refreshing the URLs on a 401/403
+  needs a new native verb and Wavee work, so an expired URL stays a visible stall (the status is in the event and the log).
+- **The feeder wakes once per segment, appends as each GET lands, and leaves the disk cache alone.** After a satisfied plan
+  the demand hook is re-armed one segment of playback below where each track's contiguous reach stands
+  (`plan::DemandBelowWhenSatisfied`, never above the target), and the plan's reference is the playhead lifted to the video
+  cursor, so the hook and the planner stop disagreeing for the cursor's lead and no longer wake the feeder for every
+  delivered sample. The hook's contiguous reach (`ContiguousReach`) and the coverage pairs (`BufferedPairsCache`) are
+  cached per buffer mutation (`CencMediaStream::m_samplesVer`), not re-walked per sample / per ask; the reach is exactly
+  the full walk's answer (`FeedTests` C20b). A job begins the video and audio GET together and appends whichever lands
+  first (`FetchWaitSet`), so a starved track is no longer held behind the other's slower download; a seek plan is the
+  exception and joins both tracks (video, then audio), because a repeat seek into the same segment flushes both streams
+  while keeping the in-flight GETs and would otherwise erase the early-appended track and refetch it for the whole scrub
+  (a non-seek job hit by such a seek can cost one refetch, after which the seek-plan job settles). Still one segment per
+  track per job: a second concurrent video GET would halve each fetch's measured rate and the ABR's throughput input sums
+  per-fetch times. The shared `HttpClient` runs on an `HttpBaseProtocolFilter` with the cache at `NoCache`, so segments
+  are no longer written to the user's INetCache. `MFSampleExtension_DecodeTimestamp` is not set (the decode time was on
+  the un-shifted timeline, after the PTS of every reordered frame). Gates: `FeedTests` (A10b, C19b, C20b).
 - **The demuxer's timeline is the manifest's.** Sample and keyframe times are PRESENTATION times with the init
   segment's edit list applied (`elst`: an encoder's B-frame delay or AAC priming), so segment `i` starts at
   `i · segmentLengthMs` exactly as the seek planner assumes. One `trak` is one track (a muxed file's tracks are never
@@ -913,10 +1087,32 @@ above it. It is now a runtime with handles, spine unchanged:
   records are read from `senc` or `saiz`/`saio`. `FgPrProbeFile` runs that same code over a local file
   (`CencDemuxTests`).
 - **Event-driven presentation.** `FIRSTFRAMEREADY` / CANPLAY / SEEKED / errors are native events → one coalesced
-  `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpVideo` reads ONE snapshot and binds the handle —
-  no poll timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
-  `VideoStreamSizing.ContentSizeFor` rule as the clear path. `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
+  `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpState` reads ONE snapshot and publishes state — no poll
+  timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
+  `VideoStreamSizeGate` as the clear path (next bullet). `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
   `BufferedAheadMs`, and the protected session publishes that same POD.
+- **The control plane leaves the element (F132).** The session pump has two halves (`IVideoSurfaceSession.PumpState` /
+  `PumpGeometry`; `PumpVideo` is both, and a session that has not split gets default-interface fallbacks to it).
+  `MediaPlayer` subscribes to the session's `PumpRequested` and runs the STATE half itself, one coalesced post to the
+  poster it captured at construction (state, buffering, position, duration, natural size, errors, seek landing, the DRM
+  phase, captions), so the signals advance with no `MediaPlayerElement` mounted (a covered presenter, a hand-off between
+  windows). The element's `PumpVideo` is the GEOMETRY half only: bind the handle, size the stream, place the child, and
+  the player queues its state pump before it tells the element about the same raise, so the element binds after the state
+  was published. `ProtectedVideoSession.Pump()` publishes and remembers the handle the snapshot reported; `Bind` hands
+  it to a binding (and only a valid one), so a pump with no element never touches a binding and a later element binds
+  the handle already known. `MediaPlayer.StatePumpCount` / `StatePumpAgeMs` expose the heartbeat for diagnostics.
+- **Stream size: buckets, settle, echo (F071, F051, F260).** Layout never drives the decoder's swap chain. Both sessions
+  size the stream through one `VideoStreamSizeGate`: a bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the
+  smallest that covers the destination, with a 10 % shrink hysteresis), the first size and a changed natural size at once,
+  any other change only after the destination held still 250 ms (DirectComposition's LINEAR scale covers the gap). The
+  compositor's content size moves to a requested size only when the backend ECHOES it as applied
+  (`VideoEngineSnapshot.StreamW/StreamH`; the protected runtime fills them from `FgPrSnapshot.streamWidth/streamHeight`
+  after `UpdateVideoStream(dst)` and zeroes them at detach): until then DComp keeps scaling the old buffer by the old
+  size. A paused or non-echoing backend is trusted after 500 ms; a settle window or echo wait re-pumps the session through
+  a timer (the protected runtime raises no event for an applied size). A rect that is not laid out (the element pumps
+  `default` before its area exists) sizes and places nothing. Native: `FgPrSessionSetStreamSize` repaints
+  (`UpdateVideoStream(null, null, null)`) while the source is not playing, as the clear path's `Repaint` does, and its
+  `[cenc] stream size` log line is rate-limited to one a second (a failure always logs).
 - **Always-on log lines, one file.** `ProtectedVideoRuntime.LogSink` receives `[video]` (attach → metadata →
   canplay → first.frame `sinceAttachMs`, seek.done `ms`, prefetch.ok) and `[video.native]` lifecycle lines; the old
   `desktop-playready.log` is gone. `DesktopProtectedVideoPlayer`, its ack waits and `DrmLicenseBridge` are deleted.

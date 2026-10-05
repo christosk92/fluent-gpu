@@ -115,3 +115,47 @@ public struct WindowStateRelay
         return true;
     }
 }
+
+/// <summary>
+/// Debounces <see cref="IPlatformWindow.IsCloaked"/> into a park decision for a detached child host. A window is parked only
+/// once it has stayed cloaked for <see cref="EnterDelayMs"/> - shell transitions (virtual-desktop slides, Alt+Tab, window
+/// animations) cloak a window for a few frames and must not flap the host between parked and live - and it un-parks the
+/// instant a sample reads uncloaked, so a window the user switches back to is never held dark. Pure and allocation-free
+/// (sampled once per host frame; the clock is the host's own timer clock).
+/// </summary>
+public struct CloakParkGate
+{
+    /// <summary>How long the window must have been continuously cloaked before the host parks it.</summary>
+    public const double EnterDelayMs = 250.0;
+
+    private double _cloakedSinceMs;
+    private bool _cloaked;
+    private bool _parked;
+
+    /// <summary>The decision the last <see cref="Advance"/> returned.</summary>
+    public readonly bool Parked => _parked;
+
+    /// <summary>Milliseconds until a still-pending debounce parks the host (0 when already due), or
+    /// <see cref="double.PositiveInfinity"/> when uncloaked or already parked. A pure query: the host uses it to wake an
+    /// otherwise idle loop at the end of the debounce, because nothing else would sample the gate again.</summary>
+    public readonly double MsUntilPark(double nowMs) =>
+        _cloaked && !_parked ? Math.Max(0.0, _cloakedSinceMs + EnterDelayMs - nowMs) : double.PositiveInfinity;
+
+    /// <summary>Feed this frame's sample (<paramref name="nowMs"/> on the host timer clock). True while the host should park.</summary>
+    public bool Advance(bool cloaked, double nowMs)
+    {
+        if (!cloaked)
+        {
+            _cloaked = false;
+            _parked = false;
+            return false;
+        }
+        if (!_cloaked)
+        {
+            _cloaked = true;
+            _cloakedSinceMs = nowMs;
+        }
+        if (!_parked && nowMs - _cloakedSinceMs >= EnterDelayMs) _parked = true;
+        return _parked;
+    }
+}

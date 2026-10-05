@@ -92,11 +92,15 @@ public interface IMediaPlayer : IAsyncDisposable
     /// <summary>The composited-video child-visual id; <see cref="VideoSurfaceId.IsNone"/> until the first video frame.</summary>
     IReadSignal<VideoSurfaceId> VideoSurface { get; }
 
-    /// <summary>Drive one UI-thread video pump: the routed backend (when it produces a composited surface) translates its
-    /// engine state into the player signals, binds the produced DirectComposition handle into <paramref name="binding"/>
-    /// (the hole the control draws), and sizes/places the video child at <paramref name="videoRect"/> (DIP) ×
-    /// <paramref name="scale"/> (device px). A no-op for audio-only / headless players. The control (<c>MediaPlayerElement</c>)
-    /// calls this for an initial hand-off and coalesced native/geometry/transport requests; it is not a per-frame repaint path.</summary>
+    /// <summary>Drive one UI-thread video pump for the presenting control: the routed backend (when it produces a composited
+    /// surface) binds the produced DirectComposition handle into <paramref name="binding"/> (the hole the control draws), and
+    /// sizes/places the video child at <paramref name="videoRect"/> (DIP) × <paramref name="scale"/> (device px). A no-op for
+    /// audio-only / headless players. The control (<c>MediaPlayerElement</c>) calls this for an initial hand-off and
+    /// coalesced native/geometry/transport requests; it is not a per-frame repaint path.
+    /// <para>A player that owns its control plane (<see cref="MediaPlayer"/>) publishes state, position, duration, natural
+    /// size and errors on its own, from its session's pump requests, whether or not any control is mounted, so this call is
+    /// the surface half only. A player that does not (the headless scripted player) publishes them from inside this call
+    /// as well.</para></summary>
     void PumpVideo(VideoBinding binding, RectF videoRect, float scale);
 
     // ── transport: idempotent, coalescing — complete (never throw) on supersession ────────────────────────────────────
@@ -105,7 +109,10 @@ public interface IMediaPlayer : IAsyncDisposable
     ValueTask PlayAsync();
     /// <summary>Pause.</summary>
     ValueTask PauseAsync();
-    /// <summary>Stop (idempotent; → Idle, releases decode residency).</summary>
+    /// <summary>Stop (idempotent): cancels an open still in flight, pauses and RELEASES the current session (decode, clock,
+    /// network and native handles — its disposal finishes in the background and <c>DisposeAsync</c> awaits it), and goes
+    /// <see cref="PlaybackState.Idle"/> with no play intent. Playback needs a new open afterwards; a later
+    /// <see cref="PlayAsync"/> with nothing open only records the intent.</summary>
     void Stop();
     /// <summary>Seek to <paramref name="to"/>.</summary>
     ValueTask SeekAsync(TimeSpan to, SeekMode mode = SeekMode.Accurate);
@@ -142,8 +149,10 @@ public interface IMediaPlayer : IAsyncDisposable
     /// leaves unset (buffering, network, ABR, license relay) fall back to the player's own. An implementation that cannot
     /// honour a start position opens at zero.</summary>
     ValueTask OpenAsync(MediaSource source, MediaOpenOptions options, CancellationToken ct = default) => OpenAsync(source, ct);
-    /// <summary>Enqueue a source to play after the current one.</summary>
+    /// <summary>Append a source to <see cref="Queue"/>. It only queues: nothing is opened, prefetched or prepared ahead of
+    /// time (a host that wants a warm next item prepares it itself).</summary>
     void Enqueue(MediaSource next);
-    /// <summary>Explicitly preroll the next source (spec §8.4).</summary>
+    /// <summary>Append the next source to <see cref="Queue"/> and return a token naming the queued item (spec §8.4). The
+    /// <c>MediaPlayer</c> facade does not preroll it: the token marks the slot, it is not a prepared session.</summary>
     PrepareToken PrepareNext(MediaSource next);
 }

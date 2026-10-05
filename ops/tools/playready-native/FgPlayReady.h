@@ -26,7 +26,11 @@
 //
 // Threading: the exports may be called from ANY thread. State is published through FgPrSessionSnapshot (one atomic
 // read of a POD — the same shape the managed VideoEngineSnapshot has) and through FgPrEventCallback, which fires on
-// the runtime thread or an MF thread and must return promptly (the managed sink only wakes a pump).
+// ONE native notifier thread: every event and log line is copied into a native ring by whichever thread raised it (the
+// runtime thread, an MF or CDM thread, a feeder) and delivered here in order, in batches. No native thread waits for the
+// callback, so a managed GC or a slow log sink cannot stall the runtime queue or hold an MF stream lock. An event can
+// therefore arrive after a snapshot read that already reflects it: the snapshot is the truth, events are wake-ups and
+// edges (FgPrRuntimeDestroy flushes what is queued before it returns).
 #pragma once
 #include <stdint.h>
 
@@ -44,7 +48,9 @@ typedef uint64_t FgPrSession;    // one per source
 /// `[video.native]` tag; desktop-playready.log is retired). `session` is the session handle the event belongs to, the
 /// LICENSE handle for the FgPrEvent_License* events, or 0 for runtime-level events. `a`/`b` carry the event's numbers
 /// (see FgPrEvent); `text` is a NUL-terminated UTF-16 detail string owned by the callee's frame — copy it or format it
-/// out before returning, never retain the pointer. Never called per video frame.
+/// out before returning, never retain the pointer. Never called per video frame. Always called from the one notifier
+/// thread, never under a native lock; it need not be quick for the native side's sake, but a slow call delays the events
+/// behind it (log lines are shed past a bounded backlog, state events are not).
 typedef void(__stdcall* FgPrEventCallback)(void* ctx, uint64_t session, int32_t event, int64_t a, int64_t b,
                                            const wchar_t* text);
 
@@ -65,18 +71,23 @@ enum FgPrEvent
 {
     FgPrEvent_RuntimeReady = 1,      // a = ms spent in bring-up
     FgPrEvent_RuntimeFailed = 2,     // a = hr
-    // The three license events carry the LICENSE handle in `session` and the KID (32 hex chars) in `text`: the
-    // acquisition can complete before FgPrLicenseAcquire's caller has recorded the handle, so managed matches by KID.
+    // The license events carry the LICENSE handle in `session` and the KID (32 hex chars) in `text`: the
+    // acquisition can complete before FgPrLicenseAcquire's caller has recorded the handle, so managed matches by KID
+    // (only the first three adopt a handle by KID; Evicted / Restricted / Revoked match by handle alone).
     FgPrEvent_LicenseUsable = 10,    // a = ms since acquire; b = expires-in ms (0 = unknown)
-    FgPrEvent_LicenseFailed = 11,    // a = hr
+    FgPrEvent_LicenseFailed = 11,    // a = hr (a PENDING license: the relay failed, Update() failed, or its key went dead)
     FgPrEvent_LicenseExpired = 12,
     FgPrEvent_Bytes = 20,            // a = bytes downloaded (cumulative), b = ms transferring (cumulative) — ≤ 4 Hz
     FgPrEvent_Buffered = 21,         // a = forward buffered ms, b = backward retained ms
     FgPrEvent_Keyframes = 22,        // a = segment index parsed; the keyframe table grew (poll FgPrSessionGetKeyframes)
     FgPrEvent_Metadata = 30,         // a = duration ms, b = (width << 32) | height
-    FgPrEvent_CanPlay = 31,
-    FgPrEvent_FirstFrame = 32,       // MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY; a = presentation position ms
-    FgPrEvent_Handle = 33,           // a = the DComp swapchain handle (re-raised on FORMATCHANGE/RESOURCELOST)
+    FgPrEvent_CanPlay = 31,          // a = startCorrectionMs: how far behind the carried start the engine clock was and had to be sought
+                                     // (the second source Start the CANPLAY fallback costs; 0 = the engine adopted the carried start)
+    FgPrEvent_FirstFrame = 32,       // MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY; a = presentation position ms, b = the QPC it was stamped at
+                                     // (FgPrSnapshot.firstFrameQpc): the first-frame time on the native clock, not the dequeue time
+    FgPrEvent_Handle = 33,           // a = the DComp swapchain handle (re-raised on RESOURCELOST, and when the value changes). The RUNTIME
+                                     // owns it: the consumer binds it (CreateSurfaceFromHandle takes its own reference) and never closes
+                                     // it; a replaced one (or the one of a detached session) is closed ~2 s after it was superseded
     FgPrEvent_Position = 34,         // a = position ms, b = QPC ticks of the sample — ≤ 4 Hz, never a pump trigger
     FgPrEvent_Seeking = 35,          // a = target ms
     FgPrEvent_Seeked = 36,           // a = landed ms, b = ms since the seek was posted
@@ -84,10 +95,31 @@ enum FgPrEvent
     FgPrEvent_Paused = 38,
     FgPrEvent_Ended = 39,
     FgPrEvent_Error = 40,            // a = MF_MEDIA_ENGINE_ERR, b = hr
-    FgPrEvent_Representation = 41,   // a = active representation index
+    FgPrEvent_Representation = 41,   // a = the representation index ON SCREEN: delivery just handed the decoder its first sample
+                                     // (-1 = the OPENING representation: delivery crossed back into it)
     FgPrEvent_Attached = 42,         // a = ms from Attach to SetSource returning
     FgPrEvent_Detached = 43,
     FgPrEvent_Log = 44,              // a diagnostic line with no numbers of its own; `text` is the line
+    FgPrEvent_RepresentationQueued = 45,   // a = the representation index now being DOWNLOADED: the switch was spliced into
+                                           // the buffer (its picture shows later, at FgPrEvent_Representation)
+    FgPrEvent_SizeChanged = 46,      // MF_MEDIA_ENGINE_EVENT_FORMATCHANGE reported a new natural size: a = width, b = height
+                                     // (FgPrSnapshot.width/height already read it). A size report only: it never touches the
+                                     // swap chain; the managed side re-asserts its stream size from the new natural size.
+    FgPrEvent_FeedStalled = 47,      // a segment GET failed and the feeder is retrying it (capped back-off, never an end of
+                                     // track): a = the segment index, b = the HTTP status (0 = transport failure; 401/403 are
+                                     // the signed-URL-expired answers). Raised once per stall; FgPrEvent_FeedRecovered ends it
+    FgPrEvent_FeedRecovered = 48,    // the stall above is over (a segment landed, or a seek started the feeder afresh)
+    FgPrEvent_Waiting = 49,          // the engine reported WAITING / STALLED / BUFFERINGSTARTED while playing: its clock has
+                                     // stopped for want of data. a = position ms. Raised on the edge only
+    FgPrEvent_Resumed = 50,          // the wait above ended (PLAYING, SEEKED, BUFFERINGENDED, or the clock advancing): a = position ms
+    // Raised with the LICENSE handle in `session` and the KID in `text`, like the license events above.
+    FgPrEvent_LicenseEvicted = 51,   // the license table's LRU closed this KEY SESSION to admit a ninth KID (never one an attached
+                                     // session uses). The native table is the single eviction authority: drop the managed row
+    FgPrEvent_LicenseRestricted = 52,   // a = the output restriction now in force (MF_MEDIAKEY_STATUS_OUTPUT_RESTRICTED 7 /
+                                        // OUTPUT_DOWNSCALED 2; 0 = lifted), b = the previous one. The key still decrypts
+    FgPrEvent_LicenseRevoked = 53,   // a USABLE license's key went INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED and will never
+                                     // decrypt again: a = hr (0x8004800N, N = the status), b = the MF_MEDIAKEY_STATUS. It is evicted
+                                     // (an attached session keeps the object until it detaches); the next acquire re-issues it
 };
 
 /// FgPrSnapshot.state — the lifecycle the managed ProtectedVideoState maps one-to-one.
@@ -107,6 +139,20 @@ enum FgPrSeekMode
 {
     FgPrSeekMode_Exact = 0,       // SetCurrentTime — decode from the keyframe to the exact PTS (a commit)
     FgPrSeekMode_Keyframe = 1,    // SetCurrentTimeEx(APPROXIMATE) — present the keyframe ≤ target (a scrub preview)
+};
+
+/// FgPrRuntimeSetVideoOutputFormat values: the pixel format the runtime's media engine outputs into its windowless swap chain.
+enum FgPrVideoOutput
+{
+    FgPrVideoOutput_Bgra = 0,     // B8G8R8A8_UNORM - the format the engine has always been forced to (the default)
+    FgPrVideoOutput_Nv12 = 1,     // NV12 - the decoder's own format: no per-frame NV12 -> BGRA video-processor pass, and a YUV overlay plane can take it
+};
+
+/// FgPrRuntimeSetSecurityPolicy values: which PlayReady security level the runtime's CDM asks for (F022).
+enum FgPrSecurityPolicy
+{
+    FgPrSecurity_Probe3000 = 0,   // probe hardware SL3000 first (`.recommendation.3000` + a "3000" video capability), fall back to SL2000 (the default)
+    FgPrSecurity_Force2000 = 2000,// never probe: the software SL2000 request the runtime has always made
 };
 
 // ── descriptors ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -149,7 +195,7 @@ typedef struct FgPrOpenDesc
     int32_t startPaused;                // 1 = open paused at startPositionMs and raise FirstFrame (FrameStep) without playing
     int64_t retainBehindMs;             // time-based retention behind the playhead (0 ⇒ 30 000)
     int64_t bufferAheadMs;              // forward buffering target (0 ⇒ 60 000)
-    int64_t storeBudgetBytes;           // the SegmentStore cap for THIS session (0 ⇒ 32 MiB)
+    int64_t storeBudgetBytes;           // the SegmentStore cap for THIS session (0 ⇒ 32 MiB; the managed side derives it from the opening rung's bandwidth, 16-128 MiB, and re-derives it per FgPrSessionSelectRepresentation)
 } FgPrOpenDesc;
 
 /// One atomic read of a session's observable state — the same shape the managed VideoEngineSnapshot has, so the
@@ -163,7 +209,8 @@ typedef struct FgPrSnapshot
     uint64_t handle;                // the DComp swapchain handle, 0 until FgPrEvent_Handle
     int32_t width, height;          // the natural frame size
     int32_t seeking;                // 1 while a seek is in flight
-    int32_t activeRepresentation;   // -1 when the source is not adaptive
+    int32_t activeRepresentation;   // the representation ON SCREEN; -1 when the source is not adaptive (or has not switched)
+    int32_t downloadingRepresentation;   // the representation being downloaded (the last one spliced in); -1 as above
     int64_t positionMs;
     int64_t positionQpc;            // QueryPerformanceCounter ticks AT which positionMs was sampled (extrapolate from here)
     int64_t durationMs;
@@ -173,6 +220,14 @@ typedef struct FgPrSnapshot
     uint64_t bytesDownloaded;
     uint64_t downloadElapsedMs;
     uint64_t storeBytes;            // what the SegmentStore currently holds (the counted half of the memory budget)
+    int32_t streamWidth, streamHeight;   // the stream size the engine has APPLIED (UpdateVideoStream(dst) succeeded: the swap
+                                         // chain's creation size or the last FgPrSessionSetStreamSize), 0x0 while none has been or
+                                         // the session is detached. The managed side keeps the compositor's content size at the
+                                         // previous value until this equals the size it asked for (an echo, not a guess)
+    int64_t framesRendered;         // IMFMediaEngineEx FRAMES_RENDERED / FRAMES_DROPPED for THIS attach, polled every ~500 ms while the
+    int64_t framesDropped;          // source plays and accumulated across the counter resets MF applies after a flush; frozen while
+                                    // paused / seeking / waiting, 0 until the first poll. A source playing with NO rendered frame for 10 s
+                                    // raises FgPrEvent_Error(a = MF_MEDIA_ENGINE_ERR_DECODE, b = 0x800705B4 ERROR_TIMEOUT)
 } FgPrSnapshot;
 
 /// What FgPrProbeFile answers about a local fragmented MP4 — the demuxer gate's read-out (tests only; no CDM, no GPU).
@@ -195,10 +250,17 @@ typedef struct FgPrProbeResult
 /// Create the process runtime: MFStartup, the D3D11 video device + IMFDXGIDeviceManager, ONE IMFMediaEngine in
 /// windowless swap-chain mode with its notify sink, ONE CDM with its PMP host, and the MTA runtime thread. Returns
 /// as soon as the thread is up; FgPrEvent_RuntimeReady (or FgPrEvent_RuntimeFailed) says when bring-up finished.
-/// `storePath` is the CDM's MF_CONTENTDECRYPTIONMODULE_STOREPATH directory (created if absent). A second call
-/// returns the EXISTING runtime handle and does no work.
-__declspec(dllexport) int32_t __stdcall FgPrRuntimeCreate(const wchar_t* storePath, FgPrEventCallback cb, void* ctx,
-                                                          FgPrRuntime* out);
+/// `storePath` is the CDM's MF_CONTENTDECRYPTIONMODULE_STOREPATH directory (created if absent). `adapterLuid` is the DXGI
+/// adapter the D3D11 video device is created on, packed (HighPart << 32) | LowPart - the renderer's adapter, so decode, the
+/// video processor and the swap chain land on the GPU the UI renders on (the clear path pins its device the same way).
+/// 0 = the default adapter; an adapter that cannot be found or refuses a video device falls back to the default one rather
+/// than failing video. A second call returns the EXISTING runtime handle and does no work (its adapter is the first call's).
+///
+/// A runtime whose bring-up fails raises FgPrEvent_RuntimeFailed, and every verb posted to it afterwards raises
+/// FgPrEvent_Error(b = the bring-up HRESULT) for its session instead of vanishing. The managed side destroys such a runtime
+/// and creates a fresh one (the same goes for a device-removed / hardware-DRM-reset error): there is no in-place repair.
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeCreateOnAdapter(const wchar_t* storePath, FgPrEventCallback cb, void* ctx,
+                                                                         int64_t adapterLuid, FgPrRuntime* out);
 
 /// Destroy the runtime: detach + destroy every session, release every license, shut the engine, the CDM, the D3D11
 /// device and MF down, and JOIN the runtime thread (bounded 2 s). The ONLY blocking export. Idempotent.
@@ -207,18 +269,37 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime rt);
 /// How long the runtime thread has been alive, in ms — the timeline every `[video.native]` line is stamped with.
 __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime rt);
 
+/// F249: choose the media engine's output format (FgPrVideoOutput) for the NEXT runtime created in this process. Process-wide and READ
+/// ONCE, when FgPrRuntimeCreateOnAdapter starts the bring-up: call it BEFORE the create; a runtime that already exists keeps the format it
+/// was created with. An unknown value selects BGRA, the default. The managed side asks for NV12 only behind `--fg video-nv12` and only
+/// after its output's overlay probe (IDXGIOutput3::CheckOverlaySupport) reported NV12 as plane-capable. A separate export, not a new
+/// parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale build (RequiredExports) instead of being
+/// called with arguments it would misread. Always returns S_OK.
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format);
+
+/// F022: choose the PlayReady security level (FgPrSecurityPolicy) the NEXT runtime's CDM asks for. Process-wide and READ ONCE, when
+/// FgPrRuntimeCreateOnAdapter starts the bring-up: call it BEFORE the create. The default (and any unknown value) is FgPrSecurity_Probe3000:
+/// the bring-up asks for the `.3000` key system with a "3000" video capability and falls back to the software SL2000 request when the
+/// machine cannot grant it; the level that was provisioned is logged (`[eme-cdm] negotiated security level`). FgPrSecurity_Force2000
+/// skips the probe. A separate export, not a new parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale
+/// build (RequiredExports). Always returns S_OK.
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t policy);
+
 // ── license cache (KID-keyed; the runtime owns the CDM; key sessions stay open until Expired or Release) ─────────────
 
 /// Start (or join) a license acquisition for `keyIdHex`. Returns S_OK with an EXISTING handle when the KID is already
-/// cached usable or pending — there is never a second challenge for the same KID. Otherwise opens a TEMPORARY CDM key
+/// cached usable or pending (for less than 8 s: an older Pending license is stale and is replaced, as is a dead one) —
+/// there is never a second challenge for the same KID. Otherwise opens a TEMPORARY CDM key
 /// session, calls GenerateRequest("cenc", pssh) and invokes `relay` with the challenge from the CDM's thread; the
 /// relay's `deliver` runs Update() and FgPrEvent_LicenseUsable follows when KeyStatusChanged says so. NON-BLOCKING:
-/// no 200 ms poll, no 30 s wait. The table holds 8 KIDs, LRU-evicted, and never evicts a KID an attached session uses.
+/// no 200 ms poll, no 30 s wait. The table holds 8 KIDs, LRU-evicted, and never evicts a KID an attached session uses;
+/// an eviction raises FgPrEvent_LicenseEvicted.
 __declspec(dllexport) int32_t __stdcall FgPrLicenseAcquire(FgPrRuntime rt, const uint8_t* pssh, int32_t psshLen,
                                                            const wchar_t* keyIdHex, FgPrLicenseCallback relay,
                                                            void* relayCtx, FgPrLicense* out);
 
-/// 0 pending, 1 usable, 2 expired, and a negative HRESULT when the acquisition failed.
+/// 0 pending, 1 usable, 2 expired, and a negative HRESULT when the acquisition failed or the key died; E_HANDLE when the
+/// handle is unknown (evicted, released, or from another runtime). Asking also marks the license most-recently used.
 __declspec(dllexport) int32_t __stdcall FgPrLicenseState(FgPrRuntime rt, FgPrLicense lic);
 
 /// Drop one cached license (closes its CDM key session). A license an attached session still uses is kept.
@@ -272,11 +353,38 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetRate(FgPrRuntime rt, FgPrS
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rt, FgPrSession s, int32_t width,
                                                                  int32_t height);
 
-/// Switch the video representation (ABR). The four URL parts describe the new rung; the feeder applies it at the next
-/// segment boundary and FgPrEvent_Representation reports the active index.
+/// Move the runtime's hidden OPM window (the engine's MF_MEDIA_ENGINE_OPM_HWND, created once at bring-up) over the video, so the
+/// engine's output protection (HDCP, image constriction) is attested against the monitor the picture is really on. `hostWindow`
+/// is the presenting window's HWND (the main window or a pop-out) and (left, top, right, bottom) the video's rect in ITS client
+/// area, in device pixels; native moves the rect to screen space, and keeps following the host window on its own pump thread
+/// when it moves with no further call (a drag, a same-DPI monitor hop, maximize / restore). Callable from any thread (the UI
+/// pump), never waits on a native thread. Returns S_OK when the move was posted, S_FALSE when nothing was moved (the session is not the one attached to
+/// the engine, the runtime is not ready, or no window exists: a runtime that could not create it simply has none), E_HANDLE for
+/// an unknown handle, E_INVALIDARG for an inverted rect, or the failing HRESULT for a `hostWindow` that is not a window.
+/// Hardening with no measured effect: it changes nothing about what is decoded or shown.
+__declspec(dllexport) int32_t __stdcall FgPrSessionPlaceOpmWindow(FgPrRuntime rt, FgPrSession s, uint64_t hostWindow,
+                                                                  int32_t left, int32_t top, int32_t right, int32_t bottom);
+
+/// Switch the video representation (ABR). The four URL parts describe the new rung. `retainMs` says where it lands:
+///   < 0   APPEND: after the last buffered segment, discarding nothing (every ABR decrease and cap change);
+///   >= 0  that many ms ahead of the playhead (0 = the segment boundary right after it: a manual pin), discarding the old
+///         representation's buffer past the landing point (an upswitch that should show soon).
+/// FgPrEvent_RepresentationQueued reports the splice (the downloading index), FgPrEvent_Representation the moment the
+/// decoder is handed the new representation's first sample (the active index).
+/// `storeBudgetBytes` (F040) is the segment-store byte budget derived for the new rung from its bandwidth (the window of
+/// bufferAheadMs + retainBehindMs at that bitrate, 16-128 MiB; 0 = leave the budget as it is). A higher budget applies at once, a
+/// lower one when the rung's first segment is spliced in. The init segment of a rung the session has already parsed (the opening
+/// one, an earlier switch's, a FgPrSessionPrefetchInit's) is not fetched again.
 __declspec(dllexport) int32_t __stdcall FgPrSessionSelectRepresentation(FgPrRuntime rt, FgPrSession s, int32_t index,
                                                                         const wchar_t* initUrl, const wchar_t* base,
-                                                                        const wchar_t* prefix, const wchar_t* suffix);
+                                                                        const wchar_t* prefix, const wchar_t* suffix,
+                                                                        int32_t retainMs, int64_t storeBudgetBytes);
+
+/// F036: ask the session to fetch and parse the init segment of a representation it may switch to next (the rungs beside the one
+/// playing), so the switch itself needs no init GET. Non-blocking: the feeder begins the GET alongside normal feeding and caches the
+/// parsed init by URL; asking for a URL already cached or already on the wire is a no-op. A failed or unusable GET is simply not
+/// cached (the switch then fetches its own and reports the real status). Safe to call repeatedly and from any thread.
+__declspec(dllexport) int32_t __stdcall FgPrSessionPrefetchInit(FgPrRuntime rt, FgPrSession s, const wchar_t* initUrl);
 
 /// One atomic read of the session's state. `out->structSize` must be sizeof(FgPrSnapshot).
 __declspec(dllexport) int32_t __stdcall FgPrSessionSnapshot(FgPrRuntime rt, FgPrSession s, FgPrSnapshot* out);

@@ -467,7 +467,10 @@ public interface IPlatformPopupWindow : IDisposable
 /// axis at the platform default. <paramref name="Zoom"/> is the initial browser-style app zoom (typically a persisted
 /// user preference — see <see cref="IPlatformWindow.SetZoom"/>): it folds into the effective
 /// <see cref="IPlatformWindow.Scale"/> and shrinks/grows the DIP viewport WITHOUT changing the physical window size.
-/// Sanitized through <see cref="ZoomLadder.Clamp"/> by the backend.</summary>
+/// Sanitized through <see cref="ZoomLadder.Clamp"/> by the backend.
+/// <paramref name="SkipDropAndTouchpad"/> = do not register the window as an OS file-drop target and do not create the
+/// DirectManipulation touchpad producer (a few ms of COM/OLE activation per window). For a window that never takes a file drop and
+/// has no touchpad-scrolled content, such as the video pop-out; the touchpad then scrolls through the wheel fallback. Default false.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
@@ -475,7 +478,8 @@ public readonly record struct WindowDesc(
     bool Composited = false,
     bool CustomFrame = false,
     Size2 MinClientSizeDip = default,
-    float Zoom = 1f);
+    float Zoom = 1f,
+    bool SkipDropAndTouchpad = false);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte
@@ -650,6 +654,14 @@ public interface IPlatformWindow : IDisposable
     /// </summary>
     Action? PaintRequested { get; set; }
 
+    /// <summary>Raised by the platform on every keep-alive beat of an OS modal move/size loop THIS window is in (the 8 ms loop
+    /// timer, and each WM_SIZE of an edge resize), AFTER the window's own paint decision, whether or not that decision painted.
+    /// The loop runs inside a DispatchMessage on the one UI thread, so every other window of the process (the main window while
+    /// a pop-out is dragged, the pop-outs while the main window is) would otherwise be frozen until mouse-up (F093): the host
+    /// wires this to a throttled, paint-only round over its peers - never a frame loop turn, which must not run from inside
+    /// another window's message dispatch. Default: a no-op (a window with no modal loop never raises it).</summary>
+    Action? ModalLoopTick { get => null; set { } }
+
     /// <summary>True while the OS modal move/size loop is active (between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE): the
     /// app's own frame loop is suspended and only WndProc-driven keep-alive paints run. The host uses this to suppress
     /// REDUNDANT (non-resize) keep-alive paints during a drag — an ambient animation (playback, caret) repainting the
@@ -679,6 +691,29 @@ public interface IPlatformWindow : IDisposable
     /// by any other code path is still seen correctly. Default true.</summary>
     bool IsVisible => true;
 
+    /// <summary>True while the OS compositor CLOAKS the window: it keeps <c>WS_VISIBLE</c> but nothing of it reaches the
+    /// screen (Win32 <c>DWMWA_CLOAKED</c>: the window lives on another virtual desktop, or a shell transition is running).
+    /// Unlike <see cref="IsVisible"/> this raises no message, so a host that parks on it must poll. A detached child host
+    /// parks while this holds (<see cref="CloakParkGate"/>); the primary window does not read it. Default false.</summary>
+    bool IsCloaked => false;
+
+    /// <summary>F118: a counter that changes whenever the set, the Z-order or the geometry of the top-level windows on this
+    /// desktop may have changed (Win32: bumped from <c>SetWinEventHook</c> callbacks on the UI thread: foreground, minimize,
+    /// show/hide/reorder, location change, cloak/uncloak of a top-level window), so a host re-asks
+    /// <see cref="CopyOccluderRectsPx"/> only when it moved. 0 means the backend does not track occlusion (the default:
+    /// headless, or a failed hook), and the host never parks the window for being covered. The backend also wakes the host's
+    /// loop (<see cref="Wake"/>) when it changes, so an un-cover is seen at once even by a parked host that blocks on messages.
+    /// Reading it may install the hooks (once, on the calling UI thread).</summary>
+    long OcclusionEpoch => 0;
+
+    /// <summary>F118: copy into <paramref name="into"/> the visible bounds (physical virtual-screen px) of the OPAQUE top-level
+    /// windows that sit ABOVE this one in Z-order and intersect it: visible, not minimized, not cloaked, and neither layered
+    /// nor click-through (a window that may show what is behind it never counts as covering). The window's own process is
+    /// included (a pop-out is a window like any other). Returns the count written (at most <c>into.Length</c>; anything
+    /// beyond is dropped, which can only under-report coverage); 0 when nothing covers it or the backend cannot say. The input
+    /// of <see cref="FluentGpu.Hosting.WindowCoverPolicy.CoveredByWindows"/>. UI thread.</summary>
+    int CopyOccluderRectsPx(Span<RectF> into) => 0;
+
     /// <summary>The per-window IME/text-services seam (composition events, candidate-window placement).</summary>
     IPlatformTextInput TextInput { get; }
 
@@ -702,6 +737,10 @@ public interface IPlatformWindow : IDisposable
     void ToggleMaximize() { }
     /// <summary>True while the client occupies the current monitor with window chrome removed.</summary>
     bool IsFullscreen => false;
+    /// <summary>The full size, in physical px, of the monitor this window is on (the whole monitor, not the work area), or
+    /// empty when unknown (headless, a backend with no per-monitor query). The video stream sizing reads it (with
+    /// <see cref="IsFullscreen"/>) to upscale a stream in Media Foundation up to the monitor instead of in DirectComposition.</summary>
+    FluentGpu.Media.SizeI MonitorSizePx => default;
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }

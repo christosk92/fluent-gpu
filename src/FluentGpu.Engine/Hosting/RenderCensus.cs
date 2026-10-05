@@ -107,4 +107,5 @@ public readonly record struct RenderPaceSnapshot
 /// (<c>SlotCatchUp</c>) smooths; a readonly record struct returned by value, so that per-present read never allocates.
 /// The other fields stay diagnostics only, never a pacing input.</summary>
 public readonly record struct RenderPaceHostState(
-    double GovernorEmaMs, bool GovernorEngaged, HostWaitKind LastWaitKind, double GpuExecutionMs, int PresentQueueDepth);
+    double GovernorEmaMs, bool GovernorEngaged, HostWaitKind LastWaitKind, double GpuExecutionMs, int PresentQueueDepth,
+    long SlotLivenessTimeouts = 0, long NonPrimaryLatencyTimeouts = 0, double NonPrimaryLatencyWaitMaxMs = 0.0);

@@ -246,6 +246,27 @@ public sealed class LiveSessionTests
         Assert.False(e.Commands.TryTakeSeek(out _, out _));
     }
 
+    [Fact]
+    public async Task EngineLiveBitBeforeMetadata_IsNotTrusted_NoLiveTimeline_NoGoLive_NoResumeSeek()
+    {
+        // The latch regression: the engine reported "live" off a NaN pre-metadata duration. Even if such a bit leaks into a
+        // snapshot, an Auto session must not act on it until the engine says metadata loaded.
+        var (s, core, e) = NewSession();
+        e.IsLiveSource = true;               // LiveSource WITHOUT MetadataLoaded
+        e.SeekableRange = (0, 120);
+        e.RaiseStateChanged();
+        Pump(s);
+
+        Assert.False(core.Timeline.Peek().IsLive);
+        Assert.False(core.Commands.Available.Peek().HasFlag(MediaCommandFlags.GoLive));
+
+        await s.PlayAsync();
+        await s.PauseAsync();
+        await s.PlayAsync();
+
+        Assert.False(e.Commands.TryTakeSeek(out _, out _));
+    }
+
     // ── error surfacing ──────────────────────────────────────────────────────────────────────────────────────────────
 
     [Theory]
@@ -442,12 +463,14 @@ public sealed class LiveSessionTests
 
         var presenter = new FakeVideoPresenter();
         registry.Drain(presenter, scale: 1f);
-        // The placement IS the fitted rect (the element's geometry survives verbatim) and the content stays the frame,
-        // so the compositor's scale is exactly fitted/natural per axis — which is what makes the modes differ at all.
-        Assert.Equal(fitted.X, presenter.LastPlaceRect.X, 2);
-        Assert.Equal(fitted.Y, presenter.LastPlaceRect.Y, 2);
-        Assert.Equal(fitted.W, presenter.LastPlaceRect.W, 2);
-        Assert.Equal(fitted.H, presenter.LastPlaceRect.H, 2);
+        // The placement IS the fitted rect (the element's geometry survives, snapped to whole device pixels — rule R) and
+        // the content stays the frame, so the compositor's scale is exactly fitted/natural per axis — which is what makes
+        // the modes differ at all.
+        RectF placed = VideoSurfaceRegistry.SnapToDevicePixels(fitted);
+        Assert.Equal(placed.X, presenter.LastPlaceRect.X, 2);
+        Assert.Equal(placed.Y, presenter.LastPlaceRect.Y, 2);
+        Assert.Equal(placed.W, presenter.LastPlaceRect.W, 2);
+        Assert.Equal(placed.H, presenter.LastPlaceRect.H, 2);
         Assert.Equal(640u, presenter.LastContentW);
         Assert.Equal(360u, presenter.LastContentH);
         // The crop mode's overflow is clipped by the viewport, not by shrinking the frame.
@@ -501,8 +524,8 @@ public sealed class LiveSessionTests
 
         Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());
         Assert.True(e.Commands.TryTakeStreamRect(out int w, out int h));
-        Assert.Equal(1280, w);      // re-sized from the NEW natural size, capped at the 1280×720 destination
-        Assert.Equal(720, h);
+        Assert.Equal(1440, w);      // re-sized from the NEW natural size at once: the 3/4 bucket (the smallest that covers 1280×720)
+        Assert.Equal(810, h);
     }
 
     [Fact]

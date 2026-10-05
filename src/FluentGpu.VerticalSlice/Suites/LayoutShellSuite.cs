@@ -65,10 +65,11 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
         public bool SupportsComposite => true;
 
-        public void SubmitComposite(in CompositeFrame frame)
+        public void SubmitComposite(in CompositeFrame frame, ISwapchain target)
         {
             if (_failure == DeviceLossProbeFailure.Submit) ThrowOnce();
-            Inner.SubmitComposite(in frame);
+            // `target` is this wrapper's DeviceLossProbeSwapchain: the inner headless device only knows the swapchain it created.
+            Inner.SubmitComposite(in frame, target is DeviceLossProbeSwapchain probe ? probe.Inner : target);
         }
 
         public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) => Inner.UploadImage(imageId, pbgra8, w, h);
@@ -125,6 +126,8 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
     sealed class DeviceLossProbeSwapchain(DeviceLossProbeDevice owner, ISwapchain inner) : ISwapchain
     {
+        /// <summary>The wrapped headless swapchain (what the inner device recognises as its primary target).</summary>
+        public ISwapchain Inner => inner;
         public Size2 SizePx => inner.SizePx;
         public void Resize(Size2 px) => inner.Resize(px);
         public void Present() => owner.Present(inner);
@@ -1468,8 +1471,11 @@ static class LayoutShellSuite
             Check("RZ-SETTLE. modal exit settle presents with span reuse disabled for resize + settle hint",
                 stats.Presented
                 && (stats.SpanReuseDisabledReasons & SpanReuseDisabledReason.Resize) != 0
-                && device.HintSettlePresentCount == 1,
-                $"presented={stats.Presented} spanDisable={stats.SpanReuseDisabledReasons} hint={device.HintSettlePresentCount}");
+                && device.HintSettlePresentCount == 1
+                // F101: the hint is armed from the published frame, and the inline UI-thread present runs the sync (blocking)
+                // only after the video placement commit - never inside Present.
+                && device.PrimarySwapchain is { LastSettleBlocked: true, CompleteSettlePresentCount: > 0 },
+                $"presented={stats.Presented} spanDisable={stats.SpanReuseDisabledReasons} hint={device.HintSettlePresentCount} settleBlocked={device.PrimarySwapchain?.LastSettleBlocked}");
         }
 
         // RZ-THROTTLE — 30 Hz gate for non-composited modal edge-resize paints.

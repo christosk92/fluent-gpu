@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
+using FluentGpu.Pal;
 using FluentGpu.WindowsApi.Media.PlayReady;
 using Xunit;
 
@@ -345,6 +346,63 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
     }
 
     [Fact]
+    public void TheNativeFrameCounters_ArePublishedAsPlaybackStatistics_ValueGated()
+    {
+        var (session, core, player) = NewSession();
+        session.PumpVideo(default, Rect, 1f);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // nothing polled yet: the seam keeps Empty
+
+        player.FramesRendered = 90;
+        player.FramesDropped = 2;
+        session.PumpVideo(default, Rect, 1f);
+        PlaybackStatistics stats = core.Statistics.Peek();
+        Assert.Equal(90, stats.FramesRendered);
+        Assert.Equal(2, stats.FramesDropped);
+        Assert.Equal(92, stats.FramesDecoded);
+
+        core.SetStatistics(PlaybackStatistics.Empty);
+        session.PumpVideo(default, Rect, 1f);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // unchanged counters publish nothing
+
+        player.FramesRendered = 150;
+        session.PumpVideo(default, Rect, 1f);
+        Assert.Equal(150, core.Statistics.Peek().FramesRendered);
+    }
+
+    [Fact]
+    public void ANoRenderedFrameHang_IsARetryableNonDrmError_NotALicenseFailure()
+    {
+        int hr = unchecked((int)0x800705B4);   // what the native runtime raises after 10 s of playing with no frame rendered
+
+        MediaError error = ProtectedMediaSession.ProtectedFailure("Protected playback failed (MF_MEDIA_ENGINE_ERR 3, 0x800705B4).", hr,
+            needsRuntimeRebuild: false, locus: null);
+
+        Assert.Equal(MediaRecovery.Retryable, error.Recovery);   // the runtime is rebuilt and the source reopened in place
+        Assert.NotEqual(MediaErrorCategory.Drm, error.Category);
+        Assert.Equal(hr, (int)error.UnderlyingCode!.Value);
+    }
+
+    [Fact]
+    public void AnErrorAFreshRuntimeCures_PublishesARetryableNonDrmError_CarryingTheHresult()
+    {
+        var (session, core, player) = NewSession();
+        int hr = unchecked((int)0x887A0005);   // DXGI_ERROR_DEVICE_REMOVED
+        player.ErrorHr = hr;
+        player.ErrorNeedsRuntimeRebuild = true;
+        player.SetError("The protected-video runtime was reset (0x887A0005); reopen the video.");
+        player.SetState(ProtectedVideoState.Error);
+
+        session.PumpVideo(default, Rect, 1f);
+
+        MediaError? error = core.Error.Peek();
+        Assert.NotNull(error);
+        Assert.Equal(MediaRecovery.Retryable, error!.Recovery);   // the owner reopens it, never "your license failed"
+        Assert.NotEqual(MediaErrorCategory.Drm, error.Category);
+        Assert.Equal(hr, (int)error.UnderlyingCode!.Value);
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+    }
+
+    [Fact]
     public async Task Dispose_StopsAndDisposesThePlayer_Unsubscribes_AndSilencesTheTransport()
     {
         var (session, _, player) = NewSession();
@@ -386,6 +444,27 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
 
     // ── the composited surface ───────────────────────────────────────────────────────────────────────────────────────
 
+    // F235: the stream-size request carries WHO asked (the slot's registry token and its window's ordinal), so the managed
+    // "[video] stream.size" line can tell the main window's slot from a pop-out's with no native ABI change.
+    [Fact]
+    public void PumpVideo_TagsTheStreamSizeRequestWithTheBindingTokenAndHostOrdinal()
+    {
+        var (session, _, player) = NewSession();
+        var registry = new VideoSurfaceRegistry { HostOrdinal = 2 };
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(3840, 2160);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Loading);
+
+        session.PumpVideo(binding, Rect, 1f);
+
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal((binding.Token, 2), Assert.Single(player.StreamSizeTags));
+        Assert.Equal(2, binding.HostOrdinal);
+    }
+
     [Fact]
     public void PumpVideo_WithAValidBindingAndASurface_SizesTheStreamToWhatTheDestinationCanShow()
     {
@@ -395,22 +474,23 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         player.HasSurface = true;
         player.SurfaceHandle = 0xBEEF;
         player.SetNaturalSize(3840, 2160);
+        player.FirstFrameEpoch = 1;
         player.SetState(ProtectedVideoState.Loading);
 
         session.PumpVideo(binding, Rect, 1f);
 
-        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);   // a 4K rung in a 640-px card allocates 640-px buffers
+        Assert.Equal(new SizeI(1280, 720), player.LastStreamSize);   // a 4K rung in a 640-px card allocates the 1/3 bucket, not 4K buffers
         Assert.Equal(1, player.SetStreamSizeCalls);
         var presenter = new FakeVideoPresenter();
         registry.Drain(presenter, scale: 1f);
         Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
-        Assert.Equal(640u, presenter.LastContentW);
-        Assert.Equal(360u, presenter.LastContentH);
+        Assert.Equal(1280u, presenter.LastContentW);
+        Assert.Equal(720u, presenter.LastContentH);
         Assert.Equal(Rect, presenter.LastPlaceRect);
         Assert.True(presenter.LastVisible);
         VideoSurfaceGeometry geometry = core.SurfaceGeometry.Peek();
         Assert.Equal(new SizeI(3840, 2160), geometry.Natural);
-        Assert.Equal(new SizeI(640, 360), geometry.Content);
+        Assert.Equal(new SizeI(1280, 720), geometry.Content);
         Assert.Equal(binding.Token, geometry.Token);
         var delivery = Assert.IsType<VideoDelivery.CompositedSurface>(session.Video);
         Assert.Equal(new SizeI(3840, 2160), delivery.NaturalSize);
@@ -428,6 +508,264 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
 
         player.HasSurface = false;
         session.PumpVideo(NewBinding(new VideoSurfaceRegistry()), Rect, 1f);    // no swap chain produced yet
+        Assert.Equal(0, player.SetStreamSizeCalls);
+    }
+
+    [Fact]
+    public void PumpVideo_BeforeTheFirstFrameOfThisAttach_PlacesTheSurfaceButNeverShowsIt()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;                       // the swap chain exists (LOADEDMETADATA) ...
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.SetState(ProtectedVideoState.Loading);   // ... but its first frame has not landed: it holds the PREVIOUS source's picture
+
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);   // sized and placed already (the 1/2 bucket), so the first frame lands in place
+        Assert.Equal(Rect, presenter.LastPlaceRect);
+        Assert.False(presenter.LastVisible);
+        Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
+        Assert.IsType<VideoDelivery.CompositedSurface>(session.Video);
+
+        player.FirstFrameEpoch = 1;                     // FIRSTFRAMEREADY of this attach
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.True(presenter.LastVisible);
+        Assert.NotEqual(default(VideoSurfaceId), core.VideoSurface.Peek());
+    }
+
+    [Fact]
+    public void PumpVideo_ASecondAttachWithoutItsFirstFrame_HidesTheSlotAgain()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+        Assert.True(presenter.LastVisible);
+
+        player.HasFirstFrame = false;                   // re-attached: FirstFrameEpoch still holds the old attach's value
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.False(presenter.LastVisible);
+        Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
+    }
+
+    [Fact]
+    public void PumpVideo_WhenTheSurfaceIsDetached_HidesTheSlotAndWithdrawsTheVideoSurface()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        VideoBinding binding = NewBinding(registry);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+        Assert.True(presenter.LastVisible);
+        Assert.NotEqual(default(VideoSurfaceId), core.VideoSurface.Peek());
+
+        player.HasSurface = false;                      // another session's attach detached this one natively
+        session.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.False(presenter.LastVisible);
+        Assert.Equal(default(VideoSurfaceId), core.VideoSurface.Peek());
+        Assert.Equal(VideoDelivery.None, session.Video);
+    }
+
+    [Fact]
+    public void PumpVideo_ANaturalSizeGrow_RaisesTheStreamSize_WhenTheDestinationCanShowIt()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        VideoBinding binding = NewBinding(registry);
+        var big = new RectF(0, 0, 1920, 1080);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        player.SetNaturalSize(1280, 720);               // the opening rung
+        session.PumpVideo(binding, big, 1f);
+        Assert.Equal(new SizeI(1280, 720), player.LastStreamSize);
+
+        player.SetNaturalSize(1920, 1080);              // ABR upgraded: FORMATCHANGE reported the bigger frame
+        session.PumpVideo(binding, big, 1f);
+
+        Assert.Equal(new SizeI(1920, 1080), player.LastStreamSize);   // not pinned to the opening rung's swap chain (asked at once)
+        Assert.Equal(2, player.SetStreamSizeCalls);
+        // ... but the compositor keeps scaling the old buffer by the old size until native echoes the new one (the fake echoes
+        // at the next snapshot), so this pump still publishes the opening rung's content size.
+        Assert.Equal(new SizeI(1280, 720), core.SurfaceGeometry.Peek().Content);
+        session.PumpVideo(binding, big, 1f);
+        Assert.Equal(new SizeI(1920, 1080), core.SurfaceGeometry.Peek().Content);
+    }
+
+    [Fact]
+    public void PumpVideo_WithAnEmptyRect_NeverSizesOrPlacesTheStream()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        VideoBinding binding = NewBinding(new VideoSurfaceRegistry());
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1920, 1080);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+
+        session.PumpVideo(binding, default, 1f);       // the element's pump before its area is laid out
+
+        Assert.Equal(0, player.SetStreamSizeCalls);    // no 2x1 swap chain
+        Assert.True(binding.ContentSize.IsEmpty);
+        Assert.False(core.SurfaceGeometry.Peek().IsPlaced);
+
+        session.PumpVideo(binding, Rect, 1f);          // the first laid-out pump sizes it
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);
+
+        session.PumpVideo(binding, default, 1f);       // the area collapsed again: size and placement stay
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+    }
+
+    [Fact]
+    public void PumpVideo_AResize_RequestsTheNewBucketOnlyOnceSettled_AndPublishesItOnlyWhenNativeEchoesIt()
+    {
+        var (session, _, player) = NewSession(startPaused: false);
+        long now = 0;
+        session.ClockMs = () => now;
+        VideoBinding binding = NewBinding(new VideoSurfaceRegistry());
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1920, 1080);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        player.EchoesStreamSize = false;               // the test holds the native echo back
+
+        session.PumpVideo(binding, Rect, 1f);
+        Assert.Equal(new SizeI(640, 360), player.LastStreamSize);   // the 1/3 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+        player.ScriptedAppliedStreamSize = new SizeI(640, 360);
+
+        var grown = new RectF(0, 0, 1000, 562);
+        now = 100;
+        session.PumpVideo(binding, grown, 1f);         // a resize gesture is under way
+        Assert.Equal(1, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+
+        now = 350;
+        session.PumpVideo(binding, grown, 1f);         // it has been still for 250 ms
+        Assert.Equal(2, player.SetStreamSizeCalls);
+        Assert.Equal(new SizeI(1440, 810), player.LastStreamSize);   // the 3/4 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);      // DComp keeps scaling the old buffer by the old size
+
+        now = 400;
+        session.PumpVideo(binding, grown, 1f);
+        Assert.Equal(2, player.SetStreamSizeCalls);                  // asked once
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);      // not echoed yet
+
+        player.ScriptedAppliedStreamSize = new SizeI(1440, 810);     // native applied it
+        session.PumpVideo(binding, grown, 1f);
+        Assert.Equal(new SizeI(1440, 810), binding.ContentSize);
+    }
+
+    // ── the two pumps (F132): state with no element, surface from the handle the state pump saw ─────────────────────────────
+
+    [Fact]
+    public void PumpState_PublishesStateSizeDurationPositionAndSurfaceReadiness_WithNoBinding_AndNeverBinds()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.FirstFrameEpoch = 1;
+        player.Phase = ProtectedVideoPhase.Playing;
+        player.SetNaturalSize(1280, 720);
+        player.SetDurationMs(60_000);
+        player.SetPositionMs(5_000);
+        player.PositionQpc = Stopwatch.GetTimestamp();
+        player.SetState(ProtectedVideoState.Playing);
+
+        session.PumpState();                                                   // no element, no binding, no rect
+
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.Equal(new SizeI(1280, 720), core.NaturalSize.Peek());
+        Assert.Equal(TimeSpan.FromSeconds(60), core.Duration.Peek());
+        Assert.True(core.Position.Peek() >= TimeSpan.FromSeconds(5));
+        Assert.False(core.VideoSurface.Peek().IsNone);                         // first frame of this attach on a live surface
+        Assert.Equal(1, player.PumpCalls);
+        Assert.Empty(player.PumpedTokens);                                     // the surface half never ran
+        Assert.Equal(0, player.SetStreamSizeCalls);
+    }
+
+    [Fact]
+    public void PumpState_AFailureWhileNothingIsMounted_StillSurfaces()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        player.SetError("The license server refused.");
+        player.SetState(ProtectedVideoState.Error);
+
+        session.PumpState();
+
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+        Assert.NotNull(core.Error.Peek());
+    }
+
+    [Fact]
+    public void PumpGeometry_BindsTheHandleAndPlaces_WithoutRunningTheStatePump()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        var presenter = new FakeVideoPresenter();
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.FirstFrameEpoch = 1;
+        player.SetState(ProtectedVideoState.Playing);
+        session.PumpState();                                                   // the state pump saw the surface first
+
+        VideoBinding binding = NewBinding(registry);
+        session.PumpGeometry(binding, Rect, 1f);
+        registry.Drain(presenter, scale: 1f);
+
+        Assert.Equal(1, player.PumpCalls);                                     // geometry added no state pump …
+        Assert.Equal(new[] { binding.Token }, player.PumpedTokens);            // … and handed the binding to the player once
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+        Assert.Equal(Rect, presenter.LastPlaceRect);
+        Assert.Equal(binding.Token, core.SurfaceGeometry.Peek().Token);
+
+        session.PumpGeometry(default, Rect, 1f);                               // an inert binding is not even forwarded
+        Assert.Single(player.PumpedTokens);
+    }
+
+    [Fact]
+    public void PumpGeometry_AfterATerminalError_BindsButSizesAndPlacesNothing()
+    {
+        var (session, _, player) = NewSession(startPaused: false);
+        var registry = new VideoSurfaceRegistry();
+        player.HasSurface = true;
+        player.SurfaceHandle = 0xBEEF;
+        player.SetNaturalSize(1280, 720);
+        player.SetState(ProtectedVideoState.Error);
+        player.SetError("boom");
+        session.PumpState();
+
+        session.PumpGeometry(NewBinding(registry), Rect, 1f);
+
         Assert.Equal(0, player.SetStreamSizeCalls);
     }
 
@@ -475,14 +813,28 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         => Assert.Equal(1_234, ProtectedMediaSession.ExtrapolatePositionMs(1_234, 1_000, playing: false, 1.0, 1_000 + Stopwatch.Frequency));
 
     [Theory]
-    [InlineData(1.0, 2_000L)]
-    [InlineData(2.0, 3_000L)]
-    [InlineData(0.5, 1_500L)]
+    [InlineData(1.0, 1_400L)]
+    [InlineData(2.0, 1_800L)]
+    [InlineData(0.5, 1_200L)]
     public void ExtrapolatePositionMs_Playing_AddsElapsedTimesRate(double rate, long expected)
     {
         const long sampledAt = 5_000_000;
         Assert.Equal(expected,
+            ProtectedMediaSession.ExtrapolatePositionMs(1_000, sampledAt, playing: true, rate, sampledAt + Stopwatch.Frequency * 2 / 5));
+    }
+
+    [Theory]
+    [InlineData(1.0, 1_500L)]
+    [InlineData(2.0, 2_000L)]
+    [InlineData(0.5, 1_250L)]
+    public void ExtrapolatePositionMs_StopsAtTheCap_WhenNoNewSampleArrives(double rate, long expected)
+    {
+        // F030: a clock that stopped without the state saying so (TIMEUPDATE went quiet) must not run on from a stale sample.
+        const long sampledAt = 5_000_000;
+        Assert.Equal(expected,
             ProtectedMediaSession.ExtrapolatePositionMs(1_000, sampledAt, playing: true, rate, sampledAt + Stopwatch.Frequency));
+        Assert.Equal(expected,
+            ProtectedMediaSession.ExtrapolatePositionMs(1_000, sampledAt, playing: true, rate, sampledAt + Stopwatch.Frequency * 60));
     }
 
     [Fact]

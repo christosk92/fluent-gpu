@@ -590,6 +590,7 @@ static class TileSuite
         Check("gate.tiles.budget-never-drops-visible TileBudgetBytes = clamp(5.0 × windowBytes, 48 MiB, 128 MiB) (~78 MiB at 2560×1600; raised 2026-09-24 from 3.5×/32/96 by the measured visible need)",
             at2560 == (long)(5.0 * 2560 * 1600 * 4) && atSmall == 48 * MiB && at4k == 128 * MiB,
             $"2560x1600={at2560 / (double)MiB:0.0}MiB 800x600={atSmall / MiB}MiB 4k={at4k / MiB}MiB");
+
     }
 
     // ── gate.tiles.feather ──────────────────────────────────────────────────────────────────────────────────────
@@ -633,6 +634,7 @@ static class TileSuite
     {
         var dev = new HeadlessGpuDevice();
         IGpuDevice seam = dev;
+        var target = dev.CreateSwapchain(new SwapchainDesc(default, new Size2(2560, 1600)));   // the composite route's PRIMARY target
         TileRaster[] rasters =
         [
             new(new TileKey(0, 0, 3), 5, InvalidationReason.NoTexture, 0),
@@ -652,7 +654,7 @@ static class TileSuite
         Check("gate.tiles.composite-record the headless device supports the composite seam; PlacementsOf returns a slice's contiguous run",
             seam.SupportsComposite && frame.PlacementsOf(0).Length == 2 && frame.PlacementsOf(1).Length == 1 && frame.PlacementsOf(7).IsEmpty);
 
-        seam.SubmitComposite(frame);
+        seam.SubmitComposite(frame, target);
         var ops = dev.LastCompositeRecords;
         bool tilePasses = ops.Count == 3 * 2 + 1 + 3 + 1 + 1;
         for (int i = 0; i < 2 && tilePasses; i++)
@@ -684,6 +686,7 @@ static class TileSuite
     {
         var table = new SliceTable();
         var dev = new HeadlessGpuDevice();
+        var target = dev.CreateSwapchain(new SwapchainDesc(default, new Size2(2560, 1600)));   // the composite route's PRIMARY target
         var keys = new TileKey[128];
         var ord = new byte[128];
         var raster = new TileRaster[128];
@@ -715,7 +718,7 @@ static class TileSuite
             items[1] = new CompositeItem(s, CompositeKind.Tiles, Affine2D.Translation(0, -vp.Y), 1f, svp, default, default, 0f, default, 0);
             dirty[0] = new PixelRect(0, 0, 2560, 1600);
             dev.SubmitComposite(new CompositeFrame(default, ReadOnlySpan<SliceRow>.Empty, ReadOnlySpan<byte>.Empty,
-                raster.AsSpan(0, rc), placements.AsSpan(0, pc), items, new PresentParams(dirty)));
+                raster.AsSpan(0, rc), placements.AsSpan(0, pc), items, new PresentParams(dirty)), target);
             table.EndFrame();
         }
 

@@ -206,6 +206,37 @@ public sealed class HeadlessPlayerTests
         Wait(player.DisposeAsync());
     }
 
+    [Fact]
+    public async Task MediaPlayer_Stop_PausesAndReleasesTheSession_AndDisposeAwaitsItsDisposal()
+    {
+        // The facade's Stop is honest: it pauses and releases the session (the next pump can no longer republish the real
+        // state over Idle), the dispose finishes in the background, and DisposeAsync waits for it so the engine is back
+        // before the next lease.
+        var limit = TimeSpan.FromSeconds(5);
+        var backend = new GatedMediaBackend();
+        var player = MediaPlayer.Build().WithBackend(MediaKind.MfVideoOrFile, backend).Build();
+        backend.Release("a.mp4");
+        await player.OpenAsync(MediaSource.FromFile("a.mp4")).AsTask().WaitAsync(limit);
+        RecordingMediaSession session = backend.SessionFor("a.mp4");
+        Assert.Same(session, player.Session);
+        session.HoldDispose();   // a slow native teardown
+        _ = player.PlayAsync();
+
+        player.Stop();
+
+        Assert.Equal(1, session.PauseCount);
+        Assert.Null(player.Session);
+        Assert.Equal(PlaybackState.Idle, player.State.Peek());
+        Assert.False(player.IsPlayRequested.Peek());
+        await session.DisposeStarted.WaitAsync(limit);   // released in the background, not on the caller
+
+        ValueTask dispose = player.DisposeAsync();
+        Assert.False(dispose.IsCompleted);   // still awaiting the stop-dispose
+        session.ReleaseDispose();
+        await dispose.AsTask().WaitAsync(limit);
+        Assert.Equal(1, session.DisposeCount);
+    }
+
     // ── (d) callback-firewall reentrancy safety ──────────────────────────────────────────────────────────────────────
 
     [Fact]

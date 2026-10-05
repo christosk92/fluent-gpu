@@ -11,11 +11,14 @@ public readonly record struct AdaptiveSegment(
     long ByteRangeOffset = -1, long ByteRangeLength = -1,
     int DiscontinuitySequence = 0, DateTimeOffset? ProgramDateTime = null, bool IsGap = false);
 
-/// <summary>A representation's initialization and ordered media segments.</summary>
+/// <summary>A representation's initialization and ordered media segments. <c>Codecs</c> is the manifest's raw
+/// <c>@codecs</c> string, <c>DefaultKid</c> the dashless lower-case <c>cenc:default_KID</c>, and
+/// <c>SegmentsStartWithKeyframe</c> the <c>@startWithSAP</c> promise (true unless the MPD says 0 or 3+).</summary>
 public sealed record AdaptiveRepresentation(
     QualityVariant Quality, Uri? Initialization, IReadOnlyList<AdaptiveSegment> Segments,
     string? PlaylistUri = null, string? DrmScheme = null, ReadOnlyMemory<byte> InitData = default,
-    string? AudioGroup = null, string? SubtitleGroup = null);
+    string? AudioGroup = null, string? SubtitleGroup = null,
+    string? Codecs = null, string? DefaultKid = null, bool SegmentsStartWithKeyframe = true);
 
 /// <summary>Mutually-selectable representations belonging to one audio/video/text adaptation.</summary>
 public sealed record AdaptiveTrackGroup(

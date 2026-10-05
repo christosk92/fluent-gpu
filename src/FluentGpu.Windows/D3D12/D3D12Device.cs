@@ -23,7 +23,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// missed vblank. Staging is CPU work in that interval (Map + padded row memcpy + Unmap per image, plus the pooled
 /// texture acquire), so an unbounded drain turned a burst of landed covers straight into missed vblanks even though
 /// the UI frames themselves averaged 0.5 ms. The drain therefore stages at most <see cref="UploadBytesPerTurn"/> per
-/// turn and carries the first over-budget job to the next turn (the queue is drained every present turn, and
+/// turn (one budget on every GPU tier) and carries the first over-budget job to the next turn (the queue is drained every present turn, and
 /// <see cref="HasPendingUploads"/> reports the carried job so the host keeps turning until it lands).
 /// <see cref="DeferredImageUploads"/> / <see cref="DeferredImageUploadBytes"/> count those carries for the always-on
 /// stats. The heap-churn half of the same defect is the upload ring in <see cref="ImageTextureStore"/>.</para>
@@ -777,7 +777,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private FluentGpu.Hosting.Threading.ImageUploadQueue.Job _heldImageJob;
     private bool _hasHeldImageJob;
 
-    /// <summary>Cumulative count of drain turns that hit <see cref="UploadBytesPerTurn"/> and carried a job over. The
+    /// <summary>Cumulative count of drain turns that hit their per-turn budget (<see cref="UploadBytesPerTurn"/>) and carried a job over. The
     /// carried job always stages FIRST on the next turn (the budget never refuses the first job of a turn), so each
     /// carry is counted exactly once and the count equals the number of budget-truncated turns. Plain counter for the
     /// always-on frame stats; read from any thread as a rough gauge (render-thread writes, no fence).</summary>
@@ -798,6 +798,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_fence != null) _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
         int faultsBefore = _imageTextures.ResourceFaults;
         long stagedBytes = 0;
+        int budgetBytes = UploadBytesPerTurn;
         while (true)
         {
             FluentGpu.Hosting.Threading.ImageUploadQueue.Job j;
@@ -807,7 +808,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (j.Evict) { _imageTextures.Free(j.Id); continue; }
             // Over budget with something already staged this turn: carry this job (and everything behind it) to the
             // next turn. A turn that has staged nothing yet always takes the job, whatever its size.
-            if (j.Buffer is not null && stagedBytes > 0 && stagedBytes + j.ByteLen > UploadBytesPerTurn)
+            if (j.Buffer is not null && stagedBytes > 0 && stagedBytes + j.ByteLen > budgetBytes)
             {
                 _heldImageJob = j; _hasHeldImageJob = true;
                 DeferredImageUploads++;
@@ -1278,7 +1279,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.SwapChain = sc3;
 
         // IDXGISwapChain3 : IDXGISwapChain2 — cap the queued frames and grab the latency waitable (created above via the flag).
-        uint depthNow = ReferenceEquals(target, _primarySwapchain) ? (uint)Volatile.Read(ref _presentQueueDepth) : InitialPresentQueueDepth;
+        // The primary follows the device's chosen depth; every other target its OWN (a pop-out's depth policy sets it, and a
+        // device-loss rebuild of its swapchain must come back at that depth, not reset it).
+        uint depthNow = ReferenceEquals(target, _primarySwapchain) ? (uint)Volatile.Read(ref _presentQueueDepth) : (uint)Volatile.Read(ref target.PresentQueueDepth);
         Check(target.SwapChain->SetMaximumFrameLatency(depthNow), "SetMaximumFrameLatency");
         target.FrameLatencyWaitable = target.SwapChain->GetFrameLatencyWaitableObject();
         target.HasLatencyWaitable = target.FrameLatencyWaitable != HANDLE.NULL;
@@ -1382,7 +1385,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(target.DcompTarget->SetRoot(target.DcompRoot), "Target.SetRoot(root)");
         Check(_dcomp->Commit(), "DComp.Commit");
         target.DcompBindPending = false;
-        target.VideoPresenter?.OnSwapchainRebound(target);   // re-attach THIS swapchain's live video children under its new root
+        // No re-attach of video children here: DComp visuals cannot move between IDCompositionDevice instances, so a device
+        // recovery disposes the presenter (RecoverDevice) and the video registry rebuilds its surfaces on a fresh one; a
+        // child created before this first lazy bind attaches on the presenter's next Commit.
     }
 
     // Producer swapchains that render into engine-owned shareable DComp surface handles (M0 test surfaces). Kept alive
@@ -1743,13 +1748,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         long fenceWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
         // The render thread normally already paid this wait in TryTakePresentSlot, BEFORE it chose which published
         // frame to present (Terminal/makepad order). The waitable is a semaphore, so waiting twice for one Present
-        // would block for a whole extra present cycle: a held credit means "the slot is already ours", so skip.
-        bool creditHeld = ReferenceEquals(sc, _primarySwapchain) && sc.LatencyCreditHeld;
+        // would block for a whole extra present cycle: a held credit means "the slot is already ours", so skip. Held on
+        // EVERY target, not just the primary: a stood-down / covered / PRESENT_TEST-latched Present spends no credit, so a
+        // non-primary (windowed popup, detached pop-out) whose credit was not tracked paid the full 1000 ms bound on its
+        // next submit - on the shared render thread, stalling every main-window present behind it.
+        bool creditHeld = sc.LatencyCreditHeld;
+        bool paidLatencyWait = false;
         if (f.SkipLatencyOnce) f.SkipLatencyOnce = false;
-        else if (!creditHeld) WaitForLatency(sc);
+        else if (!creditHeld) { WaitForLatency(sc); paidLatencyWait = true; }
         long latencyDone = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!creditHeld)
             f.LastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
+        f.LastSubmitLatencyWaitMs = paidLatencyWait ? System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds : 0.0;
         f.FrameIndex = sc.SwapChain->GetCurrentBackBufferIndex();
         int slot = _ring.NextSlot;
         // Ambient copy for nested per-submit helpers (the pass-timeline boundaries, the GPU-timing collectors) that have
@@ -1759,6 +1769,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (!WaitForFenceValue(f.FenceValues[f.FrameIndex]) || !WaitForFenceValue(_ring.Fence[slot]))
             throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
         f.LastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
+        f.LastBufferFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(latencyDone).TotalMilliseconds;
         return slot;
     }
 
@@ -3392,8 +3403,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     internal bool Vsync { get => _vsync; set => _vsync = value; }
 
-    internal void Present(D3D12Swapchain target)
+    // noWait: Present with DXGI_PRESENT_DO_NOT_WAIT (a NON-primary target only - the primary's blocking present is what the
+    // pacing is built around): a queue still full refuses the present (LastPresentRefused) instead of blocking the render
+    // thread, nothing is queued, and the latency credit stays held.
+    internal void Present(D3D12Swapchain target, bool noWait = false)
     {
+        // Reset BEFORE the Disposed early-out: a dead target must never replay the previous call's refusal (the host would keep
+        // the frame owed, and the shared render thread ticking, to retry a swapchain that is gone).
+        target.Frame.LastPresentRefused = false;
         if (target.Disposed) return;
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
         BeginTargetFrame(target.Frame);
@@ -3401,6 +3418,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // swapchain presents — deferred out of the UI-thread InitSwapChain so DComp is owned by the thread that Presents.
         if (target.Composited && target.DcompBindPending) BindDComp(target);
         target.Frame.LastPresentStoodDown = false;
+        target.Frame.LastPresentRefused = false;
         HWND hwnd = target.Hwnd;
         // The ATOMIC REVEAL frame is exempt from every stand-down below. A COMPOSITION swapchain
         // (CreateSwapChainForComposition — every windowed popup, see InitSwapChain) reaches the screen through its
@@ -3443,6 +3461,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // composition path target.TearingSupported is false so the modal-tick present is interval 0 with flags 0 (valid + tear-free).
         uint interval = (_vsync && !noVsync) ? 1u : 0u;
         uint flags = (interval == 0 && target.TearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
+        // F085: a secondary target never blocks the shared render thread inside Present (the primary keeps its contract).
+        if (noWait && !ReferenceEquals(target, _primarySwapchain)) flags |= DxgiPresentDoNotWait;
+        // F070 Stage B: a frame that moves video geometry waits (bounded) for its own GPU work to retire BEFORE the present, so the flip
+        // and the video Commit the host issues right after it reach DWM together. Armed per turn by the host, never on steady playback.
+        if (target.Frame.HintMotionFenceWait)
+        {
+            target.Frame.HintMotionFenceWait = false;
+            WaitMotionFence(target);
+        }
         // Whole-frame Present: the swapchain is FLIP_DISCARD, which refuses partial presentation (Present1 with dirty
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
@@ -3461,14 +3488,36 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         else
             pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(target.SwapChain, interval, flags);   // GEN-COM (wired)
+        // REFUSED (DXGI_ERROR_WAS_STILL_DRAWING, only possible with DO_NOT_WAIT): the queue was still full, so NOTHING was queued
+        // and no credit was spent. Like a stand-down, return without touching LatencyCreditHeld - the slot this turn reserved is
+        // still free, and the next submit must not wait for it twice. The frame sits drawn in the current back buffer (no flip
+        // happened); the host owes it and re-presents it, or draws a newer one over it. The staged dirty rects described a flip
+        // that did not happen, so the present that eventually runs is a WHOLE one (PpNeedFullPresent).
+        if ((uint)pr == DxgiErrorWasStillDrawing)
+        {
+            target.Frame.LastPresentRefused = true;
+            target.PpPresentCount = 0;
+            target.PpNeedFullPresent = true;
+            Diag.Count("d3d12", "presentWasStillDrawing");
+            EndTargetFrame();
+            return;
+        }
         target.PpPresentCount = 0;
         target.PpNeedFullPresent = false;
-        // The Present is what SPENDS the latency credit TryTakePresentSlot took (the waitable is a semaphore: it is
-        // re-signaled when this present retires from the queue). Cleared on every path where Present actually ran —
-        // success AND DXGI_STATUS_OCCLUDED, which is a success code that still consumed the slot. The stand-down /
-        // PRESENT_TEST / covered-HWND paths above returned WITHOUT presenting, so they deliberately leave the credit
-        // held: the slot they reserved is still free and the next turn must not wait for it twice.
-        if (target.LatencyCreditHeld && ReferenceEquals(target, _primarySwapchain)) target.LatencyCreditHeld = false;
+        // The Present is what SPENDS the latency credit a wait took (the waitable is a semaphore: it is re-signaled when
+        // this present retires from the queue). Cleared on every path where Present actually ran — success AND
+        // DXGI_STATUS_OCCLUDED, which is a success code that still consumed the slot. The stand-down / PRESENT_TEST /
+        // covered-HWND paths above returned WITHOUT presenting, so they deliberately leave the credit held: the slot they
+        // reserved is still free and the next turn must not wait for it twice. Per target: a non-primary swapchain obeys
+        // the same semaphore contract as the primary (see WaitForLatency, F107).
+        if (target.LatencyCreditHeld) target.LatencyCreditHeld = false;
+        // The present's OWN queue work (the flip; on WARP a copy task) runs after Present returns, and the stamp SubmitDrawList
+        // wrote (LastSubmitFence) precedes it — so a teardown or resize that waited for that stamp alone could free this target's
+        // back buffers under the present (the WARP test-host access violation, d3d10warp!Task_Copy under ~CDXGISwapChain).
+        // Signal the device fence past the present and remember the value on THIS target; TargetFenceHorizon folds it in. Per
+        // target, never a device-wide wait (F117). Skipped when the present failed: the device may be gone, and the recover path
+        // drains everything.
+        if ((int)pr >= 0 && _fence != null) target.Frame.LastPresentFence = SignalNext();
         // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
         // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
         if ((int)pr == DxgiStatusOccluded)
@@ -3488,7 +3537,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (_signalDeviceLostInsteadOfThrow) { System.Threading.Volatile.Write(ref _deviceLostReason, reason != 0u ? (int)reason : (int)(uint)pr); return; }
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
-        if (target.Frame.HintSettlePresent) { target.Frame.HintSettlePresent = false; _ = DwmFlush(); }
+        // F101: a settle hint armed for this present is NOT flushed here any more. The host commits the frame's video
+        // placement right after Present returns, and a DwmFlush in between composed the new hole over the OLD video rect (one
+        // DWM frame of trailing edge) while stalling the shared render thread for a refresh. D3D12Swapchain.CompleteSettlePresent
+        // runs the sync once the placement is committed (inline present only; a threaded present never blocks).
         // This target's front buffer / composition surface now holds engine-drawn pixels. One-way latch, read by the
         // host's popup reveal gate (never reveal a popup window whose swapchain has painted nothing) and by its
         // "owes a first paint" wake reason. Set only on the fall-through success path — a stood-down or OCCLUDED
@@ -3505,7 +3557,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         PublishVideoMemorySnapshot();
         // A Present that actually ran (the stand-down / TEST / covered paths returned above) feeds the attested ledger.
-        if (ReferenceEquals(target, _primarySwapchain)) SamplePresentStats(target.Frame);
+        // Every target's attested ledger is fed from ITS OWN swapchain's frame statistics (pacing evidence is per target); only the
+        // primary also takes the 1 Hz DWM sample, which is main-monitor-global and would be counted twice from a second target.
+        SamplePresentStats(target.Frame, ReferenceEquals(target, _primarySwapchain));
         EndTargetFrame();
     }
 
@@ -3528,7 +3582,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // The receipts UI reads this on a 5 s timer, so producing it every Present would spend two DXGI calls per frame to
     // refresh a value nobody looks at 299 times out of 300. Sample on a cold cadence instead: ~1 Hz at 60 fps. On the
     // Weak (UMA/iGPU) tier we sample ~6× faster (every 10 presents) so the host's VRAM-pressure eviction reacts within
-    // ~160ms instead of ~1s — the Adreno pages hard when over its tiny LOCAL budget (adreno-hang-fixes.md M5).
+    // ~160ms instead of ~1s — a weak part pages hard when usage exceeds its LOCAL budget (adreno-hang-fixes.md M5). On UMA
+    // the LOCAL budget reads as the shared-pool residency budget (~15 GB), not the 128 MB carve-out, so that eviction only arms
+    // under real system memory pressure (F251); the faster cadence is what makes it prompt when the OS shrinks the budget.
     const int VideoMemorySampleEveryNPresents = 60;
     const int VideoMemorySampleEveryNPresentsWeak = 10;
     int _videoMemorySampleCountdown;
@@ -3578,6 +3634,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // for CreateSwapChainForComposition; cloak/visibility is the composition path's stand-down. DXGI_PRESENT_TEST = 1.
     private const int DxgiStatusOccluded = unchecked((int)0x087A0001);
     private const uint DxgiPresentTest = 1u;
+    private const uint DxgiPresentDoNotWait = 0x00000008u;                 // DXGI_PRESENT_DO_NOT_WAIT
+    private const uint DxgiErrorWasStillDrawing = 0x887A000Au;             // DXGI_ERROR_WAS_STILL_DRAWING
     private const uint DwmwaCloaked = 14;
     // OccludedLatched/LastPresentStoodDown MOVED to TargetFrameState (Phase 1 §3.3) — per-target now, not device-global.
 
@@ -3601,6 +3659,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         for (int i = 0; i < _swapchains.Count; i++)
             if (ReferenceEquals(_swapchains[i].Frame, f)) { _swapchains[i].PpNeedFullPresent = true; _swapchains[i].PpPresentCount = 0; }
         f.HintSettlePresent = false;
+        f.HintMotionFenceWait = false;
         f.SkipVsyncOnce = false;
         EndTargetFrame();
     }
@@ -3626,7 +3685,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <inheritdoc/>
     public PresentStats LastPresentStats => _primarySwapchain!.Frame.LastPresentStats;
 
-    private void SamplePresentStats(TargetFrameState f)
+    // primary = false (a detached child / popup target): only the swapchain's own DXGI frame statistics feed its own PresentLedger.
+    // The DWM sample, the glitch totals, the topology check and LastPresentStats are main-monitor-global / primary-window state and
+    // stay the primary's alone.
+    private void SamplePresentStats(TargetFrameState f, bool primary)
     {
         long now = System.Diagnostics.Stopwatch.GetTimestamp();   // ≈ this present's submit (Present just returned)
         DXGI_FRAME_STATISTICS fs = default;
@@ -3648,9 +3710,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // repeats. Keyed on the frame-statistics validity alone — the 1 Hz DWM sample below is a separate source and must
         // not hold the ledger's baseline hostage for the first second; a DISJOINT sample resets the baseline.
         long vblankAnchor = fsOk && fs.SyncQPCTime != 0 ? fs.SyncQPCTime : f.LastPresentStats.VBlankQpc;
-        uint idle = FluentGpu.Hosting.Threading.PresentStatisticsLedger.IdleRefreshes(f.LastSubmitQpc, now, vblankAnchor, f.LastPresentStats.RefreshPeriodQpc);
+        // A non-primary target never assigns LastPresentStats (it returns below), so its idle-vblank period is its OWN monitor's, not that field's 0.
+        long idlePeriod = primary ? f.LastPresentStats.RefreshPeriodQpc : ResolveTargetRefreshPeriod(f, now);
+        uint idle = FluentGpu.Hosting.Threading.PresentStatisticsLedger.IdleRefreshes(f.LastSubmitQpc, now, vblankAnchor, idlePeriod);
         f.LastSubmitQpc = now;
         f.PresentLedger.Observe(fsOk && presentId != 0, fs.PresentCount, fs.PresentRefreshCount, presentId, idle);
+        if (!primary) return;
 
         long refreshPeriod = f.LastPresentStats.RefreshPeriodQpc;
         long vblankQpc = f.LastPresentStats.VBlankQpc;
@@ -3721,6 +3786,29 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         };
     }
 
+    // A non-primary target's refresh period for the ledger's idle-vblank count: the swapchain's cached per-window period
+    // (resolved at InitSwapChain by SamplePresentTopology), re-resolved at most ~1 Hz when the window moved monitors (cold path
+    // only: DisplayInfo.ForWindow walks QueryDisplayConfig; no log line per popup target), else the primary's period.
+    private long ResolveTargetRefreshPeriod(TargetFrameState f, long now)
+    {
+        D3D12Swapchain t = f.Target;
+        if (t.Hwnd != HWND.NULL && now - f.LastDwmSampleQpc >= System.Diagnostics.Stopwatch.Frequency)
+        {
+            f.LastDwmSampleQpc = now;
+            HMONITOR mon = MonitorFromWindow(t.Hwnd, MonitorDefaultToNearest);
+            if (mon != HMONITOR.NULL && mon != t.TopologyMonitor)
+            {
+                var mode = FluentGpu.Pal.Windows.DisplayInfo.ForWindow((nint)t.Hwnd);
+                if (mode.Valid)
+                {
+                    t.CachedRefreshPeriodQpc = mode.RefreshPeriodQpc;
+                    t.TopologyMonitor = mon;
+                }
+            }
+        }
+        return t.CachedRefreshPeriodQpc > 0 ? t.CachedRefreshPeriodQpc : _primarySwapchain?.Frame.LastPresentStats.RefreshPeriodQpc ?? 0;
+    }
+
     // Does the RENDER adapter own a DXGI output containing the window's monitor? When not, every present crosses
     // adapters (DWM cross-adapter scan-out): correct output, but an extra compositor copy + latency — the classic
     // "high FPS, bad feel" confound this line names. A dGPU with ZERO outputs presenting through the iGPU is the
@@ -3751,6 +3839,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if ((int)_factory->EnumAdapterByLuid(luid, __uuidof<IDXGIAdapter1>(), (void**)&adapter) < 0 || adapter == null)
             return;   // stale factory mid-topology-change: keep old state; the next 1 Hz sample retries
         bool sawOutput = false, owns = false;
+        FluentGpu.Media.VideoOverlayCaps overlay = default;   // F249: the owning output's overlay-plane verdict (default = unprobed)
         for (uint i = 0; ; i++)
         {
             IDXGIOutput* output = null;
@@ -3759,7 +3848,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if ((int)output->GetDesc(&od) >= 0)
             {
                 sawOutput = true;
-                if (od.Monitor == mon) owns = true;
+                if (od.Monitor == mon) { owns = true; overlay = ProbeOverlaySupport(output); }
             }
             output->Release();
             if (owns) break;
@@ -3770,6 +3859,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.TopologyMonitor = mon;
         bool topologyChanged = state != target.PresentTopologyState;
         target.PresentTopologyState = state;
+        bool overlayChanged = overlay != target.OverlayCaps;
+        target.OverlayCaps = overlay;
+        if (overlay.Probed) FluentGpu.Media.VideoOverlayCaps.Publish(in overlay);   // the engines read the newest verdict when they are created
 
         // Diagnostics-card snapshot (GpuVideoMemorySnapshot): merges the display-mode + topology fields without
         // touching the video-memory fields, which PublishVideoMemory refreshes on its own (~1/60-presents) cadence.
@@ -3791,12 +3883,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                       $" primaryHz={primaryHz:0.000} changed={(mismatch ? "true" : "false")}");
         }
 
-        if (!topologyChanged) return;
+        if (!topologyChanged && !overlayChanged) return;
+        // F249: an owned output no longer claims a direct scan-out path from adapter ownership alone; the note is what CheckOverlaySupport said.
         Diag.Line($"[d3d12.present] topology={(state == TopologyOwned ? "render-adapter-owns-output"
                 : state == TopologyCross ? "cross-adapter" : "render-adapter-has-no-outputs")}" +
             $" hwnd=0x{(nint)target.Hwnd:X}" +
             (state == TopologyOwned
-                ? " note=direct-scan-out-path-available"
+                ? $" overlay[{overlay.Describe()}] note={OverlayNote(in overlay)}"
                 : " note=presents-cross-adapters-via-DWM-(expected-on-hybrid-laptops;-adds-a-compositor-copy)"));
     }
 
@@ -3859,9 +3952,94 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // wait). Bounded timeout so a lost device can't hang the loop. No-op if the waitable wasn't created (older DXGI /
     // failure). Takes the target explicitly now (Phase 1 §3.3) — was a device-global Activate-mirrored field; a
     // detached child's own waitable is on `sc`, never the primary's.
-    private void WaitForLatency(D3D12Swapchain sc)
+    // The wait takes ONE semaphore count, i.e. a credit that exactly one Present spends: it is therefore HELD on the target
+    // (success or the 1 s liveness timeout, the same contract as TryTakePresentSlot(-1)) until a Present actually runs, and
+    // SubmitDrawList skips this wait while it is held. Without that, a submit whose Present stood down (cloaked / hidden /
+    // OCCLUDED-latched HWND) left the count at 0 and every later submit on that target blocked the whole 1000 ms bound.
+    // INTERRUPTIBLE (F207): a park request from the UI (SetSubmitAbortHandle) ends the wait with nothing taken. The credit then
+    // stays un-held - claiming one that was never taken is the F090-style drift - and the submit goes on without paying the
+    // wait (a stood-down Present spends nothing, a real one is bounded by DXGI's own queue).
+    internal void WaitForLatency(D3D12Swapchain sc)
     {
-        if (sc.HasLatencyWaitable) WaitForSingleObject(sc.FrameLatencyWaitable, 1000);
+        if (!sc.HasLatencyWaitable) return;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        LatencyWait wait = WaitLatencyOrAbort(sc.FrameLatencyWaitable, 1000);
+        if (wait == LatencyWait.Aborted) return;
+        sc.LatencyCreditHeld = true;
+        if (!ReferenceEquals(sc, _primarySwapchain)) NoteNonPrimaryLatencyWait(sc, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds, wait == LatencyWait.Opened);
+    }
+
+    // The render loop's park-request event (RenderThread._parkRequested), handed in through SetSubmitAbortHandle. 0 = none
+    // wired: every wait is then the plain bounded wait. Read per wait on the render thread; written by the host only before
+    // the loop starts and after it was joined, so it never changes under a wait. The device waits on it, never closes it.
+    private nint _submitAbortHandle;
+
+    /// <inheritdoc/>
+    public void SetSubmitAbortHandle(nint handle) => Volatile.Write(ref _submitAbortHandle, handle);
+
+    /// <inheritdoc/>
+    /// <remarks>The compositor creates its DispatcherQueue on the CURRENT thread, and the composition batches commit only
+    /// when that thread pumps messages. Brought up by the first acrylic popup's swapchain on the render thread (which never
+    /// pumps), every popup's chrome and motion would stay uncommitted.</remarks>
+    public void PrepareSwapchainCreate(in SwapchainDesc desc)
+    {
+        if (desc.DesktopAcrylic) CompositionBackdrop.EnsureCompositor();
+    }
+
+    /// <summary>How a latency-waitable wait ended: the slot opened (one semaphore count taken), the bound passed (nothing
+    /// taken), or the park-request event fired (nothing taken).</summary>
+    private enum LatencyWait : byte { Opened, TimedOut, Aborted }
+
+    /// <summary>Wait at most <paramref name="timeoutMs"/> for <paramref name="waitable"/> OR the park-request event. The
+    /// waitable is index 0: when both are signaled WaitForMultipleObjects (bWaitAll = FALSE) reports the LOWEST index, so an
+    /// open slot still wins and is the only outcome that took a count - an abort alone never reads as credit held. A failed
+    /// wait (a torn-down handle) reads as a timeout, as it always did. Render thread only; no allocation.</summary>
+    private LatencyWait WaitLatencyOrAbort(HANDLE waitable, uint timeoutMs)
+    {
+        nint abort = Volatile.Read(ref _submitAbortHandle);
+        if (abort == 0) return WaitForSingleObject(waitable, timeoutMs) == WAIT_OBJECT_0 ? LatencyWait.Opened : LatencyWait.TimedOut;
+        HANDLE* handles = stackalloc HANDLE[2];
+        handles[0] = waitable;
+        handles[1] = (HANDLE)abort;
+        uint r = WaitForMultipleObjects(2, handles, false, timeoutMs);
+        return r == WAIT_OBJECT_0 ? LatencyWait.Opened : r == WAIT_OBJECT_0 + 1 ? LatencyWait.Aborted : LatencyWait.TimedOut;
+    }
+
+    // Non-primary latency waits run on the shared render thread, so a long one is a main-window stall attributable to a
+    // popup / pop-out. Logged rate-limited per target (the evidence for the next 1000 ms-class stall report).
+    private const double NonPrimaryLatencyLogFloorMs = 20.0;
+    private const double NonPrimaryLatencyLogPeriodMs = 2000.0;
+
+    // F235: the always-on numbers behind that log, for the [render.pace] line: the window's longest non-primary wait (childWaitMax=) and
+    // the cumulative count of waits that ran out their bound (timeoutTarget=child). Written by the submitting thread only; read by the
+    // render thread's pace report (a torn-free long each).
+    private long _nonPrimaryWaitMaxUs, _nonPrimaryTimeouts;
+
+    /// <inheritdoc/>
+    public long NonPrimaryLatencyTimeouts => Volatile.Read(ref _nonPrimaryTimeouts);
+
+    /// <inheritdoc/>
+    public double NonPrimaryLatencyWaitMaxMs => Volatile.Read(ref _nonPrimaryWaitMaxUs) / 1000.0;
+
+    /// <inheritdoc/>
+    public void ResetNonPrimaryLatencyWindow() => Volatile.Write(ref _nonPrimaryWaitMaxUs, 0);
+
+    private void NoteNonPrimaryLatencyWait(D3D12Swapchain sc, double waitedMs, bool opened)
+    {
+        long waitedUs = (long)(waitedMs * 1000.0);
+        if (waitedUs > Volatile.Read(ref _nonPrimaryWaitMaxUs)) Volatile.Write(ref _nonPrimaryWaitMaxUs, waitedUs);
+        if (!opened) Volatile.Write(ref _nonPrimaryTimeouts, _nonPrimaryTimeouts + 1);
+        if (opened && waitedMs < NonPrimaryLatencyLogFloorMs) return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (sc.LatencyWaitLogQpc != 0
+            && System.Diagnostics.Stopwatch.GetElapsedTime(sc.LatencyWaitLogQpc, now).TotalMilliseconds < NonPrimaryLatencyLogPeriodMs)
+        {
+            sc.LatencyWaitsSuppressed++;
+            return;
+        }
+        Diag.Line($"[d3d12.present] non-primary latency wait target={sc.Ordinal} waitedMs={waitedMs:F1} timedOut={(opened ? 0 : 1)} suppressed={sc.LatencyWaitsSuppressed}");
+        sc.LatencyWaitLogQpc = now;
+        sc.LatencyWaitsSuppressed = 0;
     }
 
     /// <inheritdoc/>
@@ -3882,21 +4060,138 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// a plain wait timeout is as coarse as the process timer resolution. <paramref name="timeoutMs"/> &lt; 0 is the
     /// liveness-bounded wait every other turn uses: it proceeds after 1 s even when the slot never opened (a lost device
     /// must not wedge the loop) and holds the credit either way — exactly the unbounded contract this replaced.</para>
+    /// <para><b>Interruptible.</b> Every form of the wait also waits on the park-request event
+    /// (<see cref="SetSubmitAbortHandle"/>), so the UI's rendezvous never waits out the 1 s bound. An interrupted take returns
+    /// false in BOTH forms, takes nothing and leaves the credit un-held; the liveness form's caller must treat that false as
+    /// "park now", not as a slot to retake.</para>
     /// </remarks>
     public bool TryTakePresentSlot(int timeoutMs)
     {
         AssertSubmitThread();   // seam Step 0: this is the render thread's pacing wait, never the UI's
-        if (_primarySwapchain is not { } sc || sc.Disposed || !sc.HasLatencyWaitable || sc.LatencyCreditHeld) return true;
+        return _primarySwapchain is not { } sc || TryTakeLatencyCredit(sc, timeoutMs);
+    }
+
+    /// <summary>The per-target seam form: <paramref name="target"/>'s own credit (a detached pop-out's swapchain), so the
+    /// shared render thread can probe a secondary window's slot with a 0 ms take instead of blocking on its vblank. A target
+    /// this device did not create (a fake / disposed one) has no waitable here: reported as held.</summary>
+    public bool TryTakePresentSlot(ISwapchain target, int timeoutMs)
+    {
+        AssertSubmitThread();
+        return target is not D3D12Swapchain sc || TryTakeLatencyCredit(sc, timeoutMs);
+    }
+
+    /// <summary>The per-swapchain half of <see cref="TryTakePresentSlot"/>: take <paramref name="sc"/>'s present-slot credit
+    /// (waiting at most <paramref name="timeoutMs"/>, -1 = the 1 s liveness bound). True when the credit is held (or the
+    /// swapchain has no latency waitable); false when a bounded take did not get the slot. Render thread only.</summary>
+    internal bool TryTakeLatencyCredit(D3D12Swapchain sc, int timeoutMs)
+    {
+        if (sc.Disposed || !sc.HasLatencyWaitable || sc.LatencyCreditHeld) return true;
         long start = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool opened = timeoutMs < 0
-            ? WaitForSingleObject(sc.FrameLatencyWaitable, 1000) == WAIT_OBJECT_0   // bounded: a lost device must not wedge the loop
+        // Liveness form: -1 = the 1 s default bound, -N = the same proceed-regardless wait bounded at N ms (an unpaced turn's
+        // max(2 x refresh, 34 ms), F208).
+        uint livenessMs = timeoutMs == -1 ? 1000u : timeoutMs < 0 ? (uint)(-(long)timeoutMs) : 0u;
+        LatencyWait wait = timeoutMs < 0
+            ? WaitLatencyOrAbort(sc.FrameLatencyWaitable, livenessMs)   // bounded: a lost device must not wedge the loop
             : WaitForSlotWithin(sc.FrameLatencyWaitable, timeoutMs);
         sc.Frame.LastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        // A park request ended the wait: nothing was taken, whatever the form - the credit stays un-held and the caller parks.
+        if (wait == LatencyWait.Aborted) return false;
+        if (timeoutMs < 0 && wait == LatencyWait.TimedOut) NoteSlotLivenessTimeout(sc, livenessMs);
         // A bounded take that did not get the slot (timed out, or the wait failed on a torn-down handle) reserved nothing:
         // report it and leave the credit un-held. The liveness path keeps today's semantics and proceeds regardless.
-        if (!opened && timeoutMs >= 0) return false;
+        if (wait != LatencyWait.Opened && timeoutMs >= 0) return false;
         sc.LatencyCreditHeld = true;
         return true;
+    }
+
+    // F208 A1: a liveness-bounded take that ran out its bound without the slot ever opening (the presents of a minimized /
+    // cloaked / occluded primary never retire, a queue-depth change left frames queued, ...). Counted always; one rate-limited
+    // always-on line says what the primary looked like at that moment, so the cause is read off the log instead of guessed.
+    // Render thread writes; SlotLivenessTimeouts is read from any thread.
+    private long _slotLivenessTimeouts, _slotLivenessLogQpc, _slotLivenessSuppressed;
+    private const double SlotLivenessLogPeriodMs = 2000.0;
+
+    /// <inheritdoc/>
+    public long SlotLivenessTimeouts => Volatile.Read(ref _slotLivenessTimeouts);
+
+    private void NoteSlotLivenessTimeout(D3D12Swapchain sc, uint boundMs)
+    {
+        // The primary's timeouts are SlotLivenessTimeouts; a secondary swapchain's (reachable only through the per-target take) belong to
+        // NonPrimaryLatencyTimeouts, so the pace line's timeoutTarget= can say whose slot never opened (F235).
+        if (ReferenceEquals(sc, _primarySwapchain)) Volatile.Write(ref _slotLivenessTimeouts, _slotLivenessTimeouts + 1);
+        else Volatile.Write(ref _nonPrimaryTimeouts, _nonPrimaryTimeouts + 1);
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_slotLivenessLogQpc != 0
+            && System.Diagnostics.Stopwatch.GetElapsedTime(_slotLivenessLogQpc, now).TotalMilliseconds < SlotLivenessLogPeriodMs)
+        {
+            _slotLivenessSuppressed++;
+            return;
+        }
+        HWND hwnd = sc.Hwnd;
+        bool iconic = hwnd != HWND.NULL && IsIconic(hwnd) != 0;
+        bool visible = hwnd == HWND.NULL || IsWindowVisible(hwnd) != 0;
+        int cloaked = 0;
+        if (hwnd != HWND.NULL) _ = DwmGetWindowAttribute((nint)hwnd, DwmwaCloaked, out cloaked, sizeof(int));
+        uint lastPresentId = 0, statsPresentCount = 0;
+        if (sc.SwapChain != null)
+        {
+            if ((int)sc.SwapChain->GetLastPresentCount(&lastPresentId) < 0) lastPresentId = 0;
+            DXGI_FRAME_STATISTICS fs = default;
+            if ((int)sc.SwapChain->GetFrameStatistics(&fs) >= 0) statsPresentCount = fs.PresentCount;
+        }
+        double sinceLastPresentMs = sc.Frame.LastSubmitQpc == 0 ? -1.0
+            : System.Diagnostics.Stopwatch.GetElapsedTime(sc.Frame.LastSubmitQpc, now).TotalMilliseconds;
+        Diag.Line($"[d3d12.present] slot liveness timeout target={sc.Ordinal} boundMs={boundMs} iconic={(iconic ? 1 : 0)} visible={(visible ? 1 : 0)} cloaked={cloaked} occludedLatched={(sc.Frame.OccludedLatched ? 1 : 0)} depth={Volatile.Read(ref _presentQueueDepth)} lastPresentId={lastPresentId} statsPresentCount={statsPresentCount} sinceLastPresentMs={sinceLastPresentMs:F1} total={_slotLivenessTimeouts} suppressed={_slotLivenessSuppressed}");
+        _slotLivenessLogQpc = now;
+        _slotLivenessSuppressed = 0;
+    }
+
+    // F070 Stage B: the bound a geometry-motion present waits for its own submit's fence (about one 60 Hz refresh). Past it the frame
+    // presents anyway - one skewed frame, counted - so a slow frame can never stall the shared render thread.
+    private const double MotionFenceCapMs = 16.0;
+
+    // Render thread. Polls the fence (no event: a timed-out SetEventOnCompletion would leave a stale signal for the next real wait on
+    // the shared fence event) and yields, so a frame that is nearly done costs the remainder of its GPU time, never more than the cap.
+    private void WaitMotionFence(D3D12Swapchain target)
+    {
+        ulong v = target.Frame.LastSubmitFence;
+        if (v == 0 || _fence == null) return;
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        // GetCompletedValue is UINT64_MAX on a removed device, which ends the wait: the present then reports the loss as usual.
+        while (global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) < v)
+        {
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds >= MotionFenceCapMs)
+            {
+                Diag.Count("d3d12", "motionFenceTimeout");
+                return;
+            }
+            System.Threading.Thread.Yield();
+        }
+        Diag.Count("d3d12", "motionFenceWait");
+    }
+
+    // F080: edits the video presenters applied to the shared IDCompositionDevice that no Commit has flushed yet. Every
+    // presenter shares the device's one IDCompositionDevice, so ONE commit per render turn (CommitVideoComposition) flushes the
+    // parent's and every pop-out's tree together instead of one commit per window landing in different DWM frames.
+    private bool _videoCommitDue;
+    private uint _videoCommitFailedHr;   // the last failing HRESULT logged (one line per distinct value)
+
+    /// <summary>A presenter applied composition edits that need a device commit (render thread).</summary>
+    internal void NoteVideoCommitDue() => _videoCommitDue = true;
+
+    /// <inheritdoc/>
+    public void CommitVideoComposition()
+    {
+        AssertSubmitThread();
+        if (!_videoCommitDue) return;
+        _videoCommitDue = false;
+        if (_dcomp == null) return;
+        HRESULT hr = _dcomp->Commit();   // non-throwing, like the presenter's own edits: a failure leaves DWM on the prior composition
+        if ((int)hr < 0 && _videoCommitFailedHr != (uint)hr)
+        {
+            _videoCommitFailedHr = (uint)hr;
+            Diag.Line($"[video.presenter] device Commit failed: 0x{(uint)hr:X8}");
+        }
     }
 
     // TryTakePresentSlot's grace timer (render-thread owned; created on the first bounded take, closed in Dispose). A plain
@@ -3912,12 +4207,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private const uint TIMER_MODIFY_STATE = 0x0002;
     private const uint SYNCHRONIZE = 0x00100000;
 
-    /// <summary>The bounded half of <see cref="TryTakePresentSlot"/>: wait for the latency waitable OR the one-shot grace
-    /// timer, whichever fires first. True ⇔ the waitable satisfied the wait (one semaphore count taken); a timer win took
-    /// nothing (WaitForMultipleObjects with bWaitAll = FALSE changes only the object that satisfied it). The waitable is
-    /// index 0 so a slot that opens together with the timer still wins. Render thread only; no allocation.</summary>
-    private bool WaitForSlotWithin(HANDLE waitable, int timeoutMs)
+    /// <summary>The bounded half of <see cref="TryTakePresentSlot"/>: wait for the latency waitable, the one-shot grace
+    /// timer OR the park-request event, whichever fires first. <see cref="LatencyWait.Opened"/> ⇔ the waitable satisfied the
+    /// wait (one semaphore count taken); a timer or abort win took nothing (WaitForMultipleObjects with bWaitAll = FALSE
+    /// changes only the object that satisfied it). The waitable is index 0 so a slot that opens together with the timer or
+    /// the abort still wins. Render thread only; no allocation.</summary>
+    private LatencyWait WaitForSlotWithin(HANDLE waitable, int timeoutMs)
     {
+        nint abort = Volatile.Read(ref _submitAbortHandle);
         if (timeoutMs > 0 && TryEnsureSlotGraceTimer())
         {
             // Consume a stale signal first: a previous take the waitable won left the timer armed, and it may have fired
@@ -3927,18 +4224,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             due.QuadPart = -(long)timeoutMs * 10_000L;   // relative, 100 ns units
             if (SetWaitableTimer(_slotGraceTimer, &due, 0, null, null, false))
             {
-                HANDLE* handles = stackalloc HANDLE[2];
+                HANDLE* handles = stackalloc HANDLE[3];
                 handles[0] = waitable;
                 handles[1] = _slotGraceTimer;
+                uint count = 2;
+                if (abort != 0) handles[count++] = (HANDLE)abort;
                 // The coarse timeout only backstops a timer that never fires.
-                uint r = WaitForMultipleObjects(2, handles, false, (uint)timeoutMs + 16);
-                if (r != WAIT_FAILED) return r == WAIT_OBJECT_0;
+                uint r = WaitForMultipleObjects(count, handles, false, (uint)timeoutMs + 16);
+                if (r != WAIT_FAILED)
+                    return r == WAIT_OBJECT_0 ? LatencyWait.Opened : r == WAIT_OBJECT_0 + 2 && abort != 0 ? LatencyWait.Aborted : LatencyWait.TimedOut;
             }
             CloseHandle(_slotGraceTimer);   // the timer failed once: stop using it (the coarse timeout below still bounds)
             _slotGraceTimer = HANDLE.NULL;
             _slotGraceTimerUnavailable = true;
         }
-        return WaitForSingleObject(waitable, (uint)timeoutMs) == WAIT_OBJECT_0;
+        return WaitLatencyOrAbort(waitable, (uint)timeoutMs);
     }
 
     private bool TryEnsureSlotGraceTimer()
@@ -3980,6 +4280,24 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_primarySwapchain is not { } sc || sc.Disposed || sc.SwapChain == null) return Volatile.Read(ref _presentQueueDepth);
         if (sc.SwapChain->SetMaximumFrameLatency((uint)want) < 0) return Volatile.Read(ref _presentQueueDepth);
         Volatile.Write(ref _presentQueueDepth, want);
+        return want;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The per-swapchain form. The primary swapchain takes the device-level path above (it owns
+    /// <c>_presentQueueDepth</c>, which feeds <c>MaxFrameLatency</c>); any other target this device created gets its OWN
+    /// <c>SetMaximumFrameLatency</c> and its own stored depth, so a pop-out's GPU samples never retarget the main window's
+    /// queue. A target this device did not create (a fake) is unchanged. Render thread only.</remarks>
+    public int SetPresentQueueDepth(ISwapchain target, int depth)
+    {
+        AssertSubmitThread();
+        if (target is not D3D12Swapchain sc) return Volatile.Read(ref _presentQueueDepth);
+        if (ReferenceEquals(sc, _primarySwapchain)) return SetPresentQueueDepth(depth);
+        int have = Volatile.Read(ref sc.PresentQueueDepth);
+        int want = Math.Clamp(depth, (int)InitialPresentQueueDepth, (int)MaxPresentQueueDepth);
+        if (want == have || sc.Disposed || sc.SwapChain == null) return have;
+        if (sc.SwapChain->SetMaximumFrameLatency((uint)want) < 0) return have;
+        Volatile.Write(ref sc.PresentQueueDepth, want);
         return want;
     }
 
@@ -4334,7 +4652,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public void HintSettlePresent() => _primarySwapchain!.Frame.HintSettlePresent = true;
 
     [LibraryImport("dwmapi.dll")]
-    private static partial int DwmFlush();
+    internal static partial int DwmFlush();
 
     private bool CheckTearingSupport()
     {
@@ -4489,8 +4807,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.Disposed || (w == target.W && h == target.H)) return;
         BeginTargetFrame(target.Frame);
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
-        // stamped, never a full device drain — a detached child's resize must not stall the main window's recorder.
-        WaitForFenceValue(target.Frame.LastSubmitFence);
+        // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
+        // resize must not stall the main window's recorder, and the old back buffers must not be released under a present.
+        WaitForFenceValue(TargetFenceHorizon(target.Frame));
         // Swapchain-sized; recreated lazily at the new size on the next stencil scope. EXPLICIT target (INCIDENT 2026-09
         // §1.4): the old no-arg release freed only the working copy — this clears the target's own storage directly
         // (Phase 1 removes the working-copy concept structurally, so there is no reload to guard against any more).
@@ -4520,7 +4839,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         AssertDeviceOwner();   // a detached child's teardown runs under the parent loop's park (AppHost.Dispose, INCIDENT 2026-09 §1.3)
         if (target.Disposed) return;
-        if (_device != null) WaitForGpu();
+        // F117: wait only for the work THIS target's own frames still have in flight (the Resize rule), never a device-wide
+        // WaitForGpu: that signalled a fresh device fence and blocked until the queue reached it, i.e. until every queued frame of
+        // OTHER windows (the main window's included) retired too, while the UI sat parked inside a pop-out / flyout close. What
+        // is released below (this target's command list, stencil DSV, back buffers, RTV heap, DComp visuals) is only ever
+        // referenced by this target's own submits, which its fence ledger covers; DComp / DXGI keep their own references for
+        // anything still being composed, and the shared pools (atlases, image textures, ring allocators) are not released here.
+        if (_device != null) WaitForFenceValue(TargetFenceHorizon(target.Frame));
         ReleaseSwapchainResources(target);
         // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
         // but while the shared _dcomp is still alive (so the presenter's own child-visual ComPtrs release cleanly). This
@@ -4528,10 +4853,26 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.VideoPresenter?.Dispose();
         target.VideoPresenter = null;
         _swapchains.Remove(target);
-        if (_primarySwapchain == target) _primarySwapchain = null;
+        if (_primarySwapchain == target) { _primarySwapchain = null; _compositeOwner = 0; }   // the next primary is a new composite owner
         // Phase 1 (§3.5): no more device-global working copy to drop — ReleaseSwapchainResources already zeroed every
         // ComPtr on `target` itself (its own Frame/BackBuffers/SwapChain/RtvHeap), and `_f` never mirrors another
         // target's state in the first place (BeginTargetFrame/EndTargetFrame bracket it to one call).
+    }
+
+    /// <summary>The fence value that retires everything a target has in flight: the highest value its own submits stamped
+    /// (<see cref="TargetFrameState.LastSubmitFence"/> is the running max; the per-back-buffer ledger is folded in as well so a
+    /// stale max can never under-wait) AND the value signalled right after its last Present that ran
+    /// (<see cref="TargetFrameState.LastPresentFence"/>: the present's own queue work comes after the submit's stamp). Fence
+    /// values are device-monotonic, so waiting for this one value also covers every earlier submit of the target. 0 = nothing in
+    /// flight (<see cref="WaitForFenceValue"/> returns at once). Another target's stamps are never read: that is the whole point of
+    /// F117 (a secondary's dispose must not wait on the primary's frame).</summary>
+    internal static ulong TargetFenceHorizon(TargetFrameState f)
+    {
+        ulong v = f.LastSubmitFence;
+        if (f.LastPresentFence > v) v = f.LastPresentFence;
+        for (int i = 0; i < f.FenceValues.Length; i++)
+            if (f.FenceValues[i] > v) v = f.FenceValues[i];
+        return v;
     }
 
     private void ReleaseSwapchainResources(D3D12Swapchain target)
@@ -4578,6 +4919,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.DcompRoot != null) { target.DcompRoot->Release(); target.DcompRoot = null; }
         if (target.DcompTarget != null) { target.DcompTarget->Release(); target.DcompTarget = null; }
         if (target.SwapChain != null) { target.SwapChain->Release(); target.SwapChain = null; }
+        // The latency waitable belonged to the swapchain just released: the handle is void and so is any credit taken
+        // against it (InitSwapChain re-fetches both on a recovery / recreate).
+        target.FrameLatencyWaitable = HANDLE.NULL;
+        target.HasLatencyWaitable = false;
+        target.LatencyCreditHeld = false;
         if (target.RtvHeap != null)
         {
             D3D12MemoryDiagnostics.Release(target.RtvHeap, "Swapchain.RtvHeap");
@@ -4601,8 +4947,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         for (int i = 0; i < _swapchains.Count; i++)
         {
             ReleaseSwapchainResources(_swapchains[i]);
+            // The video presenter's child visuals / wrapped surfaces were created by the DComp device released in step 2
+            // and cannot be parented under the new device's root: dispose it now (its DcompRoot is already null, so it only
+            // frees its own ComPtrs, while _dcomp is still alive) and let GetVideoPresenter build a fresh one on the new
+            // device. VideoSurfaceRegistry.Drain sees the new instance and re-creates, re-binds and re-places every live surface.
+            _swapchains[i].VideoPresenter?.Dispose();
+            _swapchains[i].VideoPresenter = null;
             _swapchains[i].Disposed = false;
         }
+        // The presenters' backing visuals are gone with them; the shared black backing content was built on the queue
+        // released below, so drop it too — the next video slot recreates it (EnsureVideoBacking) on the new device.
+        ReleaseVideoBacking();
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
         ReleaseGpuTimingResources();
         // Stencil DSVs are per-target now (CANDIDATE FIX, INCIDENT 2026-09) — step 1's ReleaseSwapchainResources loop
@@ -4610,6 +4965,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // to release here (the old single call site this replaced).
         if (_infoQueue != null) { _infoQueue->Release(); _infoQueue = null; }
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
+        _videoCommitDue = false;   // the edits it described went with the old composition device
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
         _bakedBlur?.Dispose(); _bakedBlur = null;
@@ -4651,6 +5007,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         {
             System.Array.Clear(_swapchains[i].Frame.FenceValues, 0, _swapchains[i].Frame.FenceValues.Length);
             _swapchains[i].Frame.LastSubmitFence = 0;
+            _swapchains[i].Frame.LastPresentFence = 0;
         }
         System.Array.Clear(_ring.Fence, 0, _ring.Fence.Length);
         // 5. Recreate all pipelines + a fresh (empty) image store; re-arm async image confinement on the new store.
@@ -4689,6 +5046,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         foreach (nint sc in _testSurfaceSwapchains)
             if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
         _testSurfaceSwapchains.Clear();
+        ReleaseVideoBacking();   // after every presenter (their backing visuals share this content), before the DComp device
         if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
         _imagePipe?.Dispose();
@@ -4738,11 +5096,20 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal HANDLE FrameLatencyWaitable;
     internal bool HasLatencyWaitable;
     // The frame-latency waitable is a SEMAPHORE, not a level — one successful wait reserves ONE present slot and only a
-    // Present gives it back. True ⇒ D3D12Device.TryTakePresentSlot has already taken this swapchain's slot for the frame
+    // Present gives it back. True ⇒ a wait (D3D12Device.TryTakePresentSlot for the primary, SubmitDrawList's own
+    // WaitForLatency for any target) has already taken this swapchain's slot for the frame
     // now in production, so SubmitDrawList must NOT wait again (that would block a whole extra present cycle) and the
     // next Present that actually runs clears it. Render-thread-only (submit/present are render-confined), so a plain
     // field is the whole synchronization story. Reset to false wherever the waitable handle is (re)created or released.
     internal bool LatencyCreditHeld;
+    // Rate limiter for the non-primary latency-wait log (D3D12Device.NoteNonPrimaryLatencyWait): QPC of the last line, and
+    // how many qualifying waits it swallowed since. Render-thread-only, like LatencyCreditHeld.
+    internal long LatencyWaitLogQpc;
+    internal int LatencyWaitsSuppressed;
+    // This swapchain's DXGI maximum frame latency when it is NOT the primary (D3D12Device.SetPresentQueueDepth(target, depth) —
+    // a detached pop-out's own depth policy); the primary's lives on the device (_presentQueueDepth). Render thread writes
+    // (Volatile), any thread may read. Starts at the creation depth, so a rebuild of the swapchain restores it.
+    internal int PresentQueueDepth = (int)D3D12Device.InitialPresentQueueDepth;
     internal uint SwapChainFlags;
     internal bool TearingSupported;
     // partial present (D3D12Device.PartialPresent.cs): FLIP_SEQUENTIAL, the buffer epoch (bumped by every create / resize),
@@ -4777,6 +5144,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // ── Present-topology attribution (WS-B) ── cached per swapchain so [d3d12.present] emits on CHANGE only.
     internal HMONITOR TopologyMonitor;     // monitor at last check (NULL = never checked)
     internal int PresentTopologyState;     // D3D12Device.Topology* — 0 unknown / 1 owned / 2 cross-adapter / 3 no-outputs
+    internal FluentGpu.Media.VideoOverlayCaps OverlayCaps;   // F249: the owning output's overlay-plane verdict at the last topology check (default = unprobed)
     // Per-window refresh period (mixed-refresh-rate audit): resolved on the SAME edge as TopologyMonitor above
     // (D3D12Device.SamplePresentTopology), via DisplayInfo.ForWindow — 0 until first resolved, meaning "use the
     // DWM-global fallback" (SamplePresentStats only overrides its local `refreshPeriod` when this is > 0).
@@ -5024,6 +5392,11 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
 
     public void Resize(Size2 px) => Device.Resize(this, (uint)px.Width, (uint)px.Height);
     public void Present() => Device.Present(this);
+    public bool PresentNoWait()
+    {
+        Device.Present(this, noWait: true);
+        return !Frame.LastPresentRefused;
+    }
     public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
     public void AnimatePopupOpen() => Backdrop?.AnimateOpen();
     public void AnimatePopupClose() => Backdrop?.AnimateClose();
@@ -5044,6 +5417,11 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     public bool IsOccluded => Frame.OccludedLatched || Frame.LastPresentStoodDown;
     public double LastFenceWaitMs => Frame.LastFenceWaitMs;
     public double LastLatencyWaitMs => Frame.LastLatencyWaitMs;
+    public void GetLastSubmitWaits(out double latencyMs, out double bufferFenceMs)
+    {
+        latencyMs = Frame.LastSubmitLatencyWaitMs;
+        bufferFenceMs = Frame.LastBufferFenceWaitMs;
+    }
     public PresentStats LastPresentStats => Frame.LastPresentStats;
     public long PresentsDisplayed => System.Threading.Volatile.Read(ref Frame.PresentLedger.PresentsDisplayed);
     public long PresentsDropped => System.Threading.Volatile.Read(ref Frame.PresentLedger.PresentsDropped);
@@ -5051,4 +5429,13 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     public void SuppressLatencyWaitOnce() => Frame.SkipLatencyOnce = true;
     public void SuppressVsyncOnce() => Frame.SkipVsyncOnce = true;
     public void HintSettlePresent() => Frame.HintSettlePresent = true;
+    public void HintGeometryMotionPresent() => Frame.HintMotionFenceWait = true;
+
+    /// <inheritdoc/>
+    public void CompleteSettlePresent(bool blockUntilComposed)
+    {
+        if (!Frame.HintSettlePresent) return;
+        Frame.HintSettlePresent = false;
+        if (blockUntilComposed) _ = D3D12Device.DwmFlush();
+    }
 }

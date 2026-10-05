@@ -1,4 +1,5 @@
-// PrRuntime.cpp — the process-lifetime PlayReady runtime: FgPrRuntimeCreate / FgPrRuntimeDestroy / FgPrRuntimeUptimeMs.
+// PrRuntime.cpp — the process-lifetime PlayReady runtime: FgPrRuntimeCreateOnAdapter / FgPrRuntimeDestroy / FgPrRuntimeUptimeMs /
+// FgPrRuntimeSetVideoOutputFormat / FgPrRuntimeSetSecurityPolicy.
 //
 // WHAT MOVED HERE, AND WHY IT IS DONE ONCE (wavee-0.3-video-engine-implementation.md §1.3, §3.1.1). The one-shot
 // FgPlayReadyRunEx did CoInitializeEx + MFStartup, D3D11CreateDevice + the DXGI manager, CreateAndPrepareCdm (which
@@ -85,11 +86,121 @@ struct DesktopPmpHostApp : winrt::implements<DesktopPmpHostApp, IMFPMPHostApp>
     }
 };
 
+// What the CDM granted (F022). The security level a PlayReady CDM provisions is not a number any Media Foundation API reports:
+// it follows the robustness the access request carried. Two plans exist (CreateAndPrepareCdm's `hardware`): the SL3000 PROBE
+// - the `.3000` key system with one video capability whose MF_EME_ROBUSTNESS is "3000" (Chromium's hardware-secure request,
+// media_foundation_cdm_util.cc) - and the SL2000 plan, the long-standing one: `.recommendation` with EMPTY capabilities, so
+// the CDM's own default applies (software). The runtime tries the probe first (default; `--fg playready-sl2000` skips it) and
+// falls back to the SL2000 plan when ANY step of it fails, so a machine without hardware PlayReady behaves exactly as before.
+// The level that was provisioned is logged once per runtime and kept in Runtime::securityLevel: until now nothing recorded
+// what was negotiated, so a box that had quietly landed on a different level looked the same in the log. The granted
+// configuration the CDM hands back (capabilities, and the robustness inside them when it filled one in) is the evidence.
+static bool SameKey(const PROPERTYKEY& a, const PROPERTYKEY& b) { return a.pid == b.pid && IsEqualGUID(a.fmtid, b.fmtid); }
+
+static const char* EmeKeyName(const PROPERTYKEY& k)
+{
+    if (SameKey(k, MF_EME_INITDATATYPES)) return "initDataTypes";
+    if (SameKey(k, MF_EME_DISTINCTIVEID)) return "distinctiveId";
+    if (SameKey(k, MF_EME_PERSISTEDSTATE)) return "persistedState";
+    if (SameKey(k, MF_EME_AUDIOCAPABILITIES)) return "audioCapabilities";
+    if (SameKey(k, MF_EME_VIDEOCAPABILITIES)) return "videoCapabilities";
+    if (SameKey(k, MF_EME_LABEL)) return "label";
+    if (SameKey(k, MF_EME_SESSIONTYPES)) return "sessionTypes";
+    if (SameKey(k, MF_EME_ROBUSTNESS)) return "robustness";
+    if (SameKey(k, MF_EME_CONTENTTYPE)) return "contentType";
+    return nullptr;
+}
+
+static std::string DescribePropertyStore(IPropertyStore* store, int depth);
+
+static std::string DescribePropVariant(const PROPVARIANT& pv, int depth)
+{
+    switch (pv.vt)
+    {
+        case VT_UI4: return std::to_string((unsigned long)pv.ulVal);
+        case VT_BSTR: return "\"" + fgpr::Narrow(pv.bstrVal ? std::wstring(pv.bstrVal) : std::wstring()) + "\"";
+        case VT_LPWSTR: return "\"" + fgpr::Narrow(pv.pwszVal ? std::wstring(pv.pwszVal) : std::wstring()) + "\"";
+        case VT_UNKNOWN:
+        {
+            winrt::com_ptr<IPropertyStore> inner;
+            if (depth < 3 && pv.punkVal && SUCCEEDED(pv.punkVal->QueryInterface(IID_PPV_ARGS(inner.put()))) && inner)
+                return DescribePropertyStore(inner.get(), depth + 1);
+            return "<object>";
+        }
+        case VT_VECTOR | VT_UI4:
+        {
+            std::string out = "[";
+            for (ULONG i = 0; i < pv.caul.cElems && i < 16; i++)
+                out += std::string(i ? "," : "") + std::to_string((unsigned long)pv.caul.pElems[i]);
+            return out + "]";
+        }
+        case VT_VECTOR | VT_BSTR:
+        {
+            std::string out = "[";
+            for (ULONG i = 0; i < pv.cabstr.cElems && i < 16; i++)
+                out += std::string(i ? "," : "") + fgpr::Narrow(pv.cabstr.pElems[i] ? std::wstring(pv.cabstr.pElems[i]) : std::wstring());
+            return out + "]";
+        }
+        case VT_VECTOR | VT_VARIANT:
+        {
+            std::string out = "[";
+            for (ULONG i = 0; i < pv.capropvar.cElems && i < 8; i++)
+                out += std::string(i ? " " : "") + DescribePropVariant(pv.capropvar.pElems[i], depth);
+            return out + "]";
+        }
+        default: return "<vt " + std::to_string((int)pv.vt) + ">";
+    }
+}
+
+static std::string DescribePropertyStore(IPropertyStore* store, int depth)
+{
+    DWORD n = 0;
+    if (!store || FAILED(store->GetCount(&n))) return "{?}";
+    std::string out = "{";
+    for (DWORD i = 0; i < n && i < 16; i++)
+    {
+        PROPERTYKEY key{};
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        if (FAILED(store->GetAt(i, &key)) || FAILED(store->GetValue(key, &pv))) { PropVariantClear(&pv); continue; }
+        if (out.size() > 1) out += ' ';
+        const char* name = EmeKeyName(key);
+        out += name ? std::string(name) : "pid" + std::to_string((unsigned long)key.pid);
+        out += '=';
+        out += DescribePropVariant(pv, depth);
+        PropVariantClear(&pv);
+    }
+    return out + "}";
+}
+
+/// Log, once per runtime (CreateAndPrepareCdm runs once per runtime), the key system the access object negotiated and the
+/// configuration the CDM granted for the access request this file sent.
+static void LogNegotiatedCdm(const wchar_t* requestedKeySystem, IMFContentDecryptionModuleAccess* access, bool hardware)
+{
+    std::string keySystem = "?";
+    LPWSTR granted = nullptr;
+    if (SUCCEEDED(access->GetKeySystem(&granted)) && granted) keySystem = fgpr::Narrow(std::wstring(granted));
+    if (granted) CoTaskMemFree(granted);
+    std::string config = "?";
+    IPropertyStore* store = nullptr;
+    if (SUCCEEDED(access->GetConfiguration(&store)) && store)
+    {
+        config = DescribePropertyStore(store, 0);
+        store->Release();
+    }
+    LogLine("[eme-cdm] negotiated key system=" + keySystem + " (requested " + fgpr::Narrow(std::wstring(requestedKeySystem)) +
+            "); granted configuration " + config + "; " +
+            (hardware ? "robustness requested: 3000 (hardware, SL3000)"
+                      : "robustness requested: none, so the security level is the CDM's own default (software, SL2000 - no Media Foundation API reports it)"));
+}
+
 // Create + prepare the modern CDM (factory4 -> CDM factory -> access -> CDM with explicit store path -> SetPMPHostApp).
 // Faithful to the PROVEN ProbeSetPmpHostAppInUwp sequence, but returns the CDM kept alive for the media engine.
 // `failHr` receives the HRESULT of the step that failed (the runtime reports it as FgPrEvent_RuntimeFailed).
+// `hardware` (F022) asks for SL3000: the caller passes the `.3000` key system, this adds the IsTypeSupported pre-check and a
+// video capability with robustness "3000" to the access request. False is the long-standing SL2000 request, byte for byte.
 static IMFContentDecryptionModule* CreateAndPrepareCdm(const wchar_t* keySystem, const std::wstring& storePath,
-                                                       HRESULT* failHr)
+                                                       HRESULT* failHr, bool hardware)
 {
     auto hx = [](HRESULT h){ std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
     IMFMediaEngineClassFactory* baseFactory = nullptr;
@@ -104,15 +215,43 @@ static IMFContentDecryptionModule* CreateAndPrepareCdm(const wchar_t* keySystem,
         GUID iidCdmFac = __uuidof(IMFContentDecryptionModuleFactory);
         if (FAILED(hr = factory4->CreateContentDecryptionModuleFactory(keySystem, iidCdmFac, (void**)&cdmFactory)) || !cdmFactory) { LogLine("[eme-cdm] CreateCdmFactory hr=" + hx(hr)); if (SUCCEEDED(hr)) hr = E_NOINTERFACE; break; }
 
+        if (hardware)
+        {
+            // F022 probe, step 2 (step 1 was the factory itself: a machine that does not know the `.3000` key system fails above):
+            // does the factory claim H.264 for it. A refusal is the normal answer on a box without hardware PlayReady, not an error.
+            const BOOL supported = cdmFactory->IsTypeSupported(keySystem, L"video/mp4;codecs=\"avc1.640028\"");
+            LogLine(std::string("[eme-cdm] SL3000 probe: IsTypeSupported(") + fgpr::Narrow(std::wstring(keySystem)) + ", avc1) = " + (supported ? "yes" : "no"));
+            if (!supported) { hr = HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED); break; }
+        }
+
         IPropertyStore* cfg = nullptr; PSCreateMemoryPropertyStore(IID_PPV_ARGS(&cfg));
         if (!cfg) { hr = E_OUTOFMEMORY; break; }
         auto setVecBstr = [&](const PROPERTYKEY& key, const wchar_t* one){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); BSTR* arr=(BSTR*)CoTaskMemAlloc(sizeof(BSTR)); arr[0]=SysAllocString(one); pv.vt=VT_VECTOR|VT_BSTR; pv.cabstr.cElems=1; pv.cabstr.pElems=arr; cfg->SetValue(key,pv); PropVariantClear(&pv); };
         auto setVecUI4x2 = [&](const PROPERTYKEY& key, ULONG a, ULONG b){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); ULONG* arr=(ULONG*)CoTaskMemAlloc(sizeof(ULONG)*2); arr[0]=a; arr[1]=b; pv.vt=VT_VECTOR|VT_UI4; pv.caul.cElems=2; pv.caul.pElems=arr; cfg->SetValue(key,pv); PropVariantClear(&pv); };
         auto setUI4      = [&](const PROPERTYKEY& key, ULONG v){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); pv.vt=VT_UI4; pv.ulVal=v; cfg->SetValue(key,pv); };
         auto setEmptyVec = [&](const PROPERTYKEY& key){ PROPVARIANT pv; memset(&pv,0,sizeof(pv)); pv.vt=VT_VECTOR|VT_VARIANT; pv.capropvar.cElems=0; cfg->SetValue(key,pv); };
+        // The hardware request's one video capability: a property store carrying MF_EME_ROBUSTNESS = "3000", as Chromium builds it.
+        auto setHardwareVideoCapability = [&]() -> bool {
+            IPropertyStore* capability = nullptr; PSCreateMemoryPropertyStore(IID_PPV_ARGS(&capability));
+            if (!capability) return false;
+            PROPVARIANT robustness; memset(&robustness,0,sizeof(robustness)); robustness.vt=VT_BSTR; robustness.bstrVal=SysAllocString(L"3000");
+            const HRESULT hrSet = capability->SetValue(MF_EME_ROBUSTNESS, robustness);
+            PropVariantClear(&robustness);
+            PROPVARIANT* elems = (PROPVARIANT*)CoTaskMemAlloc(sizeof(PROPVARIANT));
+            if (FAILED(hrSet) || !elems) { if (elems) CoTaskMemFree(elems); capability->Release(); return false; }
+            PropVariantInit(&elems[0]); elems[0].vt=VT_UNKNOWN; elems[0].punkVal=capability;   // the array owns the reference
+            PROPVARIANT pv; memset(&pv,0,sizeof(pv)); pv.vt=VT_VECTOR|VT_VARIANT; pv.capropvar.cElems=1; pv.capropvar.pElems=elems;
+            const HRESULT hrVec = cfg->SetValue(MF_EME_VIDEOCAPABILITIES, pv);   // copies; the clear below releases ours
+            PropVariantClear(&pv);
+            return SUCCEEDED(hrVec);
+        };
         setVecBstr(MF_EME_INITDATATYPES, L"cenc");
         setEmptyVec(MF_EME_AUDIOCAPABILITIES);
-        setEmptyVec(MF_EME_VIDEOCAPABILITIES);
+        if (hardware)
+        {
+            if (!setHardwareVideoCapability()) { cfg->Release(); hr = E_FAIL; break; }
+        }
+        else setEmptyVec(MF_EME_VIDEOCAPABILITIES);
         setUI4(MF_EME_DISTINCTIVEID, MF_MEDIAKEYS_REQUIREMENT_OPTIONAL);
         setUI4(MF_EME_PERSISTEDSTATE, MF_MEDIAKEYS_REQUIREMENT_OPTIONAL);
         // Both session types stay DECLARED — this is the CDM configuration every on-box proof ran with. Only TEMPORARY
@@ -125,6 +264,7 @@ static IMFContentDecryptionModule* CreateAndPrepareCdm(const wchar_t* keySystem,
         hr = cdmFactory->CreateContentDecryptionModuleAccess(keySystem, &cfgArr, 1, &cdmAccess);
         cfg->Release();
         if (FAILED(hr) || !cdmAccess) { LogLine("[eme-cdm] CreateCdmAccess hr=" + hx(hr)); if (SUCCEEDED(hr)) hr = E_NOINTERFACE; break; }
+        LogNegotiatedCdm(keySystem, cdmAccess, hardware);
 
         IPropertyStore* cdmProps = nullptr; PSCreateMemoryPropertyStore(IID_PPV_ARGS(&cdmProps));
         if (!cdmProps) { hr = E_OUTOFMEMORY; break; }
@@ -240,7 +380,7 @@ struct MediaEngineProtectionManager
 //  The media engine's COM callbacks.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, DWORD_PTR p1, DWORD p2, int64_t qpc);
+static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t attachGen, DWORD ev, DWORD_PTR p1, DWORD p2, int64_t qpc);
 
 // The notify sink. It used to set atomics (metadata/canplay/playing/error) that three polls read on the MTA thread
 // (CANPLAY every 100 ms up to 45 s, the swap-chain handle every 60 ms up to 12 s, transport every 80 ms). Now every
@@ -281,6 +421,12 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
             case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
             case MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
             case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
+            // The engine's own "the clock stopped for want of data" family: a mid-play stall must read as buffering, not as
+            // a Playing source whose position keeps extrapolating (F030).
+            case MF_MEDIA_ENGINE_EVENT_WAITING:
+            case MF_MEDIA_ENGINE_EVENT_STALLED:
+            case MF_MEDIA_ENGINE_EVENT_BUFFERINGSTARTED:
+            case MF_MEDIA_ENGINE_EVENT_BUFFERINGENDED:
                 break;
             default:
                 return S_OK;
@@ -289,17 +435,23 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
         if (ev == MF_MEDIA_ENGINE_EVENT_TIMEUPDATE)
         {
             // The engine's own clock tick drives the position sample (FgPrEvent_Position is ≤ 4 Hz). Coalesced here, so
-            // however often the engine raises it the runtime thread wakes at most every 250 ms for it.
+            // however often the engine raises it the runtime thread wakes at most every 200 ms for it. 200 and not 250:
+            // the managed side extrapolates from this sample for at most 500 ms, and a 250 ms gate that happens to drop
+            // every second tick of a 250 ms engine interval would leave the sample up to that old.
             const int64_t last = m_lastTimeUpdateQpc.load(std::memory_order_acquire);
-            if (last != 0 && fgpr::QpcToMs(qpc - last) < 250) return S_OK;
+            if (last != 0 && fgpr::QpcToMs(qpc - last) < 200) return S_OK;
             m_lastTimeUpdateQpc.store(qpc, std::memory_order_release);
         }
         std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(m_runtime);
         if (!rt) return S_OK;
+        // The attach generation is read BEFORE the attached session: an attach bumps the generation and then names its
+        // session, so a stamp read first is never newer than the session read after it, and an event that belongs to an
+        // earlier attach is dropped by OnEngineEvent whatever session handle it carries.
+        const uint64_t attachGen = rt->attachGen.load(std::memory_order_acquire);
         const uint64_t session = rt->attached.load(std::memory_order_acquire);
         if (!session) return S_OK;
         fgpr::Runtime* raw = rt.get();   // the runtime thread owns a strong ref for as long as it runs items
-        rt->queue.Post([raw, session, ev, p1, p2, qpc] { OnEngineEvent(*raw, session, ev, p1, p2, qpc); });
+        rt->queue.Post([raw, session, attachGen, ev, p1, p2, qpc] { OnEngineEvent(*raw, session, attachGen, ev, p1, p2, qpc); });
         return S_OK;
     }
 };
@@ -374,6 +526,44 @@ struct EmeNeedKeyNotify : public IMFMediaEngineNeedKeyNotify
 //  Bring-up and teardown (runtime thread).
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
+/// FG_PLAYREADY_ITA_PREFLIGHT=1 turns the one-time CDM ITA diagnostic (fgpr::RuntimeItaPreflight) on. Off by default: it
+/// proves nothing the real topology does not, and costs several mfpmp.exe round trips plus a throw-away decrypter.
+static bool ItaPreflightRequested()
+{
+    wchar_t value[4] = {};
+    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_ITA_PREFLIGHT", value, (DWORD)(sizeof(value) / sizeof(value[0])));
+    return n == 1 && value[0] == L'1';
+}
+
+/// FG_PLAYREADY_TRUSTED_INPUT_REUSE=1 keeps ONE IMFTrustedInput for the CDM's lifetime instead of creating one per attach
+/// (fgpr::Runtime::trustedInput). Off by default until validated on a box with two KIDs and a re-attach.
+static bool TrustedInputReuseRequested()
+{
+    wchar_t value[4] = {};
+    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_TRUSTED_INPUT_REUSE", value, (DWORD)(sizeof(value) / sizeof(value[0])));
+    return n == 1 && value[0] == L'1';
+}
+
+/// FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 restores the pre-F217 order: the attach verb runs its own licence's CreateSession +
+/// GenerateRequest (a PMP round trip) BEFORE CompleteAttach, so the CDM session exists when CreateTrustedInput runs. Off by
+/// default: SetSource goes first and the acquisition follows it as the next runtime-queue item. A kill switch for a box where the
+/// trusted input turns out to need its key session to exist first (the CDM "associates the session with the trusted input").
+static bool LicenseBeforeAttachRequested()
+{
+    wchar_t value[4] = {};
+    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_LICENSE_BEFORE_ATTACH", value, (DWORD)(sizeof(value) / sizeof(value[0])));
+    return n == 1 && value[0] == L'1';
+}
+
+/// FG_PLAYREADY_NO_OPM_WINDOW=1 leaves the engine without the virtual OPM window (F264): the pre-change engine wiring, as a kill
+/// switch for a box where the window turns out to matter. Off by default.
+static bool OpmWindowDisabled()
+{
+    wchar_t value[4] = {};
+    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_NO_OPM_WINDOW", value, (DWORD)(sizeof(value) / sizeof(value[0])));
+    return n == 1 && value[0] == L'1';
+}
+
 static HRESULT BringUp(fgpr::Runtime& rt)
 {
     auto hx = [](HRESULT h){ std::stringstream s; s << "0x" << std::hex << (uint32_t)h; return s.str(); };
@@ -384,15 +574,45 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
     if (FAILED(hr)) { LogLine("[runtime] MFStartup hr=" + hx(hr)); return hr; }
     rt.mfStarted = true;
+    rt.mfReady.store(true, std::memory_order_release);   // the feeder may now build its Media Foundation source
 
     // ── D3D11 + MF DXGI manager (shared, multithread-protected). ─────────────────────────────────────────────────────
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
     {
+        // Land the device on the SAME adapter the renderer chose (the managed side passes its LUID), exactly as the clear
+        // path's engine does: on a hybrid machine the default adapter can be the OTHER GPU. LUID 0, an adapter that is gone,
+        // or one that refuses a video device falls back to the default adapter - decode on the wrong GPU beats no decode.
+        winrt::com_ptr<IDXGIAdapter1> adapter;
+        if (rt.adapterLuid != 0)
+        {
+            winrt::com_ptr<IDXGIFactory4> factory;
+            LUID luid{};
+            luid.LowPart = (DWORD)(rt.adapterLuid & 0xFFFFFFFFLL);
+            luid.HighPart = (LONG)(rt.adapterLuid >> 32);
+            if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.put()))) ||
+                FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(adapter.put()))))
+            {
+                adapter = nullptr;
+                LogLine("[cenc] render adapter luid=" + std::to_string((long long)rt.adapterLuid) + " not found - default adapter");
+            }
+        }
         ID3D11Device* d3d = nullptr; ID3D11DeviceContext* ctx = nullptr;
-        if (FAILED(hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION, &d3d, nullptr, &ctx)))
-        { LogLine("[cenc] D3D11CreateDevice hr=" + hx(hr)); return hr; }
+        // An explicit adapter REQUIRES D3D_DRIVER_TYPE_UNKNOWN (HARDWARE + an adapter is E_INVALIDARG).
+        hr = D3D11CreateDevice(adapter.get(), adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0,
+                               D3D11_SDK_VERSION, &d3d, nullptr, &ctx);
+        if (adapter && (FAILED(hr) || !d3d))
+        {
+            LogLine("[cenc] adapter-pinned D3D11CreateDevice hr=" + hx(hr) + " - default adapter");
+            if (ctx) { ctx->Release(); ctx = nullptr; }
+            if (d3d) { d3d->Release(); d3d = nullptr; }
+            adapter = nullptr;
+            hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION, &d3d, nullptr, &ctx);
+        }
+        if (FAILED(hr) || !d3d)
+        { LogLine("[cenc] D3D11CreateDevice hr=" + hx(hr)); if (ctx) ctx->Release(); return FAILED(hr) ? hr : E_FAIL; }
         if (ctx) ctx->Release();
         rt.d3d.attach(d3d);
+        LogLine(std::string("[cenc] D3D11 video device on ") + (adapter ? "the renderer's adapter (pinned)" : "the default adapter"));
     }
     // ID3D10Multithread::SetMultithreadProtected(TRUE): the media engine's decoder, the video processor and the DXGI
     // manager all share this device from different MF worker threads. The interface is reached by its IID and called
@@ -408,8 +628,26 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // ── CDM (proven S_FALSE SetPMPHostApp) + protection manager. ────────────────────────────────────────────────────
     CreateDirectoryW(rt.storePath.c_str(), nullptr);
     HRESULT cdmHr = E_FAIL;
-    IMFContentDecryptionModule* cdm = CreateAndPrepareCdm(L"com.microsoft.playready.recommendation", rt.storePath, &cdmHr);
+    IMFContentDecryptionModule* cdm = nullptr;
+    // F022: the SL3000 probe. Default on (FgPrSecurity_Probe3000): the `.3000` key system with a "3000" video capability is asked for
+    // first, and the SL2000 plan below - the long-standing request - is the fallback for ANY failure of it (no hardware PlayReady
+    // on this machine, a refused capability, a CDM that will not prepare). Forced off with FgPrSecurity_Force2000 (`--fg playready-sl2000`).
+    if (rt.securityPolicy != FgPrSecurity_Force2000)
+    {
+        HRESULT probeHr = E_FAIL;
+        cdm = CreateAndPrepareCdm(L"com.microsoft.playready.recommendation.3000", rt.storePath, &probeHr, /*hardware*/ true);
+        if (cdm) rt.securityLevel = 3000;
+        else LogLine("[eme-cdm] SL3000 not available (hr=" + hx(probeHr) + ") - falling back to SL2000");
+    }
+    else LogLine("[eme-cdm] SL3000 probe disabled (--fg playready-sl2000) - SL2000");
+    if (!cdm)
+    {
+        cdm = CreateAndPrepareCdm(L"com.microsoft.playready.recommendation", rt.storePath, &cdmHr, /*hardware*/ false);
+        rt.securityLevel = 2000;
+    }
     if (!cdm) { LogLine("[cenc] CDM creation failed hr=" + hx(cdmHr)); return cdmHr; }
+    LogLine("[eme-cdm] negotiated security level: SL" + std::to_string(rt.securityLevel) +
+            (rt.securityLevel >= 3000 ? " (hardware key system)" : " (software key system)"));
     rt.cdm.attach(cdm);
 
     try
@@ -428,6 +666,17 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     rt.notify.attach(new MediaEngineNotify(rt.handle));
     rt.needKey.attach(new EmeNeedKeyNotify());
 
+    // F264: the hidden virtual window the engine's output protection is tied to (Chromium's MF_MEDIA_ENGINE_OPM_HWND). It must exist
+    // BEFORE the engine, which reads the handle once at creation; the managed pump moves it over the video's screen rect later
+    // (FgPrSessionPlaceOpmWindow). Hardening with no proven effect, so a window that cannot be created never fails the bring-up.
+    if (OpmWindowDisabled()) LogLine("[opm] virtual window disabled (FG_PLAYREADY_NO_OPM_WINDOW)");
+    else
+    {
+        const HRESULT opmHr = rt.opm.Start();
+        LogLine(SUCCEEDED(opmHr) ? std::string("[opm] virtual window created (MF_MEDIA_ENGINE_OPM_HWND)")
+                                 : "[opm] virtual window NOT created hr=" + hx(opmHr) + " - the engine runs without OPM_HWND");
+    }
+
     winrt::com_ptr<IMFAttributes> attrs;
     if (FAILED(hr = MFCreateAttributes(attrs.put(), 10))) return hr;
     attrs->SetUnknown(MF_MEDIA_ENGINE_CALLBACK, rt.notify.get());
@@ -440,7 +689,12 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // passed the manager as a creation attribute + USE_PMP_FOR_ALL_CONTENT; that A/B arm (FG_CENC_LEGACY_ENGINE_WIRING)
     // is deleted.
     attrs->SetUINT32(MF_MEDIA_ENGINE_CONTENT_PROTECTION_FLAGS, MF_MEDIA_ENGINE_ENABLE_PROTECTED_CONTENT);
-    attrs->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM);
+    // F249: BGRA is the long-standing output; NV12 only when the managed side asked for it (FgPrRuntimeSetVideoOutputFormat, behind
+    // --fg video-nv12, after its overlay probe said NV12 can take a plane).
+    const DXGI_FORMAT outputFormat = rt.videoOutputFormat == FgPrVideoOutput_Nv12 ? DXGI_FORMAT_NV12 : DXGI_FORMAT_B8G8R8A8_UNORM;
+    attrs->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, outputFormat);
+    LogLine(std::string("[cenc] engine output format ") + (outputFormat == DXGI_FORMAT_NV12 ? "NV12" : "BGRA"));
+    if (HWND opmHwnd = rt.opm.Handle()) attrs->SetUINT64(MF_MEDIA_ENGINE_OPM_HWND, (UINT64)(uintptr_t)opmHwnd);
     hr = factory->CreateInstance(0, attrs.get(), rt.engine.put());
     LogLine("[cenc] CreateInstance(engine) hr=" + hx(hr));
     if (FAILED(hr) || !rt.engine) return FAILED(hr) ? hr : E_NOINTERFACE;
@@ -464,6 +718,13 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // Preload AUTOMATIC so an attach that opens PAUSED (FgPrOpenDesc.startPaused) still loads to CANPLAY and can
     // FrameStep its first frame out; autoplay stays off — Play is always an explicit transport verb.
     rt.engine->SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC);
+    // The ITA preflight is a diagnostic: opt-in, and here (once per runtime lifetime, before any session exists) rather
+    // than in front of the first protected SetSource, where its PMP round trips sat on the open's critical path.
+    if (ItaPreflightRequested()) fgpr::RuntimeItaPreflight(rt);
+    rt.trustedInputReuse = TrustedInputReuseRequested();
+    LogLine(std::string("[runtime] trusted input: ") + (rt.trustedInputReuse ? "one per CDM (reused across attaches)" : "one per attach"));
+    rt.licenseBeforeAttach = LicenseBeforeAttachRequested();
+    LogLine(std::string("[runtime] attach order: ") + (rt.licenseBeforeAttach ? "licence acquisition BEFORE SetSource (FG_PLAYREADY_LICENSE_BEFORE_ATTACH)" : "SetSource first, licence acquisition after it"));
     return S_OK;
 }
 
@@ -471,6 +732,7 @@ static void TearDown(fgpr::Runtime& rt)
 {
     fgpr::SessionsShutdown(rt);
     fgpr::LicensesShutdown(rt);
+    rt.trustedInput = nullptr;   // before the CDM that created it
     if (rt.engine)
     {
         HRESULT hr = rt.engine->Shutdown();
@@ -479,6 +741,7 @@ static void TearDown(fgpr::Runtime& rt)
     rt.protectedContent = nullptr;
     rt.engineEx = nullptr;
     rt.engine = nullptr;
+    rt.opm.Stop();   // the engine that was given the window is gone
     rt.needKey = nullptr;
     rt.notify = nullptr;
     rt.extension = nullptr;
@@ -486,6 +749,7 @@ static void TearDown(fgpr::Runtime& rt)
     rt.cdm = nullptr;
     rt.dxgiManager = nullptr;
     rt.d3d = nullptr;
+    rt.mfReady.store(false, std::memory_order_release);
     if (rt.mfStarted) { MFShutdown(); rt.mfStarted = false; }
     if (rt.comInitialized) { CoUninitialize(); rt.comInitialized = false; }
 }
@@ -494,9 +758,12 @@ static void TearDown(fgpr::Runtime& rt)
 //  Engine events → FgPrEvents (runtime thread).
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, DWORD_PTR p1, DWORD p2, int64_t qpc)
+static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t attachGen, DWORD ev, DWORD_PTR p1, DWORD p2, int64_t qpc)
 {
     if (!rt.Ready() || rt.attached.load(std::memory_order_acquire) != sessionHandle) return;
+    // Posted for an earlier attach (this session detached and attached again since, or another session's attach replaced
+    // it and ended): a late ERROR / EMPTIED / PAUSE of the previous load is not this attach's to report.
+    if (rt.attachGen.load(std::memory_order_acquire) != attachGen) return;
     std::shared_ptr<fgpr::Session> sp = fgpr::SessionByHandle(sessionHandle);
     if (!sp) return;
     fgpr::Session& s = *sp;
@@ -527,8 +794,11 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
         }
         case MF_MEDIA_ENGINE_EVENT_CANPLAY:
             s.readyState.store((int32_t)rt.engine->GetReadyState(), std::memory_order_release);
-            Raise(h, FgPrEvent_CanPlay);
+            // The start-position fallback runs BEFORE the event so the event can carry its price (startCorrectionMs, 0 = the engine
+            // adopted the carried start): it is the switch budget's second-Start cost. The raise only queues, so the event still
+            // precedes everything the correction's own seek makes the engine say.
             fgpr::SessionOnCanPlay(rt, s);
+            Raise(h, FgPrEvent_CanPlay, s.startCorrectionMs);
             fgpr::SessionPublishHandle(rt, s, false);
             break;
         case MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY:
@@ -543,7 +813,19 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
                                                 std::memory_order_acq_rel);
             }
             fgpr::SessionSamplePosition(rt, s, false);
-            Raise(h, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire));
+            {
+                // The carried start went onto the engine timeline at attach: the clock should read about the start now.
+                // `startCorrectionMs` != 0 means the engine ignored it and the CANPLAY fallback had to seek (a second
+                // source Start); it is the number the switch budget tracks.
+                const int64_t carried = s.startPositionMs.load(std::memory_order_acquire);
+                if (carried > 0 && expected == 0)   // expected is still 0 only when THIS event stamped the first frame
+                    fgpr::RaiseLog(h, "[cenc] first frame at " + std::to_string((long long)s.positionMs.load(std::memory_order_acquire)) +
+                                      "ms, carried start " + std::to_string((long long)carried) + "ms, startCorrectionMs=" +
+                                      std::to_string((long long)s.startCorrectionMs));
+            }
+            // b = the QPC FIRSTFRAMEREADY was stamped at (the same value as FgPrSnapshot.firstFrameQpc), so the managed side times the
+            // first frame from the native clock rather than from whenever the event was dequeued.
+            Raise(h, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire), s.firstFrameQpc.load(std::memory_order_acquire));
             fgpr::SessionPublishHandle(rt, s, false);
             break;
         }
@@ -555,12 +837,18 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
             break;
         case MF_MEDIA_ENGINE_EVENT_SEEKED:
             fgpr::SessionSamplePosition(rt, s, false);
-            if (s.internalSeeks > 0)
+            if (s.waitGate.Clear()) Raise(h, FgPrEvent_Resumed, s.positionMs.load(std::memory_order_acquire));
             {
-                // The start-position correction (PrSession.cpp SessionOnCanPlay) is the native side's own seek: nobody
-                // on the managed side is waiting for it, and a Seeked with no Seeking would confuse the seek planner.
-                s.internalSeeks--;
-                break;
+                // The carried start applied to the engine timeline at attach (and the CANPLAY fallback correction) is the
+                // native side's own seek: nobody on the managed side is waiting for it, and a Seeked with no Seeking would
+                // confuse the seek planner. It is tagged with the user seekSeq, so it clears the `seeking` flag it raised
+                // and can never swallow a user seek's SEEKED (see plan::InternalSeek).
+                const fgpr::plan::InternalSeek::Verdict v = s.internalSeek.OnSeeked(s.seekSeq.load(std::memory_order_acquire));
+                if (v.internal)
+                {
+                    if (v.clearsSeeking) s.seeking.store(0, std::memory_order_release);
+                    break;
+                }
             }
             s.seeking.store(0, std::memory_order_release);
             Raise(h, FgPrEvent_Seeked, s.positionMs.load(std::memory_order_acquire), fgpr::MsSinceQpc(s.seekPostedQpc));
@@ -568,6 +856,7 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
         case MF_MEDIA_ENGINE_EVENT_PLAYING:
             s.state.store(FgPrState_Playing, std::memory_order_release);
             fgpr::SessionSamplePosition(rt, s, false);
+            if (s.waitGate.Clear()) Raise(h, FgPrEvent_Resumed, s.positionMs.load(std::memory_order_acquire));
             Raise(h, FgPrEvent_Playing);
             break;
         case MF_MEDIA_ENGINE_EVENT_PAUSE:
@@ -611,12 +900,50 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
             // Playback time moved: refresh the snapshot, raise Position (rate-limited inside), and — should the swap chain
             // not have been ready at metadata / canplay / first frame — ask for the handle again.
             fgpr::SessionSamplePosition(rt, s, false);
+            if (s.waitGate.OnTimeUpdate(s.positionMs.load(std::memory_order_acquire)))
+                Raise(h, FgPrEvent_Resumed, s.positionMs.load(std::memory_order_acquire));   // the clock advances again
             fgpr::SessionPublishHandle(rt, s, false);
             break;
+        case MF_MEDIA_ENGINE_EVENT_WAITING:
+        case MF_MEDIA_ENGINE_EVENT_STALLED:
+        case MF_MEDIA_ENGINE_EVENT_BUFFERINGSTARTED:
+            // Only a source that is PLAYING with a frame up and no seek in flight can stall mid-play: the engine also says
+            // WAITING while it opens and while a seek loads, and both already read as buffering (Loading / Seeking).
+            if (s.state.load(std::memory_order_acquire) != FgPrState_Playing || s.firstFrameQpc.load(std::memory_order_acquire) == 0 ||
+                s.seeking.load(std::memory_order_acquire) != 0)
+                break;
+            fgpr::SessionSamplePosition(rt, s, false);   // readyState and the buffered window as of the stall
+            if (s.waitGate.Enter(s.positionMs.load(std::memory_order_acquire)))
+            {
+                fgpr::RaiseLog(h, "[cenc] engine waiting (event " + std::to_string((unsigned long)ev) + ") at " +
+                                  std::to_string((long long)s.positionMs.load(std::memory_order_acquire)) + "ms, readyState=" +
+                                  std::to_string(s.readyState.load(std::memory_order_acquire)) + " ahead=" +
+                                  std::to_string((long long)s.bufferedAheadMs.load(std::memory_order_acquire)) + "ms");
+                Raise(h, FgPrEvent_Waiting, s.positionMs.load(std::memory_order_acquire));
+            }
+            break;
+        case MF_MEDIA_ENGINE_EVENT_BUFFERINGENDED:
+            fgpr::SessionSamplePosition(rt, s, false);
+            if (s.waitGate.Clear()) Raise(h, FgPrEvent_Resumed, s.positionMs.load(std::memory_order_acquire));
+            break;
         case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
+            // A representation switch changed the decoded frame size: report it (snapshot + FgPrEvent_SizeChanged) and
+            // nothing more. No UpdateVideoStream and no handle re-raise — the managed stream size follows the new natural size.
+            // Every FORMATCHANGE is logged with the size the snapshot held and the size the engine reports now (F261): the second
+            // `swap-chain handle=` of an open follows one of these, and a same-size event is what tells a decoder re-negotiation
+            // (the type's aperture / aspect / colour differing from the SPS) from a real size change.
+            {
+                DWORD fcw = 0, fch = 0;
+                rt.engine->GetNativeVideoSize(&fcw, &fch);
+                fgpr::RaiseLog(h, "[cenc] FORMATCHANGE native size " + std::to_string(s.width.load(std::memory_order_acquire)) + "x" +
+                                  std::to_string(s.height.load(std::memory_order_acquire)) + " -> " + std::to_string((unsigned long)fcw) +
+                                  "x" + std::to_string((unsigned long)fch));
+            }
+            fgpr::SessionOnFormatChange(rt, s);
+            break;
         case MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
-            // The swap chain may have been re-created (a representation switch changed the frame size, or the device
-            // was lost): re-query the handle and RE-RAISE it even when the value is unchanged, so the presenter re-binds.
+            // The device was lost, so the swap chain may have been re-created: re-query the handle and RE-RAISE it even
+            // when the value is unchanged, so the presenter re-binds.
             fgpr::SessionPublishHandle(rt, s, true);
             break;
         default:
@@ -631,8 +958,8 @@ namespace fgpr {
 
 // Diagnose the real CDM-owned ITA before handing it to MediaEngine/PMP. This uses a separate trusted-input
 // instance so RequestAccess/GetPolicy cannot disturb the instance cached by CencMediaSource.
-// It used to run on EVERY open; it is a PMP round trip that proves nothing new after the first success, so the runtime
-// runs it on its FIRST attach only and keeps the warm switch free of it.
+// It used to run on EVERY open, then on the FIRST attach of each runtime lifetime (still ahead of SetSource, on the
+// critical path of the first protected open). It is now opt-in (FG_PLAYREADY_ITA_PREFLIGHT=1) and runs once at bring-up.
 void RuntimeItaPreflight(Runtime& rt)
 {
     if (rt.itaPreflightDone || !rt.cdm) return;
@@ -710,15 +1037,15 @@ static void RuntimeThreadMain(std::shared_ptr<fgpr::Runtime> rt)
 
     // Event-driven: block until work arrives — an export's verb, a media-engine event, a license delivery, a feeder
     // completion. Nothing on this thread ever wakes on a timer.
-    while (rt->queue.RunOnce()) {}
+    while (rt->queue.RunOnce(fgpr::LogWorkItemFailure)) {}
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Exports.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-__declspec(dllexport) int32_t __stdcall FgPrRuntimeCreate(const wchar_t* storePath, FgPrEventCallback cb, void* ctx,
-                                                          FgPrRuntime* out)
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeCreateOnAdapter(const wchar_t* storePath, FgPrEventCallback cb, void* ctx,
+                                                                         int64_t adapterLuid, FgPrRuntime* out)
 {
     if (!out) return E_POINTER;
     *out = 0;
@@ -733,7 +1060,10 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreate(const wchar_t* storePa
     }
     if (!storePath || !*storePath) return E_INVALIDARG;
 
+    // The callback is set and the notifier running BEFORE the runtime thread exists: its first events (bring-up lines) queue
+    // into the ring from the first instruction, and no producer thread ever enters the callback itself.
     fgpr::Sink().Set(cb, ctx);
+    fgpr::SinkStart();
 
     std::shared_ptr<fgpr::Runtime> rt;
     try
@@ -741,12 +1071,15 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreate(const wchar_t* storePa
         rt = std::make_shared<fgpr::Runtime>();
         rt->handle = fgpr::NewHandle(fgpr::HandleKind::Runtime);
         rt->storePath = storePath;
+        rt->adapterLuid = adapterLuid;
+        rt->videoOutputFormat = fgpr::Reg().videoOutputFormat.load(std::memory_order_acquire);
+        rt->securityPolicy = fgpr::Reg().securityPolicy.load(std::memory_order_acquire);
         rt->createdQpc = fgpr::QpcNow();
         rt->thread = std::thread(RuntimeThreadMain, rt);
     }
     catch (...)
     {
-        fgpr::Sink().Set(nullptr, nullptr);
+        fgpr::SinkStop();
         return E_OUTOFMEMORY;
     }
     fgpr::Reg().runtime = rt;
@@ -766,10 +1099,13 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime handle)
     if (!rt->shuttingDown.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return;   // idempotent
 
     fgpr::Runtime* raw = rt.get();
-    rt->queue.Post([raw] { TearDown(*raw); raw->queue.Stop(); });
+    // An Engine item, so it runs ahead of queued licence work: that work (a key session's Close above all) is drained first,
+    // while the CDM is alive.
+    rt->queue.Post([raw] { raw->queue.DrainMaintenance(fgpr::LogWorkItemFailure); TearDown(*raw); raw->queue.Stop(); });
 
     // Bounded join. A runtime thread wedged inside Media Foundation must not hang the host's shutdown: after 2 s the
     // thread is detached (it keeps its own strong ref and finishes, or dies with the process).
+    bool joined = false;
     if (rt->thread.joinable())
     {
         if (rt->thread.get_id() == std::this_thread::get_id())
@@ -779,7 +1115,7 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime handle)
         else
         {
             const DWORD wait = WaitForSingleObject((HANDLE)rt->thread.native_handle(), 2000);
-            if (wait == WAIT_OBJECT_0) rt->thread.join();
+            if (wait == WAIT_OBJECT_0) { rt->thread.join(); joined = true; }
             else
             {
                 fgpr::RaiseLog(0, "[runtime] destroy: runtime thread did not finish within 2000ms - detached");
@@ -788,29 +1124,59 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime handle)
         }
     }
 
+    // The join point for the feeder threads the runtime thread handed to the reaper instead of joining itself: none of
+    // them may be left running when the host unloads this DLL. Only when the runtime thread was actually joined: its
+    // TearDown has then drained every feeder, so this just ends the idle reaper thread and cannot block. A detached runtime
+    // thread (wedged, or Destroy called from inside a work item) drains the reaper in its own TearDown (Reap joins inline
+    // once it is closed), and ~Runtime -> ~FeederReaper joins when the last strong ref drops - the host never waits on a
+    // feeder here, keeping the 2 s bound above.
+    if (joined) rt->reaper.Shutdown();
+
     {
         std::lock_guard<std::mutex> g(fgpr::Reg().mx);
         if (fgpr::Reg().runtime == rt) fgpr::Reg().runtime = nullptr;
         fgpr::Reg().sessions.clear();
     }
 
-    // The managed side frees its callback context the moment this returns: stop new calls, then wait (bounded) for the
-    // ones that already read the pointer on an MF or CDM thread.
-    fgpr::EventSink& sink = fgpr::Sink();
-    sink.draining.store(true, std::memory_order_release);
-    sink.cb.store(0, std::memory_order_release);
-    {
-        // Bounded (500 ms) wait for callbacks that already read the pointer; Raise notifies as the last one returns.
-        std::unique_lock<std::mutex> lk(sink.drainMx);
-        sink.drainCv.wait_for(lk, std::chrono::milliseconds(500),
-                              [&] { return sink.inflight.load(std::memory_order_acquire) == 0; });
-    }
-    sink.ctx.store(nullptr, std::memory_order_release);
-    sink.draining.store(false, std::memory_order_release);
+    // The managed side frees its callback context the moment this returns. SinkStop flushes every event still queued into the
+    // callback (the destroy's own lines and the last session events arrive in order, none lost), stops accepting (a straggling
+    // MF thread's push is rejected), joins the notifier - bounded, so a callback wedged in managed code cannot hang the
+    // host's shutdown - and only then clears the callback. Nothing enters the callback after this returns.
+    fgpr::SinkStop();
 }
 
 __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime handle)
 {
     std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(handle);
     return rt ? rt->UptimeMs() : 0;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format)
+{
+    fgpr::Reg().videoOutputFormat.store(format == FgPrVideoOutput_Nv12 ? FgPrVideoOutput_Nv12 : FgPrVideoOutput_Bgra, std::memory_order_release);
+    return S_OK;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t policy)
+{
+    fgpr::Reg().securityPolicy.store(policy == FgPrSecurity_Force2000 ? FgPrSecurity_Force2000 : FgPrSecurity_Probe3000, std::memory_order_release);
+    return S_OK;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrSessionPlaceOpmWindow(FgPrRuntime rtHandle, FgPrSession sh, uint64_t hostWindow,
+                                                                  int32_t left, int32_t top, int32_t right, int32_t bottom)
+{
+    if (right < left || bottom < top) return E_INVALIDARG;
+    std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(rtHandle);
+    if (!rt || !fgpr::IsKind(sh, fgpr::HandleKind::Session)) return E_HANDLE;
+    // Ready() first: the window object is written by BringUp and read here from the UI thread, so it is only touched once the
+    // bring-up has published (and never changed again). Only the session the engine is playing moves the window: a stale or
+    // prepared session's placement would drag it away from the picture that is on screen.
+    if (!rt->Ready() || rt->attached.load(std::memory_order_acquire) != sh) return S_FALSE;
+    RECT placed{};
+    const HRESULT hr = rt->opm.Place((HWND)(uintptr_t)hostWindow, left, top, right, bottom, &placed);
+    if (hr == S_OK && rt->opm.FirstPlacement())
+        fgpr::RaiseLog(sh, "[opm] virtual window over the video at screen (" + std::to_string(placed.left) + "," + std::to_string(placed.top) +
+                           ") " + std::to_string(placed.right - placed.left) + "x" + std::to_string(placed.bottom - placed.top));
+    return hr;
 }

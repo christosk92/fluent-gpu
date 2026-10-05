@@ -93,6 +93,7 @@ public sealed unsafe partial class D3D12Device
         if (_surfaces is not null && _surfaces.TileCap >= tileCap) return;
         if (_surfaces is not null) { WaitForGpu(); _surfaces.Dispose(); }
         _surfaces = new SurfacePool(_device, Math.Max(tileCap, 64));
+        _compositeOwner = 0;   // a fresh pool has no owner yet: the next composite stamps it (CheckCompositeOwner)
         if (_compositor is null)
         {
             _compositor = new SliceCompositor();
@@ -100,11 +101,31 @@ public sealed unsafe partial class D3D12Device
         }
     }
 
-    public void SubmitComposite(in CompositeFrame frame)
+    // The SliceTable (CompositeFrame.OwnerToken) whose surface numbering the current tile pool holds; 0 = none since the
+    // pool was (re)built. Tile slots carry no host key, so two hosts compositing into one pool silently overwrite each
+    // other's retained tiles (F229) - this makes that visible instead of a stale-pixel mystery.
+    private int _compositeOwner;
+
+    // Checked BEFORE the submit opens (a Debug throw must not leave a command list open); the pool's first owner is stamped
+    // after EnsureCompositeResources, so a pool rebuilt by THIS frame belongs to it.
+    private void CheckCompositeOwner(int token)
+    {
+        if (token == 0 || _compositeOwner == 0 || _compositeOwner == token) return;   // unstamped frame / no owner yet / same owner
+        Diag.Count("d3d12", "compositeOwnerMismatch");
+#if DEBUG
+        throw new InvalidOperationException("SubmitComposite: the tile pool belongs to slice table " + _compositeOwner
+            + " but this frame was built from slice table " + token + " (two hosts share one device tile pool).");
+#endif
+    }
+
+    public void SubmitComposite(in CompositeFrame frame, ISwapchain target)
     {
         var sc = _primarySwapchain ?? throw new InvalidOperationException("CreateSwapchain must be called before SubmitComposite.");
+        if (!ReferenceEquals(target, sc))
+            throw new InvalidOperationException("SubmitComposite composites into the PRIMARY swapchain only; a secondary target (detached pop-out / popup) must use SubmitDrawList.");
         if (sc.Disposed) throw new InvalidOperationException("The primary swapchain is disposed.");
         AssertSubmitThread();
+        CheckCompositeOwner(frame.OwnerToken);
         TargetFrameState f = sc.Frame;
         // Tiles and region scratches can exceed a small window: the stencil DSV covers max(window, tile).
         _stencilFloorW = TileGrid.W; _stencilFloorH = TileGrid.H;
@@ -116,6 +137,7 @@ public sealed unsafe partial class D3D12Device
         for (int i = 0; i < frame.Rasters.Length; i++) maxSurface = Math.Max(maxSurface, frame.Rasters[i].Surface + 1);
         for (int i = 0; i < frame.Placements.Length; i++) maxSurface = Math.Max(maxSurface, frame.Placements[i].Surface + 1);
         EnsureCompositeResources(maxSurface);
+        if (_compositeOwner == 0) _compositeOwner = frame.OwnerToken;
         MapRows(in frame);
         PrepareCompositeGlyphs(in frame);
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
@@ -1102,7 +1124,14 @@ public sealed unsafe partial class D3D12Device
                     _compositor!.Begin(it.Clip.X - ox, it.Clip.Y - oy, it.Clip.Right - ox, it.Clip.Bottom - oy);
                     _compositor.Color(new ColorF(0f, 0f, 0f, 1f));
                     _compositor.Alpha(it.Alpha);
-                    if (it.RoundClip.W > 0f) _compositor.RoundClip(Offset(it.RoundClip, -ox, -oy), it.ClipRadii.TopLeft);
+                    if (it.RoundClip.W > 0f)
+                    {
+                        // F078: the hole's own rounded rect. Uniform radii take the shared rounded-clip path; a hole with
+                        // different corners (a PiP rounded on one side) takes the per-corner one.
+                        RectF holeRound = Offset(it.RoundClip, -ox, -oy);
+                        if (it.ClipRadii.IsUniform) _compositor.RoundClip(holeRound, it.ClipRadii.TopLeft);
+                        else _compositor.CornerClip(holeRound, it.ClipRadii);
+                    }
                     _compositor.Draw(_cmdList, SliceCompositor.Pso.Erase, default);
                     break;
                 }

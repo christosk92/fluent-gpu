@@ -116,6 +116,108 @@ static partial class ControlsSuite
             + $"video={videoAt} chrome={chromeAt}) top(chrome={topChrome} hole={topHole} page={topPage}) "
             + $"hole={holeR.X:0},{holeR.Y:0},{holeR.W:0}x{holeR.H:0} chrome={chromeR.X:0},{chromeR.Y:0},{chromeR.W:0}x{chromeR.H:0} "
             + $"items={host.UiSlices.LastItems.Length}");
+
+        VideoHoleShapeChecks(strings);
+    }
+
+    /// <summary>The hole of <see cref="VideoHoleShapeChecks"/>: a stage whose hole is rounded on its TOP corners only and drawn
+    /// at half opacity, at a size that lands on fractional device pixels at the gate's 1.5 scale.</summary>
+    sealed class VideoRoundedHoleProbe : Component
+    {
+        public static readonly CornerRadius4 HoleCorners = new(24f, 24f, 0f, 0f);
+        public const float HoleOpacity = 0.5f;
+
+        public override Element Render() => new BoxEl
+        {
+            Width = 480f, Height = 360f, ZStack = true,
+            Children =
+            [
+                new ScrollEl
+                {
+                    Width = 480f, Height = 360f, SuppressScrollBar = true, EdgeCues = ScrollEdgeCues.None,
+                    Content = new BoxEl { Width = 480f, Height = 360f, Fill = VideoChromeOverHoleProbe.PageFill },
+                },
+                new BoxEl
+                {
+                    Width = 400f, Height = 225f, ZStack = true, Fill = VideoChromeOverHoleProbe.LetterboxFill,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Width = 333.2f, Height = 187.3f, VideoHole = true, VideoSurfaceId = 7,
+                            Corners = HoleCorners, Opacity = HoleOpacity,
+                        },
+                    ],
+                },
+            ],
+        };
+    }
+
+    // ── gate.video.hole-erase-shape (gpu-renderer.md §7.3, F078 + F073 pixel rule R) ─────────────────────────────────────
+    // The composite erase of a video hole used to be a full-strength, square, sub-pixel quad: under an attenuated or rounded
+    // hole it cleared the page at 100% and in the four corner wedges outside the rounded shape, and its edges were not the
+    // whole device pixels the DirectComposition video rect covers. The erase item now carries the punch's own strength
+    // (VideoReady x opacity), the hole's rounded rect (per-corner radii) and whole-pixel edges (each of X, Y, Right and Bottom
+    // rounded independently, away from zero). A square, opaque hole keeps the plain full-strength erase.
+    static void VideoHoleShapeChecks(StringTable strings)
+    {
+        // baseline: the square, opaque hole of the chrome-over-hole scenario
+        bool baseline;
+        string baseDetail;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole-shape-square", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new VideoChromeOverHoleProbe());
+            for (int i = 0; i < 3; i++) host.RunFrame();
+            var erases = device.LastHoleErases;
+            baseline = erases.Count == 1 && Near(erases[0].Alpha, 1f, 0.001f) && erases[0].RoundRectPx.IsEmpty
+                && erases[0].Radii.TopLeft == 0f && erases[0].Radii.BottomRight == 0f;
+            baseDetail = erases.Count == 1 ? $"alpha={erases[0].Alpha:0.###} round={erases[0].RoundRectPx.W:0.#}" : $"erases={erases.Count}";
+        }
+
+        // the rounded, attenuated hole at scale 1.5 (window 720x540 px = 480x360 DIP)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole-shape-rounded", new Size2(720, 540), 1.5f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new VideoRoundedHoleProbe());
+            for (int i = 0; i < 3; i++) host.RunFrame();
+
+            var scene = host.Scene;
+            var hole = FindVisual(scene, scene.Root, VisualKind.Video);
+            RectF holeR = hole.IsNull ? default : scene.AbsoluteRect(hole);
+            float s = device.LastCompositeInfo.Scale > 0f ? device.LastCompositeInfo.Scale : 1f;
+            // pixel rule R, evaluated independently of the recorder: each edge to the nearest whole pixel, away from zero
+            float x0 = MathF.Round(holeR.X * s, MidpointRounding.AwayFromZero), y0 = MathF.Round(holeR.Y * s, MidpointRounding.AwayFromZero);
+            float x1 = MathF.Round(holeR.X * s + holeR.W * s, MidpointRounding.AwayFromZero);
+            float y1 = MathF.Round(holeR.Y * s + holeR.H * s, MidpointRounding.AwayFromZero);
+
+            var erases = device.LastHoleErases;
+            bool one = !hole.IsNull && erases.Count == 1 && erases[0].GroupDepth == 0;
+            CompositeHoleErase er = one ? erases[0] : default;
+            bool whole = one && er.RectPx.X == MathF.Floor(er.RectPx.X) && er.RectPx.Y == MathF.Floor(er.RectPx.Y)
+                && er.RectPx.W == MathF.Floor(er.RectPx.W) && er.RectPx.H == MathF.Floor(er.RectPx.H);
+            bool ruleR = one && er.RectPx.X == x0 && er.RectPx.Y == y0 && er.RectPx.Right == x1 && er.RectPx.Bottom == y1;
+            bool strength = one && Near(er.Alpha, VideoRoundedHoleProbe.HoleOpacity, 0.001f);
+            float r = VideoRoundedHoleProbe.HoleCorners.TopLeft * s;
+            bool radii = one && Near(er.Radii.TopLeft, r, 0.01f) && Near(er.Radii.TopRight, r, 0.01f)
+                && er.Radii.BottomRight == 0f && er.Radii.BottomLeft == 0f;
+            // the rounded rect IS the whole-pixel hole (nothing cut it), so the wedges outside the curve stay with the page
+            bool shape = one && er.RoundRectPx.X == er.RectPx.X && er.RoundRectPx.Y == er.RectPx.Y
+                && er.RoundRectPx.W == er.RectPx.W && er.RoundRectPx.H == er.RectPx.H;
+
+            Check("gate.video.hole-erase-shape the composite erase of a video hole carries the punch's own strength (VideoReady x opacity), its rounded rect with per-corner radii and whole-pixel edges (pixel rule R: X, Y, Right and Bottom each rounded to the nearest device pixel), so a faded or rounded hole no longer clears the page at full strength / in the corner wedges; a square opaque hole stays the plain full-strength erase",
+                baseline && one && whole && ruleR && strength && radii && shape,
+                $"baseline={baseline} ({baseDetail}) erases={erases.Count} whole={whole} ruleR={ruleR} "
+                + $"rect={er.RectPx.X:0.##},{er.RectPx.Y:0.##},{er.RectPx.W:0.##}x{er.RectPx.H:0.##} want={x0:0.##},{y0:0.##},{x1 - x0:0.##}x{y1 - y0:0.##} "
+                + $"alpha={er.Alpha:0.###} radii={er.Radii.TopLeft:0.##}/{er.Radii.TopRight:0.##}/{er.Radii.BottomRight:0.##}/{er.Radii.BottomLeft:0.##} "
+                + $"round={er.RoundRectPx.X:0.##},{er.RoundRectPx.Y:0.##},{er.RoundRectPx.W:0.##}x{er.RoundRectPx.H:0.##}");
+        }
     }
 
     /// <summary>The composed-stream byte offset of the first page fill, letterbox fill, DrawVideo and chrome fill (−1 = none).</summary>

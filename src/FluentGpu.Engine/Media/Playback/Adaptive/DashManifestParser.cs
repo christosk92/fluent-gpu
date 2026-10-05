@@ -10,6 +10,11 @@ namespace FluentGpu.Media.Adaptive;
 /// SegmentTimeline repeats, VOD and dynamic windows, multiple adaptation sets, roles, and CENC init data.</summary>
 public static class DashManifestParser
 {
+    /// <summary>The most segments one representation expands to. A longer VOD (or a window past it) is truncated at this
+    /// bound, never allocated without limit; callers that need the whole presentation compare against
+    /// <see cref="AdaptiveManifest.Duration"/>.</summary>
+    public const int MaxSegmentsPerRepresentation = 4096;
+
     public static AdaptiveManifest Parse(string xml, Uri source, DateTimeOffset? now = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(xml);
@@ -43,9 +48,13 @@ public static class DashManifestParser
                 bool isDefault = role == TrackRole.Main;
                 bool forced = role == TrackRole.Captions;
                 var reps = new List<AdaptiveRepresentation>();
+                int representationIndex = 0;
                 foreach (var representation in Children(adaptation, "Representation"))
+                    // An @id-less representation gets an id derived from its position, so re-parsing the same MPD
+                    // yields the same ids (a Guid would make every refresh look like a brand-new representation).
                     reps.Add(ParseRepresentation(representation, adaptation, adaptationBase, type, periodStart,
-                        periodDuration, live, ast, tsbd, now ?? DateTimeOffset.UtcNow, ref lowLatency));
+                        periodDuration, live, ast, tsbd, now ?? DateTimeOffset.UtcNow,
+                        $"p{periodIndex}a{adaptationIndex}r{representationIndex++}", ref lowLatency));
 
                 if (reps.Count > 0)
                 {
@@ -64,10 +73,10 @@ public static class DashManifestParser
     private static AdaptiveRepresentation ParseRepresentation(
         XElement rep, XElement adaptation, Uri parent, AdaptiveTrackType type, TimeSpan periodStart,
         TimeSpan? periodDuration, bool live, DateTimeOffset? availabilityStart, TimeSpan timeShiftDepth,
-        DateTimeOffset now, ref bool lowLatency)
+        DateTimeOffset now, string fallbackId, ref bool lowLatency)
     {
         Uri baseUri = ResolveBase(parent, rep);
-        string id = A(rep, "id") ?? Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        string id = A(rep, "id") ?? fallbackId;
         int bandwidth = Int(A(rep, "bandwidth"));
         int width = Int(A(rep, "width"), Int(A(adaptation, "width")));
         int height = Int(A(rep, "height"), Int(A(adaptation, "height")));
@@ -76,6 +85,8 @@ public static class DashManifestParser
         var contentType = ContentType(type, codecs);
         var quality = new QualityVariant(id, bandwidth, new SizeI(width, height), fps, contentType,
             HdrFrom(adaptation, rep), A(rep, "label"));
+        string? sap = A(rep, "startWithSAP") ?? A(adaptation, "startWithSAP");
+        bool startsWithKeyframe = sap is null || Int(sap, 1) is 1 or 2;
 
         XElement? template = Child(rep, "SegmentTemplate") ?? Child(adaptation, "SegmentTemplate");
         XElement? segmentList = Child(rep, "SegmentList") ?? Child(adaptation, "SegmentList");
@@ -97,8 +108,10 @@ public static class DashManifestParser
             if (timeline is not null)
             {
                 long number = startNumber, time = 0;
-                foreach (var s in Children(timeline, "S"))
+                var entries = new List<XElement>(Children(timeline, "S"));
+                for (int i = 0; i < entries.Count; i++)
                 {
+                    XElement s = entries[i];
                     long d = Long(A(s, "d"));
                     if (d <= 0) throw new FormatException("DASH SegmentTimeline entry has no positive duration.");
                     long explicitTime = Long(A(s, "t"), long.MinValue);
@@ -106,10 +119,24 @@ public static class DashManifestParser
                     long repeat = Long(A(s, "r"));
                     if (repeat < 0)
                     {
-                        double windowSeconds = periodDuration?.TotalSeconds ?? (timeShiftDepth > TimeSpan.Zero ? timeShiftDepth.TotalSeconds : 120);
-                        repeat = Math.Max(0, Math.Min(4095, (long)Math.Ceiling(windowSeconds * timescale / d) - 1));
+                        // @r=-1 repeats up to the next S@t, else to the end of the period, else (a dynamic MPD with no
+                        // stated end) over the time-shift window.
+                        long nextTime = i + 1 < entries.Count ? Long(A(entries[i + 1], "t"), long.MinValue) : long.MinValue;
+                        if (nextTime != long.MinValue)
+                            repeat = (nextTime - time + d - 1) / d - 1;
+                        else if (periodDuration is { } pd)
+                        {
+                            long remaining = (long)Math.Ceiling(pd.TotalSeconds * timescale) - (time - presentationOffset);
+                            repeat = remaining > 0 ? (remaining + d - 1) / d - 1 : 0;
+                        }
+                        else
+                        {
+                            double windowSeconds = timeShiftDepth > TimeSpan.Zero ? timeShiftDepth.TotalSeconds : 120;
+                            repeat = (long)Math.Ceiling(windowSeconds * timescale / d) - 1;
+                        }
+                        repeat = Math.Clamp(repeat, 0, MaxSegmentsPerRepresentation - 1);
                     }
-                    for (long k = 0; k <= repeat && segments.Count < 4096; k++, number++, time += d)
+                    for (long k = 0; k <= repeat && segments.Count < MaxSegmentsPerRepresentation; k++, number++, time += d)
                     {
                         string rel = AdaptiveUri.ExpandTemplate(media, id, number, time, bandwidth);
                         segments.Add(new AdaptiveSegment(AdaptiveUri.Resolve(baseUri, rel), number,
@@ -131,7 +158,7 @@ public static class DashManifestParser
                     count = keep;
                 }
                 else count = Math.Max(1, (long)Math.Ceiling((periodDuration ?? TimeSpan.FromSeconds(segSeconds)).TotalSeconds / segSeconds));
-                count = Math.Min(count, 4096);
+                count = Math.Min(count, MaxSegmentsPerRepresentation);
                 for (long k = 0; k < count; k++)
                 {
                     long number = first + k;
@@ -158,19 +185,38 @@ public static class DashManifestParser
             }
         }
 
-        string? drmScheme = null;
+        // ContentProtection may sit on the AdaptationSet or the Representation. The init data always belongs to the
+        // scheme reported: a PlayReady element's data is never overwritten by a Widevine sibling's.
+        string? drmScheme = null, kid = null;
         ReadOnlyMemory<byte> initData = default;
-        foreach (var cp in Children(adaptation, "ContentProtection"))
+        bool playReadyData = false;
+        foreach (var scope in new[] { adaptation, rep })
+        foreach (var cp in Children(scope, "ContentProtection"))
         {
             string scheme = A(cp, "schemeIdUri") ?? "";
-            if (scheme.Contains("9a04f079", StringComparison.OrdinalIgnoreCase)) drmScheme = "playready";
-            else if (scheme.Contains("edef8ba9", StringComparison.OrdinalIgnoreCase)) drmScheme ??= "widevine";
+            kid ??= NormalizeKid(A(cp, "default_KID"));
+            byte[]? data = null;
             foreach (var child in cp.Elements())
-                if (child.Name.LocalName is "pssh" or "pro" && !string.IsNullOrWhiteSpace(child.Value))
-                    try { initData = Convert.FromBase64String(child.Value.Trim()); } catch (FormatException) { }
+                if (child.Name.LocalName is "pssh" or "pro" && !string.IsNullOrWhiteSpace(child.Value)
+                    && (child.Name.LocalName == "pssh" || data is null))
+                    try { data = Convert.FromBase64String(child.Value.Trim()); } catch (FormatException) { }
+            if (scheme.Contains("9a04f079", StringComparison.OrdinalIgnoreCase))
+            {
+                drmScheme = "playready";
+                if (!playReadyData) { initData = data; playReadyData = data is not null; }
+            }
+            else if (scheme.Contains("edef8ba9", StringComparison.OrdinalIgnoreCase) && drmScheme != "playready")
+            {
+                drmScheme = "widevine";
+                if (data is not null) initData = data;
+            }
         }
-        return new AdaptiveRepresentation(quality, initialization, segments, null, drmScheme, initData);
+        return new AdaptiveRepresentation(quality, initialization, segments, null, drmScheme, initData,
+            Codecs: codecs.Length > 0 ? codecs : null, DefaultKid: kid, SegmentsStartWithKeyframe: startsWithKeyframe);
     }
+
+    private static string? NormalizeKid(string? kid)
+        => string.IsNullOrWhiteSpace(kid) ? null : kid.Replace("-", "", StringComparison.Ordinal).Trim().ToLowerInvariant();
 
     private static IEnumerable<XElement> Children(XElement? p, string local)
     { if (p is not null) foreach (var e in p.Elements()) if (e.Name.LocalName == local) yield return e; }
@@ -196,6 +242,9 @@ public static class DashManifestParser
     private static AdaptiveTrackType TrackType(XElement adaptation)
     {
         string value = A(adaptation, "contentType") ?? A(adaptation, "mimeType") ?? "";
+        if (value.Length == 0)
+            foreach (var rep in Children(adaptation, "Representation"))
+                if (A(rep, "mimeType") is { Length: > 0 } repMime) { value = repMime; break; }
         if (value.Contains("audio", StringComparison.OrdinalIgnoreCase)) return AdaptiveTrackType.Audio;
         if (value.Contains("text", StringComparison.OrdinalIgnoreCase) || value.Contains("subtitle", StringComparison.OrdinalIgnoreCase)
             || value.Contains("application", StringComparison.OrdinalIgnoreCase)) return AdaptiveTrackType.Text;

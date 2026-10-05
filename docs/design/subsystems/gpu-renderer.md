@@ -92,7 +92,8 @@ devirtualized types; per-call `ICommandEncoder` use is the secondary/explicit pa
 texture upload). **AS-BUILT (2026-09):** the primary window submits through **`IGpuDevice.SubmitComposite`** (the
 retained tiled composite, §13.1; seam registered in `pal-rhi.md` §2.3), whose tile rasterizer replays each slice
 segment through that same streaming decoder; `SubmitDrawList` remains the secondary swapchains' route
-(`RepaintRoute.FullDirect`).
+(`RepaintRoute.FullDirect`) — a detached pop-out host records STANDALONE (no slice arenas) and submits it with
+`SubmitDrawList(..., its own swapchain)`, never `SubmitComposite` (which D3D12 rejects for a non-primary target).
 
 ```csharp
 // FluentGpu.Rhi  (interface assembly; portable; [assembly: DisableRuntimeMarshalling] on Render/Pal)
@@ -1160,20 +1161,60 @@ and the page bleeds through the video.
 render target is bound. As built (§13.1): the in-stream `DrawVideo` erases the TILE (or inline-group scratch) it
 rasters into, and the composite plan adds an `EraseVideoHole` item — a DestOut quad over the hole's rect, clipped to
 its slice's composite clip — right BEFORE the segment that punched it (Composite order, above), so the hole reaches the
-back buffer from a static, scroll or leaf-effect slice. The item is the hole's bounding rect (no radii): an earlier
-item's pixels in a rounded hole's corners are cleared with it. A hole punched inside an inline group layer keeps its
+back buffer from a static, scroll or leaf-effect slice. The item is the hole's own shape and strength (F078): its
+quad is the hole's rect cut to the slice's composite clip with each of X, Y, Right and Bottom rounded to the nearest whole
+device pixel independently, away from zero (pixel rule R — the same rule the DirectComposition video rect uses, so the erase
+and the video share one edge); its `Alpha` is the punch's `VideoReady` x opacity; and a rounded hole carries its own rounded
+rect with a radius per corner (`RoundClip` + `ClipRadii`, drawn by the compositor's per-corner SDF), or, for a square hole,
+the in-stream rounded clip it sits under — so an earlier item's pixels in a rounded hole's corner wedges survive. A hole punched inside an inline group layer keeps its
 erase after its segment, which clears the chrome over that hole too. Inside a `CompositeKind.Group`'s item range that
 item erases the GROUP surface instead, so a video under a non-leaf opacity / blur / acrylic group does not reach the
 swapchain, and an acrylic backdrop over the video rect frosts what the tiles hold there (the video must simply not bleed
-under the acrylic). Cumulative parent `Opacity` attenuates the in-stream erase (the composite item stays full strength:
-under an attenuated hole the punching segment's own earlier content keeps the attenuated remainder, earlier items are
-cleared). These are **accepted and transient** — the supported scope is a video node outside a non-leaf group.
+under the acrylic). Cumulative parent `Opacity` attenuates the in-stream erase AND the composite item (F078: both use
+`VideoReady` x opacity, so the page under a faded hole and the stage's own letterbox keep the same remainder). The
+DirectComposition video visual itself has no opacity (`IDCompositionVisual` v1: the presenter stores the value and applies
+none), so the video stays at full strength under a faded hole; a Debug build logs one `[video]` line when a `DrawVideo` is
+recorded with opacity below 1. These are **accepted and transient** — the supported scope is a video node outside a
+non-leaf group and outside an opacity ancestor.
+
+**Settle-frame ordering (F101).** A resize-settle frame (`resized && keepAlive`) carries its DWM sync hint in the published
+`RenderFrame.SettlePresent` (like `SuppressVsync`), armed by `ApplyPresentPacing` on the presenting thread for exactly the
+submit that presents it — not a flag the UI thread pokes into render-owned swapchain state. `Present` never blocks on it: the
+host commits the frame's video placement (`DrainVideoForPresentTurn`) and only then calls `ISwapchain.CompleteSettlePresent`,
+so the new hole and the new video geometry reach DWM in the same composition. An inline (UI-thread) present flushes DWM there
+(`DwmFlush`, blocking one vblank); the shared render thread never does (it already wakes on the compositor tick, and a flush
+would stall the pop-out it also presents), it only consumes the hint.
 
 **Damage / re-punch.** The composite redraws the whole back buffer on every presented frame, so every hole item is
 re-punched every frame with no extra rule, and the retained tile keeps its own erased pixels; there is no
 video-hole damage-inflation rule (the partial-canvas decode that needed one is deleted). Flush-wise the hole rides the
-UI swapchain `Present` while the child placement rides the per-frame DComp `Commit` the video pump issues: two flushes
-on one frame turn, not one (`docs/plans/video-phase1-plan.md §2`, correction #4).
+UI swapchain `Present` while the child placement rides a DComp `Commit`: two flushes on one frame turn, not one
+(`docs/plans/video-phase1-plan.md §2`, correction #4). F070 makes them AGREE rather than merge: the video is placed from the
+snapshot of the frame being presented, moved by the hole's own posed travel (`SliceRecorder.PosedHoles`, so a composite-only
+scroll or animation turn moves the video with the hole), and on a turn that moves an on-screen surface the present waits (bounded)
+for its own GPU work and the placement is committed immediately after it (`threading-render-seam.md` §10, Stage B). They are still
+two flushes; the single-transaction form (one DComp visual holding hole and video) is a recorded follow-up, not built.
+
+**Overlay probe, NV12 output and overlay promotion (F249 / F087, both A/B arms, default off).** `D3D12Device.SamplePresentTopology` asks
+the output the window sits on, once per output (first resolve or monitor change, never per present), what it reports through
+`IDXGIOutput3::CheckOverlaySupport` for NV12, YUY2 and BGRA, and logs that verdict on the `[d3d12.present] topology=...` line
+(`overlay[nv12=direct+scaling yuy2=none bgra=direct] note=...`) in place of the old `direct-scan-out-path-available`, which was printed
+from adapter ownership alone. The verdict is `VideoOverlayCaps` (published process-wide; `default` = not probed, which claims nothing).
+`--fg video-nv12` drops the forced B8G8R8A8 `MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT` for NV12 on both engines (the clear engine at
+`CreateEngine`, the protected one through `FgPrRuntimeSetVideoOutputFormat`, called before the runtime create reads it) only when the
+probe reports NV12 as plane-capable; BGRA is the fallback. `--fg video-overlay` lets the video visual sit ABOVE the UI visual while
+nothing paints over its rect and the output reported a plane: the composite plan classifies every posed hole after the plan is laid out
+(`SliceRecorder.ClassifyVideoOcclusion` -> `VideoPosedHole.Unoccluded`: no op after the `DrawVideo` in its segment, and no later
+segment, slice, backdrop or hole in painter order overlaps the visible hole; judged on whole-segment painted bounds, so it only errs
+towards "covered". A hole is also never clear when its erase is partial (opacity below 1: the promoted visual has no opacity), when an
+in-stream rounded clip cuts it (the presenter rounds only by the element's own corner radius), or when it sits under a layer or group
+surface; detached fly snapshots sit in the root slice's tail and count as covering segments), and `VideoPlacementApplier` runs each surface through a `VideoOverlayGate` (promote at the first clear turn, demote
+the SAME turn something covers it, hold the underlay for 500 ms after a demotion so the visual's z-order never flaps). The hole itself
+stays punched in both modes (a video above it simply covers it), so promotion changes only the visual's z-order
+(`IVideoPresenter.SetOverlay`, `DCompVideoPresenter` re-inserts the parent above the UI visual). Measure with PresentMon before turning
+either switch on by default: `--fg video-overlay` and/or `--fg video-nv12` vs neither, on the Adreno box, comparing the PresentMode column
+(Composed: Flip vs Hardware Composed: Independent Flip / MPO plane) and `MsBetweenDisplayChange` while a video plays fullscreen with
+the chrome hidden.
 
 ---
 
@@ -1633,7 +1674,7 @@ X1-85). `CompositeKind`, as built:
 | `Region` | the same for an effect segment's region surfaces; a LEAF effect slice carries its group alpha / feather / self-blur σ on the item |
 | `Group` | an effect slice WITH child slices that is not distributed (below): the next `GroupCount` items composite into ONE group surface covering its placed `Footprint` (its clip ∩ the window when the footprint exceeds `GroupCacheKey.MaxFootprintPx` = one tile's area), origin on the grid of the group's own `Transform` (its slice's posed offset, whole px), then that surface composites with the item's alpha / feather(s) / blur — exact group semantics, overlapping children never double-blend. The surface is RETAINED under its content key (below) |
 | `Backdrop` | in-app acrylic: a mini-composite of the clear colour + every earlier item under the item's rounded rect grown by the chain's reach, dual-Kawase blurred and tinted with its `AcrylicRecipe` — zero back-buffer reads |
-| `EraseVideoHole` | a DestOut quad over the video rect, emitted BEFORE the segment that punched it (that segment's tile holds the hole with its later chrome painted over it) — after it only for a hole punched inside an inline group layer (§7.3 Composite order) |
+| `EraseVideoHole` | a DestOut quad over the video rect (whole device pixels, pixel rule R; strength `Alpha` = VideoReady x opacity; the hole's own per-corner rounded rect in `RoundClip`/`ClipRadii`), emitted BEFORE the segment that punched it (that segment's tile holds the hole with its later chrome painted over it) — after it only for a hole punched inside an inline group layer (§7.3 Composite order) |
 | `Direct` | a degraded segment (§13.1d) |
 
 The composite PSOs (`SliceCompositor.cs` + `composite.hlsl`; 56 root constants — 57 of the 64 root DWORDs with the

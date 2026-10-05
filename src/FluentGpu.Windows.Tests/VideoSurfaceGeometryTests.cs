@@ -92,9 +92,9 @@ public sealed class VideoSurfaceGeometryTests
 
         VideoSurfaceGeometry geo = core.SurfaceGeometry.Peek();
         Assert.Equal(1.5f, geo.Scale, P);
-        // 326×160 DIP at 1.5 ⇒ 489×240 device px; the cap follows the MOST magnified axis (240/1080), so the frame is
-        // rendered at 489×275 — still exactly 16:9.
-        Assert.Equal(new SizeI(489, 275), geo.Content);
+        // 326×160 DIP at 1.5 ⇒ 489×240 device px; the most magnified axis needs 489/1920 = 0.255 of the frame, so the
+        // stream takes the smallest bucket that covers it (1/3) — 640×360, still exactly 16:9.
+        Assert.Equal(new SizeI(640, 360), geo.Content);
         Assert.Equal(1920.0 / 1080.0, (double)geo.Content.Width / geo.Content.Height, 2);
     }
 
@@ -178,5 +178,221 @@ public sealed class VideoSurfaceGeometryTests
         RectF honest = MediaPlayerElement.FitVideoRect(card, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
         Edges4 bars = MediaPlayerElement.LetterboxInsets(card, honest);
         Assert.Equal((GrownH - RailW * 9f / 16f) * 0.5f, bars.Top, P);
+    }
+
+    // ── whole-pixel placement (rule R: round X, Y, Right, Bottom independently, midpoint away from zero) ──────────────
+
+    [Fact]
+    public void SnapToDevicePixels_RoundsEveryEdgeIndependently()
+    {
+        // Right (110.7) and Bottom (70.8) round on their own: the width is 111 - 10 = 101, NOT round(100.3) = 100.
+        RectF snapped = VideoSurfaceRegistry.SnapToDevicePixels(new RectF(10.4f, 20.6f, 100.3f, 50.2f));
+        Assert.Equal(new RectF(10f, 21f, 101f, 50f), snapped);
+    }
+
+    [Fact]
+    public void SnapToDevicePixels_MidpointRoundsAwayFromZero()
+    {
+        // Banker's rounding would give 0 / 2 / 2 / 2; away-from-zero gives 1 / 2 / 2 / 3.
+        Assert.Equal(new RectF(1f, 2f, 1f, 1f),
+            VideoSurfaceRegistry.SnapToDevicePixels(new RectF(0.5f, 1.5f, 1f, 1f)));
+        // Negative edges (an oversized crop frame overflowing left/up) round away from zero too.
+        Assert.Equal(new RectF(-1f, -2f, 2f, 1f),
+            VideoSurfaceRegistry.SnapToDevicePixels(new RectF(-0.5f, -1.5f, 1f, 1f)));
+    }
+
+    [Fact]
+    public void SnapToDevicePixels_RectsSharingAFractionalEdgeSnapToTheSameBoundary()
+    {
+        var left = new RectF(0f, 0f, 100.4f, 50f);
+        var right = new RectF(100.4f, 0f, 99.6f, 50f);
+        RectF a = VideoSurfaceRegistry.SnapToDevicePixels(left);
+        RectF b = VideoSurfaceRegistry.SnapToDevicePixels(right);
+        Assert.Equal(100f, a.Right);
+        Assert.Equal(a.Right, b.X);   // no gap and no overlap between the two snapped rects
+    }
+
+    [Fact]
+    public void SnapToDevicePixels_LeavesWholePixelRectsUntouched()
+    {
+        var r = new RectF(12f, 34f, 320f, 180f);
+        Assert.Equal(r, VideoSurfaceRegistry.SnapToDevicePixels(r));
+    }
+
+    [Fact]
+    public void FitVideoRectSnapped_IsBitIdenticalAtScaleOneWhenTheFitIsAlreadyWholePixels()
+    {
+        var area = new RectF(0, 0, 400, 180);
+        var natural = new SizeI(1920, 1080);
+        Assert.Equal(MediaPlayerElement.FitVideoRect(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0),
+            MediaPlayerElement.FitVideoRectSnapped(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, 1f));
+    }
+
+    [Theory]
+    [InlineData(1.25f)]
+    [InlineData(1.5f)]
+    public void FitVideoRectSnapped_AndHoleInsets_LandOnTheRegistrysDeviceBoundary(float scale)
+    {
+        var area = new RectF(0, 0, 400, 300);
+        var natural = new SizeI(1920, 1080);   // 400x225 centred: a fractional top/bottom edge at both scales
+        RectF fit = MediaPlayerElement.FitVideoRect(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, scale);
+        RectF registrySnap = VideoSurfaceRegistry.SnapToDevicePixels(MediaPlayerElement.ToDeviceRect(fit, scale));
+
+        // The snapped fit's DEVICE edges are whole pixels and are exactly the boundary the registry snaps the raw fit to.
+        RectF snappedDip = MediaPlayerElement.FitVideoRectSnapped(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, scale);
+        RectF snappedDev = MediaPlayerElement.ToDeviceRect(snappedDip, scale);
+        Assert.Equal(MathF.Round(snappedDev.X), snappedDev.X, 3);
+        Assert.Equal(MathF.Round(snappedDev.Y), snappedDev.Y, 3);
+        Assert.Equal(MathF.Round(snappedDev.Right), snappedDev.Right, 3);
+        Assert.Equal(MathF.Round(snappedDev.Bottom), snappedDev.Bottom, 3);
+        Assert.Equal(registrySnap.X, snappedDev.X, 3);
+        Assert.Equal(registrySnap.Y, snappedDev.Y, 3);
+        Assert.Equal(registrySnap.Right, snappedDev.Right, 3);
+        Assert.Equal(registrySnap.Bottom, snappedDev.Bottom, 3);
+
+        // The hole the element lays out (area minus the letterbox insets) snaps, in the registry's drain, to that same
+        // boundary — so the UI hole's erase rect and the video visual share every edge.
+        Edges4 insets = MediaPlayerElement.HoleInsets(area, natural, VideoAspectMode.Uniform, 16.0 / 9.0, scale);
+        var hole = new RectF(area.X + insets.Left, area.Y + insets.Top,
+            area.W - insets.Left - insets.Right, area.H - insets.Top - insets.Bottom);
+        RectF holeSnap = VideoSurfaceRegistry.SnapToDevicePixels(MediaPlayerElement.ToDeviceRect(hole, scale));
+        Assert.Equal(registrySnap, holeSnap);
+    }
+
+    [Fact]
+    public void Drain_PlacesTheVideoAtWholeDevicePixels_AtAFractionalScale()
+    {
+        var (s, _, e) = NewSession();
+        VideoBinding binding = NewBinding(out VideoSurfaceRegistry registry);
+        e.MetadataLoaded = true; e.NativeW = 640; e.NativeH = 360; e.Handle = 0xF00D;
+        var rectDip = new RectF(10.3f, 7.1f, 321f, 180.5f);
+        binding.SetViewport(rectDip);
+        s.PumpVideo(binding, rectDip, 1.5f);
+
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1.5f);
+        Assert.Equal(VideoSurfaceRegistry.SnapToDevicePixels(MediaPlayerElement.ToDeviceRect(rectDip, 1.5f)),
+            presenter.LastPlaceRect);
+        Assert.Equal(MathF.Round(presenter.LastPlaceRect.X), presenter.LastPlaceRect.X);
+        Assert.Equal(MathF.Round(presenter.LastPlaceRect.Right), presenter.LastPlaceRect.Right);
+        Assert.Equal(MathF.Round(presenter.LastViewport.Bottom), presenter.LastViewport.Bottom);
+    }
+
+    // F208 / F080 over a real session's pump: the surface its first bind produces is created, bound and placed by the EARLY
+    // (structural) drain with no commit of its own, the host's one device commit follows, and the coupled drain that rides the
+    // UI frame's present is still the only thing that applies a later placement or a destroy.
+    [Fact]
+    public void StructuralDrain_BindsASessionsFirstHandleEarly_WithoutCommitting_AndLeavesPlaceAndDestroyCoupled()
+    {
+        var (s, _, e) = NewSession();
+        VideoBinding binding = NewBinding(out VideoSurfaceRegistry registry);
+        e.MetadataLoaded = true; e.NativeW = 640; e.NativeH = 360; e.Handle = 0xF00D;
+        var rectDip = new RectF(10f, 20f, 320f, 180f);
+        s.PumpVideo(binding, rectDip, 1f);
+        Assert.True(registry.HasStructuralWork);
+
+        var presenter = new FakeVideoPresenter();
+        registry.DrainStructural(presenter, 1f, deferCommit: true);
+        Assert.Contains("Create(1)", presenter.Calls);
+        Assert.NotEqual((nuint)0, presenter.LastBoundHandle);
+        Assert.Equal(1, presenter.Applies);
+        Assert.Equal(0, presenter.Commits);                  // the host commits once per turn, after every host applied
+        Assert.False(registry.HasStructuralWork);
+
+        // A move of the placed surface and the destroy of a released one wait for the coupled drain.
+        int placesAfterCreate = presenter.Calls.FindAll(c => c.StartsWith("Place(", StringComparison.Ordinal)).Count;
+        binding.SetViewport(new RectF(12f, 22f, 300f, 170f));
+        registry.DrainStructural(presenter, 1f, deferCommit: true);
+        Assert.Equal(placesAfterCreate, presenter.Calls.FindAll(c => c.StartsWith("Place(", StringComparison.Ordinal)).Count);
+        binding.Release();
+        registry.DrainStructural(presenter, 1f, deferCommit: true);
+        Assert.DoesNotContain("Destroy(1)", presenter.Calls);
+
+        registry.Drain(presenter, 1f, deferCommit: true);
+        Assert.Contains("Destroy(1)", presenter.Calls);
+        Assert.Equal(0, presenter.Commits);
+    }
+
+    // ── F235: ONE swap-chain handle on two LIVE slots, across windows ───────────────────────────────────────────────────────
+    // The Debug-only OneSurfacePerPlayerGuard scans a single registry (and is compiled out of the shipping binary); every window owns
+    // its own registry, so a main-window slot plus a pop-out slot writing one player's swap chain was invisible to it. The census counter
+    // scans every registered window through each registry's any-thread handle mirror.
+
+    private static int BindOne(VideoSurfaceRegistry registry, nuint handle)
+    {
+        int token = registry.Acquire();
+        registry.Bind(token, handle);
+        return token;
+    }
+
+    [Fact]
+    public void DualHandleCounter_SeesTwoWindowsWritingOneHandle_WhichNoSingleRegistryCanSee()
+    {
+        var main = new VideoSurfaceRegistry();
+        var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+        BindOne(main, 0x10);
+        BindOne(main, 0x20);
+        int popToken = BindOne(popout, 0x30);
+
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+
+        popout.Bind(popToken, 0x10);                  // the pop-out's slot now carries the main window's handle
+        Assert.Equal(1, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main }));    // each window alone looks fine: the blind spot
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { popout }));
+    }
+
+    [Fact]
+    public void DualHandleCounter_DropsASlotThatWasReleasedOrWhoseWindowWasTornDown()
+    {
+        var main = new VideoSurfaceRegistry();
+        var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+        BindOne(main, 0x10);
+        int popToken = BindOne(popout, 0x10);
+        Assert.Equal(1, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+
+        popout.Release(popToken);                      // the UI-side release clears the mirror at once, before the render side frees the slot
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+
+        int again = BindOne(popout, 0x10);
+        Assert.NotEqual(0, again);
+        Assert.Equal(1, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+        popout.DestroyAll(new FakeVideoPresenter());   // a reaped window: nothing it carried may linger in the scan
+        Assert.Equal(0, MediaCensus.CountDualHandleSlots(new[] { main, popout }));
+    }
+
+    [Fact]
+    public void DualHandleCounter_ProcessTable_FollowsRegisterAndUnregister_AndNeverCountsAZeroHandle()
+    {
+        var main = new VideoSurfaceRegistry();
+        var popout = new VideoSurfaceRegistry { HostOrdinal = 1 };
+        BindOne(main, 0x44);
+        BindOne(popout, 0x44);
+        BindOne(main, 0);                              // a slot with no handle yet is not a writer
+        BindOne(popout, 0);
+        Assert.True(MediaCensus.RegisterRegistry(main));
+        Assert.True(MediaCensus.RegisterRegistry(popout));
+        try
+        {
+            Assert.False(MediaCensus.RegisterRegistry(popout));                  // already present
+            Assert.Equal(1, MediaCensus.CountDualHandleSlots());
+            Assert.True(MediaCensus.DualHandlePeak >= 1);   // (Capture() would also call every other test's session census callback)
+            MediaCensus.UnregisterRegistry(popout);                              // the pop-out was reaped
+            Assert.Equal(0, MediaCensus.CountDualHandleSlots());
+        }
+        finally
+        {
+            MediaCensus.UnregisterRegistry(main);
+            MediaCensus.UnregisterRegistry(popout);
+        }
+    }
+
+    [Fact]
+    public void BindingNamesItsWindow_ForTheAttributionLines()
+    {
+        var registry = new VideoSurfaceRegistry { HostOrdinal = 3 };
+        var binding = new VideoBinding(registry, registry.Acquire());
+        Assert.Equal(3, binding.HostOrdinal);
+        Assert.Equal(0, default(VideoBinding).HostOrdinal);   // an inert binding belongs to no window
     }
 }

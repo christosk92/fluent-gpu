@@ -9,6 +9,8 @@
 //                  K[2]    = sample map (uv = (pos − K[2].xy) · K[2].zw)
 //                  K[3]    = (alpha, featherOn, roundRadius, roundOn); K[4] = rounded-clip rect px
 //                  K[5..8] = the packed edge feather (rect, band, corner, misc); K[9] = fill colour (premultiplied)
+//                  featherOn = -1 (the video-hole erase): K[5] = a rounded rect px, K[6] = its radii (tl, tr, br, bl)
+//                  instead of a feather
 //                  K[10..13] = a SECOND packed edge feather (a distributed ancestor fade — the coverage is the exact
 //                  product); its misc.y (intensity) = 0 disables it
 //                  PSSample only: K[9] = (max uv.xy, clampOn, 0) — the last WRITTEN texel's centre (a pooled surface is
@@ -45,10 +47,23 @@ float sdRoundRect(float2 p, float4 r, float rad)
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - rad;
 }
 
+// A rounded rect with a radius per corner: r = (x0, y0, x1, y1) px, rad = (topLeft, topRight, bottomRight, bottomLeft).
+float sdRoundRect4(float2 p, float4 r, float4 rad)
+{
+    float2 c = (r.xy + r.zw) * 0.5;
+    float2 h = max((r.zw - r.xy) * 0.5, 0.0);
+    float2 q = p - c;
+    float rr = q.x < 0.0 ? (q.y < 0.0 ? rad.x : rad.w) : (q.y < 0.0 ? rad.y : rad.z);
+    rr = min(rr, min(h.x, h.y));
+    float2 d = abs(q) - (h - rr);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - rr;
+}
+
 float Coverage(float2 p)
 {
     float a = K[3].x;
     if (K[3].y > 0.5) a *= edgeFeather(p, K[5], K[6], K[7], K[8]);
+    else if (K[3].y < -0.5) a *= saturate(0.5 - sdRoundRect4(p, K[5], K[6]));
     if (K[13].y > 0.0) a *= edgeFeather(p, K[10], K[11], K[12], K[13]);
     if (K[3].w > 0.5) a *= saturate(0.5 - sdRoundRect(p, K[4], K[3].z));
     return a;

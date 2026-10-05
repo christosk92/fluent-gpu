@@ -41,6 +41,7 @@ static class NavSuite
         PageHostChecks(strings);
         KeepAliveChecks(strings);
         KeepAliveParkedScrollbarChecks(strings);
+        ScrollChromeIdleChecks(strings);
         KeepAliveWedgedExitBackstopChecks(strings);
         SemanticZoomNavigationChecks(strings);
         ParkBeforeRenderChecks(strings);
@@ -331,6 +332,60 @@ static class NavSuite
         Check("gate.keepalive.parked-scrollbar-idles a page parked with its scrollbar mid-cycle releases the ScrollAnim wake at once and lands the bar hidden; it stays released after KeepAlive evicts the page; an un-parked or cold-remounted page still reveals its bar on the next scroll",
             midCycle && parkIdle >= 0 && landedAtRest && hiddenOnReturn && revealsAfterUnpark && evictIdle >= 0 && revealsAfterEvict,
             $"midCycle={midCycle} parkIdle={parkIdle} landedAtRest={landedAtRest} hiddenOnReturn={hiddenOnReturn} revealsAfterUnpark={revealsAfterUnpark} evictIdle={evictIdle} revealsAfterEvict={revealsAfterEvict} wake={host.CurrentWakeReasons}");
+    }
+
+    // gate.scroll.chrome-idle (F238): the scrollbar chrome is armed by a viewport's offset change, and a bar that is never
+    // drawn (SuppressScrollBar: the lyrics list, a paged shelf) or a programmatic move nobody is hovering must not run the
+    // 83 ms fade-in + 2 s idle dwell + fade-out as a per-frame ScrollAnim wake. Input-driven moves on a drawn bar still arm it
+    // (the keepalive gate above pins that), and a programmatic move over a hovered viewport does too.
+    static void ScrollChromeIdleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("chrome-idle", new Size2(400, 220), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new ChromeIdleProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+        host.RunFrame();
+
+        int plain = (int)probe.Plain.Raw.Index, quiet = (int)probe.Quiet.Raw.Index;
+        bool realized = !probe.Plain.IsNull && !probe.Quiet.IsNull
+            && host.Scene.TryGetScroll(probe.Quiet, out var qs) && qs.SuppressBar
+            && host.Scene.TryGetScroll(probe.Plain, out var ps) && !ps.SuppressBar;
+
+        // A programmatic latch (the lyrics line hand-off: ScrollTo Immediate) on each viewport with the pointer nowhere near.
+        host.TryGetScrollHandle(probe.Plain)!.ScrollTo(120f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
+        host.TryGetScrollHandle(probe.Quiet)!.ScrollTo(120f, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
+        for (int i = 0; i < 4; i++) host.RunFrame();
+        host.Scene.TryGetScroll(probe.Plain, out var plainAfter);
+        host.Scene.TryGetScroll(probe.Quiet, out var quietAfter);
+        bool moved = plainAfter.Offset > 1.0 && quietAfter.Offset > 1.0;
+        bool programmaticIdle = host.ScrollChrome.Count == 0 && !host.ScrollChrome.NeedsFrame
+            && (host.CurrentWakeReasons & WakeReasons.ScrollAnim) == 0
+            && host.Scene.ScrollChrome.Count == 0
+            && host.Scene.ScrollChrome.Get(plain).FadeT == 0f && host.Scene.ScrollChrome.Get(quiet).FadeT == 0f;
+
+        // An input-driven report on a bar that is never drawn: declined; on a drawn bar: armed.
+        host.ScrollChrome.NotifyMoved(quiet);
+        bool suppressedDeclined = host.ScrollChrome.Count == 0 && host.Scene.ScrollChrome.Count == 0;
+        host.ScrollChrome.NotifyMoved(quiet, FluentGpu.Scroll.Motion.MotionKind.Wheel);
+        bool suppressedWheelDeclined = host.ScrollChrome.Count == 0;
+        host.ScrollChrome.NotifyMoved(plain, FluentGpu.Scroll.Motion.MotionKind.Programmatic);
+        bool programmaticDeclined = host.ScrollChrome.Count == 0;
+        host.ScrollChrome.NotifyMoved(plain, FluentGpu.Scroll.Motion.MotionKind.Wheel);
+        bool userArms = host.ScrollChrome.Count == 1 && host.ScrollChrome.NeedsFrame;
+
+        // A programmatic move over a HOVERED viewport arms it (the pointer is on the bar's own surface).
+        host.ScrollChrome.SetNodeParked(plain, true);   // retire the armed row the line above made
+        host.Scene.ScrollChrome.GetOrAddRow(plain).PointerOver = true;
+        host.ScrollChrome.NotifyMoved(plain, FluentGpu.Scroll.Motion.MotionKind.Programmatic);
+        bool hoveredArms = host.ScrollChrome.Count == 1;
+
+        Check("gate.scroll.chrome-idle a programmatic scroll (a lyrics hand-off) with the pointer away, and ANY move of a SuppressScrollBar viewport, never arms the scrollbar chrome - no row, no fade, no ScrollAnim wake; a user move on a drawn bar and a programmatic move over a hovered viewport still arm it",
+            realized && moved && programmaticIdle && suppressedDeclined && suppressedWheelDeclined && programmaticDeclined && userArms && hoveredArms,
+            $"realized={realized} moved={moved} programmaticIdle={programmaticIdle} suppressedDeclined={suppressedDeclined} suppressedWheelDeclined={suppressedWheelDeclined} programmaticDeclined={programmaticDeclined} userArms={userArms} hoveredArms={hoveredArms} wake={host.CurrentWakeReasons}");
     }
 
     // gate.reconciler.keepalive-exit-backstop — FinalizeKeepAliveTransitions' deadline mirrors the orphan path's own
@@ -1339,6 +1394,41 @@ sealed class SemanticZoomItemsProbe : Component
                 ViewChangeCompleted = Completed.Add,
                 Controller = Zoom,
             });
+    }
+}
+
+// Two side-by-side viewports for gate.scroll.chrome-idle: a plain one and one that never draws its bar (SuppressScrollBar).
+sealed class ChromeIdleProbe : Component
+{
+    public NodeHandle Plain, Quiet;
+
+    public override Element Render()
+    {
+        static Element[] Rows(string tag)
+        {
+            var rows = new Element[20];
+            for (int i = 0; i < rows.Length; i++)
+                rows[i] = new BoxEl { Height = 24f, Children = [Text(tag + "-row-" + i)] };
+            return rows;
+        }
+
+        return new BoxEl
+        {
+            Direction = 0, Gap = 8f,
+            Children =
+            [
+                new ScrollEl
+                {
+                    Width = 160f, Height = 100f, OnRealized = h => Plain = h,
+                    Content = new BoxEl { Direction = 1, Children = Rows("p") },
+                },
+                new ScrollEl
+                {
+                    Width = 160f, Height = 100f, SuppressScrollBar = true, OnRealized = h => Quiet = h,
+                    Content = new BoxEl { Direction = 1, Children = Rows("q") },
+                },
+            ],
+        };
     }
 }
 

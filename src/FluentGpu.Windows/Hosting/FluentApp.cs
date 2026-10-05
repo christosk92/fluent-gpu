@@ -290,6 +290,10 @@ public static class FluentApp
         }
 
         Win32ThreadCycles.Install();   // the engine's per-thread cycle seam (UI-gap decomposition, render worst-present split)
+        // The platform media backends as the engine's DEFAULTS: MediaPlayer.Create()/Build() and UseVideo then play clear video
+        // with no registration of their own (an explicit WithBackend still wins; the MF backend is built on the first open).
+        MediaRouter.SetDefaultRegistrar(static router =>
+            router.RegisterDefault(MediaKind.MfVideoOrFile, static () => new FluentGpu.Media.Windows.MfMediaPlayer()));
         var strings = new StringTable();
         using var app = new Win32App();
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —

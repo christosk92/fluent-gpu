@@ -78,7 +78,6 @@ public struct Cadence
     public CadenceKind Kind;
     public float Hz;          // CadenceKind.Hz: frames per second
     public int DrivenSlot;    // CadenceKind.Driven: the SignalSource index (event-woken via WakeFrame)
-
     public static Cadence Display => new() { Kind = CadenceKind.DisplayRate };
     public static Cadence At(float hz) => new() { Kind = CadenceKind.Hz, Hz = hz };
     public static Cadence DrivenBy(int signalSlot) => new() { Kind = CadenceKind.Driven, DrivenSlot = signalSlot };

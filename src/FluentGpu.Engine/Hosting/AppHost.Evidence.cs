@@ -30,7 +30,7 @@ public sealed partial class AppHost
     /// <summary>The recorder pair whose composite turns reach the window: the UI pair inline (headless / SingleThread),
     /// the render thread's pair otherwise (a detached child's render pair is drained on its parent's thread).</summary>
     private SliceRecorder EvidenceSlices => _renderThread is null && _parentRenderThread is null ? _uiSlices : _renderSlices;
-    private SliceTable EvidenceTiles => _renderThread is null && _parentRenderThread is null ? _uiTiles : _renderTiles;
+    private SliceTable? EvidenceTiles => _renderThread is null && _parentRenderThread is null ? _uiTiles : _renderTiles;
 
     /// <summary>Constructor tail: the ledgers live on the pair that composites.</summary>
     private void EnableEvidence() => EvidenceSlices.EnableEvidence();

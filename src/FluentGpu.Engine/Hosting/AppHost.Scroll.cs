@@ -239,7 +239,7 @@ public sealed partial class AppHost
             if (moved)
             {
                 _anyScrollMovedThisFrame = true;
-                _scrollChrome.NotifyMoved(idx);
+                _scrollChrome.NotifyMoved(idx, plan.Kind);
                 _scene.NoteCaptureChanged(idx);
             }
             // Virtualization: does the realized window cover the present-time window (velocity-sized overscan)?
@@ -285,7 +285,7 @@ public sealed partial class AppHost
             if (!settled) _scrollUnsettledCount++;
             if (sc.Motion.UserDriven) _anyUserScrollMovingNow = true;
             _anyScrollMovedThisFrame = true;
-            _scrollChrome.NotifyMoved(idx);
+            _scrollChrome.NotifyMoved(idx, plan.Kind);
             _scene.NoteCaptureChanged(idx);
             if (sc.ItemCount > 0 && sc.Extent is { } ext)
             {

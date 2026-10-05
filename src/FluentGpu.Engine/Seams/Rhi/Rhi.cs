@@ -81,6 +81,14 @@ public partial interface IGpuDevice : IDisposable
     /// (a backend without a queue, or one that refuses, returns its unchanged <see cref="MaxFrameLatency"/>).</summary>
     int SetPresentQueueDepth(int depth) => MaxFrameLatency;
 
+    /// <summary>The per-swapchain form of <see cref="SetPresentQueueDepth(int)"/>: set <paramref name="target"/>'s OWN present-queue
+    /// depth (a detached pop-out's swapchain follows its own measured GPU margin, <c>PresentQueueDepthPolicy</c> per host) and
+    /// never another target's: a child's samples must not retarget the primary, and the primary's must not retarget a child.
+    /// The primary swapchain's form is <see cref="SetPresentQueueDepth(int)"/>. Returns the depth now in force for
+    /// <paramref name="target"/> (a backend without a queue, a target it did not create, or one that refuses, returns its
+    /// unchanged depth; default: <see cref="MaxFrameLatency"/>). Render thread only.</summary>
+    int SetPresentQueueDepth(ISwapchain target, int depth) => MaxFrameLatency;
+
     /// <summary>Runtime toggle for the PASS-granular GPU timeline (<see cref="ISwapchain.CopyGpuPassTimeline"/>): timestamps
     /// only at pass boundaries, read back one submission later. Off by default; settable at any time from any thread (the
     /// render thread observes it at the next submit). A backend without timestamp queries ignores it.</summary>
@@ -100,8 +108,56 @@ public partial interface IGpuDevice : IDisposable
     /// slot still busy after it means the previous present missed its vblank, and the loop skips that tick instead of
     /// queueing a frame that could only land late (see D3D12Device.TryTakePresentSlot) — so the bound must hold at
     /// millisecond precision (a plain OS wait timeout is only as fine as the timer resolution). Default true: the headless
-    /// seam has no present queue, and a backend without a latency waitable keeps waiting inside submit.</para></summary>
+    /// seam has no present queue, and a backend without a latency waitable keeps waiting inside submit.</para>
+    /// <para>A NEGATIVE <paramref name="timeoutMs"/> is the liveness-bounded wait that proceeds (credit held) even when the slot
+    /// never opened, so a lost device cannot wedge the loop: <c>-1</c> bounds it at the backend's default (1 s), any other
+    /// <c>-N</c> at N ms (an unpaced turn's <c>max(2 x refresh, 34 ms)</c>, F208 - a minimized or cloaked primary whose
+    /// presents never retire no longer costs a second per turn). A backend counts and reports the liveness timeouts
+    /// (<see cref="SlotLivenessTimeouts"/>).</para></summary>
     bool TryTakePresentSlot(int timeoutMs) => true;
+
+    /// <summary>Liveness-bounded present-slot takes of the PRIMARY swapchain that timed out so far (CUMULATIVE; render thread writes,
+    /// any thread reads): the take proceeded without the slot ever opening. A secondary swapchain's are
+    /// <see cref="NonPrimaryLatencyTimeouts"/>. Surfaced as <c>slotTimeouts=</c> in the <c>[render.pace]</c> line.
+    /// Default 0: the headless seam has no present queue.</summary>
+    long SlotLivenessTimeouts => 0;
+
+    /// <summary>Blocking latency waits a NON-primary swapchain's submit (a detached pop-out's, a popup's) ran out the 1 s bound for
+    /// without its slot opening (CUMULATIVE; any thread reads). They run on the shared render thread, so each is a main-window
+    /// stall attributable to that secondary window; <see cref="SlotLivenessTimeouts"/> counts the PRIMARY's only. The
+    /// <c>[render.pace]</c> line's <c>timeoutTarget=primary|child</c> is the difference of the two (F235). Default 0.</summary>
+    long NonPrimaryLatencyTimeouts => 0;
+
+    /// <summary>The longest blocking latency wait of a non-primary swapchain since <see cref="ResetNonPrimaryLatencyWindow"/>, in
+    /// milliseconds: the <c>childWaitMax=</c> of the <c>[render.pace]</c> line (the primary's own is <c>slotWaitMax=</c>). Default 0.</summary>
+    double NonPrimaryLatencyWaitMaxMs => 0.0;
+
+    /// <summary>Start a new <see cref="NonPrimaryLatencyWaitMaxMs"/> window (the pace report opens one every second). Render thread.</summary>
+    void ResetNonPrimaryLatencyWindow() { }
+
+    /// <summary>The per-swapchain form of <see cref="TryTakePresentSlot(int)"/>: take <paramref name="target"/>'s OWN
+    /// present-slot credit (waiting at most <paramref name="timeoutMs"/>, 0 = a non-blocking probe). The shared render thread
+    /// asks this for a detached pop-out's swapchain BEFORE it acquires that pop-out's frame, so it never blocks on a
+    /// secondary window's vblank (and never on the main window's). Same contract otherwise: true when the credit is held (or
+    /// the backend has no present queue); false when the slot did not open in time, nothing taken. Render-thread only.
+    /// Default true: the headless seam has no present queue.</summary>
+    bool TryTakePresentSlot(ISwapchain target, int timeoutMs) => true;
+
+    /// <summary>Hand the device the render loop's park-request event (a manual-reset Win32 event handle; 0 = none, the
+    /// default and what the host passes again before it closes the event). Every blocking wait the render thread makes for a
+    /// present slot — <see cref="TryTakePresentSlot(int)"/>, the per-swapchain take and the wait inside a submit — then waits
+    /// on {the slot's waitable, this event}, the waitable FIRST: a slot that is open still wins, and a park request alone ends
+    /// the wait with NOTHING taken (the take returns false; a submit's wait leaves the credit un-held), so the UI's
+    /// rendezvous never waits out a 1 s slot wait. The event is owned by the caller; the device only waits on it. Called
+    /// before the render loop starts and after it was joined, never while it runs. Default no-op: the headless seam has no
+    /// present queue to wait on.</summary>
+    void SetSubmitAbortHandle(nint handle) { }
+
+    /// <summary>UI thread: do the thread-affine part of creating <paramref name="desc"/>'s swapchain before the render thread
+    /// creates the swapchain itself (a popup's create rides the render-thread mailbox). The D3D12 backend brings up the
+    /// process-wide Windows.UI.Composition compositor here for a desktop-acrylic popup: it binds to the creating thread's
+    /// DispatcherQueue, and only the UI thread pumps one. Default no-op.</summary>
+    void PrepareSwapchainCreate(in SwapchainDesc desc) { }
 
     /// <summary>Best-effort local (device-dedicated) VRAM usage vs the OS-reported budget for this adapter, in bytes.
     /// Returns <see langword="false"/> when the backend cannot report it (the headless seam, and any real backend before
@@ -124,6 +180,12 @@ public partial interface IGpuDevice : IDisposable
     /// <see langword="null"/> when the target is not composited / the backend cannot composite video. Default routes to
     /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
     FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
+
+    /// <summary>The ONE device-level composition flush of a render turn (F080): every presenter's queued mutations
+    /// (<see cref="FluentGpu.Pal.IVideoPresenter.ApplyPending"/>) are made visible by a single commit on the shared composition
+    /// device, after the parent and every detached child drained. No-op when nothing was applied since the last commit, and on a
+    /// backend without a composition device (the default). Render thread only.</summary>
+    void CommitVideoComposition() { }
 
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
@@ -254,6 +316,19 @@ public interface ISwapchain : IDisposable
     void Resize(Size2 px);
     void Present();
 
+    /// <summary>Present WITHOUT blocking the calling thread on this target's present queue (DXGI_PRESENT_DO_NOT_WAIT): the
+    /// non-blocking secondary present (F085) a detached pop-out's frame takes on the render thread it shares with the main
+    /// window. True when the frame is queued, stood down or otherwise handled exactly as <see cref="Present"/> would have
+    /// (including a covered window's stand-down). False when the backend REFUSED it because the queue was still full
+    /// (DXGI_ERROR_WAS_STILL_DRAWING): nothing was queued, so the present-slot credit the frame would have spent is still
+    /// held, the drawn back buffer is untouched, and the caller owes the frame and may re-present it on a later turn. The
+    /// default is the plain blocking <see cref="Present"/> (a backend with no queue to refuse from).</summary>
+    bool PresentNoWait()
+    {
+        Present();
+        return true;
+    }
+
     /// <summary>Read the most recently retired whole-frame GPU execution sample for THIS target. Returns false when the
     /// backend cannot measure it or no sample for this swapchain has retired yet. Target ownership is load-bearing: a
     /// popup/child submission must never update the main host's governor (and vice versa).</summary>
@@ -357,6 +432,17 @@ public interface ISwapchain : IDisposable
     /// no longer masquerade as the primary's (INCIDENT 2026-09 §1.6 item 4). Default 0.</summary>
     double LastLatencyWaitMs => 0;
 
+    /// <summary>Diagnostic (F244): the two waits THIS target's most recent submit paid inside itself, split so a slow present turn
+    /// can name the call that blocked — <paramref name="latencyMs"/>, a frame-latency waitable wait the submit made because the
+    /// render loop had not already taken the credit (0 when it held it), and <paramref name="bufferFenceMs"/>, the back-buffer /
+    /// ring-slot frame-fence wait (the GPU still owning the buffer). Both 0 for a backend that does not block there (the default,
+    /// and a target that has not submitted yet). Render-thread read, right after the submit.</summary>
+    void GetLastSubmitWaits(out double latencyMs, out double bufferFenceMs)
+    {
+        latencyMs = 0;
+        bufferFenceMs = 0;
+    }
+
     /// <summary>OS-attested present statistics for THIS target, CUMULATIVE (a reader diffs two samples), from the
     /// engine's <c>PresentStatisticsLedger</c> over the backend's PAIRED frame-statistics counters: presents that reached
     /// a vblank, presents superseded before display (ΔPresentCount beyond ΔPresentRefreshCount — the silent drop a submit
@@ -384,7 +470,26 @@ public interface ISwapchain : IDisposable
     void SuppressVsyncOnce() { }
 
     /// <summary>Hint the backend to sync DWM composition once after THIS target's next present (self-resetting). The
-    /// host calls this on a modal-loop SETTLE frame (<c>resized &amp;&amp; keepAlive</c>) so Mica/backdrop snaps with
-    /// the final client size. Default no-op.</summary>
+    /// host calls this, on the thread that presents the frame, for a modal-loop SETTLE frame (<c>resized &amp;&amp;
+    /// keepAlive</c>; <c>RenderFrame.SettlePresent</c>) so Mica/backdrop snaps with the final client size. The hint only ARMS
+    /// the sync: the present itself never blocks on it, because the video placement for the frame must be committed first
+    /// (see <see cref="CompleteSettlePresent"/>). Default no-op.</summary>
     void HintSettlePresent() { }
+
+    /// <summary>Arm, for THIS target's next present only (self-resetting), the geometry-motion present (F070 Stage B): the frame
+    /// being presented moves a video surface that is already on screen, so the present first waits (bounded by about one refresh) for
+    /// the frame's own GPU work to retire, and the host commits the new video placement the instant the present returns. The new hole
+    /// and the new video rect then become eligible for the SAME DWM composition instead of landing a queue-depth apart. A frame whose
+    /// GPU work runs longer than the bound presents anyway (one skewed frame, counted). Armed ONLY for a turn that moves video
+    /// geometry, never on steady playback or idle. Default no-op: a backend with no present queue to skew against.</summary>
+    void HintGeometryMotionPresent() { }
+
+    /// <summary>Run (or drop) the sync <see cref="HintSettlePresent"/> armed. The host calls this AFTER it committed the
+    /// frame's video placement, so the hole and the video geometry reach DWM in the same composition: a blocking flush
+    /// between the present and that commit would leave a composed frame with the new hole over the old video rect.
+    /// <paramref name="blockUntilComposed"/> is true only for an inline (UI-thread) present, where blocking one vblank costs
+    /// no other target anything. On the shared render thread it is false: the thread already waits on the compositor tick at
+    /// the top of its next turn, and a DWM flush there stalls every other target it presents (a pop-out) for up to a
+    /// refresh. Either way the hint is consumed. Default no-op.</summary>
+    void CompleteSettlePresent(bool blockUntilComposed) { }
 }

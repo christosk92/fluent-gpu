@@ -15,7 +15,10 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// promised: the license goes in flight from its first line, and the session fetches the init segments plus
 /// <see cref="ProtectedVideoSession.DefaultPrefetchSegments"/> segments at the start position for both streams — with
 /// no engine call. <see cref="OpenAsync"/> then finds that prepared session by its init URL and the switch is one
-/// attach. An unconsumed prepared session is disposed after <see cref="PreparedExpiryMs"/>.</para>
+/// attach. An unconsumed prepared session is disposed <see cref="PreparedExpiryMs"/> after its fetch LANDED (a
+/// prepare that is still downloading is not aged by its download), and every open's outcome is logged as
+/// <c>[video] prepared.hit|miss|expired key= ageMs=</c>, so a lost hand-off is never silent. A host asks
+/// <see cref="TryPeekPrepared"/> whether the open would be handed one, under the same expiry rule.</para>
 /// <para><b>The start position.</b> <see cref="MediaOpenOptions.StartPosition"/> is carried into the native open
 /// descriptor: the first segment fetched is the one containing it and the first presented frame is at it. A song→video
 /// switch at 1:23 never shows 0:00 first.</para>
@@ -27,8 +30,9 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// </summary>
 public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
 {
-    /// <summary>How long a prepared-but-unopened session is kept before it is disposed (its store and license row stay
-    /// accounted for no longer than the runtime's own warm-idle window).</summary>
+    /// <summary>How long a prepared-but-unopened session is kept, measured from the moment its fetch landed (from its
+    /// creation while it has not landed), before it is disposed (its store and license row stay accounted for no longer
+    /// than the runtime's own warm-idle window).</summary>
     public const int PreparedExpiryMs = ProtectedVideoRuntime.WarmIdleDisposeMs;
 
     private readonly Func<ProtectedVideoRequest, IProtectedVideoPlayer> _playerFactory;
@@ -37,6 +41,10 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
     private readonly DashSourceDescriptor? _descriptor;
     private readonly object _gate = new();
     private readonly Dictionary<string, PreparedEntry> _prepared = new(StringComparer.Ordinal);
+
+    /// <summary>The millisecond clock the expiry rule reads (a test advances it instead of waiting out
+    /// <see cref="PreparedExpiryMs"/>).</summary>
+    internal Func<long> Clock { get; set; } = static () => Environment.TickCount64;
 
     /// <summary>Create the production backend: sessions on <see cref="ProtectedVideoRuntime.Shared"/>, licenses started in
     /// its cache. <paramref name="defaultRelay"/> serves the prepare hook (which has no per-open options);
@@ -94,7 +102,11 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             throw new NotSupportedException("ProtectedMediaBackend requires a source carrying a DrmConfig (source.With(drm)).");
 
         ProtectedVideoRequest request = BuildRequest(source, source.Drm, opts.LicenseRelay ?? _defaultRelay, opts.StartPaused, _descriptor)
-            with { StartPosition = opts.StartPosition > TimeSpan.Zero ? opts.StartPosition : TimeSpan.Zero };
+            with
+            {
+                StartPosition = opts.StartPosition > TimeSpan.Zero ? opts.StartPosition : TimeSpan.Zero,
+                OriginTimestamp = System.Diagnostics.Stopwatch.GetTimestamp(),   // F216: the switch.budget counts from this open
+            };
 
         IProtectedVideoPlayer? player = TakePrepared(request);
         if (player is null)
@@ -140,6 +152,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             await player.PrefetchAsync(ProtectedVideoSession.DefaultPrefetchSegments, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { /* a canceled prepare still leaves whatever landed usable */ }
+        entry.MarkLanded(Clock());                                         // the expiry window starts HERE, not at creation
 
         TimeSpan duration = request.DurationMs > 0 ? TimeSpan.FromMilliseconds(request.DurationMs) : TimeSpan.Zero;
         bool ready = player.ForwardBufferedMs > 0 && player.State.Peek() != ProtectedVideoState.Error;
@@ -153,9 +166,9 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         List<PreparedEntry>? expired = null;
         lock (_gate)
         {
-            long now = Environment.TickCount64;
+            long now = Clock();
             foreach (KeyValuePair<string, PreparedEntry> kv in _prepared)
-                if (now - kv.Value.CreatedMs > PreparedExpiryMs) (expired ??= new()).Add(kv.Value);
+                if (kv.Value.IsExpired(now)) (expired ??= new()).Add(kv.Value);
             if (expired is not null)
                 for (int i = 0; i < expired.Count; i++) _prepared.Remove(expired[i].Request.InitUrl!);
             if (_prepared.Remove(key, out PreparedEntry? superseded)) (expired ??= new()).Add(superseded);
@@ -165,18 +178,56 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             for (int i = 0; i < expired.Count; i++) expired[i].Release();
     }
 
-    /// <summary>Hand a prepared player for <paramref name="request"/>'s init URL to the open, exactly once.</summary>
+    /// <summary>Hand a prepared player for <paramref name="request"/>'s init URL to the open, exactly once. Logs the
+    /// outcome: <c>hit</c> (taken), <c>expired</c> (found, past <see cref="PreparedExpiryMs"/>, disposed) or <c>miss</c>
+    /// (none registered, or its item was disposed first).</summary>
     private IProtectedVideoPlayer? TakePrepared(ProtectedVideoRequest request)
     {
-        if (request.InitUrl is null) return null;
-        PreparedEntry? entry;
+        string? key = request.InitUrl;
+        if (key is null) return null;
+        PreparedEntry? entry = null;
         lock (_gate)
         {
-            if (!_prepared.Remove(request.InitUrl, out entry)) return null;
+            if (_prepared.Remove(key, out PreparedEntry? taken)) entry = taken;
         }
-        if (Environment.TickCount64 - entry.CreatedMs > PreparedExpiryMs) { entry.Release(); return null; }
-        return entry.Claim() ? entry.Player : null;
+        if (entry is null) { LogPrepared("miss", key, -1); return null; }
+        long now = Clock();
+        long age = entry.AgeMs(now);
+        if (entry.IsExpired(now)) { entry.Release(); LogPrepared("expired", key, age); return null; }
+        if (!entry.Claim()) { LogPrepared("miss", key, age); return null; }
+        LogPrepared("hit", key, age);
+        return entry.Player;
     }
+
+    /// <summary>
+    /// Would an open of the source whose init URL is <paramref name="initUrl"/> be handed a prepared session right now?
+    /// True while one is registered (in flight or landed), not yet claimed and within <see cref="PreparedExpiryMs"/> —
+    /// the exact rule <see cref="OpenAsync"/> applies, so a host reports "warm" only for a switch that will be. An
+    /// expired entry found here is disposed on the spot (it would be at the open anyway, and nothing else frees it
+    /// until the next prepare). Does not claim or refresh anything.
+    /// </summary>
+    public bool TryPeekPrepared(string? initUrl)
+    {
+        if (initUrl is null) return false;
+        PreparedEntry? expired = null;
+        bool live = false;
+        long age = 0;
+        lock (_gate)
+        {
+            if (!_prepared.TryGetValue(initUrl, out PreparedEntry? entry)) return false;
+            long now = Clock();
+            age = entry.AgeMs(now);
+            if (entry.IsExpired(now)) { _prepared.Remove(initUrl); expired = entry; }
+            else live = !entry.IsClaimed;
+        }
+        if (expired is null) return live;
+        expired.Release();
+        LogPrepared("expired", initUrl, age);
+        return false;
+    }
+
+    private static void LogPrepared(string what, string initUrl, long ageMs)
+        => ProtectedVideoRuntime.WriteVideoLine($"prepared.{what} key={(initUrl.Length <= 24 ? initUrl : initUrl[^24..])} ageMs={ageMs}");
 
     private void ForgetPrepared(PreparedEntry entry)
     {
@@ -272,14 +323,36 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             _owner = owner;
             Player = player;
             Request = request;
-            CreatedMs = Environment.TickCount64;
+            CreatedMs = owner.Clock();
+            MediaCensus.NotePrepared(+1);   // F197: a prepared session (its segment store is resident) until the open or the disposal claims it
         }
 
         internal IProtectedVideoPlayer Player { get; }
         internal ProtectedVideoRequest Request { get; }
         internal long CreatedMs { get; }
 
-        internal bool Claim() => Interlocked.Exchange(ref _claimed, 1) == 0;
+        // The clock reading at which the prefetch finished (or was canceled); -1 while it is still in flight.
+        private long _landedMs = -1;
+
+        internal bool IsClaimed => Volatile.Read(ref _claimed) != 0;
+
+        internal void MarkLanded(long nowMs) => Volatile.Write(ref _landedMs, nowMs);
+
+        /// <summary>Milliseconds since the entry's clock started: its landing, or its creation while still in flight.</summary>
+        internal long AgeMs(long nowMs)
+        {
+            long landed = Volatile.Read(ref _landedMs);
+            return nowMs - (landed >= 0 ? landed : CreatedMs);
+        }
+
+        internal bool IsExpired(long nowMs) => AgeMs(nowMs) > PreparedExpiryMs;
+
+        internal bool Claim()
+        {
+            if (Interlocked.Exchange(ref _claimed, 1) != 0) return false;
+            MediaCensus.NotePrepared(-1);
+            return true;
+        }
 
         /// <summary>Dispose the player unless the open already took it.</summary>
         internal void Release()

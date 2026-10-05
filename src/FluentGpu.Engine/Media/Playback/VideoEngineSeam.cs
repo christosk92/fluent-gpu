@@ -30,7 +30,7 @@ public enum VideoEngineFlags : uint
     /// <summary>The engine is in an error state (see <see cref="VideoEngineSnapshot.ErrorCode"/>/<see cref="VideoEngineSnapshot.ErrorHr"/>).</summary>
     Error = 1 << 5,
     /// <summary>Latched by the engine thread once the current source is known live (e.g. a DVR/live manifest); never
-    /// cleared within a source — only reset on the next <c>SetSource</c>.</summary>
+    /// cleared within a source — only reset on the next <c>SetSource</c> (or a <c>Detach</c>).</summary>
     LiveSource = 1 << 6,
     /// <summary>The engine has ANSWERED the native-video-size query (GetNativeVideoSize). <c>Known + 0×0</c> means
     /// audio-only; <c>!Known</c> means the answer is still resolving.</summary>
@@ -38,6 +38,10 @@ public enum VideoEngineFlags : uint
     /// <summary>Unrecoverable bring-up failure — the engine must be rebuilt (a fresh <see cref="IDisposable.Dispose"/>
     /// + reconstruct), never <c>SetSource</c>'d again.</summary>
     Faulted = 1 << 8,
+    /// <summary>Playback is intended (<see cref="Playing"/>) but the engine is starved: MF raised WAITING after this
+    /// source first had enough data and nothing has resumed it (PLAYING / CANPLAY, or the playhead moving again). The
+    /// published position is frozen while this is set, so a consumer must not extrapolate it forward.</summary>
+    Waiting = 1 << 9,
 }
 
 /// <summary>Plain-old-data snapshot of a video engine's observable state, published by the engine thread and read by
@@ -84,9 +88,106 @@ public struct VideoEngineSnapshot
     /// current <see cref="SourceEpoch"/>; 0 until it does (or when the backend does not report it). The moment a
     /// surface may drop its poster — an event, never a state guess.</summary>
     public long FirstFrameTimestamp;
+    /// <summary>How many SEEKED events the engine has raised for the current <see cref="SourceEpoch"/> (0 for a backend
+    /// that does not report them). Lossless where the <see cref="VideoEngineFlags.Seeking"/> flag is not: a seek whose
+    /// SEEKING and SEEKED land between two reads never shows the flag, but always moves this counter — what a consumer
+    /// owing a repaint after a paused seek compares against its last-seen value.</summary>
+    public int SeekedCount;
     /// <summary>Media buffered ahead of the playhead, in ms; 0 when empty or not reported by this backend. What a seek
     /// planner checks before it asks for a fetch, and what a scrub bar's loaded band starts from.</summary>
     public long BufferedAheadMs;
+    /// <summary>The stream width (device px) the backend has APPLIED (the echo of the last <see cref="VideoCommandKind.StreamRect"/>
+    /// it carried out); 0 until one has been, and again after a new source. A consumer keeps the content size it hands the
+    /// compositor at the PREVIOUS value until this equals the size it asked for, so DirectComposition never scales a buffer
+    /// still at the old size by the new size's factor.</summary>
+    public uint StreamW;
+    /// <summary>The stream height (device px) the backend has APPLIED; see <see cref="StreamW"/>.</summary>
+    public uint StreamH;
+    /// <summary>Frames the backend's video renderer has PRESENTED for the current <see cref="SourceEpoch"/> (MF's
+    /// FRAMES_RENDERED, accumulated across the counter resets the engine applies after an internal flush — see
+    /// <see cref="VideoFrameCounters"/>). Polled only while video is actually playing, so it is frozen while paused, parked,
+    /// starved or seeking; 0 for a backend that does not report it.</summary>
+    public long FramesRendered;
+    /// <summary>Frames the backend's renderer DROPPED for the current <see cref="SourceEpoch"/> (MF's FRAMES_DROPPED, same
+    /// accumulation as <see cref="FramesRendered"/>). Counts only the renderer's own drops: a frame the compositor missed
+    /// after the swap chain presented it is invisible here, which is what <see cref="RenderedFrameWatch"/> backstops.</summary>
+    public long FramesDropped;
+}
+
+/// <summary>Accumulates a media engine's rendered/dropped frame counters across the resets it applies: Media Foundation
+/// clears both internally after a flush (a seek, a source reload), so a reading LOWER than the previous one means the engine
+/// restarted from zero, and the previous run's total is kept (Firefox's <c>MFMediaEngineParent::UpdateStatisticsData</c> and
+/// Chromium's <c>statistics_</c> rebase do the same). Single-threaded: owned by whoever polls the engine. Pure BCL, so the
+/// clear engine and its tests run the same arithmetic headlessly (the protected runtime mirrors it in C++).</summary>
+public struct VideoFrameCounters
+{
+    private uint _lastRendered, _lastDropped;
+
+    /// <summary>Frames rendered since <see cref="Reset"/> / <see cref="Rebase"/>, across engine-side counter resets.</summary>
+    public long Rendered { get; private set; }
+    /// <summary>Frames dropped since <see cref="Reset"/> / <see cref="Rebase"/>, across engine-side counter resets.</summary>
+    public long Dropped { get; private set; }
+
+    /// <summary>Forget everything (a new source, a detach): the next <see cref="Observe"/> counts from zero.</summary>
+    public void Reset() => this = default;
+
+    /// <summary>Start a new accumulation at the engine's CURRENT raw readings, counting nothing already on them: a warm engine
+    /// reused for the next source may still carry the previous source's totals until it resets them. A reading that then falls
+    /// below the baseline is the engine's own reset, and counts from zero.</summary>
+    public void Rebase(uint rawRendered, uint rawDropped)
+    {
+        Rendered = 0; Dropped = 0;
+        _lastRendered = rawRendered; _lastDropped = rawDropped;
+    }
+
+    /// <summary>Fold in one raw reading of the engine's counters.</summary>
+    public void Observe(uint rawRendered, uint rawDropped)
+    {
+        // Either counter going backwards means the engine flushed and restarted both: the new reading IS the delta from zero.
+        if (rawRendered < _lastRendered || rawDropped < _lastDropped) { _lastRendered = 0; _lastDropped = 0; }
+        Rendered += rawRendered - _lastRendered;
+        Dropped += rawDropped - _lastDropped;
+        _lastRendered = rawRendered; _lastDropped = rawDropped;
+    }
+}
+
+/// <summary>Chromium's rendered-video-frame detection (<c>MediaFoundationRenderer::CheckRenderedVideoFrame</c>): a source that
+/// is playing video but has rendered NO frame within <see cref="DefaultTimeoutMs"/> — counted from PLAYING, or from the last
+/// <c>UpdateVideoStream</c> that re-sized the stream — is hung (a dead swap-chain handle, a stuck topology, a lost device that
+/// never raised an error). Only the FIRST frame is watched: once any frame has rendered the watch is over, so a legitimately
+/// static picture never trips it. Pure and single-threaded; the caller supplies the clock.</summary>
+public struct RenderedFrameWatch
+{
+    /// <summary>Chromium's <c>kMinPlaybackTimeout</c>: no frame in this long while playing is a hang, whatever the rate.</summary>
+    public const long DefaultTimeoutMs = 10_000;
+
+    private long _sinceMs;
+    private bool _counting, _done;
+
+    /// <summary>Begin again for a new source (or after a detach).</summary>
+    public void Reset() => this = default;
+
+    /// <summary>The stream was re-sized or re-created: a swap chain that never presents again must be given a fresh window
+    /// from here, not judged against a clock that started before the change. No-op while the window is not counting.</summary>
+    public void Restart(long nowMs)
+    {
+        if (_counting) _sinceMs = nowMs;
+    }
+
+    /// <summary>Observe one turn. <paramref name="playing"/> is true only while the source is playing video (not paused, parked,
+    /// starved, seeking or failed) — time outside it never counts, and the window restarts when it resumes.
+    /// <paramref name="rendered"/> is the accumulated rendered-frame count. Returns true exactly once: the turn the window
+    /// elapsed with still no rendered frame.</summary>
+    public bool Observe(long nowMs, bool playing, long rendered, long timeoutMs = DefaultTimeoutMs)
+    {
+        if (_done) return false;
+        if (rendered > 0) { _done = true; _counting = false; return false; }
+        if (!playing) { _counting = false; return false; }
+        if (!_counting) { _counting = true; _sinceMs = nowMs; return false; }
+        if (nowMs - _sinceMs < timeoutMs) return false;
+        _done = true; _counting = false;
+        return true;
+    }
 }
 
 /// <summary>Single-writer seqlock around one <see cref="VideoEngineSnapshot"/>. Publish: engine thread only, never
@@ -150,10 +251,14 @@ public enum VideoCommandKind : byte
     Detach,
 }
 
-/// <summary>Fire-and-forget, alloc-free command channel from the UI thread to the engine thread. One slot per
-/// <see cref="VideoCommandKind"/>, LAST-WINS coalescing within a kind; each slot's payload is guarded by its own
-/// seqlock so a payload never tears. <see cref="Post"/> never allocates. <see cref="Wake"/> — set once by the engine
-/// — is invoked at most once per drain cycle, coalescing however many posts land between two drains.</summary>
+/// <summary>Fire-and-forget, alloc-free command channel into the engine thread, safe for ANY number of producer threads
+/// (the UI thread, a pool continuation after an awaited open, a settle worker) and exactly one consumer (the engine
+/// thread). One slot per <see cref="VideoCommandKind"/>, LAST-WINS coalescing within a kind. Each slot is a seqlock whose
+/// odd-sequence write section is CAS-acquired, so two producers can never interleave field writes (no torn payload) and
+/// the pending flag is set and cleared INSIDE that section (no duplicate or lost apply). <see cref="Post"/> never
+/// allocates; its only wait is the few-store write section of a concurrent producer/take on the SAME slot.
+/// <see cref="Wake"/> — set once by the engine — is invoked at most once per drain cycle, coalescing however many posts
+/// (and <see cref="RequestWake"/> calls) land between two drains.</summary>
 public sealed class VideoEngineCommandQueue
 {
     private struct Slot { public int Seq; public int Pending; public double A; public int I, J; public object? Obj; }
@@ -167,15 +272,37 @@ public sealed class VideoEngineCommandQueue
     public Action? Wake;
 
     /// <summary>Post a command, overwriting any pending, undrained payload of the same <paramref name="kind"/>
-    /// (last-wins coalescing). Alloc-free. May be called from any thread; typically the UI thread.</summary>
+    /// (last-wins coalescing). Alloc-free. May be called from any number of threads concurrently.</summary>
     public void Post(VideoCommandKind kind, double a = 0, int i = 0, int j = 0, object? obj = null)
     {
         ref Slot s = ref _slots[(int)kind];
-        Interlocked.Increment(ref s.Seq);
+        int s0 = AcquireWriteSection(ref s);
         s.A = a; s.I = i; s.J = j; s.Obj = obj;
-        Interlocked.Increment(ref s.Seq);
+        // Pending is raised INSIDE the write section: a consumer that sees it set will wait for the section to close, so
+        // it can neither read this payload half-written nor clear a flag that belongs to a later post.
         Volatile.Write(ref s.Pending, 1);
+        Volatile.Write(ref s.Seq, unchecked(s0 + 2));
+        RequestWake();
+    }
+
+    /// <summary>Ask for one out-of-cadence engine-thread turn WITHOUT posting a command (a native MF event): invokes
+    /// <see cref="Wake"/> only if no wake is already outstanding for the current drain cycle — the same gate
+    /// <see cref="Post"/> uses, so command-driven and event-driven wakes coalesce together. Alloc-free, any thread.</summary>
+    public void RequestWake()
+    {
         if (Interlocked.Exchange(ref _wakeQueued, 1) == 0) Wake?.Invoke();
+    }
+
+    // CAS the slot's sequence from even to odd; returns the even value it was acquired from (publish s0 + 2 to release).
+    private static int AcquireWriteSection(ref Slot s)
+    {
+        SpinWait spin = default;
+        while (true)
+        {
+            int s0 = Volatile.Read(ref s.Seq);
+            if ((s0 & 1) == 0 && Interlocked.CompareExchange(ref s.Seq, unchecked(s0 + 1), s0) == s0) return s0;
+            spin.SpinOnce(sleep1Threshold: -1);
+        }
     }
 
     /// <summary>Take the pending payload for <paramref name="kind"/>, if any, clearing its pending flag. Returns
@@ -184,16 +311,23 @@ public sealed class VideoEngineCommandQueue
     {
         ref Slot s = ref _slots[(int)kind];
         a = 0; i = 0; j = 0; obj = null;
-        if (Interlocked.Exchange(ref s.Pending, 0) == 0) return false;
+        SpinWait spin = default;
         while (true)
         {
             int s0 = Volatile.Read(ref s.Seq);
-            if ((s0 & 1) != 0) { Thread.SpinWait(8); continue; }
-            a = s.A; i = s.I; j = s.J; obj = s.Obj;
+            if ((s0 & 1) != 0) { spin.SpinOnce(sleep1Threshold: -1); continue; }
+            if (Volatile.Read(ref s.Pending) == 0) return false;
+            double ta = s.A; int ti = s.I, tj = s.J; object? to = s.Obj;
             // Same weak-memory-model fence as VideoSnapshotBuffer.Read: the payload loads must complete before the
-            // validation load, or a torn payload could validate.
+            // validation, or a torn payload could validate.
             Interlocked.MemoryBarrier();
-            if (Volatile.Read(ref s.Seq) == s0) return true;
+            // Validate AND claim in one step: only if no producer entered since s0 do we own the section, and only then
+            // do we clear Pending — so a post that raced the copy is left pending for the next take, never lost.
+            if (Interlocked.CompareExchange(ref s.Seq, unchecked(s0 + 1), s0) != s0) continue;
+            Volatile.Write(ref s.Pending, 0);
+            Volatile.Write(ref s.Seq, unchecked(s0 + 2));
+            a = ta; i = ti; j = tj; obj = to;
+            return true;
         }
     }
 

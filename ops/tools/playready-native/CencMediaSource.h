@@ -31,6 +31,7 @@
 #include <map>        // per-stream ITA cache (a single slot thrashes once there are two streams)
 #include <set>        // announced / ended stream ids
 #include <iterator>   // make_move_iterator — appending fetched samples without copying them
+#include <numeric>    // std::gcd — the frame rate as a reduced fraction
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Big-endian box reader helpers.
@@ -73,6 +74,203 @@ static bool FindBox(const uint8_t* data, size_t len, uint32_t type, Box& out)
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  H.264 sequence parameter set — the few fields the video media type is described from (F261, F028).
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+/// What an SPS says about the picture: the coded size, the crop rectangle and the VUI's aspect, range, colour description
+/// and timing. Every VUI group is flagged on its own: a stream that carries no VUI (or a truncated one) yields the
+/// geometry and nothing else, which the media type then simply leaves out.
+struct SpsInfo
+{
+    bool valid = false;                                  // the geometry parsed; false = nothing below is meaningful
+    uint32_t codedWidth = 0, codedHeight = 0;            // before cropping, luma samples (what the decoder allocates)
+    uint32_t cropLeft = 0, cropRight = 0, cropTop = 0, cropBottom = 0;   // luma samples (the crop units already applied)
+    bool hasAspect = false;                              // VUI aspect_ratio_info: the SAMPLE aspect ratio below
+    uint32_t sarWidth = 0, sarHeight = 0;
+    bool hasRange = false, fullRange = false;            // VUI video_signal_type: video_full_range_flag
+    bool hasColour = false;                              // VUI colour_description: ISO/IEC 23091-2 code points
+    uint8_t primaries = 0, transfer = 0, matrix = 0;
+    bool hasTiming = false;                              // VUI timing_info: one tick = numUnitsInTick / timeScale s, 2 ticks per frame
+    uint32_t numUnitsInTick = 0, timeScale = 0;
+
+    uint32_t DisplayWidth() const { return codedWidth - cropLeft - cropRight; }
+    uint32_t DisplayHeight() const { return codedHeight - cropTop - cropBottom; }
+    bool HasCrop() const { return (cropLeft | cropRight | cropTop | cropBottom) != 0; }
+};
+
+/// A big-endian bit reader over an RBSP. Reading past the end sets `bad` and returns zeros, so a truncated SPS can never
+/// loop or read out of bounds; the parser checks `bad` before it trusts a group of fields.
+struct SpsBits
+{
+    const uint8_t* data = nullptr;
+    size_t bitCount = 0;
+    size_t pos = 0;
+    bool bad = false;
+
+    uint32_t Bit()
+    {
+        if (pos >= bitCount) { bad = true; return 0; }
+        const uint32_t v = (data[pos >> 3] >> (7 - (pos & 7))) & 1u;
+        pos++;
+        return v;
+    }
+    uint32_t Bits(int n)
+    {
+        uint32_t v = 0;
+        for (int i = 0; i < n; i++) v = (v << 1) | Bit();
+        return v;
+    }
+    /// ue(v): Exp-Golomb. More than 31 leading zeros is not a value this parser can hold: treated as corrupt.
+    uint32_t Ue()
+    {
+        int zeros = 0;
+        while (!bad && Bit() == 0)
+            if (++zeros > 31) { bad = true; return 0; }
+        if (bad) return 0;
+        return zeros == 0 ? 0u : ((1u << zeros) - 1u) + Bits(zeros);
+    }
+    /// se(v): the signed Exp-Golomb mapping 0, 1, -1, 2, -2, ...
+    int64_t Se()
+    {
+        const uint32_t k = Ue();
+        return (k & 1u) ? (int64_t)((k >> 1) + 1) : -(int64_t)(k >> 1);
+    }
+};
+
+/// Skip one scaling_list(): its values do not matter, only how many bits they take.
+static void SkipScalingList(SpsBits& b, int size)
+{
+    int64_t last = 8, next = 8;
+    for (int j = 0; j < size && !b.bad; j++)
+    {
+        if (next != 0) next = ((last + b.Se()) % 256 + 256) % 256;
+        if (next != 0) last = next;
+    }
+}
+
+/// Parse the SPS NAL unit `nal` (its header byte first, as stored in the avcC) into `out`. False when it is not an SPS or its
+/// geometry is unreadable or implausible; `out` is then left default (invalid).
+static bool ParseSps(const uint8_t* nal, size_t n, SpsInfo& out)
+{
+    out = SpsInfo{};
+    if (nal == nullptr || n < 5 || (nal[0] & 0x1F) != 7) return false;
+
+    // Unescape: the RBSP is the payload without its emulation-prevention bytes (00 00 03 -> 00 00).
+    std::vector<uint8_t> rbsp;
+    rbsp.reserve(n);
+    int zeros = 0;
+    for (size_t i = 1; i < n; i++)
+    {
+        const uint8_t c = nal[i];
+        if (zeros >= 2 && c == 3) { zeros = 0; continue; }
+        rbsp.push_back(c);
+        zeros = c == 0 ? zeros + 1 : 0;
+    }
+
+    SpsBits b;
+    b.data = rbsp.data();
+    b.bitCount = rbsp.size() * 8;
+
+    const uint32_t profile = b.Bits(8);
+    b.Bits(8);    // constraint_set flags + reserved
+    b.Bits(8);    // level_idc
+    b.Ue();       // seq_parameter_set_id
+    uint32_t chromaFormat = 1;
+    bool separatePlanes = false;
+    switch (profile)
+    {
+        case 100: case 110: case 122: case 244: case 44: case 83: case 86: case 118: case 128: case 138: case 139: case 134: case 135:
+        {
+            chromaFormat = b.Ue();
+            if (chromaFormat > 3) return false;
+            if (chromaFormat == 3) separatePlanes = b.Bit() != 0;
+            b.Ue();   // bit_depth_luma_minus8
+            b.Ue();   // bit_depth_chroma_minus8
+            b.Bit();  // qpprime_y_zero_transform_bypass_flag
+            if (b.Bit() != 0)   // seq_scaling_matrix_present_flag
+            {
+                const int lists = chromaFormat != 3 ? 8 : 12;
+                for (int i = 0; i < lists && !b.bad; i++)
+                    if (b.Bit() != 0) SkipScalingList(b, i < 6 ? 16 : 64);
+            }
+            break;
+        }
+        default: break;
+    }
+    b.Ue();   // log2_max_frame_num_minus4
+    const uint32_t pocType = b.Ue();
+    if (pocType == 0) b.Ue();   // log2_max_pic_order_cnt_lsb_minus4
+    else if (pocType == 1)
+    {
+        b.Bit();   // delta_pic_order_always_zero_flag
+        b.Se();    // offset_for_non_ref_pic
+        b.Se();    // offset_for_top_to_bottom_field
+        const uint32_t cycle = b.Ue();
+        if (cycle > 255) return false;
+        for (uint32_t i = 0; i < cycle && !b.bad; i++) b.Se();
+    }
+    b.Ue();    // max_num_ref_frames
+    b.Bit();   // gaps_in_frame_num_value_allowed_flag
+    const uint32_t widthMbs = b.Ue();
+    const uint32_t heightMapUnits = b.Ue();
+    const bool frameMbsOnly = b.Bit() != 0;
+    if (!frameMbsOnly) b.Bit();   // mb_adaptive_frame_field_flag
+    b.Bit();                      // direct_8x8_inference_flag
+    if (b.bad || widthMbs >= 0x1000 || heightMapUnits >= 0x1000) return false;
+
+    SpsInfo r;
+    r.codedWidth = (widthMbs + 1) * 16;
+    r.codedHeight = (heightMapUnits + 1) * 16 * (frameMbsOnly ? 1u : 2u);
+
+    if (b.Bit() != 0)   // frame_cropping_flag: the offsets are in crop units, not luma samples
+    {
+        const uint32_t l = b.Ue(), rt = b.Ue(), t = b.Ue(), bt = b.Ue();
+        if (b.bad || l > 0x4000 || rt > 0x4000 || t > 0x4000 || bt > 0x4000) return false;
+        const uint32_t chromaArrayType = separatePlanes ? 0u : chromaFormat;
+        const uint32_t unitX = chromaArrayType == 0 || chromaArrayType == 3 ? 1u : 2u;
+        const uint32_t unitY = (chromaArrayType == 1 ? 2u : 1u) * (frameMbsOnly ? 1u : 2u);
+        r.cropLeft = l * unitX; r.cropRight = rt * unitX; r.cropTop = t * unitY; r.cropBottom = bt * unitY;
+        if (r.cropLeft + r.cropRight >= r.codedWidth || r.cropTop + r.cropBottom >= r.codedHeight) return false;
+    }
+    if (b.bad) return false;
+    r.valid = true;   // the geometry is trusted from here; a damaged VUI only costs the VUI-derived attributes
+
+    if (b.Bit() != 0)   // vui_parameters_present_flag
+    {
+        if (b.Bit() != 0)   // aspect_ratio_info_present_flag
+        {
+            static const uint16_t kSar[17][2] = {
+                { 0, 0 }, { 1, 1 }, { 12, 11 }, { 10, 11 }, { 16, 11 }, { 40, 33 }, { 24, 11 }, { 20, 11 }, { 32, 11 },
+                { 80, 33 }, { 18, 11 }, { 15, 11 }, { 64, 33 }, { 160, 99 }, { 4, 3 }, { 3, 2 }, { 2, 1 } };
+            const uint32_t idc = b.Bits(8);
+            uint32_t sw = 0, sh = 0;
+            if (idc == 255) { sw = b.Bits(16); sh = b.Bits(16); }
+            else if (idc >= 1 && idc <= 16) { sw = kSar[idc][0]; sh = kSar[idc][1]; }
+            if (!b.bad && sw > 0 && sh > 0) { r.hasAspect = true; r.sarWidth = sw; r.sarHeight = sh; }
+        }
+        if (b.Bit() != 0) b.Bit();   // overscan_info_present_flag -> overscan_appropriate_flag
+        if (b.Bit() != 0)            // video_signal_type_present_flag
+        {
+            b.Bits(3);               // video_format
+            const bool full = b.Bit() != 0;
+            if (!b.bad) { r.hasRange = true; r.fullRange = full; }
+            if (b.Bit() != 0)        // colour_description_present_flag
+            {
+                const uint32_t p = b.Bits(8), t = b.Bits(8), m = b.Bits(8);
+                if (!b.bad) { r.hasColour = true; r.primaries = (uint8_t)p; r.transfer = (uint8_t)t; r.matrix = (uint8_t)m; }
+            }
+        }
+        if (b.Bit() != 0) { b.Ue(); b.Ue(); }   // chroma_loc_info_present_flag -> the two chroma sample location fields
+        if (b.Bit() != 0)                        // timing_info_present_flag
+        {
+            const uint32_t units = b.Bits(32), scale = b.Bits(32);
+            if (!b.bad && units > 0 && scale > 0) { r.hasTiming = true; r.numUnitsInTick = units; r.timeScale = scale; }
+        }
+    }
+    out = r;
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Parsed init-segment info.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // Which kind of track an InitInfo describes. Spotify addresses every representation as its own single-track file (video
@@ -102,6 +300,8 @@ struct InitInfo
     std::vector<uint8_t> avcC;         // raw AVCDecoderConfigurationRecord (from the 'avcC' box)
     std::vector<uint8_t> spspps;       // SPS+PPS as Annex-B (for MF_MT_MPEG_SEQUENCE_HEADER)
     uint32_t width = 0, height = 0;
+    uint32_t paspHSpacing = 0, paspVSpacing = 0;   // the sample entry's 'pasp' pixel aspect ratio, 0 when absent
+    SpsInfo sps;                       // the first SPS's geometry and VUI (invalid when the avcC carries none that parses)
     // ── audio (mp4a/enca) ───────────────────────────────────────────────────────────────────────────────────────────
     uint32_t channels = 0;             // AudioSampleEntry channelcount
     uint32_t sampleRate = 0;           // AudioSampleEntry samplerate (integer part of the 16.16 fixed-point field)
@@ -136,7 +336,9 @@ static void ExtractSpsPps(const std::vector<uint8_t>& avcC, InitInfo& info)
     {
         uint16_t n = rd16(&avcC[p]); p += 2;
         if (p + n > avcC.size()) return;
-        emit(&avcC[p], n); p += n;
+        emit(&avcC[p], n);
+        if (!info.sps.valid) ParseSps(&avcC[p], n, info.sps);   // the first SPS that parses describes the picture
+        p += n;
     }
     if (p >= avcC.size()) return;
     int numPps = avcC[p++];
@@ -178,6 +380,11 @@ static void ParseVisualSampleEntry(const Box& entry, InitInfo& info)
     const uint8_t* kids = p + 78; size_t klen = n - 78;
     ForEachBox(kids, klen, [&](const Box& b) {
         if (b.type == fourcc("avcC")) { info.avcC.assign(b.payload, b.payload + b.payloadLen); }
+        else if (b.type == fourcc("pasp") && b.payloadLen >= 8)   // hSpacing(4) vSpacing(4): the pixel aspect ratio
+        {
+            info.paspHSpacing = rd32(b.payload);
+            info.paspVSpacing = rd32(b.payload + 4);
+        }
         else if (b.type == fourcc("sinf"))
         {
             Box frma, schm, schi, tenc;
@@ -438,6 +645,11 @@ struct Sample
     uint64_t durTicks = 0;
     bool keyframe = false;
     bool encrypted = false;
+    // The video FORMAT GENERATION this sample belongs to (fgpr::RepBook): stamped by the stream that stores it, never by
+    // the demuxer. Delivery announces a format change when the next sample's generation differs from the one Media
+    // Foundation's current type describes, so the change lands where the new representation's first sample does, not
+    // where it was spliced in. Travels with the sample through trims, splices and a re-attach's TakeSamples.
+    uint16_t repGen = 0;
 };
 
 // Media Foundation's H.264 decoder consumes Annex-B access units (start-code-prefixed NALs), while ISO BMFF stores
@@ -804,6 +1016,179 @@ struct CencMediaSource;   // fwd
 /// recompute a fresh boundary and retry rather than treat it like `Rejected`.
 enum class SwitchResult { Spliced, StaleBoundary, Rejected };
 
+/// What the H.264 media type carries beyond its geometry and SPS/PPS, worked out from an init segment alone (no Media
+/// Foundation call, so a unit test pins it): frame rate, pixel aspect ratio, the visible-area aperture and the VUI's colour
+/// description, as Media Foundation's own enum values. Firefox (MFMediaEngineVideoStream::CreateMediaType) and Chromium
+/// (GetVideoType) describe the clear type this fully before wrapping it, so the decoder never depends on its defaults (F261,
+/// F028). Each `has*` is false when the stream does not say: the type then leaves the attribute OUT rather than guess (a
+/// wrong value can break the protected pipeline's topology negotiation; an absent one only leaves the decoder to take it from
+/// the in-band SPS, as it did before these attributes were set).
+struct H264TypeAttrs
+{
+    bool hasFrameRate = false;
+    uint32_t frameRateNum = 0, frameRateDen = 0;
+    uint32_t parNum = 1, parDen = 1;   // always set: the container's pasp, else the VUI's sample aspect ratio, else square pixels
+    bool hasAperture = false;          // the SPS crop and the declared size agree: the whole declared frame is the visible area
+    bool hasPrimaries = false, hasTransfer = false, hasMatrix = false, hasRange = false;
+    uint32_t primaries = 0, transfer = 0, matrix = 0, range = 0;
+};
+
+/// num/den reduced, when it is a believable frame rate (1..240 fps). A trex duration of 1 tick at a 90 kHz timescale is a
+/// muxer's placeholder, not a rate, and must not be advertised as 90000 fps. `outNum` / `outDen` are written only on success.
+static bool ReduceFrameRate(uint64_t num, uint64_t den, uint32_t& outNum, uint32_t& outDen)
+{
+    if (num == 0 || den == 0) return false;
+    const uint64_t g = std::gcd(num, den);
+    num /= g;
+    den /= g;
+    if (num > 0xFFFFFFFFull || den > 0xFFFFFFFFull) return false;
+    if (num < den || num > 240ull * den) return false;
+    outNum = (uint32_t)num;
+    outDen = (uint32_t)den;
+    return true;
+}
+
+static H264TypeAttrs ComputeH264TypeAttrs(const cenc::InitInfo& info)
+{
+    H264TypeAttrs a;
+    const cenc::SpsInfo& sps = info.sps;
+
+    // Frame rate: the mvex/trex default duration against the media timescale (what a packager that states the duration once
+    // per track writes), else the SPS VUI's timing (two ticks per frame).
+    a.hasFrameRate = ReduceFrameRate(info.timescale, info.defaultSampleDuration, a.frameRateNum, a.frameRateDen);
+    if (!a.hasFrameRate && sps.valid && sps.hasTiming)
+        a.hasFrameRate = ReduceFrameRate(sps.timeScale, 2ull * sps.numUnitsInTick, a.frameRateNum, a.frameRateDen);
+
+    // Pixel aspect ratio: pasp, else the VUI's sample aspect ratio, else square pixels.
+    if (info.paspHSpacing > 0 && info.paspVSpacing > 0) { a.parNum = info.paspHSpacing; a.parDen = info.paspVSpacing; }
+    else if (sps.valid && sps.hasAspect) { a.parNum = sps.sarWidth; a.parDen = sps.sarHeight; }
+
+    // Aperture: an SPS that crops (1080p is coded 1088 tall with 8 rows cropped) names a visible area smaller than what the
+    // decoder allocates. FRAME_SIZE is the visible size, as in Chromium's type, so the aperture is that whole frame. Set it
+    // only when the container's size and the SPS crop AGREE; a disagreement is shown in the type dump and left to the SPS.
+    a.hasAperture = sps.valid && sps.HasCrop() && info.width > 0 && info.height > 0 &&
+                    sps.DisplayWidth() == info.width && sps.DisplayHeight() == info.height;
+
+    if (sps.valid && sps.hasColour)
+    {
+        // ISO/IEC 23091-2 (H.273) code points as H.264's VUI carries them -> Media Foundation's enums; the ones with no
+        // Media Foundation counterpart stay unset.
+        switch (sps.primaries)
+        {
+            case 1:  a.primaries = MFVideoPrimaries_BT709; break;
+            case 4:  a.primaries = MFVideoPrimaries_BT470_2_SysM; break;
+            case 5:  a.primaries = MFVideoPrimaries_BT470_2_SysBG; break;
+            case 6:  a.primaries = MFVideoPrimaries_SMPTE170M; break;
+            case 7:  a.primaries = MFVideoPrimaries_SMPTE240M; break;
+            case 9:  a.primaries = MFVideoPrimaries_BT2020; break;
+            case 22: a.primaries = MFVideoPrimaries_EBU3213; break;
+            default: break;
+        }
+        a.hasPrimaries = a.primaries != 0;
+        switch (sps.transfer)
+        {
+            case 1: case 6: a.transfer = MFVideoTransFunc_709; break;   // BT.601's curve is BT.709's
+            case 4:  a.transfer = MFVideoTransFunc_22; break;
+            case 5:  a.transfer = MFVideoTransFunc_28; break;
+            case 7:  a.transfer = MFVideoTransFunc_240M; break;
+            case 8:  a.transfer = MFVideoTransFunc_10; break;
+            case 13: a.transfer = MFVideoTransFunc_sRGB; break;
+            case 14: case 15: a.transfer = MFVideoTransFunc_2020; break;
+            case 16: a.transfer = MFVideoTransFunc_2084; break;
+            case 18: a.transfer = MFVideoTransFunc_HLG; break;
+            default: break;
+        }
+        a.hasTransfer = a.transfer != 0;
+        switch (sps.matrix)
+        {
+            case 1: a.matrix = MFVideoTransferMatrix_BT709; break;
+            case 5: case 6: a.matrix = MFVideoTransferMatrix_BT601; break;
+            case 7: a.matrix = MFVideoTransferMatrix_SMPTE240M; break;
+            case 9: a.matrix = MFVideoTransferMatrix_BT2020_10; break;
+            default: break;
+        }
+        a.hasMatrix = a.matrix != 0;
+    }
+    if (sps.valid && sps.hasRange)
+    {
+        a.range = sps.fullRange ? MFNominalRange_0_255 : MFNominalRange_16_235;
+        a.hasRange = true;
+    }
+    return a;
+}
+
+/// The clear H.264 media type for one representation's init: geometry, SPS/PPS, the original sample format and the attributes
+/// ComputeH264TypeAttrs works out (frame rate, pixel aspect, aperture, colour). Non-throwing
+/// (a format change is built on a Media Foundation callback thread, where an exception would terminate the process);
+/// the caller wraps it (MFWrapMediaType) when the stream is protected.
+static HRESULT BuildH264ClearType(const cenc::InitInfo& info, IMFMediaType** out)
+{
+    winrt::com_ptr<IMFMediaType> mt;
+    HRESULT hr = MFCreateMediaType(mt.put());
+    if (FAILED(hr)) return hr;
+    mt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    mt->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    MFSetAttributeSize(mt.get(), MF_MT_FRAME_SIZE, info.width, info.height);
+    mt->SetUINT32(MF_MT_INTERLACE_MODE, 2 /*MFVideoInterlace_Progressive*/);
+    if (!info.spspps.empty()) mt->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, info.spspps.data(), (UINT32)info.spspps.size());
+    mt->SetUINT32(MF_MT_ORIGINAL_4CC, info.codec4cc ? info.codec4cc : cenc::fourcc("avc1"));
+
+    // Each attribute is set on its own and a failure only drops THAT attribute (and is reported in the dump below): the type
+    // above is already what the source has always advertised, so no attribute here can fail the build of the type.
+    const H264TypeAttrs attrs = ComputeH264TypeAttrs(info);
+    const char* failedAttr = nullptr;
+    HRESULT failedHr = S_OK;
+    auto guard = [&](const char* name, HRESULT h) { if (FAILED(h) && !failedAttr) { failedAttr = name; failedHr = h; } };
+    guard("PIXEL_ASPECT_RATIO", MFSetAttributeRatio(mt.get(), MF_MT_PIXEL_ASPECT_RATIO, attrs.parNum, attrs.parDen));
+    if (attrs.hasFrameRate) guard("FRAME_RATE", MFSetAttributeRatio(mt.get(), MF_MT_FRAME_RATE, attrs.frameRateNum, attrs.frameRateDen));
+    if (attrs.hasAperture)
+    {
+        MFVideoArea area{};
+        area.Area.cx = (LONG)info.width;
+        area.Area.cy = (LONG)info.height;
+        guard("MINIMUM_DISPLAY_APERTURE", mt->SetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<const UINT8*>(&area), sizeof(area)));
+        guard("GEOMETRIC_APERTURE", mt->SetBlob(MF_MT_GEOMETRIC_APERTURE, reinterpret_cast<const UINT8*>(&area), sizeof(area)));
+    }
+    if (attrs.hasPrimaries) guard("VIDEO_PRIMARIES", mt->SetUINT32(MF_MT_VIDEO_PRIMARIES, attrs.primaries));
+    if (attrs.hasTransfer) guard("TRANSFER_FUNCTION", mt->SetUINT32(MF_MT_TRANSFER_FUNCTION, attrs.transfer));
+    if (attrs.hasMatrix) guard("YUV_MATRIX", mt->SetUINT32(MF_MT_YUV_MATRIX, attrs.matrix));
+    if (attrs.hasRange) guard("VIDEO_NOMINAL_RANGE", mt->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, attrs.range));
+
+    // The final type, one line per build (the opening type and every representation's): what an on-box check of a rung reads
+    // to tell a negotiation that broke on an attribute from one that did not. Logging must not throw on an MF thread.
+    try
+    {
+        const cenc::SpsInfo& sps = info.sps;
+        std::string line = "[cenc-src] H.264 type " + std::to_string(info.width) + "x" + std::to_string(info.height) + " rate=";
+        line += attrs.hasFrameRate ? std::to_string(attrs.frameRateNum) + "/" + std::to_string(attrs.frameRateDen) : std::string("-");
+        line += " par=" + std::to_string(attrs.parNum) + ":" + std::to_string(attrs.parDen);
+        line += attrs.hasAperture ? " aperture=" + std::to_string(info.width) + "x" + std::to_string(info.height) : std::string(" aperture=-");
+        line += " primaries=" + (attrs.hasPrimaries ? std::to_string(attrs.primaries) : std::string("-"));
+        line += " transfer=" + (attrs.hasTransfer ? std::to_string(attrs.transfer) : std::string("-"));
+        line += " matrix=" + (attrs.hasMatrix ? std::to_string(attrs.matrix) : std::string("-"));
+        line += " range=" + (attrs.hasRange ? std::to_string(attrs.range) : std::string("-"));
+        if (sps.valid)
+        {
+            line += " sps=" + std::to_string(sps.codedWidth) + "x" + std::to_string(sps.codedHeight) + " crop(l,r,t,b)=" +
+                    std::to_string(sps.cropLeft) + "," + std::to_string(sps.cropRight) + "," + std::to_string(sps.cropTop) + "," +
+                    std::to_string(sps.cropBottom);
+            if (sps.HasCrop() && !attrs.hasAperture)
+                line += " (SPS display " + std::to_string(sps.DisplayWidth()) + "x" + std::to_string(sps.DisplayHeight()) + " disagrees with the container)";
+        }
+        else line += " sps=unparsed";
+        if (failedAttr)
+        {
+            std::stringstream ss;
+            ss << " FAILED " << failedAttr << " hr=0x" << std::hex << (uint32_t)failedHr;
+            line += ss.str();
+        }
+        LogLine(line);
+    }
+    catch (...) {}
+    *out = mt.detach();
+    return S_OK;
+}
+
 struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 {
     winrt::com_ptr<IMFMediaEventQueue> m_queue;
@@ -846,6 +1231,13 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // other data this counter needs to be ordered against.
     std::atomic<uint32_t> m_cutGen{ 0 };
 
+    // Counts every mutation of m_samples' CONTENT (a splice, a trim that dropped something, an emptied buffer); the cursor
+    // moving is not one. The two caches below answer the demand hook and CoverageAt from ONE walk of the vector per
+    // mutation instead of one per delivered sample / per ask (F037); each is keyed on this counter (SegmentStore.h).
+    uint64_t m_samplesVer = 0;                    // m_mx
+    fgpr::ContiguousReach m_contigReach;          // m_mx
+    fgpr::BufferedPairsCache m_pairsCache;        // m_mx
+
     // Hole detection for DeliverSampleLocked. Samples are stored and delivered in DECODE order (see SegmentStore.h's
     // SpliceSamples "ORDERING KEY DECISION"), so a B-frame's PRESENTATION time is not monotonic sample-to-sample
     // within a GOP — comparing this sample against the PREVIOUS array element (what a naive check would do) would
@@ -857,9 +1249,33 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     bool m_haveDeliveredReach = false;          // false until the first sample is ever delivered
     uint64_t m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();   // rate-limit: once per hole start
 
+    // An unbuffered seek (FlushForSeek) emptied this stream and the target segment has not been repositioned to yet:
+    // until Start(reposition) runs, nothing may be delivered - the segment that lands for the new position would
+    // otherwise be handed to Media Foundation on the OLD clock, ahead of the reposition that rewinds it. Set only by
+    // FlushForSeek; cleared by Start(reposition), ReleaseReposition (the engine refused the seek), TakeSamples and
+    // Shutdown - every path that ends a seek, or a missed one freezes playback. Guarded by m_mx.
+    bool m_holdForReposition = false;
+    // The playhead (ms) as the feeder last saw it, -1 = unknown. The trim measures the retention window and the keyframe
+    // its GOP starts at from here instead of the delivery cursor, which runs ahead of the clock by MF's queue.
+    std::atomic<int64_t> m_playheadHintMs{ -1 };
+
+    // ── video format generations (fgpr::RepBook) ─────────────────────────────────────────────────────────────────────
+    // Which representations this VIDEO stream holds samples of, and which one Media Foundation's current media type
+    // describes. Guarded by m_mx.
+    fgpr::RepBook m_rep;
+    // The stream descriptor's type is a MFMediaType_Protected wrapper (BuildCencSource): a format change wraps its new
+    // type the same way.
+    bool m_wrapProtected = false;
+    // Told, under m_mx, the manifest index of the representation whose first sample was just delivered (the picture on
+    // screen changes with it). Installed by the session next to m_demand; it may only touch leaf state and raise an event
+    // (a push into the native event ring, never a call into managed code, so it is safe under m_mx).
+    std::function<void(int32_t)> m_onRepDelivered;
+
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
 
-    /// Every diagnostic line from this stream carries its session handle (shadows the runtime-level ::LogLine).
+    /// Every diagnostic line from this stream carries its session handle (shadows the runtime-level ::LogLine). Safe under
+    /// m_mx and on an MF thread (RequestSample): RaiseLog only copies the line into the native event ring and returns;
+    /// it never enters managed code, so a managed GC or the app's log sink cannot hold the stream lock (F192).
     void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
 
     // IMFMediaEventGenerator (delegate to the queue).
@@ -901,8 +1317,65 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         return DeliverSampleLocked(pToken);
     }
 
+    /// Delivery is about to hand over a sample of generation `gen`. When that is not the generation Media Foundation's
+    /// current type describes, announce the new format NOW, ahead of the sample: a FRESH media type (MFWrapMediaType
+    /// of a newly built clear type - the live wrapped type is never mutated, because the wrapper stores the inner type
+    /// as a serialized blob and changing the outer attributes leaves the unwrapped type the decoder sees untouched),
+    /// set as the descriptor's current type and queued as MEStreamFormatChanged. The first sample of a new
+    /// representation also carries its SPS/PPS in-band, which stays the decoder-authoritative configuration. Crossing
+    /// BACK (a seek into samples of an older generation) re-announces the older format the same way.
+    void AnnounceFormatIfCrossingLocked(uint16_t gen)
+    {
+        if (gen == m_rep.deliveredGen) return;
+        m_rep.deliveredGen = gen;
+        const fgpr::RepFormat* fmt = m_rep.Find(gen);
+        if (!fmt) return;   // a generation the book no longer holds (never expected): nothing known to announce
+
+        m_info = fmt->info;
+        // A new generation's timeline restarts at its first sample; a reach computed over the previous generation's
+        // samples must not be compared across it (see m_deliveredReachTicks' declaration).
+        m_haveDeliveredReach = false;
+        m_deliveredReachTicks = 0;
+        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
+
+        winrt::com_ptr<IMFMediaType> type;
+        HRESULT hrType = BuildH264ClearType(fmt->info, type.put());
+        HRESULT hrSet = E_FAIL;
+        if (SUCCEEDED(hrType))
+        {
+            if (m_wrapProtected)
+            {
+                winrt::com_ptr<IMFMediaType> wrapped;
+                if (SUCCEEDED(MFWrapMediaType(type.get(), MFMediaType_Protected, MFVideoFormat_H264, wrapped.put())))
+                    type = std::move(wrapped);
+            }
+            winrt::com_ptr<IMFMediaTypeHandler> handler;
+            if (m_sd && SUCCEEDED(m_sd->GetMediaTypeHandler(handler.put())) && handler)
+                hrSet = handler->SetCurrentMediaType(type.get());
+            m_queue->QueueEventParamUnk(MEStreamFormatChanged, GUID_NULL, S_OK, type.get());
+        }
+        auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
+        LogLine("[cenc-src] video format change delivered: " + std::to_string(fmt->info.width) + "x" +
+                std::to_string(fmt->info.height) + " (gen " + std::to_string(gen) + ", representation " +
+                std::to_string(fmt->index) + ") at sample " + std::to_string(m_next) + " typeHr=" + hx(hrType) +
+                " setHr=" + hx(hrSet));
+        // The opening representation's index is -1 (native never learns it): crossing BACK into it (a seek behind the splice)
+        // publishes -1 as the on-screen index too, which the managed side maps to the rung the session opened on.
+        if (m_store) m_store->displayedRepresentation.store(fmt->index, std::memory_order_release);
+        if (m_onRepDelivered) m_onRepDelivered(fmt->index);
+    }
+
     HRESULT DeliverSampleLocked(::IUnknown* pToken)
     {
+        if (m_holdForReposition)
+        {
+            // Flushed for an unbuffered seek, not yet repositioned: park (Start(reposition) releases it). Not a
+            // starvation, so no demand kick - the feeder is already fetching the seek target.
+            winrt::com_ptr<::IUnknown> token;
+            if (pToken) token.copy_from(pToken);
+            m_starvedRequests.push_back(std::move(token));
+            return S_OK;
+        }
         if (m_next >= m_samples.size())
         {
             if (!m_complete)
@@ -948,6 +1421,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                           "," + std::to_string(first.data[6]) + "," + std::to_string(first.data[7])
                         : " head=<short>"));
         }
+        if (m_streamId == 1) AnnounceFormatIfCrossingLocked(m_samples[m_next].repGen);
         winrt::com_ptr<IMFSample> sample;
         HRESULT hr = MakeSample(m_samples[m_next], sample.put());
         if (FAILED(hr)) return hr;
@@ -1021,21 +1495,40 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                               (remainder100ns * m_info.timescale) / 10000000ULL;
             }
 
-            size_t best = 0;
-            uint64_t bestTime = 0;
-            bool found = false;
-            for (size_t i = 0; i < m_samples.size(); i++)
+            // The keyframe at or before the target, else (a first frame a composition offset past it) the first one just
+            // after. NEVER sample 0: with nothing to start from the oldest retained sample is a mid-GOP P/B frame that
+            // would be delivered flagged discontinuous, with no reference to decode it against.
+            const size_t best = fgpr::PickStartKeyframe(m_samples, targetTicks,
+                                                         fgpr::MsToTicks(fgpr::kContiguityToleranceMs, m_info.timescale));
+            const bool found = best < m_samples.size();
+            const uint64_t bestTime = found ? m_samples[best].timeTicks : 0;
+            m_holdForReposition = false;   // the reposition this hold was waiting for is this one
+            if (found)
+                m_next = best;
+            else
             {
-                auto const& sample = m_samples[i];
-                if (!sample.keyframe || sample.timeTicks > targetTicks) continue;
-                if (!found || sample.timeTicks >= bestTime)
+                // A guard, not a path: the unbuffered-seek flush (FlushForSeek) leaves the target segment's own keyframe
+                // here, and the keyframe-aligned trim never strands a head without one. What is buffered cannot serve
+                // this target, so drop it (the cut generation resets the feeder's guard) and ask the feeder to refill
+                // from the playhead: the stream starves instead of delivering from the wrong place.
+                if (!m_samples.empty())
                 {
-                    best = i;
-                    bestTime = sample.timeTicks;
-                    found = true;
+                    int64_t bufStartMs = 0, bufEndMs = 0;
+                    if (m_info.timescale > 0)
+                    {
+                        bufStartMs = (int64_t)((m_samples.front().timeTicks * 1000ULL) / m_info.timescale);
+                        auto const& last = m_samples.back();
+                        bufEndMs = (int64_t)(((last.timeTicks + last.durTicks) * 1000ULL) / m_info.timescale);
+                    }
+                    LogLine(std::string("[cenc-src] ") + m_label + " seek target has no keyframe <= target, parking: buffered [" +
+                            std::to_string((long long)bufStartMs) + ".." + std::to_string((long long)bufEndMs) + "]ms");
+                    m_samples.clear();
+                    ResetBufferLocked();
+                    PublishBytesLocked();
+                    if (m_demand && m_store) m_demand();
                 }
+                m_next = 0;
             }
-            m_next = found ? best : 0;
             m_discontinuity = true;
             // A reposition can legitimately jump the next delivered sample's presentation time in either direction;
             // the hole detector must not compare it against history from before the seek.
@@ -1110,6 +1603,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         fgpr::SpliceOutcome outcome = fgpr::SpliceSamples(m_samples, m_next, std::move(incoming), truncateAfter);
         if (outcome.stale) return outcome;   // nothing mutated: no byte/generation/invariant bookkeeping needed
 
+        m_samplesVer++;
         m_bytes = (m_bytes > outcome.freedBytes ? m_bytes - outcome.freedBytes : 0) + outcome.addedBytes;
         if (outcome.cutCoverage) m_cutGen.fetch_add(1, std::memory_order_release);
         PublishBytesLocked();
@@ -1134,8 +1628,11 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         if (!m_store) return;
         const uint64_t budget = m_streamId == 1 ? m_store->VideoBudget() : m_store->AudioBudget();
         bool byteBudgetCut = false;
+        const int64_t hintMs = m_playheadHintMs.load(std::memory_order_relaxed);
+        const uint64_t hintTicks = hintMs >= 0 ? fgpr::MsToTicks(hintMs, m_info.timescale) : (std::numeric_limits<uint64_t>::max)();
         const size_t dropped = fgpr::TrimBehindByTime(m_samples, m_next, m_info.timescale, m_store->retainBehindMs,
-                                                       budget, m_bytes, &byteBudgetCut, reserveBytes);
+                                                       budget, m_bytes, &byteBudgetCut, reserveBytes, hintTicks);
+        if (dropped > 0) m_samplesVer++;
         if (dropped > 0 && byteBudgetCut) m_cutGen.fetch_add(1, std::memory_order_release);
         PublishBytesLocked();
     }
@@ -1154,6 +1651,8 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (more.empty()) return;
+        if (m_streamId == 1)
+            for (auto& smp : more) smp.repGen = m_rep.appendGen;   // the newest representation: what the feeder fetches now
         SpliceLocked(std::move(more));
         TrimBehindLocked();
         if (!m_shutdown) ReleaseStarvedLocked();
@@ -1180,15 +1679,76 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         std::vector<cenc::Sample> out = std::move(m_samples);
         m_samples.clear();
-        m_next = 0;
         bytes = m_bytes;
+        ResetBufferLocked();
+        m_holdForReposition = false;   // the fresh stream the buffer moves into starts unheld
+        return out;
+    }
+
+    /// Move the format generations out with the samples a re-attach relocates (TakeSamples), so the fresh stream can still
+    /// announce the right format for every sample it inherits.
+    fgpr::RepBook TakeRepBook()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        fgpr::RepBook out = std::move(m_rep);
+        m_rep = fgpr::RepBook{};
+        return out;
+    }
+
+    /// Take over a retired stream's generations. The fresh stream's media type was built from the newest representation's
+    /// init, so that is the generation Media Foundation starts out holding; a first delivered sample of an OLDER generation
+    /// (the playhead is still behind the splice) then announces the older format. An empty book (nothing to adopt) keeps
+    /// the generation BuildCencSource registered.
+    void AdoptRepBook(fgpr::RepBook&& book)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (book.formats.empty()) return;
+        m_rep = std::move(book);
+        m_rep.deliveredGen = m_rep.appendGen;
+    }
+
+    /// The buffer is empty now (the caller moved or cleared m_samples): reset the cursor and the byte ledger, bump the cut
+    /// generation so the feeder's guard resets structurally, and forget the hole-detection reach.
+    void ResetBufferLocked()
+    {
+        m_next = 0;
         m_bytes = 0;
+        m_samplesVer++;
         m_cutGen.fetch_add(1, std::memory_order_release);
         m_haveDeliveredReach = false;
         m_deliveredReachTicks = 0;
         m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
-        return out;
     }
+
+    /// A seek to a position this stream does not hold: empty it NOW (ExoPlayer / Shaka reset the track's queue the same
+    /// way) so the target segment lands in an empty buffer. Kept, the old samples made the landed run - inserted behind the
+    /// cursor, in front of it in the vector - the very thing the time trim erased in the same call, and Start() then fell
+    /// back to the oldest sample. Holds delivery until Start(reposition) (m_holdForReposition) and reopens the track
+    /// (the target may not be the last segment). Call under the session's feedMx, never from inside another stream's m_mx.
+    void FlushForSeek()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_samples.clear();
+        ResetBufferLocked();
+        PublishBytesLocked();
+        m_complete = false;
+        m_holdForReposition = true;
+        LogLine(std::string("[cenc-src] ") + m_label + " flushed for an unbuffered seek, holding delivery until the reposition");
+    }
+
+    /// The engine refused the reposition a FlushForSeek was waiting for: nothing will ever call Start(reposition), so lift
+    /// the hold and let what is parked resume (the stream is empty or holds the landed target; either way not frozen).
+    void ReleaseReposition()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (!m_holdForReposition) return;
+        m_holdForReposition = false;
+        LogLine(std::string("[cenc-src] ") + m_label + " reposition hold released (the seek was not applied)");
+        if (!m_shutdown) ReleaseStarvedLocked();
+    }
+
+    /// The playhead the feeder last saw (ms), -1 = unknown: the trim's anchor (see m_playheadHintMs).
+    void SetPlayheadHintMs(int64_t ms) { m_playheadHintMs.store(ms >= 0 ? ms : -1, std::memory_order_relaxed); }
 
     /// Lock-free progress signal for the feeder's thread-local guard (PrSession.cpp): "did coverage just get cut out
     /// from under you", distinct from "the buffer simply hasn't grown yet". Every writer (SpliceLocked, TakeSamples,
@@ -1200,7 +1760,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     int BufferedPairs(int64_t* out, int capPairs)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        return fgpr::ComputeBufferedPairs(m_samples, m_info.timescale, out, capPairs);
+        return m_pairsCache.Get(m_samples, m_info.timescale, m_samplesVer, out, capPairs);
     }
 
     /// A seek into a range the feeder has not fetched re-opens a track that had been marked complete — otherwise the
@@ -1217,26 +1777,36 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         return m_complete;
     }
 
-    /// Splice the target representation's segment into the timeline at ITS OWN presentation time, then announce the new
-    /// H.264 geometry. The feeder calls this at a segment boundary at-or-after the playhead, so everything between the
-    /// playhead and the splice point stays in the OLD representation and the timeline remains contiguous. (Erasing from
-    /// m_next unconditionally — what this used to do — deleted every buffered sample under the playhead and refilled
-    /// from the feeder's stale cursor, which is what punched a multi-second hole in the video while audio kept running:
-    /// the frozen frame.) Already delivered samples remain owned by Media Foundation.
+    /// Splice the target representation's segment into the timeline at ITS OWN presentation time. The feeder calls this at
+    /// a segment boundary at-or-after the playhead - in the normal (append) case at the END of the buffer, so the splice
+    /// erases nothing - and everything between the playhead and the splice point stays in the OLD representation: the
+    /// timeline remains contiguous. (Erasing from m_next unconditionally - what this used to do - deleted every buffered
+    /// sample under the playhead and refilled from the feeder's stale cursor, which is what punched a multi-second hole in
+    /// the video while audio kept running: the frozen frame.) Already delivered samples remain owned by Media Foundation.
     ///
-    /// Returns `Rejected` for the pre-existing early-outs (shutdown, wrong kind, an empty replacement — none of these
+    /// The new run is stamped with a fresh format generation and the new format is NOT announced here: delivery announces
+    /// it when the cursor reaches the run's first sample (AnnounceFormatIfCrossingLocked), which may be a minute away.
+    /// `repIndex` is the manifest index the run belongs to; it is published as the DOWNLOADING representation now and as
+    /// the displayed one at the crossing.
+    ///
+    /// Returns `Rejected` for the pre-existing early-outs (shutdown, wrong kind, an empty replacement - none of these
     /// are the feeder's fault, so there is nothing for it to retry against). Returns `StaleBoundary`, with NOTHING
-    /// changed (m_info, m_discontinuity, m_complete and the format-change event are all untouched) when the boundary
-    /// the feeder computed has since fallen behind the delivery cursor — the case proven live: a boundary computed at
+    /// changed (the generations, m_discontinuity and m_complete are all untouched) when the boundary
+    /// the feeder computed has since fallen behind the delivery cursor - the case proven live: a boundary computed at
     /// segment 0 before a 200 ms GET, with the cursor at sample 15 by the time the response lands. Splicing the whole
     /// replacement in at index 15 there would re-deliver 15 already-shown frames; refusing instead tells the feeder to
     /// recompute a fresh boundary against where the cursor actually is now. Otherwise splices and returns `Spliced`.
-    SwitchResult SwitchVideoRepresentation(const cenc::InitInfo& nextInfo, std::vector<cenc::Sample>&& replacement)
+    SwitchResult SwitchVideoRepresentation(const cenc::InitInfo& nextInfo, std::vector<cenc::Sample>&& replacement,
+                                           int32_t repIndex)
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return SwitchResult::Rejected;
 
         const uint64_t spliceTicks = replacement.front().timeTicks;   // captured before the move below
+        // The generation is stamped on before the splice but only COMMITTED to the book once the splice is accepted: a
+        // stale boundary throws the run away.
+        const uint16_t gen = m_rep.NextFreeGen();
+        for (auto& smp : replacement) smp.repGen = gen;
         const fgpr::SpliceOutcome outcome = SpliceLocked(std::move(replacement), true);
         if (outcome.stale)
         {
@@ -1248,41 +1818,41 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             return SwitchResult::StaleBoundary;
         }
         const size_t at = outcome.at;
-        m_info = nextInfo;
+        m_rep.Register(gen, repIndex, nextInfo);
+        m_rep.Prune(m_samples);
+        if (m_store) m_store->downloadingRepresentation.store(repIndex, std::memory_order_release);
         // Only the sample delivered NEXT may be flagged discontinuous. When the splice lands ahead of the playhead the
         // next sample is still old-representation continuous video; flagging it would make the decoder drop frames all
         // the way to the new keyframe.
         if (at <= m_next) m_discontinuity = true;
         m_complete = false;
-        // The new representation's timeline restarts at the splice; a reach computed against the OLD representation's
-        // samples must not be compared across it (see m_deliveredReachTicks' declaration).
-        m_haveDeliveredReach = false;
-        m_deliveredReachTicks = 0;
-        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
-
-        // The protected wrapper remains the same stream type; update its display/config attributes and publish the
-        // standard format-change event. The first replacement access unit also carries the new SPS/PPS, which is the
-        // decoder-authoritative configuration for H.264 dynamic resolution changes.
-        winrt::com_ptr<IMFMediaTypeHandler> handler;
-        winrt::com_ptr<IMFMediaType> current;
-        if (m_sd && SUCCEEDED(m_sd->GetMediaTypeHandler(handler.put())) && handler &&
-            SUCCEEDED(handler->GetCurrentMediaType(current.put())) && current)
-        {
-            MFSetAttributeSize(current.get(), MF_MT_FRAME_SIZE, nextInfo.width, nextInfo.height);
-            if (!nextInfo.spspps.empty())
-                current->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, nextInfo.spspps.data(), (UINT32)nextInfo.spspps.size());
-            m_queue->QueueEventParamUnk(MEStreamFormatChanged, GUID_NULL, S_OK, current.get());
-        }
         const int64_t spliceMs = m_info.timescale ? (int64_t)((spliceTicks * 1000ULL) / m_info.timescale) : 0;
         const int64_t playheadMs = (m_info.timescale && m_next < m_samples.size())
             ? (int64_t)((m_samples[m_next].timeTicks * 1000ULL) / m_info.timescale) : 0;
         LogLine("[cenc-src] video switched to " + std::to_string(nextInfo.width) + "x" +
-                std::to_string(nextInfo.height) + " spliced at sample " + std::to_string(at) +
-                " (t=" + std::to_string((long long)spliceMs) + "ms) with the playhead at sample " +
-                std::to_string(m_next) + " (t=" + std::to_string((long long)playheadMs) + "ms), buffer=" +
+                std::to_string(nextInfo.height) + " (gen " + std::to_string(gen) + ") spliced at sample " +
+                std::to_string(at) + " (t=" + std::to_string((long long)spliceMs) + "ms) with the playhead at sample " +
+                std::to_string(m_next) + " (t=" + std::to_string((long long)playheadMs) + "ms), removed=" +
+                std::to_string(outcome.removed) + " freedBytes=" + std::to_string(outcome.freedBytes) + ", buffer=" +
                 std::to_string(m_samples.size()) + " sample(s)");
         ReleaseStarvedLocked();
         return SwitchResult::Spliced;
+    }
+
+    /// A switch whose landing point is at or past the end of the track: there is no segment left to fetch in the new
+    /// representation, so nothing is spliced. The new representation is still registered as the one new samples are
+    /// stamped with (a later seek back refetches in it) and published as DOWNLOADING, so the ABR's baseline and the
+    /// session's fetch URLs agree.
+    void RetargetAppend(const cenc::InitInfo& nextInfo, int32_t repIndex)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video) return;
+        const uint16_t gen = m_rep.NextFreeGen();
+        m_rep.Register(gen, repIndex, nextInfo);
+        m_rep.Prune(m_samples);
+        if (m_store) m_store->downloadingRepresentation.store(repIndex, std::memory_order_release);
+        LogLine("[cenc-src] video retargeted to " + std::to_string(nextInfo.width) + "x" + std::to_string(nextInfo.height) +
+                " (gen " + std::to_string(gen) + ") with nothing left to splice: the buffer already reaches the end");
     }
 
     /// No more samples are coming (the fetcher finished, or gave up). After this, running dry is a real end of stream —
@@ -1327,9 +1897,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         return ContiguousAheadMsLocked();
     }
-    int64_t ContiguousAheadMsLocked() const
+    int64_t ContiguousAheadMsLocked()
     {
-        return fgpr::ContiguousAheadMs(m_samples, m_next, m_info.timescale);
+        // Cached across the cursor's walk through one run (fgpr::ContiguousReach), exactly equal to the full walk.
+        return m_contigReach.Ahead(m_samples, m_next, m_info.timescale, m_samplesVer);
     }
     int64_t NextSampleTimeMs()
     {
@@ -1371,7 +1942,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_starvedRequests.clear();
         for (auto const& token : parked) DeliverSampleLocked(token.get());
     }
-    void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; if (m_queue) m_queue->Shutdown(); }
+    void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; m_holdForReposition = false; if (m_queue) m_queue->Shutdown(); }
 
     void NotifySourceEnded();   // defined after CencMediaSource
 
@@ -1395,7 +1966,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         auto toMf = [&](uint64_t ticks) -> LONGLONG { return (LONGLONG)((ticks * 10000000ULL) / m_info.timescale); };
         sample->SetSampleTime(toMf(s.timeTicks));
         sample->SetSampleDuration(toMf(s.durTicks));
-        sample->SetUINT64(MFSampleExtension_DecodeTimestamp, (UINT64)toMf(s.decodeTicks));
+        // No MFSampleExtension_DecodeTimestamp (F265): the demuxer's decode time is the UN-shifted tfdt timeline while the
+        // sample time above is edit-list-shifted, so a DTS written from it sat AFTER the PTS of every reordered frame.
+        // Firefox's and Chromium's media-engine sources set only the sample time, duration and clean point, and nothing in
+        // this pipeline reads the attribute; the decoder derives decode order from the delivery order.
         if (s.keyframe) sample->SetUINT32(MFSampleExtension_CleanPoint, 1);
 
         if (s.encrypted)
@@ -1463,7 +2037,8 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
 
     CencMediaSource() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
 
-    /// Every diagnostic line from this source carries its session handle (shadows the runtime-level ::LogLine).
+    /// Every diagnostic line from this source carries its session handle (shadows the runtime-level ::LogLine). Like the
+    /// stream's, it only queues into the native event ring: no managed call on an MF thread or under a lock.
     void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
 
     void SetStartPosition100ns(LONGLONG position100ns)
@@ -1513,6 +2088,10 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
             // the source its start position; the first Start that asks for "the beginning" is rewritten to it, the
             // streams reposition to the keyframe at or before it, and MESourceStarted carries the ACTUAL start time so the
             // presentation clock begins there too. Consumed once: a later Start(0) is a real seek to 0.
+            // Normally the session has already put the start position on the ENGINE's timeline (SetCurrentTime between
+            // SetSource and Play, PrSession.cpp CompleteAttach), so the engine's first Start is explicit and this rewrite
+            // does not fire. It remains the fallback for an engine that asks for "the beginning" anyway: the samples then
+            // still begin at the start position and the CANPLAY correction brings the clock to them.
             if (!wasActive && m_startPosition100ns > 0 &&
                 (startVar.vt == VT_EMPTY || (startVar.vt == VT_I8 && startVar.hVal.QuadPart == 0)))
             {
@@ -1763,13 +2342,7 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
 
     winrt::com_ptr<IMFMediaType> mt;
-    winrt::check_hresult(MFCreateMediaType(mt.put()));
-    mt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    mt->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-    MFSetAttributeSize(mt.get(), MF_MT_FRAME_SIZE, info.width, info.height);
-    mt->SetUINT32(MF_MT_INTERLACE_MODE, 2 /*MFVideoInterlace_Progressive*/);
-    if (!info.spspps.empty()) mt->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, info.spspps.data(), (UINT32)info.spspps.size());
-    mt->SetUINT32(MF_MT_ORIGINAL_4CC, info.codec4cc ? info.codec4cc : cenc::fourcc("avc1"));
+    winrt::check_hresult(BuildH264ClearType(info, mt.put()));
     // Protected-stream advertisement, the Firefox desktop-MFCDM way (gecko MFMediaEngineVideoStream::CreateMediaType +
     // MFMediaEngineStream::GenerateStreamDescriptor): WRAP the fully-populated clear H.264 type into a
     // MFMediaType_Protected envelope with MFWrapMediaType and set MF_SD_PROTECTED=1 on the stream descriptor. That is
@@ -1852,6 +2425,8 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     stream->m_sd = sd;
     stream->m_source = (IMFMediaSource*)source.get();   // weak — source holds the strong ref
     stream->m_info = info;
+    stream->m_wrapProtected = wrapProtected;
+    stream->m_rep.Register(0, -1, info);   // generation 0: the opening representation (its manifest index is the session's)
     stream->m_samples = std::move(samples);
     stream->m_streamId = 1;
     stream->m_label = "video";

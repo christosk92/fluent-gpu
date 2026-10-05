@@ -29,8 +29,10 @@ public enum CompositeRecordKind : byte
 /// <see cref="HeadlessGpuDevice.LastComposedStream"/> — every composed op before that byte offset lies UNDER the erase
 /// (cleared inside the rect), every op from it on paints OVER the hole; <see cref="GroupDepth"/> = the
 /// <see cref="CompositeKind.Group"/> items enclosing it (inside one it clears that group's surface, never the back buffer —
-/// gpu-renderer.md §7.3).</summary>
-public readonly record struct CompositeHoleErase(int ItemIndex, FluentGpu.Foundation.RectF RectPx, int ComposedOffset, int GroupDepth);
+/// gpu-renderer.md §7.3). <see cref="Alpha"/> = the erase strength (the punch's VideoReady x opacity), <see cref="RoundRectPx"/> +
+/// <see cref="Radii"/> = the rounded rect the erase is clipped to (empty = the quad itself; F078).</summary>
+public readonly record struct CompositeHoleErase(int ItemIndex, FluentGpu.Foundation.RectF RectPx, int ComposedOffset, int GroupDepth,
+    float Alpha = 1f, FluentGpu.Foundation.CornerRadius4 Radii = default, FluentGpu.Foundation.RectF RoundRectPx = default);
 
 /// <summary>What a render pass targets.</summary>
 public enum CompositePassTarget : byte { TileSurface, BackBuffer }
@@ -90,9 +92,29 @@ public sealed partial class HeadlessGpuDevice
     /// <summary>The frame context of the most recent <see cref="SubmitComposite"/>.</summary>
     public FrameInfo LastCompositeInfo { get; private set; }
 
-    public void SubmitComposite(in CompositeFrame frame)
+    /// <summary>The slice-table owner (<see cref="CompositeFrame.OwnerToken"/>) of the most recent stamped composite; 0 before
+    /// any. The headless model has no pool to corrupt, but exposing it lets a gate assert which host composited.</summary>
+    public int LastCompositeOwner { get; private set; }
+
+    /// <summary>The swapchain the most recent <see cref="SubmitComposite"/> was handed as its target; null before any. Lets a gate
+    /// assert that a detached pop-out never reached the composite route and that the primary host did.</summary>
+    public ISwapchain? LastCompositeTarget { get; private set; }
+
+    /// <summary>Opt in to the D3D12 backend's rule that <see cref="SubmitComposite"/> accepts only the device's first-created
+    /// (primary) swapchain, throwing for any other target. Off by default: many suites run several ordinary primary hosts on one
+    /// device, and the headless model has no device-wide tile pool for a second host to corrupt. A routing gate turns it on so a
+    /// detached pop-out that took the composite route fails loudly instead of being recorded.</summary>
+    public bool RejectNonPrimaryComposite { get; init; }
+
+    public void SubmitComposite(in CompositeFrame frame, ISwapchain target)
     {
         if (_renderConfined) ThreadGuard.AssertRenderOwner();
+        // D3D12 draws the composite into the PRIMARY target only (its one device-wide tile pool); the headless model rejects a
+        // secondary target the same way only when a routing gate opts in (RejectNonPrimaryComposite).
+        if (RejectNonPrimaryComposite && !ReferenceEquals(target, _primarySwapchain))
+            throw new InvalidOperationException("SubmitComposite composites into the PRIMARY swapchain only; a secondary target (detached pop-out / popup) must use SubmitDrawList.");
+        if (frame.OwnerToken != 0) LastCompositeOwner = frame.OwnerToken;
+        LastCompositeTarget = target;
         _compositeRecords.Clear();
         LastCompositeInfo = frame.Info;
         _groupTurn++;
@@ -456,7 +478,7 @@ public sealed partial class HeadlessGpuDevice
                     // model keeps no pixels, so it records the erase where it acts: at this point of the composed stream
                     // (everything composed so far lies under it, everything after paints over the hole) and inside how
                     // many groups (an enclosed erase clears the group surface, not the back buffer).
-                    _holeErases.Add(new CompositeHoleErase(i, it.Clip, _composed.Bytes.Length, _groupEnds.Count));
+                    _holeErases.Add(new CompositeHoleErase(i, it.Clip, _composed.Bytes.Length, _groupEnds.Count, it.Alpha, it.ClipRadii, it.RoundClip));
                     break;
             }
             // close every group whose last enclosed item was this one

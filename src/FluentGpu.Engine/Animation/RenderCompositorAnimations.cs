@@ -326,7 +326,7 @@ public sealed class RenderCompositorAnimations
         HoldNowMs = double.NaN,
     };
 
-    private static void Evaluate(ref State state, double nowMs, float refIntervalMs)
+    private void Evaluate(ref State state, double nowMs, float refIntervalMs)
     {
         if (state.Parked || state.Done) return;
         // PENDING START (AnimFlags.StartPending — a structural enter/exit the UI just seeded): the first render frame to
@@ -349,7 +349,8 @@ public sealed class RenderCompositorAnimations
         // CADENCE (the render-thread half of AnimEngine's PASS1 due-check): a row that states its own frame rate is
         // re-sampled only when its period has elapsed; in between its Value/ElapsedMs are HELD, so a 30Hz shimmer
         // steps at 30Hz even though the compositor is posing at panel rate for something else. Sampling stays
-        // analytical/absolute, so holding costs nothing and skipping never accumulates drift.
+        // analytical/absolute, so holding costs nothing and skipping never accumulates drift. Nothing here lengthens a
+        // period: there is no background or tier floor on a visible loop (motion policy, 2026-10-03).
         ushort periodMs = state.Desired.PeriodMs;
         if (periodMs > 0)
         {

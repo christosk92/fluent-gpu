@@ -2,14 +2,19 @@ namespace FluentGpu.Hosting;
 
 /// <summary>M5 (adreno-hang-fixes.md): when to call <c>ImageCache.EvictToVramPressure</c>, decided independently of the
 /// cache itself so the decision is unit-testable with no engine/GPU dependency. Engine-free on purpose — the eviction
-/// call is one line in <see cref="AppHost"/>, but WHEN it fires is the whole defect: on a 128 MB LOCAL part
-/// <c>used &gt; 0.90·budget</c> is true on essentially every frame (the swapchain alone is 66 MB), and
+/// call is one line in <see cref="AppHost"/>, but WHEN it fires is the whole defect: on a part whose LOCAL budget really is
+/// about 128 MB, <c>used &gt; 0.90·budget</c> is true on essentially every frame (the swapchain alone is 66 MB), and
 /// <c>D3D12Device.PublishVideoMemorySnapshot</c> only refreshes its sample every 10 presents — so re-acting on the SAME
 /// stale (used, budget) pair re-sheds the identical overage every frame in between, evicting unpinned ring entries a
 /// scroll immediately re-<c>Request</c>s, which re-decodes, re-uploads, re-crossfades, and gets evicted again.
 /// <para>Hysteresis (arm high / disarm low) stops the sample noise right at the threshold from chattering; the cooldown
 /// (longer than the device's own sample cadence) stops a single eviction pass from firing again before its effect could
-/// possibly show up in a fresh sample; the same-sample suppression is the actual fix for the loop above.</para></summary>
+/// possibly show up in a fresh sample; the same-sample suppression is the actual fix for the loop above.</para>
+/// <para><b>UMA premise (F251).</b> The 128 MB figure is the dedicated carve-out an Adreno / iGPU reports, NOT what this
+/// policy sees: on UMA DXGI's LOCAL <c>Budget</c> is the OS residency budget of the shared pool (about 15 GB), so the policy
+/// stays disarmed in normal operation and arms only when that budget shrinks under system memory pressure. That is the
+/// intended outcome (the OS, not a fixed number, says when memory is short), so the budget is deliberately not derived from
+/// <c>DedicatedVideoMemory</c>, which would re-create the per-frame shed this class documents.</para></summary>
 internal struct VramShedPolicy
 {
     public const float ArmRatio = 0.90f, DisarmRatio = 0.80f;

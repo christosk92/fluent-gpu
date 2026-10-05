@@ -22,8 +22,9 @@ public static class GpuMemoryBudgets
     public const long PixelPoolWeak = 16L * 1024 * 1024;
 
     /// <summary>Image-cache steady-state cap. Weak stays well below the discrete default to shrink both the at-rest
-    /// residency and the post-device-recovery re-realize burst on Adreno-class parts that page hard over their small
-    /// LOCAL budget (adreno-hang-fixes.md M5).
+    /// residency and the post-device-recovery re-realize burst on a weak part that pages hard once it is over its LOCAL
+    /// budget (adreno-hang-fixes.md M5). 40 MB is the fallback used when the LOCAL budget is unknown (see
+    /// <see cref="For"/>); a known LOCAL budget derives the cap instead.
     /// <para>Raised from 24 MB when the cache started charging COMMITTED bytes instead of decoded pixels
     /// (<see cref="ImageCache.CommittedBytesFor"/>). The old 24 was an honest number against a dishonest measure: at a
     /// ~3.5× average over-commit it described roughly 84 MB of real GPU memory. Holding 24 against the true figure
@@ -42,19 +43,27 @@ public static class GpuMemoryBudgets
     /// tiers headlessly, which is the whole point (see the class remarks).
     /// <para><paramref name="localBudgetBytes"/> is the adapter's DXGI LOCAL segment budget (0 = unknown, e.g. the
     /// sample has not been taken yet, or the device is headless) — on the weak tier it derives
-    /// <see cref="ImageCache"/> instead of using the flat <see cref="ImageCacheWeak"/> constant, because a 128 MB
-    /// Adreno-class part and a 512 MB-class UMA iGPU are both "weak" but do not have the same LOCAL segment to share
-    /// between the swapchain, the pixel pool and the image cache. The discrete tier is unaffected — it never reads
-    /// the parameter.</para></summary>
+    /// <see cref="ImageCache"/> instead of using the flat <see cref="ImageCacheWeak"/> constant, because the derivation
+    /// separates weak parts by their DXGI LOCAL budget: a part whose LOCAL budget really is small lands at 32-40 MB,
+    /// while a UMA part, whose LOCAL budget is the ~15 GB shared-pool residency budget, lands at the 64 MB clamp (see
+    /// <c>WeakImageCacheFor</c>). The discrete tier is unaffected — it never reads the parameter.</para></summary>
     public static (long PixelPool, long ImageCache, long Derived) For(bool weak, long localBudgetBytes = 0)
         => weak
             ? (PixelPoolWeak, WeakImageCacheFor(localBudgetBytes), DerivedWeak)
             : (PixelPoolDefault, ImageCacheDefault, DerivedDefault);
 
     /// <summary>5/16 of the LOCAL segment, clamped to [32, 64] MB. 0 (unknown LOCAL) keeps the shipped 40 MB flat
-    /// default. A 128 MB Adreno part lands at exactly 40 MB — the number this shipped with — so this is a
-    /// derivation, not a re-tune; a 256 MB-class part is allowed up to the discrete cache's own 64 MB ceiling, and
-    /// nothing below the 32 MB floor the eviction/prefetch ring needs to stay useful.</summary>
+    /// default. The derivation only distinguishes a discrete-class part that really has a small LOCAL segment: a
+    /// 128 MB LOCAL budget lands at exactly 40 MB (the number this shipped with) and a 256 MB-class one is allowed up
+    /// to the discrete cache's own 64 MB ceiling, never below the 32 MB floor the eviction/prefetch ring needs.
+    /// <para><b>On UMA the clamp lands at 64 MB, by design (F251).</b> A UMA adapter (the Adreno X1 and every iGPU) has
+    /// only a small "dedicated" carve-out (128 MB, as the <c>[d3d12.adapter] vramMB</c> log line prints it), but DXGI
+    /// reports the SHARED pool as the LOCAL segment, so <c>QueryVideoMemoryInfo(LOCAL).Budget</c> is the OS residency
+    /// budget the driver actually enforces: about 15 GB on a 16 GB machine. A 64 MB image cache inside that is harmless,
+    /// so the flat 40 MB of the 128 MB premise does not apply. That LOCAL budget stays authoritative and is NOT replaced
+    /// by <c>DedicatedVideoMemory</c>: sizing against 128 MB would make <see cref="FluentGpu.Hosting.VramShedPolicy"/>
+    /// shed on every frame (the swapchain alone is 66 MB), the churn that policy exists to prevent. The shed arms
+    /// when that OS budget SHRINKS under real system memory pressure.</para></summary>
     private static long WeakImageCacheFor(long localBudgetBytes)
         => localBudgetBytes <= 0 ? ImageCacheWeak : Math.Clamp(localBudgetBytes * 5 / 16, 32L << 20, 64L << 20);
 }

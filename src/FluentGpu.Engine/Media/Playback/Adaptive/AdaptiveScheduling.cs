@@ -74,8 +74,13 @@ public static class AdaptiveSegmentScheduler
     }
 }
 
-/// <summary>Allocation-free exponentially-weighted throughput estimator. Samples use payload bits / transfer time; the
-/// fast EWMA reacts to drops while the slow EWMA prevents a single burst from driving an unsafe upgrade.
+/// <summary>Allocation-free, duration-weighted exponentially-weighted throughput estimator. Samples use payload bits /
+/// transfer time; the fast EWMA reacts to drops while the slow EWMA prevents a single burst from driving an unsafe upgrade.
+/// <para>Each sample is weighted by its transfer duration (weight = seconds) against half-lives of
+/// <see cref="FastHalfLifeSeconds"/> / <see cref="SlowHalfLifeSeconds"/> (Shaka's <c>EwmaBandwidthEstimator</c>), so a
+/// 64 KB / 400 ms slice moves the estimate far less than a 5 MB / 2 s segment transfer instead of both counting as one
+/// fixed-weight step. The estimate only counts as a measurement once <see cref="MinTotalBytes"/> have been folded in;
+/// until then it stays the prior.</para>
 /// <para>Two rules keep the estimate honest. (1) A sample smaller than <see cref="MinSampleBytes"/> or, below
 /// <see cref="LargeSampleBytes"/>, shorter than <see cref="MinSampleMs"/> is round-trip/scheduler noise, not
 /// throughput, and is DISCARDED — a 12 KB range request that completes in 40 ms "measures" whatever the RTT happened
@@ -97,23 +102,42 @@ public sealed class ThroughputEstimator
     /// link fills the whole forward buffer before any sample clears 200 ms, the estimate never leaves the seed, and Auto
     /// sits on the opening rung until the forced probe (2026-09-22: n=0 at 62 s buffered, every session).</summary>
     public const long LargeSampleBytes = 2L * 1024 * 1024;
+    /// <summary>Half-life of the reactive EWMA, in seconds of transfer time.</summary>
+    public const double FastHalfLifeSeconds = 2.0;
+    /// <summary>Half-life of the conservative EWMA, in seconds of transfer time.</summary>
+    public const double SlowHalfLifeSeconds = 5.0;
+    /// <summary>Total accepted payload (128 KB) before the estimate counts as a measurement; below it the estimate is
+    /// still the prior, so one marginal slice can never be the whole verdict.</summary>
+    public const long MinTotalBytes = 128 * 1024;
 
-    private double _fastKbps = DefaultSeedKbps;
-    private double _slowKbps = DefaultSeedKbps;
+    // The prior (2 Mbps seed or a remembered estimate) is kept apart from the measured EWMAs: the EWMAs start at zero and
+    // are zero-factor corrected on read (Shaka), so the first measurement replaces the prior outright.
+    private double _priorKbps = DefaultSeedKbps;
+    private double _fastSum;
+    private double _slowSum;
+    private double _totalWeight;
+    private long _totalBytes;
     private int _accepted;
 
     /// <summary>The reactive EWMA — reacts to drops.</summary>
-    public double FastKbps => _fastKbps;
+    public double FastKbps => IsMeasured ? Corrected(_fastSum, FastHalfLifeSeconds) : _priorKbps;
     /// <summary>The conservative EWMA — keeps a single burst from driving an unsafe upgrade.</summary>
-    public double SlowKbps => _slowKbps;
-    /// <summary>How many real samples have been accepted (0 ⇒ the estimate is still the seed).</summary>
+    public double SlowKbps => IsMeasured ? Corrected(_slowSum, SlowHalfLifeSeconds) : _priorKbps;
+    /// <summary>How many samples have been accepted. Not the same as measured: see <see cref="IsMeasured"/>.</summary>
     public int AcceptedSamples => _accepted;
+    /// <summary>True once <see cref="MinTotalBytes"/> of accepted payload have been folded in; false ⇒ the estimate is
+    /// still the prior.</summary>
+    public bool IsMeasured => _totalBytes >= MinTotalBytes;
     /// <summary>The conservative estimate the scheduler budgets against. Never zero — see <see cref="DefaultSeedKbps"/>.</summary>
-    public double EstimateKbps => Math.Min(_fastKbps, _slowKbps);
+    public double EstimateKbps => Math.Min(FastKbps, SlowKbps);
 
     /// <summary>Return to the 2 Mbps prior. For a NEW source only — a SEEK must keep the history, because the network
     /// did not change when the user dragged the scrubber.</summary>
-    public void Reset() { _fastKbps = DefaultSeedKbps; _slowKbps = DefaultSeedKbps; _accepted = 0; }
+    public void Reset()
+    {
+        _priorKbps = DefaultSeedKbps;
+        _fastSum = 0; _slowSum = 0; _totalWeight = 0; _totalBytes = 0; _accepted = 0;
+    }
 
     /// <summary>Fold one transfer sample in. Returns false when the sample was discarded as noise.</summary>
     public bool Add(long payloadBytes, TimeSpan elapsed)
@@ -123,19 +147,36 @@ public sealed class ThroughputEstimator
         double seconds = Math.Max(elapsed.TotalMilliseconds, 1.0) / 1000.0;
         double kbps = payloadBytes * 8.0 / seconds / 1000.0;
         if (!double.IsFinite(kbps) || kbps <= 0) return false;
-        if (_accepted == 0) { _fastKbps = kbps; _slowKbps = kbps; }   // the seed is a prior, not a measurement
-        else { _fastKbps += 0.35 * (kbps - _fastKbps); _slowKbps += 0.08 * (kbps - _slowKbps); }
+        _fastSum = Fold(_fastSum, kbps, seconds, FastHalfLifeSeconds);
+        _slowSum = Fold(_slowSum, kbps, seconds, SlowHalfLifeSeconds);
+        _totalWeight += seconds;
+        _totalBytes += payloadBytes;
         _accepted++;
         return true;
     }
 
+    /// <summary>One duration-weighted EWMA step: a sample of <paramref name="weightSeconds"/> decays the history by
+    /// 0.5^(weight / half-life).</summary>
+    private static double Fold(double sum, double kbps, double weightSeconds, double halfLifeSeconds)
+    {
+        double decay = Math.Pow(0.5, weightSeconds / halfLifeSeconds);
+        return kbps * (1.0 - decay) + decay * sum;
+    }
+
+    /// <summary>Zero-factor correction: the EWMA starts at 0, so divide by the weight actually accumulated.</summary>
+    private double Corrected(double sum, double halfLifeSeconds)
+    {
+        double zeroFactor = 1.0 - Math.Pow(0.5, _totalWeight / halfLifeSeconds);
+        return zeroFactor > 0 ? sum / zeroFactor : _priorKbps;
+    }
+
     /// <summary>Replace the 2 Mbps startup prior with a remembered estimate (the app's last measurement on this machine).
-    /// Still a PRIOR: <see cref="AcceptedSamples"/> stays 0 and the first accepted sample replaces it outright. Ignored once
+    /// Still a PRIOR: <see cref="IsMeasured"/> stays false and the first measurement replaces it outright. Ignored once
     /// anything has been measured.</summary>
     public void Seed(double kbps)
     {
-        if (!double.IsFinite(kbps) || kbps <= 0 || _accepted > 0) return;
-        _fastKbps = kbps; _slowKbps = kbps;
+        if (!double.IsFinite(kbps) || kbps <= 0 || IsMeasured) return;
+        _priorKbps = kbps;
     }
 }
 
@@ -155,19 +196,28 @@ public enum AbrDecisionReason : byte
     Pinned,
     /// <summary>Every rung exceeded the height cap; the SMALLEST rung at/above the cap was taken.</summary>
     Capped,
+    /// <summary>The cap dropped below the current rung; the best allowed rung that costs no more than the current one was
+    /// taken at once (never the bottom of the ladder).</summary>
+    CapDownswitch,
+    /// <summary>The throughput budget indicated a lower rung but the forward buffer held at least
+    /// <see cref="AdaptiveBitrateController.MaxBufferForQualityDecrease"/>, so the rung was kept: a dip is ridden out on
+    /// the buffer already downloaded instead of being paid for with a switch.</summary>
+    DeferredDecrease,
 }
 
-/// <summary>Production ABR controller: conservative throughput budget, immediate downshift, buffer-gated upgrade, an
-/// asymmetric climb/sustain hysteresis band, a forced probe that breaks the low-rendition feedback loop, plus a manual
-/// pin and bitrate/resolution caps. It acts only on measurements; a prior holds. The forced probe is the only move off
-/// a prior — see <see cref="EstimateIsPrior"/> and the 4-param <c>Choose</c> overload.</summary>
+/// <summary>Production ABR controller: conservative throughput budget, a downshift that is immediate once the forward
+/// buffer is thin (and deferred while it holds <see cref="MaxBufferForQualityDecrease"/>), buffer-gated upgrade, an
+/// asymmetric climb/sustain hysteresis band, a timed forced probe that breaks the low-rendition feedback loop, plus a
+/// manual pin and bitrate/resolution caps. It acts only on measurements; a prior holds. The forced probe is the only move
+/// off a prior — see <see cref="EstimateIsPrior"/> and the 4-param <c>Choose</c> overload. Pacing between switches
+/// (minimum interval, probe evidence) is the caller's, in <see cref="AbrSwitchGate"/>.</summary>
 public sealed class AdaptiveBitrateController : IAbrPolicy
 {
     private readonly ThroughputEstimator _throughput = new();
     private int _current;
     private int _upgradeCandidate = -1;
     private byte _upgradeVotes;
-    private byte _steadySegments;
+    private long _steadySinceMs = -1;   // when rule 4 was first reached without anything resetting the ladder; -1 = not steady
     private bool _climbedOnce;
     private bool _probeInFlight;
     private byte _probeFailures;
@@ -177,9 +227,21 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     public QualitySelection Selection { get; set; } = QualitySelection.Auto;
     /// <summary>Hard bitrate ceiling (bits/s).</summary>
     public int MaxBitrate { get; set; } = int.MaxValue;
-    /// <summary>Hard resolution-height ceiling. See the <c>allowed == 0</c> branch of the variant overload — a cap
-    /// bounds the climb; it must never manufacture a downswitch.</summary>
-    public int MaxHeight { get; set; } = int.MaxValue;
+    /// <summary>Hard resolution-height ceiling from POLICY (the user's pin, a metered link). Independent of
+    /// <see cref="ViewportMaxHeight"/>: the effective cap is the smaller of the two, computed in <c>Choose</c>, so a
+    /// viewport never overwrites a policy and a policy write never discards a viewport.</summary>
+    public int PolicyMaxHeight { get; set; } = int.MaxValue;
+    /// <summary>Resolution-height ceiling from the laid-out video surface. Cleared by <see cref="ResetForNewSource"/>:
+    /// the previous source's surface is not this one's.</summary>
+    public int ViewportMaxHeight { get; set; } = int.MaxValue;
+    /// <summary>Compat property for callers that treat the cap as one number: set writes <see cref="PolicyMaxHeight"/>,
+    /// get returns the EFFECTIVE cap, <c>min(policy, viewport)</c>. See the <c>allowed == 0</c> branch of the variant
+    /// overload — a cap bounds the climb; it must never manufacture a downswitch to the floor.</summary>
+    public int MaxHeight
+    {
+        get => Math.Min(PolicyMaxHeight, ViewportMaxHeight);
+        set => PolicyMaxHeight = value;
+    }
     /// <summary>Headroom required to CLIMB: a rung is affordable only at 0.85 × the estimate.</summary>
     public double UpSwitchFactor { get; set; } = 0.85;
     /// <summary>Headroom required to STAY: the current rung is abandoned only past 0.95 × the estimate. The asymmetric
@@ -189,8 +251,17 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     /// startup burst at 4 segments (~16 s) 12 s is reachable, but 6 s makes the FIRST climb happen while the user is
     /// still watching the opening bars rather than half a minute in.</summary>
     public TimeSpan UpgradeBuffer { get; set; } = TimeSpan.FromSeconds(6);
-    /// <summary>Consecutive healthy decisions after which Auto steps up one rung REGARDLESS of the estimate.</summary>
-    public int ForcedProbeSegments { get; set; } = 3;
+    /// <summary>How long Auto must sit steady (buffer healthy, no change indicated) before it steps up one rung
+    /// REGARDLESS of the estimate. In TIME, not decisions: the decision cadence is the caller's (1 Hz in the protected
+    /// session, which made the old 3-decision budget a probe every 3 s). A failed probe doubles it, up to 16x.</summary>
+    public TimeSpan ForcedProbeInterval { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>Forward buffer at or above which a measured downswitch is DEFERRED (Media3's
+    /// <c>maxDurationForQualityDecreaseMs</c>): the buffer already downloaded rides out the dip, and the rung is left only
+    /// when the buffer drops below it. Below it the downswitch stays immediate.</summary>
+    public TimeSpan MaxBufferForQualityDecrease { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>The controller's clock (milliseconds, monotonic) for the probe interval; replaced in tests so the
+    /// cadence is deterministic.</summary>
+    public Func<long> NowMs { get; set; } = static () => Environment.TickCount64;
 
     /// <summary>The conservative throughput estimate (kbps). Never zero — the estimator is seeded.</summary>
     public double EstimatedKbps => _throughput.EstimateKbps;
@@ -211,7 +282,7 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     /// <summary>See <see cref="ThroughputEstimator.Seed"/>.</summary>
     public void SeedEstimate(double kbps) => _throughput.Seed(kbps);
     /// <summary>True until the first real sample: the estimate is a prior and must never move the ladder by itself.</summary>
-    public bool EstimateIsPrior => _throughput.AcceptedSamples == 0;
+    public bool EstimateIsPrior => !_throughput.IsMeasured;
 
     /// <summary>Full reset for a NEW source: ladder position, vote/probe state AND throughput history.</summary>
     public void Reset()
@@ -224,14 +295,38 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
         _probeFailures = 0;
     }
 
+    /// <summary>Reset for a NEW source on a SHARED controller: ladder position, vote/probe state, the climb flag and the
+    /// viewport cap go; the throughput history and the policy cap stay (the link did not change, and the policy is the
+    /// app's, not the previous source's). Without it a probe backoff, <c>_climbedOnce</c> and the last surface's viewport
+    /// cap leak into an unrelated video.</summary>
+    public void ResetForNewSource()
+    {
+        ResetLadderState();
+        _current = 0;
+        _climbedOnce = false;
+        _probeInFlight = false;
+        _probeFailures = 0;
+        _reason = AbrDecisionReason.Hold;
+        ViewportMaxHeight = int.MaxValue;
+    }
+
     /// <summary>Reset for a SEEK. A seek does not change the network, so the throughput history is PRESERVED —
     /// clearing it dropped Auto back to the prior after every scrub and re-ran the whole slow climb.</summary>
     public void ResetForSeek() => ResetLadderState();
 
-    private void ResetLadderState() { _upgradeCandidate = -1; _upgradeVotes = 0; _steadySegments = 0; }
+    private void ResetLadderState() { _upgradeCandidate = -1; _upgradeVotes = 0; _steadySinceMs = -1; }
 
     /// <summary>Seed the representation already opened by the backend (for example a conservative 480p startup rung).</summary>
     public void SeedCurrent(int index) { _current = Math.Max(0, index); ResetLadderState(); }
+
+    /// <summary>The caller declined the last decision (its switch gate said no, or the switch never landed): re-seed the
+    /// ladder at the rung that is really in use. A forced probe that never left is neither a success nor a failure, so
+    /// the probe flag clears WITHOUT backing the cadence off.</summary>
+    public void DeclineLastDecision(int index)
+    {
+        _probeInFlight = false;
+        SeedCurrent(index);
+    }
 
     /// <inheritdoc/> — the IAbrPolicy seam: a caller that HANDS a measured kbps is by contract measured; the prior rule
     /// applies only to the controller's OWN estimate (the variant overload).
@@ -266,16 +361,26 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
         _current = Math.Clamp(_current, 0, variantBitrates.Length - 1);
         int currentBitrate = variantBitrates[_current];
 
-        // 1. Downswitch is immediate and unconditional — ON A MEASUREMENT. A prior (the 2 Mbps seed, or a remembered
-        //    estimate) must never move the ladder off the rung the backend deliberately opened: the seed cannot "afford"
-        //    the ≤480p opening rung, and acting on it put every cold start through 480p → 320p → 480p before the first
-        //    frame (two swap chains; 2026-09-22). The opening rung is the app's decision; the first real sample corrects it.
+        // 1. Downswitch is immediate ON A MEASUREMENT, once the forward buffer is thin. A prior (the 2 Mbps seed, or a
+        //    remembered estimate) must never move the ladder off the rung the backend deliberately opened: the seed cannot
+        //    "afford" the ≤480p opening rung, and acting on it put every cold start through 480p → 320p → 480p before the
+        //    first frame (two swap chains; 2026-09-22). The opening rung is the app's decision; the first real sample
+        //    corrects it.
         if (!estimateIsPrior && variantBitrates[sustain] < currentBitrate)
         {
+            // With MaxBufferForQualityDecrease (25 s) already downloaded, one low sample is not worth a switch: the buffer
+            // rides the dip out and a real slump drains it below the line within seconds. Returns BEFORE rule 4, so a
+            // forced probe never fires while a decrease is indicated; a probe in flight stays in flight.
+            if (forwardBuffered >= MaxBufferForQualityDecrease)
+            {
+                ResetLadderState();
+                _reason = AbrDecisionReason.DeferredDecrease;
+                return _current;
+            }
             // A probe the very next decision reverts is an OSCILLATION, and every reversal costs a real
             // representation switch (which is what visibly freezes the frame). Back the probe cadence off
-            // exponentially so a link that genuinely cannot hold the next rung is retried at 3, 6, 12, 24, 48
-            // decisions instead of every 3 forever.
+            // exponentially so a link that genuinely cannot hold the next rung is retried at 10, 20, 40, 80, 160 s
+            // instead of every 10 forever.
             if (_probeInFlight && _probeFailures < 4) _probeFailures++;
             _probeInFlight = false;
             ResetLadderState();
@@ -318,12 +423,13 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
         // 4. FORCED PROBE. The estimate is derived from what the CURRENT rung downloads, so a low rendition
         //    self-reinforces: it never transfers enough per segment to justify climbing off itself, and Auto sits on
         //    240p over a gigabit link forever. With the buffer at/above target and no downswitch indicated for
-        //    ForcedProbeSegments consecutive decisions, step up ONE rung regardless of the estimate and let the next
-        //    segment's real sample confirm or refute it. The 0.85 / 0.95 hysteresis band above is what stops that
-        //    probe turning into a per-second oscillation.
+        //    ForcedProbeInterval of wall time, step up ONE rung regardless of the estimate and let the next segment's
+        //    real sample confirm or refute it. The 0.85 / 0.95 hysteresis band above is what stops that probe turning
+        //    into a per-second oscillation.
         _upgradeCandidate = -1;
         _upgradeVotes = 0;
-        if (_steadySegments < byte.MaxValue) _steadySegments++;
+        long nowMs = NowMs();
+        if (_steadySinceMs < 0) _steadySinceMs = nowMs;
         int probe = -1;
         for (int i = 0; i < variantBitrates.Length; i++)
         {
@@ -331,10 +437,10 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
             if (br <= currentBitrate || br > MaxBitrate) continue;
             if (probe < 0 || br < variantBitrates[probe]) probe = i;
         }
-        int probeAfter = Math.Max(1, ForcedProbeSegments) << _probeFailures;   // 3, 6, 12, 24, 48 decisions
-        if (probe >= 0 && _steadySegments >= probeAfter)
+        long probeAfterMs = Math.Max(1L, (long)ForcedProbeInterval.TotalMilliseconds) << _probeFailures;   // 10, 20, 40, 80, 160 s
+        if (probe >= 0 && nowMs - _steadySinceMs >= probeAfterMs)
         {
-            _steadySegments = 0;
+            _steadySinceMs = -1;
             _climbedOnce = true;
             _probeInFlight = true;
             _reason = AbrDecisionReason.ForcedProbe;
@@ -354,12 +460,15 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
                 if (string.Equals(variants[i].Id, pinnedId, StringComparison.Ordinal))
                 { _reason = AbrDecisionReason.Pinned; return _current = i; }
         }
+        // A ladder that shrank across sources must not leave _current out of range (FULL-list coordinates).
+        _current = Math.Clamp(_current, 0, variants.Count - 1);
+        int maxHeight = MaxHeight;   // the effective cap, read once so a concurrent writer cannot split one decision
         Span<int> bitrates = variants.Count <= 64 ? stackalloc int[variants.Count] : new int[variants.Count];
         Span<int> indices = variants.Count <= 64 ? stackalloc int[variants.Count] : new int[variants.Count];
         int allowed = 0;
         for (int i = 0; i < variants.Count; i++)
         {
-            if (variants[i].Resolution.Height > MaxHeight) continue;
+            if (variants[i].Resolution.Height > maxHeight) continue;
             bitrates[allowed] = variants[i].Bitrate;
             indices[allowed] = i;
             allowed++;
@@ -382,9 +491,33 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
 
         // The span overload reasons in FILTERED coordinates; _current is kept in FULL-list coordinates (that is what
         // SeedCurrent publishes), so map in and back out around the call.
-        int localCurrent = 0;
+        int localCurrent = -1;
         for (int i = 0; i < allowed; i++)
             if (indices[i] == _current) { localCurrent = i; break; }
+        if (localCurrent < 0)
+        {
+            // The current rung is ABOVE the new cap. Falling back to local index 0 here silently became the cheapest rung
+            // (rules 1-3 then all return it) — a quality crash on every fullscreen exit. A cap is not a throughput
+            // verdict: take the allowed rung that costs the most without exceeding the current one (ties: taller), or,
+            // on a non-monotonic ladder where nothing allowed is cheaper, the tallest allowed rung. No votes and no probe
+            // accounting; a probe the cap cut short is simply over, not failed.
+            int currentBitrate = variants[_current].Bitrate;
+            int target = -1, tallest = 0;
+            for (int i = 0; i < allowed; i++)
+            {
+                int height = variants[indices[i]].Resolution.Height;
+                if (height > variants[indices[tallest]].Resolution.Height) tallest = i;
+                if (bitrates[i] > currentBitrate) continue;
+                if (target < 0 || bitrates[i] > bitrates[target]
+                    || (bitrates[i] == bitrates[target] && height > variants[indices[target]].Resolution.Height))
+                    target = i;
+            }
+            if (target < 0) target = tallest;
+            ResetLadderState();
+            _probeInFlight = false;
+            _reason = AbrDecisionReason.CapDownswitch;
+            return _current = indices[target];
+        }
         _current = localCurrent;
         int selected = Choose(bitrates[..allowed], forwardBuffered, EstimatedKbps, EstimateIsPrior);
         return _current = indices[Math.Clamp(selected, 0, allowed - 1)];

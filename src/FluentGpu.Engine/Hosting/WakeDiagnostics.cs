@@ -57,7 +57,10 @@ public enum WakeReasons
 /// attribution), the consecutive-awake streak, seconds since the loop last went fully idle, frames spent minimized,
 /// a reconcile/layout/record-only work split, the live <c>FrameClock.Tick</c> subscribers at print time
 /// (<c>pollers=</c>), and every subscriber that held ANY frame awake this window even if it had already unmounted by
-/// print time (<c>pollersSeen=</c>, <see cref="AppendPollersSeen"/>).</summary>
+/// print time (<c>pollersSeen=</c>, <see cref="AppendPollersSeen"/>), the host timers that fired (<c>timersSeen=</c>: owner
+/// component x fires) and what the UI frames that published a scene were for (<c>uiPresents=</c>,
+/// <see cref="ClassifyUiPresent"/>); the render side appends its own present causes and the recorded / composite-only split
+/// (<c>AppHost.AppendRenderWakeCensus</c>).</summary>
 ///
 /// <para>This used to be <c>FG_WAKE_DIAG=1</c> to stderr once a second. That is exactly the shape this codebase has
 /// learned not to ship: "the loop is pinned at panel rate and nothing in the log says which term holds it" is
@@ -90,7 +93,7 @@ internal sealed class WakeDiagnostics
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake
     private readonly long[] _soleFrames = new long[ReasonCount];     // frames where reason i was the ONLY bit set
     private long _framesRun;          // frames where RunFrame did real work (awake)
-    private long _framesRendered;     // of those, frames that actually rendered (FrameStats.Rendered)
+    private long _framesReconciledOrLaidOut;   // of those, frames that reconciled or laid out (FrameStats.Rendered: reconcile || layout — NOT "presented")
     private long _framesMinimized;    // awake frames observed while the window was minimized
     private long _reconciledFrames;   // awake frames that reconciled
     private long _layoutFrames;       // awake frames that ran layout
@@ -149,9 +152,17 @@ internal sealed class WakeDiagnostics
 
     private readonly Action<System.Text.StringBuilder> _appendRenderCensus;
 
+    // The host timer queue (UseTimeout / UseInterval / UseDebouncedValue / UseThrottledValue): the `timer` wake bit only says a
+    // timer was DUE, so the queue keeps a per-owner fire tally for this census to print as `timersSeen=` and reopen each window.
+    private readonly HostTimerQueue? _timers;
+
+    // Why each UI frame that PUBLISHED a scene (and so owes the glass a present) ran, one bucket per frame (see
+    // ClassifyUiPresent). The `kept:`/`sole:` lists say which wake bits were set; this says what the present was FOR.
+    private readonly long[] _uiPresentCause = new long[UiPresentCauseCount];
+
     public WakeDiagnostics(FluentGpu.Signals.Signal<object?> frameClockSig, FluentGpu.Animation.AnimEngine anim, FluentGpu.Scene.SceneStore scene,
-        Action<System.Text.StringBuilder> appendRenderCensus, Func<bool> windowActive)
-    { _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; _windowActive = windowActive; }
+        Action<System.Text.StringBuilder> appendRenderCensus, Func<bool> windowActive, HostTimerQueue? timers = null)
+    { _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; _windowActive = windowActive; _timers = timers; }
 
     /// <summary>Close the elapsed span into the focus bucket the PREVIOUS observation saw, then re-sample focus.</summary>
     private bool SampleFocus(long now)
@@ -176,6 +187,59 @@ internal sealed class WakeDiagnostics
         long actFrames = _framesRun - _framesInactive;
         sb.Append(CultureInfo.InvariantCulture,
             $" | focus act={(actSec > 0 ? actFrames / actSec : 0):0.0}fps/{actSec:0.0}s inact={(inactSec > 0 ? _framesInactive / inactSec : 0):0.0}fps/{inactSec:0.0}s");
+    }
+
+    /// <summary>What a UI frame that published a scene was for (F242). One cause per frame, by precedence.</summary>
+    internal enum UiPresentCause
+    {
+        /// <summary>A host timer was due this frame (UseInterval / UseTimeout / debounce / throttle) — the autonomous ticker.</summary>
+        Timer,
+        /// <summary>A <c>FrameClock.Tick</c> subscriber held the frame awake.</summary>
+        Poller,
+        /// <summary>A component re-rendered.</summary>
+        Reconcile,
+        /// <summary>No re-render, but layout ran.</summary>
+        Layout,
+        /// <summary>A record-only frame woken by a pending render-effect or an explicit wake (a bound signal write, input).</summary>
+        Signal,
+        /// <summary>Anything else (animation edge, image pump, warm cadence, ...).</summary>
+        Other,
+    }
+
+    private const int UiPresentCauseCount = 6;
+    private static readonly string[] s_uiPresentCauseNames = ["timer", "poller", "reconcile", "layout", "signal", "other"];
+
+    /// <summary>The ONE cause a published UI frame is attributed to. Autonomous wakes win over the work shape on purpose: a 30 Hz
+    /// ticker whose tick re-renders a component is still a timer-driven present, and attributing it to <c>reconcile</c> is how
+    /// the equalizer and seek-rail tickers stayed anonymous. Then reconcile, layout, a pending render-effect / explicit wake,
+    /// else other. Pure: the unit tests pin the precedence.</summary>
+    internal static UiPresentCause ClassifyUiPresent(WakeReasons reasons, bool reconciled, bool laidOut)
+    {
+        if ((reasons & WakeReasons.Timer) != 0) return UiPresentCause.Timer;
+        if ((reasons & WakeReasons.FrameClockPoller) != 0) return UiPresentCause.Poller;
+        if (reconciled) return UiPresentCause.Reconcile;
+        if (laidOut) return UiPresentCause.Layout;
+        if ((reasons & (WakeReasons.RuntimePending | WakeReasons.FrameNeeded)) != 0) return UiPresentCause.Signal;
+        return UiPresentCause.Other;
+    }
+
+    /// <summary>Append <c>uiPresents=N:cause×frames,…</c> (or <c>uiPresents=0</c>) for the window just closed — the UI frames that
+    /// published a scene, by <see cref="ClassifyUiPresent"/>. Report cadence only.</summary>
+    internal void AppendUiPresents(System.Text.StringBuilder sb)
+    {
+        long total = 0;
+        for (int i = 0; i < UiPresentCauseCount; i++) total += _uiPresentCause[i];
+        sb.Append(CultureInfo.InvariantCulture, $" | uiPresents={total}");
+        if (total == 0) return;
+        sb.Append(':');
+        bool first = true;
+        for (int i = 0; i < UiPresentCauseCount; i++)
+        {
+            if (_uiPresentCause[i] == 0) continue;
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(s_uiPresentCauseNames[i]).Append(CultureInfo.InvariantCulture, $"×{_uiPresentCause[i]}");
+        }
     }
 
     /// <summary>Append <c>pollers=N</c> and, when N &gt; 0, <c>:Name,Name,…</c> — each live <c>FrameClock.Tick</c>
@@ -206,8 +270,10 @@ internal sealed class WakeDiagnostics
 
     /// <summary>Record one frame's wake mask + classification. <paramref name="reasons"/> is the mask the loop
     /// computed; <paramref name="awake"/> is whether the frame actually did work (a frame can run for a completed
-    /// image pump with reasons==None — counted toward the streak reset, not toward an awake reason).</summary>
-    public void Record(WakeReasons reasons, bool awake, bool rendered, bool reconciled, bool laidOut, bool minimized)
+    /// image pump with reasons==None — counted toward the streak reset, not toward an awake reason).
+    /// <paramref name="published"/> is whether the frame handed a scene to the renderer (it owes a present): it is attributed to
+    /// one <see cref="UiPresentCause"/> for the line's <c>uiPresents=</c>.</summary>
+    public void Record(WakeReasons reasons, bool awake, bool rendered, bool reconciled, bool laidOut, bool minimized, bool published = false)
     {
         long now = Stopwatch.GetTimestamp();
         if (_windowStartTicks == 0) { _windowStartTicks = now; _lastIdleTicks = now; }
@@ -226,7 +292,8 @@ internal sealed class WakeDiagnostics
         if (!awake) return;   // image-pump-only frame: classified as idle above, no per-reason attribution
 
         _framesRun++;
-        if (rendered) _framesRendered++;
+        if (rendered) _framesReconciledOrLaidOut++;
+        if (published) _uiPresentCause[(int)ClassifyUiPresent(reasons, reconciled, laidOut)]++;
         if (minimized) _framesMinimized++;
         if (!active) _framesInactive++;
         // 3-way split (one bucket per frame): reconciled wins over layout-only wins over compositor-only record.
@@ -313,7 +380,7 @@ internal sealed class WakeDiagnostics
         // fps is the headline — "the loop ran at panel rate for 30 s" is the symptom; the kept/sole lists below are
         // the answer to "which term did that", which is the whole reason this instrument exists.
         sb.Append(CultureInfo.InvariantCulture,
-            $"[wake] {sec:0.0}s fps={(sec > 0 ? _framesRun / sec : 0):0.0} run={_framesRun} rendered={_framesRendered}");
+            $"[wake] {sec:0.0}s fps={(sec > 0 ? _framesRun / sec : 0):0.0} run={_framesRun} reconciledOrLaidOut={_framesReconciledOrLaidOut}");
         SampleFocus(now);   // close the span since the last frame into its bucket, so the split covers the whole window
         AppendFocusSplit(sb);
         sb.Append(CultureInfo.InvariantCulture,
@@ -335,6 +402,10 @@ internal sealed class WakeDiagnostics
         // Every poller that held a frame awake this window, even one that already unmounted — pollers= above only
         // sees who is STILL subscribed at print time.
         AppendPollersSeen(sb);
+        // Host timers that fired this window, by owner component (the `timer` bit above only says one was due), and what the
+        // UI frames that published were for — together they name the autonomous tickers behind a present rate.
+        _timers?.AppendTimersSeen(sb);
+        AppendUiPresents(sb);
         // UI desired tracks survive until completion feedback is imported. They do not establish that the
         // renderer is moving: report its actual motion decision and presented-frame delta alongside them.
         _anim.AppendLiveTrackCensus(sb);
@@ -345,10 +416,12 @@ internal sealed class WakeDiagnostics
 
         Array.Clear(_reasonFrames);
         Array.Clear(_soleFrames);
+        Array.Clear(_uiPresentCause);
+        _timers?.ResetFireCensus();
         _pollersSeenCount = 0;   // names/frames stay stale in the arrays past this index — harmless, count gates reads
         _skipMisses = 0;
         _framesRun = 0;
-        _framesRendered = 0;
+        _framesReconciledOrLaidOut = 0;
         _framesMinimized = 0;
         _framesInactive = 0;
         _activeTicks = 0;

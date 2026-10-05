@@ -51,6 +51,20 @@ public static class Marquee
         public ScrollMode Mode { get; init; } = ScrollMode.Loop;
         public TriggerMode Trigger { get; init; } = TriggerMode.Always;
         public bool Enabled { get; init; } = true;
+        /// <summary>Park the scroll while nothing of the window is on screen - covered by another window, cloaked or minimized
+        /// (<see cref="InputHooks.WindowOccluded"/>). Parking glides the content home (the same return a deactivated trigger
+        /// makes) and frees the loop row: a title nobody CAN see must not hold a render wake and a present for the whole song
+        /// (F239). The scroll resumes from its start when the window is uncovered. Focus is deliberately NOT a condition: an
+        /// unfocused but visible window keeps its title moving at the display rate (motion policy, 2026-10-03 - the engine
+        /// never slows visible motion for losing focus). A scroll the pointer drives (<see cref="TriggerMode.Hover"/> with the
+        /// pointer over it) is never parked. Default on; set false for a marquee that must keep moving while covered.</summary>
+        public bool ParkWhenOccluded { get; init; } = true;
+        /// <summary>With <see cref="ScrollMode.PingPong"/> and a positive <see cref="CycleMs"/>: every row takes the SAME
+        /// cycle length (<see cref="StartDelayMs"/> + <see cref="EndPauseMs"/> + 2 x <see cref="CycleMs"/>) whatever its own
+        /// tail, a short tail simply resting longer at its ends. Sibling lines (a title over an artist line) then start,
+        /// travel and rest together instead of drifting out of phase - so the window changes pixels in ONE shared span,
+        /// not the union of two offset ones. Ignored for the other modes.</summary>
+        public bool SyncCycle { get; init; }
     }
 
     public static readonly Style Default = new();
@@ -164,6 +178,14 @@ internal sealed class MarqueeScroller : Component
 
     public override Element Render()
     {
+        var hooks = UseContext(InputHooks.Current);
+        // A covered / cloaked window's marquee is seen by nobody: park it (glide home) while the window is occluded. The read
+        // subscribes, so an occlusion edge re-renders this scroller and re-seeds the track through the same `paused` edge a
+        // deactivated trigger uses. Focus is NOT read: an unfocused but visible window keeps scrolling at the display rate.
+        // A scroll the pointer is DRIVING (Hover mode, pointer over it) is never parked: it is user input.
+        bool hoverDriven = Sty.Trigger == Marquee.TriggerMode.Hover && Hovered.Value;
+        bool covered = Sty.ParkWhenOccluded && !hoverDriven && hooks.WindowOccluded?.Value == true;
+
         float cw = ContainerW.Value;
         float tw = TextW.Value;
         bool overflow = tw > cw + 1f && cw > 0f;
@@ -175,7 +197,7 @@ internal sealed class MarqueeScroller : Component
             _ => true,
         };
         bool canScroll = Sty.Enabled && overflow && !Motion.ReducedMotion;
-        bool paused = canScroll && !active;
+        bool paused = canScroll && (!active || covered);
 
         var scrollerHost = UseRef(NodeHandle.Null);
         UseLayoutEffect(() => { scrollerHost.Value = Context.HostNode; }, DepKey.Empty);
@@ -210,6 +232,8 @@ internal sealed class MarqueeScroller : Component
             // The scroll and the home glide both take the display cadence (null) like every other row: scrolling TEXT is the
             // motion a sub-refresh cadence betrays first (it read as stepping at 30 Hz, and a 60 Hz cap still halved it on a
             // 120 Hz panel), and the host's one power ceiling (AppHost.PowerCapFps) still reaches it under energy saver.
+            // The translate is sampled as is (sub-pixel positions, like main): the text glides; it is not stepped to the
+            // device-pixel grid (owner decision, 2026-10-05 - the pixel-snapped variant of the audit branch was dropped).
             UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping,
                          DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)));
         }
@@ -251,25 +275,18 @@ internal sealed class MarqueeScroller : Component
         MaxLines = 1,
     };
 
-    private (Keyframe[] keys, float durMs, bool loop) BuildTrack(bool loop, bool canScroll, float loopDist, float tailDist)
+    internal (Keyframe[] keys, float durMs, bool loop) BuildTrack(bool loop, bool canScroll, float loopDist, float tailDist)
     {
         if (!canScroll)
             return ([new Keyframe(0f, 0f), new Keyframe(1f, 0f)], 200f, false);
 
-        float speed = MathF.Max(1f, Sty.Speed);
         // CycleMs caps long traversals to a shared cadence; Speed remains the minimum visible pace for short tails.
         // Thus long sibling lines stay synced without making a one-glyph overflow look stationary.
         bool fixedCycle = Sty.CycleMs > 0f;
 
-        float TravelMs(float distance)
-        {
-            float atMinSpeed = MathF.Max(0f, distance) / speed * 1000f;
-            return fixedCycle ? MathF.Min(Sty.CycleMs, atMinSpeed) : atMinSpeed;
-        }
-
         if (loop)
         {
-            float travel = TravelMs(loopDist);
+            float travel = TravelMs(Sty, loopDist);
             float dur = MathF.Max(1f, travel + Sty.StartDelayMs);
             float delayFrac = Sty.StartDelayMs / dur;
             return (
@@ -283,11 +300,14 @@ internal sealed class MarqueeScroller : Component
         // PingPong: pause at start, scroll out, hold at tail, bounce back.
         float startPause = Sty.StartDelayMs;
         float endPause = Sty.EndPauseMs;
-        float travelP = TravelMs(tailDist);
-        float total = MathF.Max(1f, startPause + endPause + 2f * travelP);
+        float travelP = TravelMs(Sty, tailDist);
+        // SyncCycle: the cycle length is the fixed one (2 x CycleMs of travel budget) for every row, the return leg is
+        // anchored to the END of the cycle, and a tail shorter than the budget rests longer at its tail instead.
+        bool syncCycle = Sty.SyncCycle && fixedCycle;
+        float total = MathF.Max(1f, startPause + endPause + 2f * (syncCycle ? Sty.CycleMs : travelP));
         float f1 = startPause / total;
         float f2 = f1 + travelP / total;
-        float f3 = f2 + endPause / total;
+        float f3 = syncCycle ? 1f - travelP / total : f2 + endPause / total;
         return (
         [
             new Keyframe(0f, 0f, Easing.Linear),
@@ -296,6 +316,14 @@ internal sealed class MarqueeScroller : Component
             new Keyframe(f3, -tailDist, Easing.Linear),
             new Keyframe(1f, 0f, Easing.Linear),
         ], total, true);
+    }
+
+    /// <summary>One traversal's duration (ms) of <paramref name="distance"/> under <paramref name="sty"/>: constant velocity at
+    /// <see cref="Marquee.Style.Speed"/> (a floor on the pace), capped at <see cref="Marquee.Style.CycleMs"/> when that is set.</summary>
+    internal static float TravelMs(Marquee.Style sty, float distance)
+    {
+        float atMinSpeed = MathF.Max(0f, distance) / MathF.Max(1f, sty.Speed) * 1000f;
+        return sty.CycleMs > 0f ? MathF.Min(sty.CycleMs, atMinSpeed) : atMinSpeed;
     }
 
     /// <summary>The trigger-deactivated return: a ONE-SHOT from the LIVE translate <paramref name="fromX"/> back to 0

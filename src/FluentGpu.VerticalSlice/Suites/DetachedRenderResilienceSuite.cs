@@ -1,9 +1,19 @@
 ﻿using System;
 using System.Collections.Generic;
+using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Hosting;
 using FluentGpu.Hosting.Threading;
+using FluentGpu.Pal;
+using FluentGpu.Pal.Headless;
+using FluentGpu.Render;
+using FluentGpu.Render.Tiles;
 using FluentGpu.Rhi;
+using FluentGpu.Rhi.Headless;
+using FluentGpu.Signals;
 using FluentGpu.Text;
+using FluentGpu.Text.Headless;
 using static FluentGpu.VerticalSlice.Harness.Gate;
 
 namespace FluentGpu.VerticalSlice.Suites;
@@ -26,6 +36,76 @@ static class DetachedRenderResilienceSuite
         SlotQuarantinePolicyChecks();
         RecordedOpRingChecks();
         TargetFenceLedgerChecks();
+        DetachedChildRouteChecks(strings);
+    }
+
+    sealed class PopoutMainRoot : Component
+    {
+        public override Element Render() => Ui.VStack(0);
+    }
+
+    /// <summary>A pop-out whose content changes every turn (a ticking seek bar): the shape that used to composite into the
+    /// main swapchain on every frame (F090).</summary>
+    sealed class RepaintingPopoutRoot : Component
+    {
+        public static readonly Signal<int> Tick = new(0);
+        public override Element Render() => new BoxEl { Grow = 1f, Height = 40f + Tick.Value % 50, Fill = ColorF.FromRgba(20, 60, 120) };
+    }
+
+    // gate.detached.* (F090 / F229): a detached pop-out records standalone and presents through ITS OWN swapchain's direct
+    // route - it never reaches SubmitComposite, which draws into the PRIMARY back buffer, drains the main window's frame-latency
+    // credit and numbers its tile surfaces into the device-wide tile pool the main window also uses. Two real hosts on ONE
+    // headless device: the parent composites, the child repaints every turn; the device's primary target and composite
+    // log must belong to the parent alone.
+    static void DetachedChildRouteChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var device = new HeadlessGpuDevice { RejectNonPrimaryComposite = true };
+        var parentWindow = new HeadlessWindow(new WindowDesc("popout-main", new Size2(320, 240), 1f));
+        parentWindow.Show();
+        using var parent = new AppHost(app, parentWindow, device, new HeadlessFontSystem(strings), strings, new PopoutMainRoot());
+        parent.RunFrame();
+        var childWindow = new HeadlessWindow(new WindowDesc("popout-child", new Size2(320, 180), 1f, Composited: true, CustomFrame: true));
+        childWindow.Show();
+        var child = new AppHost(app, childWindow, device, new HeadlessFontSystem(strings), strings, new RepaintingPopoutRoot(),
+            images: null, frameTime: null, compositeSwapchain: true, isDetachedChild: true, parentRenderThread: null);
+        parent.AdoptDetachedChild(child);
+
+        var primary = device.CreatedSwapchains[0];
+        var childTarget = device.CreatedSwapchains[1];
+        int composites = device.CompositeFrameCount;
+        int primaryPresents = primary.PresentCount;
+        int childPresents0 = childTarget.PresentCount;
+        for (int i = 0; i < 30; i++)
+        {
+            RepaintingPopoutRoot.Tick.Value++;
+            parent.TickDetachedHosts();
+        }
+
+        Check("gate.detached.child-never-composites 30 repainting child turns issued no SubmitComposite (the child never numbers surfaces into the shared tile pool)",
+            device.CompositeFrameCount == composites, $"composites {composites} -> {device.CompositeFrameCount}");
+        Check("gate.detached.child-presents-own-swapchain the child's repaints went through SubmitDrawList(its own swapchain) and presented it",
+            device.DirectSubmitCount >= 10 && ReferenceEquals(device.LastDirectTarget, childTarget)
+            && childTarget.PresentCount - childPresents0 >= 10,
+            $"direct={device.DirectSubmitCount} presents={childTarget.PresentCount - childPresents0}");
+        Check("gate.detached.primary-untouched the child's turns neither submitted into nor presented the primary swapchain",
+            primary.PresentCount == primaryPresents && !ReferenceEquals(device.LastDirectTarget, primary)
+            && ReferenceEquals(device.LastCompositeTarget, primary),
+            $"primaryPresents {primaryPresents} -> {primary.PresentCount}");
+        Check("gate.detached.tile-owner-is-the-primary-host the device's composite log is stamped by the parent's slice table only, distinct from the child's",
+            device.LastCompositeOwner == parent.UiSliceTable.OwnerId && parent.UiSliceTable.OwnerId != child.UiSliceTable.OwnerId,
+            $"owner={device.LastCompositeOwner} parent={parent.UiSliceTable.OwnerId} child={child.UiSliceTable.OwnerId}");
+
+        bool rejected = false;
+        try
+        {
+            var frame = new CompositeFrame(default, ReadOnlySpan<SliceRow>.Empty, ReadOnlySpan<byte>.Empty,
+                ReadOnlySpan<TileRaster>.Empty, ReadOnlySpan<TilePlacement>.Empty, ReadOnlySpan<CompositeItem>.Empty, PresentParams.Full);
+            device.SubmitComposite(in frame, childTarget);
+        }
+        catch (InvalidOperationException) { rejected = true; }
+        Check("gate.detached.composite-rejects-secondary-target the device refuses a composite into a non-primary swapchain",
+            rejected && device.CompositeFrameCount == composites);
     }
 
     // gate.d3d12.forensic.* (Phase 0 §2.6): the always-on forensic ring is the only evidence a shipping (Release)

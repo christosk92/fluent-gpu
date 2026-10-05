@@ -30,8 +30,20 @@ namespace FluentGpu.Hosting;
 /// <item><c>opaque</c> — an opaque HWND swapchain instead of the DWM Mica composition (A/B arm).</item>
 /// <item><c>no-precise-wait</c> — the frame wait falls back from the high-resolution waitable timer.</item>
 /// <item><c>no-vsync</c> — present at sync-interval 0 (diagnose present cap vs frame cost).</item>
+/// <item><c>present-nowait</c> — a detached pop-out presents with DXGI_PRESENT_DO_NOT_WAIT and re-presents a refused frame on
+/// a later turn instead of ever blocking the shared render thread in Present (A/B arm, default off).</item>
 /// <item><c>gpu-timing</c> — start with the pass-granular GPU timeline on (<c>AppHost.GpuPassTimingEnabled</c>, the
 /// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
+/// <item><c>video-nv12</c> — both media engines (clear and protected) output NV12 instead of the forced BGRA when the
+/// output's overlay probe reports NV12 support (F249, A/B arm, default off).</item>
+/// <item><c>playready-sl2000</c> — the protected runtime never probes hardware PlayReady SL3000 (the <c>.3000</c> key system with a
+/// "3000" video capability) and asks for the software SL2000 CDM it always did. Without it the runtime probes SL3000 and falls back to
+/// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
+/// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
+/// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
+/// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
+/// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
+/// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
 /// </list>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
@@ -53,6 +65,8 @@ public static class EngineSwitches
     public static string? ImageTrace;
     public static bool D3DMemLog;
     public static bool NcDiag;
+    /// <summary>Accept the <c>FluentGpu.TestInput</c> window message (<c>--fg test-input</c>); read once when the first window is created.</summary>
+    public static bool TestInput;
     /// <summary>One-shot scene dump mode (null = off).</summary>
     public static string? SceneDump;
     public static bool ShelfLog;
@@ -66,6 +80,33 @@ public static class EngineSwitches
     public static bool NoVsync;
     /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
     public static bool GpuPassTiming;
+    /// <summary>Non-blocking secondary present (F085, <c>--fg present-nowait</c>): a detached pop-out's Present carries
+    /// DXGI_PRESENT_DO_NOT_WAIT, and a frame DXGI refuses (DXGI_ERROR_WAS_STILL_DRAWING) stays owed and is re-presented on a
+    /// later turn - the shared render thread never waits inside a secondary window's Present. A HYPOTHESIS arm, default off:
+    /// the child's present slot is already probed without waiting (F090), so the default is decided by PresentMon
+    /// (MsBetweenDisplayChange) on both HWNDs with the pop-out playing, not by this flag's existence.</summary>
+    public static bool NonBlockingSecondaryPresent;
+
+    /// <summary>NV12 media-engine output (F249, <c>--fg video-nv12</c>): both engines drop the forced B8G8R8A8 output format for NV12
+    /// when the render output's overlay probe (<see cref="FluentGpu.Media.VideoOverlayCaps"/>) reports NV12 as plane-capable, so the
+    /// decoded frame skips the per-frame NV12 to BGRA video-processor pass and a YUV overlay plane can take it. BGRA stays the fallback
+    /// whenever the probe says no or has not run. A HYPOTHESIS arm, default off: whether MF honours the format for a windowless swap
+    /// chain and whether DWM then promotes it is only settled by PresentMon (the Hardware Composed / MPO plane columns) with the
+    /// switch on and off.</summary>
+    public static bool Nv12VideoOutput;
+
+    /// <summary>Overlay promotion (F087, <c>--fg video-overlay</c>): a video whose rect nothing paints over (a fullscreen video with its
+    /// chrome hidden, an idle pop-out) is inserted ABOVE the UI visual and falls back to the hole-punched underlay the turn something
+    /// covers it, with a hold after each demotion; only where the output's overlay probe reports support. The UI hole stays punched in
+    /// both modes. A HYPOTHESIS arm, default off, decided by the owner's PresentMon A/B (<c>MsBetweenDisplayChange</c> and the
+    /// PresentMode column, switch on vs off), not by this flag's existence.</summary>
+    public static bool VideoOverlay;
+
+    /// <summary>Skip the PlayReady SL3000 probe (F022, <c>--fg playready-sl2000</c>): the protected runtime's CDM is the software SL2000 request
+    /// it has always made. The default (false) probes the hardware key system first - SL3000 is used only where the machine grants it,
+    /// otherwise the runtime falls back to SL2000 - and the negotiated level is logged once per runtime. Read once, when the native runtime
+    /// is created: set it (the command line) before the first protected open.</summary>
+    public static bool ForcePlayReadySl2000;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -116,6 +157,7 @@ public static class EngineSwitches
             case "img": ImageTrace = string.IsNullOrEmpty(value) ? null : value; return ImageTrace is not null;
             case "d3d-mem": D3DMemLog = true; return true;
             case "nc": NcDiag = true; return true;
+            case "test-input": TestInput = true; return true;
             case "dump": SceneDump = string.IsNullOrEmpty(value) ? "1" : value; return true;
             case "shelf": ShelfLog = true; return true;
             case "morph": MorphLog = true; return true;
@@ -136,7 +178,11 @@ public static class EngineSwitches
             case "opaque": OpaqueWindow = true; return true;
             case "no-precise-wait": PreciseWait = false; return true;
             case "no-vsync": NoVsync = true; return true;
+            case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
+            case "video-nv12": Nv12VideoOutput = true; return true;
+            case "video-overlay": VideoOverlay = true; return true;
+            case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
             default: return false;
         }
     }

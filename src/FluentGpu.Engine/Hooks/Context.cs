@@ -121,9 +121,44 @@ public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
     FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default);
 
+/// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
+/// revealed once its first frame has presented, so the four stages are separate costs and only the first two are paid
+/// synchronously inside the open call. All milliseconds; <see cref="FirstFrameMs"/> and <see cref="FirstPresentMs"/> are
+/// known only once the window was revealed (see <see cref="IDetachedVideoWindow.OnRevealed"/>), and are 0 before.
+/// <list type="bullet">
+/// <item><see cref="WindowCreateMs"/>: native window creation and placement (everything up to the host constructor).</item>
+/// <item><see cref="HostCtorMs"/>: the child host constructor (swapchain creation, scene and reconciler setup, mount).</item>
+/// <item><see cref="FirstFrameMs"/>: the child's first <c>RunFrame</c> (the full reconcile, layout and record).</item>
+/// <item><see cref="FirstPresentMs"/>: wall time from the start of the open until the first present was observed on the UI
+/// thread (it contains the three stages above plus any render-thread wait).</item>
+/// </list>
+/// <see cref="TimedOut"/> is true when the window was shown by the reveal timeout instead of by a presented frame.
+/// <see cref="RenderPresentMs"/> (F215) is the same stage as <see cref="FirstPresentMs"/> read from the clock the RENDER thread
+/// stamped when the child's first present succeeded, so <c>FirstPresentMs - RenderPresentMs</c> is the lag the UI added in
+/// noticing it; -1 when the reveal came from the timeout (no present was seen) or the backend does not stamp it. The time to the
+/// child's first VIDEO BIND is a later stage than the reveal: <see cref="IDetachedVideoWindow.OnFirstVideoBound"/>.</summary>
+public readonly record struct DetachedOpenTiming(
+    double WindowCreateMs, double HostCtorMs, double FirstFrameMs, double FirstPresentMs, bool TimedOut, double RenderPresentMs = -1.0);
+
 /// <summary>A live handle to a detached video window (see <see cref="InputHooks.OpenDetachedWindow"/>).</summary>
 public interface IDetachedVideoWindow
 {
+    /// <summary>The open-cost split. Only <see cref="DetachedOpenTiming.WindowCreateMs"/> and
+    /// <see cref="DetachedOpenTiming.HostCtorMs"/> are filled while the window is still hidden; the rest arrives with
+    /// <see cref="OnRevealed"/>. Default: all zero (a backend that does not measure).</summary>
+    DetachedOpenTiming OpenTiming => default;
+    /// <summary>Fired once, on the UI thread, when the window has been revealed (shown after its first present, or by the reveal
+    /// timeout), with the full <see cref="DetachedOpenTiming"/>. Set it right after the open call returns: the reveal happens on
+    /// a later frame. Default: ignored.</summary>
+    Action<DetachedOpenTiming>? OnRevealed { get => null; set { } }
+    /// <summary>Milliseconds from the start of the open to the pop-out's first SUCCESSFUL video bind (the presenter accepted a
+    /// swap-chain handle for one of the window's surfaces: the first moment the picture can be composited there), or -1 while none
+    /// has landed. The reveal (<see cref="OnRevealed"/>) only proves the child presented its own frame; with a protected source the
+    /// bind follows the native handle and can land later. Default: -1 (a backend that does not measure).</summary>
+    double FirstVideoBindMs => -1.0;
+    /// <summary>Fired once, on the UI thread, when <see cref="FirstVideoBindMs"/> is known (its argument). Set it right after the open
+    /// call returns. Default: ignored.</summary>
+    Action<double>? OnFirstVideoBound { get => null; set { } }
     /// <summary>True until the window is closed/reaped.</summary>
     bool IsOpen { get; }
     /// <summary>Toggle persistent always-on-top.</summary>
@@ -179,6 +214,28 @@ public interface IDetachedVideoWindow
     /// anything and never will again. Default false so a backend without the concept (or a handle backed by a host
     /// that predates this member) reads as healthy forever, matching prior behavior.</summary>
     bool RenderFailed => false;
+
+    /// <summary>F110: true while the window is PARKED warm (<see cref="Park"/>): hidden, its host stopped producing, its content
+    /// still mounted and its swapchain still alive, waiting for <see cref="Unpark"/> (or <see cref="Close"/>). A parked window is
+    /// still <see cref="IsOpen"/>. Default false (a backend without warm reuse never parks).</summary>
+    bool IsParked => false;
+
+    /// <summary>F110: hide the window and PARK its host instead of closing it (Win32 <c>SW_HIDE</c>: no frames are produced, no
+    /// present is made; the child host, its mounted tree and its swapchain stay alive), so the next open can reuse it with
+    /// <see cref="Unpark"/> and skip the window, swapchain and tree construction. A fullscreen window leaves fullscreen first,
+    /// so it comes back windowed at the rect the user last chose, and a pending settled-bounds change is delivered
+    /// (<see cref="BoundsChanged"/>) before it hides. Returns false when the window cannot be parked (still waiting for its
+    /// reveal, its render path failed, closed, or the backend has no warm reuse): the caller closes it instead. Idempotent
+    /// while parked. UI thread. Closing a parked window (<see cref="Close"/>) disposes it normally; the owner decides when.</summary>
+    bool Park() => false;
+
+    /// <summary>F110: bring a parked window back for a new open. Applies the request's restored bounds (clamped into a visible
+    /// monitor's work area), always-on-top state and title, then re-arms the reveal gate: the window is shown on the next child
+    /// frame (<see cref="OnRevealed"/> fires then, so set it after this call returns, as after an open), and the host resumes
+    /// producing. The request's <see cref="DetachedWindowRequest.Content"/> is ignored: the parked tree is reused, so it must
+    /// follow live signals rather than capture values. Returns false when the window is not parked or cannot be reused (the
+    /// caller opens a new one). UI thread.</summary>
+    bool Unpark(DetachedWindowRequest request) => false;
     /// <summary>Fired once, on the render thread, the instant <see cref="RenderFailed"/> latches. The owner should
     /// treat this like <see cref="OnClosed"/>'s sibling — typically marshal to the UI thread and close the pop-out
     /// (it can no longer present) rather than leave a frozen/blank window around. Default no-op.</summary>
@@ -281,8 +338,9 @@ public sealed class InputHooks
     public event Action? WindowMoveSizeEndedObserved;
     public void NotifyWindowMoveSizeEnded() => WindowMoveSizeEndedObserved?.Invoke();
     /// <summary>Open a movable/resizable, always-on-top DETACHED video window hosting the request's content in its OWN
-    /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (headless, the
-    /// async render path, or a backend without secondary swapchains). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>
+    /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (a child host,
+    /// headless, or a backend without secondary swapchains; the async render path is NOT a reason - the pop-out presents
+    /// through the parent's render thread). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>
     public Func<DetachedWindowRequest, IDetachedVideoWindow?>? OpenDetachedWindow;
     /// <summary>Whether <see cref="OpenDetachedWindow"/> would actually succeed right now (a child host, headless, or a
     /// backend without secondary swapchains all say no). An affordance can PREFLIGHT with this instead of discovering the

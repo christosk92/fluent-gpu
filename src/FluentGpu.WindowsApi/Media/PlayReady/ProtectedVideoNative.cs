@@ -28,8 +28,8 @@ internal static unsafe partial class PrNative
     internal const int EvBuffered = 21;
     internal const int EvKeyframes = 22;
     internal const int EvMetadata = 30;
-    internal const int EvCanPlay = 31;
-    internal const int EvFirstFrame = 32;
+    internal const int EvCanPlay = 31;      // a = startCorrectionMs (the carried-start fallback's second source Start; 0 = none)
+    internal const int EvFirstFrame = 32;   // a = position ms, b = native's QPC at FIRSTFRAMEREADY (0 from a fake / an older DLL)
     internal const int EvHandle = 33;
     internal const int EvPosition = 34;
     internal const int EvSeeking = 35;
@@ -42,6 +42,34 @@ internal static unsafe partial class PrNative
     internal const int EvAttached = 42;
     internal const int EvDetached = 43;
     internal const int EvLog = 44;
+    /// <summary>A representation switch was spliced into the buffer; <c>a</c> = the index now being downloaded. The new
+    /// picture shows later, at <see cref="EvRepresentation"/>.</summary>
+    internal const int EvRepresentationQueued = 45;
+    /// <summary>FORMATCHANGE reported a new natural size (<c>a</c> = width, <c>b</c> = height): a size report only, the
+    /// snapshot already carries it and the pump re-asserts the stream size from it.</summary>
+    internal const int EvSizeChanged = 46;
+    /// <summary>A segment GET failed and the feeder is retrying it with a capped back-off (never an end of track):
+    /// <c>a</c> = the segment index, <c>b</c> = the HTTP status (0 = transport failure; 401/403 = an expired signed URL).
+    /// Raised once per stall; <see cref="EvFeedRecovered"/> ends it.</summary>
+    internal const int EvFeedStalled = 47;
+    /// <summary>The <see cref="EvFeedStalled"/> stall is over: a segment landed, or a seek started the feeder afresh.</summary>
+    internal const int EvFeedRecovered = 48;
+    /// <summary>The engine reported WAITING / STALLED / BUFFERINGSTARTED while playing: its clock stopped for want of data
+    /// (<c>a</c> = position ms). The snapshot still reads Playing, so only this event can say the picture is frozen.</summary>
+    internal const int EvWaiting = 49;
+    /// <summary>The <see cref="EvWaiting"/> wait ended: PLAYING, SEEKED, BUFFERINGENDED or the clock advancing
+    /// (<c>a</c> = position ms).</summary>
+    internal const int EvResumed = 50;
+    /// <summary>The native license table's LRU closed this license's key session to admit another KID (never one an attached
+    /// session uses): the event's session handle is the LICENSE handle. The native table is the single eviction authority, so the
+    /// managed cache drops the row that holds that handle.</summary>
+    internal const int EvLicenseEvicted = 51;
+    /// <summary>The CDM restricted the license's key output: <c>a</c> = the restriction now in force (7 = OUTPUT_RESTRICTED,
+    /// 2 = OUTPUT_DOWNSCALED, 0 = lifted), <c>b</c> = the previous one. The key still decrypts.</summary>
+    internal const int EvLicenseRestricted = 52;
+    /// <summary>A USABLE license's key went INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED and will never decrypt again:
+    /// <c>a</c> = the failing HRESULT (0x8004800N, N = the status), <c>b</c> = the MF_MEDIAKEY_STATUS. Native has evicted it.</summary>
+    internal const int EvLicenseRevoked = 53;
 
     // ── state (FgPrState) ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -59,6 +87,14 @@ internal static unsafe partial class PrNative
     internal const int SeekExact = 0;
     /// <summary>SetCurrentTimeEx(APPROXIMATE) — present the keyframe ≤ target (a scrub preview).</summary>
     internal const int SeekKeyframe = 1;
+
+    // ── security policy (FgPrSecurityPolicy, F022) ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Probe hardware SL3000 first (the <c>.3000</c> key system + a "3000" video capability) and fall back to SL2000 when the
+    /// machine cannot grant it — the default.</summary>
+    internal const int SecurityProbe3000 = 0;
+    /// <summary>Never probe: the software SL2000 request the runtime has always made (<c>--fg playready-sl2000</c>).</summary>
+    internal const int SecurityForce2000 = 2000;
 
     /// <summary>"Let the native side find the keyframe itself" — the planner has no table yet.</summary>
     internal const long NoKeyframeHint = -1;
@@ -112,6 +148,7 @@ internal static unsafe partial class PrNative
         public int Height;
         public int Seeking;
         public int ActiveRepresentation;
+        public int DownloadingRepresentation;
         public long PositionMs;
         public long PositionQpc;
         public long DurationMs;
@@ -121,6 +158,10 @@ internal static unsafe partial class PrNative
         public ulong BytesDownloaded;
         public ulong DownloadElapsedMs;
         public ulong StoreBytes;
+        public int StreamWidth;
+        public int StreamHeight;
+        public long FramesRendered;
+        public long FramesDropped;
     }
 
     /// <summary>Blittable mirror of <c>FgPrProbeResult</c> — what the demuxer found in a local fragmented MP4.</summary>
@@ -140,15 +181,28 @@ internal static unsafe partial class PrNative
 
     // ── runtime ────────────────────────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary><paramref name="adapterLuid"/> is the DXGI adapter LUID packed <c>(HighPart &lt;&lt; 32) | LowPart</c> the D3D11
+    /// video device is created on (0 = the default adapter).</summary>
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
-    internal static partial int FgPrRuntimeCreate(string storePath,
-        delegate* unmanaged[Stdcall]<nint, ulong, int, long, long, char*, void> cb, nint ctx, ulong* @out);
+    internal static partial int FgPrRuntimeCreateOnAdapter(string storePath,
+        delegate* unmanaged[Stdcall]<nint, ulong, int, long, long, char*, void> cb, nint ctx, long adapterLuid, ulong* @out);
 
     [LibraryImport(LibraryName)]
     internal static partial void FgPrRuntimeDestroy(ulong rt);
 
     [LibraryImport(LibraryName)]
     internal static partial long FgPrRuntimeUptimeMs(ulong rt);
+
+    /// <summary>F249: the media engine's output format for the NEXT runtime (0 = BGRA, the default; 1 = NV12). Process-wide, read once
+    /// when the runtime is created, so it is set BEFORE <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int FgPrRuntimeSetVideoOutputFormat(int format);
+
+    /// <summary>F022: which PlayReady security level the NEXT runtime's CDM asks for (<see cref="SecurityProbe3000"/> or
+    /// <see cref="SecurityForce2000"/>). Process-wide, read once when the runtime is created, so it is set BEFORE
+    /// <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int FgPrRuntimeSetSecurityPolicy(int policy);
 
     // ── license ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -198,9 +252,19 @@ internal static unsafe partial class PrNative
     [LibraryImport(LibraryName)]
     internal static partial int FgPrSessionSetStreamSize(ulong rt, ulong s, int width, int height);
 
+    /// <summary><paramref name="hostWindow"/> is the presenting window's HWND and the rect its video's client-area rect in device
+    /// pixels; native moves its hidden OPM window over it (screen space). S_FALSE = nothing moved (not the attached session).</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int FgPrSessionPlaceOpmWindow(ulong rt, ulong s, ulong hostWindow, int left, int top, int right, int bottom);
+
+    /// <summary><paramref name="storeBudgetBytes"/> (F040): the store budget derived for the new rung (0 = unchanged).</summary>
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
     internal static partial int FgPrSessionSelectRepresentation(ulong rt, ulong s, int index, string initUrl,
-        string @base, string prefix, string suffix);
+        string @base, string prefix, string suffix, int retainMs, long storeBudgetBytes);
+
+    /// <summary>F036: ask the feeder to fetch and parse a rung's init segment ahead of a switch to it.</summary>
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int FgPrSessionPrefetchInit(ulong rt, ulong s, string initUrl);
 
     [LibraryImport(LibraryName)]
     internal static partial int FgPrSessionSnapshot(ulong rt, ulong s, Snapshot* @out);
@@ -270,8 +334,19 @@ internal interface IPrSessionNative
     int SessionSetVolume(ulong runtime, ulong session, double volume);
     int SessionSetRate(ulong runtime, ulong session, double rate);
     int SessionSetStreamSize(ulong runtime, ulong session, int width, int height);
+    /// <summary><c>FgPrSessionPlaceOpmWindow</c>: move the runtime's hidden OPM window over a video at the client-area rect
+    /// (<paramref name="left"/>, <paramref name="top"/>, <paramref name="right"/>, <paramref name="bottom"/>, device px) of the
+    /// presenting window <paramref name="hostWindow"/>. S_OK = posted; S_FALSE = nothing moved (the session is not the one
+    /// attached to the engine, or the runtime has no window).</summary>
+    int SessionPlaceOpmWindow(ulong runtime, ulong session, ulong hostWindow, int left, int top, int right, int bottom);
+    /// <summary><paramref name="retainMs"/>: negative appends after the last buffered segment (nothing discarded), 0 lands
+    /// at the boundary after the playhead, positive lands that many ms ahead of the playhead.</summary>
+    /// <param name="storeBudgetBytes">F040: the segment-store budget derived for the new rung (0 = leave it).</param>
     int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
-                                    string? prefix, string? suffix);
+                                    string? prefix, string? suffix, int retainMs, long storeBudgetBytes);
+    /// <summary><c>FgPrSessionPrefetchInit</c> (F036): have the feeder fetch and parse <paramref name="initUrl"/> (a rung the session
+    /// may switch to next) alongside normal feeding, so the switch needs no init GET. Non-blocking.</summary>
+    int SessionPrefetchInit(ulong runtime, ulong session, string initUrl);
     /// <summary><c>FgPrSessionSnapshot</c>; <paramref name="snapshot"/> is written only on success.</summary>
     int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot);
     /// <summary>Fills <paramref name="into"/>; returns the TOTAL keyframe count (negative = HRESULT).</summary>
@@ -343,9 +418,13 @@ internal sealed unsafe class PrSessionNative : IPrSessionNative
     public int SessionSetRate(ulong runtime, ulong session, double rate) => PrNative.FgPrSessionSetRate(runtime, session, rate);
     public int SessionSetStreamSize(ulong runtime, ulong session, int width, int height)
         => PrNative.FgPrSessionSetStreamSize(runtime, session, width, height);
+    public int SessionPlaceOpmWindow(ulong runtime, ulong session, ulong hostWindow, int left, int top, int right, int bottom)
+        => PrNative.FgPrSessionPlaceOpmWindow(runtime, session, hostWindow, left, top, right, bottom);
     public int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
-                                           string? prefix, string? suffix)
-        => PrNative.FgPrSessionSelectRepresentation(runtime, session, index, initUrl, baseUrl!, prefix!, suffix!);
+                                           string? prefix, string? suffix, int retainMs, long storeBudgetBytes)
+        => PrNative.FgPrSessionSelectRepresentation(runtime, session, index, initUrl, baseUrl!, prefix!, suffix!, retainMs, storeBudgetBytes);
+    public int SessionPrefetchInit(ulong runtime, ulong session, string initUrl)
+        => PrNative.FgPrSessionPrefetchInit(runtime, session, initUrl);
 
     public int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot)
     {

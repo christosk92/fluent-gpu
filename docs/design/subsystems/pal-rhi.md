@@ -243,7 +243,8 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
   ticks bail). Non-composited windows apply each throttled keep-alive tick live. Keep-alive paints skip redundant
   frames when only ambient animation is awake during edge resize, but still run when essential work is pending
   (layout, warming virtual lists, decode, drag dwell). `WM_EXITSIZEMOVE` triggers the settle resize (§5.3) with
-  `HintSettlePresent` (optional one-shot `DwmFlush` after present).
+  `HintSettlePresent`, armed from the published `RenderFrame.SettlePresent` (F101): an inline present runs one `DwmFlush`
+  after the frame's video placement commit (`CompleteSettlePresent`); a render-thread present never flushes.
 
   | Window | Move | Edge resize | Mouse-up |
   |---|---|---|---|
@@ -432,9 +433,18 @@ The retained tiled composite adds ONE `IGpuDevice` member pair and its POD frame
 raster order, the render-pass discipline, what each `CompositeKind` draws, the present rule — is owned by
 `gpu-renderer.md` §13.1):
 
-- `bool SupportsComposite` (default false) and `void SubmitComposite(in CompositeFrame frame)` (default throws). Every
-  backend that renders a PRIMARY window implements both (`HeadlessGpuDevice`, `D3D12Device`); the host has no other
-  primary route. Render thread; spans only — no copies, no allocation.
+- `bool SupportsComposite` (default false) and `void SubmitComposite(in CompositeFrame frame, ISwapchain target)` (default
+  throws). Every backend that renders a PRIMARY window implements both (`HeadlessGpuDevice`, `D3D12Device`); the host has
+  no other primary route. Render thread; spans only — no copies, no allocation. `target` is the swapchain the caller
+  presents this turn and D3D12 REJECTS (throws) anything but its primary (the headless model only when
+  `RejectNonPrimaryComposite` is set, so suites may run several primary hosts on one device): the composite route owns one device-wide
+  tile pool and draws only into the primary back buffer, so a detached pop-out (or popup) that reached it would draw into
+  the main window, spend its frame-latency credit and overwrite its retained tiles (F090 / F229). Secondary swapchains
+  take `SubmitDrawList(..., target)`. `CompositeFrame.OwnerToken` (`SliceTable.OwnerId`, 0 = unstamped) names the slice
+  table whose surface numbering the frame uses; D3D12 records the first owner after each tile-pool (re)build and counts
+  `compositeOwnerMismatch` (throws in Debug) when another owner composites into the same pool. The per-target credit
+  probe is `TryTakePresentSlot(ISwapchain target, int timeoutMs)` (the render thread probes a pop-out's own slot with a
+  0 ms take before adopting its frame).
 - `CompositeFrame` (a `ref struct`): the `FrameInfo`, the slice rows (`SliceRow`) and their concatenated streams, the
   tile raster list (`TileRaster`, visible first), the resident tile placements grouped by slice (`TilePlacement`), the
   painter-ordered `CompositeItem`s + their marker layers, the slices' damage and span indices, the staged

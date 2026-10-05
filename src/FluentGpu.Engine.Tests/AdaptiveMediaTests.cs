@@ -163,12 +163,18 @@ public sealed class AdaptiveMediaTests
         // The estimate is derived from what the CURRENT rung downloads, so a low rendition self-reinforces: it never
         // transfers enough per segment to justify climbing off itself. Without the forced probe this is how Auto sits
         // on the bottom rung over a fast link forever — the "Auto - 240p" report.
-        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.Zero, ForcedProbeSegments = 3 };
+        long now = 0;   // the probe is timed in WALL time; one decision a second, a 2 s steady interval
+        var abr = new AdaptiveBitrateController
+        {
+            UpgradeBuffer = TimeSpan.Zero, ForcedProbeInterval = TimeSpan.FromSeconds(2), NowMs = () => now,
+        };
         int[] bitrates = [300_000, 1_000_000];
         const double justBelowTheNextRung = 1_000.0;   // kbps: 1 Mbps, so 1_000_000 bps never clears the 0.85 climb budget
 
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung));
+        now += 1_000;
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung));
+        now += 1_000;
         Assert.Equal(1, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung));
         Assert.Equal(AbrDecisionReason.ForcedProbe, abr.LastDecisionReason);
     }
@@ -202,7 +208,9 @@ public sealed class AdaptiveMediaTests
         Assert.Equal(AbrDecisionReason.Hold, abr.LastDecisionReason);
 
         // The first real measurement is free to move the ladder — the prior guard applies only while it is a prior.
-        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(60), 1_870, estimateIsPrior: false));
+        // A measured decrease is immediate only once the buffer is under MaxBufferForQualityDecrease (25 s); above it the
+        // decrease is deferred (DeferredDecrease), so this check runs at 20 s.
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 1_870, estimateIsPrior: false));
         Assert.Equal(AbrDecisionReason.Throughput, abr.LastDecisionReason);
     }
 
@@ -211,12 +219,18 @@ public sealed class AdaptiveMediaTests
     {
         // Rule 4 (forced probe) is the only move off a prior: it must survive even while estimateIsPrior is true, or
         // a link with nothing but a seeded/remembered estimate could never climb off its opening rung.
-        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.Zero, ForcedProbeSegments = 3 };
+        long now = 0;
+        var abr = new AdaptiveBitrateController
+        {
+            UpgradeBuffer = TimeSpan.Zero, ForcedProbeInterval = TimeSpan.FromSeconds(2), NowMs = () => now,
+        };
         int[] bitrates = [300_000, 1_000_000];
         const double justBelowTheNextRung = 1_000.0;   // kbps: 1 Mbps, so 1_000_000 bps never clears the 0.85 climb budget
 
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung, estimateIsPrior: true));
+        now += 1_000;
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung, estimateIsPrior: true));
+        now += 1_000;
         Assert.Equal(1, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung, estimateIsPrior: true));
         Assert.Equal(AbrDecisionReason.ForcedProbe, abr.LastDecisionReason);
     }
@@ -225,7 +239,7 @@ public sealed class AdaptiveMediaTests
     public void AbrSeededEstimateIsAPriorUntilTheFirstSample()
     {
         // SeedEstimate hands in a remembered estimate (the app's LinkMemory) without pretending it was measured:
-        // AcceptedSamples stays 0, EstimateIsPrior stays true, and the first real sample REPLACES it outright,
+        // IsMeasured stays false, EstimateIsPrior stays true, and the first real measurement REPLACES it outright,
         // exactly like the 2 Mbps startup prior.
         var abr = new AdaptiveBitrateController();
         abr.SeedEstimate(300_000);
@@ -279,6 +293,224 @@ public sealed class AdaptiveMediaTests
         // The smallest rung by HEIGHT, addressed in full-list coordinates — index 1, not index 0.
         Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(20)));
         Assert.Equal(AbrDecisionReason.Capped, abr.LastDecisionReason);
+    }
+
+    private static QualityVariant[] Ladder(params (int Height, int Bitrate)[] rungs)
+    {
+        var codec = new MediaContentType(Container.Dash, CodecId.H264, CodecId.None);
+        var variants = new QualityVariant[rungs.Length];
+        for (int i = 0; i < rungs.Length; i++)
+            variants[i] = new QualityVariant(rungs[i].Height.ToString(), rungs[i].Bitrate,
+                new SizeI(rungs[i].Height * 16 / 9, rungs[i].Height), 30, codec);
+        return variants;
+    }
+
+    private static readonly (int Height, int Bitrate)[] FourRungs =
+        [(240, 300_000), (480, 800_000), (720, 1_500_000), (1080, 4_000_000)];
+
+    /// <summary>A controller on the 240/480/720/1080 ladder that has MEASURED a fast link and climbed to 1080 once
+    /// (so the two-vote gate is armed, the state a long-lived shared controller is in).</summary>
+    private static AdaptiveBitrateController ClimbedTo1080(QualityVariant[] variants)
+    {
+        var abr = new AdaptiveBitrateController();
+        abr.RecordDownload(2_000_000, TimeSpan.FromSeconds(1));   // 16 Mbps, a measurement
+        Assert.Equal(3, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.Throughput, abr.LastDecisionReason);
+        return abr;
+    }
+
+    [Fact]
+    public void AbrCapBelowTheCurrentRungTakesTheBestRungUnderTheCap_NotTheBottomOfTheLadder()
+    {
+        // F138: leaving fullscreen drops the cap under the 1080 rung. The local-index-0 fallback made every rule return
+        // the cheapest rung (a quality crash to 240p, then a climb back); the answer is 720 at once.
+        QualityVariant[] variants = Ladder(FourRungs);
+        var abr = ClimbedTo1080(variants);
+
+        abr.MaxHeight = 720;
+        Assert.Equal(2, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrCapDownswitchIgnoresAThinBuffer()
+    {
+        // Rule 2 (buffer < 6 s => hold the current rung) must not pin the rung the cap just excluded.
+        QualityVariant[] variants = Ladder(FourRungs);
+        var abr = ClimbedTo1080(variants);
+
+        abr.MaxHeight = 720;
+        Assert.Equal(2, abr.Choose(variants, TimeSpan.FromSeconds(2)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrCapDownswitchHappensOnAPriorToo()
+    {
+        // A prior skips rules 1 and 3, but a cap is not a throughput verdict: the excluded rung is still left.
+        QualityVariant[] variants = Ladder(FourRungs);
+        var abr = new AdaptiveBitrateController { MaxHeight = 720 };
+        abr.SeedCurrent(3);
+        Assert.True(abr.EstimateIsPrior);
+
+        Assert.Equal(2, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrCapDownswitchPicksTheRungByBitrate_NotTheNextHeightDown()
+    {
+        // Cap 720 on a 240/540/1080 ladder: nothing is at 720, the best allowed rung is 540.
+        QualityVariant[] variants = Ladder((240, 300_000), (540, 1_200_000), (1080, 4_000_000));
+        var abr = new AdaptiveBitrateController { MaxHeight = 720 };
+        abr.SeedCurrent(2);
+
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrCapDownswitchOnAnUnsortedLadder_AndANonMonotonicOne()
+    {
+        // The pick is by bitrate / height, never by list position.
+        QualityVariant[] unsorted = Ladder((1080, 4_000_000), (240, 300_000), (720, 1_500_000));
+        var abr = new AdaptiveBitrateController { MaxHeight = 720 };
+        abr.SeedCurrent(0);
+        Assert.Equal(2, abr.Choose(unsorted, TimeSpan.FromSeconds(30)));
+
+        // Non-monotonic: the only allowed rung costs MORE than the current one — take the tallest allowed rung.
+        QualityVariant[] odd = Ladder((1080, 500_000), (720, 900_000), (480, 700_000));
+        var abr2 = new AdaptiveBitrateController { MaxHeight = 720 };
+        abr2.SeedCurrent(0);
+        Assert.Equal(1, abr2.Choose(odd, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr2.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrCurrentRungOutOfRangeAfterTheLadderShrankIsClamped()
+    {
+        // SeedCurrent publishes FULL-list coordinates; a shorter ladder on the next source must not index past the end.
+        QualityVariant[] variants = Ladder((240, 300_000), (720, 1_500_000), (1080, 4_000_000));
+        var abr = new AdaptiveBitrateController { MaxHeight = 720 };
+        abr.SeedCurrent(9);
+
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrCapDownswitchDoesNotCountAsAFailedProbe()
+    {
+        // A cap is not a throughput verdict: it must not back the probe cadence off.
+        QualityVariant[] variants = Ladder(FourRungs);
+        long now = 0;
+        var abr = new AdaptiveBitrateController
+        {
+            UpgradeBuffer = TimeSpan.Zero, ForcedProbeInterval = TimeSpan.FromSeconds(2), NowMs = () => now,
+        };
+        abr.RecordDownload(1_000_000, TimeSpan.FromSeconds(8));   // 1 Mbps: affords 480 only, never 720 by estimate
+        abr.SeedCurrent(1);
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        now += 1_000;
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        now += 1_000;
+        Assert.Equal(2, abr.Choose(variants, TimeSpan.FromSeconds(30)));   // forced probe 480 -> 720
+        Assert.Equal(AbrDecisionReason.ForcedProbe, abr.LastDecisionReason);
+
+        abr.MaxHeight = 480;
+        now += 1_000;
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.CapDownswitch, abr.LastDecisionReason);
+
+        // Base cadence (2 s steady), not the backed-off 4 s: the next probe comes after the same two decisions.
+        abr.MaxHeight = int.MaxValue;
+        now += 1_000;
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        now += 1_000;
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        now += 1_000;
+        Assert.Equal(2, abr.Choose(variants, TimeSpan.FromSeconds(30)));
+        Assert.Equal(AbrDecisionReason.ForcedProbe, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrResetForNewSourceMakesTheFirstClimbOneVoteAgain_AndKeepsTheLink()
+    {
+        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.FromSeconds(10) };
+        int[] bitrates = [300_000, 1_000_000, 3_000_000];
+        abr.RecordDownload(2_000_000, TimeSpan.FromSeconds(1));
+        Assert.Equal(2, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 5_000));   // first climb: one vote, arms the gate
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 500));     // downswitch
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 5_000));   // armed: the climb now needs two votes
+
+        abr.ResetForNewSource();
+        abr.SeedCurrent(0);
+
+        Assert.False(abr.EstimateIsPrior);   // the throughput history survives a new source
+        Assert.Equal(2, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 5_000));   // one vote again
+    }
+
+    [Fact]
+    public void AbrPolicyAndViewportCapsAreSeparateInputs_AndOnlyTheViewportIsResetPerSource()
+    {
+        var abr = new AdaptiveBitrateController();
+        Assert.Equal(int.MaxValue, abr.MaxHeight);
+
+        abr.MaxHeight = 720;                  // compat setter writes the POLICY cap
+        Assert.Equal(720, abr.PolicyMaxHeight);
+        Assert.Equal(int.MaxValue, abr.ViewportMaxHeight);
+
+        abr.ViewportMaxHeight = 480;
+        Assert.Equal(480, abr.MaxHeight);     // the getter is the effective cap
+        abr.MaxHeight = 1080;                 // a policy write does not discard the viewport
+        Assert.Equal(480, abr.ViewportMaxHeight);
+        Assert.Equal(480, abr.MaxHeight);
+
+        abr.ViewportMaxHeight = 2160;
+        Assert.Equal(1080, abr.MaxHeight);    // and a viewport above the policy never raises it
+
+        abr.ResetForNewSource();
+        Assert.Equal(1080, abr.PolicyMaxHeight);
+        Assert.Equal(int.MaxValue, abr.ViewportMaxHeight);
+        Assert.Equal(1080, abr.MaxHeight);
+    }
+
+    [Fact]
+    public void ThroughputEstimatorWeighsASampleByItsDuration()
+    {
+        // F150: a 64 KB / 400 ms slice used to move the fast EWMA by a fixed 35% whatever its size; weighted by duration
+        // against a 2 s half-life it barely moves a 4 s history.
+        var estimator = new ThroughputEstimator();
+        Assert.True(estimator.Add(5_000_000, TimeSpan.FromSeconds(4)));   // 10 Mbps
+        Assert.InRange(estimator.EstimateKbps, 9_999, 10_001);
+
+        Assert.True(estimator.Add(64 * 1024, TimeSpan.FromMilliseconds(400)));   // 1.3 Mbps
+        Assert.True(estimator.EstimateKbps > 8_000, $"estimate {estimator.EstimateKbps} fell too far on one small slice");
+
+        // A long low-rate transfer DOES move it: weight is duration, so seconds of evidence count for more.
+        Assert.True(estimator.Add(2_500_000, TimeSpan.FromSeconds(10)));   // 2 Mbps for 10 s
+        Assert.True(estimator.EstimateKbps < 4_000, $"estimate {estimator.EstimateKbps} ignored 10 s of slow transfer");
+    }
+
+    [Fact]
+    public void ThroughputEstimatorIsAPriorUntil128KbHaveBeenMeasured()
+    {
+        var estimator = new ThroughputEstimator();
+        Assert.True(estimator.Add(70 * 1024, TimeSpan.FromMilliseconds(500)));
+        Assert.False(estimator.IsMeasured);
+        Assert.Equal(ThroughputEstimator.DefaultSeedKbps, estimator.EstimateKbps);
+        estimator.Seed(300_000);              // still a prior, so a remembered estimate is still accepted
+        Assert.Equal(300_000, estimator.EstimateKbps);
+
+        Assert.True(estimator.Add(70 * 1024, TimeSpan.FromMilliseconds(500)));   // 140 KB total
+        Assert.True(estimator.IsMeasured);
+        Assert.InRange(estimator.EstimateKbps, 1_146, 1_148);   // 70 KB * 8 / 0.5 s: the measurement replaces the prior outright
+
+        var abr = new AdaptiveBitrateController();
+        Assert.True(abr.RecordDownload(70 * 1024, TimeSpan.FromMilliseconds(500)));
+        Assert.True(abr.EstimateIsPrior);
+        Assert.True(abr.RecordDownload(70 * 1024, TimeSpan.FromMilliseconds(500)));
+        Assert.False(abr.EstimateIsPrior);
     }
 
     [Fact]

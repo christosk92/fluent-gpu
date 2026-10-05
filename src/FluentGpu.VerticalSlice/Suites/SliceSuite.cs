@@ -461,9 +461,14 @@ static class SliceSuite
 
         // fade-follows-page: a page scroll tick is composite-only (0 bytes) and moves the shelf's own feather with the
         // page while the page's feather (the viewport's) stays put.
+        // The first scroll move after a programmatic jump is recorded in full (the realize catch-up): a bar nobody sees no longer ticks
+        // frames after it (F238), so absorb that frame here and measure the NEXT tick, the steady page scroll the gate is about.
+        host.TryGetScrollHandle(page)!.ScrollTo(393.0, ScrollMove.Immediate);
+        host.RunFrame();
+        TryItemOfNode(host, s.ScrollRef(scrollers[2]).ContentNode, out s1);
         float pageY0 = s1.Feather.Rect.Y, shelfY0 = s1.Feather2.Rect.Y;
         int framesBefore = device.CompositeFrameCount;
-        host.TryGetScrollHandle(page)!.ScrollTo(407.0, ScrollMove.Immediate);
+        host.TryGetScrollHandle(page)!.ScrollTo(400.0, ScrollMove.Immediate);
         host.RunFrame();
         bool compositeOnly = host.LastStats.CompositeOnlyTurn && host.LastStats.Slices.BytesRecorded == 0 && device.CompositeFrameCount > framesBefore;
         bool found2 = TryItemOfNode(host, s.ScrollRef(scrollers[2]).ContentNode, out var s1b);
@@ -917,6 +922,7 @@ static class SliceSuite
         Collect(s, s.Root, scrollers);
         var vp = scrollers.Count > 0 ? scrollers[0] : NodeHandle.Null;
         host.TryGetScrollHandle(vp)?.ScrollTo(30.0, ScrollMove.Immediate);   // past the runway: full band, the thumb at the top of its track, inside it
+        if (!vp.IsNull) host.ScrollChrome.NotifyMoved((int)vp.Raw.Index);   // the user's scroll: a programmatic move alone no longer shows the bar (F238)
         for (int i = 0; i < 20; i++) host.RunFrame();
         int groups = CountKind(host, CompositeKind.Group);
         CompositeItem content = default;
@@ -933,6 +939,7 @@ static class SliceSuite
         for (int i = 1; i <= 3; i++)
         {
             host.TryGetScrollHandle(vp)?.ScrollTo(30.0 + 3.0 * i, ScrollMove.Immediate);
+            if (!vp.IsNull) host.ScrollChrome.NotifyMoved((int)vp.Raw.Index);
             host.RunFrame();
             bytes += host.LastStats.Slices.BytesRecorded;
             if (host.LastStats.CompositeOnlyTurn) composite++;

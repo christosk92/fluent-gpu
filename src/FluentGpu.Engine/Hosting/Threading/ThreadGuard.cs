@@ -37,8 +37,15 @@ public static class ThreadGuard
         t_role = role;
     }
 
+    /// <summary>True when the CURRENT thread is the bound UI thread (a non-throwing probe for diagnostics that must count, not fail).</summary>
+    internal static bool IsUiThread => t_role == ThreadRole.Ui;
+
     [Conditional("FGGUARD")] public static void AssertUi()     { if (t_role != ThreadRole.Ui)     ThrowWrongThread(ThreadRole.Ui); }
     [Conditional("FGGUARD")] public static void AssertRender() { if (t_role != ThreadRole.Render) ThrowWrongThread(ThreadRole.Render); }
+    /// <summary>The UI-owned state of a UI/render split (the video-surface registry's intent table) must never be touched from the
+    /// render thread. Unbound threads pass: a test or a start-up path with no role bound is single-threaded by construction, so
+    /// only the one wrong role is the violation.</summary>
+    [Conditional("FGGUARD")] public static void AssertNotRender() { if (t_role == ThreadRole.Render) ThrowWrongThread(ThreadRole.Ui); }
     [Conditional("FGGUARD")] public static void AssertWorkerOrRender() { if (t_role is not (ThreadRole.Worker or ThreadRole.Render)) ThrowWrongThread(ThreadRole.Worker); }
 
     // Render OWNERSHIP (not identity): device-mutating calls (swapchain create/resize/dispose, WaitForGpu, capture) are

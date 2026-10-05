@@ -975,6 +975,7 @@ public sealed partial class InputDispatcher
                             {
                                 Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
                             });
+                        NotifyPressListeners(_down, in e);
                         if (_scene.GetDrag(_down) is not null) _dragTarget = _down;  // begin a drag gesture
                         else
                             // Arm a drag-reorder candidate on the nearest CanDrag ancestor (a press on a child of a
@@ -2629,8 +2630,8 @@ public sealed partial class InputDispatcher
     /// <see cref="NearestClickOwner"/> (which answers "who ACTIVATES") because a node may own a gesture through
     /// <c>OnPointerPressed</c>/<c>OnPointerReleased</c> alone — a selection row does exactly that.
     /// <para>A <see cref="InteractionInfo.HoverScopeTransparentBit"/> node (the ToolTip wrapper) is a pointer LISTENER,
-    /// not an owner: its <c>OnPointerPressed</c> only dismisses the bubble, and still fires because the press is delivered
-    /// to the hit node itself. Letting it own the gesture would swallow the release a bound slot root is waiting for — a
+    /// not an owner: its <c>OnPointerPressed</c> only dismisses the bubble, and still fires (as the hit node itself, or
+    /// relayed from a descendant's press by <see cref="NotifyPressListeners"/>). Letting it own the gesture would swallow the release a bound slot root is waiting for — a
     /// click on a card's trimmed, tool-tipped title inside an ItemsView slot invoked nothing (Wavee #157).</para></summary>
     private NodeHandle NearestGestureOwner(NodeHandle node)
     {
@@ -2643,6 +2644,27 @@ public sealed partial class InputDispatcher
             if ((mask & owns) != 0) return n;
         }
         return NodeHandle.Null;
+    }
+
+    /// <summary>Deliver a primary-button press to the pointer LISTENERS above the hit node: the ancestors that are
+    /// <see cref="InteractionInfo.HoverScopeTransparentBit"/> and carry an <c>OnPointerPressed</c> (the ToolTip wrapper).
+    /// The press itself goes only to the hit node, and a tool-tipped BUTTON wins the hit over its wrapper, so without this
+    /// the wrapper never heard a press on any interactive target and its "a press dismisses the bubble until the pointer
+    /// leaves and re-enters" rule only worked for a non-interactive target. A listener never owns the gesture (see
+    /// <see cref="NearestGestureOwner"/>), so only the press is relayed: no release, no click count of its own. The hit
+    /// node itself already ran its handler above, so the walk starts at its parent. A parent walk per press; one args object per listener found.</summary>
+    private void NotifyPressListeners(NodeHandle hit, in InputEvent e)
+    {
+        const uint listener = InteractionInfo.HoverScopeTransparentBit | InteractionInfo.PressedBit;
+        for (var n = _scene.Parent(hit); !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+        {
+            if ((_scene.Interaction(n).HandlerMask & listener) != listener) continue;
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            _scene.GetPointerPressed(n)?.Invoke(new PointerEventArgs
+            {
+                Local = LocalPos(n, e.PositionPx), ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
+            });
+        }
     }
 
     /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).

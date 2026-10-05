@@ -137,6 +137,7 @@ public sealed class ScrollBarChromeWakeTests
             var vp = FindViewport(host.Scene);
             Assert.False(vp.IsNull);
             host.TryGetScrollHandle(vp)!.ScrollTo(4_000.0, ScrollMove.Immediate);
+            host.ScrollChrome.NotifyMoved((int)vp.Raw.Index);   // the user's move: a programmatic ScrollTo alone no longer arms the bar (F238)
             for (int i = 0; i < 20; i++) host.RunFrame();   // the move, then the 83 ms fade-in
 
             Assert.Equal(1f, host.Scene.ScrollChrome.Get((int)vp.Raw.Index).FadeT);

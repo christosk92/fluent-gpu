@@ -94,7 +94,33 @@ public sealed partial class AnimEngine
         if (!IsCompositorRowStatic(in row)) return false;
         if (row.Channel is AnimChannel.SizeW or AnimChannel.SizeH
             && (_scene.Flags(row.Node) & NodeFlags.Relayouting) != 0) return false;
+        // F169: a translate/scale/rotate row on a node a follow-rect pass reads (the followed target, the follower, and
+        // their ancestor chains) stays UI-owned: phase 7.15 reads those nodes' painted pose THIS frame, and a render-owned
+        // row never advances the UI-side transform between feedbacks, so the follower would trail the slide. Live check
+        // like Relayouting above, so it needs no candidate-cache invalidation of its own.
+        if (_followAnchors.Count != 0 && row.Channel <= AnimChannel.Rotation && _followAnchors.Contains(row.Node)) return false;
         return true;
+    }
+
+    // F169: the nodes whose painted pose the host's follow-rect pass (SceneStore.PlaceFollowRects) reads, republished by the
+    // host after every pass. Empty whenever nothing follows, so the compositor offload is only lost for the chain under a
+    // live follower and only while it follows.
+    private readonly HashSet<NodeHandle> _followAnchors = new();
+
+    /// <summary>True while a follow-rect pass holds any node's transform rows UI-owned.</summary>
+    public bool HasFollowAnchors => _followAnchors.Count != 0;
+
+    /// <summary>Replace the follow anchor set (see <see cref="SceneStore.CollectFollowAnchors"/>). A row whose node enters
+    /// the set hands off to the UI tick from the last compositor feedback pose (<see cref="ApplyCompositorFeedback"/> keeps
+    /// the UI row's Position/Elapsed there), so the slide continues from where it was last reported; a row whose node
+    /// leaves it is captured again from the UI row's advanced state, and the render thread re-seeds from that. Rewrites
+    /// nothing when the set is unchanged (the steady frame is one SetEquals).</summary>
+    public void SetFollowAnchors(HashSet<NodeHandle> anchors)
+    {
+        if (_followAnchors.SetEquals(anchors)) return;
+        _followAnchors.Clear();
+        _followAnchors.UnionWith(anchors);
+        _slab.BumpVersion();   // ownership of live rows just flipped: re-derive the candidate list and the wake census
     }
 
     /// <summary>UI publication: copy the complete desired supported set, including parked rows, into an owned slot.

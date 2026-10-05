@@ -14,6 +14,7 @@ using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
 using FluentGpu.Scene;
 using FluentGpu.Scroll;
+using FluentGpu.Signals;
 
 namespace FluentGpu;
 
@@ -40,7 +41,10 @@ namespace FluentGpu;
 /// always-on Close-failure forensic ring — §2.6), zero <c>Close()</c> exceptions/reap-timeouts, zero
 /// <c>[detached] child frame failed</c> lines / <see cref="IDetachedVideoWindow.RenderFailed"/> latches, zero
 /// device-lost recoveries, and the main window's presented fps (<see cref="FrameStats.PresentFps"/>) stayed
-/// &gt;= 0.9x the PRIMARY monitor's refresh across every window that had a child open — the plan's Phase 2 criterion;
+/// &gt;= 0.9x the PRIMARY monitor's refresh across every window that had a child open — the plan's Phase 2 criterion — and
+/// the shared render thread's present-slot wait (<see cref="RenderPaceSnapshot.SlotWaitMaxMs"/>) never ran past 100 ms while the
+/// per-frame-repainting child was open (a pop-out that composites into, or waits on, the MAIN swapchain's frame-latency
+/// credit pins it at the 1000 ms liveness bound — F090);
 /// a Phase 0/1 run still reports the number without failing the process on it, since the render-thread-per-target
 /// allocation counter (§7.3 point 4) is a later-wave RenderThread addition — this probe uses
 /// <see cref="FrameStats.HotPhaseAllocBytes"/> (today's zero-alloc-phase gauge, sampled through the same
@@ -120,6 +124,7 @@ internal static class DetachedStressProbe
         }
         nav("virtualization");   // the 100k-row bound-recycler list — the app's own 10k+ library-list stand-in
         for (int i = 0; i < 12 && !window.IsClosed; i++) host.RunFrame();
+        double slotWaitMaxBaselineMs = host.RenderPace.SlotWaitMaxMs;   // the render thread's running max before any child opened
 
         NodeHandle scrollNode = FindScrollable(host.Scene, host.Scene.Root);
         bool canScroll = !scrollNode.IsNull;
@@ -165,6 +170,7 @@ internal static class DetachedStressProbe
             long holdStart = sw.ElapsedMilliseconds;
             while (sw.ElapsedMilliseconds - holdStart < holdMs && !window.IsClosed)
             {
+                StressChild.Tick.Value++;   // the child repaints EVERY frame (a ticking seek bar): the F090 shape
                 Step(host, canScroll, scrollNode, ref scrollOffset, ref scrollDir, ScrollStepPx, mainFrameMs, mainFenceWaitMs, childOpenFps, childOpenAllocBytes);
                 host.TickDetachedHosts();
                 if (child.RenderFailed) renderFailedThisChild = true;
@@ -204,6 +210,11 @@ internal static class DetachedStressProbe
         long allocMax = 0; foreach (var b in childOpenAllocBytes) if (b > allocMax) allocMax = b;
 
         bool passFps = fpsChildOpenP50 <= 0 || fpsChildOpenP50 >= 0.9 * primaryHz;   // 0 samples (no child-open window measured) never fails this leg
+        // The render thread's present-slot wait is a running max (RenderPace): only growth past the pre-child baseline counts,
+        // so a startup hiccup cannot fail (or hide) a pop-out stall. A repainting pop-out must never hold the thread > 100 ms.
+        double slotWaitMaxMs = host.RenderPace.SlotWaitMaxMs;
+        const double SlotWaitCeilingMs = 100.0;
+        bool passSlotWait = slotWaitMaxMs <= SlotWaitCeilingMs || slotWaitMaxMs <= slotWaitMaxBaselineMs + 1.0;
         bool pass = counters.DebugLayerErrors == 0
             && counters.ForensicLines == 0
             && closeFailures == 0
@@ -211,7 +222,8 @@ internal static class DetachedStressProbe
             && counters.ChildFrameFailedLines == 0
             && childRenderFailedLatches == 0
             && deviceLostRecoveries == 0
-            && passFps;
+            && passFps
+            && passSlotWait;
 
         string verdict = pass ? "PASS" : "FAIL";
         Console.Error.WriteLine(
@@ -219,6 +231,7 @@ internal static class DetachedStressProbe
             $"childRenderFailed={childRenderFailedLatches} debugErrors={counters.DebugLayerErrors} forensicLines={counters.ForensicLines} " +
             $"stallLines={counters.StallLines} deviceLostRecoveries={deviceLostRecoveries} " +
             $"fps.main.p50={fpsMainP50:0.0} fps.childOpen.p50={fpsChildOpenP50:0.0} fenceWait.p95={fenceP95:0.00}ms " +
+            $"slotWaitMax={slotWaitMaxMs:0.0}ms (baseline {slotWaitMaxBaselineMs:0.0}ms, ceiling {SlotWaitCeilingMs:0}ms) " +
             $"hotPhaseAllocBytes.max={allocMax} (stand-in for the render-thread-per-turn counter, §7.3 point 4 — not yet landed) " +
             $"verdict={verdict}");
         return pass ? 0 : 1;
@@ -354,6 +367,10 @@ internal static class DetachedStressProbe
 /// stencil-DSV incident, so the stress cycle keeps exercising that path on every open, not just a plain rect.</summary>
 sealed class StressChild : Component
 {
+    /// <summary>Bumped by the probe every frame a child is open: the child's content changes every turn, so it submits and
+    /// presents every turn like a pop-out with a ticking seek bar (the F090 stall needed exactly that).</summary>
+    public static readonly Signal<int> Tick = new(0);
+
     public override Element Render() => new BoxEl
     {
         Grow = 1f,
@@ -367,6 +384,7 @@ sealed class StressChild : Component
         [
             new TextEl("Detached stress child") { Size = 16f },
             new TextEl("stencil-clip plate — opened/closed on a timer") { Size = 12f },
+            new BoxEl { Height = 4f, Width = 40f + Tick.Value % 200, Fill = ColorF.FromRgba(90, 160, 255, 255) },
         ],
     };
 }

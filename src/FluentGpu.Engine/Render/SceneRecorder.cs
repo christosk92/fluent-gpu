@@ -265,6 +265,16 @@ internal sealed class SceneRecordingContext
     private readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
     private int _publishedVideoRectCount;
 
+    // F070: the same turn's holes as the video placement must follow them (unclipped posed rect + the clip that cut it, per registry
+    // token). Written by Record / Compose on the thread that records, read by that thread's present turn right after - the render
+    // thread's VideoPlacementApplier moves the video by each hole's travel since the UI published, so it lands under the hole of
+    // the frame it is presented with.
+    private readonly FluentGpu.Media.VideoPosedHole[] _publishedPosedHoles = new FluentGpu.Media.VideoPosedHole[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+    private int _publishedPosedHoleCount;
+
+    /// <summary>The holes of the last completed record or composite, with the pose the composite applied (F070).</summary>
+    internal ReadOnlySpan<FluentGpu.Media.VideoPosedHole> PosedVideoHoles => _publishedPosedHoles.AsSpan(0, _publishedPosedHoleCount);
+
     /// <summary>
     /// Does <paramref name="worldRect"/> sit on top of a video hole punch? True when a single <c>DrawVideo</c> Dst from
     /// the last completed record covers at least <paramref name="minCoveredFraction"/> of its area.
@@ -892,6 +902,7 @@ internal sealed class SceneRecordingContext
 
         // Publish this record's hole set for the between-frames RectOverVideoHole query (see that method).
         PublishVideoRects(slices.VideoRects);
+        PublishPosedHoles(slices.PosedHoles);
         if (standalone)
         {
             DrawList root = slices.Arena(SliceRecorder.RootSlot);
@@ -908,6 +919,7 @@ internal sealed class SceneRecordingContext
         slices.Place(scene, ref repaint);
         slices.NoteCompositeOnly();
         PublishVideoRects(slices.VideoRects);
+        PublishPosedHoles(slices.PosedHoles);
         return repaint;
     }
 
@@ -916,6 +928,13 @@ internal sealed class SceneRecordingContext
         int n = Math.Min(holes.Length, _publishedVideoRects.Length);
         for (int v = 0; v < n; v++) _publishedVideoRects[v] = holes[v];
         _publishedVideoRectCount = n;
+    }
+
+    private void PublishPosedHoles(ReadOnlySpan<FluentGpu.Media.VideoPosedHole> holes)
+    {
+        int n = Math.Min(holes.Length, _publishedPosedHoles.Length);
+        holes[..n].CopyTo(_publishedPosedHoles);
+        _publishedPosedHoleCount = n;
     }
 
     /// <summary>Draw the <see cref="FluentGpu.Animation.DetachedAnimSlab"/>'s live snapshots (the connected-animation

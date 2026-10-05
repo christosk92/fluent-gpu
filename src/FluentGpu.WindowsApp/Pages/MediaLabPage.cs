@@ -405,7 +405,7 @@ sealed class MediaScenarioDiagnostics : Component
         MediaError? error = Player.Error.Value;
         string text = $"state={state} · buffer={buffer.Reason} {(buffer.Percent >= 0 ? buffer.Percent.ToString("P0") : "indeterminate")} · " +
             $"ahead={buffer.BufferedAhead.TotalSeconds:0.0}s · live={timeline.IsLive} offset={timeline.LiveOffset.TotalSeconds:0.0}s · " +
-            $"geometry={geometry.DisplaySize.Width}×{geometry.DisplaySize.Height} · HDR={color.Hdr} · dropped={stats.FramesDropped}";
+            $"geometry={geometry.DisplaySize.Width}×{geometry.DisplaySize.Height} · HDR={color.Hdr} · rendered={stats.FramesRendered} dropped={stats.FramesDropped}";
         string catalog = $"tracks video={Player.Tracks.Video.Count} audio={Player.Tracks.Audio.Count} text={Player.Tracks.Text.Count} · " +
             $"qualities={Player.Qualities.Variants.Count} active={activeQuality?.Label ?? activeQuality?.Id ?? "auto/pending"} · " +
             $"throughput={stats.EstimatedThroughputKbps:0}kbps rebuffer={stats.RebufferCount}";

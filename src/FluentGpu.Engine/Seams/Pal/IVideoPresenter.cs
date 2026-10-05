@@ -16,7 +16,8 @@ public readonly record struct VideoSurfaceId(uint Value)
 /// The video-compositing PAL seam (<c>docs/plans/video-compositing-spine-design.md §4</c>,
 /// <c>docs/plans/video-phase1-plan.md §4</c> — DRM-free spine). Composites externally-produced video as a sibling
 /// DirectComposition visual the engine never paints into: a child visual z-BELOW the UI swapchain visual, revealed
-/// through a premultiplied-0 hole-punch in the UI back buffer. The portable core references only this interface (it
+/// through a premultiplied-0 hole-punch in the UI back buffer (or, while the host promotes it through <see cref="SetOverlay"/>,
+/// ABOVE that visual over the same hole). The portable core references only this interface (it
 /// stays TerraFX-free); every <c>IDCompositionVisual</c>/<c>IDCompositionSurface</c> ComPtr lives behind the Windows
 /// leaf (<c>FluentGpu.Windows/Pal/DCompVideoPresenter.cs</c>), render-thread-confined like the rest of the device.
 /// </summary>
@@ -37,13 +38,16 @@ public interface IVideoPresenter
     /// <c>IDCompositionDevice::CreateSurfaceFromHandle</c> and binds it as the child visual's content. Phase 1
     /// (DRM-free) passes an UNPROTECTED handle; the DRM phase passes a PROTECTED handle here — and NOTHING else in
     /// this seam or the renderer changes. This is the single DRM attach point.
+    /// <para>Returns <see langword="true"/> only when the handle is now the surface's content. On failure it returns
+    /// <see langword="false"/> after DROPPING the previous content (a stale frame of an earlier source must never stay on
+    /// screen under a new one), and the caller keeps the handle unbound and retries on a later drain.</para>
     /// </summary>
-    void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);
+    bool BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);
 
     /// <summary>
-    /// Position/clip the child visual to <paramref name="deviceRect"/> (device px) at draw order <paramref name="z"/>.
-    /// Queued for the frame's <see cref="Commit"/>; the matching hole-punch in the UI back buffer is the source of
-    /// truth for the visible rect. <paramref name="opacity"/> is retained metadata (the graded reveal is done UI-side).
+    /// Position/clip the child visual to <paramref name="deviceRect"/> (device px) at draw order <paramref name="z"/>
+    /// (higher Z composites above lower Z, always below the UI visual). Queued for the frame's <see cref="Commit"/>; the
+    /// matching hole-punch in the UI back buffer is the source of truth for the visible rect. <paramref name="opacity"/> is retained metadata (the graded reveal is done UI-side).
     /// </summary>
     void Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z);
 
@@ -51,7 +55,8 @@ public interface IVideoPresenter
     /// UniformToFill can place an oversized, centered frame and crop it to the element without distortion.</summary>
     void SetViewport(VideoSurfaceId id, RectF deviceRect) { }
 
-    /// <summary>Show/hide the child visual (queued for the next <see cref="Commit"/>).</summary>
+    /// <summary>Show/hide the child visual (queued for the next <see cref="Commit"/>). Hiding removes the visual from the
+    /// composition tree rather than clipping it to nothing; showing re-inserts it at its Z with its content still bound.</summary>
     void SetVisible(VideoSurfaceId id, bool visible);
 
     /// <summary>
@@ -68,12 +73,41 @@ public interface IVideoPresenter
     /// Half the shorter side gives a circle. Default no-op so headless/test presenters need not implement it.</summary>
     void SetCornerRadius(VideoSurfaceId id, float radiusPx) { }
 
+    /// <summary>True when this presenter's output reported overlay-plane support for the video (F087: the Windows probe,
+    /// <see cref="FluentGpu.Media.VideoOverlayCaps"/>), so a surface may be promoted ABOVE the UI plane through
+    /// <see cref="SetOverlay"/>. Default false: a headless / test presenter, or an output that was not probed or reported no plane,
+    /// keeps every surface an underlay.</summary>
+    bool SupportsOverlay => false;
+
+    /// <summary>
+    /// Overlay mode (F087): <see langword="true"/> moves the child visual ABOVE the UI visual (inserted above it, in the same
+    /// <c>(Z, slot)</c> order among the other promoted surfaces), <see langword="false"/> returns it to its place BELOW the UI visual.
+    /// The caller promotes only a surface whose rect nothing paints over, and demotes it on the turn something does; the UI back
+    /// buffer's hole stays punched in both modes, so only the visual's z-order changes. Queued for the next <see cref="Commit"/>
+    /// like every other mutation. Default no-op so headless/test presenters need not implement it.
+    /// </summary>
+    void SetOverlay(VideoSurfaceId id, bool above) { }
+
     /// <summary>Tear down one surface (removes the child visual, releases its content). Cold path.</summary>
     void Destroy(VideoSurfaceId id);
 
     /// <summary>
-    /// Flush all queued <see cref="Place"/>/<see cref="SetVisible"/>/<see cref="BindSurfaceHandle"/> mutations into
-    /// one <c>IDCompositionDevice::Commit</c> — the per-frame commit at phase 11 (the "two-clock tear" lock: the hole
+    /// Apply every queued <see cref="Place"/>/<see cref="SetVisible"/>/<see cref="BindSurfaceHandle"/> mutation to the
+    /// presenter's own visuals WITHOUT the device-level flush (F080): the host then makes ONE
+    /// <see cref="FluentGpu.Rhi.IGpuDevice.CommitVideoComposition"/> per render turn after the parent and every detached child
+    /// applied theirs, instead of one commit per window. Default <see cref="Commit"/>: a presenter with no shared device
+    /// flush has nothing to defer.
+    /// </summary>
+    void ApplyPending() => Commit();
+
+    /// <summary>True when this presenter can attach new surfaces to a live composition root now. A composited swapchain binds
+    /// its DirectComposition graph on its first Present, so a surface created before that would sit unattached while the UI
+    /// already punched its hole: the early (structural) drain waits for this. Default true.</summary>
+    bool CanAttachSurfaces => true;
+
+    /// <summary>
+    /// <see cref="ApplyPending"/> plus the device flush: all queued mutations become one
+    /// <c>IDCompositionDevice::Commit</c> — the per-frame commit at phase 11 (the "two-clock tear" lock: the hole
     /// rides the same frame-turn's <c>Present</c>). No-op when nothing is dirty.
     /// </summary>
     void Commit();

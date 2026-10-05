@@ -64,8 +64,16 @@ public sealed record ProtectedVideoRequest
     public long RetainBehindMs { get; init; } = ProtectedVideoSession.DefaultRetainBehindMs;
     /// <summary>Forward buffering target, in ms.</summary>
     public long BufferAheadMs { get; init; } = ProtectedVideoSession.DefaultBufferAheadMs;
-    /// <summary>The byte cap of this session's segment store.</summary>
-    public long StoreBudgetBytes { get; init; } = ProtectedVideoSession.DefaultStoreBudgetBytes;
+    /// <summary>The byte cap of this session's segment store. 0 (the default) DERIVES it from the opening representation's declared
+    /// bandwidth - the retention window plus the forward target, at that bitrate, with headroom, 16-128 MiB - and re-derives it at
+    /// every representation change (F040); a positive value is an explicit cap that is never re-derived. An opening rung with no
+    /// declared bandwidth gets <see cref="ProtectedVideoSession.DefaultStoreBudgetBytes"/>.</summary>
+    public long StoreBudgetBytes { get; init; }
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> at which the open that produced this request began (F216):
+    /// the origin the session's <c>switch.budget</c> line counts from. A prepared session was created long before the open that takes
+    /// it, so the stage times are measured from THIS, not from the session's creation. 0 = unknown (the session then counts from its
+    /// own attach).</summary>
+    public long OriginTimestamp { get; init; }
 
     // ── the paired AUDIO representation (optional) — the video's own soundtrack ───────────────────────────────────────
     // Null ⇒ video only. Segment count / start number / stride / length are SHARED with the video: both representations

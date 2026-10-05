@@ -83,6 +83,11 @@ public sealed class HeadlessWindow : IPlatformWindow
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SetZoom"/>
     public void SetZoom(float zoom) => _zoom = ZoomLadder.Clamp(zoom);
     public Action? PaintRequested { get; set; }   // unused headless (no modal resize loop)
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.ModalLoopTick"/>
+    public Action? ModalLoopTick { get; set; }   // tests raise it by hand: headless has no modal loop of its own
+    /// <summary>Settable synthetic OUTER rect in virtual-screen px (test seam for the pop-out coverage verdict). Default empty
+    /// = "the backend cannot report it", exactly like the interface default.</summary>
+    public RectF OuterBoundsPx { get; set; }
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.InModalLoop"/>
     public bool InModalLoop { get; set; }
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SizedInModalLoop"/>
@@ -225,12 +230,51 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public void SetCursor(CursorId id) => LastCursor = id;
     public void SetTitle(StringId title) { }
-    public void Show() { Shown = true; IsVisible = true; }
+    public void Show() { Shown = true; IsVisible = true; ShowCalls++; }
+
+    /// <summary>How many times <see cref="Show"/> was called (test seam): the pop-out reveal must show its window exactly once.</summary>
+    public int ShowCalls { get; private set; }
+
+    /// <summary>The last <see cref="SetTopmost"/> value (test seam; false until set).</summary>
+    public bool Topmost { get; private set; }
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SetTopmost"/>
+    public void SetTopmost(bool topmost) => Topmost = topmost;
 
     /// <summary>Settable visibility (test seam), mirroring Win32's live <c>WS_VISIBLE</c> read: <see cref="Hide"/> clears
     /// it, <see cref="Show"/> sets it. Defaults to TRUE so a headless host that never calls <see cref="Show"/> is not
     /// parked — headless has no real screen, and every existing gate drives an unshown window.</summary>
     public bool IsVisible { get; set; } = true;
+
+    /// <summary>Settable (test seam): the OS compositor cloaks the window (another virtual desktop). False by default.</summary>
+    public bool IsCloaked { get; set; }
+
+    private RectF[] _occluders = [];
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.OcclusionEpoch"/>
+    /// <remarks>0 (untracked, so the host never parks for being covered) until a test calls <see cref="SetOccluders"/>.</remarks>
+    public long OcclusionEpoch { get; private set; }
+
+    /// <summary>Test seam (F118): the opaque top-level windows above this one (physical px), as the OS would report them. Bumps
+    /// <see cref="OcclusionEpoch"/>, like a win-event hook callback, so the host re-evaluates on its next frame.</summary>
+    public void SetOccluders(params RectF[] rects)
+    {
+        _occluders = rects;
+        OcclusionEpoch++;
+    }
+
+    /// <summary>How many times the host asked for the occluders (test seam): the verdict is cached per epoch, so a quiet window must
+    /// not ask again.</summary>
+    public int OccluderQueries { get; private set; }
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.CopyOccluderRectsPx"/>
+    public int CopyOccluderRectsPx(Span<RectF> into)
+    {
+        OccluderQueries++;
+        int n = Math.Min(_occluders.Length, into.Length);
+        for (int i = 0; i < n; i++) into[i] = _occluders[i];
+        return n;
+    }
 
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Hide"/>
     public void Hide() => IsVisible = false;
@@ -263,6 +307,9 @@ public sealed class HeadlessWindow : IPlatformWindow
     public int SetFullscreenCount { get; private set; }
     public bool IsFullscreen { get; private set; }
     public int CloseCount { get; private set; }
+    /// <summary>Settable (test seam): the window was closed by the user / OS — a detached child's host is reaped by the parent
+    /// loop on seeing this. False by default (headless windows are never closed by the OS).</summary>
+    public bool IsClosed { get; set; }
 
     public void Minimize() { MinimizeCount++; State = WindowState.Minimized; }
 

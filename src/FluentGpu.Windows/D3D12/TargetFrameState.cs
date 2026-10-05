@@ -28,7 +28,8 @@ internal sealed unsafe class TargetFrameState
     internal ID3D12GraphicsCommandList* List;                                    // ONE command list per target
     internal void* List4;                                                        // the same object as ID3D12GraphicsCommandList4 (render passes)
     internal readonly ulong[] FenceValues = new ulong[D3D12Device.FRAME_COUNT];  // fence value of the last submit that used back buffer k
-    internal ulong LastSubmitFence;                                              // max(FenceValues): the stamp Resize/teardown waits on
+    internal ulong LastSubmitFence;                                              // max(FenceValues): the stamp of the last submit
+    internal ulong LastPresentFence;                                             // signalled right after this target's last Present that ran: the present's own queue work (the flip; a WARP copy) — folded into TargetFenceHorizon, so Resize/teardown wait for it too
     internal uint FrameIndex;                                                    // GetCurrentBackBufferIndex() at submit entry
 
     // ── Tier-3 stencil path clip (moved from D3D12Swapchain.StencilDsv* + D3D12Device._stencil*) ───────────────────
@@ -44,7 +45,16 @@ internal sealed unsafe class TargetFrameState
 
     // ── present side (moved from D3D12Device) ────────────────────────────────────────────────────────────────────
     internal bool OccludedLatched, LastPresentStoodDown, SkipLatencyOnce, SkipVsyncOnce, HintSettlePresent;
+    // F070 Stage B: the next Present of this target waits (bounded) for its own submit's fence first. Armed by the host for a turn that
+    // moves video geometry, consumed by Present, render-thread-only.
+    internal bool HintMotionFenceWait;
+    // The last Present(noWait: true) of this target was REFUSED (DXGI_ERROR_WAS_STILL_DRAWING): nothing was queued and the
+    // latency credit is still held. Render-thread-only, reset at the top of every Present.
+    internal bool LastPresentRefused;
     internal double LastFenceWaitMs, LastLatencyWaitMs;
+    // F244: the two halves of the last submit's own waits - a latency-waitable wait paid inside the submit (0 when the credit was
+    // already held) and the back-buffer / ring-slot fence wait. Render-thread-only, written by OpenSubmit.
+    internal double LastSubmitLatencyWaitMs, LastBufferFenceWaitMs;
     internal PresentStats LastPresentStats;
     // Attested statistics (compositor-scroll plan §5.3): after every Present that actually ran on the primary target,
     // SamplePresentStats feeds the ledger DXGI's PAIRED PresentCount/PresentRefreshCount, the present's id and the idle

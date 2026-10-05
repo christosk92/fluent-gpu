@@ -64,6 +64,28 @@ public sealed class RenderThreadLifecycleTests
         }
     }
 
+    // F102: fgpu-render is the deadline thread of the whole process (record, composite, submit, present for every window), so
+    // it runs above the Normal-priority decode workers and ThreadPool continuations it shares the cores with. The submit
+    // callback runs ON the render thread, so it reads the thread's own priority.
+    [Fact]
+    public void RenderThread_RunsAtAboveNormalPriority_ForItsLifetime()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        ThreadPriority seen = ThreadPriority.Lowest;
+        string? name = null;
+        var rt = new RenderThread(seam, _ => { seen = Thread.CurrentThread.Priority; name = Thread.CurrentThread.Name; }, async: false);
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);
+            rt.DrainSync();   // force-sync: the turn (and its writes) complete before DrainSync returns
+            Assert.Equal("fgpu-render", name);
+            Assert.Equal(ThreadPriority.AboveNormal, seen);
+        }
+        finally { rt.Dispose(); }
+    }
+
     // The present-slot take (IGpuDevice.TryTakePresentSlot) must be paid BEFORE the frame is chosen — the whole point
     // of the latency fix: the presented state is then the freshest one that existed when the slot opened, instead of one
     // aged by the wait (the historical order waited inside submit, AFTER the acquire, which on a GPU costing most of a
@@ -426,6 +448,53 @@ public sealed class RenderThreadLifecycleTests
         finally { rt.Dispose(); }
     }
 
+    // F207: the UI's park rendezvous must not wait out a present-slot wait. The fake take blocks like the real device's 1 s
+    // liveness wait - until the slot opens (never, here) OR the park-request event fires - and answers false WITHOUT taking
+    // the credit when the park request ended it. Quiesce must then return as soon as the loop reaches its gate, the aborted
+    // turn must have presented nothing (nothing to undo, nothing retaken), and after Resume the still-pending publication
+    // presents on a fresh take.
+    [Fact]
+    public void Quiesce_InterruptsABlockedSlotTake_AndTheAbortedTurnPresentsNothing()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        int submits = 0, takes = 0;
+        using var entered = new ManualResetEventSlim(false);
+        RenderThread? rt = null;
+        rt = new RenderThread(seam, _ => Interlocked.Increment(ref submits), async: false,
+                              takePresentSlot: _ =>
+                              {
+                                  if (Interlocked.Increment(ref takes) != 1) return true;   // the turn after Resume takes its credit at once
+                                  entered.Set();
+                                  bool aborted = rt!.ParkRequested.WaitOne(10_000);
+                                  return !aborted;   // false = the park request ended the wait and nothing was taken
+                              });
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);
+            rt.WakeAsync();
+            Assert.True(entered.Wait(5_000), "the render thread never reached the blocked slot take");
+
+            var sw = Stopwatch.StartNew();
+            rt.Quiesce();
+            sw.Stop();
+            try
+            {
+                Assert.True(sw.ElapsedMilliseconds < 1_000, $"Quiesce must not wait out the slot take; took {sw.ElapsedMilliseconds} ms");
+                Assert.Equal(0, Volatile.Read(ref submits));   // the aborted turn presented nothing
+                Assert.Equal(1, Volatile.Read(ref takes));     // and did not retake the slot behind the UI's back
+                Assert.Equal(1L, rt.QuiesceCount);
+                Assert.True(rt.QuiesceWaitMsMax > 0.0 && rt.QuiesceWaitMsMax < 1_000.0, $"QuiesceWaitMsMax={rt.QuiesceWaitMsMax}");
+            }
+            finally { rt.Resume(); }
+
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref submits) == 1, 5_000), "the pending publication never presented after Resume");
+            Assert.False(rt.ParkRequested.WaitOne(0), "the gate must consume the park request");
+        }
+        finally { rt.Dispose(); }
+    }
+
     // The dedup contract in isolation: the consumer is idempotent across bare acquires (no intervening publish).
     [Fact]
     public void SceneFramePublisher_TryAcquire_DedupsAnAlreadyConsumedFrame()
@@ -448,5 +517,93 @@ public sealed class RenderThreadLifecycleTests
         Assert.True(seam.TryAcquire(out var f2));
         Assert.Equal(2UL, f2.PublishSeq);
         Assert.False(seam.TryAcquire(out _), "and dedups again");
+    }
+
+    // F208: the host's early (structural) video drain is the loop's preTurn hook. It must run BEFORE the present-slot take (a
+    // take may block for a long while) and on a bare wake, which presents nothing and so reaches no slot at all.
+    [Fact]
+    public void PreTurn_RunsBeforeThePresentSlotTake_AndOnABareWake()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        // The loop thread starts in the ctor: a Publish landing before its first HasPendingFrame check lets it run a turn on its
+        // own, and DrainSync then adds a bare turn. So record under a lock and assert relative order / membership, not exact
+        // sequences (the turns themselves are serial, so a returned DrainSync means every earlier turn has finished).
+        var order = new System.Collections.Generic.List<string>();
+        var gate = new object();
+        void Record(string s) { lock (gate) order.Add(s); }
+        string[] Snapshot() { lock (gate) return order.ToArray(); }
+        var rt = new RenderThread(seam, _ => Record("submit"), async: false,
+                                  takePresentSlot: _ => { Record("take"); return true; },
+                                  preTurn: () => Record("pre"));
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);
+            rt.DrainSync();
+            var first = Snapshot();
+            Assert.Equal(1, Array.FindAll(first, s => s == "take").Length);
+            Assert.Equal(1, Array.FindAll(first, s => s == "submit").Length);
+            int take = Array.IndexOf(first, "take");
+            Assert.True(take > 0 && first[take - 1] == "pre", $"the preTurn hook must run right before the slot take: [{string.Join(",", first)}]");
+            Assert.True(Array.IndexOf(first, "submit") > take, $"the present must follow the slot take: [{string.Join(",", first)}]");
+
+            int seen = first.Length;
+            rt.DrainSync();                                  // a bare wake: no publication, no motion
+            var after = Snapshot();
+            var added = new string[after.Length - seen];
+            Array.Copy(after, seen, added, 0, added.Length);
+            Assert.Contains("pre", added);
+            Assert.DoesNotContain("take", added);
+            Assert.DoesNotContain("submit", added);
+        }
+        finally { rt.Dispose(); }
+    }
+
+    // F208: a surface handle arriving wakes the loop with no publication, so the early drain runs on the next turn instead of
+    // waiting for a UI frame (or for another window's slot wait) to come round.
+    [Fact]
+    public void WakeForVideo_RunsPreTurnWithoutAPublication_AndTakesNoSlot()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        using var ran = new ManualResetEventSlim(false);
+        int takes = 0;
+        var rt = new RenderThread(seam, _ => { }, async: false,
+                                  takePresentSlot: _ => { Interlocked.Increment(ref takes); return true; },
+                                  preTurn: () => ran.Set());
+        try
+        {
+            rt.WakeForVideo();
+            Assert.True(ran.Wait(5_000), "the wake never ran the preTurn hook");
+            Assert.Equal(0, Volatile.Read(ref takes));       // a bare wake presents nothing: no slot is reserved
+        }
+        finally { rt.Dispose(); }
+        rt.WakeForVideo();                                   // after Dispose: dropped, never throws
+    }
+
+    // F208: an UNPACED turn's slot take is the liveness-bounded form, bounded at max(2 x refresh, 34 ms) - not the plain 1 s
+    // wait a minimized / cloaked primary used to cost on every turn.
+    [Fact]
+    public void AnUnpacedTurnsSlotTake_IsLivenessBoundedAtTwoRefreshes_NotOneSecond()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        long period = Stopwatch.Frequency / 60;
+        int lastTimeout = int.MinValue;
+        var rt = new RenderThread(seam, _ => { }, async: false, tickPeriod: () => period,
+                                  takePresentSlot: ms => { lastTimeout = ms; return true; });
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);
+            rt.DrainSync();
+            Assert.Equal(-RenderThread.UnpacedSlotBoundMs(period * 1000.0 / Stopwatch.Frequency), lastTimeout);
+            Assert.InRange(lastTimeout, -100, -34);          // a 60 Hz panel: 2 x 16.7 ms rounds up to 34 ms
+        }
+        finally { rt.Dispose(); }
+
+        Assert.Equal(34, RenderThread.UnpacedSlotBoundMs(8.33));    // 120 Hz: the 34 ms floor
+        Assert.Equal(67, RenderThread.UnpacedSlotBoundMs(33.3));    // 30 Hz: two refreshes
     }
 }

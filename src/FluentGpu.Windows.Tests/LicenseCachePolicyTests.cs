@@ -177,6 +177,88 @@ public sealed class LicenseCachePolicyTests
     public void AcceptCompletion_ANonPendingRow_IsNeverReapplied(LicenseCacheState state)
         => Assert.False(LicenseCachePolicy.AcceptCompletion(true, state, 7, 7));
 
+    // ── the Pending deadline (F011) ──────────────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(0L, LicenseCacheAction.Await)]                                                       // just acquired
+    [InlineData(LicenseCachePolicy.PendingDeadlineMs - 1, LicenseCacheAction.Await)]                 // one ms short of the deadline
+    [InlineData(LicenseCachePolicy.PendingDeadlineMs, LicenseCacheAction.Acquire)]                   // the deadline itself: stale
+    [InlineData(LicenseCachePolicy.PendingDeadlineMs * 5, LicenseCacheAction.Acquire)]
+    public void Decide_Pending_JoinsUntilTheDeadline_ThenReacquires(long ageMs, LicenseCacheAction expected)
+        => Assert.Equal(expected, LicenseCachePolicy.Decide(LicenseCacheState.Pending, 0, Now, acquiredMs: Now - ageMs));
+
+    [Fact]
+    public void Decide_Pending_WithNoKnownAcquireTime_NeverGoesStale()
+        => Assert.Equal(LicenseCacheAction.Await, LicenseCachePolicy.Decide(LicenseCacheState.Pending, 0, Now + 10 * LicenseCachePolicy.PendingDeadlineMs));
+
+    [Fact]
+    public void PendingDeadline_IsBelowTheSessionStartBudget()
+        => Assert.True(LicenseCachePolicy.PendingDeadlineMs < 10_000);   // the start budget's floor: a retry must not join the attempt that failed the open
+
+    [Theory]
+    [InlineData(LicenseCacheState.Usable)]
+    [InlineData(LicenseCacheState.Expired)]
+    [InlineData(LicenseCacheState.Failed)]
+    public void TheDeadlineOnlyAppliesToPendingRows(LicenseCacheState state)
+    {
+        long old = Now - 10 * LicenseCachePolicy.PendingDeadlineMs;
+        LicenseCacheAction fresh = LicenseCachePolicy.Decide(state, 0, Now);
+        Assert.Equal(fresh, LicenseCachePolicy.Decide(state, 0, Now, acquiredMs: old));   // an old Usable row is still reused
+    }
+
+    // ── ChooseDeadEviction (F008: only dead rows are trimmed managed-side) ─────────────────────────────────────────────
+
+    [Fact]
+    public void ChooseDeadEviction_BelowCapacity_TrimsNothing()
+    {
+        var rows = new LicenseCacheEntry[LicenseCachePolicy.Capacity - 1];
+        for (int i = 0; i < rows.Length; i++) rows[i] = Row(i, LicenseCacheState.Failed);
+        Assert.Equal(-1, LicenseCachePolicy.ChooseDeadEviction(rows, keepKid: null));
+    }
+
+    [Fact]
+    public void ChooseDeadEviction_FullOfLiveRows_TrimsNothing_NativeOwnsTheLruChoice()
+    {
+        var rows = FullCache();
+        rows[2] = Row(2, LicenseCacheState.Pending);
+        Assert.Equal(-1, LicenseCachePolicy.ChooseDeadEviction(rows, keepKid: null));
+    }
+
+    [Theory]
+    [InlineData(LicenseCacheState.Failed)]
+    [InlineData(LicenseCacheState.Expired)]
+    public void ChooseDeadEviction_Full_TrimsTheFirstDeadRow(LicenseCacheState dead)
+    {
+        var rows = FullCache();
+        rows[5] = Row(5, dead);
+        rows[6] = Row(6, dead);
+        Assert.Equal(5, LicenseCachePolicy.ChooseDeadEviction(rows, keepKid: null));
+    }
+
+    [Fact]
+    public void ChooseDeadEviction_NeverTrimsAnInUseOrKeptRow()
+    {
+        var rows = FullCache();
+        rows[1] = Row(1, LicenseCacheState.Failed, inUse: true);
+        rows[2] = Row(2, LicenseCacheState.Failed);
+        Assert.Equal(2, LicenseCachePolicy.ChooseDeadEviction(rows, keepKid: null));
+        Assert.Equal(-1, LicenseCachePolicy.ChooseDeadEviction(rows, keepKid: "kid2"));
+    }
+
+    // ── AcceptRevocation (F045) ──────────────────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(true, LicenseCacheState.Usable, 7ul, 7ul, true)]       // a key that WAS usable died
+    [InlineData(true, LicenseCacheState.Pending, 7ul, 7ul, true)]      // the usable event was not applied yet
+    [InlineData(true, LicenseCacheState.Failed, 7ul, 7ul, false)]
+    [InlineData(true, LicenseCacheState.Expired, 7ul, 7ul, false)]
+    [InlineData(true, LicenseCacheState.Usable, 7ul, 8ul, false)]      // a predecessor's key session says nothing about this row
+    [InlineData(true, LicenseCacheState.Usable, 0ul, 0ul, false)]      // no handle
+    [InlineData(false, LicenseCacheState.Usable, 7ul, 7ul, false)]     // no row
+    public void AcceptRevocation_OnlyALiveRowsOwnNonZeroHandle(bool rowExists, LicenseCacheState state, ulong rowHandle,
+                                                                ulong eventHandle, bool accepted)
+        => Assert.Equal(accepted, LicenseCachePolicy.AcceptRevocation(rowExists, state, rowHandle, eventHandle));
+
     // ── LicenseKeyId ─────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>A GUID whose first three fields are asymmetric, so a missing (or doubled) byte swap cannot pass.</summary>

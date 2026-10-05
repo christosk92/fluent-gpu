@@ -121,6 +121,44 @@ public sealed class MfMediaSessionTests
     }
 
     [Fact]
+    public void WaitingWhilePlaying_PublishesRebufferingBuffering_UntilTheStallEnds()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.DurationSeconds = 60; Pump(s);
+        _ = s.PlayAsync(); eng.Playing = true; Pump(s);
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+
+        eng.Waiting = true;                 // MF WAITING: Playing stays true across a starvation
+        Pump(s);
+        Assert.Equal(PlaybackState.Buffering, core.State.Peek());
+        Assert.True(core.Buffering.Peek().IsBuffering);
+        Assert.Equal(BufferingReason.Rebuffering, core.Buffering.Peek().Reason);
+
+        eng.Waiting = false;                // PLAYING / CANPLAY / playhead progress cleared it
+        Pump(s);
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.False(core.Buffering.Peek().IsBuffering);
+    }
+
+    [Fact]
+    public void WaitingWhilePlaying_StopsProjectingThePositionForward()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.DurationSeconds = 60; Pump(s);
+        _ = s.PlayAsync(); eng.Playing = true; eng.CurrentTimeSeconds = 10; Pump(s);
+
+        eng.Waiting = true;                 // republishes the snapshot (a fresh PositionTimestamp) with position 10
+        System.Threading.Thread.Sleep(80);  // a stall long enough that a projected clock would visibly run ahead
+        Pump(s);
+        Assert.Equal(10.0, core.Position.Peek().TotalSeconds, 3);   // frozen with the frame
+
+        eng.Waiting = false;
+        System.Threading.Thread.Sleep(80);
+        Pump(s);
+        Assert.True(core.Position.Peek().TotalSeconds > 10.04);     // projection resumes with the playback
+    }
+
+    [Fact]
     public void Metadata_PublishesSizeDurationCommands_AndBecomesReady()
     {
         var (s, core, eng) = NewSession(startPaused: true);
@@ -300,6 +338,8 @@ public sealed class MfMediaSessionTests
     public void Repaint_IsInvalidationDriven_AndNativeEventsRequestOneFollowingPump()
     {
         var (s, _, eng) = NewSession();
+        long now = 0;
+        s.ClockMs = () => now;
         var binding = NewBinding(out _);
         eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
         int requested = 0;
@@ -307,17 +347,173 @@ public sealed class MfMediaSessionTests
 
         s.PumpVideo(binding, Rect, 1f);       // initial metadata/handle/geometry hand-off
         Assert.True(eng.Commands.TryTakeRepaint());
+        Assert.True(eng.Commands.TryTakeStreamRect(out _, out _));   // the hand-off's stream size
 
         s.PumpVideo(binding, Rect, 1f);       // identical host work is not a repaint
         Assert.False(eng.Commands.TryTakeRepaint());
 
-        eng.RaiseStateChanged();               // MF worker event -> one coalesced caller request
+        eng.RaiseStateChanged();               // MF worker event -> one coalesced caller request, but NOT a repaint
         Assert.Equal(1, requested);
         s.PumpVideo(binding, Rect, 1f);
-        Assert.True(eng.Commands.TryTakeRepaint());
+        Assert.False(eng.Commands.TryTakeRepaint());
 
-        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f); // geometry invalidates once
+        // A new destination does not re-size the stream while it may still be moving (F071): nothing is posted, so nothing
+        // is repainted either ...
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f);
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.False(eng.Commands.TryTakeRepaint());
+        // ... and once it has held still, the new stream size is asked for once and the frame is repainted at it.
+        now += VideoStreamSizeGate.SettleMs;
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f);
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((640, 360), (w, h));
         Assert.True(eng.Commands.TryTakeRepaint());
+    }
+
+    // ── the stream size: no sizing for an unlaid-out rect (F051), buckets that settle and an echo before the compositor
+    //    hears of them (F071) ──────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PumpVideo_WithAnEmptyRect_PublishesTheNaturalSize_ButNeverSizesOrPlacesTheStream()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1920; eng.NativeH = 1080; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, default, 1f);      // the element's pump before its area is laid out
+
+        Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());     // state and natural size still publish
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));       // no 2x1 swap chain
+        Assert.True(binding.ContentSize.IsEmpty);
+        Assert.False(core.SurfaceGeometry.Peek().IsPlaced);
+
+        s.PumpVideo(binding, new RectF(0, 0, 960, 540), 1f);              // the first laid-out pump sizes it
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((960, 540), (w, h));
+
+        s.PumpVideo(binding, default, 1f);                                // the area collapsed again
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.Equal(new SizeI(960, 540), binding.ContentSize);           // the last good size stays
+    }
+
+    [Fact]
+    public void PumpVideo_AResize_RequestsTheNewBucketOnlyOnceSettled_AndPublishesItOnlyWhenTheEngineEchoesIt()
+    {
+        var (s, _, eng) = NewSession();
+        long now = 0;
+        s.ClockMs = () => now;
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1920; eng.NativeH = 1080; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f);
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((640, 360), (w, h));                                 // the 1/3 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+        eng.EchoStreamRect(640, 360);
+
+        now = 100;
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);             // a resize gesture is under way
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);
+
+        now = 350;
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);             // it has been still for 250 ms
+        Assert.True(eng.Commands.TryTakeStreamRect(out w, out h));
+        Assert.Equal((1440, 810), (w, h));                                // the 3/4 bucket
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);           // DComp keeps scaling the old buffer by the old size
+
+        now = 400;
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);
+        Assert.Equal(new SizeI(640, 360), binding.ContentSize);           // not echoed yet
+
+        eng.EchoStreamRect(1440, 810);
+        s.PumpVideo(binding, new RectF(0, 0, 1000, 562), 1f);
+        Assert.Equal(new SizeI(1440, 810), binding.ContentSize);          // the engine applied it: now the compositor may use it
+    }
+
+    [Fact]
+    public void Repaint_IsOwedAfterAPausedSeekCompletes_AndNeverPostedWhilePlaying()
+    {
+        var (s, _, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());        // the initial hand-off
+
+        eng.Seeking = true; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(eng.Commands.TryTakeRepaint());       // a seek in flight owes nothing yet
+        eng.Seeking = false; eng.SeekedCount = 1; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());        // the landed paused frame is repainted once
+
+        // A fast paused seek: SEEKING and SEEKED both land between two pumps, so the Seeking flag is never observed. The
+        // SEEKED counter still moves, so the landed frame is repainted.
+        eng.SeekedCount = 2; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(eng.Commands.TryTakeRepaint());       // and only once
+
+        eng.Playing = true; eng.Seeking = true; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        eng.Seeking = false; eng.SeekedCount = 3; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(eng.Commands.TryTakeRepaint());       // MF presents its own frames while Playing
+        eng.Playing = false; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(eng.Commands.TryTakeRepaint());        // the owed repaint is paid at the first non-Playing pump
+    }
+
+    [Fact]
+    public void Surface_IsNotPublishedAtBind_OnlyOnceThisSourcesFirstFrameLands()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, Rect, 1f);                    // handle bound, no frame yet
+        Assert.True(core.VideoSurface.Peek().IsNone);
+        Assert.Equal(0, s.FirstFrameEpoch);
+
+        eng.FirstFrameTimestamp = 12345; eng.RaiseStateChanged();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(core.VideoSurface.Peek().IsNone);
+        Assert.Equal(1, s.FirstFrameEpoch);
+
+        s.PumpVideo(binding, Rect, 1f);                    // one-shot per session
+        Assert.Equal(1, s.FirstFrameEpoch);
+    }
+
+    [Fact]
+    public void Surface_IsDroppedByAPresentationEpochBump_AndRepublishedOnTheRebind()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xAAAA; eng.FirstFrameTimestamp = 7;
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(core.VideoSurface.Peek().IsNone);
+
+        eng.Handle = 0;                                    // the rebuilt swap chain has no handle yet
+        eng.RaiseFormatChange();
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(core.VideoSurface.Peek().IsNone);      // the poster covers until the next handle
+
+        eng.Handle = 0xBBBB;
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.False(core.VideoSurface.Peek().IsNone);     // same source, first frame already seen: back at the rebind
+    }
+
+    [Fact]
+    public void ConnectSignals_ResetsASurfaceTheSinkStillHeldFromAPreviousSession()
+    {
+        var core = new MediaPlayerCore();
+        var sink = new MediaSignalSink(core);
+        sink.VideoSurface(new VideoSurfaceId(1));          // what the previous session of an in-place Switch left behind
+
+        new MfMediaSession(new FakeVideoEngine(), 0, new MediaOpenOptions()).ConnectSignals(sink);
+
+        Assert.True(core.VideoSurface.Peek().IsNone);
     }
 
     [Fact]
@@ -394,6 +590,104 @@ public sealed class MfMediaSessionTests
         Assert.Equal(0.0, secsLow, 6);
     }
 
+    // ── the two pumps (F132): state needs no element, geometry needs the state half to have adopted the source ───────────
+
+    [Fact]
+    public void PumpState_AdvancesStateDurationNaturalSizeAndPosition_WithNoBindingAtAll()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.DurationSeconds = 90; eng.Handle = 0xBEEF;
+
+        s.PumpState();                                                    // no element, no binding, no rect
+
+        Assert.Equal(PlaybackState.Ready, core.State.Peek());
+        Assert.Equal(new SizeI(1280, 720), core.NaturalSize.Peek());
+        Assert.Equal(TimeSpan.FromSeconds(90), core.Duration.Peek());
+        Assert.True(core.VideoSurface.Peek().IsNone);                     // readiness needs a bound handle: that is the geometry half's
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));       // nothing sized, nothing repainted
+        Assert.False(eng.Commands.TryTakeRepaint());
+
+        _ = s.PlayAsync(); eng.Playing = true; eng.CurrentTimeSeconds = 12;
+        s.PumpState();
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.InRange(core.Position.Peek(), TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(14));
+
+        eng.HasError = true; eng.ErrorCode = 2;                           // a failure while nothing is mounted still surfaces
+        s.PumpState();
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+        Assert.Equal(MediaErrorCategory.Network, core.Error.Peek()!.Category);
+    }
+
+    [Fact]
+    public void PumpGeometry_BindsAndPlaces_ButPublishesNoState_AndWaitsForTheStateHalf()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.DurationSeconds = 90; eng.Handle = 0xBEEF;
+        eng.FirstFrameTimestamp = 7;
+
+        s.PumpGeometry(binding, new RectF(10, 20, 640, 360), 2f);         // the state half has not adopted the source yet
+        Assert.Equal(PlaybackState.Opening, core.State.Peek());           // …and the geometry half publishes no state of its own
+        Assert.Equal(SizeI.Zero, core.NaturalSize.Peek());
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+        Assert.True(core.VideoSurface.Peek().IsNone);
+
+        s.PumpState();
+        Assert.Equal(PlaybackState.Ready, core.State.Peek());
+        s.PumpGeometry(binding, new RectF(10, 20, 640, 360), 2f);
+
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((1280, 720), (w, h));
+        Assert.False(core.VideoSurface.Peek().IsNone);                    // handle bound + this source's first frame
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1f);
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+
+        s.PumpGeometry(default, new RectF(0, 0, 100, 100), 1f);           // an inert binding does nothing at all
+        Assert.False(eng.Commands.TryTakeStreamRect(out _, out _));
+    }
+
+    [Fact]
+    public void PumpGeometry_LeavesAPresentationEpochTheStateHalfHasNotAdopted_ForTheNextTurn()
+    {
+        var (s, _, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xAAAA;
+        s.PumpState();
+        s.PumpGeometry(binding, Rect, 1f);
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xAAAA, presenter.LastBoundHandle);
+
+        eng.Handle = 0xBBBB;
+        eng.RaiseFormatChange();
+        s.PumpGeometry(binding, Rect, 1f);                                // the epoch moved and the state half has not seen it
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xAAAA, presenter.LastBoundHandle);           // the old handle is not re-bound over a replaced swap chain
+
+        s.PumpState();                                                    // the same raise requests the state pump first…
+        s.PumpGeometry(binding, Rect, 1f);                                // …then the element's turn
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xBBBB, presenter.LastBoundHandle);
+    }
+
+    [Fact]
+    public void PumpVideo_IsTheTwoHalvesInOneCall()
+    {
+        var (s, core, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.DurationSeconds = 90; eng.Handle = 0xBEEF;
+
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 2f);              // one snapshot, state then geometry
+
+        Assert.Equal(TimeSpan.FromSeconds(90), core.Duration.Peek());
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal((1280, 720), (w, h));
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, scale: 1f);
+        Assert.Equal((nuint)0xBEEF, presenter.LastBoundHandle);
+    }
+
     // ── stale-epoch guard + disposal ─────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -424,6 +718,50 @@ public sealed class MfMediaSessionTests
         // Idempotent + inert after dispose.
         Assert.True(s.PlayAsync().IsCompletedSuccessfully);
         s.PumpVideo(default, Rect, 1f);   // no throw
+    }
+
+    [Fact]
+    public void RendererFrameCounters_AreMappedOntoPlaybackStatistics_AndValueGated()
+    {
+        var (s, core, eng) = NewSession();
+        Pump(s);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // nothing counted yet: the seam keeps Empty
+
+        eng.Frames = (120, 3);
+        Pump(s);
+        PlaybackStatistics stats = core.Statistics.Peek();
+        Assert.Equal(120, stats.FramesRendered);
+        Assert.Equal(3, stats.FramesDropped);
+        Assert.Equal(123, stats.FramesDecoded);   // MF reports no separate decoder count: rendered + dropped
+
+        core.SetStatistics(PlaybackStatistics.Empty);
+        Pump(s);
+        Assert.Equal(PlaybackStatistics.Empty, core.Statistics.Peek());   // unchanged counters publish nothing
+
+        eng.Frames = (180, 3);
+        Pump(s);
+        Assert.Equal(180, core.Statistics.Peek().FramesRendered);
+    }
+
+    [Fact]
+    public void AHungEngine_IsATypedRetryableDecodeError_AndItsCountersStayPublished()
+    {
+        var (s, core, eng) = NewSession();
+        int hr = unchecked((int)0x800705B4);   // HRESULT_FROM_WIN32(ERROR_TIMEOUT): no frame rendered within 10 s of playing
+        eng.Frames = (0, 7);
+        eng.ErrorCode = 3;                     // MF_MEDIA_ENGINE_ERR_DECODE
+        eng.ErrorHr = hr;
+        eng.HasError = true;
+
+        Pump(s);
+
+        MediaError? error = core.Error.Peek();
+        Assert.NotNull(error);
+        Assert.Equal(MediaErrorCategory.Decode, error!.Category);
+        Assert.Equal(MediaRecovery.Retryable, error.Recovery);
+        Assert.Equal(hr, (int)error.UnderlyingCode!.Value);
+        Assert.Equal(PlaybackState.Failed, core.State.Peek());
+        Assert.Equal(7, core.Statistics.Peek().FramesDropped);   // published ahead of the error gate
     }
 
     [Fact]
