@@ -833,6 +833,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // BeginRecording, so the job stayed queued and the host kept waking at the bake cadence (bakedBlurPending) to
         // publish frames that elided again: a 30 Hz loop that never made progress. The bake is its own compute batch,
         // so it needs no frame; its result posts a completion wake, and the frame that shows it is the one that changed.
+        // Never on a lost device: the recovery gate rebuilds the queue's targets, and a compute submit would only fail.
+        if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return;
         if (_bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && baker.DrainOne(_imageTextures, bakedQueue))
         {
             Diag.Count("d3d12", "bakedBlurJobs");
@@ -1824,7 +1826,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _frameUploadBytes += _glyphs.LastUploadBytes;
         }
         // One image bake per turn, on its own COMPUTE queue (never this list): recorded, submitted and published behind
-        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands.
+        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands. A host with
+        // an image upload queue already ran the turn's bake in DrainImageJobs (the queue's 33 ms cadence makes this one a
+        // no-op then); this site stays for a SingleThread host, which has no upload queue and never calls DrainImageJobs.
         if (isPrimaryTarget &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures
             && baker.DrainOne(textures, bakedQueue))
