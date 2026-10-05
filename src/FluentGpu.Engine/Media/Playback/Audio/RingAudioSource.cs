@@ -159,6 +159,7 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
         try { return await tcs.Task.ConfigureAwait(false); }
         finally { registration.Unregister(null); }
     }
+    private int _belowRefill;             // RT-owned edge latch for the idle producer's refill wake — see CheckRefillEdge
     private int _belowLowWater;           // RT-owned edge latch (spec §7.9) for the worker low-water wake — see CheckLowWaterEdge
 
     /// <summary>Wrap <paramref name="inner"/> with a ring sized to <paramref name="ringFrames"/> frames, keeping
@@ -436,6 +437,25 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
             return true;
         }
         Volatile.Write(ref _belowLowWater, 0);   // recovered — re-arm for the next drop
+        return false;
+    }
+
+    /// <summary>RT: edge-triggered refill wake for a DEDICATED producer that sleeps while the ring is at target: true once each time the
+    /// buffered fill drops an eighth of the target below it (re-armed when it recovers), so the producer tops the ring up in small
+    /// steps and the decode-ahead cushion stays near the target instead of oscillating down to the half-target low-water edge. Volatile
+    /// reads/writes only (the AudioTripwire contract).</summary>
+    public bool CheckRefillEdge()
+    {
+        AssertRtFirewall();
+        int target = Volatile.Read(ref _targetFloats);
+        bool low = _ring.AvailableFloats < target - target / 8;
+        if (low)
+        {
+            if (Volatile.Read(ref _belowRefill) != 0) return false;
+            Volatile.Write(ref _belowRefill, 1);
+            return true;
+        }
+        Volatile.Write(ref _belowRefill, 0);
         return false;
     }
 

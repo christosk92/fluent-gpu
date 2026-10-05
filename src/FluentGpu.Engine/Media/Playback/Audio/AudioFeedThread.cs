@@ -380,6 +380,9 @@ public sealed class AudioFeedThread : IDisposable
                 if (rings[i].Ring.HasDedicatedProducer) rings[i].Ring.WakeProducer();
                 else lowWater = true;
             }
+            // A dedicated producer sleeps long once its ring is at target; this earlier edge (an eighth below target) refills in small
+            // steps so the cushion stays near the target. Same contract: a Volatile read + Set on a pre-allocated event.
+            else if (rings[i].Ring.HasDedicatedProducer && rings[i].Ring.CheckRefillEdge()) rings[i].Ring.WakeProducer();
         }
         // Fix 2 hook (spec, PcmAudioSession.SuppressXrunAccounting remarks): a control-requested seek/flush intentionally
         // empties the ring, so the RT loop's very next reads finding it empty are a PLANNED rebuffer, not a real underrun —

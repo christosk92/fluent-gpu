@@ -40,6 +40,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     private ulong _clockFreq;
     private long _latencyFrames;
     private long _written;
+    private long _writtenSinceStart;   // frames written since the last Start()/Reset(): the underrun rule's "a full buffer has gone through"
     private long _deviceUnderruns;   // RT-incremented, read from any thread (Volatile): see DeviceUnderruns
     private bool _ready;
     private bool _started;
@@ -170,6 +171,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             MarkLost(hr);
             throw new AudioDeviceLostException(hr);
         }
+        _writtenSinceStart = 0;   // a resume's first writes refill a queue that legitimately drained while stopped
         _started = true;
     }
 
@@ -218,6 +220,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(hr);
         }
         Interlocked.Exchange(ref _written, 0);
+        _writtenSinceStart = 0;
     }
     /// <inheritdoc/>
     /// <remarks>A NEGATIVE <paramref name="timeoutMs"/> means INFINITE (R-3): the session passes -1 while a pause fade has finished
@@ -260,7 +263,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             // Device-side glitch signal: a RUNNING stream whose queue is empty when we come to write has already played silence,
             // which no app-side counter can see. Only after a full device buffer has gone through since the last Reset, so
             // a start-up or post-seek prefill (legitimately empty) never counts. One compare + one add: RT-legal.
-            if (firstPadding && padding == 0 && _started && _written > _bufferFrames) _deviceUnderruns++;
+            if (firstPadding && DeviceUnderrunRule.IsUnderrun(padding, _started, _writtenSinceStart, _bufferFrames)) _deviceUnderruns++;
             firstPadding = false;
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
@@ -312,6 +315,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 break;
             }
             _written += toWrite;
+            _writtenSinceStart += toWrite;
             written += toWrite;
         }
 

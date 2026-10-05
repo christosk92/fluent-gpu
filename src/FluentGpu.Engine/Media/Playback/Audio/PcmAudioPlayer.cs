@@ -745,7 +745,8 @@ public sealed partial class PcmAudioSession : IMediaSession
 
     /// <summary>Times the output DEVICE itself ran dry while streaming (<see cref="IBufferedAudioSink.DeviceUnderruns"/>) — the
     /// glitches <see cref="XrunCount"/> cannot see, because the app's ring was full and the stall was downstream of it.</summary>
-    public long DeviceUnderrunCount => (_out as IBufferedAudioSink)?.DeviceUnderruns ?? 0;
+    public long DeviceUnderrunCount => Interlocked.Read(ref _retiredDeviceUnderruns) + ((_out as IBufferedAudioSink)?.DeviceUnderruns ?? 0);
+    private long _retiredDeviceUnderruns;   // underruns of sinks this session has already swapped out (RebuildSink)
 
     /// <summary>Approximate independent work totals for off-RT diagnostics; not a coherent audio-state snapshot.</summary>
     public (long Gain, long GainSkipped, long Channel, long ChannelSkipped, long Transport, long TransportSkipped,
@@ -3082,6 +3083,8 @@ public sealed partial class PcmAudioSession : IMediaSession
         var oldSink = _out;
         var oldEndpoint = _endpoint;
         try { oldSink.Stop(); } catch { /* teardown never throws */ }
+        // The device-underrun count lives on the sink: fold the old sink's into the session's so the total stays monotonic across a swap.
+        if (oldSink is IBufferedAudioSink oldBuffered) Interlocked.Add(ref _retiredDeviceUnderruns, oldBuffered.DeviceUnderruns);
 
         _out = newEndpoint.Sink;
         _clock = newEndpoint.Clock;
