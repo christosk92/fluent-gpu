@@ -49,6 +49,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         public int W, H;
         public D3D12_RESOURCE_STATES State;
         public int LastTurn;
+        public long LastUseMs;       // scratch: wall clock of the latest lease (the idle path's clock: no turns advance when idle)
         public ulong LastUseFence;
         public uint Serial;          // bumped on every raster into the slot (content identity for derived caches)
         public bool InUse;           // scratch: leased this frame
@@ -121,6 +122,21 @@ internal sealed unsafe class SurfacePool : IDisposable
         _bank = bank;
         _turn = turn;
         ScratchLeases = 0; ScratchPx = 0L; ScratchRefused = 0;
+        DrainRetired(completedFence);
+        for (int i = 0; i < _scratch.Length; i++)
+        {
+            ref Entry e = ref _scratch[i];
+            if (e.Retained && turn - e.LastTurn > RetainTurns) e.Retained = false;   // stale result: back to the pool
+            if (e.Res == null || e.InUse || e.Retained) continue;
+            if (LayerTargetTrim.Classify(false, turn - e.LastTurn, weak) == LayerTrimVerdict.Retire) Retire(ref e);
+        }
+        EnforceFreeCap(turn, weak);
+    }
+
+    /// <summary>Release every retired texture whose last use the GPU has passed. Also the idle path's drain (a retire made
+    /// between turns would otherwise wait for the next composite, which an idle app never runs).</summary>
+    public void DrainRetired(ulong completedFence)
+    {
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
             if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
@@ -130,13 +146,49 @@ internal sealed unsafe class SurfacePool : IDisposable
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
         }
+    }
+
+    /// <summary>Retired textures still waiting on the fence (the idle path asks whether to look again soon).</summary>
+    public int RetiredCount => Volatile.Read(ref _retiredCount);
+
+    // The FREE scratch (unleased, unretained) a pool keeps warm is byte-capped (LayerTargetTrim.FreeScratchCapBytes): the
+    // oldest-used go first, and only slots unused for 2+ turns count, so a surface a repeating animation re-leases every
+    // turn is never a victim and the cap cannot thrash a live effect.
+    private void EnforceFreeCap(int turn, bool weak)
+    {
+        long cap = LayerTargetTrim.FreeScratchCapBytes(weak);
+        while (true)
+        {
+            long free = 0; int victim = -1, oldest = int.MaxValue;
+            for (int i = 0; i < _scratch.Length; i++)
+            {
+                ref Entry e = ref _scratch[i];
+                if (e.Res == null || e.InUse || e.Retained || turn - e.LastTurn < 2) continue;
+                free += LayerTargetBucket.Bytes(e.W, e.H);
+                if (e.LastTurn < oldest) { oldest = e.LastTurn; victim = i; }
+            }
+            if (free <= cap || victim < 0) return;
+            Retire(ref _scratch[victim]);
+        }
+    }
+
+    /// <summary>Idle-path housekeeping on the wall clock (render thread, between turns): drain what the fence has passed and
+    /// retire FREE scratch nothing has leased for <see cref="LayerTargetTrim.IdleMs"/>: an idle app runs no composite turn to
+    /// age them. A retained derived result is left alone (re-drawing it is the point of keeping it). Returns the ms until it next
+    /// has something to do (-1 = nothing pending).</summary>
+    public int TrimIdle(long nowMs, ulong completedFence, bool weak)
+    {
+        DrainRetired(completedFence);
+        long next = long.MaxValue;
         for (int i = 0; i < _scratch.Length; i++)
         {
             ref Entry e = ref _scratch[i];
-            if (e.Retained && turn - e.LastTurn > RetainTurns) e.Retained = false;   // stale result: back to the pool
             if (e.Res == null || e.InUse || e.Retained) continue;
-            if (LayerTargetTrim.Classify(false, turn - e.LastTurn, weak) == LayerTrimVerdict.Retire) Retire(ref e);
+            if (LayerTargetTrim.IsIdleFor(nowMs, e.LastUseMs, weak)) Retire(ref e);
+            else next = Math.Min(next, LayerTargetTrim.IdleMs(weak) - (nowMs - e.LastUseMs));
         }
+        if (RetiredCount > 0) next = Math.Min(next, 500);   // waiting on the fence
+        return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
     }
 
     /// <summary>Retire (behind its last-use fence) the texture of every tile slot the <see cref="SliceTable"/> released this
@@ -263,6 +315,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         s.Retained = false;   // an evicted retained result (every slot held a texture): its key no longer resolves
         s.InUse = true;
         s.LastTurn = _turn;
+        s.LastUseMs = Environment.TickCount64;
         s.LastUseFence = frameFence;
         return best;
     }
@@ -296,6 +349,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             if (!e.Retained || e.RetainKey != key || e.Res == null) continue;
             e.InUse = true;
             e.LastTurn = _turn;
+            e.LastUseMs = Environment.TickCount64;
             e.LastUseFence = frameFence;
             aux = e.RetainAux;
             return i;

@@ -2774,7 +2774,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         D3D12MemoryDiagnostics.Track(res, dsvBytes != 0 ? "StencilClip.Dsv" : "StencilClip.AllocationUnknown.Dsv",
             dsvBytes != 0 ? dsvBytes : (uint)(cw * ch * 4));
         _f!.StencilDsv = res;
-        _f!.StencilW = cw; _f!.StencilH = ch;
+        _f!.StencilW = cw; _f!.StencilH = ch; _f!.StencilLastUseMs = Environment.TickCount64;
         Rec(RecordedOp.StencilDsvCreated, (uint)cw, (uint)ch);
         return true;
     }
@@ -2798,6 +2798,54 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         f.StencilDepth = 0; f.StencilScopeMasked.Clear(); f.StencilDsvBound = false;
     }
 
+    /// <summary>The stencil surface (D24S8 at the window's size: ~16 MiB at 2560x1600, pinned host memory on a UMA adapter) is
+    /// released once no stencil scope has bound it for this long. It is rebuildable on demand (the first path clip after
+    /// that creates it lazily, inside <see cref="EnsureStencilDsv"/>), and most pages never clip to a path at all.</summary>
+    internal const long StencilIdleReleaseMs = 15_000;
+
+    /// <summary>Pure decision: release a stencil surface that exists, was last bound <paramref name="idleMs"/> ago, and whose
+    /// target's last submit the GPU has completed (a fence not yet passed means a submit may still use it).</summary>
+    internal static bool ShouldReleaseStencil(bool exists, long nowMs, long lastUseMs, ulong lastSubmitFence, ulong completedFence)
+        => exists && nowMs - lastUseMs >= StencilIdleReleaseMs && lastSubmitFence <= completedFence;
+
+    /// <summary>Between-turns housekeeping on the render thread (<see cref="IGpuDevice.TrimIdleResources"/>): drain the tile
+    /// pool's retired queue, retire idle free scratch, release an idle stencil surface. Everything it frees is rebuilt on demand
+    /// and only touches resources nothing has used for seconds, so nothing visible changes. Never waits on the GPU: a resource
+    /// whose fence has not passed is simply looked at again soon (the returned delay).</summary>
+    public int TrimIdleResources(long nowMs)
+    {
+        if (_device == null) return -1;
+        AssertSubmitThread();
+        ulong completed = _fence->GetCompletedValue();
+        long next = long.MaxValue;
+        if (_surfaces is { } sp)
+        {
+            int n = sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
+            if (n >= 0) next = n;
+        }
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            var sc = _swapchains[i];
+            if (sc.Disposed) continue;
+            var f = sc.Frame;
+            if (f.StencilDsv == null) continue;
+            if (ShouldReleaseStencil(true, nowMs, f.StencilLastUseMs, f.LastSubmitFence, completed)) { ReleaseStencilDsv(f); continue; }
+            long left = StencilIdleReleaseMs - (nowMs - f.StencilLastUseMs);
+            next = Math.Min(next, left > 0 ? left : 500);   // idle long enough: only the fence is outstanding
+        }
+        return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
+    }
+
+    /// <summary>Idle-path tile texture release: the same fence-gated retire a composite turn's trim list performs
+    /// (<see cref="SurfacePool.TrimTiles"/>), for slots the table freed while the app was not compositing.</summary>
+    public void TrimTileSurfaces(ReadOnlySpan<int> slots)
+    {
+        if (_surfaces is null || slots.IsEmpty) return;
+        AssertSubmitThread();
+        _surfaces.TrimTiles(slots);
+        _surfaces.DrainRetired(_fence->GetCompletedValue());
+    }
+
     /// <summary>Re-attach (or drop) the stencil DSV on the CURRENT scene render target. OMSetRenderTargets disturbs
     /// neither viewport, scissor, PSO nor root bindings, so this is safe to issue mid-segment.</summary>
     private void RebindCurrentTarget(bool withDsv, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
@@ -2817,6 +2865,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // the DSV size; the target size is the preceding Viewport/ListReset entry.
             Rec(RecordedOp.SetRenderTargetWithDsv, (uint)rtv.ptr, (uint)_f!.StencilW << 16 | ((uint)_f!.StencilH & 0xFFFF));
             _f!.StencilDsvBound = true;
+            _f!.StencilLastUseMs = Environment.TickCount64;
             return;
         }
         _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);

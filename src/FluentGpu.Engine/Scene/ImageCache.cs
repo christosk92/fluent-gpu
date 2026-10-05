@@ -676,6 +676,14 @@ public sealed class ImageCache
         if (e.StatusEpoch is { } epoch)
             epoch.Value = epoch.Peek() + 1;
     }
+    /// <summary>The (source, decode W, decode H) a non-derived handle was requested at; false for a derived / unknown handle.</summary>
+    public bool TryGetTarget(ImageHandle h, out string source, out int w, out int hgt)
+    {
+        if (_byId.TryGetValue(h.Id, out var e) && !e.Derived) { source = e.Key.Source; w = e.Key.W; hgt = e.Key.H; return true; }
+        source = ""; w = hgt = 0;
+        return false;
+    }
+
     /// <summary>The source URL bound to a handle (null when unknown).</summary>
     public string? SourceOf(ImageHandle h)
     {

@@ -939,7 +939,7 @@ public sealed record ImageEl : Element
     public float FocusX { get; init; } = 0.5f;
     public float FocusY { get; init; } = 0.5f;
     /// <summary>Decode-size hint (target px) used when the layout extent is fluid (<see cref="Width"/> is <c>NaN</c>, so the
-    /// real box size isn't known at request time). Ignored when <see cref="Width"/> is explicit (that drives the decode).
+    /// real box size isn't known at request time) — PHYSICAL px, the caller applies the device scale. Ignored when <see cref="Width"/> is explicit (the decode is then Width × the device scale, rounded up).
     /// <c>NaN</c> ⇒ decode at source resolution.</summary>
     public float DecodePx { get; init; } = float.NaN;
     public CornerRadius4 Corners { get; init; }

@@ -53,7 +53,12 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
     private readonly bool _ownsHttp;
     private readonly DiskImageCache? _disk;
     private readonly string _accept;
-    private readonly ArrayPool<byte> _pool;
+    private volatile ArrayPool<byte> _pool;   // swapped by the idle trim; every rent/return reads the live one
+    private readonly bool _ownsPool;          // false for an injected (test) pool: never swapped
+    private long _lastUseMs;                  // Environment.TickCount64 of the latest rent
+    private int _dirty;                      // the pool has held arrays since it was created / last swapped
+    private Timer? _idleTimer;
+    internal ArrayPool<byte> PoolForTest => _pool;
 
     public DefaultImageFetcher(HttpClient? http = null, DiskImageCache? diskCache = null, string? acceptHeader = null)
         : this(http, diskCache, acceptHeader, pool: null) { }
@@ -67,7 +72,42 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
         // Safe default: never advertise a format WIC may lack a codec for (avoids an undecodable response).
         // Pass "image/avif,image/webp,image/*" to opt into modern formats when the platform has the codecs.
         _accept = acceptHeader ?? "image/jpeg,image/png,image/*;q=0.5";
+        _ownsPool = pool is null;
         _pool = pool ?? ArrayPool<byte>.Create(PoolMaxArrayLength, PoolMaxArraysPerBucket);
+    }
+
+    /// <summary>The pool is dropped and re-created once no fetch has rented for this long: a <c>ConfigurableArrayPool</c>
+    /// never trims, so the covers of the busiest scroll (up to 16 arrays per size class, LOH arrays up to 8 MiB each)
+    /// would otherwise stay resident for the process's life. The next fetch re-rents fresh arrays — the steady state of a
+    /// scroll is allocation-free again after its first few covers, and an idle app holds none.</summary>
+    internal const long PoolIdleTrimMs = 30_000;
+
+    /// <summary>Pure trim decision: the pool holds arrays (<paramref name="dirty"/>) and nothing rented it for
+    /// <see cref="PoolIdleTrimMs"/>. Internal for the policy tests.</summary>
+    internal static bool ShouldTrimPool(long nowMs, long lastUseMs, bool dirty) => dirty && nowMs - lastUseMs >= PoolIdleTrimMs;
+
+    private void NoteRent()
+    {
+        Volatile.Write(ref _lastUseMs, Environment.TickCount64);
+        Volatile.Write(ref _dirty, 1);
+        if (!_ownsPool || Volatile.Read(ref _idleTimer) is not null) return;
+        // One cheap 30 s timer for the fetcher's life, started by the first rent (a fetcher that never fetches has none).
+        // Concurrent first rents (decode workers) race here: the loser's timer is disposed, never left rooted.
+        var t = new Timer(static o => ((DefaultImageFetcher)o!).TrimIdlePool(Environment.TickCount64), this, PoolIdleTrimMs, PoolIdleTrimMs);
+        if (Interlocked.CompareExchange(ref _idleTimer, t, null) is not null) t.Dispose();
+    }
+
+    /// <summary>Swap in a fresh pool when <see cref="ShouldTrimPool"/> says so (the timer's body; internal for the tests).
+    /// The swap comes first, then the dirty flag is consumed: a rent racing in between re-marks it, so the new pool is trimmed
+    /// later rather than the mark being lost.</summary>
+    internal bool TrimIdlePool(long nowMs)
+    {
+        if (!ShouldTrimPool(nowMs, Volatile.Read(ref _lastUseMs), Volatile.Read(ref _dirty) != 0)) return false;
+        // A rental still in flight returns into the NEW pool (ReturnBuffer/Return both go through _pool): a pow-2 array of
+        // any size class is accepted by a fresh pool, so nothing leaks and nothing throws.
+        _pool = ArrayPool<byte>.Create(PoolMaxArrayLength, PoolMaxArraysPerBucket);
+        Interlocked.Exchange(ref _dirty, 0);
+        return true;
     }
 
     /// <summary>Hand a <see cref="FetchResult.Buffer"/> back to the dedicated pool (the scheduler's post-decode call).
@@ -79,6 +119,7 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
     {
         if (buffer.Length < 16 || !System.Numerics.BitOperations.IsPow2(buffer.Length)) return;
         _pool.Return(buffer);
+        Volatile.Write(ref _dirty, 1);   // a foreign (disk-cache) array migrating into the pool counts as use
     }
 
     /// <summary>The first rental's requested size: <c>Content-Length</c> + <see cref="ContentLengthSlack"/> when the
@@ -160,6 +201,7 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
     /// belongs to the caller until it comes back through <see cref="ReturnBuffer"/>. Internal for the buffer-policy tests.</summary>
     internal async Task<FetchResult> ReadAllPooled(Stream s, long? hint, CancellationToken ct)
     {
+        NoteRent();
         byte[] buf = _pool.Rent(InitialCapacity(hint));
         int len = 0;
         try
@@ -186,5 +228,5 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
         }
     }
 
-    public void Dispose() { if (_ownsHttp) _http.Dispose(); }
+    public void Dispose() { _idleTimer?.Dispose(); if (_ownsHttp) _http.Dispose(); }
 }
