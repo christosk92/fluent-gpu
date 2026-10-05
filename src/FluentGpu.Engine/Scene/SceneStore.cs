@@ -1484,6 +1484,9 @@ public sealed partial class SceneStore : ISceneBackend
         if ((flags & NodeFlags.LayoutDirty) != 0) recordBits |= RecordDirtyLayout;
         if ((flags & NodeFlags.PaintDirty) != 0) recordBits |= RecordDirtyContent;
         if (recordBits != 0) MarkRecordDirty(idx, recordBits);
+        // _flags is a captured column. MarkRecordDirty ledgers the node for any dirty mark; a mark of other flags only
+        // (VirtualRangeDirty, BoundsAnimated, Parked, StickyPinned…) is ledgered here, exactly as SetFlagBits does.
+        else if ((old | flags) != old) NoteCaptureChanged(idx);
         _flags[idx] = old | flags;
     }
     public void Unmark(NodeHandle h, NodeFlags flags)
