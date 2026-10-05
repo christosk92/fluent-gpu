@@ -533,6 +533,9 @@ public sealed partial class AppHost : IDisposable
     private bool _renderWasPaused;
     private int _renderMotionActive; // renderer-written diagnostic mirror; never inspect render-owned state from UI
     private ulong _wakeCensusPresented;
+    private long _wakeCensusNoop, _wakeCensusWarm, _wakeCensusFresh;
+    // Render thread writes: fresh publications whose record came out byte-identical to the presented stream (elided submit).
+    private long _freshIdentical;
 
     /// <summary>Whether this host's render motion may run at all: on screen, not latched <see cref="_renderFailed"/>, and with a
     /// retained frame still valid for the current target to re-present. A child that latched RenderFailed has NO motion to run:
@@ -581,6 +584,14 @@ public sealed partial class AppHost : IDisposable
         sb.Append(System.Globalization.CultureInfo.InvariantCulture,
             $" | renderMotion={Volatile.Read(ref _renderMotionActive)} presents={presented - _wakeCensusPresented} feedbackPending={(_recordFeedback.HasPendingFrame ? 1 : 0)}");
         _wakeCensusPresented = presented;
+        // The redundant-frame evidence, per window: UI frames that elided a no-op publication (noopSkips), turns the warm
+        // cadence alone woke and that ran idle (warmIdle), and publications the render thread still adopted, recorded and
+        // found byte-identical to what it had presented (freshIdentical: what the UI-side skip could not prove unchanged).
+        long noop = _noopPublications.Elided, warm = _warmCadenceIdleTurns, fresh = Interlocked.Read(ref _freshIdentical);
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture,
+            $" noopSkips={noop - _wakeCensusNoop} warmIdle={warm - _wakeCensusWarm} freshIdentical={fresh - _wakeCensusFresh}");
+        _wakeCensusNoop = noop; _wakeCensusWarm = warm; _wakeCensusFresh = fresh;
+        _noopPublications.AppendBlockedWindow(sb);
         _renderPresentCensus.AppendWindow(sb);
     }
 
@@ -1720,6 +1731,7 @@ public sealed partial class AppHost : IDisposable
                     _renderSubmissionContinuity.Elided(rf.PublishSeq);
                     presented = false;
                     Interlocked.Increment(ref _framesSkippedSubmit);
+                    if (fresh) Interlocked.Increment(ref _freshIdentical);
                     // E5: this turn skips the submit (no command list, no present) but the staging pass at the top of
                     // this method may still have queued retires this frame — a settle frame that never submits again
                     // must not leave them stuck behind a fence the device already signaled.
@@ -3797,6 +3809,50 @@ public sealed partial class AppHost : IDisposable
         WakeFrame();
     }
 
+    // ── No-op publication skip (render-thread seam): see NoopPublicationGate ─────────────────────────────────────────
+    private readonly NoopPublicationGate _noopPublications = new();
+
+    /// <summary>Scene publications elided because the frame changed nothing a publication carries (cumulative).</summary>
+    internal long NoopPublicationsElided => _noopPublications.Elided;
+
+    /// <summary>Test-only: the render seam's publication counter (moves once per published scene).</summary>
+    internal ulong ScenePublishSeqForTest => _renderSeam.PublishSeq;
+
+    /// <summary>Test-only: captures that kept their slot's image snapshot (no image input moved since that slot's last one).</summary>
+    internal int ImageCapturesReusedForTest => _renderSeam.ImageCapturesReused;
+
+    /// <summary>What a scene publication made now would carry beyond the store's own ledger (see <see cref="PublicationKey"/>).</summary>
+    private PublicationKey BuildPublicationKey(in Threading.SceneRecordOptions options, Size2 frameSize) => new(
+        _renderSeam.TargetEpoch, _scene.Root, _scene.DeviceScale, _scene.OverlayClip, _scene.SpotlightScrimClip,
+        _scene.HasActiveVirtualDisclosures, _scene.PendingRemovalExtents.Length, _scene.PendingRemovalOverflow,
+        ImageCache.RecordingInputSerial, _anim.CompositorCaptureFingerprint(), _scene.Recording.ConfigurationVersion,
+        options, frameSize, _window.Scale, Clear);
+
+    /// <summary>The hard half of the no-op publication skip: every host-side fact that, when set, means this frame owes the
+    /// renderer a publication whatever the key comparison says. Conservative by construction: each clause is cheap, and any
+    /// doubt publishes (a skipped real change would be a stale frame; a published no-op only costs time).</summary>
+    private NoopPublicationBlock NoopPublicationCandidate(bool resized, bool keepAlive, bool reconciled, bool layoutNeeded,
+        bool transformWrote, bool imageContentChanged)
+    {
+        if (_paintWake == UnknownPaintWake || !NoopPublicationGate.WakeAllowsSkip(_paintWake)) return NoopPublicationBlock.Wake;
+        if (_lastPublishedSceneSeq == 0 || !_everLaidOut || !_repaintTargetValid || _revealPending) return NoopPublicationBlock.Target;
+        if (resized || keepAlive || reconciled || layoutNeeded) return NoopPublicationBlock.Structure;
+        if (transformWrote) return NoopPublicationBlock.Transform;
+        if (imageContentChanged) return NoopPublicationBlock.Images;
+        if (_scene.HasUnpublishedChanges) return NoopPublicationBlock.SceneChange;
+        if (_scene.HasRecordDirtyLedger || _scene.PendingRemovalExtents.Length != 0 || _scene.PendingRemovalOverflow)
+            return NoopPublicationBlock.Retiring;
+        if (_popupWindows.Count != 0 || _retiringPopups.Count != 0 || _popupSkipRoots.Count != 0 || _reuseBlockRoots.Count != 0
+            || _connected.Detached.NodeCount != 0 || _anim.PendingStructuralDamage.Count != 0
+            || _scene.OrphanCount != 0 || _scene.OverlayCount != 0 || !_scene.DragGhost.IsNull || !_scene.DragOverlay.IsNull
+            || _scene.DropSpotlightActive) return NoopPublicationBlock.Overlay;
+        if (_images.HasActiveCrossfades || _device.HasPendingUploads || _bakedBlurQueue.HasRunnableJob) return NoopPublicationBlock.Images;
+        if (_videoSurfaces.HasUnpublishedChanges || _swapchain.TextRepaintPending || _device.HasLiveFeedback) return NoopPublicationBlock.Device;
+        if (_anyScrollMovedThisFrame || _scrollUnsettledCount != 0 || AnyUserScrollMoving) return NoopPublicationBlock.Scroll;
+        lock (_popupActionLock) { if (_popupActionsIn.Count != 0 || _ownResizePending) return NoopPublicationBlock.Overlay; }
+        return NoopPublicationBlock.None;
+    }
+
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
     private long _framesSkippedSubmit;          // diagnostic census of elided submits (idle/playback redundant presents avoided)
@@ -3981,6 +4037,8 @@ public sealed partial class AppHost : IDisposable
     /// cref="MissedVsyncsTotalForTest"/> reads the cumulative counter these calls feed, independent of any
     /// FrameStats a real RunFrame call would have produced.</summary>
     internal void NoteNoPresentTurnForTest() => NoteNoPresentTurn();
+    /// <summary>Test-only: an explicit wake with nothing behind it (the FrameNeeded bit alone), as a bare WakeFrame makes.</summary>
+    internal void WakeFrameForTest() => WakeFrame();
     internal void NotePresentedForTest(ulong publishSeq = 0) => NotePresented(publishSeq);
     internal long MissedVsyncsTotalForTest => Interlocked.Read(ref _missedVsyncsTotal);
 
@@ -4582,6 +4640,17 @@ public sealed partial class AppHost : IDisposable
 
     private int _pumpedEvents;   // events pumped into the ring this frame (device-lost line + the warm-cadence arm)
 
+    /// <summary>The wake mask <see cref="RunFrame"/> computed for the frame its <see cref="Paint"/> call runs, or
+    /// <see cref="UnknownPaintWake"/> for a Paint entered any other way (the WndProc keep-alive repaint), which then
+    /// recomputes what it needs and never takes the no-op publication skip.</summary>
+    private WakeReasons _paintWake = UnknownPaintWake;
+    private const WakeReasons UnknownPaintWake = (WakeReasons)(-1);
+    private long _warmCadenceIdleTurns;   // turns woken by the warm-cadence hold alone, run as idle turns (no Paint)
+
+    /// <summary>Turns whose only wake reason was the post-input warm-cadence hold, taken as idle turns instead of a
+    /// Paint (cumulative; the [wake] census prints the window's count as <c>warmIdle=</c>).</summary>
+    internal long WarmCadenceIdleTurns => _warmCadenceIdleTurns;
+
     private const uint WarmCadenceInputMask =
         (1u << (int)InputKind.PointerDown) | (1u << (int)InputKind.PointerUp)
         | (1u << (int)InputKind.PointerCancel) | (1u << (int)InputKind.Key)
@@ -4864,9 +4933,25 @@ public sealed partial class AppHost : IDisposable
         // queue is a no-op and the loop still idles at RecommendedWaitMs == -1.)
 
         // Wake attribution: snapshot the mask at the idle decision point (before the image pump can flip _frameNeeded).
+        // Computed ONCE per frame: the idle gate below, the census, and Paint's own reads (_paintWake) all use this mask.
         WakeReasons wake = ComputeWakeReasons();   // always-on census input; allocation-free field reads
 
-        if (!HasActiveWork)
+        // Warm cadence ALONE is not work: the hold only keeps the loop waking on the display tick for a second after the
+        // last interaction, so the next one pays no cold-start ramp. A frame woken by nothing else (no input this turn, no
+        // post, no other wake bit) has nothing to reconcile, lay out, record or present, and used to run the whole Paint
+        // and publish a byte-identical scene for every tick of that second (60-165 full frames per click). It now takes the
+        // idle turn below: the wait stays the display-tick wait (RecommendedWaitMs still sees the hold), so input latency is
+        // unchanged — any real input ends the wait and arrives with its own bits set.
+        bool warmCadenceOnly = wake == WakeReasons.WarmCadence && inputKindMask == 0 && clicks == 0 && !drainedPosts;
+        if (warmCadenceOnly)
+        {
+            _warmCadenceIdleTurns++;
+            // Headless time IS the frame clock (one fixed step per painted frame), so a turn that no longer paints must still
+            // let the hold's time pass, as the wall clock does under a real window, or the hold would never expire there.
+            if (_isHeadless) _frameClockMs += _frameTime.NextDeltaMs();
+        }
+
+        if (wake == WakeReasons.None || warmCadenceOnly)   // == !HasActiveWork, without a second ComputeWakeReasons
         {
             AdvanceImagePresentationClock(); // completed hidden/idle decodes must not inherit a stale reveal start
             int completed = PumpsSharedImages ? _images.Pump() : 0;   // a pop-out leaves the shared cache to the primary (F108)
@@ -4884,7 +4969,7 @@ public sealed partial class AppHost : IDisposable
                 // [wake] census). Nothing was owed a present during this stretch; stamp so the NEXT present (the
                 // wheel notch that wakes us) rebases instead of charging the whole idle gap as missed vsyncs.
                 NoteNoPresentTurn();
-                if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsParked); _wakeDiag.MaybeReport(); }
+                if (_wakeDiag is not null) { _wakeDiag.Record(wake, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsParked); _wakeDiag.MaybeReport(); }
                 if (_memCensus is not null) _memCensus.MaybeReport();
                 if (s_allocTypes) AllocTypeProfiler.MaybeReport();
                 if (s_allocDiag)
@@ -4933,7 +5018,10 @@ public sealed partial class AppHost : IDisposable
         if (s_allocDiag) _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
         _lastProducedTickSeq = _frameTickSeq;   // this frame is the one produced for the current compositor tick
         ulong publishedBefore = _renderSeam.PublishSeq;
-        FrameStats painted = Paint(clicks);
+        _paintWake = wake;   // Paint reads this frame's mask instead of recomputing it (step-up guard, publication gate)
+        FrameStats painted;
+        try { painted = Paint(clicks); }
+        finally { _paintWake = UnknownPaintWake; }
         if (_wakeDiag is not null)
         {
             // Awake frame: classify reconciled/layout-only/record-only from FrameStats (Rendered = reconciled||layoutNeeded), and
@@ -5198,9 +5286,10 @@ public sealed partial class AppHost : IDisposable
             //      so nothing visible is lost. Warming / budget-deferred virtual lists (own wake bits) and any other
             //      essential wake bit still paint — NoEssentialModalWakeReasons masks them off so a seek ticker cannot
             //      starve mid-drag refill.
-            var wakeReasons = ComputeWakeReasons();
+            // Only a keep-alive repaint asks: the mask is computed for it alone, never on the ordinary RunFrame path.
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
                 && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
+                && ComputeWakeReasons() is var wakeReasons
                 && (wakeReasons == WakeReasons.None
                     || (_window.SizedInModalLoop && _anim.NextDueMs(_timers.NowMs) > 0f
                         && NoEssentialModalWakeReasons(wakeReasons))))
@@ -5227,7 +5316,8 @@ public sealed partial class AppHost : IDisposable
             // neither is ever stale.
             if (!_lastWaitWasDisplayRate)
             {
-                WakeReasons stepUp = ComputeWakeReasons();
+                // RunFrame's mask for this frame when it is the caller (computed a few field reads ago); recomputed otherwise.
+                WakeReasons stepUp = _paintWake != UnknownPaintWake ? _paintWake : ComputeWakeReasons();
                 bool staleGap = _lastWaitKind is HostWaitKind.Idle or HostWaitKind.Hud or HostWaitKind.Baked
                              || (_lastWaitKind == HostWaitKind.Cadence && (stepUp & ~CadenceWake) != 0);
                 if (staleGap || _connected.HasActive || _runtime.HasPending)
@@ -5799,6 +5889,30 @@ public sealed partial class AppHost : IDisposable
                 skipSubmit = dlHash == _lastPresentedDrawListHash;
                 if (!skipSubmit) _wakeDiag?.NoteSkipMiss();   // a rate in the [wake] census, not a per-frame stderr line
             }
+            // No-op publication skip (render-thread seam; NoopPublicationGate): the inline hash above only ever ran for the
+            // single-thread path, so under a render thread EVERY Paint published, and the render side found most of those
+            // identical only after a capture, an adoption, a record and a hash. Decided here, on the facts the capture would
+            // read: a frame that changed nothing a publication carries publishes nothing and wakes nobody.
+            Threading.SceneRecordOptions recordOptions = default;
+            PublicationKey publicationKey = default;
+            Size2 publishFrameSize = default;
+            if (recordOnRender)
+            {
+                recordOptions = new Threading.SceneRecordOptions(focus, textEdit, Tok.ScrollThumb,
+                    Tok.AcrylicFlyout.Fallback, spanDisable,
+                    RenderBudget.CompiledIn && RenderBudget.Enabled, Tok.Epoch);
+                publishFrameSize = FrameSizePx(keepAlive);
+                publicationKey = BuildPublicationKey(in recordOptions, publishFrameSize);
+                var block = NoopPublicationCandidate(resized, keepAlive, reconciled, layoutNeeded, transformWrote, imageContentChanged);
+                if (block == NoopPublicationBlock.None && !_noopPublications.Matches(in publicationKey, _uiCoverage))
+                    block = NoopPublicationBlock.Key;
+                if (block == NoopPublicationBlock.None)
+                {
+                    skipSubmit = true;
+                    _noopPublications.NoteElided();
+                }
+                else _noopPublications.NoteBlocked(block);
+            }
             RememberDeviceLostFrame(clicks, keepAlive, resized, reconciled, layoutNeeded, transformWrote,
                 maybeUnchanged, skipSubmit, in recordStats, frameStart, tFlush, tLayout, tAnim, tRecord);
             long subStart = (keepAlive && s_resizeDiag) ? Stopwatch.GetTimestamp() : 0;
@@ -5823,7 +5937,8 @@ public sealed partial class AppHost : IDisposable
                 // OFF — under Async/ForceSync the render thread owns every device touch (threading-render-seam.md:
                 // "the render thread owns every ComPtr") and reclaims on its OWN skip/elided-record branches instead;
                 // calling this from the UI thread while that thread is live would be a cross-thread device touch.
-                if (!_asyncActive) _device.ReclaimCompletedUploads();
+                // A render thread (a no-op publication skip under force-sync) owns the device: no UI-thread touch then.
+                if (!_asyncActive && !recordOnRender) _device.ReclaimCompletedUploads();
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmitDone = tSubmit = Stopwatch.GetTimestamp();
             }
@@ -5863,7 +5978,7 @@ public sealed partial class AppHost : IDisposable
                 long tHash0 = Stopwatch.GetTimestamp();
                 if (dlHash == 0UL) dlHash = InlineStreamHash();
                 subHashMs = ElapsedMs(tHash0);
-                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, _images.ClockMs, repaint);
+                var submitInfo = new FrameInfo(recordOnRender ? publishFrameSize : FrameSizePx(keepAlive), _window.Scale, Clear, _images.ClockMs, repaint);
                 // F101: a settle frame (resized && keepAlive) carries its hint IN the publication (settlePresent below); it
                 // used to be a UI-thread poke at the render-owned swapchain state, which a render turn presenting an
                 // earlier publication could consume and a stand-down could drop.
@@ -5872,9 +5987,6 @@ public sealed partial class AppHost : IDisposable
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
                 if (recordOnRender)
                 {
-                    var recordOptions = new Threading.SceneRecordOptions(focus, textEdit, Tok.ScrollThumb,
-                        Tok.AcrylicFlyout.Fallback, spanDisable,
-                        RenderBudget.CompiledIn && RenderBudget.Enabled, Tok.Epoch);
                     tCap0 = Stopwatch.GetTimestamp();
                     _framePublishSeq = _renderSeam.PublishScene(_scene, _images, _strings, recordOptions,
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
@@ -5883,6 +5995,7 @@ public sealed partial class AppHost : IDisposable
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;
+                    _noopPublications.Remember(in publicationKey, _uiCoverage);   // what this publication carried (read before the capture)
                     _anim.PendingStructuralDamage.Clear();
                     // NotePublished FIRST (P8): every store write from here on belongs to the NEXT publication, and the
                     // capture ledger stamps by _publishSeq + 1 - including the ledger entries ClearTransformDirty and

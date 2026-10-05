@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using FluentGpu.Rhi;
 using FluentGpu.Foundation;
@@ -92,6 +92,11 @@ public sealed class SceneFramePublisher
     /// pixels as a partial-repaint base and repaints in full. Starts at the initial epoch: the FIRST frame's full
     /// repaint is the host's <c>_repaintTargetValid</c> latch, not a seam concern.</summary>
     public long LastConsumedTargetEpoch => Volatile.Read(ref _lastConsumedTargetEpoch);
+
+    /// <summary>The current target epoch (moved by <see cref="InvalidateTarget"/>). A publication carries the epoch it was made
+    /// in; the host's no-op publication skip never holds back a publication across an epoch change, because an invalidated
+    /// target cannot re-present the snapshot it retains.</summary>
+    internal long TargetEpoch => Volatile.Read(ref _targetEpoch);
 
     /// <summary>UI-private latest publication counter.</summary>
     public ulong PublishSeq => _publishSeq;
@@ -433,6 +438,17 @@ public sealed class SceneFramePublisher
     }
 
     internal SceneRenderFrame Scene(in RenderFrame frame) => _scenes[frame.ArenaIndex]!;
+
+    /// <summary>Captures, across all slots, that kept the slot's image snapshot instead of rebuilding it (tests / diagnostics).</summary>
+    internal int ImageCapturesReused
+    {
+        get
+        {
+            int n = 0;
+            foreach (var frame in _scenes) n += frame?.ImageCapturesReused ?? 0;
+            return n;
+        }
+    }
 
     internal bool IsCurrentTarget(in RenderFrame frame) => frame.TargetEpoch == Volatile.Read(ref _targetEpoch);
 

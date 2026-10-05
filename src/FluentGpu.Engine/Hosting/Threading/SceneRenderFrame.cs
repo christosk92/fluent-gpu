@@ -25,6 +25,24 @@ internal sealed class SceneRenderFrame
     private PopupRecordingTarget[] _popups = [];
     private NodeHandle[] _popupRoots = [];
     private int _skipCount, _reuseBlockCount, _damageCount, _detachedCount, _popupCount;
+    // The image snapshot's provenance (see Capture): whether it holds a capture at all, the cache and the cache-wide input
+    // serial it was taken at, and whether detached-slab ids were folded into it.
+    private bool _imagesCaptured, _imagesHadDetached;
+    private long _imageSerial;
+    private ImageCache? _imageSource;
+
+    /// <summary>Captures that kept this slot's image snapshot instead of rebuilding it (diagnostics / tests).</summary>
+    internal int ImageCapturesReused { get; private set; }
+
+    private static bool HasDetachedImages(DetachedAnimSlab detached)
+    {
+        for (int i = 0; i < detached.NodeCount; i++)
+        {
+            var node = detached.At(i);
+            if (node.InUse && (VisualKind)node.Kind == VisualKind.Image && node.ImageId != 0) return true;
+        }
+        return false;
+    }
 
     internal void Capture(SceneStore source, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
@@ -46,7 +64,23 @@ internal sealed class SceneRenderFrame
         Scene.Recording.RetainConfigurationStrings(Scene, strings);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         // Only images the recorder can draw: the captured nodes' references plus the detached slab's (folded in below).
-        Images.Capture(images, Scene.ReferencedImageIds);
+        // Kept as-is when this slot's previous image capture is provably identical: the same cache, the same referenced id
+        // set (the scene capture did not rebuild it), no detached-slab ids on either capture, and no recording input of any
+        // cache entry moved since (ImageCache.RecordingInputSerial). That was a dictionary clear + one lookup and insert per
+        // referenced id on every publication, almost always rebuilding the same table.
+        long imageSerial = ImageCache.RecordingInputSerial;
+        bool detachedImages = HasDetachedImages(detached);
+        if (_imagesCaptured && imageSerial == _imageSerial && ReferenceEquals(images, _imageSource)
+            && !Scene.LastCaptureRebuiltResourceReferences && !detachedImages && !_imagesHadDetached)
+        {
+            Images.RefreshClock(images);
+            ImageCapturesReused++;
+        }
+        else Images.Capture(images, Scene.ReferencedImageIds);
+        _imagesCaptured = true;
+        _imageSerial = imageSerial;
+        _imageSource = images;
+        _imagesHadDetached = detachedImages;
         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
         animation.CaptureCompositorAnimations(Animations,
             System.Diagnostics.Stopwatch.GetTimestamp() * 1000.0 / System.Diagnostics.Stopwatch.Frequency);

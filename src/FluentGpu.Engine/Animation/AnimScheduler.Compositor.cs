@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
@@ -142,6 +142,33 @@ public sealed partial class AnimEngine
             target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot));
         }
         target.EndCapture();
+    }
+
+    /// <summary>A fingerprint of exactly what <see cref="CaptureCompositorAnimations"/> would hand the renderer, as far as the
+    /// renderer's adoption can tell rows apart (<c>RenderCompositorAnimations.Adopt</c>): which rows are captured (live,
+    /// compositor-owned), and for each its identity (instance), its seed revision (every retarget re-stamps it), its node,
+    /// its cadence and its Parked/Done flags. Two equal fingerprints mean a re-capture would adopt to the identical render
+    /// state — the renderer advances these rows itself, so their positions are not an input. Same walk as the capture
+    /// (O(compositor-candidate rows)), no allocation. The host compares it across frames for its no-op publication skip.</summary>
+    internal ulong CompositorCaptureFingerprint()
+    {
+        RefreshCompositorCandidates();
+        ulong h = 14695981039346656037UL;
+        int n = 0;
+        foreach (int slot in _compositorCandidateSlots)
+        {
+            ref var row = ref _slab.At(slot);
+            if (!_scene.IsLive(row.Node) || !IsCompositorRow(in row)) continue;
+            var identity = _compositorSeeds[slot];
+            h = Mix(h, identity.Instance);
+            h = Mix(h, identity.Revision);
+            h = Mix(h, ((ulong)row.Node.Raw.Index << 32) | row.Node.Raw.Gen);
+            h = Mix(h, ((ulong)(uint)PeriodMsOf(slot) << 16) | (ulong)(row.Flags & (AnimFlags.Parked | AnimFlags.Done)));
+            n++;
+        }
+        return Mix(h, (ulong)n);
+
+        static ulong Mix(ulong h, ulong v) => (h ^ v) * 1099511628211UL;
     }
 
     /// <summary>

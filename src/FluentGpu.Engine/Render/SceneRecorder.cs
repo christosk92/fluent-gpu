@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Threading;
 using FluentGpu.Foundation;
 using FluentGpu.Render.Evidence;
@@ -244,7 +244,12 @@ internal sealed class SceneRecordingContext
     {
         _sbUpGlyph = up; _sbDownGlyph = down; _sbLeftGlyph = left; _sbRightGlyph = right; _sbIconFamily = iconFamily;
         _sbArrowGlyphsSet = true;
+        ConfigurationVersion++;
     }
+
+    /// <summary>Moves on every change to the recording configuration <see cref="CopyConfigurationFrom"/> copies into a
+    /// publication — the host's no-op publication skip compares it.</summary>
+    internal int ConfigurationVersion { get; private set; }
 
     // ── Repaint-damage scratch (gpu-renderer.md §13.1) ──────────────────────────────────────────────────────────────
     // The AA floor every emitted repaint rect is padded by. Per-kind effect extent (shadow offset+spread+3σ, self-blur

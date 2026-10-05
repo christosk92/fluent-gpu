@@ -610,6 +610,7 @@ public sealed partial class SceneStore : ISceneBackend
 
     private void CaptureRemovalExtent(NodeHandle node)
     {
+        _mutationStamp = _publishSeq + 1;   // a removal is a captured change (the snapshot copies the ledger)
         if (_removedCount >= RemovalLedgerCap) { _removedOverflow = true; _removedOverflowStamp = _publishSeq + 1; return; }
         RectF abs = AbsoluteRect(node);
         ref NodePaint p = ref _paint[(int)node.Raw.Index];
@@ -819,6 +820,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_overlays.Count >= MaxOverlays) { var old = _overlays[0]; _overlays.RemoveAt(0); FreeSubtree(old); }
         _flags[node.Raw.Index] |= NodeFlags.ConnectedOverlay;
         _overlays.Add(node);
+        NoteCaptureChanged((int)node.Raw.Index);   // the overlay band and the node's flags are captured
     }
 
     /// <summary>Drop a node from the overlay band (does NOT free it — the caller owns its lifetime).</summary>
@@ -827,6 +829,7 @@ public sealed partial class SceneStore : ISceneBackend
         for (int i = _overlays.Count - 1; i >= 0; i--)
             if (_overlays[i] == node) { _overlays.RemoveAt(i); break; }
         if (IsLive(node)) _flags[node.Raw.Index] &= ~NodeFlags.ConnectedOverlay;
+        _mutationStamp = _publishSeq + 1;   // the overlay band is captured (a dead node has no row to ledger)
     }
 
     /// <summary>Count of connected-animation overlays currently flying (the host keeps painting while &gt; 0).</summary>
@@ -1306,6 +1309,12 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>The publication the host just captured this scene into. Every later mark belongs to the NEXT one.</summary>
     public ulong PublishSeq => _publishSeq;
     public void NotePublished(ulong seq) => _publishSeq = seq;
+
+    /// <summary>True while any record-dirty bit is still set — retained until a publication carrying it is consumed
+    /// (<see cref="ClearRecordDirty(ulong)"/>). The host keeps publishing while bits remain, so the renderer's snapshot sheds
+    /// them as it did before the no-op publication skip existed (a stale bit would re-damage its band on every render-side
+    /// motion turn).</summary>
+    internal bool HasRecordDirtyLedger => _recordDirtyWroteCount > 0;
 
     /// <summary>Retire each self/descendant transform/content contribution the render thread has adopted
     /// (stamp ≤ <paramref name="consumedSeq"/>), keeping newer contributions. A snapshot carries the union of deltas

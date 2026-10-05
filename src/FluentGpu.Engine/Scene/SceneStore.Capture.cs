@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 
 namespace FluentGpu.Scene;
 
@@ -66,6 +66,7 @@ public sealed partial class SceneStore
         if ((uint)idx >= (uint)_high) return;
         if (_captureStamp.Length <= idx) GrowCaptureLedger(idx + 1);
         _captureStamp[idx] = _publishSeq + 1;
+        _mutationStamp = _publishSeq + 1;
         if (_inCaptureList[idx]) return;
         _inCaptureList[idx] = true;
         if (_captureWroteCount == _captureWrote.Length)
@@ -79,7 +80,19 @@ public sealed partial class SceneStore
     /// <c>LayoutInput</c>/<c>NodePaint</c>/<c>InteractionInfo</c>/<c>NodeFlags</c> across the nodes it patched —
     /// enumerating either precisely would mean auditing hundreds of write sites, and a missed one is a stale-pixel
     /// bug. Coast frames (the case P8 exists for) do neither.</summary>
-    public void NoteBulkMutation() => _bulkMutationSeq = _publishSeq + 1;
+    public void NoteBulkMutation() => _bulkMutationSeq = _mutationStamp = _publishSeq + 1;
+
+    // The publication the store's most recent captured mutation belongs to: every ledger entry above, a bulk mutation, a
+    // freshly created slot, a removal-ledger entry and an overlay-band edit stamp it _publishSeq + 1. The one store-wide
+    // answer to "did anything a snapshot copies change since the last publication?" (HasUnpublishedChanges).
+    private ulong _mutationStamp;
+
+    /// <summary>True when the store holds a change no publication has carried yet: some captured column, a bulk mutation
+    /// (layout, reconcile, a column realloc), a created slot, a removal or an overlay-band edit happened after the last
+    /// <see cref="NotePublished"/>. False means a capture now would copy exactly the rows the last one did — the store side of
+    /// the host's no-op publication skip. Sound by the capture-ledger contract above (every captured-column write is ledgered,
+    /// which the DEBUG incremental-parity self-check enforces). O(1).</summary>
+    public bool HasUnpublishedChanges => _mutationStamp > _publishSeq;
 
     /// <summary>Drop ledger entries the OLDEST publisher slot has already captured (stamp ≤ <paramref name="retainSeq"/>)
     /// and raise the floor, so a later capture cannot silently trust a truncated history. O(entries), compacts in place —
@@ -103,7 +116,7 @@ public sealed partial class SceneStore
     private void NoteCaptureCreated(int idx)
     {
         if (_createdStamp.Length <= idx) GrowCaptureLedger(idx + 1);
-        _createdStamp[idx] = _publishSeq + 1;
+        _createdStamp[idx] = _mutationStamp = _publishSeq + 1;
     }
 
     private void GrowCaptureLedger(int need)
