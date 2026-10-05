@@ -417,6 +417,10 @@ public static class FluentApp
             host.GpuDetail = () => gpu.DiagGpuDetail;
             s_gpuDevice = gpu;
         }
+        // The frame ledger's platform seams (process cycles, process memory, VRAM, glyph atlas) — installed always, read only while
+        // it records; `--fg ledger[=PATH]` turns it on from the first frame (FrameLedger.cs).
+        Win32LedgerSampler.Install(gpuDev);
+        if (EngineSwitches.Ledger) FrameLedger.Enable();
 
         // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
         // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
@@ -646,6 +650,8 @@ public static class FluentApp
         }
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
+        if (EngineSwitches.Ledger) FrameLedger.DumpIfRequested();   // `--fg ledger=PATH`: the binary + one CSV per stream
+        Win32LedgerSampler.Uninstall(gpuDev);
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (h.Screenshot is { } shotPath && device is D3D12Device d3d)

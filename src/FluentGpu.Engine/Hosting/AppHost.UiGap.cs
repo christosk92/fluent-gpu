@@ -40,6 +40,7 @@ public sealed partial class AppHost
     public void NoteLoopWait(long startQpc, long endQpc, int requestedMs)
     {
         if (endQpc > startQpc) _gapWaitTicks += endQpc - startQpc;
+        if (FrameLedger.Enabled) NoteLedgerWait(startQpc, endQpc, requestedMs);
         if (requestedMs < 0) _gapWaitInfinite = true;
         else _gapWaitRequestedMs += requestedMs;
         _gapWaits++;

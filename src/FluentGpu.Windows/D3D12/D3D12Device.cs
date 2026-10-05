@@ -385,6 +385,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>Process-global copy of <see cref="VideoMemorySnapshot"/> (one GPU device per process).</summary>
     public static GpuVideoMemorySnapshot LastVideoMemory => D3D12MemoryDiagnostics.LastVideoMemory;
 
+    /// <summary>The glyph atlas's bytes (its CPU mirror, the size of the GPU texture it uploads into); 0 before init. Any thread
+    /// (a plain read of the render thread's atlas edge) — the frame ledger's memory sample.</summary>
+    internal long DiagGlyphAtlasBytes => _glyphs?.AtlasCpuBytes ?? 0;
+
     /// <summary>QPC timestamp of the first successful Present (0 = none yet). Startup probes subtract process start.</summary>
     public static long FirstPresentQpc => s_firstPresentQpc;
 
@@ -4578,7 +4582,29 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (end <= begin) return;
         double ms = (end - begin) * 1000.0 / _gpuExecutionTsFreq;
         if (!double.IsFinite(ms) || ms <= 0.0) return;
-        owner.PublishGpuRenderSample(ms, ownerSubmit, System.Diagnostics.Stopwatch.GetTimestamp());
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        owner.PublishGpuRenderSample(ms, ownerSubmit, now, GpuTicksToQpc(begin, now), GpuTicksToQpc(end, now));
+    }
+
+    // GPU timestamp → QPC (the frame ledger's GPU stream): ID3D12CommandQueue::GetClockCalibration pairs a GPU timestamp with the
+    // QPC read at the same instant; refreshed at most once a second (the two clocks drift apart slowly), on the render thread.
+    private ulong _gpuClockGpuTs;
+    private long _gpuClockQpc, _gpuClockSampledQpc;
+
+    private long GpuTicksToQpc(ulong gpuTicks, long nowQpc)
+    {
+        if (_queue == null || _gpuExecutionTsFreq == 0) return 0;
+        if (_gpuClockSampledQpc == 0 || nowQpc - _gpuClockSampledQpc > System.Diagnostics.Stopwatch.Frequency)
+        {
+            ulong gpuTs, cpuTs;
+            if (_queue->GetClockCalibration(&gpuTs, &cpuTs) < 0) { _gpuClockSampledQpc = nowQpc; _gpuClockQpc = 0; return 0; }
+            _gpuClockGpuTs = gpuTs;
+            _gpuClockQpc = unchecked((long)cpuTs);
+            _gpuClockSampledQpc = nowQpc;
+        }
+        if (_gpuClockQpc == 0) return 0;
+        double deltaGpu = gpuTicks >= _gpuClockGpuTs ? (double)(gpuTicks - _gpuClockGpuTs) : -(double)(_gpuClockGpuTs - gpuTicks);
+        return _gpuClockQpc + (long)(deltaGpu * System.Diagnostics.Stopwatch.Frequency / _gpuExecutionTsFreq);
     }
 
     private void ReleaseGpuTimingResources()
@@ -4607,6 +4633,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Array.Clear(_ring.PassPending, 0, _ring.PassPending.Length);
         Array.Clear(_ring.PassOwner, 0, _ring.PassOwner.Length);
         _gpuExecutionTsFreq = 0; _passTsFreq = 0;
+        _gpuClockSampledQpc = 0; _gpuClockQpc = 0;   // a rebuilt queue recalibrates
         _gpuExecutionTimingInitTried = false; _passInitTried = false;
         _passOn = false;
         for (int i = 0; i < _swapchains.Count; i++)
@@ -5156,6 +5183,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     private long _gpuSampleSequence;
     private long _gpuSampleSubmitSequence;
     private long _gpuSamplePublishedQpc;
+    private long _gpuSampleStartQpc, _gpuSampleEndQpc;   // the pair on QPC (clock calibration; 0 = unknown) — same seqlock
     private double _gpuSampleExecutionMs;
     // Pass-granular GPU timeline of this target's most recently RETIRED instrumented frame (seqlock: odd version =
     // write in flight). Written by the render thread one submission after the frame, read by any thread.
@@ -5211,12 +5239,14 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         return unchecked((ulong)submit);
     }
 
-    internal void PublishGpuRenderSample(double executionMs, ulong submitSequence, long publishedQpc)
+    internal void PublishGpuRenderSample(double executionMs, ulong submitSequence, long publishedQpc, long startQpc = 0, long endQpc = 0)
     {
         System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
         System.Threading.Volatile.Write(ref _gpuSampleExecutionMs, executionMs);
         System.Threading.Interlocked.Exchange(ref _gpuSampleSubmitSequence, unchecked((long)submitSequence));
         System.Threading.Interlocked.Exchange(ref _gpuSamplePublishedQpc, publishedQpc);
+        System.Threading.Interlocked.Exchange(ref _gpuSampleStartQpc, startQpc);
+        System.Threading.Interlocked.Exchange(ref _gpuSampleEndQpc, endQpc);
         System.Threading.Interlocked.Increment(ref _gpuSampleSequence);
         System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
     }
@@ -5240,6 +5270,8 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             long sequence = System.Threading.Interlocked.Read(ref _gpuSampleSequence);
             long sampleSubmit = System.Threading.Interlocked.Read(ref _gpuSampleSubmitSequence);
             long publishedQpc = System.Threading.Interlocked.Read(ref _gpuSamplePublishedQpc);
+            long startQpc = System.Threading.Interlocked.Read(ref _gpuSampleStartQpc);
+            long endQpc = System.Threading.Interlocked.Read(ref _gpuSampleEndQpc);
             long currentSubmit = System.Threading.Interlocked.Read(ref _gpuSubmitSequence);
             long after = System.Threading.Volatile.Read(ref _gpuSampleVersion);
             if (before != after || (after & 1L) != 0) continue;
@@ -5247,7 +5279,10 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             ulong submitAge = currentSubmit >= sampleSubmit
                 ? unchecked((ulong)(currentSubmit - sampleSubmit))
                 : ulong.MaxValue;
-            sample = new GpuRenderSample(ms, unchecked((ulong)sequence), submitAge, publishedQpc);
+            sample = new GpuRenderSample(ms, unchecked((ulong)sequence), submitAge, publishedQpc)
+            {
+                SubmitSequence = unchecked((ulong)sampleSubmit), GpuStartQpc = startQpc, GpuEndQpc = endQpc,
+            };
             return true;
         }
         sample = default;

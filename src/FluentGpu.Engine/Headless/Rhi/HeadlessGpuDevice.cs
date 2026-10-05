@@ -180,6 +180,9 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     /// <summary>Test seam: the composited-video presenter this device answers for EVERY swapchain (the headless seam has no
     /// DirectComposition). <see langword="null"/> (the default) keeps every host's video drain a no-op, as before.</summary>
     public FluentGpu.Pal.IVideoPresenter? VideoPresenterForTest { get; set; }
+
+    /// <summary>The pass-timeline toggle, stored (headless records no timestamps; a test feeds the swapchain's timeline seam).</summary>
+    public bool GpuPassTimingEnabled { get; set; }
     public FluentGpu.Pal.IVideoPresenter? VideoPresenter => VideoPresenterForTest;
 
     /// <summary>Device-level composition commits (<see cref="IGpuDevice.CommitVideoComposition"/>) this run, and a hook run on
@@ -607,4 +610,28 @@ public sealed class HeadlessSwapchain : ISwapchain
     public bool PopupOpenPlayed { get; private set; }
     public void ConfigurePopupChrome(in PopupChromeMetrics m) => LastPopupChrome = m;
     public void AnimatePopupOpen() => PopupOpenPlayed = true;
+
+    /// <summary>Test seam: the retired whole-frame GPU sample this target reports (null = none, as headless has no timestamps).</summary>
+    public GpuRenderSample? GpuSampleForTest { get; set; }
+
+    /// <summary>Test seam: the pass timeline this target reports with <see cref="GpuPassSummaryForTest"/> (null = none).</summary>
+    public GpuPassTiming[]? GpuPassesForTest { get; set; }
+    public GpuPassFrameSummary GpuPassSummaryForTest { get; set; }
+
+    /// <inheritdoc/>
+    public bool TryGetGpuRenderSample(out GpuRenderSample sample)
+    {
+        sample = GpuSampleForTest ?? default;
+        return GpuSampleForTest.HasValue;
+    }
+
+    /// <inheritdoc/>
+    public int CopyGpuPassTimeline(Span<GpuPassTiming> dst, out GpuPassFrameSummary summary)
+    {
+        summary = GpuPassesForTest is null ? default : GpuPassSummaryForTest;
+        if (GpuPassesForTest is not { } p) return 0;
+        int n = Math.Min(p.Length, dst.Length);
+        p.AsSpan(0, n).CopyTo(dst);
+        return n;
+    }
 }
