@@ -319,7 +319,7 @@ public sealed class TitleBar : Component
                 Opacity = active ? 1f : 0.5f,
                 Children = [Ui.Icon(IconGlyph, IconSize).Foreground(IconColor)],
             };
-            kids.Add(Parts.Apply(PartIcon, icon) with { Children = icon.Children });
+            kids.Add(Parts is null ? icon : Parts.Apply(PartIcon, icon) with { Children = icon.Children });
             kids.Add(new BoxEl { Width = 16f });                  // WinUI icon margin-right
         }
 

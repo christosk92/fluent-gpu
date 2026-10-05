@@ -135,6 +135,6 @@ public static partial class RepeatButton
             Children = [labelEl],
         };
         // Parts: restyle anything; the click + auto-repeat mechanics and the label slot always win.
-        return parts.Apply(PartRoot, root) with { OnClick = onClick, Repeats = true, Role = AutomationRole.Button, Children = root.Children };
+        return parts is null ? root : parts.Apply(PartRoot, root) with { OnClick = onClick, Repeats = true, Role = AutomationRole.Button, Children = root.Children };
     }
 }
