@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -404,6 +404,9 @@ public sealed class RenderThreadPacingTests
         var seam = new SceneFramePublisher();
         var display = new VirtualDisplay();
         var split = new PresentSplit(StageMs: 0.1, RecordMs: 0.2, SubmitMs: 0.3, FenceMs: 0, LatencyMs: 0, PresentMs: 91.0, VideoMs: 0.4);
+        // The split is injected, not measured: the window itself is quiet, so ask for every window (--fg pace).
+        bool previousPaceLog = EngineSwitches.PaceLog;
+        EngineSwitches.PaceLog = true;
         var rt = new RenderThread(seam, _ => { }, async: false,
             needsTick: () => true, ownMotion: () => true,
             tick: () => { }, tickPeriod: () => PeriodQpc, displayClock: display,
@@ -427,6 +430,7 @@ public sealed class RenderThreadPacingTests
         {
             rt.Dispose(); display.Dispose();
             FluentGpu.Foundation.Diag.Sink = previousSink;
+            EngineSwitches.PaceLog = previousPaceLog;
         }
     }
 
@@ -470,6 +474,21 @@ public sealed class RenderThreadPacingTests
             FluentGpu.Foundation.Diag.Sink = previousSink;
         }
     }
+
+    // A window of smooth motion has nothing to report: it is counted (quiet=N on the next printed line), not printed.
+    [Theory]
+    [InlineData(0, 0, 0, 0, 0, 8.0, false)]
+    [InlineData(1, 0, 0, 0, 0, 8.0, true)]
+    [InlineData(0, 1, 0, 0, 0, 8.0, true)]
+    [InlineData(0, 0, 1, 0, 0, 8.0, true)]
+    [InlineData(0, 0, 0, 1, 0, 8.0, true)]
+    [InlineData(0, 0, 0, 0, 1, 8.0, true)]
+    [InlineData(0, 0, 0, 0, 0, 16.6, false)]
+    [InlineData(0, 0, 0, 0, 0, 16.7, true)]
+    public void PaceWindow_IsPrintedOnlyWhenAnomalous(long missed, long catchUps, long slotTimeouts, long childTimeouts,
+        long slotDrops, double lagMaxMs, bool expected)
+        => Assert.Equal(expected, RenderThread.PaceWindowAnomalous(missed, catchUps, slotTimeouts, childTimeouts, slotDrops,
+            lagMaxMs, refreshMs: 8.333));
 
     [Theory]
     [InlineData(0, 0, "none")]

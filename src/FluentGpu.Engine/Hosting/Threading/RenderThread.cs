@@ -595,12 +595,38 @@ public sealed class RenderThread : IDisposable
         RenderPaceHostState host = _paceHost?.Invoke() ?? default;
         string child = _childPaceReport?.Invoke() ?? "";
         long childTimeouts = host.NonPrimaryLatencyTimeouts - _paceChildTimeouts0;
+        // Quiet windows are counted, not printed: a second of motion that missed no tick, needed no catch-up, timed no slot
+        // out and kept every present within two refresh periods of its tick has nothing to report, and printing it anyway was
+        // one formatted line (and its strings) per second for as long as anything moved. The next anomalous line carries the
+        // count (quiet=N); `--fg pace` prints every window as before.
+        if (!EngineSwitchesPaceLog && child.Length == 0 && !PaceWindowAnomalous(
+                _missedMotionTicks - _paceMissed0, _catchUpSkips - _paceCatchUp0,
+                host.SlotLivenessTimeouts - _paceSlotTimeouts0, childTimeouts, slotDrops - _paceSlotDrops0,
+                Math.Max(_presentLagMaxQpc, _childDrainMaxQpc) * toMs, PeriodQpc() * toMs))
+        {
+            _paceQuietWindows++;
+            _paceWindowStartQpc = 0;
+            return;
+        }
+        long quiet = _paceQuietWindows;
+        _paceQuietWindows = 0;
         string timeoutTarget = PaceTimeoutTarget(host.SlotLivenessTimeouts - _paceSlotTimeouts0, childTimeouts);
         double childDrainAvg = _childDrainCount == 0 ? 0 : _childDrainSumQpc * toMs / _childDrainCount;
         FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} timeoutTarget={timeoutTarget} childWaitMax={host.NonPrimaryLatencyWaitMaxMs:F2} childTimeouts={childTimeouts} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)} childDrain(avg={childDrainAvg:F2} max={_childDrainMaxQpc * toMs:F2} n={_childDrainCount}){child}"));
+            $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} timeoutTarget={timeoutTarget} childWaitMax={host.NonPrimaryLatencyWaitMaxMs:F2} childTimeouts={childTimeouts} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)} childDrain(avg={childDrainAvg:F2} max={_childDrainMaxQpc * toMs:F2} n={_childDrainCount}) quiet={quiet}{child}"));
         _paceWindowStartQpc = 0;   // next turn opens a fresh window
     }
+
+    private long _paceQuietWindows;   // quiet [render.pace] windows since the last printed line
+    private static bool EngineSwitchesPaceLog => FluentGpu.Hosting.EngineSwitches.PaceLog;
+
+    /// <summary>Whether a <c>[render.pace]</c> window is worth a line: a missed motion tick, a catch-up skip, a liveness
+    /// slot timeout (primary or child), a display-clock slot drop, or a present (or a detached child's drain) that took more
+    /// than two refresh periods (<paramref name="presentLagMaxMs"/> is the larger of the two). Pure; the tests pin it.</summary>
+    internal static bool PaceWindowAnomalous(long missed, long catchUps, long slotTimeouts, long childTimeouts, long slotDrops,
+        double presentLagMaxMs, double refreshMs)
+        => missed > 0 || catchUps > 0 || slotTimeouts > 0 || childTimeouts > 0 || slotDrops > 0
+           || presentLagMaxMs > 2.0 * refreshMs;
 
     /// <summary>Which swapchain's liveness-bounded slot waits timed out in a pace window (F235): <c>none</c>, <c>primary</c> (the
     /// main window), <c>child</c> (a pop-out or popup, whose blocking wait runs on this shared thread) or <c>both</c>. Pure.</summary>
