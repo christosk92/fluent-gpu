@@ -57,24 +57,6 @@ public sealed class RenderCompositorAnimations
     private int _count;
     private bool _paused;
     private double _pausedAtMs;
-    // The device scale a PixelSnap row rounds against: refreshed from the adopted scene at the top of Adopt/Tick (Pause reuses
-    // the last one — its evaluation is the same instant the loop last posed).
-    private float _deviceScale = 1f;
-    // The shared phase of PixelSnap rows (F239): one clock per cadence period, decided once per evaluation instant, so every
-    // row with that period re-samples on the SAME render ticks whatever instant each was seeded at. A fixed array keeps the steady Tick allocation-free (gate.compositor-alloc);
-    // a clock is never cleared (a stale period is simply never asked again), and a full table recycles round-robin - only a
-    // phase re-lock for the rows on the recycled period.
-    private struct PeriodClock
-    {
-        public float PeriodMs;
-        public double LastAdvanceMs;   // the instant this clock last advanced
-        public double DecidedAtMs;     // the latest instant a decision was made for
-        public bool Advanced;          // that decision
-    }
-    private const int ClockSlots = 8;
-    private readonly PeriodClock[] _clocks = new PeriodClock[ClockSlots];
-    private int _clockCount;
-    private int _clockEvict;
     public bool HasActive { get; private set; }
     /// <summary>Did this tick change ANY pixels — a posed value that moved, a row that finished, or a row that
     /// disappeared or parked? False means the compositor produced a byte-identical scene, which is what lets the host
@@ -110,7 +92,6 @@ public sealed class RenderCompositorAnimations
     public void Adopt(CompositorAnimationSnapshot desired, SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
-        _deviceScale = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
         double capturedAtMs = _paused ? Math.Min(desired.CapturedAtMs, _pausedAtMs) : desired.CapturedAtMs;
         SceneRecordingSnapshot.Grow(ref _nextStates, desired.Count);
         SceneRecordingSnapshot.Grow(ref _feedback, desired.Count);
@@ -212,7 +193,6 @@ public sealed class RenderCompositorAnimations
     public void Tick(SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
-        _deviceScale = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
         // The steady render interval going INTO this tick — the reference a pending-start row held on this tick caps its
         // first advance against. 0 = unknown (the first tick, or a gap longer than any frame — an idle render thread).
         if (!_paused && nowMs > _lastTickMs)
@@ -346,34 +326,6 @@ public sealed class RenderCompositorAnimations
         HoldNowMs = double.NaN,
     };
 
-    /// <summary>Did the shared clock of <paramref name="periodMs"/> advance at <paramref name="nowMs"/>? Decided once per
-    /// instant (every row of the period asks at the same <c>nowMs</c> within a tick, and Adopt's pre-pose asks again at the
-    /// tick's own instant): due when a period minus <see cref="AnimEngine.CadenceSlackMs"/> has passed since the clock's
-    /// last advance, or it never advanced. An instant EARLIER than one already decided (a parking row sampled at its
-    /// capture time) is answered "not advanced" without disturbing that decision.</summary>
-    private bool ClockAdvanced(float periodMs, double nowMs)
-    {
-        int index = -1;
-        for (int i = 0; i < _clockCount; i++)
-            if (_clocks[i].PeriodMs == periodMs) { index = i; break; }
-        if (index < 0)
-        {
-            if (_clockCount < ClockSlots) index = _clockCount++;
-            else { index = _clockEvict; _clockEvict = (_clockEvict + 1) % ClockSlots; }
-            _clocks[index] = new PeriodClock
-            {
-                PeriodMs = periodMs, LastAdvanceMs = double.NegativeInfinity, DecidedAtMs = double.NegativeInfinity,
-            };
-        }
-        ref var clock = ref _clocks[index];
-        if (nowMs == clock.DecidedAtMs) return clock.Advanced;
-        if (nowMs < clock.DecidedAtMs) return false;
-        clock.Advanced = nowMs - clock.LastAdvanceMs >= periodMs - AnimEngine.CadenceSlackMs;
-        if (clock.Advanced) clock.LastAdvanceMs = nowMs;
-        clock.DecidedAtMs = nowMs;
-        return clock.Advanced;
-    }
-
     private void Evaluate(ref State state, double nowMs, float refIntervalMs)
     {
         if (state.Parked || state.Done) return;
@@ -397,25 +349,12 @@ public sealed class RenderCompositorAnimations
         // CADENCE (the render-thread half of AnimEngine's PASS1 due-check): a row that states its own frame rate is
         // re-sampled only when its period has elapsed; in between its Value/ElapsedMs are HELD, so a 30Hz shimmer
         // steps at 30Hz even though the compositor is posing at panel rate for something else. Sampling stays
-        // analytical/absolute, so holding costs nothing and skipping never accumulates drift.
-        //
-        // One refinement, on pixel-snapped rows with an explicit cadence only. A PixelSnap row is due when its PERIOD'S shared
-        // clock advanced at this instant (ClockAdvanced) - not "a period after its own last sample" - so two such rows with the
-        // same period step on the SAME render tick whatever instant each was seeded at; their pixel changes then share one
-        // present (F239) rather than alternating ticks. The clock uses the same relative rule (a period minus the slack since
-        // its own last advance), so render ticks spaced about one period apart neither drop a sample nor double one. A
-        // display-cadence row (period 0, the marquee's default) samples on every tick; the SNAP alone decides whether the
-        // sample changes a pixel (pass 2's bitwise compare elides the frame when it does not). Nothing here lengthens a
-        // period: there is no background or tier floor on a visible loop.
-        float periodMs = state.Desired.PeriodMs;
-        bool snap = state.Desired.Row.Has(AnimFlags.PixelSnap);
-        if (periodMs > 0f)
+        // analytical/absolute, so holding costs nothing and skipping never accumulates drift. Nothing here lengthens a
+        // period: there is no background or tier floor on a visible loop (motion policy, 2026-10-03).
+        ushort periodMs = state.Desired.PeriodMs;
+        if (periodMs > 0)
         {
-            if (snap)
-            {
-                if (!ClockAdvanced(periodMs, nowMs) && state.LastAdvanceMs > 0d) return;   // a row that never sampled poses at once
-            }
-            else if (state.LastAdvanceMs > 0d && nowMs - state.LastAdvanceMs < periodMs - AnimEngine.CadenceSlackMs) return;
+            if (state.LastAdvanceMs > 0d && nowMs - state.LastAdvanceMs < periodMs - AnimEngine.CadenceSlackMs) return;
             state.LastAdvanceMs = nowMs;
         }
         state.ElapsedMs = state.AnchorElapsedMs + (float)Math.Max(0, nowMs - state.AnchorNowMs);
@@ -433,10 +372,9 @@ public sealed class RenderCompositorAnimations
         if (row.Has(AnimFlags.Loop)) progress -= MathF.Floor(progress);
         else if (progress >= 1) { progress = 1; state.Done = true; }
         else progress = MathF.Max(0, progress);
-        float sampled = state.Desired.Keys.Length >= 2
+        state.Value = state.Desired.Keys.Length >= 2
             ? AnimEngine.Sample(state.Desired.Keys, progress)
             : row.Gen.FromV + (row.To - row.Gen.FromV) * Easings.Ease((Easing)(byte)row.Gen.EaseId, progress);
-        state.Value = snap ? AnimEngine.SnapToDevicePx(sampled, _deviceScale) : sampled;
         state.Velocity = 0; // The existing eased/keyframe engine carries velocity only for analytical springs.
     }
 

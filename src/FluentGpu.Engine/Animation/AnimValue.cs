@@ -55,10 +55,6 @@ public enum AnimFlags : ushort
                               // flies to a stale target and SettleRestore snaps the rest of the way; with it the target
                               // tracks the content as it arrives. Cleared the moment the author declares a size
                               // (AnimEngine.RecordDeclaredSize) — a declared value is ground truth, not a projection.
-    PixelSnap     = 1 << 13,  // the row's sampled value is rounded to a whole DEVICE pixel (AnimEngine.SnapToDevicePx) before it is
-                              // posed: a slow translate (a marquee) then changes the pixels only when it crosses a pixel edge,
-                              // never on a sub-pixel step, and a snapped row re-samples on a shared per-period clock so sibling
-                              // rows step on the same render tick (RenderCompositorAnimations.Evaluate)
 }
 
 /// <summary>The 16-byte tagged-union generator law. The owning <see cref="AnimValue.Kind"/> selects the reading.

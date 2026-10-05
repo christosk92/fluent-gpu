@@ -468,7 +468,6 @@ public sealed partial class AnimEngine
                 {
                     ClearKeys(s);
                     ResetCadence(s);   // a re-seed inherits nothing: display rate unless this seed asks for a cadence
-                    _slab.At(s).Flags &= ~AnimFlags.PixelSnap;   // …and whole-pixel snapping likewise (Keyframes re-asks for it)
                     StampCompositorSeed(s, newInstance: false, explicitFrom: true);
                     return s;
                 }

@@ -232,13 +232,10 @@ internal sealed class MarqueeScroller : Component
             // The scroll and the home glide both take the display cadence (null) like every other row: scrolling TEXT is the
             // motion a sub-refresh cadence betrays first (it read as stepping at 30 Hz, and a 60 Hz cap still halved it on a
             // 120 Hz panel), and the host's one power ceiling (AppHost.PowerCapFps) still reaches it under energy saver.
-            // The translate is quantised to WHOLE DEVICE PIXELS (pixelSnap, F239): scrolled text is what the scroll system
-            // itself snaps (ScrollEffectEval.SnapToDevicePixel), so the glyphs stay crisp instead of shimmering through
-            // sub-pixel coverage, and a display tick on which the text has not yet crossed a pixel edge poses the IDENTICAL
-            // value — a byte-identical frame the host elides — instead of a re-record and present of the whole window for a
-            // half-pixel step. No visible frame is dropped: on every tick the text can move a pixel, it does.
+            // The translate is sampled as is (sub-pixel positions, like main): the text glides; it is not stepped to the
+            // device-pixel grid (owner decision, 2026-10-05 - the pixel-snapped variant of the audit branch was dropped).
             UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping,
-                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)), pixelSnap: true);
+                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)));
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };

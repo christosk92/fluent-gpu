@@ -29,14 +29,10 @@ public sealed partial class AnimEngine
     /// <paramref name="cadence"/> is the row's own frame rate (<see cref="Cadence"/>, AnimClock.cs) — the DATA that
     /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means <see cref="Cadence.Display"/>,
     /// one-shot or loop alike. Pass <c>Cadence.At(hz)</c> only for a source with a native rate (a Lottie composition's
-    /// frame rate) or one that genuinely wants fewer frames — it is opt-in, never inferred.
-    /// <paramref name="pixelSnap"/> rounds every sample to a whole DEVICE pixel (<see cref="SnapToDevicePx"/>) — a slow
-    /// translate (a marquee) then changes the pixels only when it crosses a pixel edge, so a sub-pixel step is a held
-    /// value (a byte-identical frame the host elides) instead of a re-record + present of the whole window. It is a
-    /// quantisation of the VALUE, never of the rate: the row still samples on every tick its cadence allows.</summary>
+    /// frame rate) or one that genuinely wants fewer frames — it is opt-in, never inferred.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
                           bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
-                          Cadence? cadence = null, bool pixelSnap = false)
+                          Cadence? cadence = null)
     {
         int s = Get(node, channel, composite != CompositeOp.Replace);
         SetCadence(s, cadence ?? Cadence.Display);
@@ -50,7 +46,6 @@ public sealed partial class AnimEngine
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven);
         if (loop) r.Flags |= AnimFlags.Loop; else r.Flags &= ~AnimFlags.Loop;
-        if (pixelSnap) r.Flags |= AnimFlags.PixelSnap; else r.Flags &= ~AnimFlags.PixelSnap;
         r.Flags |= AnimFlags.JustSeeded;   // seed frame holds the initial value (advance begins next frame)
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;
@@ -115,17 +110,9 @@ public sealed partial class AnimEngine
             ? Sample(keys, u)
             : r.Gen.FromV + (r.To - r.Gen.FromV) * Easings.Ease((Easing)(byte)r.Gen.EaseId, u);   // Animate two-point
 
-        if (r.Has(AnimFlags.PixelSnap)) val = SnapToDevicePx(val, _scene.DeviceScale);
         if (done) r.Flags |= AnimFlags.Done;
         return val;
     }
-
-    /// <summary>Round <paramref name="value"/> (DIP) to a whole device pixel at <paramref name="deviceScale"/> (device px per
-    /// DIP), expressed back in DIP. The scroll system's one snap (<c>ScrollEffectEval.SnapToDevicePixel</c>), so a snapped
-    /// translate lands on the pixel the scroll poser would put the same content on; the UI-side sample here and the render
-    /// thread's (<see cref="RenderCompositorAnimations"/>) share it, so both pose the same pixel.</summary>
-    internal static float SnapToDevicePx(float value, float deviceScale)
-        => FluentGpu.Scroll.Effects.ScrollEffectEval.SnapToDevicePixel(value, deviceScale);
 
     // sample a multi-keyframe track at progress u (0..1), per-segment easing (ported from AnimEngine.Sample)
     internal static float Sample(ReadOnlySpan<Keyframe> keys, float u)
