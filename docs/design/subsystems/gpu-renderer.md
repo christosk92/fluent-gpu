@@ -1822,14 +1822,17 @@ in a separate region-pin pool) is deleted; `backdrop-effects-animation.md` §FA-
 
 #### 13.1h Present
 
-**The frame presents WHOLE and the swapchain stays `FLIP_DISCARD`** (+ `SetMaximumFrameLatency(1)` + the waitable
-object). `Present1` partial presentation is refused under `FLIP_DISCARD` — a dirty-rect `Present1` after a full present
-is `DXGI_ERROR_INVALID_CALL`, pinned by `FluentGpu.Windows.Tests` `ComAbiBindingTests` — so the D3D12 target never
-passes dirty rects. `PresentParams` therefore stay the seam's **census**: `BuildComposite` fills its dirty rects with
-the frame's repaint set ∪ the visible re-rastered tiles' destinations through `RepaintPolicy.ToPixel` (empty ⇒
-`PresentParams.Full`), the headless model records them (`CompositeRecordKind.StagePresent`), and no backend consumes
-them today. Switching to `FLIP_SEQUENTIAL` to make them a DWM hint is a separate, unmade decision. The composite pass
-never reads the previous back buffer, so presenting whole costs no correctness.
+**The primary swapchain is `FLIP_SEQUENTIAL` and presents PARTIALLY** (`D3D12Device.PartialPresent.cs`). Each composite
+diffs its entries (one per tile placement / offscreen surface, keyed by item identity and signed by everything that
+decides its pixels) against the previous frame's in PAINTER order (a monotone matching: an item that appeared, vanished
+or moved in the order dirties only its own rects — no whole frame on a structure change), repaints into the back buffer
+the union of the dirty sets since that buffer was last rendered (buffer age), and hands `Present1` this frame's dirty
+set. A re-rastered tile dirties only what its raster wrote (a partial raster's damage, §13.1l); an unblurred group
+dirties only what its members dirty; a frame whose trusted diff is empty presents a one-pixel dirty rect instead of the
+whole window. Whole-frame route: the first frame, a resize / DPI / clear-colour / knockout change, a stood-down present,
+a forced-full repaint, or a repaint ≥ 45 % of the window. `--fg no-precise-present` restores the whole-placement /
+whole-frame behaviour (the A/B arm). `PresentParams` from `BuildComposite` stay the seam's census (the headless model
+records them).
 
 #### 13.1i The repaint set, carry and culling contracts (still owned here)
 
@@ -1963,6 +1966,31 @@ the next failing-first reproduction). Unit: `SliceTableContentTests` (an unchang
 re-raster exactly their tile as `Content`, a changed op count is `PrimCount`, restored bytes need no raster).
 
 ---
+
+#### 13.1l Sub-tile damage — a tile re-rasters only what changed (as built 2026-10-05)
+
+A content re-raster used to CLEAR and replay the whole 1024×512 surface for a one-pixel change. Now the table keeps, per
+surface, the op list its pixels were rastered from (`TileOpRec`: op hash folded with the hash chain of the scopes open
+around it, footprint in tile px — one shared, compacting slab, `SliceTable.Damage.cs`), and `SliceRecorder` hands every
+scheduled raster the list its replay will draw (`TileContentHash.CollectTileOps`). `TileDamage.Diff` builds a MONOTONE
+matching of the two lists (common prefix / suffix, greedy resync); the union of the footprints of the unmatched ops is
+the damage: outside it every pixel is covered by the same ops in the same order under the same scopes, so it is
+unchanged. `SliceTable.PlanDamage` makes the raster PARTIAL — damage ∪ the tile's image cross-fade rects ∪ the surface's
+stray pixels (an unfaithful partial raster), grown a pixel and snapped to the 2×2 quad grid — only when the tile was
+valid and re-rasters for Content / PrimCount, its surface holds a trusted snapshot on the same slice grid (origin,
+residual, scale), the diff is bounded (no unbounded op unmatched, no blur / edge-fade layer in the tile) and the damage
+is < 60 % of the surface. The backend (`D3D12Device.TileDamage.cs`) clears the damage, opens a PRESERVE pass and replays
+with every scissor cut to it (the decoder's chokepoint and an inline group's composite) and the decode-time / span cull
+narrowed to it; a texture created this turn rasters whole. Images sample whatever pixels their id holds NOW (an LQIP,
+then the full-res art) under unchanged bytes: the backend records per surface the `ImageTextureStore.ContentSerial` of
+every image its rasters drew and grows a partial raster's damage over each image whose serial moved
+(`CompositeFrameFlags.RasterBeyondPlan` tells the table when it wrote past the plan). An op's footprint is cut by its
+clip grown one DIP (`SliceRecorder.ClipSlack`): the scissor rounds the clip out, and an op just outside the rect still
+paints that edge pixel. Pixel identity: `TileDamageTests` rasters thousands of random scene edits on a CPU model of the
+replay both ways and compares bytes; `--fg damage-validate` re-rasters every partial tile whole into a shadow scratch on
+device and compares the readbacks (a mismatch logs its extent). `--fg no-partial-raster` is the A/B arm,
+`--fg damage-log` names every raster and every dirty entry, and the `[fps]` line's `dpx` token reports raster /
+composite / present pixels per composite.
 
 ## 14. Shaders — HLSL → DXC → DXIL `byte[]`
 
