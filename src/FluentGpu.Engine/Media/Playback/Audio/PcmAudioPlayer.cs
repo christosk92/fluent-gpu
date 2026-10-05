@@ -2416,6 +2416,12 @@ public sealed partial class PcmAudioSession : IMediaSession
     /// Runs off the RT thread. On the single-thread path use <see cref="PumpAudio"/> instead.</summary>
     public PlaybackState TickControl(int frames) => Advance(frames, renderInline: false);
 
+    /// <summary>True when a control tick can change nothing until a transport command arrives: nothing is playing or requested, the
+    /// device is stopped and no seek-rebuffer window is open. The clock thread then blocks on its wake event
+    /// (<see cref="AudioFeedThread.WakeOutput"/>) instead of ticking every 15 ms; every command that matters wakes it.</summary>
+    internal bool ControlIdle => !_playRequested && !_started && !_seekRebufferActive
+        && _state is PlaybackState.Paused or PlaybackState.Ended or PlaybackState.Ready;
+
     /// <summary>M4 RT feed callback (spec §7.9): if Playing, render+present exactly one block through the published graph
     /// (lock-free consume + quarantine) reading pre-decoded PCM from the voice rings — copy+mix ONLY, alloc/lock/syscall-free
     /// (the <see cref="AudioTripwire"/> around <see cref="RenderBlock"/> enforces it). Returns frames presented (0 if not

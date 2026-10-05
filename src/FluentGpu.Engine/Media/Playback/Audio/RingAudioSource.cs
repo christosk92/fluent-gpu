@@ -41,6 +41,7 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
     private readonly object _producerGate = new();
     private readonly CancellationTokenSource _producerCancellation = new();
     private readonly AutoResetEvent _producerWake = new(false);
+    private const int IdleProducerWaitMs = 500;   // safety net only: low-water, seek and dispose all signal _producerWake
     /// <summary>Wake this voice's producer on low-water, seek or cancellation.</summary>
     public void WakeProducer()
     {
@@ -105,7 +106,11 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
                 // Wake any waiter whose minimum is now met (or whose producer finished). A manual-reset event: waiters Reset → check →
                 // wait, so a Set landing between their check and their wait is never lost.
                 if (IsReady(Volatile.Read(ref ReadyMinimum))) ReadyWake.Set();
-                _producerWake.WaitOne(20);
+                // Ring at its decode-ahead target (or the source finished): nothing to do until the RT low-water edge, a seek or
+                // disposal signals _producerWake, so sleep long (the timeout is only a safety net). While below target the inner
+                // source stalled (a network read with nothing ready) and has no signal to wait on, so it keeps its 20 ms retry.
+                bool idle = ProducerDone || _ring.AvailableFloats >= Volatile.Read(ref _targetFloats);
+                _producerWake.WaitOne(idle ? IdleProducerWaitMs : 20);
             }
         }
         catch (Exception e)

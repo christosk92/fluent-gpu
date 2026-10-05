@@ -103,8 +103,10 @@ public sealed class AudioFeedThread : IDisposable
     // deterministic fixtures still call WorkerPumpOnce directly, without requiring a management timer.
     private readonly AutoResetEvent _workerWake = new(false);
     private readonly AutoResetEvent _outputWake = new(false);
+    private readonly AutoResetEvent _clockWake = new(false);   // ends the clock thread's idle wait (session.ControlIdle) the moment a command lands
+    private const int IdleClockWaitMs = 250;                    // safety net only while idle: transport commands and seeks signal _clockWake
     /// <summary>Wake paused/output-capacity waits for transport commands.</summary>
-    public void WakeOutput() { if (!_disposed) SignalWake(_outputWake); }
+    public void WakeOutput() { if (!_disposed) { SignalWake(_outputWake); SignalWake(_clockWake); } }
 
     // Control/RT callers can have passed a disposed check before the final successful join closes a handle.
     // Match RingAudioSource.WakeProducer: a late signal is harmless, never an escaping teardown exception.
@@ -328,7 +330,7 @@ public sealed class AudioFeedThread : IDisposable
     public void RequestSeek(long frame)
     {
         Volatile.Write(ref _pendingSeekFrame, frame);
-        if (!_disposed) SignalWake(_workerWake);
+        if (!_disposed) { SignalWake(_workerWake); SignalWake(_clockWake); }
     }
 
     // ── RT feed thread — copy+mix ONLY ───────────────────────────────────────────────────────────────────────────────
@@ -573,6 +575,7 @@ public sealed class AudioFeedThread : IDisposable
         _run = false;
         SignalWake(_outputWake);
         SignalWake(_workerWake);
+        SignalWake(_clockWake);
         bool rtJoined = Join(_rtThread), workerJoined = Join(_workerThread), clockJoined = Join(_clockThread);
         if (rtJoined) _rtThread = null;
         if (workerJoined) _workerThread = null;
@@ -630,8 +633,11 @@ public sealed class AudioFeedThread : IDisposable
             {
                 try { ControlTickOnce(); }
                 catch (Exception e) { RecordFault(ref _clockFaults, e); }
-                // Position/state publication is a control-rate concern, not an audio-rate spin loop.
-                Thread.Sleep(15);
+                // Position/state publication is a control-rate concern, not an audio-rate spin loop. While nothing is playing
+                // or requested there is nothing to publish: block until a command signals _clockWake (a signal that landed
+                // between the idle check and the wait is retained by the AutoResetEvent, so no command is ever delayed).
+                if (_session.ControlIdle) _clockWake.WaitOne(IdleClockWaitMs);
+                else Thread.Sleep(15);
             }
         }
         finally { LoopExited(); }
@@ -656,6 +662,7 @@ public sealed class AudioFeedThread : IDisposable
         // disposed-event handling. Timed-out joins defer this cleanup until the LAST live loop actually exits.
         try { _workerWake.Dispose(); } catch { /* teardown never throws */ }
         try { _outputWake.Dispose(); } catch { /* teardown never throws */ }
+        try { _clockWake.Dispose(); } catch { /* teardown never throws */ }
     }
 
     /// <inheritdoc/>
