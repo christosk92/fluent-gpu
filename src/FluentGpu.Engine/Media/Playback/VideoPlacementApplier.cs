@@ -540,6 +540,12 @@ internal sealed class VideoPlacementApplier
         if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={visible} scale={scale:0.##} pose=({dx:0.##},{dy:0.##})");
     }
 
+    /// <summary>Changes were applied with the device commit deferred and no commit has been published for them yet: the host
+    /// owes a <c>CommitVideoComposition</c> + <see cref="PublishCommitted"/> pair. A detached child's drain reads it right after
+    /// the child's present (F080): a first Place, a SetVisible, a viewport, clip or z change must land in the SAME DWM frame as
+    /// the child's flip, not after the parent's slot wait. Render thread.</summary>
+    internal bool HasUncommittedApply => _publishDue;
+
     /// <summary>After the host's device-level commit for changes applied with <c>deferCommit</c>: publish which slots are now bound
     /// AND composed (the readiness only counts once the commit ran). Returns true on a bound edge, so the host wakes the UI loop.
     /// No-op when nothing was applied since the last call.</summary>

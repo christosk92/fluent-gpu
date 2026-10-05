@@ -177,6 +177,17 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     private bool _renderConfined;
     public void MarkRenderConfined() => _renderConfined = true;
 
+    /// <summary>Test seam: the composited-video presenter this device answers for EVERY swapchain (the headless seam has no
+    /// DirectComposition). <see langword="null"/> (the default) keeps every host's video drain a no-op, as before.</summary>
+    public FluentGpu.Pal.IVideoPresenter? VideoPresenterForTest { get; set; }
+    public FluentGpu.Pal.IVideoPresenter? VideoPresenter => VideoPresenterForTest;
+
+    /// <summary>Device-level composition commits (<see cref="IGpuDevice.CommitVideoComposition"/>) this run, and a hook run on
+    /// each — a test's door to WHEN the host commits relative to its presents.</summary>
+    public int VideoCompositionCommits { get; private set; }
+    public System.Action? OnCommitVideoComposition { get; set; }
+    public void CommitVideoComposition() { VideoCompositionCommits++; OnCommitVideoComposition?.Invoke(); }
+
     // The FIRST swapchain created is the "primary" for the handful of device-level diagnostic getters that predate
     // per-target state (detached-window-render-isolation-implementation.md §3.3) and have not been migrated to a
     // per-call target parameter — today only HintSettlePresentCount below.

@@ -69,6 +69,10 @@ public sealed class RenderThread : IDisposable
     // After the parent's present decision, every turn: the host's one composition commit for the turn (AppHost.CommitVideoTurn,
     // F080), now that the children (extraDrain, before the decision) and the parent (inside it) have applied their placements.
     private readonly Action? _postTurn;
+    /// <summary>Test-only: which optional turn callbacks the owner wired (the children's drain before the present decision, the
+    /// post-present commit) — a host that drops one of them is what these say.</summary>
+    internal bool HasExtraDrainForTest => _extraDrain is not null;
+    internal bool HasPostTurnForTest => _postTurn is not null;
     private readonly Func<bool>? _needsTick;   // render-side motion live, on this host OR a detached child? (AppHost.HasRenderMotion) — wakes the loop at the display clock
     // Render-side motion live on THIS host alone (AppHost.HasOwnRenderMotion). Only this makes the turn a parent present: the
     // tick rule, the primary present credit, the motion run and the tick-spent mark are the parent swapchain's; a child's motion

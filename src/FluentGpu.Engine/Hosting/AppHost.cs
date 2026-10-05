@@ -833,7 +833,7 @@ public sealed partial class AppHost : IDisposable
     // The dedicated render thread, constructed for a real windowed host (mode Async — the default — or ForceSync). null ⇒
     // the SingleThread inline pass-through (headless, and the internal SingleThread override). It runs submit/present off
     // the UI thread; under ForceSync the UI still blocks on it (no async overlap), under Async it presents on its own timeline.
-    private readonly Threading.RenderThread? _renderThread;
+    private Threading.RenderThread? _renderThread;   // set once: the constructor (a windowed host), or InstallRenderThreadForTest before the first frame
     // Step 1 (ASYNC only): the image upload/evict handoff. Non-null ⇒ ImageCache hands GPU work to the render thread
     // through this queue (drained in SubmitPresentOnRenderThread before submit) instead of touching the device on the UI
     // thread. Null in default/force-sync — there the direct device sinks run with no cross-thread overlap.
@@ -3008,6 +3008,17 @@ public sealed partial class AppHost : IDisposable
             // is counted by the child's pace as skipped).
             if (child._renderPresentCount != presents0)
             {
+                // F080, the corollary of draining children BEFORE the parent's present decision: placement work this present applied
+                // with the device commit deferred (a first Place, SetVisible, a viewport / clip / corner-radius / overlay change — a
+                // MOVE already committed inside the child's own drain, Stage B) must not wait for the turn's post-present commit.
+                // The parent's slot wait sits between here and there and can cross a vblank (the unpaced liveness bound, a paced
+                // catch-up falling through to the blocking take), and the child's hole would then flip a DWM frame before its
+                // picture followed. Commit right after the child's flip; the post-turn commit is a no-op for this child then.
+                if (child.VideoApplier.HasUncommittedApply)
+                {
+                    _device.CommitVideoComposition();
+                    if (child.VideoApplier.PublishCommitted()) child._window.Wake();
+                }
                 long done = Stopwatch.GetTimestamp();
                 pace?.NotePresent(done - (child._deferredSinceQpc != 0 ? child._deferredSinceQpc : probeStart), done - slotAt);
                 if (deliveredSeq != 0 && pace is not null)
@@ -3017,10 +3028,51 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
-    /// <summary>Render thread, parent host, after the parent's present decision: the turn's ONE composition commit (F080). The
-    /// children drained BEFORE the parent's slot wait (<see cref="DrainChildRenderSources"/>, F241) and the parent's own drain
-    /// (inside its present) applied their placements without a commit; this flushes them all in one DWM frame.</summary>
+    /// <summary>Render thread, parent host, after the parent's present decision: the turn's composition commit for the PARENT's
+    /// deferred placement work (F080) and the readiness it makes true. The children drained BEFORE the parent's slot wait
+    /// (<see cref="DrainChildRenderSources"/>, F241) and each child that presented with placement applied already committed right
+    /// after its own flip, so for them this is the O(1) no-op; the parent's own drain (inside its present) applied without a
+    /// commit and lands here, in the DWM frame of its present.</summary>
     private void CommitVideoTurnAfterPresent() => CommitVideoTurn(Volatile.Read(ref _childRenderSources));
+
+    /// <summary>The render loop with THIS host's real callbacks: the submit, the children's drain (extraDrain, before the present
+    /// decision), the motion tick, the slot take, the pace evidence, the structural video pre-turn and the post-present commit
+    /// (<see cref="CommitVideoTurnAfterPresent"/>). ONE place builds it — the constructor for a windowed host and
+    /// <see cref="InstallRenderThreadForTest"/> for a headless one — so a test can pin which callback runs where (a headless
+    /// window never goes async on its own, which is how the wiring used to have no coverage).</summary>
+    private Threading.RenderThread BuildRenderThread(bool async, FluentGpu.Pal.IRenderDisplayClock? displayClock)
+        => new(_renderSeam, rf => SubmitPresentOnRenderThread(rf), async: async,
+            deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
+            extraDrain: DrainChildRenderSources, needsTick: HasRenderMotion, tick: RenderMotion,
+            tickPeriod: RenderPeriodTicks, displayClock: displayClock,
+            takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
+            submitAbortHandleSink: _device.SetSubmitAbortHandle,
+            ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
+            presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent);
+
+    /// <summary>Test-only: give a HEADLESS primary host the force-sync render loop a windowed one would have (one
+    /// <c>RunFrame</c> = one publish + one <c>DrainSync</c> turn on the fgpu-render thread), wired by the same
+    /// <see cref="BuildRenderThread"/> as production. From then on the host publishes to its seam and the render thread
+    /// submits, drains its detached children and commits, exactly as under a real window; a detached child built with this
+    /// thread as its <c>parentRenderThread</c> rides its turns. Call once, before the first frame.</summary>
+    internal Threading.RenderThread InstallRenderThreadForTest()
+    {
+        Threading.ThreadGuard.AssertUi();
+        if (_renderThread is not null) throw new InvalidOperationException("the host already owns a render thread");
+        _renderThread = BuildRenderThread(async: false, displayClock: null);
+        _videoSurfaces.StructuralWake = _renderThread.WakeForVideo;
+        return _renderThread;
+    }
+
+    /// <summary>Test-only: register a detached child as one of this host's render sources (what <c>OpenDetachedWindow</c> does
+    /// after <see cref="AdoptDetachedChild"/>); the child's publications then ride this host's render turns.</summary>
+    internal void AttachChildRenderSourceForTest(AppHost child) => AttachChildRenderSource(child);
+
+    /// <summary>Test-only: this host's video-surface registry (the UI-thread intents the publications snapshot).</summary>
+    internal FluentGpu.Media.VideoSurfaceRegistry VideoSurfacesForTest => _videoSurfaces;
+
+    /// <summary>Test-only: does this host's applier owe a composition commit for work applied with the commit deferred?</summary>
+    internal bool HasUncommittedVideoApplyForTest => VideoApplier.HasUncommittedApply;
 
     /// <summary>UI thread: stop + join this host's render thread on window close (idempotent with Dispose). Ordered BEFORE
     /// any swapchain/device teardown so the render thread — the sole ComPtr owner — is gone first.</summary>
@@ -4419,14 +4471,7 @@ public sealed partial class AppHost : IDisposable
             // the render thread) + bound its fence waits, and give the render loop a recover gate (_device.RecoverDevice
             // under render confinement) + a thread-safe UI wake to nudge the UI out of its clean block on RecoverDone.
             if (_asyncActive) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
-            _renderThread = new Threading.RenderThread(_renderSeam, rf => SubmitPresentOnRenderThread(rf), async: _asyncActive,
-                deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
-                extraDrain: DrainChildRenderSources, needsTick: HasRenderMotion, tick: RenderMotion,
-                tickPeriod: RenderPeriodTicks, displayClock: _window.CreateRenderDisplayClock(),
-                takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
-                submitAbortHandleSink: _device.SetSubmitAbortHandle,
-                ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
-                presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent);
+            _renderThread = BuildRenderThread(_asyncActive, _window.CreateRenderDisplayClock());
             _device.MarkRenderConfined();
             _videoSurfaces.StructuralWake = _renderThread.WakeForVideo;   // a handle arriving wakes the loop: no UI publication needed (F208)
         }
