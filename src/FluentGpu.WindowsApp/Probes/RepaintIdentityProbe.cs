@@ -144,6 +144,106 @@ internal static class RepaintIdentityProbe
                 }
             }
 
+            // ── partial-present-identity: frames composited through the PRESERVE route (repaint rects into a back buffer
+            //    that keeps its pixels, FLIP_SEQUENTIAL) vs the same state composited and presented WHOLE ──
+            for (int id = 0; id < StaticNames.Length && Want("partial-present-identity"); id++)
+            {
+                total++;
+                RepaintIdentityScene.ResetAll();
+                RepaintIdentityScene.Scenario.Value = id;
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                long partial0 = 0, partial1 = 0;
+                host.RunWithRenderThreadParked(() => partial0 = gpu.PartialFrameCount);
+                for (int step = 1; step <= 6; step++)
+                {
+                    RepaintIdentityScene.Tick.Value++;
+                    if (step % 2 == 0) RepaintIdentityScene.TickB.Value++;
+                    if (step % 3 == 0) RepaintIdentityScene.TickC.Value++;
+                    RepaintIdentityScene.ScrollY.Value += 7f;
+                    RepaintIdentityScene.RowX.Value += 5f;
+                    Settle(host, w, 3);
+                }
+                byte[] partial = Capture(host, gpu, out int aw, out int ah, () => partial1 = gpu.PartialFrameCount);
+                host.GpuKnockouts = GpuKnockouts.FullPresent;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 6);
+                byte[] whole = Capture(host, gpu, out int bw, out int bh);
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 4);
+                string name = $"partial-present-identity/{StaticNames[id]}@{scale:0.00}";
+                Console.Error.WriteLine($"[repaint-identity] {name}: partial frames={partial1 - partial0}");
+                if (Judge(name, partial, whole, aw, ah, bw, bh, 0, outDir)) passed++; else failed++;
+            }
+            if (Want("partial-present-identity"))
+            {
+                total++;
+                RepaintIdentityScene.ResetAll();
+                RepaintIdentityScene.Scenario.Value = 11;
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                var handle = FindScroller(host);
+                string name = $"partial-present-identity/scroll@{scale:0.00}";
+                if (handle is null) { Console.Error.WriteLine($"[repaint-identity] {name}: INCONCLUSIVE — no scroller"); failed++; }
+                else
+                {
+                    long p0 = 0, p1 = 0;
+                    host.RunWithRenderThreadParked(() => p0 = gpu.PartialFrameCount);
+                    double at = 0.0;
+                    for (int step = 0; step < 9; step++)
+                    {
+                        at += 23.0 + 5.0 * step;   // small steps: most of the window keeps its pixels
+                        handle.ScrollTo(at, ScrollMove.Immediate);
+                        Settle(host, w, 3);
+                    }
+                    byte[] partial = Capture(host, gpu, out int aw, out int ah, () => p1 = gpu.PartialFrameCount);
+                    host.GpuKnockouts = GpuKnockouts.FullPresent;
+                    host.RequestFullRepaintOnce();
+                    Settle(host, w, 6);
+                    byte[] whole = Capture(host, gpu, out int bw, out int bh);
+                    host.GpuKnockouts = GpuKnockouts.None;
+                    Console.Error.WriteLine($"[repaint-identity] {name}: partial frames={p1 - p0}");
+                    if (Judge(name, partial, whole, aw, ah, bw, bh, 0, outDir)) passed++; else failed++;
+                    handle.ScrollTo(0.0, ScrollMove.Immediate);
+                }
+            }
+
+            // ── occlusion-identity: an opaque overlay hides the page under it — the composite leaves the hidden items out
+            //    (CompositeItem.Opaque) vs the NoOcclusion control that composites every item: 0 px, and the route engaged ──
+            (int Scenario, string Name)[] occlusion = [(24, "tiles-inset"), (25, "lowres-window"), (26, "lowres-inset")];
+            for (int v = 0; v < occlusion.Length && Want("occlusion-identity"); v++)
+            {
+                total++;
+                RepaintIdentityScene.ResetAll();
+                RepaintIdentityScene.Scenario.Value = occlusion[v].Scenario;
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                for (int step = 1; step <= 4; step++) { RepaintIdentityScene.Tick.Value++; Settle(host, w, 3); }
+                // both routes composite from a FRESH scratch pool: a sampled route's pixels depend on the leased texture's
+                // size (SurfacePool.DropScratch), and the two routes lease differently (their backdrop keys differ)
+                host.RunWithRenderThreadParked(gpu.DropScratchSurfaces);
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 4);
+                int hidden = 0;
+                byte[] occluded = Capture(host, gpu, out int aw, out int ah, () => hidden = gpu.LastOccludedItems);
+                host.GpuKnockouts = GpuKnockouts.NoOcclusion;
+                host.RunWithRenderThreadParked(gpu.DropScratchSurfaces);
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 6);
+                byte[] every = Capture(host, gpu, out int bw, out int bh);
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 4);
+                string name = $"occlusion-identity/{occlusion[v].Name}@{scale:0.00}";
+                Console.Error.WriteLine($"[repaint-identity] {name}: hidden items={hidden}");
+                if (hidden <= 0) { Console.Error.WriteLine($"[repaint-identity] {name}: FAIL — the occlusion route never engaged"); failed++; }
+                else if (Judge(name, occluded, every, aw, ah, bw, bh, 0, outDir)) passed++; else failed++;
+            }
+
             // ── tile-feather-identity ──
             if (Want("tile-feather-identity"))
             {

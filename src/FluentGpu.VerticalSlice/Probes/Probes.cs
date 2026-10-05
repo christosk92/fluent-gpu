@@ -1785,10 +1785,15 @@ sealed class HeadlessScrollProducer
     public void PointerDownAt(Point2 p, PointerKind kind = PointerKind.Mouse, uint id = 0) =>
         _win.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0, Pointer: kind, TimestampMs: Ms, PointerId: id));
 
-    /// <summary>Present one frame, then advance the packet-spacing clock by <paramref name="dtMs"/>.</summary>
+    /// <summary>Present one frame, then advance the packet-spacing clock by <paramref name="dtMs"/>. The producer is a
+    /// clock: a frame the host idles through (a contact begin that moves nothing, a still bar) still lets one frame of
+    /// host time pass, as the wall clock does live. The headless clock only advances on a painted frame, so an idle turn
+    /// is painted (an unchanged scene records nothing) to keep the plan clock in step with the packet stamps.</summary>
     public FrameStats Frame(float dtMs)
     {
+        double before = _host.FrameClockMsForTest;
         var f = _host.RunFrame();
+        if (_host.FrameClockMsForTest == before) f = _host.Paint(0);
         FrameMs += dtMs;
         return f;
     }

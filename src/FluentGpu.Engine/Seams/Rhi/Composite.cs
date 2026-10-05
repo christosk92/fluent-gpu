@@ -58,11 +58,15 @@ public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float 
 /// A Group's <see cref="Transform"/> is its slice's posed offset (whole device px), so a group moved rigidly by an
 /// ancestor scroll keeps its content key. <see cref="Inherited"/> = how many ancestor edge fades were DISTRIBUTED onto this
 /// item (0–2; their layers are <see cref="CompositeFrame.ItemInherited"/>, their feathers already folded into
-/// <see cref="Feather"/>/<see cref="Feather2"/>).</summary>
+/// <see cref="Feather"/>/<see cref="Feather2"/>). <see cref="LowResDown"/> &gt; 1 = a LOW-RESOLUTION repaint boundary
+/// (BoxEl.RasterScale): a <see cref="CompositeKind.Direct"/> item the backend replays once per change into one surface at
+/// 1/LowResDown of the window scale and upsamples bilinearly — it holds no tiles. <see cref="Opaque"/> = a window-px rect
+/// (whole pixels) this item paints FULLY OPAQUE once composited (empty = none known): every item composited before it whose
+/// footprint lies inside is hidden, and the backend skips it.</summary>
 public readonly record struct CompositeItem(int SliceId, CompositeKind Kind, Affine2D Transform, float Alpha, RectF Clip,
     CornerRadius4 ClipRadii, EdgeFeather Feather, float BlurSigma, AcrylicRecipe Acrylic, byte BlendCopy,
     RectF RoundClip = default, int GroupCount = 0, byte HasLayer = 0, RectF SourceClip = default,
-    EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0);
+    EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0, RectF Opaque = default);
 
 /// <summary>The backend's content-keyed offscreen cache for the last composite (gpu-renderer.md §13.1e/§13.1g):
 /// <paramref name="GroupSurfaces"/> = group surfaces RENDERED (a miss), <paramref name="GroupCacheHits"/> = groups

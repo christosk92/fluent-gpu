@@ -51,11 +51,12 @@ public sealed partial class SceneRecordingSnapshot
         public NodePaint Paint;
         public InteractionAnim Interaction;
         public BrushAnim Brush;
+        public GlyphWipe Wipe;
         public int Node;    // the scene slot this row is bound to for the current overlay epoch
-        public byte Have;   // HavePaint | HaveInteraction | HaveBrush
+        public byte Have;   // HavePaint | HaveInteraction | HaveBrush | HaveWipe
     }
 
-    private const byte HavePaint = 1, HaveInteraction = 2, HaveBrush = 4;
+    private const byte HavePaint = 1, HaveInteraction = 2, HaveBrush = 4, HaveWipe = 8;
 
     /// <summary>The floor every captured snapshot reserves — comfortably above the measured 28–61 concurrent
     /// animation tracks, so the demand-driven reserve below is a safety net rather than the steady-state path.</summary>
@@ -244,6 +245,25 @@ public sealed partial class SceneRecordingSnapshot
             row.Have |= HaveBrush;
         }
         row.Brush.T = value;
+    }
+
+    /// <summary>A posed glyph-wipe split (<c>AnimChannel.GlyphWipeSplit</c>) over the node's authored <see cref="GlyphWipe"/>:
+    /// colours, softness and lift stay as authored, only the split moves. A node with no authored wipe poses nothing.</summary>
+    /// <param name="changed">See <see cref="CompositorPaint"/> — false re-poses an identical value and damages nothing.</param>
+    internal void SetCompositorGlyphWipe(NodeHandle node, float split, bool changed = true)
+    {
+        uint index = node.Raw.Index;
+        if (!_glyphWipe.TryGet((int)index, out GlyphWipe authored)) return;
+        int slot = AcquireOverlayRow(index);
+        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
+        if (slot < 0) return;
+        ref OverlayRow row = ref _overlayRows[slot];
+        if ((row.Have & HaveWipe) == 0)
+        {
+            row.Wipe = authored;
+            row.Have |= HaveWipe;
+        }
+        row.Wipe = row.Wipe with { Split = split };
     }
 
     /// <summary>This node's row for the current overlay epoch, binding a free one on first touch. -1 means the pool is

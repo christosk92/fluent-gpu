@@ -331,7 +331,7 @@ public sealed partial class AnimEngine
     /// seam for the deleted AdvanceBrushAnims + InteractionAnimator tickers.</summary>
     private static bool IsSideTableChannel(AnimChannel ch)
         => ch == AnimChannel.BrushFade || ch == AnimChannel.HoverFade || ch == AnimChannel.PressFade
-           || ch == AnimChannel.DisclosureProgress;
+           || ch == AnimChannel.DisclosureProgress || ch == AnimChannel.GlyphWipeSplit;
 
     private void WriteSideTable(AnimChannel ch, NodeHandle node, float v)
     {
@@ -341,6 +341,7 @@ public sealed partial class AnimEngine
             case AnimChannel.HoverFade: _scene.SetInteractT(node, press: false, v); break;
             case AnimChannel.PressFade: _scene.SetInteractT(node, press: true, v); break;
             case AnimChannel.DisclosureProgress: _scene.SetVirtualDisclosureProgress(node, v); break;
+            case AnimChannel.GlyphWipeSplit: _scene.SetGlyphWipeSplit(node, v); break;
         }
     }
 

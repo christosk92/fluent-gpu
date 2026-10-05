@@ -32,11 +32,17 @@ public sealed class RenderCompositorAnimations
         /// parks, so an un-park always re-poses as a change.</summary>
         public float PosedValue;
         public bool HasPosed;
+        /// <summary>The row's node could not reach a pixel on its last tick (<see cref="Reaches"/>): nothing was posed
+        /// for it, so the frame shows whatever it last recorded. The tick it can reach pixels again re-poses it as a
+        /// change, whatever its value.</summary>
+        public bool Hidden;
     }
     /// <summary>One node's folded pose for this tick, plus whether ANY of its channels actually moved. Folded per node
     /// rather than per row because a node with a TranslateX and an Opacity row must damage once, not twice.</summary>
-    private struct NodeAcc { public AnimEngine.Accum Acc; public bool Changed; }
+    private struct NodeAcc { public AnimEngine.Accum Acc; public bool Changed, OpacityMoving, OpacityPosed, Hidden; }
     private State[] _states = [], _nextStates = [];
+    // Per row, this tick: evaluated on a live, un-parked node (pass 1), and whether that row moved to a new Done.
+    private bool[] _rowLive = [], _rowDoneEdge = [];
     // Render tick bookkeeping for the pending-start hold: the previous tick's instant and the interval before it.
     private double _lastTickMs;
     private float _tickIntervalMs;
@@ -89,6 +95,8 @@ public sealed class RenderCompositorAnimations
         double capturedAtMs = _paused ? Math.Min(desired.CapturedAtMs, _pausedAtMs) : desired.CapturedAtMs;
         SceneRecordingSnapshot.Grow(ref _nextStates, desired.Count);
         SceneRecordingSnapshot.Grow(ref _feedback, desired.Count);
+        SceneRecordingSnapshot.Grow(ref _rowLive, desired.Count);
+        SceneRecordingSnapshot.Grow(ref _rowDoneEdge, desired.Count);
         _accumulators.EnsureCapacity(desired.Count);
         _nextIndices.Clear();
         int count = 0;
@@ -198,44 +206,110 @@ public sealed class RenderCompositorAnimations
         HasActive = false;
         // A revert queued by Adopt is a real change even if no row moves this tick.
         ChangedThisTick = _revertedCount > 0;
+        // PASS 1: sample every row and fold the transform/opacity channels per node — nothing is written to the scene yet,
+        // because whether a row may pose at all depends on its ancestors' opacity THIS tick (pass 2).
         for (int i = 0; i < _count; i++)
         {
             ref var state = ref _states[i];
             bool wasDone = state.Done;
             Evaluate(ref state, nowMs, _tickIntervalMs);
             ref readonly var row = ref state.Desired.Row;
-            if (!state.Parked && scene.IsLive(row.Node))
+            _rowLive[i] = !state.Parked && scene.IsLive(row.Node);
+            _rowDoneEdge[i] = state.Done && !wasDone;
+            if (_rowLive[i] && !IsSideTable(row.Channel))
             {
-                // Bitwise compare, deliberately no tolerance: a held or Done row re-poses the IDENTICAL float, and a
-                // live row's next analytic sample differs in at least one ulp. (WebRender's approx_eq guards a property
-                // binding that can be re-sent unchanged; our Value is recomputed, not re-sent.)
-                bool changed = !state.HasPosed || state.Value != state.PosedValue;
-                state.PosedValue = state.Value;
-                state.HasPosed = true;
-                // A row reaching Done changes no pixels, but it does complete a UI lifecycle through the feedback
-                // publish — so it counts as "this tick did something" even when the value held.
-                ChangedThisTick |= changed || (state.Done && !wasDone);
-                if (row.Channel is AnimChannel.HoverFade or AnimChannel.PressFade)
-                    scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value, changed);
-                else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value, changed);
-                else
-                {
-                    ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
-                    if (!exists) accumulator.Acc = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
-                    accumulator.Acc.Fold(row.Channel, state.Value, replace: true);
-                    accumulator.Changed |= changed;   // any channel of this node moving damages the node once
-                }
-                HasActive |= !_paused && !state.Done;
+                ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
+                if (!exists) accumulator.Acc = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
+                accumulator.Acc.Fold(row.Channel, state.Value, replace: true);
+                accumulator.OpacityMoving |= row.Channel == AnimChannel.Opacity && !state.Done;
+                accumulator.OpacityPosed |= row.Channel == AnimChannel.Opacity;
             }
             _feedback[i] = new(row.Node, row.Channel, state.Desired.Instance, state.Desired.Revision,
                 state.Value, state.Velocity, MathF.Max(0, state.ElapsedMs), MathF.Max(0, -state.ElapsedMs), state.Done);
         }
-        foreach (var entry in _accumulators) Compose(scene, entry.Key, entry.Value.Acc, entry.Value.Changed);
+        // PASS 2: a row poses only when its node can reach a pixel. One that cannot (an ancestor at opacity 0 or not
+        // Visible — an always-mounted busy bar parked at opacity 0, looping) changes nothing on screen: it writes no pose,
+        // damages nothing and, when it loops forever, does not keep the render loop awake. Its value is a pure function
+        // of time, so the tick it can reach pixels again poses it exactly where it belongs.
+        for (int i = 0; i < _count; i++)
+        {
+            if (!_rowLive[i]) continue;
+            ref var state = ref _states[i];
+            ref readonly var row = ref state.Desired.Row;
+            // A row reaching Done completes a UI lifecycle through the feedback publish — it counts as "this tick did
+            // something" even when the value held, and even when nobody can see it.
+            ChangedThisTick |= _rowDoneEdge[i];
+            if (!Reaches(scene, row.Node))
+            {
+                state.Hidden = true;
+                // flagged, not removed: a descendant's Reaches still reads this node's opacity from its accumulator
+                if (!IsSideTable(row.Channel))
+                    CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Hidden = true;
+                // A finite row still ticks to its Done (its lifecycle needs the edge); a loop never ends, so it waits.
+                HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Loop);
+                continue;
+            }
+            // Bitwise compare, deliberately no tolerance: a held or Done row re-poses the IDENTICAL float, and a live
+            // row's next analytic sample differs in at least one ulp. (WebRender's approx_eq guards a property binding
+            // that can be re-sent unchanged; our Value is recomputed, not re-sent.) A row that was hidden posed nothing
+            // since: it re-poses as a change.
+            // A wipe split poses at whole-DIP steps of its run (QuantizeWipe): only a step that crosses one is a change.
+            float posed = row.Channel == AnimChannel.GlyphWipeSplit ? QuantizeWipe(scene, row.Node, state.Value) : state.Value;
+            bool changed = !state.HasPosed || posed != state.PosedValue || state.Hidden;
+            state.PosedValue = posed;
+            state.HasPosed = true;
+            state.Hidden = false;
+            ChangedThisTick |= changed;
+            if (row.Channel is AnimChannel.HoverFade or AnimChannel.PressFade)
+                scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value, changed);
+            else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value, changed);
+            else if (row.Channel == AnimChannel.GlyphWipeSplit) scene.SetCompositorGlyphWipe(row.Node, posed, changed);
+            else CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Changed |= changed;   // any channel moving damages the node once
+            HasActive |= !_paused && !state.Done;
+        }
+        foreach (var entry in _accumulators) if (!entry.Value.Hidden) Compose(scene, entry.Key, entry.Value.Acc, entry.Value.Changed);
         // Drain the reverts LAST, so a node that both lost a row and kept another is damaged by whichever ran first
         // and not twice — MarkCompositorSelfChanged is idempotent within an epoch.
         for (int i = 0; i < _revertedCount; i++)
             if (scene.IsLive(_reverted[i])) scene.MarkCompositorSelfChanged(_reverted[i]);
         _revertedCount = 0;
+    }
+
+    /// <summary>Can <paramref name="node"/> put a pixel on screen this tick? Not when it or an ancestor is not Visible, or
+    /// an ANCESTOR sits at opacity 0 — the value THIS tick poses when an animation folds it, else the scene's (a hover or
+    /// pressed opacity counts as possibly visible). The node's OWN opacity hides it only when no row of its own poses it:
+    /// a posed 0 is exactly what hides a faded-out node, so that pose must be written. An opacity that is itself in motion
+    /// counts as visible: a fade-in from 0 is what must keep posing. Conservative elsewhere: a broken chain reads as visible.</summary>
+    private bool Reaches(SceneRecordingSnapshot scene, NodeHandle node)
+    {
+        for (NodeHandle n = node; !n.IsNull && scene.IsLive(n); n = scene.Parent(n))
+        {
+            if ((scene.Flags(n) & NodeFlags.Visible) == 0) return false;
+            ref readonly NodePaint p = ref scene.Paint(n);
+            float op = p.Opacity;
+            if (_accumulators.TryGetValue(n, out NodeAcc acc))
+            {
+                if (acc.OpacityMoving || (n == node && acc.OpacityPosed)) continue;
+                op = acc.Acc.Op;
+            }
+            if (!float.IsNaN(p.HoverOpacity)) op = MathF.Max(op, p.HoverOpacity);
+            if (!float.IsNaN(p.PressedOpacity)) op = MathF.Max(op, p.PressedOpacity);
+            if (op <= 0f) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Channels posed onto a side table (interaction, brush, glyph wipe) rather than folded into the transform /
+    /// opacity accumulator.</summary>
+    private static bool IsSideTable(AnimChannel channel)
+        => channel is AnimChannel.HoverFade or AnimChannel.PressFade or AnimChannel.BrushFade or AnimChannel.GlyphWipeSplit;
+
+    /// <summary>A wipe split rounded to whole DIPs of the run it sweeps (the node's width), the settled ends exact: the
+    /// boundary moves in pixel steps, so a tick that stays inside one changes nothing and re-records nothing.</summary>
+    internal static float QuantizeWipe(SceneRecordingSnapshot scene, NodeHandle node, float split)
+    {
+        float w = scene.Bounds(node).W;
+        return w > 1f && split > 0f && split < 1f ? MathF.Round(split * w) / w : split;
     }
 
     private static State Seed(in CompositorAnimationSnapshot.Entry entry, double capturedAtMs) => new()
