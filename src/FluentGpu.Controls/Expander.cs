@@ -244,8 +244,12 @@ public sealed class Expander : Component
             Role = AutomationRole.Expander,
             Children =
             [
+                // A COLUMN: the header content is stretched to this slot's WIDTH (cross axis). In a row it was only as
+                // wide as its own content, and a self-measuring header (SettingsCard builds its layout from its last
+                // measured width) then latched whatever width one narrow frame gave it: a zoom step left Settings'
+                // expander headers wrapped into a sliver, icon dropped, the switch spilling below the card.
                 headerContent is { } hc
-                    ? new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [hc] }
+                    ? new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [hc] }
                     : new TextEl(Header) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
                 chevron,
             ],
