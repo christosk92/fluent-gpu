@@ -651,7 +651,7 @@ public static class FluentApp
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
         if (EngineSwitches.Ledger) FrameLedger.DumpIfRequested();   // `--fg ledger=PATH`: the binary + one CSV per stream
-        Win32LedgerSampler.Uninstall();
+        Win32LedgerSampler.Uninstall(gpuDev);
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (h.Screenshot is { } shotPath && device is D3D12Device d3d)

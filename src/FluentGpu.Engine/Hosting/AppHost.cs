@@ -4600,6 +4600,7 @@ public sealed partial class AppHost : IDisposable
     private FrameStats RunFrameCore()
     {
         _ledgerExit = LedgerFrameExit.Painted;
+        _ledgerWake = 0;
         ImportRecordingFeedback();
         // Seam confinement backstop: the frame pump IS the UI thread. Bind it (idempotent) + assert. Both are
         // [Conditional("FGGUARD")] — live in Debug/CI (proves single-UI-thread ownership), erased from Release/Ship.
@@ -4877,6 +4878,7 @@ public sealed partial class AppHost : IDisposable
 
         // Wake attribution: snapshot the mask at the idle decision point (before the image pump can flip _frameNeeded).
         WakeReasons wake = ComputeWakeReasons();   // always-on census input; allocation-free field reads
+        _ledgerWake = (uint)wake;                  // the frame ledger's wake census (a plain store)
 
         if (!HasActiveWork)
         {
@@ -4909,6 +4911,7 @@ public sealed partial class AppHost : IDisposable
             }
             _frameNeeded = true;
             wake = ComputeWakeReasons();   // a completed decode forced this paint → re-attribute (now FrameNeeded)
+            _ledgerWake = (uint)wake;
         }
 
         // F098: a wake whose ONLY reason is a coalesced video pump (a native state edge, a transport command, a geometry request)

@@ -32,6 +32,18 @@ public sealed class LedgerSnapshot
     /// <summary>A cycle count in ms at <see cref="CyclesPerMs"/> (NaN without a calibrated rate).</summary>
     public double CyclesMs(ulong cycles) => CyclesPerMs > 0 ? cycles / CyclesPerMs : double.NaN;
 
+    /// <summary>The same records read at another cycles-per-ms (a run applies ONE rate to every window it compares).</summary>
+    public LedgerSnapshot WithRate(double cyclesPerMs) => new()
+    {
+        QpcFrequency = QpcFrequency, CyclesPerMs = cyclesPerMs, Processors = Processors, OriginQpc = OriginQpc, EndQpc = EndQpc,
+        Ui = Ui, Render = Render, Gpu = Gpu, Memory = Memory, Audio = Audio,
+    };
+
+    /// <summary>The process's cycles per millisecond of process CPU time over this window's memory samples (Δ QueryProcessCycleTime /
+    /// Δ GetProcessTimes): the counter's EFFECTIVE rate at the clocks the cores actually ran at. NaN under
+    /// <paramref name="minCpuMs"/> of CPU time (the tick-accounted denominator is too coarse below it).</summary>
+    public double EffectiveCyclesPerMs(double minCpuMs = 1000) => FrameLedger.RateBetween(Memory, minCpuMs);
+
     /// <summary>The window's wall time (ms).</summary>
     public double WallMs => (EndQpc - OriginQpc) * 1000.0 / QpcFrequency;
 
@@ -64,7 +76,7 @@ public sealed class LedgerSnapshot
 /// little-endian as they sit in memory. Compact (no text) and lossless; <see cref="LedgerSnapshot.WriteCsv"/> is the readable form.</summary>
 public static class FrameLedgerFile
 {
-    public const int Version = 1;
+    public const int Version = 2;
     private static ReadOnlySpan<byte> Magic => "FGLEDGER"u8;
 
     public static void Write(Stream s, LedgerSnapshot snap)
@@ -142,7 +154,7 @@ public static class FrameLedgerCsv
     public static string Ui(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Ui.Length * 220);
-        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal");
+        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs");
         LedgerUiFrame prev = default;
         for (int i = 0; i < s.Ui.Length; i++)
         {
@@ -163,7 +175,9 @@ public static class FrameLedgerCsv
             sb.Append(r.Nodes).Append(',').Append(r.DrawNodes).Append(',').Append(r.Slices).Append(',').Append(r.Components).Append(',');
             T(sb, r.DamageCoverage);
             sb.Append(r.DamageRects).Append(',').Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',')
-              .Append(r.PresentedTotal).Append(',').Append(r.MissedVsyncsTotal).AppendLine();
+              .Append(r.PresentedTotal).Append(',').Append(r.MissedVsyncsTotal).Append(',').Append("0x").Append(r.WakeMask.ToString("X", Inv)).Append(',');
+            T(sb, r.UiCpuTimeTotal / 10_000.0, last: true);
+            sb.AppendLine();
             prev = r;
         }
         return sb.ToString();
@@ -172,7 +186,7 @@ public static class FrameLedgerCsv
     public static string Render(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Render.Length * 200);
-        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks");
+        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs");
         foreach (ref readonly var r in s.Render.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -185,7 +199,9 @@ public static class FrameLedgerCsv
             sb.Append(r.AllocBytes).Append(',');
             T(sb, r.StageMs); T(sb, r.RecordMs); T(sb, r.SubmitMs); T(sb, r.FenceMs); T(sb, r.LatencyMs); T(sb, r.PresentMs); T(sb, r.VideoMs);
             T(sb, r.DamageCoverage);
-            sb.Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',').Append(r.TilesRastered).Append(',').Append(r.MissedTicks).AppendLine();
+            sb.Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',').Append(r.TilesRastered).Append(',').Append(r.MissedTicks).Append(',');
+            T(sb, r.CpuTimeTotal / 10_000.0, last: true);
+            sb.AppendLine();
         }
         return sb.ToString();
     }
@@ -229,14 +245,14 @@ public static class FrameLedgerCsv
     public static string Audio(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Audio.Length * 80);
-        sb.AppendLine("seq,ms,deviceWrites,deviceDryEdges,xruns,xrunFrames,paddingMinFrames,paddingMinMs,bufferFrames,rate");
+        sb.AppendLine("seq,ms,deviceWrites,bufferDrained,xruns,xrunFrames,paddingMinFrames,paddingMinMs,bufferFrames,rate");
         LedgerAudioSample prev = default;
         for (int i = 0; i < s.Audio.Length; i++)
         {
             ref readonly var r = ref s.Audio[i];
             sb.Append(r.Seq).Append(','); T(sb, s.Ms(r.Qpc));
             // Deltas since the previous sample (the first row: since the counters began).
-            sb.Append(r.DeviceWritesTotal - prev.DeviceWritesTotal).Append(',').Append(r.DeviceDryEdgesTotal - prev.DeviceDryEdgesTotal).Append(',')
+            sb.Append(r.DeviceWritesTotal - prev.DeviceWritesTotal).Append(',').Append(r.BufferDrainedTotal - prev.BufferDrainedTotal).Append(',')
               .Append(r.XrunsTotal - prev.XrunsTotal).Append(',').Append(r.XrunFramesTotal - prev.XrunFramesTotal).Append(',')
               .Append(r.PaddingMinFrames).Append(',');
             T(sb, r.PaddingMinFrames >= 0 && r.Rate > 0 ? r.PaddingMinFrames * 1000.0 / r.Rate : double.NaN);

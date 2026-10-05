@@ -30,6 +30,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     private HANDLE _event;   // auto-reset event the device signals each period (event-driven shared mode; replaces Sleep(1) poll)
 
     private uint _bufferFrames;
+    private int _healthLastPadding;   // AudioHealth: the padding this device's previous write saw (RT thread)
     private int _deviceChannels = 2;
     // Device sample format persisted at Open (§7.1): the graph is internally stereo f32, but the endpoint may be int16/24/32.
     // _devFloat == "write our f32 blocks straight" (device is 32-bit IEEE float — the normal case); otherwise Write converts.
@@ -176,7 +177,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         {
             int hr = _client->Stop();
             _started = false;
-            AudioHealth.NoteDeviceIdle();
+            _healthLastPadding = 0;   // a stopped client's next empty buffer is not a drained edge
             if (hr < 0 && IsDeviceLostHr(hr)) MarkLost(hr);
         }
     }
@@ -215,7 +216,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(hr);
         }
         Interlocked.Exchange(ref _written, 0);
-        AudioHealth.NoteDeviceIdle();
+        _healthLastPadding = 0;
     }
     /// <inheritdoc/>
     /// <remarks>A NEGATIVE <paramref name="timeoutMs"/> means INFINITE (R-3): the session passes -1 while a pause fade has finished
@@ -254,7 +255,12 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 if (IsDeviceLostHr(hr)) MarkLost(hr);
                 break;
             }
-            if (written == 0) AudioHealth.NoteDevicePadding((int)padding, (int)_bufferFrames, Format.SampleRate, _started);
+            if (written == 0)
+            {
+                // The frame ledger's audio health (AudioHealth): this device's own drained edge — empty now, audio queued at its previous write.
+                AudioHealth.NoteDeviceWrite((int)padding, (int)_bufferFrames, Format.SampleRate, _started && padding == 0 && _healthLastPadding > 0);
+                _healthLastPadding = (int)padding;
+            }
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
             {

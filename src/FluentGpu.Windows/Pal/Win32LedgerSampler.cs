@@ -13,6 +13,7 @@ internal static unsafe partial class Win32LedgerSampler
 {
     private static readonly Func<ulong> s_cycles = ReadProcessCycles;
     private static readonly LedgerPlatformSampler s_sample = Sample;
+    private static readonly Func<long> s_threadTime = ReadThreadCpuTime;
     private static D3D12Device? s_device;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -31,11 +32,19 @@ internal static unsafe partial class Win32LedgerSampler
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
 
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetThreadTimes(nint thread, out long creation, out long exit, out long kernel, out long user);
+
     [LibraryImport("kernel32.dll", EntryPoint = "K32GetProcessMemoryInfo")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetProcessMemoryInfo(nint process, ProcessMemoryCountersEx* counters, uint cb);
 
     private const nint CurrentProcess = -1;   // GetCurrentProcess()'s pseudo-handle
+    private const nint CurrentThread = -2;    // GetCurrentThread()'s pseudo-handle
+
+    /// <summary>The calling thread's kernel + user time (100 ns): the ledger's rate-free cross-check of its cycle figures.</summary>
+    private static long ReadThreadCpuTime() => GetThreadTimes(CurrentThread, out _, out _, out long k, out long u) ? k + u : 0L;
 
     private static ulong ReadProcessCycles() => QueryProcessCycleTime(CurrentProcess, out ulong c) ? c : 0UL;
 
@@ -60,15 +69,19 @@ internal static unsafe partial class Win32LedgerSampler
         s.GlyphAtlasBytes = Volatile.Read(ref s_device)?.DiagGlyphAtlasBytes ?? 0;
     }
 
-    /// <summary>Install the process counter + the memory sampler into the ledger seams (the device, when there is one, adds the
-    /// glyph atlas). A failing cycle query leaves that seam empty.</summary>
+    /// <summary>Install the process counter, the thread CPU time and the memory sampler into the ledger seams; the FIRST window's
+    /// device adds the glyph atlas (a later window never replaces it). A failing query leaves its seam empty.</summary>
     public static void Install(D3D12Device? device)
     {
-        Volatile.Write(ref s_device, device);
+        if (device is not null) Interlocked.CompareExchange(ref s_device, device, null);
         if (FrameLedger.ProcessCycles is null && ReadProcessCycles() != 0) FrameLedger.ProcessCycles = s_cycles;
+        if (FrameLedger.ThreadCpuTime is null && ReadThreadCpuTime() != 0) FrameLedger.ThreadCpuTime = s_threadTime;
         FrameLedger.PlatformSampler ??= s_sample;
     }
 
-    /// <summary>The window is gone: forget its device (the seams stay; they read nothing device-bound then).</summary>
-    public static void Uninstall() => Volatile.Write(ref s_device, null);
+    /// <summary>A window is gone: forget its device if it is the one the sampler reads (another window's exit leaves it alone).</summary>
+    public static void Uninstall(D3D12Device? device)
+    {
+        if (device is not null) Interlocked.CompareExchange(ref s_device, null, device);
+    }
 }

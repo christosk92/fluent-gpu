@@ -6,7 +6,8 @@ namespace FluentGpu.Hosting;
 
 // ── the frame ledger's host side (FrameLedger.cs) ──────────────────────────────────────────────────────────────────────
 //
-// UI: RunFrame wraps RunFrameCore. Off, that is one static bool read. On (and this host owns the ledger), the wrapper reads
+// UI: RunFrame wraps RunFrameCore. Off, the wrapper is one static bool read, and RunFrameCore / Paint pay only the plain
+// field stores below (the pump's end stamp, the exit gate, the wake mask — values they already hold). On (and this host owns the ledger), the wrapper reads
 // the thread's cycles + allocated bytes and QPC around the frame, and RunFrameCore / Paint leave their own stamps in plain
 // fields as they go (the pump's end, which early-out stopped the frame, Paint's six phase stamps); the record is assembled
 // here from those and the frame's FrameStats. The loop's wait before the frame arrives through NoteLoopWait.
@@ -20,6 +21,7 @@ public sealed partial class AppHost
     private readonly record struct LedgerPaintStamps(long Start, long Flush, long Layout, long Anim, long Record, long Submit);
 
     private LedgerFrameExit _ledgerExit;
+    private uint _ledgerWake;
     private long _ledgerPumpQpc;
     private LedgerPaintStamps _ledgerPaint;
     private long _ledgerWaitStart, _ledgerWaitEnd;
@@ -54,8 +56,8 @@ public sealed partial class AppHost
         long end = Stopwatch.GetTimestamp();
         ulong cycles = ThreadCycles.Read();
         long alloc = GC.GetAllocatedBytesForCurrentThread();
+        long cpuTime = FrameLedger.ReadThreadCpuTime();
         ulong uiCycles = cycles >= cyclesStart && cyclesStart != 0 ? cycles - cyclesStart : 0;
-        if (end - start > Stopwatch.Frequency / 1000) FrameLedger.ObserveUiRate(uiCycles, end - start);
         bool painted = _ledgerPaint.Start != 0;
         var flags = LedgerUiFlags.None;
         if (s.Rendered) flags |= LedgerUiFlags.Rendered;
@@ -72,6 +74,8 @@ public sealed partial class AppHost
             WaitStartQpc = _ledgerWaitStart, WaitEndQpc = _ledgerWaitEnd, WaitRequestedMs = _ledgerWaitMs, WaitKind = (byte)_ledgerWaitKind,
             Exit = (byte)_ledgerExit, Flags = (ushort)flags,
             PublishSeq = painted ? s.PublishSeq : 0,
+            // The process counter is read here, after the frame's end stamp and its own cycle read, so its ~10 µs syscall is never
+            // inside a measured span (it lands in the gap before the next frame, as part of "other").
             UiCycles = uiCycles, UiCyclesTotal = cycles, ProcessCyclesTotal = FrameLedger.ReadProcessCycles(),
             AllocBytes = alloc - allocStart, AllocBytesTotal = alloc,
             GcPauseTicksTotal = GC.GetTotalPauseDuration().Ticks,
@@ -81,6 +85,7 @@ public sealed partial class AppHost
             DamageRects = (ushort)Math.Clamp(s.RepaintRectCount, 0, ushort.MaxValue),
             FullReason = (byte)s.RepaintFullReason,
             PresentedTotal = (long)PresentedSequence, MissedVsyncsTotal = Interlocked.Read(ref _missedVsyncsTotal),
+            WakeMask = _ledgerWake, UiCpuTimeTotal = cpuTime,
         };
         FrameLedger.RecordUi(ref r);
         _ledgerWaitStart = _ledgerWaitEnd = 0;
@@ -108,6 +113,15 @@ public sealed partial class AppHost
         _ledgerTurnOutcome = outcome;
     }
 
+    /// <summary>Test seam: one ledgered turn as the render loop would hand it, with this host's submit side set as
+    /// SubmitPresentOnRenderThread would have left it.</summary>
+    internal void LedgerTurnForTest(in Threading.LedgerTurnFacts f, bool presented, LedgerTurnOutcome outcome)
+    {
+        _ledgerTurnPresented = presented;
+        _ledgerTurnOutcome = outcome;
+        LedgerRenderTurn(in f);
+    }
+
     /// <summary>RENDER THREAD (<see cref="Threading.RenderThread.LedgerSink"/>): one turn of this host's loop. Records the turn when
     /// this host owns the ledger, then any GPU sample that retired since the last turn. Zero allocation.</summary>
     private void LedgerRenderTurn(in Threading.LedgerTurnFacts f)
@@ -123,9 +137,11 @@ public sealed partial class AppHost
         _ledgerTurnTiles = 0;
         _ledgerTurnPresented = false;
         if (!FrameLedger.IsOwner(this)) return;
-        if (f.DoneQpc > f.SlotOpenQpc && f.SlotOpenQpc != 0) FrameLedger.ObserveRenderRate(f.Cycles, f.EndQpc - f.StartQpc);
-
         bool hasSample = _swapchain.TryGetGpuRenderSample(out GpuRenderSample g);
+        // The submit this turn made (the join key to the GPU stream): 0 unless the turn actually submitted to this swapchain; an age
+        // of ulong.MaxValue means the sample's submit is not comparable with the current one (an invalidated target).
+        bool submitted = presented && outcome is LedgerTurnOutcome.Recorded or LedgerTurnOutcome.CompositeOnly or LedgerTurnOutcome.Direct;
+        ulong submitSeq = submitted && hasSample && g.SubmitSequence != 0 && g.SubmitAge != ulong.MaxValue ? g.SubmitSequence + g.SubmitAge : 0;
         bool turnPresented = f.Kind is LedgerTurnKind.Fresh or LedgerTurnKind.Motion;
         Threading.PresentSplit split = turnPresented ? _presentSplit : default;
         var flags = LedgerTurnFlags.None;
@@ -135,7 +151,7 @@ public sealed partial class AppHost
         {
             WaitStartQpc = f.WaitStartQpc, StartQpc = f.StartQpc, SlotOpenQpc = f.SlotOpenQpc, DoneQpc = f.DoneQpc, EndQpc = f.EndQpc,
             TickSeq = f.TickSeq, TickQpc = f.TickQpc, PublishSeq = f.PublishSeq,
-            SubmitSeq = hasSample && g.SubmitSequence != 0 ? g.SubmitSequence + g.SubmitAge : 0,
+            SubmitSeq = submitSeq, CpuTimeTotal = FrameLedger.ReadThreadCpuTime(),
             Cycles = f.Cycles, CyclesTotal = f.CyclesTotal, AllocBytes = f.AllocBytes,
             StageMs = (float)split.StageMs, RecordMs = (float)split.RecordMs, SubmitMs = (float)split.SubmitMs, FenceMs = (float)split.FenceMs,
             LatencyMs = (float)split.LatencyMs, PresentMs = (float)split.PresentMs, VideoMs = (float)split.VideoMs,

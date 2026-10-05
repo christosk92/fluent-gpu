@@ -157,8 +157,9 @@ public sealed class RenderThread : IDisposable
     private ulong _turnStartCycles;
     private double _renderCyclesPerMs;
     // The frame ledger's view of the turn (FrameLedger): what the present decision did, when the slot opened and the present
-    // returned, the publication it presented and the ticks it skipped. Plain render-thread stores every turn; read only by the
-    // ledger hand-off at the turn's end, and only while the ledger is on.
+    // returned, the publication it presented and the ticks it skipped. Plain render-thread stores every turn (the decision's own
+    // stamps, already taken); the counter reads the hand-off needs (the wait-start QPC, the allocation counter) run only while the
+    // ledger is on, and only then is the hand-off called.
     private LedgerTurnKind _turnKind;
     private long _turnSlotOpenQpc, _turnDoneQpc, _turnLedgerTickSeq, _turnLedgerTickQpc, _turnStartAlloc;
     private ulong _turnPublishSeq;
@@ -304,7 +305,7 @@ public sealed class RenderThread : IDisposable
         ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Render);   // this thread is the SOLE ComPtr owner for submit/present
         while (true)
         {
-            long waitStart = Stopwatch.GetTimestamp();
+            long waitStart = FrameLedger.Enabled ? Stopwatch.GetTimestamp() : 0;   // the ledger's turn record only
             bool motionDue = _needsTick?.Invoke() == true;
             if (!motionDue) { _motionRun.Break(); _catchUp.Break(); }   // idle is not a missed tick: the next paced present starts a new run
             _displayClock?.SetActive(motionDue);
@@ -321,7 +322,7 @@ public sealed class RenderThread : IDisposable
             }
             long turnStart = Stopwatch.GetTimestamp();
             _turnStartCycles = FluentGpu.Foundation.ThreadCycles.Read();
-            _turnStartAlloc = GC.GetAllocatedBytesForCurrentThread();
+            if (FrameLedger.Enabled) _turnStartAlloc = GC.GetAllocatedBytesForCurrentThread();
             _turnKind = LedgerTurnKind.Bare;
             _turnSlotOpenQpc = _turnDoneQpc = _turnLedgerTickSeq = _turnLedgerTickQpc = 0;
             _turnPublishSeq = 0;

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -39,6 +41,7 @@ public sealed class FrameLedgerTests
         public readonly HeadlessWindow Window;
         public readonly PaintedRoot Root = new();
         public readonly AppHost Host;
+        public readonly RenderThread? Thread;
 
         public Rig(bool renderThread = false)
         {
@@ -46,7 +49,18 @@ public sealed class FrameLedgerTests
             Window = new HeadlessWindow(new WindowDesc("main", new Size2(320, 240), 1f));
             Window.Show();
             Host = new AppHost(App, Window, Device, new HeadlessFontSystem(Strings), Strings, Root);
-            if (renderThread) Host.InstallRenderThreadForTest();
+            if (renderThread) Thread = Host.InstallRenderThreadForTest();
+        }
+
+        public AppHost NewChild()
+        {
+            var window = new HeadlessWindow(new WindowDesc("pop-out", new Size2(320, 180), 1f, Composited: true, CustomFrame: true));
+            window.Show();
+            var child = new AppHost(App, window, Device, new HeadlessFontSystem(Strings), Strings, new PaintedRoot(),
+                images: null, frameTime: null, compositeSwapchain: true, isDetachedChild: true, parentRenderThread: Thread);
+            Host.AdoptDetachedChild(child);
+            Host.AttachChildRenderSourceForTest(child);
+            return child;
         }
 
         public void Dispose()
@@ -55,6 +69,16 @@ public sealed class FrameLedgerTests
             Host.Dispose();
             App.Dispose();
         }
+    }
+
+    private static LedgerTurnFacts Turn(LedgerTurnKind kind, ulong publishSeq = 0)
+    {
+        long t = Stopwatch.GetTimestamp();
+        return new LedgerTurnFacts
+        {
+            WaitStartQpc = t - 100, StartQpc = t, SlotOpenQpc = t + 10, DoneQpc = kind is LedgerTurnKind.Fresh or LedgerTurnKind.Motion ? t + 20 : 0,
+            EndQpc = t + 30, Kind = kind, PublishSeq = publishSeq, Cycles = 1000, CyclesTotal = 5000,
+        };
     }
 
     [Fact]
@@ -228,6 +252,124 @@ public sealed class FrameLedgerTests
             if (Array.Exists(snap.Ui, u => u.PublishSeq == t.PublishSeq)) joined++;
         }
         Assert.True(joined >= 10, $"fresh turns joined to a UI frame: {joined}");
+    }
+
+    [Fact]
+    public void GpuSamples_BecomeOneRecordEach_WithThePassTimelineOfTheSameSubmit_AndTheTurnJoinsOnTheSubmit()
+    {
+        using var rig = new Rig();
+        rig.Host.RunFrame();
+        var sc = rig.Device.PrimarySwapchain!;
+        FrameLedger.Enable(1024);
+        FrameLedger.Attach(rig.Host);
+        rig.Device.GpuPassTimingEnabled = true;
+        var mark = FrameLedger.Mark();
+        sc.GpuSampleForTest = new GpuRenderSample(2.5, 7, 2, 123) { SubmitSequence = 40, GpuStartQpc = 1000, GpuEndQpc = 1025 };
+        sc.GpuPassesForTest = [new GpuPassTiming(GpuPassKind.TileRaster, 256, 256, 1f), new GpuPassTiming(GpuPassKind.Composite, 320, 240, 0.5f),
+                               new GpuPassTiming(GpuPassKind.Composite, 320, 240, 0.25f)];
+        sc.GpuPassSummaryForTest = new GpuPassFrameSummary(3, 1.75f, 3, 0, 1);
+        rig.Host.LedgerTurnForTest(Turn(LedgerTurnKind.Fresh, 11), presented: true, LedgerTurnOutcome.Recorded);
+        rig.Host.LedgerTurnForTest(Turn(LedgerTurnKind.Motion), presented: false, LedgerTurnOutcome.Elided);   // same sample: no GPU record
+        sc.GpuSampleForTest = new GpuRenderSample(3.0, 9, ulong.MaxValue, 456) { SubmitSequence = 43 };          // seq 8 was missed
+        rig.Host.LedgerTurnForTest(Turn(LedgerTurnKind.Motion), presented: true, LedgerTurnOutcome.CompositeOnly);
+        var snap = FrameLedger.Snapshot(mark);
+
+        Assert.Equal(3, snap.Render.Length);
+        Assert.Equal(42UL, snap.Render[0].SubmitSeq);                                   // the sample's submit + its age
+        Assert.Equal((byte)LedgerTurnFlags.Presented, snap.Render[0].Flags);
+        Assert.Equal(11UL, snap.Render[0].PublishSeq);
+        Assert.Equal(0UL, snap.Render[1].SubmitSeq);                                    // an elided turn submitted nothing
+        Assert.Equal(0, snap.Render[1].Flags & (byte)LedgerTurnFlags.Presented);
+        Assert.Equal((byte)LedgerTurnKind.Motion, snap.Render[2].Kind);
+        Assert.NotEqual(0, snap.Render[2].Flags & (byte)LedgerTurnFlags.Presented);     // a motion re-present that presented
+        Assert.Equal(0UL, snap.Render[2].SubmitSeq);                                    // an incomparable age is no join key
+
+        Assert.Equal(2, snap.Gpu.Length);
+        var g = snap.Gpu[0];
+        Assert.Equal(7UL, g.SampleSeq);
+        Assert.Equal(40UL, g.SubmitSeq);
+        Assert.Equal(2.5f, g.GpuMs);
+        Assert.Equal(1000, g.GpuStartQpc);
+        Assert.Equal(3, g.PassCount);
+        Assert.Equal(1f, g.TileRasterMs);
+        Assert.Equal(0.75f, g.CompositeMs);
+        Assert.Equal(1, snap.Gpu[1].MissedSamples);
+        Assert.Equal(0, snap.Gpu[1].PassCount);                                         // the timeline did not advance with it
+    }
+
+    [Fact]
+    public void TheRenderLoop_HandsAMotionTurn_WithItsSlotAndPresentStamps()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        FrameLedger.Enable(1024);
+        var facts = new List<LedgerTurnFacts>();
+        int ticks = 0;
+        var rt = new RenderThread(new SceneFramePublisher(), _ => { }, async: false,
+            needsTick: () => true, ownMotion: () => true, tick: () => ticks++, tickPeriod: () => Stopwatch.Frequency / 120);
+        rt.LedgerSink = (in LedgerTurnFacts f) => { lock (facts) facts.Add(f); };
+        try
+        {
+            for (int i = 0; i < 4; i++) rt.DrainSync();
+            Assert.True(ticks >= 4, "motion re-presents: " + ticks);
+            LedgerTurnFacts[] seen;
+            lock (facts) seen = facts.ToArray();
+            int motion = 0;
+            foreach (var f in seen)
+            {
+                Assert.True(f.WaitStartQpc > 0 && f.StartQpc >= f.WaitStartQpc && f.EndQpc >= f.StartQpc);
+                if (f.Kind != LedgerTurnKind.Motion) continue;
+                motion++;
+                Assert.True(f.SlotOpenQpc >= f.StartQpc && f.DoneQpc >= f.SlotOpenQpc && f.EndQpc >= f.DoneQpc);
+                Assert.Equal(0UL, f.PublishSeq);
+            }
+            Assert.True(motion >= 4, "motion turns handed: " + motion);
+        }
+        finally { rt.Dispose(); FrameLedger.Disable(); }
+    }
+
+    [Fact]
+    public void ASecondHost_AndADetachedChild_NeverWriteTheRings()
+    {
+        using var a = new Rig(renderThread: true);
+        using var b = new Rig();
+        FrameLedger.Enable(1024);
+        var mark = FrameLedger.Mark();
+        var child = a.NewChild();
+        child.RunFrame();                                  // a detached child never claims, even with no owner yet
+        Assert.Null(FrameLedger.Owner);
+        a.Host.RunFrame();
+        Assert.Same(a.Host, FrameLedger.Owner);
+        for (int i = 0; i < 5; i++) { b.Root.W.Value = 100f + i; b.Host.RunFrame(); child.RunFrame(); }
+        Assert.Single(FrameLedger.Snapshot(mark).Ui);      // only the owner's one frame
+        Assert.Same(a.Host, FrameLedger.Owner);
+    }
+
+    [Fact]
+    public void LedgeredPaintedFrames_AllocateNoMoreThanUnledgeredOnes()
+    {
+        using var rig = new Rig();
+        for (int i = 0; i < 40; i++) { rig.Root.W.Value = 200f + (i & 1); rig.Host.RunFrame(); }   // warm the painted path
+        long Measure()
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++)
+            {
+                rig.Root.W.Value = 200f + (i & 1);        // every frame paints
+                rig.Host.RunFrame();
+                rig.Host.NoteLoopWait(1, 2, 8);
+            }
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Measure();
+        long off = Measure();
+        FrameLedger.Enable(1024);
+        FrameLedger.Attach(rig.Host);
+        Measure();
+        long on = Measure();
+        int painted = 0;
+        foreach (var f in FrameLedger.Snapshot().Ui) if ((f.Flags & (ushort)LedgerUiFlags.Painted) != 0) painted++;
+        Assert.True(painted >= 190, "painted ledgered frames: " + painted);
+        Assert.True(on <= off, "ledgered painted frames allocated " + on + " B vs " + off + " B unledgered");
     }
 
     [Fact]

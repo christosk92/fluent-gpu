@@ -20,19 +20,25 @@ namespace FluentGpu.Hosting;
 /// submit while pass timing is on. Producer: the render thread (it polls the swapchain after each turn).</item>
 /// <item><b>Memory</b> (<see cref="LedgerMemorySample"/>): working set, private bytes, managed heap, VRAM, image cache, glyph atlas at
 /// <see cref="MemoryIntervalMs"/> on the ledger's own sampler thread (an idle loop parked in its wait is still sampled).</item>
-/// <item><b>Audio</b> (<see cref="LedgerAudioSample"/>): the audio health counters at the same cadence: device-side dry edges and
+/// <item><b>Audio</b> (<see cref="LedgerAudioSample"/>): the audio health counters at the same cadence: buffer-drained edges and
 /// the window's minimum endpoint padding apart from app-side xruns (<see cref="FluentGpu.Media.AudioHealth"/>).</item>
 /// </list>
-/// <para><b>Cost.</b> Off (the default): one static bool read per RunFrame and per render turn — nothing else runs. On: a record is
-/// a struct copy into a ring slot plus a handful of counter reads (two thread-cycle reads, one QueryProcessCycleTime ~10 µs, QPC,
-/// the thread's allocation counter); nothing on any record path allocates (pinned by FrameLedgerTests). The rings (~15 MB at the
-/// default capacity) and the sampler thread exist only after <see cref="Enable"/>.</para>
+/// <para><b>Cost.</b> Off (the default): a static bool read per RunFrame and per render turn gates every ledger read and record; what
+/// stays unconditional is a handful of plain field stores the frame and the turn leave for it (the pump's end stamp, the exit gate,
+/// the wake mask, the present decision's stamps) — no counter read, no syscall. On: a record is a struct copy into a ring slot plus a
+/// few counter reads (thread cycles, GetThreadTimes, the thread's allocation counter, QPC, and once per UI frame
+/// QueryProcessCycleTime, ~10 µs with ~100 threads, read AFTER the frame's end stamp so it is never inside a measured span); nothing
+/// on any record path allocates (pinned by FrameLedgerTests). The rings (~15 MB at the default capacity) and the sampler thread
+/// exist only after <see cref="Enable"/>.</para>
 /// <para><b>Owner.</b> The ledger follows ONE host: the first non-detached <see cref="AppHost"/> that runs a frame while it is enabled
 /// (or the one passed to <see cref="Attach"/>); a pop-out or a second host never writes into the rings, so each stays single-producer.</para>
 /// <para><b>Cycles.</b> Per-thread and per-process CPU are CYCLE counts (QueryThreadCycleTime / QueryProcessCycleTime). They become
-/// milliseconds through <see cref="CyclesPerMs"/>: the running maximum of cycles over wall time across spans the thread was known
-/// to be running (a calibration spin at enable, then every UI frame and render turn) — pre-emption only lowers a sample, so the
-/// supremum is the counter's rate. Where the counter tracks the core clock, a converted figure is "CPU time at the peak clock".</para>
+/// milliseconds through ONE rate, <see cref="CyclesPerMs"/>: the process's cycles per millisecond of process CPU time
+/// (Δ QueryProcessCycleTime / Δ GetProcessTimes) since <see cref="Enable"/> — the counter's EFFECTIVE rate at the clocks the cores
+/// actually ran (on a DVFS core the counter follows the clock, so a fixed peak rate would under-read every slow-clocked span).
+/// Until a second of CPU time has accrued it is a frozen spin calibration at enable. A consumer comparing windows applies one rate
+/// to all of them (<see cref="LedgerSnapshot.WithRate"/>); the GetThreadTimes totals in the UI / render records are the rate-free
+/// cross-check.</para>
 /// <para>Enabled from the command line with <c>--fg ledger</c> or <c>--fg ledger=PATH</c> (FluentApp dumps <c>PATH</c> + one CSV per
 /// stream at exit), or programmatically (<see cref="Enable"/> / <see cref="Mark"/> / <see cref="Snapshot"/>, the bench's door).</para>
 /// </summary>
@@ -52,7 +58,8 @@ public static class FrameLedger
     private static readonly object s_memoryGate = new();
     private static AppHost? s_owner;
     private static long s_enabledQpc;
-    private static double s_cyclesPerMs, s_uiCyclesPerMs, s_renderCyclesPerMs;
+    private static double s_spinCyclesPerMs;
+    private static long s_enabledMemory;
     private static Thread? s_sampler;
     private static AutoResetEvent? s_samplerStop;
     private static int s_samplerRun;
@@ -75,8 +82,40 @@ public static class FrameLedger
     /// <summary>The platform half of the memory sample; null leaves those fields 0 (headless).</summary>
     public static LedgerPlatformSampler? PlatformSampler { get; set; }
 
-    /// <summary>The calibrated cycles-per-ms the export converts with (see the class remarks); 0 = no counter.</summary>
-    public static double CyclesPerMs => Math.Max(s_cyclesPerMs, Math.Max(s_uiCyclesPerMs, s_renderCyclesPerMs));
+    /// <summary>The CALLING thread's cumulative CPU time (GetThreadTimes kernel + user, 100 ns), installed by the platform; null reads 0.</summary>
+    public static Func<long>? ThreadCpuTime { get; set; }
+
+    /// <summary>The cycles-per-ms the export converts with (see the class remarks): the effective rate since <see cref="Enable"/>,
+    /// or the spin calibration before a second of CPU time accrued; 0 = no counter.</summary>
+    public static double CyclesPerMs
+    {
+        get
+        {
+            if (s_memory is { } ring)
+            {
+                LedgerMemorySample[] mem;
+                lock (s_memoryGate) mem = ring.CopySince(Volatile.Read(ref s_enabledMemory));
+                double r = RateBetween(mem, 1000);
+                if (double.IsFinite(r)) return r;
+            }
+            return s_spinCyclesPerMs;
+        }
+    }
+
+    /// <summary>Δ process cycles / Δ process CPU ms between the first and the last of <paramref name="samples"/>; NaN when the CPU time
+    /// between them is under <paramref name="minCpuMs"/> or either counter is missing.</summary>
+    public static double RateBetween(ReadOnlySpan<LedgerMemorySample> samples, double minCpuMs)
+    {
+        if (samples.Length < 2) return double.NaN;
+        ref readonly var a = ref samples[0];
+        ref readonly var b = ref samples[^1];
+        if (a.ProcessCyclesTotal == 0 || a.ProcessCpuTicksTotal == 0 || b.ProcessCyclesTotal <= a.ProcessCyclesTotal) return double.NaN;
+        double cpuMs = (b.ProcessCpuTicksTotal - a.ProcessCpuTicksTotal) / 10_000.0;
+        return cpuMs >= minCpuMs ? (b.ProcessCyclesTotal - a.ProcessCyclesTotal) / cpuMs : double.NaN;
+    }
+
+    /// <summary>The calling thread's cumulative CPU time (100 ns), 0 without a platform source.</summary>
+    internal static long ReadThreadCpuTime() => ThreadCpuTime is { } f ? f() : 0L;
 
     /// <summary>QPC at the last <see cref="Enable"/>.</summary>
     public static long EnabledQpc => Volatile.Read(ref s_enabledQpc);
@@ -99,8 +138,9 @@ public static class FrameLedger
         s_memory ??= new LedgerRing<LedgerMemorySample>(MemoryCapacity);
         s_audio ??= new LedgerRing<LedgerAudioSample>(MemoryCapacity);
         s_passScratch ??= new GpuPassTiming[GpuPassTimeline.MaxPasses];
-        s_cyclesPerMs = Math.Max(s_cyclesPerMs, CalibrateSpin());
+        s_spinCyclesPerMs = CalibrateSpin();   // frozen for this enable: the fallback until the effective rate exists
         Volatile.Write(ref s_enabledQpc, Stopwatch.GetTimestamp());
+        Volatile.Write(ref s_enabledMemory, s_memory.Count);
         s_enabled = true;
         StartSampler();
         SampleMemory();   // a sample at the window's start, whatever the sampler's phase
@@ -194,18 +234,6 @@ public static class FrameLedger
     /// <summary>The process's cumulative cycles (0 without a platform counter).</summary>
     internal static ulong ReadProcessCycles() => ProcessCycles is { } f ? f() : 0UL;
 
-    /// <summary>Fold a span the UI thread was running for into the cycle-rate supremum (see <see cref="ThreadCycles.Calibrate"/>).</summary>
-    internal static void ObserveUiRate(ulong cycles, long wallQpc)
-    {
-        if (wallQpc > 0) s_uiCyclesPerMs = ThreadCycles.Calibrate(s_uiCyclesPerMs, cycles, wallQpc * 1000.0 / Stopwatch.Frequency);
-    }
-
-    /// <summary>The render thread's counterpart of <see cref="ObserveUiRate"/>.</summary>
-    internal static void ObserveRenderRate(ulong cycles, long wallQpc)
-    {
-        if (wallQpc > 0) s_renderCyclesPerMs = ThreadCycles.Calibrate(s_renderCyclesPerMs, cycles, wallQpc * 1000.0 / Stopwatch.Frequency);
-    }
-
     /// <summary>Spin the calling thread three times for 8 ms and keep the highest cycles-per-ms (0 without a counter). Enable only.</summary>
     private static double CalibrateSpin()
     {
@@ -258,6 +286,8 @@ public static class FrameLedger
         {
             var p = default(LedgerPlatformSample);
             PlatformSampler?.Invoke(ref p);
+            // GetGCMemoryInfo allocates its info object (a few hundred bytes), so it runs on every fourth sample only, here on the
+            // sampler thread, never on a frame thread.
             if ((s_gcInfoTick++ & 3) == 0)
             {
                 GCMemoryInfo gi = GC.GetGCMemoryInfo();
@@ -295,7 +325,7 @@ public static class FrameLedger
                 var a = FluentGpu.Media.AudioHealth.Sample();
                 var ar = new LedgerAudioSample
                 {
-                    Seq = (ulong)audioRing.Count, Qpc = s.Qpc, DeviceWritesTotal = a.DeviceWrites, DeviceDryEdgesTotal = a.DeviceDryEdges,
+                    Seq = (ulong)audioRing.Count, Qpc = s.Qpc, DeviceWritesTotal = a.DeviceWrites, BufferDrainedTotal = a.BufferDrainedEdges,
                     XrunsTotal = a.Xruns, XrunFramesTotal = a.XrunFrames, PaddingMinFrames = a.PaddingMinFrames,
                     BufferFrames = a.BufferFrames, Rate = a.Rate,
                 };
@@ -354,7 +384,9 @@ internal sealed class LedgerRing<T> where T : unmanaged
         Volatile.Write(ref _count, i + 1);
     }
 
-    /// <summary>Every record pushed at or after <paramref name="from"/> still in the ring, oldest first.</summary>
+    /// <summary>Every record pushed at or after <paramref name="from"/> still in the ring, oldest first. The copy is not atomic
+    /// against the producer: if it laps the reader (pushes more than the capacity minus the window while the copy runs) the oldest
+    /// copied slots may already hold newer records. A window well inside the capacity (the bench's 10 s against 136 s) never laps.</summary>
     public T[] CopySince(long from)
     {
         long end = Count;

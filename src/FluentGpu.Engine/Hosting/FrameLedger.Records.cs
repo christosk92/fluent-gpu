@@ -10,7 +10,9 @@ namespace FluentGpu.Hosting;
 // file header carries the frequency); every CPU figure is a raw CYCLE count (QueryThreadCycleTime / QueryProcessCycleTime,
 // converted at export through the ledger's calibrated cycles-per-ms); "Total" fields are the thread's / process's cumulative
 // counter at the record's end, so any window's CPU is a difference of two of them and "other threads" is
-// process - UI - render over the same window. A zero stamp means "this frame never reached that point".
+// process - UI - render over the same window. A zero stamp means "this frame never reached that point". Beside the cycles,
+// the UI and render records carry the thread's cumulative CPU time from GetThreadTimes (100 ns, scheduler-tick accounted): a
+// cross-check that needs no rate.
 // Field order is the file format: append only, and bump FrameLedgerFile.Version when a layout changes.
 
 /// <summary>Where a <see cref="AppHost.RunFrame"/> left: <see cref="Painted"/>, or the early-out that stopped it before Paint.</summary>
@@ -135,6 +137,11 @@ public struct LedgerUiFrame
     public byte Reserved;
     /// <summary>The host's cumulative successful presents and missed vsyncs at the frame's end.</summary>
     public long PresentedTotal, MissedVsyncsTotal;
+    /// <summary>The <see cref="WakeReasons"/> the frame's idle decision saw (0 when an earlier gate stopped it) — the wake census.</summary>
+    public uint WakeMask;
+    public uint Reserved2;
+    /// <summary>The UI thread's cumulative CPU time at the frame's end (GetThreadTimes kernel + user, 100 ns; 0 = no platform source).</summary>
+    public long UiCpuTimeTotal;
 }
 
 /// <summary>One turn of the owning host's render thread (only turns that passed the wait: resize parks and device-loss
@@ -164,6 +171,8 @@ public struct LedgerRenderTurn
     public int MissedTicks;
     /// <summary><see cref="LedgerTurnKind"/>, <see cref="LedgerTurnOutcome"/>, <see cref="LedgerTurnFlags"/>, <see cref="RepaintFullReason"/>.</summary>
     public byte Kind, Outcome, Flags, FullReason;
+    /// <summary>The render thread's cumulative CPU time at the turn's end (GetThreadTimes, 100 ns; 0 = no platform source).</summary>
+    public long CpuTimeTotal;
 }
 
 /// <summary>One retired whole-frame GPU timestamp pair of the owning host's swapchain, with the pass timeline of the same
@@ -232,15 +241,16 @@ public struct LedgerMemorySample
     public int Reserved2;
 }
 
-/// <summary>The audio health counters (<see cref="FluentGpu.Media.AudioHealth"/>) at the memory cadence: device-side dry edges (the
-/// endpoint buffer drained between two writes) apart from app-side xruns (the feed thread's ring ran empty).</summary>
+/// <summary>The audio health counters (<see cref="FluentGpu.Media.AudioHealth"/>) at the memory cadence: buffer-drained edges (the
+/// endpoint buffer was found empty at a write after holding audio at the previous one) apart from app-side xruns (the feed
+/// thread's ring ran empty). A drained edge says audio ran out at the endpoint; it does not say whose fault it was.</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct LedgerAudioSample
 {
     public ulong Seq;
     public long Qpc;
-    /// <summary>Cumulative: device writes, device dry edges, app-side xrun incidents, frames those xruns lost.</summary>
-    public long DeviceWritesTotal, DeviceDryEdgesTotal, XrunsTotal, XrunFramesTotal;
+    /// <summary>Cumulative: device writes, buffer-drained edges, app-side xrun incidents, frames those xruns lost.</summary>
+    public long DeviceWritesTotal, BufferDrainedTotal, XrunsTotal, XrunFramesTotal;
     /// <summary>The lowest endpoint padding (queued frames) any write saw since the previous sample (-1 = no write).</summary>
     public int PaddingMinFrames;
     public int BufferFrames, Rate, Reserved;
