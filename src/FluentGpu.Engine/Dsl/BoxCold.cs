@@ -3,13 +3,13 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Dsl;
 
-// The rarely-set BoxEl channels, split into four themed blocks so a box that sets none costs four null references and one
-// that sets a few clones only the block it touches. Copy-on-write: BoxEl's `with` copies share a block until a setter runs
-// on the copy, which clones it first (Owner tells a clone made for that element from a shared one). Defaults mirror the
-// former inline initializers exactly; Owner is excluded from equality. A setter that writes the value a channel already
-// holds (the default included) does not clone the block.
+// The rarely-set BoxEl channels, split into six themed blocks so a box that sets none costs six null references and one
+// that sets a few clones only the block it touches. Copy-on-write: BoxEl's `with` copies share a block until a setter that
+// changes a value runs on the copy, which clones it first (Owner tells a clone made for that element from a shared one). A
+// setter that writes the value a channel already holds (the default included) does not clone. Defaults mirror the former
+// inline initializers exactly; Owner is excluded from equality.
 
-/// <summary>BoxEl's rich paint (gradients, shadow, arc, acrylic, feedback, clip path, border extras).</summary>
+/// <summary>BoxEl's common rich paint (gradient, border brush, shadow, border and clip extras).</summary>
 internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
 {
     public static readonly BoxColdPaint Default = new();
@@ -22,29 +22,16 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
     public float BorderDashOff;
     public Prop<ValidationState> Validation = default;
     public ShadowSpec? Shadow;
-    public ArcSpec? Arc;
     public GradientSpec? Gradient;
-    public Prop<Point2> RadialGradientCenter = new Point2(float.NaN, float.NaN);
-    public GradientSpec? GradientTo;
-    public Prop<float> GradientMix = 0f;
     public PaintBlend Blend = PaintBlend.SrcOver;
     public LayerBlend LayerBlend = LayerBlend.SrcOver;
-    public FeedbackSpec? Feedback;
-    public Prop<Affine2D> FeedbackTransform = Affine2D.Identity;
-    public Prop<float> FeedbackDecay = float.NaN;
     public GradientSpec? BorderBrush;
-    public GradientSpec? HoverGradient;
-    public GradientSpec? PressedGradient;
-    public GradientSpec? HoverBorderBrush;
-    public GradientSpec? PressedBorderBrush;
-    public AcrylicSpec? Acrylic;
     public bool RepaintBoundary;
     public float RasterScale = 1f;
     public bool TabShape;
     public float TabFlareRadius = 4f;
     public bool VideoHole;
     public int VideoSurfaceId;
-    public EdgeFadeSpec? EdgeFade;
     public PathData? ClipPath;
     public FillRule ClipPathRule = FillRule.NonZero;
     public float ClipPathViewBoxW;
@@ -69,29 +56,16 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
             && EqualityComparer<float>.Default.Equals(BorderDashOff, o.BorderDashOff)
             && EqualityComparer<Prop<ValidationState>>.Default.Equals(Validation, o.Validation)
             && EqualityComparer<ShadowSpec?>.Default.Equals(Shadow, o.Shadow)
-            && EqualityComparer<ArcSpec?>.Default.Equals(Arc, o.Arc)
             && EqualityComparer<GradientSpec?>.Default.Equals(Gradient, o.Gradient)
-            && EqualityComparer<Prop<Point2>>.Default.Equals(RadialGradientCenter, o.RadialGradientCenter)
-            && EqualityComparer<GradientSpec?>.Default.Equals(GradientTo, o.GradientTo)
-            && EqualityComparer<Prop<float>>.Default.Equals(GradientMix, o.GradientMix)
             && EqualityComparer<PaintBlend>.Default.Equals(Blend, o.Blend)
             && EqualityComparer<LayerBlend>.Default.Equals(LayerBlend, o.LayerBlend)
-            && EqualityComparer<FeedbackSpec?>.Default.Equals(Feedback, o.Feedback)
-            && EqualityComparer<Prop<Affine2D>>.Default.Equals(FeedbackTransform, o.FeedbackTransform)
-            && EqualityComparer<Prop<float>>.Default.Equals(FeedbackDecay, o.FeedbackDecay)
             && EqualityComparer<GradientSpec?>.Default.Equals(BorderBrush, o.BorderBrush)
-            && EqualityComparer<GradientSpec?>.Default.Equals(HoverGradient, o.HoverGradient)
-            && EqualityComparer<GradientSpec?>.Default.Equals(PressedGradient, o.PressedGradient)
-            && EqualityComparer<GradientSpec?>.Default.Equals(HoverBorderBrush, o.HoverBorderBrush)
-            && EqualityComparer<GradientSpec?>.Default.Equals(PressedBorderBrush, o.PressedBorderBrush)
-            && EqualityComparer<AcrylicSpec?>.Default.Equals(Acrylic, o.Acrylic)
             && EqualityComparer<bool>.Default.Equals(RepaintBoundary, o.RepaintBoundary)
             && EqualityComparer<float>.Default.Equals(RasterScale, o.RasterScale)
             && EqualityComparer<bool>.Default.Equals(TabShape, o.TabShape)
             && EqualityComparer<float>.Default.Equals(TabFlareRadius, o.TabFlareRadius)
             && EqualityComparer<bool>.Default.Equals(VideoHole, o.VideoHole)
             && EqualityComparer<int>.Default.Equals(VideoSurfaceId, o.VideoSurfaceId)
-            && EqualityComparer<EdgeFadeSpec?>.Default.Equals(EdgeFade, o.EdgeFade)
             && EqualityComparer<PathData?>.Default.Equals(ClipPath, o.ClipPath)
             && EqualityComparer<FillRule>.Default.Equals(ClipPathRule, o.ClipPathRule)
             && EqualityComparer<float>.Default.Equals(ClipPathViewBoxW, o.ClipPathViewBoxW)
@@ -104,7 +78,58 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
     public override int GetHashCode() => 0;
 }
 
-/// <summary>BoxEl's input and interaction (pointer/drag/key handlers, drag-drop, repeat, focus extras).</summary>
+/// <summary>BoxEl's stateful and effect paint (hover/pressed gradients and borders, acrylic, edge fade, feedback, arc).</summary>
+internal sealed class BoxColdPaintFx : IEquatable<BoxColdPaintFx>
+{
+    public static readonly BoxColdPaintFx Default = new();
+
+    public BoxEl? Owner;
+
+    public ArcSpec? Arc;
+    public Prop<Point2> RadialGradientCenter = new Point2(float.NaN, float.NaN);
+    public GradientSpec? GradientTo;
+    public Prop<float> GradientMix = 0f;
+    public FeedbackSpec? Feedback;
+    public Prop<Affine2D> FeedbackTransform = Affine2D.Identity;
+    public Prop<float> FeedbackDecay = float.NaN;
+    public GradientSpec? HoverGradient;
+    public GradientSpec? PressedGradient;
+    public GradientSpec? HoverBorderBrush;
+    public GradientSpec? PressedBorderBrush;
+    public AcrylicSpec? Acrylic;
+    public EdgeFadeSpec? EdgeFade;
+
+    public BoxColdPaintFx CloneFor(BoxEl owner)
+    {
+        var c = (BoxColdPaintFx)MemberwiseClone();
+        c.Owner = owner;
+        return c;
+    }
+
+    public bool Equals(BoxColdPaintFx? o)
+    {
+        if (ReferenceEquals(this, o)) return true;
+        if (o is null) return false;
+        return EqualityComparer<ArcSpec?>.Default.Equals(Arc, o.Arc)
+            && EqualityComparer<Prop<Point2>>.Default.Equals(RadialGradientCenter, o.RadialGradientCenter)
+            && EqualityComparer<GradientSpec?>.Default.Equals(GradientTo, o.GradientTo)
+            && EqualityComparer<Prop<float>>.Default.Equals(GradientMix, o.GradientMix)
+            && EqualityComparer<FeedbackSpec?>.Default.Equals(Feedback, o.Feedback)
+            && EqualityComparer<Prop<Affine2D>>.Default.Equals(FeedbackTransform, o.FeedbackTransform)
+            && EqualityComparer<Prop<float>>.Default.Equals(FeedbackDecay, o.FeedbackDecay)
+            && EqualityComparer<GradientSpec?>.Default.Equals(HoverGradient, o.HoverGradient)
+            && EqualityComparer<GradientSpec?>.Default.Equals(PressedGradient, o.PressedGradient)
+            && EqualityComparer<GradientSpec?>.Default.Equals(HoverBorderBrush, o.HoverBorderBrush)
+            && EqualityComparer<GradientSpec?>.Default.Equals(PressedBorderBrush, o.PressedBorderBrush)
+            && EqualityComparer<AcrylicSpec?>.Default.Equals(Acrylic, o.Acrylic)
+            && EqualityComparer<EdgeFadeSpec?>.Default.Equals(EdgeFade, o.EdgeFade);
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as BoxColdPaintFx);
+    public override int GetHashCode() => 0;
+}
+
+/// <summary>BoxEl's common interaction handlers (key, hover, focus, press, context) and focus extras.</summary>
 internal sealed class BoxColdInput : IEquatable<BoxColdInput>
 {
     public static readonly BoxColdInput Default = new();
@@ -112,40 +137,17 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public BoxEl? Owner;
 
     public Action<KeyEventArgs>? OnKeyDown;
-    public Action<CharEventArgs>? OnCharInput;
-    public Action<Point2>? OnPointerDown;
-    public Action<Point2>? OnDrag;
-    public bool DragYieldsToPan;
     public Action<PointerEventArgs>? OnPointerPressed;
     public Action<PointerEventArgs>? OnPointerReleased;
     public Action<ContextRequestEventArgs>? OnContextRequested;
     public bool ClickRequestsContext;
-    public KeyAccelerator? Accelerator;
-    public char AccessKey;
-    public Action<WheelEventArgs>? OnPointerWheel;
     public Action<Point2>? OnHoverMove;
-    public Action<Point2>? OnPointerMoveWithin;
     public Action? OnPointerExit;
     public Action<bool>? OnFocusChanged;
-    public bool CanDrag;
-    public Action<DragEventArgs>? OnDragStarted;
-    public Action<DragEventArgs>? OnDragDelta;
-    public Action<DragEventArgs>? OnDragCompleted;
-    public Action? OnDragCanceled;
-    public DragSource? Draggable;
-    public DropTargetSpec? DropTarget;
-    public bool Repeats;
-    public float RepeatDelayMs = float.NaN;
-    public float RepeatIntervalMs = float.NaN;
-    public bool ActivateOnEnter = true;
     public bool AllowFocusOnInteraction = true;
     public bool HitTestPassThrough;
-    public bool BlocksBackgroundScroll;
     public bool? TabStop;
-    public int TabIndex;
     public Edges4? FocusVisualMargin;
-    public Action<RectF>? OnBoundsChanged;
-    public Func<NodeHandle>? FollowRect;
     public bool BlocksDragArm;
     public bool HoverScopeTransparent;
 
@@ -161,21 +163,76 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
         return EqualityComparer<Action<KeyEventArgs>?>.Default.Equals(OnKeyDown, o.OnKeyDown)
-            && EqualityComparer<Action<CharEventArgs>?>.Default.Equals(OnCharInput, o.OnCharInput)
-            && EqualityComparer<Action<Point2>?>.Default.Equals(OnPointerDown, o.OnPointerDown)
-            && EqualityComparer<Action<Point2>?>.Default.Equals(OnDrag, o.OnDrag)
-            && EqualityComparer<bool>.Default.Equals(DragYieldsToPan, o.DragYieldsToPan)
             && EqualityComparer<Action<PointerEventArgs>?>.Default.Equals(OnPointerPressed, o.OnPointerPressed)
             && EqualityComparer<Action<PointerEventArgs>?>.Default.Equals(OnPointerReleased, o.OnPointerReleased)
             && EqualityComparer<Action<ContextRequestEventArgs>?>.Default.Equals(OnContextRequested, o.OnContextRequested)
             && EqualityComparer<bool>.Default.Equals(ClickRequestsContext, o.ClickRequestsContext)
+            && EqualityComparer<Action<Point2>?>.Default.Equals(OnHoverMove, o.OnHoverMove)
+            && EqualityComparer<Action?>.Default.Equals(OnPointerExit, o.OnPointerExit)
+            && EqualityComparer<Action<bool>?>.Default.Equals(OnFocusChanged, o.OnFocusChanged)
+            && EqualityComparer<bool>.Default.Equals(AllowFocusOnInteraction, o.AllowFocusOnInteraction)
+            && EqualityComparer<bool>.Default.Equals(HitTestPassThrough, o.HitTestPassThrough)
+            && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
+            && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
+            && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)
+            && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent);
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as BoxColdInput);
+    public override int GetHashCode() => 0;
+}
+
+/// <summary>BoxEl's rarely-used gestures (drag and drop, repeat, accelerators, pointer-down/drag/wheel) and the layout animation.</summary>
+internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
+{
+    public static readonly BoxColdGesture Default = new();
+
+    public BoxEl? Owner;
+
+    public Action<CharEventArgs>? OnCharInput;
+    public Action<Point2>? OnPointerDown;
+    public Action<Point2>? OnDrag;
+    public bool DragYieldsToPan;
+    public KeyAccelerator? Accelerator;
+    public char AccessKey;
+    public Action<WheelEventArgs>? OnPointerWheel;
+    public Action<Point2>? OnPointerMoveWithin;
+    public bool CanDrag;
+    public Action<DragEventArgs>? OnDragStarted;
+    public Action<DragEventArgs>? OnDragDelta;
+    public Action<DragEventArgs>? OnDragCompleted;
+    public Action? OnDragCanceled;
+    public DragSource? Draggable;
+    public DropTargetSpec? DropTarget;
+    public bool Repeats;
+    public float RepeatDelayMs = float.NaN;
+    public float RepeatIntervalMs = float.NaN;
+    public bool ActivateOnEnter = true;
+    public bool BlocksBackgroundScroll;
+    public int TabIndex;
+    public Action<RectF>? OnBoundsChanged;
+    public Func<NodeHandle>? FollowRect;
+    public LayoutTransition? Animate;
+
+    public BoxColdGesture CloneFor(BoxEl owner)
+    {
+        var c = (BoxColdGesture)MemberwiseClone();
+        c.Owner = owner;
+        return c;
+    }
+
+    public bool Equals(BoxColdGesture? o)
+    {
+        if (ReferenceEquals(this, o)) return true;
+        if (o is null) return false;
+        return EqualityComparer<Action<CharEventArgs>?>.Default.Equals(OnCharInput, o.OnCharInput)
+            && EqualityComparer<Action<Point2>?>.Default.Equals(OnPointerDown, o.OnPointerDown)
+            && EqualityComparer<Action<Point2>?>.Default.Equals(OnDrag, o.OnDrag)
+            && EqualityComparer<bool>.Default.Equals(DragYieldsToPan, o.DragYieldsToPan)
             && EqualityComparer<KeyAccelerator?>.Default.Equals(Accelerator, o.Accelerator)
             && EqualityComparer<char>.Default.Equals(AccessKey, o.AccessKey)
             && EqualityComparer<Action<WheelEventArgs>?>.Default.Equals(OnPointerWheel, o.OnPointerWheel)
-            && EqualityComparer<Action<Point2>?>.Default.Equals(OnHoverMove, o.OnHoverMove)
             && EqualityComparer<Action<Point2>?>.Default.Equals(OnPointerMoveWithin, o.OnPointerMoveWithin)
-            && EqualityComparer<Action?>.Default.Equals(OnPointerExit, o.OnPointerExit)
-            && EqualityComparer<Action<bool>?>.Default.Equals(OnFocusChanged, o.OnFocusChanged)
             && EqualityComparer<bool>.Default.Equals(CanDrag, o.CanDrag)
             && EqualityComparer<Action<DragEventArgs>?>.Default.Equals(OnDragStarted, o.OnDragStarted)
             && EqualityComparer<Action<DragEventArgs>?>.Default.Equals(OnDragDelta, o.OnDragDelta)
@@ -187,19 +244,14 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<float>.Default.Equals(RepeatDelayMs, o.RepeatDelayMs)
             && EqualityComparer<float>.Default.Equals(RepeatIntervalMs, o.RepeatIntervalMs)
             && EqualityComparer<bool>.Default.Equals(ActivateOnEnter, o.ActivateOnEnter)
-            && EqualityComparer<bool>.Default.Equals(AllowFocusOnInteraction, o.AllowFocusOnInteraction)
-            && EqualityComparer<bool>.Default.Equals(HitTestPassThrough, o.HitTestPassThrough)
             && EqualityComparer<bool>.Default.Equals(BlocksBackgroundScroll, o.BlocksBackgroundScroll)
-            && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
             && EqualityComparer<int>.Default.Equals(TabIndex, o.TabIndex)
-            && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
             && EqualityComparer<Action<RectF>?>.Default.Equals(OnBoundsChanged, o.OnBoundsChanged)
             && EqualityComparer<Func<NodeHandle>?>.Default.Equals(FollowRect, o.FollowRect)
-            && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)
-            && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent);
+            && EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdInput);
+    public override bool Equals(object? obj) => Equals(obj as BoxColdGesture);
     public override int GetHashCode() => 0;
 }
 
@@ -273,8 +325,6 @@ internal sealed class BoxColdMisc : IEquatable<BoxColdMisc>
 
     public BoxEl? Owner;
 
-    public LayoutTransition? Animate;
-
     public bool IsolateLayout;
     public float MaxHeight = float.NaN;
     public bool MeasureUnboundedWidth;
@@ -291,8 +341,7 @@ internal sealed class BoxColdMisc : IEquatable<BoxColdMisc>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate)
-            && EqualityComparer<bool>.Default.Equals(IsolateLayout, o.IsolateLayout)
+        return EqualityComparer<bool>.Default.Equals(IsolateLayout, o.IsolateLayout)
             && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
             && EqualityComparer<bool>.Default.Equals(MeasureUnboundedWidth, o.MeasureUnboundedWidth)
             && EqualityComparer<float>.Default.Equals(AspectRatio, o.AspectRatio);

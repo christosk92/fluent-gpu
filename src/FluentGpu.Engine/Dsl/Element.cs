@@ -110,13 +110,17 @@ public sealed record BoxEl : Element
 {
     public override ushort ElementTypeId => 1;
 
-    // Rarely-set channels live in four shared, copy-on-write blocks (BoxCold.cs), one per theme: a BoxEl is allocated and
+    // Rarely-set channels live in six shared, copy-on-write blocks (BoxCold.cs), one per theme: a BoxEl is allocated and
     // `with`-copied on every render of every box, so its inline footprint is only the channels most boxes set. A block is a
-    // null reference until a setter runs; the first setter on an element clones it, the rest write the clone.
+    // null reference until a setter changes a value; the first such setter on an element clones the block, the rest write the clone.
     private BoxColdPaint? _cPaint;
     private BoxColdPaint CPaint => _cPaint is { } c && ReferenceEquals(c.Owner, this) ? c : (_cPaint = (_cPaint ?? BoxColdPaint.Default).CloneFor(this));
+    private BoxColdPaintFx? _cPaintFx;
+    private BoxColdPaintFx CPaintFx => _cPaintFx is { } c && ReferenceEquals(c.Owner, this) ? c : (_cPaintFx = (_cPaintFx ?? BoxColdPaintFx.Default).CloneFor(this));
     private BoxColdInput? _cInput;
     private BoxColdInput CInput => _cInput is { } c && ReferenceEquals(c.Owner, this) ? c : (_cInput = (_cInput ?? BoxColdInput.Default).CloneFor(this));
+    private BoxColdGesture? _cGesture;
+    private BoxColdGesture CGesture => _cGesture is { } c && ReferenceEquals(c.Owner, this) ? c : (_cGesture = (_cGesture ?? BoxColdGesture.Default).CloneFor(this));
     private BoxColdMotion? _cMotion;
     private BoxColdMotion CMotion => _cMotion is { } c && ReferenceEquals(c.Owner, this) ? c : (_cMotion = (_cMotion ?? BoxColdMotion.Default).CloneFor(this));
     private BoxColdMisc? _cMisc;
@@ -154,20 +158,20 @@ public sealed record BoxEl : Element
 
     // Optional rich paint (carried into sparse scene side-tables by the reconciler; default = none).
     public ShadowSpec? Shadow { get => (_cPaint ?? BoxColdPaint.Default).Shadow; init { if (!EqualityComparer<ShadowSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).Shadow, value)) CPaint.Shadow = value; } } // soft drop shadow / elevation, drawn beneath the fill
-    public ArcSpec? Arc { get => (_cPaint ?? BoxColdPaint.Default).Arc; init { if (!EqualityComparer<ArcSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).Arc, value)) CPaint.Arc = value; } } // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
+    public ArcSpec? Arc { get => (_cPaintFx ?? BoxColdPaintFx.Default).Arc; init { if (!EqualityComparer<ArcSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).Arc, value)) CPaintFx.Arc = value; } } // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
     public GradientSpec? Gradient { get => (_cPaint ?? BoxColdPaint.Default).Gradient; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).Gradient, value)) CPaint.Gradient = value; } } // gradient fill — supersedes Fill at record time when set
     /// <summary>Optional bindable radial-gradient origin in normalized element coordinates. A non-finite static value
     /// keeps <see cref="GradientSpec.RadialCenter"/> as the source of truth; a signal updates paint only, without a
     /// component render or gradient-spec rebuild (pointer-driven spotlight/reveal effects).</summary>
-    public Prop<Point2> RadialGradientCenter { get => (_cPaint ?? BoxColdPaint.Default).RadialGradientCenter; init { if (!EqualityComparer<Prop<Point2>>.Default.Equals((_cPaint ?? BoxColdPaint.Default).RadialGradientCenter, value)) CPaint.RadialGradientCenter = value; } }
+    public Prop<Point2> RadialGradientCenter { get => (_cPaintFx ?? BoxColdPaintFx.Default).RadialGradientCenter; init { if (!EqualityComparer<Prop<Point2>>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).RadialGradientCenter, value)) CPaintFx.RadialGradientCenter = value; } }
     /// <summary>A second gradient the fill blends toward by <see cref="GradientMix"/> (0 = <see cref="Gradient"/>, 1 = this).
     /// Must share <see cref="Gradient"/>'s stop count (the <see cref="HoverGradient"/> rule; a different count blends only
     /// the shared prefix). Static; the blend happens at record time on stack locals, so a palette cross-fade costs no
     /// re-render and no allocation.</summary>
-    public GradientSpec? GradientTo { get => (_cPaint ?? BoxColdPaint.Default).GradientTo; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).GradientTo, value)) CPaint.GradientTo = value; } }
+    public GradientSpec? GradientTo { get => (_cPaintFx ?? BoxColdPaintFx.Default).GradientTo; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).GradientTo, value)) CPaintFx.GradientTo = value; } }
     /// <summary>The 0..1 blend from <see cref="Gradient"/> toward <see cref="GradientTo"/>. Bindable and paint-only (no
     /// relayout): a signal moves the colours without rebuilding a <see cref="GradientSpec"/>.</summary>
-    public Prop<float> GradientMix { get => (_cPaint ?? BoxColdPaint.Default).GradientMix; init { if (!EqualityComparer<Prop<float>>.Default.Equals((_cPaint ?? BoxColdPaint.Default).GradientMix, value)) CPaint.GradientMix = value; } }
+    public Prop<float> GradientMix { get => (_cPaintFx ?? BoxColdPaintFx.Default).GradientMix; init { if (!EqualityComparer<Prop<float>>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).GradientMix, value)) CPaintFx.GradientMix = value; } }
     /// <summary>How this box's subtree paints onto what is under it: <see cref="PaintBlend.Additive"/> adds light (glow,
     /// particles) for every rect, gradient, series and sprite field below it. Glyphs, images and paths stay source-over.
     /// Put it on a child of a <see cref="RepaintBoundary"/>, not on the boundary itself: a boundary (also a Feedback or
@@ -180,19 +184,19 @@ public sealed record BoxEl : Element
     public LayerBlend LayerBlend { get => (_cPaint ?? BoxColdPaint.Default).LayerBlend; init { if (!EqualityComparer<LayerBlend>.Default.Equals((_cPaint ?? BoxColdPaint.Default).LayerBlend, value)) CPaint.LayerBlend = value; } }
     /// <summary>Make this box a FEEDBACK boundary (visualizer F6; see <see cref="FeedbackSpec"/>). Implies a repaint boundary
     /// at <see cref="FeedbackSpec.RasterScale"/>. Detached windows (no layer route) draw the fresh content only.</summary>
-    public FeedbackSpec? Feedback { get => (_cPaint ?? BoxColdPaint.Default).Feedback; init { if (!EqualityComparer<FeedbackSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).Feedback, value)) CPaint.Feedback = value; } }
+    public FeedbackSpec? Feedback { get => (_cPaintFx ?? BoxColdPaintFx.Default).Feedback; init { if (!EqualityComparer<FeedbackSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).Feedback, value)) CPaintFx.Feedback = value; } }
     /// <summary>The per-advance warp of the previous frame about the box centre (zoom / rotate / drift), DIP. Bindable.</summary>
-    public Prop<Affine2D> FeedbackTransform { get => (_cPaint ?? BoxColdPaint.Default).FeedbackTransform; init { if (!EqualityComparer<Prop<Affine2D>>.Default.Equals((_cPaint ?? BoxColdPaint.Default).FeedbackTransform, value)) CPaint.FeedbackTransform = value; } }
+    public Prop<Affine2D> FeedbackTransform { get => (_cPaintFx ?? BoxColdPaintFx.Default).FeedbackTransform; init { if (!EqualityComparer<Prop<Affine2D>>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).FeedbackTransform, value)) CPaintFx.FeedbackTransform = value; } }
     /// <summary>Overrides <see cref="FeedbackSpec.Decay"/> per advance (NaN = the spec's). Bindable: a kick can burst the trail.</summary>
-    public Prop<float> FeedbackDecay { get => (_cPaint ?? BoxColdPaint.Default).FeedbackDecay; init { if (!EqualityComparer<Prop<float>>.Default.Equals((_cPaint ?? BoxColdPaint.Default).FeedbackDecay, value)) CPaint.FeedbackDecay = value; } }
+    public Prop<float> FeedbackDecay { get => (_cPaintFx ?? BoxColdPaintFx.Default).FeedbackDecay; init { if (!EqualityComparer<Prop<float>>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).FeedbackDecay, value)) CPaintFx.FeedbackDecay = value; } }
     public GradientSpec? BorderBrush { get => (_cPaint ?? BoxColdPaint.Default).BorderBrush; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).BorderBrush, value)) CPaint.BorderBrush = value; } } // gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
-    public GradientSpec? HoverGradient { get => (_cPaint ?? BoxColdPaint.Default).HoverGradient; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).HoverGradient, value)) CPaint.HoverGradient = value; } }
-    public GradientSpec? PressedGradient { get => (_cPaint ?? BoxColdPaint.Default).PressedGradient; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).PressedGradient, value)) CPaint.PressedGradient = value; } }
-    public GradientSpec? HoverBorderBrush { get => (_cPaint ?? BoxColdPaint.Default).HoverBorderBrush; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).HoverBorderBrush, value)) CPaint.HoverBorderBrush = value; } }
-    public GradientSpec? PressedBorderBrush { get => (_cPaint ?? BoxColdPaint.Default).PressedBorderBrush; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).PressedBorderBrush, value)) CPaint.PressedBorderBrush = value; } }
-    public AcrylicSpec? Acrylic { get => (_cPaint ?? BoxColdPaint.Default).Acrylic; init { if (!EqualityComparer<AcrylicSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).Acrylic, value)) CPaint.Acrylic = value; } } // per-node frosted-glass backdrop (blur + tint + noise)
+    public GradientSpec? HoverGradient { get => (_cPaintFx ?? BoxColdPaintFx.Default).HoverGradient; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).HoverGradient, value)) CPaintFx.HoverGradient = value; } }
+    public GradientSpec? PressedGradient { get => (_cPaintFx ?? BoxColdPaintFx.Default).PressedGradient; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).PressedGradient, value)) CPaintFx.PressedGradient = value; } }
+    public GradientSpec? HoverBorderBrush { get => (_cPaintFx ?? BoxColdPaintFx.Default).HoverBorderBrush; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).HoverBorderBrush, value)) CPaintFx.HoverBorderBrush = value; } }
+    public GradientSpec? PressedBorderBrush { get => (_cPaintFx ?? BoxColdPaintFx.Default).PressedBorderBrush; init { if (!EqualityComparer<GradientSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).PressedBorderBrush, value)) CPaintFx.PressedBorderBrush = value; } }
+    public AcrylicSpec? Acrylic { get => (_cPaintFx ?? BoxColdPaintFx.Default).Acrylic; init { if (!EqualityComparer<AcrylicSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).Acrylic, value)) CPaintFx.Acrylic = value; } } // per-node frosted-glass backdrop (blur + tint + noise)
     /// <summary>Record this subtree into its OWN retained slice (Flutter's RepaintBoundary, CSS <c>will-change</c>): a
     /// change inside it — a looping keyframe, a bound transform/opacity, a per-frame visualizer — re-rasters only this
     /// slice's tiles, and a change around it never re-rasters this one. Put it on the root of content that animates
@@ -220,16 +224,16 @@ public sealed record BoxEl : Element
     /// <summary>Per-element edge fade (gpu-renderer.md): feather this element's content alpha to transparent (+ optional
     /// blur) near the chosen edges, following its rounded <see cref="Corners"/> (the curve) — it dissolves into whatever
     /// is behind. One offscreen RT per faded element. Null = none.</summary>
-    public EdgeFadeSpec? EdgeFade { get => (_cPaint ?? BoxColdPaint.Default).EdgeFade; init { if (!EqualityComparer<EdgeFadeSpec?>.Default.Equals((_cPaint ?? BoxColdPaint.Default).EdgeFade, value)) CPaint.EdgeFade = value; } }
+    public EdgeFadeSpec? EdgeFade { get => (_cPaintFx ?? BoxColdPaintFx.Default).EdgeFade; init { if (!EqualityComparer<EdgeFadeSpec?>.Default.Equals((_cPaintFx ?? BoxColdPaintFx.Default).EdgeFade, value)) CPaintFx.EdgeFade = value; } }
 
     public Action? OnClick { get; init; }
     public Action<KeyEventArgs>? OnKeyDown { get => (_cInput ?? BoxColdInput.Default).OnKeyDown; init { if (!EqualityComparer<Action<KeyEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnKeyDown, value)) CInput.OnKeyDown = value; } }
     /// <summary>Text (character) input — the IME/layout-resolved codepoint, routed to the focused node and bubbled
     /// (distinct from <see cref="OnKeyDown"/>'s raw virtual-key). Set by editable controls (EditableText/ComboBox).</summary>
-    public Action<CharEventArgs>? OnCharInput { get => (_cInput ?? BoxColdInput.Default).OnCharInput; init { if (!EqualityComparer<Action<CharEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnCharInput, value)) CInput.OnCharInput = value; } }
+    public Action<CharEventArgs>? OnCharInput { get => (_cGesture ?? BoxColdGesture.Default).OnCharInput; init { if (!EqualityComparer<Action<CharEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnCharInput, value)) CGesture.OnCharInput = value; } }
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
-    public Action<Point2>? OnPointerDown { get => (_cInput ?? BoxColdInput.Default).OnPointerDown; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnPointerDown, value)) CInput.OnPointerDown = value; } }
-    public Action<Point2>? OnDrag { get => (_cInput ?? BoxColdInput.Default).OnDrag; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnDrag, value)) CInput.OnDrag = value; } }
+    public Action<Point2>? OnPointerDown { get => (_cGesture ?? BoxColdGesture.Default).OnPointerDown; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnPointerDown, value)) CGesture.OnPointerDown = value; } }
+    public Action<Point2>? OnDrag { get => (_cGesture ?? BoxColdGesture.Default).OnDrag; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDrag, value)) CGesture.OnDrag = value; } }
     /// <summary>Marks an <see cref="OnDrag"/> node a CROSS-AXIS content pan (SwipeControl row swipe, FlipView page drag):
     /// instead of eagerly capturing the contact on touch-down — the Slider/EditableText scrub default — this drag enrolls
     /// an AXIS-LOCKED gesture-arena member that competes with an enclosing scroller's Pan (input-a11y.md §7A). It wins the
@@ -237,7 +241,7 @@ public sealed record BoxEl : Element
     /// declarative form of <c>DragController.YieldsToPan</c>. Its axis is inferred from this node's main axis
     /// (<see cref="Direction"/>): a row box (Direction=0) is a horizontal swipe, a column box a vertical one. No effect
     /// without <see cref="OnDrag"/>, and no effect on the mouse path (mouse drag still captures immediately).</summary>
-    public bool DragYieldsToPan { get => (_cInput ?? BoxColdInput.Default).DragYieldsToPan; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).DragYieldsToPan, value)) CInput.DragYieldsToPan = value; } }
+    public bool DragYieldsToPan { get => (_cGesture ?? BoxColdGesture.Default).DragYieldsToPan; init { if (!EqualityComparer<bool>.Default.Equals((_cGesture ?? BoxColdGesture.Default).DragYieldsToPan, value)) CGesture.DragYieldsToPan = value; } }
     /// <summary>Position-aware press carrying click count (double/triple-click), modifier chord, button and device kind —
     /// the text-selection / list-interaction press handler. Fires alongside <see cref="OnPointerDown"/> on left press.</summary>
     public Action<PointerEventArgs>? OnPointerPressed { get => (_cInput ?? BoxColdInput.Default).OnPointerPressed; init { if (!EqualityComparer<Action<PointerEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnPointerPressed, value)) CInput.OnPointerPressed = value; } }
@@ -268,9 +272,9 @@ public sealed record BoxEl : Element
     public bool ClickRequestsContext { get => (_cInput ?? BoxColdInput.Default).ClickRequestsContext; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).ClickRequestsContext, value)) CInput.ClickRequestsContext = value; } }
     /// <summary>Keyboard-accelerator chord (WinUI KeyboardAccelerator): invokes <see cref="OnClick"/> from anywhere once
     /// focused routing leaves the chord unhandled (e.g. Ctrl+W close-tab).</summary>
-    public KeyAccelerator? Accelerator { get => (_cInput ?? BoxColdInput.Default).Accelerator; init { if (!EqualityComparer<KeyAccelerator?>.Default.Equals((_cInput ?? BoxColdInput.Default).Accelerator, value)) CInput.Accelerator = value; } }
+    public KeyAccelerator? Accelerator { get => (_cGesture ?? BoxColdGesture.Default).Accelerator; init { if (!EqualityComparer<KeyAccelerator?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).Accelerator, value)) CGesture.Accelerator = value; } }
     /// <summary>Access-key mnemonic (WinUI AccessKey): Alt+letter invokes <see cref="OnClick"/>. Uppercase 'A'..'Z'/'0'..'9'.</summary>
-    public char AccessKey { get => (_cInput ?? BoxColdInput.Default).AccessKey; init { if (!EqualityComparer<char>.Default.Equals((_cInput ?? BoxColdInput.Default).AccessKey, value)) CInput.AccessKey = value; } }
+    public char AccessKey { get => (_cGesture ?? BoxColdGesture.Default).AccessKey; init { if (!EqualityComparer<char>.Default.Equals((_cGesture ?? BoxColdGesture.Default).AccessKey, value)) CGesture.AccessKey = value; } }
     /// <summary>Pointer cursor shown while hovering this node or any cursor-less descendant (WinUI SetCursor). Null =
     /// inherit from the nearest declaring ancestor, else the system arrow — clickability does NOT imply the hand. An
     /// explicit value (Arrow included) terminates the lookup, masking an ancestor's I-beam/hand (the TextBox delete
@@ -278,14 +282,14 @@ public sealed record BoxEl : Element
     public CursorId? Cursor { get; init; }
     /// <summary>Element-level wheel hook (WinUI PointerWheelChanged), consulted BEFORE the enclosing viewport scrolls;
     /// set <c>Handled</c> to consume (NumberBox value stepping). Unhandled keeps walking up (routed-event semantics).</summary>
-    public Action<WheelEventArgs>? OnPointerWheel { get => (_cInput ?? BoxColdInput.Default).OnPointerWheel; init { if (!EqualityComparer<Action<WheelEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnPointerWheel, value)) CInput.OnPointerWheel = value; } }
+    public Action<WheelEventArgs>? OnPointerWheel { get => (_cGesture ?? BoxColdGesture.Default).OnPointerWheel; init { if (!EqualityComparer<Action<WheelEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnPointerWheel, value)) CGesture.OnPointerWheel = value; } }
     /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
     /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
     public Action<Point2>? OnHoverMove { get => (_cInput ?? BoxColdInput.Default).OnHoverMove; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnHoverMove, value)) CInput.OnHoverMove = value; } }
     /// <summary>Routed mouse/pen move in this node's local coordinates while the pointer is anywhere in its subtree.
     /// Delivered leaf-to-root, including when an interactive child is the hit leaf. Suppressed for touch and capture/
     /// drag paths. Intended for allocation-free container effects such as a pointer-tracked spotlight.</summary>
-    public Action<Point2>? OnPointerMoveWithin { get => (_cInput ?? BoxColdInput.Default).OnPointerMoveWithin; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnPointerMoveWithin, value)) CInput.OnPointerMoveWithin = value; } }
+    public Action<Point2>? OnPointerMoveWithin { get => (_cGesture ?? BoxColdGesture.Default).OnPointerMoveWithin; init { if (!EqualityComparer<Action<Point2>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnPointerMoveWithin, value)) CGesture.OnPointerMoveWithin = value; } }
     /// <summary>Fired when the pointer LEAVES this node (loses hover) — to reset a hover preview to its resting state
     /// (RatingControl reverting to the committed rating, a ToolTip dismissing). Makes the node hit-testable.</summary>
     public Action? OnPointerExit { get => (_cInput ?? BoxColdInput.Default).OnPointerExit; init { if (!EqualityComparer<Action?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnPointerExit, value)) CInput.OnPointerExit = value; } }
@@ -298,42 +302,42 @@ public sealed record BoxEl : Element
     /// (per-axis, ListViewBaseItem_Partial.cpp:1864-1878) promotes the press to a drag — the node follows the pointer
     /// at WinUI ListViewItemDragThemeOpacity 0.80 (ListViewItem_themeresources.xaml:7) with a lifted shadow, stops
     /// hit-testing, and the eventual release SUPPRESSES the click.</summary>
-    public bool CanDrag { get => (_cInput ?? BoxColdInput.Default).CanDrag; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).CanDrag, value)) CInput.CanDrag = value; } }
+    public bool CanDrag { get => (_cGesture ?? BoxColdGesture.Default).CanDrag; init { if (!EqualityComparer<bool>.Default.Equals((_cGesture ?? BoxColdGesture.Default).CanDrag, value)) CGesture.CanDrag = value; } }
     /// <summary>Drag lifecycle (needs <see cref="CanDrag"/>): fired once when the press crosses the drag box (WinUI
     /// DragItemsStarting). The args instance is reused for the whole gesture — copy what you keep.</summary>
-    public Action<DragEventArgs>? OnDragStarted { get => (_cInput ?? BoxColdInput.Default).OnDragStarted; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnDragStarted, value)) CInput.OnDragStarted = value; } }
+    public Action<DragEventArgs>? OnDragStarted { get => (_cGesture ?? BoxColdGesture.Default).OnDragStarted; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragStarted, value)) CGesture.OnDragStarted = value; } }
     /// <summary>Every pointer move while the drag is active: accumulated gesture deltas + smoothed velocity — feed
     /// <c>ReorderList.Update(e.TotalDy)</c> and re-render with its projected order / offset hints.</summary>
-    public Action<DragEventArgs>? OnDragDelta { get => (_cInput ?? BoxColdInput.Default).OnDragDelta; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnDragDelta, value)) CInput.OnDragDelta = value; } }
+    public Action<DragEventArgs>? OnDragDelta { get => (_cGesture ?? BoxColdGesture.Default).OnDragDelta; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragDelta, value)) CGesture.OnDragDelta = value; } }
     /// <summary>Release after an active drag (WinUI DragItemsCompleted): commit the reorder here
     /// (<c>ReorderList.Complete()</c>); the drop-glide and the displaced-sibling FLIP retarget off this commit.</summary>
-    public Action<DragEventArgs>? OnDragCompleted { get => (_cInput ?? BoxColdInput.Default).OnDragCompleted; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnDragCompleted, value)) CInput.OnDragCompleted = value; } }
+    public Action<DragEventArgs>? OnDragCompleted { get => (_cGesture ?? BoxColdGesture.Default).OnDragCompleted; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragCompleted, value)) CGesture.OnDragCompleted = value; } }
     /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing.</summary>
-    public Action? OnDragCanceled { get => (_cInput ?? BoxColdInput.Default).OnDragCanceled; init { if (!EqualityComparer<Action?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnDragCanceled, value)) CInput.OnDragCanceled = value; } }
+    public Action? OnDragCanceled { get => (_cGesture ?? BoxColdGesture.Default).OnDragCanceled; init { if (!EqualityComparer<Action?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragCanceled, value)) CGesture.OnDragCanceled = value; } }
     /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
     /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
     /// armer) with a string Kind discriminator + a payload factory the engine resolves ONCE when the press promotes
     /// past the drag box. The live <see cref="DragSession"/> then routes to the nearest accepting
     /// <see cref="DropTarget"/> under the pointer on every move.</summary>
-    public DragSource? Draggable { get => (_cInput ?? BoxColdInput.Default).Draggable; init { if (!EqualityComparer<DragSource?>.Default.Equals((_cInput ?? BoxColdInput.Default).Draggable, value)) CInput.Draggable = value; } }
+    public DragSource? Draggable { get => (_cGesture ?? BoxColdGesture.Default).Draggable; init { if (!EqualityComparer<DragSource?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).Draggable, value)) CGesture.Draggable = value; } }
     /// <summary>E5-L2 drop TARGET (Flutter DragTarget / SwiftUI dropDestination): accepts sessions whose Kind is in
     /// <c>AcceptKinds</c> — OnEnter/OnOver/OnLeave fire on hover transitions, OnDrop on release over it (before the
     /// L1 completion; <c>SettleOnDrop</c> keeps the drop-glide for reorder targets). Discovery is hit-test-CHAIN
     /// based (nearest accepting ancestor of the node under the pointer) — the spec alone does NOT make this box
     /// click/pointer hit-testable.</summary>
-    public DropTargetSpec? DropTarget { get => (_cInput ?? BoxColdInput.Default).DropTarget; init { if (!EqualityComparer<DropTargetSpec?>.Default.Equals((_cInput ?? BoxColdInput.Default).DropTarget, value)) CInput.DropTarget = value; } }
+    public DropTargetSpec? DropTarget { get => (_cGesture ?? BoxColdGesture.Default).DropTarget; init { if (!EqualityComparer<DropTargetSpec?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).DropTarget, value)) CGesture.DropTarget = value; } }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Pauses while the held pointer leaves the
     /// node (fresh delay on re-entry — RepeatButton_Partial.cpp:530-574); a held Space arms the same engine timer.</summary>
-    public bool Repeats { get => (_cInput ?? BoxColdInput.Default).Repeats; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).Repeats, value)) CInput.Repeats = value; } }
+    public bool Repeats { get => (_cGesture ?? BoxColdGesture.Default).Repeats; init { if (!EqualityComparer<bool>.Default.Equals((_cGesture ?? BoxColdGesture.Default).Repeats, value)) CGesture.Repeats = value; } }
     /// <summary>WinUI RepeatButton <c>Delay</c>/<c>Interval</c> (ms) for <see cref="Repeats"/> nodes. NaN = the WinUI
     /// DP defaults (500/33); the ScrollBar template arrows use Interval=50 (ScrollBar_themeresources.xaml).</summary>
-    public float RepeatDelayMs { get => (_cInput ?? BoxColdInput.Default).RepeatDelayMs; init { if (!EqualityComparer<float>.Default.Equals((_cInput ?? BoxColdInput.Default).RepeatDelayMs, value)) CInput.RepeatDelayMs = value; } }
-    public float RepeatIntervalMs { get => (_cInput ?? BoxColdInput.Default).RepeatIntervalMs; init { if (!EqualityComparer<float>.Default.Equals((_cInput ?? BoxColdInput.Default).RepeatIntervalMs, value)) CInput.RepeatIntervalMs = value; } }
+    public float RepeatDelayMs { get => (_cGesture ?? BoxColdGesture.Default).RepeatDelayMs; init { if (!EqualityComparer<float>.Default.Equals((_cGesture ?? BoxColdGesture.Default).RepeatDelayMs, value)) CGesture.RepeatDelayMs = value; } }
+    public float RepeatIntervalMs { get => (_cGesture ?? BoxColdGesture.Default).RepeatIntervalMs; init { if (!EqualityComparer<float>.Default.Equals((_cGesture ?? BoxColdGesture.Default).RepeatIntervalMs, value)) CGesture.RepeatIntervalMs = value; } }
     /// <summary>WinUI <c>KeyPress::Button bAcceptsReturn</c>: false = Enter does NOT activate this clickable (it falls
     /// through to normal key routing) — CheckBox (CheckBox_Partial.cpp:27), RadioButton (RadioButton_Partial.cpp:30)
     /// and ToggleSwitch (ToggleSwitch_Partial.cpp:1002-1007) toggle on Space only. Space activation is unaffected.</summary>
-    public bool ActivateOnEnter { get => (_cInput ?? BoxColdInput.Default).ActivateOnEnter; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).ActivateOnEnter, value)) CInput.ActivateOnEnter = value; } }
+    public bool ActivateOnEnter { get => (_cGesture ?? BoxColdGesture.Default).ActivateOnEnter; init { if (!EqualityComparer<bool>.Default.Equals((_cGesture ?? BoxColdGesture.Default).ActivateOnEnter, value)) CGesture.ActivateOnEnter = value; } }
     /// <summary>WinUI <c>AllowFocusOnInteraction</c>: false = a pointer press never moves focus to this focusable (and
     /// never falls past it to an ancestor — focus stays where it was, AppBarButton_themeresources.xaml:136); keyboard
     /// Tab still reaches it. True (default) = press focuses the nearest focusable self-or-ancestor.</summary>
@@ -362,7 +366,7 @@ public sealed record BoxEl : Element
     /// that fallback treat it as opaque: any scrollable candidate found in an EARLIER sibling is discarded once this
     /// node is reached, though the fallback still recurses into ITS OWN children (a dialog with genuine scrollable
     /// Content is still found normally, since that inner scroller is a DESCENDANT, not blocked by this reset).</summary>
-    public bool BlocksBackgroundScroll { get => (_cInput ?? BoxColdInput.Default).BlocksBackgroundScroll; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).BlocksBackgroundScroll, value)) CInput.BlocksBackgroundScroll = value; } }
+    public bool BlocksBackgroundScroll { get => (_cGesture ?? BoxColdGesture.Default).BlocksBackgroundScroll; init { if (!EqualityComparer<bool>.Default.Equals((_cGesture ?? BoxColdGesture.Default).BlocksBackgroundScroll, value)) CGesture.BlocksBackgroundScroll = value; } }
     /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
     /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
     /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>
@@ -372,7 +376,7 @@ public sealed record BoxEl : Element
     /// focusable even when clickable (the light-dismiss catcher layer — WinUI's dismiss layer is not a tab stop),
     /// true = force focusable.</summary>
     public bool? TabStop { get => (_cInput ?? BoxColdInput.Default).TabStop; init { if (!EqualityComparer<bool?>.Default.Equals((_cInput ?? BoxColdInput.Default).TabStop, value)) CInput.TabStop = value; } }
-    public int TabIndex { get => (_cInput ?? BoxColdInput.Default).TabIndex; init { if (!EqualityComparer<int>.Default.Equals((_cInput ?? BoxColdInput.Default).TabIndex, value)) CInput.TabIndex = value; } }
+    public int TabIndex { get => (_cGesture ?? BoxColdGesture.Default).TabIndex; init { if (!EqualityComparer<int>.Default.Equals((_cGesture ?? BoxColdGesture.Default).TabIndex, value)) CGesture.TabIndex = value; } }
     /// <summary>WinUI FocusVisualMargin: negative values push the keyboard-focus ring OUTSIDE the bounds. Null = the
     /// WinUI template default (−3 all around); Slider uses −7,0,−7,0.</summary>
     public Edges4? FocusVisualMargin { get => (_cInput ?? BoxColdInput.Default).FocusVisualMargin; init { if (!EqualityComparer<Edges4?>.Default.Equals((_cInput ?? BoxColdInput.Default).FocusVisualMargin, value)) CInput.FocusVisualMargin = value; } }
@@ -444,7 +448,7 @@ public sealed record BoxEl : Element
     public Action<NodeHandle>? OnRealized { get; init; }
     /// <summary>Called after layout when this node's arranged local bounds change. Intended for retained leaf controls
     /// that need their own laid-out width/height without subscribing to raw viewport changes.</summary>
-    public Action<RectF>? OnBoundsChanged { get => (_cInput ?? BoxColdInput.Default).OnBoundsChanged; init { if (!EqualityComparer<Action<RectF>?>.Default.Equals((_cInput ?? BoxColdInput.Default).OnBoundsChanged, value)) CInput.OnBoundsChanged = value; } }
+    public Action<RectF>? OnBoundsChanged { get => (_cGesture ?? BoxColdGesture.Default).OnBoundsChanged; init { if (!EqualityComparer<Action<RectF>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnBoundsChanged, value)) CGesture.OnBoundsChanged = value; } }
 
     /// <summary>Follow another node's on-screen rect: answers the node this box must cover RIGHT NOW (typically a hollow
     /// reservation captured through <see cref="OnRealized"/>), or <see cref="NodeHandle.Null"/> for "not following". While it
@@ -457,7 +461,7 @@ public sealed record BoxEl : Element
     /// stops (so let the thunk's answer be a function of a signal those bindings read too). The thunk runs on the UI thread
     /// outside any reactive scope (read signals with Peek), must not allocate, and must be the SAME delegate every render
     /// (a fresh closure per render re-diffs the box). The target must not be inside this box's own subtree.</summary>
-    public Func<NodeHandle>? FollowRect { get => (_cInput ?? BoxColdInput.Default).FollowRect; init { if (!EqualityComparer<Func<NodeHandle>?>.Default.Equals((_cInput ?? BoxColdInput.Default).FollowRect, value)) CInput.FollowRect = value; } }
+    public Func<NodeHandle>? FollowRect { get => (_cGesture ?? BoxColdGesture.Default).FollowRect; init { if (!EqualityComparer<Func<NodeHandle>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).FollowRect, value)) CGesture.FollowRect = value; } }
 
     public Element[] Children { get; init; } = [];
 
@@ -521,7 +525,7 @@ public sealed record BoxEl : Element
     /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
     /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>
-    public LayoutTransition? Animate { get => (_cMisc ?? BoxColdMisc.Default).Animate; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals((_cMisc ?? BoxColdMisc.Default).Animate, value)) CMisc.Animate = value; } }
+    public LayoutTransition? Animate { get => (_cGesture ?? BoxColdGesture.Default).Animate; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).Animate, value)) CGesture.Animate = value; } }
 
     /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
     /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>

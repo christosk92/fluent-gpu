@@ -5,7 +5,7 @@ namespace FluentGpu.Dsl;
 
 /// <summary>The rarely-set channels of the <see cref="Element"/> base (motion, scroll effects, skeleton, shared-element), split
 /// out so an element that sets none of them costs one null reference. Copy-on-write exactly like <c>BoxCold</c>: `with`
-/// copies share the instance until a setter runs on the copy, which clones it first (<see cref="Owner"/> marks a clone made
+/// copies share the instance until a setter that changes a value runs on the copy, which clones it first (<see cref="Owner"/> marks a clone made
 /// for that element). Defaults mirror the former inline initializers.</summary>
 internal sealed class ElementCold : IEquatable<ElementCold>
 {
