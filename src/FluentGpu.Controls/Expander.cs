@@ -185,8 +185,18 @@ public sealed class Expander : Component
         // never race a slow frame or an interrupted toggle. Always tracked (cheap, and Options is a frozen field so
         // the branch below is stable for the component's whole lifetime either way) — only its result is consulted
         // when the option is off.
-        var transitioning = UseSignal(false);
-        UseEffect(() => transitioning.Value = true, open);
+        // The flag is up whenever the next toggle is owed its motion: from mount while COLLAPSED (the next open must ease),
+        // and from every toggle until the open leg settles. A freshly mounted OPEN Expander starts at rest — no FLIP seeds
+        // a track at mount, so raising the flag there only mounted a per-frame watcher and re-rendered the card twice to
+        // clear it again, for every Expander that mounted or was realized (a scrolled list of them kept a frame-clock
+        // poller alive the whole time). Only a CHANGE of `open` raises it after mount.
+        var transitioning = UseSignal(!open);
+        var lastOpen = UseRef(open);
+        UseEffect(() =>
+        {
+            if (lastOpen.Value != open) transitioning.Value = true;
+            lastOpen.Value = open;
+        }, open);
         bool isTransitioning = transitioning.Value;      // subscribe: the resize watcher's write re-renders this component
         bool animateResize = Options.AnimateContentResize || isTransitioning;
 

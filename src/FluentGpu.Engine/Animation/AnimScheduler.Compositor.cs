@@ -188,6 +188,14 @@ public sealed partial class AnimEngine
                 ref var row = ref _slab.At(slot);
                 if (row.Has(AnimFlags.Parked) || row.Channel != pose.Channel || !_compositorSeeds.TryGetValue(slot, out var seed)
                     || seed.Instance != pose.InstanceId || seed.Revision != pose.Revision || !IsCompositorRow(in row)) continue;
+                if (pose.Hidden && !pose.Done)
+                {
+                    // Nothing of it is on screen: keep the timing, leave the scene (and the row's shown value) untouched.
+                    row.ElapsedMs = pose.ElapsedMs;
+                    row.DelayRemainingMs = pose.DelayRemainingMs;
+                    row.Flags &= ~(AnimFlags.JustSeeded | AnimFlags.StartPending);
+                    break;
+                }
                 row.Position = pose.Value;
                 row.Velocity = pose.Velocity;
                 row.ElapsedMs = pose.ElapsedMs;
@@ -199,7 +207,7 @@ public sealed partial class AnimEngine
                 {
                     ref var accumulation = ref CollectionsMarshal.GetValueRefOrAddDefault(_compositorFeedbackAccumulators, row.Node, out bool exists);
                     if (!exists) accumulation = Accum.FromPaint(in _scene.Paint(row.Node));
-                    accumulation.Fold(row.Channel, row.Position, replace: true);
+                    accumulation.Fold(row.Channel, Posed(in row, row.Position, in _scene.Bounds(row.Node), _scene.DeviceScale), replace: true);
                 }
                 if (pose.Done)
                 {
@@ -265,6 +273,8 @@ public sealed class CompositorAnimationSnapshot
     }
 }
 
-/// <summary>Latest render pose; settled entries persist until a later desired set omits their instance.</summary>
+/// <summary>Latest render pose; settled entries persist until a later desired set omits their instance. One render-owned
+/// row's pose fed back to the UI. <paramref name="Hidden"/>: its node could not reach a pixel on
+/// the tick that produced it — the UI imports the timing only and composes nothing into its scene.</summary>
 public readonly record struct CompositorAnimationPose(NodeHandle Node, AnimChannel Channel, ulong InstanceId, ulong Revision,
-    float Value, float Velocity, float ElapsedMs, float DelayRemainingMs, bool Done);
+    float Value, float Velocity, float ElapsedMs, float DelayRemainingMs, bool Done, bool Hidden = false);

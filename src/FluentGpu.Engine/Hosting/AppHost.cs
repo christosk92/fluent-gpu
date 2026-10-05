@@ -4606,7 +4606,7 @@ public sealed partial class AppHost : IDisposable
         EnableEvidence();   // the evidence ledgers live on the recorder pair that composites (AppHost.Evidence.cs)
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
-        _wakeDiag = new WakeDiagnostics(_frameClockSig, _anim, _scene, AppendRenderWakeCensus, () => _window.IsActive, _timers);   // always-on: see WakeDiagnostics (the [wake] census)
+        _wakeDiag = new WakeDiagnostics(_frameClockSig, _anim, _scene, AppendRenderWakeCensus, () => _window.IsActive, _timers, _frameClockPaceableSig);   // always-on: see WakeDiagnostics (the [wake] census)
         if (s_memDiag)
         {
             _memCensus = new MemCensus(this, EngineSwitches.MemDiagSeconds);

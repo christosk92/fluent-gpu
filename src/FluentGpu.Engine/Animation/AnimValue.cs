@@ -55,6 +55,13 @@ public enum AnimFlags : ushort
                               // flies to a stale target and SettleRestore snaps the rest of the way; with it the target
                               // tracks the content as it arrives. Cleared the moment the author declares a size
                               // (AnimEngine.RecordDeclaredSize) — a declared value is ground truth, not a projection.
+    SnapDevicePx  = 1 << 13,  // a ScaleX/ScaleY row POSES whole device pixels of the node's own extent (its Bounds W/H x
+                              // the scene's DeviceScale; AnimEngine.SnapToDevicePixels): crisp edges, and a sample that
+                              // stays inside one pixel poses the same value, so its frame records and presents nothing.
+                              // The UI tick, the compositor feedback and the render thread all pose through it.
+    Hold          = 1 << 14,  // AnimEngine.SetHeld: the row's VALUE stays where it stands (on the render thread, the value it
+                              // last posed) while its time runs on; released, it resumes at the phase the clock reached.
+                              // No re-seed, no frames requested while held. Cleared by a re-seed (AnimEngine.Get).
 }
 
 /// <summary>The 16-byte tagged-union generator law. The owning <see cref="AnimValue.Kind"/> selects the reading.

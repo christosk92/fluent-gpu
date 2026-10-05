@@ -129,6 +129,9 @@ public sealed partial class AnimEngine
                 // the old engine's first-frame hold (which the gates encode). Absolute-time sampling keeps it deterministic.
                 if (justSeeded) r.Flags &= ~AnimFlags.JustSeeded;
                 else r.ElapsedMs += stepMs;
+                // HELD (AnimEngine.SetHeld): the time runs on, the value stays where it stands — released, the row resumes
+                // at the phase the clock has reached, like the render thread's hold.
+                if (r.Has(AnimFlags.Hold)) continue;
                 if (r.Kind == GenKind.Spring)
                 {
                     float rd = RestDeltaFor(r.Channel);
@@ -166,14 +169,14 @@ public sealed partial class AnimEngine
                 ref AnimValue r = ref _slab.At(s);
                 if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
                     || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
-                acc.Fold(r.Channel, r.Position, replace: true); any = true;
+                acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: true); any = true;
             }
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
                 if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
                     || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
-                acc.Fold(r.Channel, r.Position, replace: false); any = true;
+                acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: false); any = true;
             }
             if (any) Compose(node, in acc);
         }
@@ -442,6 +445,21 @@ public sealed partial class AnimEngine
         Compose(node, in acc);
     }
 
+    /// <summary>Hold (or release) the row on <paramref name="node"/>/<paramref name="channel"/> IN PLACE: while held its
+    /// value stays exactly where it stands — on the render thread, the value it last posed, which is the pixel on screen —
+    /// and its time keeps running, so a release resumes at the phase the clock has reached (a looping meter frozen under
+    /// a hover picks up its loop where it would have been, never restarting it). Nothing is re-seeded and a held row asks
+    /// for no frames. No-op without a live row. Re-seeding the channel clears the hold.</summary>
+    public void SetHeld(NodeHandle node, AnimChannel channel, bool held)
+    {
+        int s = Find(node, channel);
+        if (s < 0) return;
+        ref AnimValue r = ref _slab.At(s);
+        if (r.Has(AnimFlags.Hold) == held) return;
+        if (held) r.Flags |= AnimFlags.Hold; else r.Flags &= ~AnimFlags.Hold;
+        _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
+    }
+
     /// <summary>The live value of an in-flight row (so an interrupting tween departs from where it is, not a recomputed
     /// endpoint). False = no live row → caller uses its resting value.</summary>
     public bool TryGetTrackValue(NodeHandle node, AnimChannel channel, out float value)
@@ -468,6 +486,7 @@ public sealed partial class AnimEngine
                 {
                     ClearKeys(s);
                     ResetCadence(s);   // a re-seed inherits nothing: display rate unless this seed asks for a cadence
+                    _slab.At(s).Flags &= ~(AnimFlags.SnapDevicePx | AnimFlags.Hold);   // …nor a pixel snap or a hold
                     StampCompositorSeed(s, newInstance: false, explicitFrom: true);
                     return s;
                 }

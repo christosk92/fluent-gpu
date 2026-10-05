@@ -832,6 +832,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // (threading-render-seam.md §9) arms even if no Present happens soon — a minimized/idle window can drain image
         // jobs for many turns without presenting, and the whole recovery hangs off that one recorded reason.
         if (_imageTextures.ResourceFaults != faultsBefore) NoteIfDeviceLost();
+        // The turn's image bake runs HERE, at the top of every render turn — not only inside a frame that records. A turn
+        // whose frame elides (nothing on screen changed: the usual case while the bake is all that is left) never reached
+        // BeginRecording, so the job stayed queued and the host kept waking at the bake cadence (bakedBlurPending) to
+        // publish frames that elided again: a 30 Hz loop that never made progress. The bake is its own compute batch,
+        // so it needs no frame; its result posts a completion wake, and the frame that shows it is the one that changed.
+        // Never on a lost device: the recovery gate rebuilds the queue's targets, and a compute submit would only fail.
+        if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return;
+        if (_bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && baker.DrainOne(_imageTextures, bakedQueue))
+        {
+            Diag.Count("d3d12", "bakedBlurJobs");
+            _turnBakedBlurJobs++;
+        }
     }
 
     // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──
@@ -1791,7 +1803,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameKnockouts = isPrimaryTarget ? (GpuKnockouts)_knockouts : GpuKnockouts.None;
         GpuDrawCount.Frame = 0;
         _framePassBreaks = 0; _frameBackBufferTransitions = 0;
-        _frameImageUploads = 0; _frameUploadBytes = 0; _frameBakedBlurJobs = 0;
+        _frameImageUploads = 0; _frameUploadBytes = 0; _frameBakedBlurJobs = _turnBakedBlurJobs; _turnBakedBlurJobs = 0;
         _frameBackBuffer = sc.BackBuffers[f.FrameIndex];
         ID3D12CommandAllocator* allocator = _ring.Allocators[slot];
         Check(allocator->Reset(), "allocator.Reset");
@@ -1818,7 +1830,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _frameUploadBytes += _glyphs.LastUploadBytes;
         }
         // One image bake per turn, on its own COMPUTE queue (never this list): recorded, submitted and published behind
-        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands.
+        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands. A host with
+        // an image upload queue already ran the turn's bake in DrainImageJobs (the queue's 33 ms cadence makes this one a
+        // no-op then); this site stays for a SingleThread host, which has no upload queue and never calls DrainImageJobs.
         if (isPrimaryTarget &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures
             && baker.DrainOne(textures, bakedQueue))
@@ -4406,6 +4420,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _frameImageUploads;
     private long _frameUploadBytes;
     private int _frameBakedBlurJobs;
+    private int _turnBakedBlurJobs;   // bakes DrainImageJobs ran at the top of this render turn (folded into the frame's count)
 
     /// <inheritdoc/>
     /// <remarks>Latched by the render thread once per submit; settable from any thread. The first submit with it on

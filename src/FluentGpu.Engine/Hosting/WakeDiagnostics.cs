@@ -125,6 +125,9 @@ internal sealed class WakeDiagnostics
     // printed nowhere, which left "frameClockPoller held the loop on 100 % of runs, subscriber unknown" as an
     // unanswerable report — exactly the kind this instrument was built to make answerable.
     private readonly FluentGpu.Signals.Signal<object?> _frameClockSig;
+    // Its paceable twin (AppHost._frameClockPaceableSig, FrameClock.PaceableTick): the decorative per-frame clocks the GPU
+    // governor may pace (a visualizer, an equalizer meter). Their subscribers are per-frame pollers just the same.
+    private readonly FluentGpu.Signals.Signal<object?>? _paceableSig;
 
     /// <summary>Most poller names printed per line; the rest fold into a <c>+k</c> tail. A leak of forty identical rows
     /// is answered by the first eight names and the count — the census must stay ONE log line.</summary>
@@ -143,9 +146,11 @@ internal sealed class WakeDiagnostics
     // Cached snapshot of the CURRENT subscriber set's names. Refreshed only when Signal.SubscriberSetVersion moves
     // (an actual subscribe/unsubscribe), not on every kept-awake frame — walking SubscriberAt + DiagOwner for a
     // steady-state set that isn't changing would be pure waste on a bit that can be set every frame for minutes.
+    // Kept per clock: a frame is charged only to the subscribers of the clock whose bit it carried.
     private readonly string?[] _currentPollerNames = new string?[MaxPollersSeen];
-    private int _currentPollerCount;
-    private int _lastPollerSetVersion = -1;
+    private readonly string?[] _currentPaceableNames = new string?[MaxPollersSeen];
+    private int _currentPollerCount, _currentPaceableCount;
+    private int _lastPollerSetVersion = -1, _lastPaceableSetVersion = -1;
 
     // The animation engine + scene, for the live-track and orphan census below. A compositor-owned track is the ONE
     // wake source this line could not see: WakeReasons.Anim is masked while RenderOwnsCompositor, so a page pinned at
@@ -165,8 +170,12 @@ internal sealed class WakeDiagnostics
     private readonly long[] _uiPresentCause = new long[UiPresentCauseCount];
 
     public WakeDiagnostics(FluentGpu.Signals.Signal<object?> frameClockSig, FluentGpu.Animation.AnimEngine anim, FluentGpu.Scene.SceneStore scene,
-        Action<System.Text.StringBuilder> appendRenderCensus, Func<bool> windowActive, HostTimerQueue? timers = null)
-    { _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; _windowActive = windowActive; _timers = timers; }
+        Action<System.Text.StringBuilder> appendRenderCensus, Func<bool> windowActive, HostTimerQueue? timers = null,
+        FluentGpu.Signals.Signal<object?>? paceableSig = null)
+    {
+        _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; _windowActive = windowActive;
+        _timers = timers; _paceableSig = paceableSig;
+    }
 
     /// <summary>Close the elapsed span into the focus bucket the PREVIOUS observation saw, then re-sample focus.</summary>
     private bool SampleFocus(long now)
@@ -220,7 +229,7 @@ internal sealed class WakeDiagnostics
     internal static UiPresentCause ClassifyUiPresent(WakeReasons reasons, bool reconciled, bool laidOut)
     {
         if ((reasons & WakeReasons.Timer) != 0) return UiPresentCause.Timer;
-        if ((reasons & WakeReasons.FrameClockPoller) != 0) return UiPresentCause.Poller;
+        if ((reasons & (WakeReasons.FrameClockPoller | WakeReasons.FrameClockPaceable)) != 0) return UiPresentCause.Poller;
         if (reconciled) return UiPresentCause.Reconcile;
         if (laidOut) return UiPresentCause.Layout;
         if ((reasons & (WakeReasons.RuntimePending | WakeReasons.FrameNeeded)) != 0) return UiPresentCause.Signal;
@@ -314,31 +323,45 @@ internal sealed class WakeDiagnostics
             if (set == 1) _soleFrames[i]++;
         }
 
-        if ((reasons & WakeReasons.FrameClockPoller) != 0) NotePollersSeen();
+        if ((reasons & (WakeReasons.FrameClockPoller | WakeReasons.FrameClockPaceable)) != 0) NotePollersSeen(reasons);
     }
 
-    /// <summary>Attribute this kept-awake frame to every currently-live <c>FrameClock.Tick</c> subscriber, by name.
-    /// Re-walks the subscriber list only when <see cref="FluentGpu.Signals.Signal{T}.SubscriberSetVersion"/> moved
+    /// <summary>Attribute this kept-awake frame, by name, to every currently-live subscriber of the clock whose bit it
+    /// carried: <c>FrameClock.Tick</c> for <see cref="WakeReasons.FrameClockPoller"/>, <c>FrameClock.PaceableTick</c> for
+    /// <see cref="WakeReasons.FrameClockPaceable"/> — a paceable ticker the governor held back is not charged for a frame
+    /// another poller requested, nor the other way round.
+    /// Re-walks a subscriber list only when its <see cref="FluentGpu.Signals.Signal{T}.SubscriberSetVersion"/> moved
     /// since the last call — steady state (the common case: the same 1-3 pollers ticking for seconds) is a handful of
     /// string== compares against the reused tally, no allocation.</summary>
-    private void NotePollersSeen()
+    private void NotePollersSeen(WakeReasons reasons)
     {
-        int ver = _frameClockSig.SubscriberSetVersion;
-        if (ver != _lastPollerSetVersion)
+        if ((reasons & WakeReasons.FrameClockPoller) != 0)
         {
-            _lastPollerSetVersion = ver;
-            int n = Math.Min(_frameClockSig.SubscriberCount, MaxPollersSeen);
-            _currentPollerCount = n;
-            for (int i = 0; i < n; i++)
-            {
-                var c = _frameClockSig.SubscriberAt(i);
-                _currentPollerNames[i] = c.DiagOwner is { } owner ? owner.GetType().Name : c.GetType().Name;
-            }
+            RefreshNames(_frameClockSig, ref _lastPollerSetVersion, _currentPollerNames, ref _currentPollerCount);
+            Tally(_currentPollerNames, _currentPollerCount);
         }
-
-        for (int i = 0; i < _currentPollerCount; i++)
+        if ((reasons & WakeReasons.FrameClockPaceable) != 0 && _paceableSig is { } paceable)
         {
-            string name = _currentPollerNames[i]!;
+            RefreshNames(paceable, ref _lastPaceableSetVersion, _currentPaceableNames, ref _currentPaceableCount);
+            Tally(_currentPaceableNames, _currentPaceableCount);
+        }
+    }
+
+    private static void RefreshNames(FluentGpu.Signals.Signal<object?> clock, ref int lastVersion, string?[] names, ref int count)
+    {
+        int ver = clock.SubscriberSetVersion;
+        if (ver == lastVersion) return;
+        lastVersion = ver;
+        int n = Math.Min(clock.SubscriberCount, MaxPollersSeen);
+        for (int i = 0; i < n; i++) names[i] = PollerName(clock, i);
+        count = n;
+    }
+
+    private void Tally(string?[] names, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            string name = names[i]!;
             int idx = -1;
             for (int j = 0; j < _pollersSeenCount; j++)
                 if (_pollersSeenNames[j] == name) { idx = j; break; }
@@ -351,6 +374,19 @@ internal sealed class WakeDiagnostics
             }
             _pollersSeenFrames[idx]++;
         }
+    }
+
+    /// <summary>The census name of one wake bit (tests pin every <see cref="WakeReasons"/> bit to its own name).</summary>
+    internal static string ReasonName(WakeReasons bit)
+    {
+        int i = System.Numerics.BitOperations.TrailingZeroCount((uint)bit);
+        return i < ReasonCount ? s_reasonNames[i] : "";
+    }
+
+    private static string PollerName(FluentGpu.Signals.Signal<object?> clock, int i)
+    {
+        var c = clock.SubscriberAt(i);
+        return c.DiagOwner is { } owner ? owner.GetType().Name : c.GetType().Name;
     }
 
     /// <summary>Append <c>pollersSeen=N:Name×frames,…</c> (or <c>pollersSeen=0</c>) for the window just closed — every
