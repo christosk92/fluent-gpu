@@ -49,6 +49,16 @@ public sealed record SeriesEl : Element
     /// <summary>The box-height fraction a sample of 1.0 reaches (Mirrored: of HALF the box height).</summary>
     public float Amplitude { get; init; } = 1f;
     public float Opacity { get; init; } = 1f;
+    /// <summary>What the gradient runs along (default: amplitude, the v1 behaviour).</summary>
+    public SeriesGradientAxis GradientAxis { get; init; } = SeriesGradientAxis.Amplitude;
+    /// <summary>A 1-DIP analytic fringe on the Stroke / Polar ribbon edges (on by default).</summary>
+    public bool AntiAlias { get; init; } = true;
+    /// <summary>A second gradient the colours blend toward by <see cref="GradientMix"/> (same stop count as <see cref="Gradient"/>).</summary>
+    public GradientSpec? GradientTo { get; init; }
+    /// <summary>The 0..1 blend toward <see cref="GradientTo"/>; bindable, paint-only.</summary>
+    public Prop<float> GradientMix { get; init; } = 0f;
+    /// <summary>Additive adds light instead of covering (glow); see <see cref="PaintBlend"/>.</summary>
+    public PaintBlend Blend { get; init; } = PaintBlend.SrcOver;
 
     // layout (the PolylineStrokeEl block, Element.cs)
     public float Width { get; init; } = float.NaN;

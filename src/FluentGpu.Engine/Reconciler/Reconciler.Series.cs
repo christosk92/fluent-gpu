@@ -13,6 +13,21 @@ public sealed partial class TreeReconciler
 {
     private void BindSeriesSamples(NodeHandle node, SeriesEl se)
     {
+        if (se.GradientMix.IsBound)
+        {
+            var mx = new BindEffect<float>(Runtime, se, static e => e is SeriesEl x ? x.GradientMix : default);
+            AddBinding(node, mx.Start(() =>
+            {
+                NodeBindingFireCount++;
+                if (!_scene.IsLive(node)) return;
+                float mix = mx.Read();
+                float prev = _scene.TryGetGradientMix(node, out float m) ? m : 0f;
+                float next = float.IsFinite(mix) ? Math.Clamp(mix, 0f, 1f) : 0f;
+                if (prev == next) return;
+                NodeBindingWriteCount++;
+                _scene.SetGradientMix(node, next);
+            }));
+        }
         if (!se.Samples.IsBound) return;
         var fx = new BindEffect<SeriesSamples>(Runtime, se, static e => e is SeriesEl x ? x.Samples : default);
         AddBinding(node, fx.Start(() =>

@@ -18,6 +18,100 @@ static class CompositorAnimationChecks
         RowPoolIsSparseAtSceneHighWater();
         RowPoolCapacityBoundsAndFallback();
         RowPoolTicksAllocateNothing();
+        HiddenLoopsDoNotDriveFrames();
+        GlyphWipeSplitPosesOnTheRenderThread();
+    }
+
+    /// <summary>The karaoke wipe as a render-thread animation (AnimChannel.GlyphWipeSplit): a keyframed split poses onto
+    /// the snapshot's wipe at whole-DIP steps of the run, a tick inside one step changes nothing, the authored column is
+    /// never touched, and the UI-owned path moves the store's wipe.</summary>
+    private static void GlyphWipeSplitPosesOnTheRenderThread()
+    {
+        var (scene, _, nodes, animation) = Fan(1);
+        var run = nodes[0];
+        scene.Bounds(run) = new(0, 0, 200, 20);
+        scene.Paint(run).VisualKind = VisualKind.Text;   // the wipe rides a text run (captured for text nodes only)
+        scene.SetGlyphWipe(run, new GlyphWipe(ColorF.FromRgba(255, 255, 255), ColorF.FromRgba(128, 128, 128), 0f));
+        animation.Keyframes(run, AnimChannel.GlyphWipeSplit, [new(0f, 0f), new(1f, 1f, Easing.Linear)], 1000f);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        var desired = new CompositorAnimationSnapshot();
+        animation.CaptureCompositorAnimations(desired, 0);
+        var renderer = new RenderCompositorAnimations();
+        renderer.Adopt(desired, snapshot, 0);
+        renderer.Tick(snapshot, 500);
+        snapshot.TryGetGlyphWipe(run, out var half);
+        renderer.Tick(snapshot, 501);   // 100.2 DIP: the same whole step
+        bool held = !renderer.ChangedThisTick;
+        renderer.Tick(snapshot, 503);   // 100.6 DIP: the next one
+        bool stepped = renderer.ChangedThisTick;
+        snapshot.TryGetGlyphWipe(run, out var next);
+        snapshot.BeginCompositorOverlay();
+        snapshot.TryGetGlyphWipe(run, out var authored);
+        Check("gate.compositor-glyph-wipe the render tick poses a keyframed wipe split at whole-DIP steps; a sub-DIP tick changes nothing; the authored wipe is untouched",
+            half.Split == 0.5f && held && stepped && MathF.Abs(next.Split - 101f / 200f) < 1e-6f && authored.Split == 0f,
+            $"split@500={half.Split} held={held} stepped={stepped} split@503={next.Split} authored={authored.Split}");
+        snapshot.ReleaseResources();
+
+        var (scene2, _, nodes2, _) = Fan(1);
+        var run2 = nodes2[0];
+        scene2.Bounds(run2) = new(0, 0, 200, 20);
+        scene2.Paint(run2).VisualKind = VisualKind.Text;   // the wipe rides a text run (captured for text nodes only)
+        scene2.SetGlyphWipe(run2, new GlyphWipe(ColorF.FromRgba(255, 255, 255), ColorF.FromRgba(128, 128, 128), 0f));
+        var ui = new AnimEngine(scene2);
+        ui.Keyframes(run2, AnimChannel.GlyphWipeSplit, [new(0f, 0f), new(1f, 1f, Easing.Linear)], 1000f);
+        ui.Tick(16);
+        ui.Tick(484);
+        scene2.TryGetGlyphWipe(run2, out var uiWipe);
+        Check("gate.compositor-glyph-wipe-ui the UI-owned path moves the store's wipe split",
+            uiWipe.Split > 0.3f && uiWipe.Split < 0.7f, $"split={uiWipe.Split}");
+    }
+
+    /// <summary>A loop on a node that cannot reach a pixel (Wavee's always-mounted Home busy bar, parked at opacity 0)
+    /// must not drive frames: no pose, no change, no render activity. When its parent becomes visible, the next tick poses
+    /// it exactly where time puts it; a parent FADING IN from 0 keeps it posing from the fade's first tick.</summary>
+    private static void HiddenLoopsDoNotDriveFrames()
+    {
+        var (scene, root, nodes, animation) = Fan(1);
+        var bar = nodes[0];
+        scene.Paint(root).Opacity = 0f;
+        animation.Keyframes(bar, AnimChannel.TranslateX, [new(0f, 0f), new(1f, 100f, Easing.Linear)], 1000f, loop: true);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        var desired = new CompositorAnimationSnapshot();
+        animation.CaptureCompositorAnimations(desired, 0);
+        var renderer = new RenderCompositorAnimations();
+        renderer.Adopt(desired, snapshot, 0);
+        renderer.Tick(snapshot, 100);
+        renderer.Tick(snapshot, 200);
+        bool idle = !renderer.HasActive && !renderer.ChangedThisTick && snapshot.Paint(bar).LocalTransform.Dx == 0f;
+        scene.Paint(root).Opacity = 1f;   // the parent shows (a publication)
+        snapshot.Capture(scene);
+        animation.CaptureCompositorAnimations(desired, 300);
+        renderer.Adopt(desired, snapshot, 300);
+        float dx = snapshot.Paint(bar).LocalTransform.Dx;
+        bool shown = renderer.HasActive && renderer.ChangedThisTick && MathF.Abs(dx - 30f) < 0.5f;
+        Check("gate.compositor-hidden-loop-idle a loop under an opacity-0 parent poses nothing and keeps nothing awake; shown, it lands where time puts it",
+            idle && shown, $"idle={idle} shown={shown} dx@300ms={dx:0.00} (want 30)");
+        snapshot.ReleaseResources();
+
+        var (scene2, root2, nodes2, animation2) = Fan(1);
+        var bar2 = nodes2[0];
+        scene2.Paint(root2).Opacity = 0f;
+        animation2.Animate(root2, AnimChannel.Opacity, 0f, 1f, 250f, Easing.Linear);
+        animation2.Keyframes(bar2, AnimChannel.TranslateX, [new(0f, 0f), new(1f, 100f, Easing.Linear)], 1000f, loop: true);
+        var snapshot2 = new SceneRecordingSnapshot();
+        snapshot2.Capture(scene2);
+        var desired2 = new CompositorAnimationSnapshot();
+        animation2.CaptureCompositorAnimations(desired2, 0);
+        var renderer2 = new RenderCompositorAnimations();
+        renderer2.Adopt(desired2, snapshot2, 0);
+        renderer2.Tick(snapshot2, 50);
+        float dx2 = snapshot2.Paint(bar2).LocalTransform.Dx;
+        bool fading = renderer2.HasActive && renderer2.ChangedThisTick && dx2 > 0f;
+        Check("gate.compositor-hidden-loop-fade-in a parent fading in from opacity 0 keeps its child's loop posing from the first tick",
+            fading, $"active={renderer2.HasActive} changed={renderer2.ChangedThisTick} dx@50ms={dx2:0.00}");
+        snapshot2.ReleaseResources();
     }
 
     private static (SceneStore Scene, NodeHandle Node, AnimEngine Animation, SceneRecordingSnapshot Snapshot) Fixture()

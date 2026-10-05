@@ -175,14 +175,9 @@ internal sealed class MarqueeScroller : Component
     public Signal<float> ScrollX = null!;
     public Signal<bool> Hovered = null!;
 
-    /// <summary>Above this speed (device px/s) one 30 Hz sample would move the text by more than ~1.2 px, so the row samples
-    /// at 60 Hz instead; at or below it a step is at most about one pixel at 30 Hz.</summary>
-    internal const float FastStepPxPerSec = 36f;
-
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
-        float scale = UseContext(Viewport.Scale);
         // A background window's marquee is read by nobody: park it (glide home) while the window is not the focused one or is
         // covered/cloaked. Both reads subscribe, so a focus flip or an occlusion edge re-renders this scroller and re-seeds
         // the track through the same `paused` edge a deactivated trigger uses. A scroll the pointer is DRIVING (Hover mode,
@@ -235,17 +230,16 @@ internal sealed class MarqueeScroller : Component
             (Keyframe[] keys, float durMs, bool looping) = paused
                 ? HomeTrack(homeFrom, Sty)
                 : BuildTrack(loop, canScroll, loopDist, tailDist);
-            // A scrolling title is perpetual (it would default to DefaultLoopHz). Its translate is quantised to WHOLE
-            // DEVICE PIXELS (pixelSnap) and sampled at a cadence derived from its speed in device px/s - 30 Hz for a slow
-            // title (about one pixel per sample), 60 Hz only for a fast one - so a step either moves the text by a pixel or
-            // is a held value the host elides; the old unquantised 60 Hz sample moved it by half a pixel and damaged the
-            // whole window every other refresh. The cadence is one of two values on purpose: rows sampling on those
-            // periods share one render-side clock, so two marquees step on the same tick. The home glide is a
-            // short one-shot and takes the display cadence (null) like every other one-shot (still pixel-snapped).
-            float stepHz = StepHz(TravelSpeedDip(Sty, loop ? loopDist : tailDist) * scale);
+            // The scroll and the home glide both take the display cadence (null) like every other row: scrolling TEXT is the
+            // motion a sub-refresh cadence betrays first (it read as stepping at 30 Hz, and a 60 Hz cap still halved it on a
+            // 120 Hz panel), and the host's one power ceiling (AppHost.PowerCapFps) still reaches it under energy saver.
+            // The translate is quantised to WHOLE DEVICE PIXELS (pixelSnap, F239): scrolled text is what the scroll system
+            // itself snaps (ScrollEffectEval.SnapToDevicePixel), so the glyphs stay crisp instead of shimmering through
+            // sub-pixel coverage, and a display tick on which the text has not yet crossed a pixel edge poses the IDENTICAL
+            // value — a byte-identical frame the host elides — instead of a re-record and present of the whole window for a
+            // half-pixel step. No visible frame is dropped: on every tick the text can move a pixel, it does.
             UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping,
-                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist, scale)),
-                         cadence: paused ? null : Cadence.At(stepHz), pixelSnap: true);
+                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)), pixelSnap: true);
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };
@@ -335,19 +329,6 @@ internal sealed class MarqueeScroller : Component
         float atMinSpeed = MathF.Max(0f, distance) / MathF.Max(1f, sty.Speed) * 1000f;
         return sty.CycleMs > 0f ? MathF.Min(sty.CycleMs, atMinSpeed) : atMinSpeed;
     }
-
-    /// <summary>The constant speed (DIP/s) of one traversal of <paramref name="distance"/> (see <see cref="TravelMs"/>);
-    /// <see cref="Marquee.Style.Speed"/> when the distance is zero.</summary>
-    internal static float TravelSpeedDip(Marquee.Style sty, float distance)
-    {
-        float travelMs = TravelMs(sty, distance);
-        return travelMs > 0f ? MathF.Max(0f, distance) / travelMs * 1000f : MathF.Max(1f, sty.Speed);
-    }
-
-    /// <summary>The sampling rate (Hz) of a marquee row moving at <paramref name="pxPerSec"/> device px/s: 30 Hz while a sample
-    /// moves it by about a pixel or less, 60 Hz above <see cref="FastStepPxPerSec"/>. Two values only, so every marquee's
-    /// period lands on the render thread's shared per-period clock.</summary>
-    internal static float StepHz(float pxPerSec) => pxPerSec > FastStepPxPerSec ? 60f : 30f;
 
     /// <summary>The trigger-deactivated return: a ONE-SHOT from the LIVE translate <paramref name="fromX"/> back to 0
     /// (the rest pose, where <see cref="ResolveEdgeFade"/> yields the right-edge overflow cue only). Pace is four times

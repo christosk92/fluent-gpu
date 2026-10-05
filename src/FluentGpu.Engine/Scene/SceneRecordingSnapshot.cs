@@ -55,9 +55,17 @@ public sealed partial class SceneRecordingSnapshot
     // VisualKind-gated capture-time copy like _rowCells (a SeriesEl has no other sparse paint of its own).
     private readonly SnapshotColumn<SeriesSpec> _series = new();
     private readonly SnapshotColumn<SeriesSamplesCapture> _seriesSamples = new();
+    // SpriteFieldEl (VisualKind.Sprites): the static spec + the pooled instance copy, captured like the series samples.
+    private readonly SnapshotColumn<SpriteSpec> _spriteSpec = new();
+    private readonly SnapshotColumn<SpriteCapture> _sprites = new();
     private readonly SnapshotColumn<ClipPathSpec> _clipPath = new();
     private readonly SnapshotColumn<Point2> _radialCenter = new();
+    private readonly SnapshotColumn<GradientSpec> _GradientTo = new();
+    private readonly SnapshotColumn<float> _gradientMix = new();
+    private readonly SnapshotColumn<byte> _blend = new();
+    private readonly SnapshotColumn<FeedbackState> _feedback = new();
     private readonly SnapshotColumn<AcrylicSpec> _acrylic = new();
+    private readonly SnapshotColumn<byte> _repaintBoundary = new();
     private readonly SnapshotColumn<EdgeFadeSpec> _edgeFade = new();
     private readonly SnapshotColumn<ImageVisualEffects> _imageEffects = new();
     private readonly SnapshotColumn<BrushAnim> _brushAnim = new();
@@ -276,6 +284,8 @@ public sealed partial class SceneRecordingSnapshot
             _spanDecorations.BeginCapture();
             _rowCells.BeginCapture();
             _seriesSamples.BeginCapture();
+            _spriteSpec.BeginCapture();
+            _sprites.BeginCapture();
         }
         // These three are rebuilt wholesale on EVERY capture: they are tiny (orphans are budget-capped, scroll rows
         // are a handful of viewports) and rebuilding is cheaper than tracking deltas through them.
@@ -341,6 +351,8 @@ public sealed partial class SceneRecordingSnapshot
             _spanDecorations.EndCapture();
             _rowCells.EndCapture();
             _seriesSamples.EndCapture();
+            _spriteSpec.EndCapture();
+            _sprites.EndCapture();
         }
         _orphanChildren.EndCapture();
 
@@ -404,9 +416,16 @@ public sealed partial class SceneRecordingSnapshot
         _path.Remove(index);
         _series.Remove(index);
         _seriesSamples.Remove(index);
+        _spriteSpec.Remove(index);
+        _sprites.Remove(index);
         _clipPath.Remove(index);
         _radialCenter.Remove(index);
+        _GradientTo.Remove(index);
+        _gradientMix.Remove(index);
+        _blend.Remove(index);
+        _feedback.Remove(index);
         _acrylic.Remove(index);
+        _repaintBoundary.Remove(index);
         _edgeFade.Remove(index);
         _imageEffects.Remove(index);
         _brushAnim.Remove(index);
@@ -530,7 +549,12 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetSeries(node, out SeriesSpec series)) CopySeries(ref _series.Set(index), in series);
             if (source.TryGetClipPath(node, out ClipPathSpec clipPath)) _clipPath.Set(index) = clipPath;
             if (source.TryGetRadialGradientCenter(node, out Point2 radialCenter)) _radialCenter.Set(index) = radialCenter;
+            if (source.TryGetGradientTo(node, out var capturedGradientTo)) CopyGradient(ref _GradientTo.Set(index), in capturedGradientTo);
+            if (source.TryGetGradientMix(node, out float gradientMix)) _gradientMix.Set(index) = gradientMix;
+            if (source.TryGetBlend(node, out byte blend)) _blend.Set(index) = blend;
+            if (source.TryGetFeedback(node, out var feedback)) _feedback.Set(index) = feedback;
             if (source.TryGetAcrylic(node, out AcrylicSpec acrylic)) _acrylic.Set(index) = acrylic;
+            if (source.IsRepaintBoundary(node)) _repaintBoundary.Set(index) = source.RepaintBoundaryDown(node);
             if (source.TryGetEdgeFade(node, out EdgeFadeSpec edgeFade)) _edgeFade.Set(index) = edgeFade;
             if (source.TryGetImageEffects(node, out ImageVisualEffects imageEffects)) _imageEffects.Set(index) = imageEffects;
             if (source.TryGetBrushAnim(node, out BrushAnim brushAnim)) _brushAnim.Set(index) = brushAnim;
@@ -558,6 +582,17 @@ public sealed partial class SceneRecordingSnapshot
             rc.Count = rowCells.Length;
             rc.Placeholder = rowPlaceholder;
             rc.PlaceholderColor = rowPlaceholderColor;
+        }
+        if (_paint[index].VisualKind == VisualKind.Sprites)
+        {
+            if (source.TryGetSpriteSpec(node, out var spriteSpec)) _spriteSpec.Set(index) = spriteSpec;
+            if (source.TryGetSprites(node, out var sprites))
+            {
+                ref var sp = ref _sprites.Set(index);
+                if (sp.Sprites is null || sp.Sprites.Length < sprites.Length) sp.Sprites = new Sprite[Math.Max(64, sprites.Length)];
+                sprites.CopyTo(sp.Sprites);
+                sp.Count = sprites.Length;
+            }
         }
         if (_paint[index].VisualKind == VisualKind.Series && source.TryGetSeriesSamples(node, out var seriesSamples))
         {
@@ -839,6 +874,14 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetPath(NodeHandle node, out PathSpec value) => _path.TryGet((int)node.Raw.Index, out value);
     public bool TryGetSeries(NodeHandle node, out SeriesSpec value) => _series.TryGet((int)node.Raw.Index, out value);
     /// <summary>The recorder's read of a captured series (the render-thread twin of <c>SceneStore.TryGetSeriesSamples</c>).</summary>
+    public bool TryGetSpriteSpec(NodeHandle node, out SpriteSpec spec) => _spriteSpec.TryGet((int)node.Raw.Index, out spec);
+    public bool TryGetSprites(NodeHandle node, out ReadOnlySpan<Sprite> sprites)
+    {
+        if (_sprites.TryGet((int)node.Raw.Index, out var c) && c.Sprites is not null) { sprites = c.Sprites.AsSpan(0, c.Count); return true; }
+        sprites = default;
+        return false;
+    }
+
     public bool TryGetSeriesSamples(NodeHandle node, out ReadOnlySpan<float> samples)
     {
         if (_seriesSamples.TryGet((int)node.Raw.Index, out var c) && c.Samples is not null) { samples = c.Samples.AsSpan(0, c.Count); return true; }
@@ -847,7 +890,17 @@ public sealed partial class SceneRecordingSnapshot
     }
     public bool TryGetClipPath(NodeHandle node, out ClipPathSpec value) => _clipPath.TryGet((int)node.Raw.Index, out value);
     public bool TryGetRadialGradientCenter(NodeHandle node, out Point2 value) => _radialCenter.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGradientTo(NodeHandle node, out GradientSpec value) => _GradientTo.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGradientMix(NodeHandle node, out float value) => _gradientMix.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetFeedback(NodeHandle node, out FeedbackState value) => _feedback.TryGet((int)node.Raw.Index, out value);
+    /// <summary>BoxEl.Blend of <paramref name="node"/> (SrcOver when unset).</summary>
+    public PaintBlend PaintBlendOf(NodeHandle node) => _blend.TryGet((int)node.Raw.Index, out byte v) ? (PaintBlend)(v & 0xF) : PaintBlend.SrcOver;
+    /// <summary>BoxEl.LayerBlend of <paramref name="node"/> (SrcOver when unset).</summary>
+    public LayerBlend LayerBlendOf(NodeHandle node) => _blend.TryGet((int)node.Raw.Index, out byte v) ? (LayerBlend)(v >> 4) : LayerBlend.SrcOver;
     public bool TryGetAcrylic(NodeHandle node, out AcrylicSpec value) => _acrylic.TryGet((int)node.Raw.Index, out value);
+    public bool IsRepaintBoundary(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out _);
+    /// <summary>The boundary's raster downscale (1 = full resolution); 0 when the node is not a repaint boundary.</summary>
+    public byte RepaintBoundaryDown(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out byte d) ? d : (byte)0;
     public bool TryGetEdgeFade(NodeHandle node, out EdgeFadeSpec value) => _edgeFade.TryGet((int)node.Raw.Index, out value);
     public bool TryGetImageEffects(NodeHandle node, out ImageVisualEffects value) => _imageEffects.TryGet((int)node.Raw.Index, out value);
     public bool TryGetBrushAnim(NodeHandle node, out BrushAnim value)
@@ -863,7 +916,19 @@ public sealed partial class SceneRecordingSnapshot
     }
     public bool TryGetTextEdit(NodeHandle node, out TextEditState value) => _textEdit.TryGet((int)node.Raw.Index, out value);
     public bool TryGetSelectionHighlight(NodeHandle node, out ColorF value) => _selectionHighlight.TryGet((int)node.Raw.Index, out value);
-    public bool TryGetGlyphWipe(NodeHandle node, out GlyphWipe value) => _glyphWipe.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGlyphWipe(NodeHandle node, out GlyphWipe value)
+    {
+        if (node.Raw.Index < (uint)Capacity)
+        {
+            int slot = _overlayRow[node.Raw.Index] - 1;
+            if (slot >= 0 && (_overlayRows[slot].Have & HaveWipe) != 0)
+            {
+                value = _overlayRows[slot].Wipe;
+                return true;
+            }
+        }
+        return _glyphWipe.TryGet((int)node.Raw.Index, out value);
+    }
     public bool TryGetGradient(NodeHandle node, out GradientSpec value) => _Gradient.TryGet((int)node.Raw.Index, out value);
     public bool TryGetBorderBrush(NodeHandle node, out GradientSpec value) => _BorderBrush.TryGet((int)node.Raw.Index, out value);
     public bool TryGetHoverGradient(NodeHandle node, out GradientSpec value) => _HoverGradient.TryGet((int)node.Raw.Index, out value);
@@ -947,13 +1012,20 @@ public sealed partial class SceneRecordingSnapshot
 
     private static void CopySeries(ref SeriesSpec target, in SeriesSpec source)
     {
+        GradientSpec? gradient = null, to = null;
         if (source.Gradient is { } g)
         {
             GradientSpec copy = target.Gradient ?? default;
             CopyGradient(ref copy, in g);           // pools the stops array exactly as the BoxEl gradient columns do
-            target = source with { Gradient = copy };
+            gradient = copy;
         }
-        else target = source;
+        if (source.GradientTo is { } gt)
+        {
+            GradientSpec copy = target.GradientTo ?? default;
+            CopyGradient(ref copy, in gt);
+            to = copy;
+        }
+        target = source with { Gradient = gradient, GradientTo = to };
     }
 
     private void BeginSparseCapture()
@@ -969,7 +1041,12 @@ public sealed partial class SceneRecordingSnapshot
         _series.BeginCapture();
         _clipPath.BeginCapture();
         _radialCenter.BeginCapture();
+        _GradientTo.BeginCapture();
+        _gradientMix.BeginCapture();
+        _blend.BeginCapture();
+        _feedback.BeginCapture();
         _acrylic.BeginCapture();
+        _repaintBoundary.BeginCapture();
         _edgeFade.BeginCapture();
         _imageEffects.BeginCapture();
         _brushAnim.BeginCapture();
@@ -997,7 +1074,12 @@ public sealed partial class SceneRecordingSnapshot
         _series.EndCapture();
         _clipPath.EndCapture();
         _radialCenter.EndCapture();
+        _GradientTo.EndCapture();
+        _gradientMix.EndCapture();
+        _blend.EndCapture();
+        _feedback.EndCapture();
         _acrylic.EndCapture();
+        _repaintBoundary.EndCapture();
         _edgeFade.EndCapture();
         _imageEffects.EndCapture();
         _brushAnim.EndCapture();
@@ -1018,6 +1100,7 @@ public sealed partial class SceneRecordingSnapshot
     private struct SpanDecoration { public SpanStyle[] Styles; public SpanRect[] Rects; }
     private struct RowCellsCapture { public RowCellRecorded[]? Cells; public int Count; public bool Placeholder; public ColorF PlaceholderColor; }
     private struct SeriesSamplesCapture { public float[]? Samples; public int Count; }
+    private struct SpriteCapture { public Sprite[]? Sprites; public int Count; }
 }
 
 /// <summary>Reusable dense visual rows indexed by sparse scene slots. Mutation is confined to exclusive capture.</summary>

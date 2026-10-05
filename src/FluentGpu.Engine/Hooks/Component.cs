@@ -176,7 +176,8 @@ public abstract class Component
     /// thunk yields a different value (auto SMTC/buffering/default tracks; auto-disposed on unmount).</summary>
     protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source) => Context.UseVideo(source);
     /// <summary>Seed a keyframe track on this component's node. <paramref name="cadence"/> is the row's own frame
-    /// rate (<c>AnimEngine.Keyframes</c>): <c>null</c> = display rate for a one-shot, <c>DefaultLoopHz</c> for a loop.</summary>
+    /// rate (<c>AnimEngine.Keyframes</c>): <c>null</c> = display rate, one-shot or loop. <paramref name="pixelSnap"/> rounds
+    /// each sample to a whole device pixel (see <c>AnimEngine.Keyframes</c>).</summary>
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null, bool pixelSnap = false) => Context.UseKeyframes(channel, keys, durationMs, loop, deps, cadence, pixelSnap);
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a

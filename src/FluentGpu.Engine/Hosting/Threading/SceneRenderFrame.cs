@@ -87,7 +87,7 @@ internal sealed class SceneRenderFrame
             bool placed = !target.WindowBoundsDip.IsEmpty || !target.BoundsDip.IsEmpty;
             // The SLOT travels, not its swapchain: under a render thread the swapchain is created (and released) by that thread
             // through the popup mailbox, so it may not exist yet when this publication is captured. RecordPopups resolves it
-            // (and its size) on the render thread when it records.
+            // (and its size) on the render thread when it records; the slot's Lifecycle takes the per-pass timing there too.
             _popups[i] = new(target.Root, new(origin.X, origin.Y), target, target.Window,
                 target.DrawList, target.Recording, placed);
         }
@@ -137,12 +137,14 @@ internal sealed class SceneRenderFrame
             ref readonly var popup = ref _popups[i];
             if (popup.Slot.Swapchain is not { } swapchain || popup.Root.IsNull || !Scene.IsLive(popup.Root)) continue;   // null: not created yet / already released
             if (!popup.Placed) continue;   // no placement yet ⇒ nothing to paint (and nothing to reveal on)
+            long passStart = System.Diagnostics.Stopwatch.GetTimestamp();
             popup.Recording.CopyConfigurationFrom(Scene.Recording);
             popup.Recording.RecordSubtree(Scene, popup.Commands, Images, Options.Focus, Options.ScrollThumb,
                 Options.ScrollTrack, Options.TextEdit, popup.Root, popup.Origin);
             device.SubmitDrawList(popup.Commands.Bytes, popup.Commands.SortKeys,
                 new FrameInfo(swapchain.SizePx, scale, ColorF.Transparent) { ImageClockMs = imageClockMs }, swapchain);
             swapchain.Present();
+            popup.Slot.Lifecycle.NoteTurn(passStart, System.Diagnostics.Stopwatch.GetTimestamp(), swapchain.HasPresentedContent);
             // The open motion starts on the frame the popup's content is actually ON its composition surface — the
             // swapchain's own report, not the fact that Present() was called: a backend stands down for a covered /
             // hidden target and presents nothing, and a popup HWND is hidden precisely until this first frame lands.

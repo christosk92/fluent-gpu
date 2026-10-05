@@ -137,10 +137,9 @@ public sealed partial class AnimEngine
             var identity = _compositorSeeds[slot];
             _keysBySlot.TryGetValue(slot, out var keys);
             // Cadence travels WITH the row: the render thread owns these rows' advance, so it must apply the same
-            // due-check the UI-thread PASS1 does or a 30Hz shimmer would silently run at panel rate once the
-            // compositor adopts it. Cadence.Default is resolved HERE (every capture re-reads DefaultLoopHz, so a live
-            // power-policy change reaches render-owned rows at the next publication).
-            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)ResolvedPeriodMs(slot));
+            // due-check the UI-thread PASS1 does or an explicit Cadence.At(hz) row would silently run at panel rate once
+            // the compositor adopts it.
+            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot));
         }
         target.EndCapture();
     }

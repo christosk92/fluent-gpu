@@ -345,52 +345,6 @@ public sealed class RenderThreadPacingTests
         finally { rt.Dispose(); display.Dispose(); }
     }
 
-    // F241 / F239: a BACKGROUND window's loop-only render motion is throttled. The host's callback names the interval; inside it the
-    // render thread re-presents motion at most once per interval (a wake that lands sooner re-poses nothing), a fresh publication
-    // is never held back, and with the throttle off (0) every tick presents again.
-    [Fact]
-    public void MotionThrottle_HoldsMotionTurnsInsideTheInterval_NeverAFreshPublication_AndReleasesWhenOff()
-    {
-        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
-        var seam = new SceneFramePublisher();
-        var display = new VirtualDisplay();
-        byte[] one = [1];
-        int throttleMs = 400;                                // far longer than this test's turns: only the sleep below ends it
-        int motionPresents = 0, freshPresents = 0;
-        var rt = new RenderThread(seam, _ => freshPresents++, async: false,
-            needsTick: () => true, ownMotion: () => true,
-            tick: () => motionPresents++, tickPeriod: () => PeriodQpc, displayClock: display,
-            takePresentSlot: _ => true, motionThrottleMs: () => throttleMs);
-        try
-        {
-            display.Now = 0;
-            rt.DrainSync();                                  // the first motion turn: nothing presented before it, so it runs
-            Assert.Equal(1, motionPresents);
-
-            for (int k = 1; k <= 6; k++) { display.Now = k; rt.DrainSync(); }   // a new tick every turn, all inside the interval
-            Assert.Equal(1, motionPresents);                 // held: not one more motion re-present
-            Assert.True(rt.MotionThrottleSkips >= 6, $"skips={rt.MotionThrottleSkips}");
-
-            seam.Publish(one, default, default);             // a UI publication is never throttled
-            display.Now = 7;
-            rt.DrainSync();
-            Assert.Equal(1, freshPresents);
-
-            Thread.Sleep(throttleMs + 100);                  // the interval has elapsed since the last present
-            int before = motionPresents;
-            display.Now = 20;
-            rt.DrainSync();
-            Assert.True(motionPresents > before, "a motion turn past the interval presents again");
-
-            throttleMs = 0;                                  // throttle off: a motion present on every new tick
-            before = motionPresents;
-            display.Now = 21; rt.DrainSync();
-            display.Now = 22; rt.DrainSync();
-            Assert.True(motionPresents >= before + 2, $"motion={motionPresents} before={before}");
-        }
-        finally { rt.Dispose(); display.Dispose(); }
-    }
-
     // F244: the worst present's work is split into the host's phases and the blocking one is named. The host's stamps arrive through
     // the presentSplit callback (sampled right after the turn that set a new worst); the 1 Hz line prints them next to wake/slot/work.
     [Fact]

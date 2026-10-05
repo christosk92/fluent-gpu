@@ -175,7 +175,7 @@ internal static class VideoE2EProbe
         // UI-loop measurement (resettable)
         private long _prevStart;
         private double _gapMax, _busyMax;
-        private int _inactiveIterations, _iterations;
+        private int _powerCapIterations, _iterations;
         private readonly int[] _waitKinds = new int[16];
 
         // present tracing
@@ -298,7 +298,7 @@ internal static class VideoE2EProbe
         }
 
         // ── frame loop ───────────────────────────────────────────────────────────────────────────────────────────────
-        private void ResetUi() { Array.Clear(_waitKinds); _gapMax = 0; _busyMax = 0; _inactiveIterations = 0; _iterations = 0; _prevStart = 0; }
+        private void ResetUi() { Array.Clear(_waitKinds); _gapMax = 0; _busyMax = 0; _powerCapIterations = 0; _iterations = 0; _prevStart = 0; }
 
         /// <summary>One turn of the gallery's real loop (RunFrame, TickDetachedHosts, the typed wait), timed. The wait is
         /// capped at 16 ms so an idle/slow wait never starves the probe's own timers.</summary>
@@ -319,7 +319,7 @@ internal static class VideoE2EProbe
             if (busy > _busyMax) _busyMax = busy;
             _lastBusy = busy;
             _iterations++;
-            if (_host.LastWaitKind == HostWaitKind.InactiveThrottle) _inactiveIterations++;
+            if (_host.LastWaitKind == HostWaitKind.PowerCap) _powerCapIterations++;   // the one policy ceiling (energy saver); there is no focus throttle
             _waitKinds[(int)_host.LastWaitKind & 15]++;
             if (_child is { } ch && ch.Win.IsOpen && !ch.Win.IsParked) VideoE2EState.ChildTick.Value++;
             var wait = _host.WaitRequestWithDetached();
@@ -573,15 +573,15 @@ internal static class VideoE2EProbe
             _mainSink = null;
             double clockPeriod = _host.RenderPace.ClockPeriodMs;
             Raw("clockPeriodMs", clockPeriod);
-            Raw("inactiveThrottleIterations", _inactiveIterations); RawWaitKinds();
+            Raw("powerCapIterations", _powerCapIterations); RawWaitKinds();
             Raw("uiGapMaxMs", _gapMax); Raw("uiBusyMaxMs", _busyMax);
 
             var d = Summarize(sink);
             Info("Display refresh rate (Hz) / vsync period (ms)", $"{F(_hz)} / {F(_vsyncMs, "0.000")}  (compositor beat {F(clockPeriod, "0.000")} ms)");
             IntervalInfo("S1 main", d, "mainInterval");
             Check("S1 baseline presents recorded", d.N.ToString(CultureInfo.InvariantCulture), ">= 300 intervals (valid baseline)", d.N >= 300);
-            if (_inactiveIterations > _iterations / 4)
-                _cur.Notes.Add($"window was throttled as inactive in {_inactiveIterations}/{_iterations} loop turns: the baseline may under-report");
+            if (_powerCapIterations > _iterations / 4)
+                _cur.Notes.Add($"frames were paced by the power cap (energy saver) in {_powerCapIterations}/{_iterations} loop turns: the baseline may under-report");
             S1Dist = d;
         }
         private Dist S1Dist;
@@ -648,7 +648,7 @@ internal static class VideoE2EProbe
             var dm = Summarize(mainSink); var dc = Summarize(childSink);
             Raw("slotTimeouts", timeouts); Raw("slotLivenessTimeouts", _gpu.SlotLivenessTimeouts); Raw("nonPrimaryLatencyTimeouts", _gpu.NonPrimaryLatencyTimeouts);
             Raw("framesRendered", fr); Raw("framesDropped", fd); Raw("dropPct", dropPct);
-            Raw("uiGapMaxMs", _gapMax); Raw("uiBusyMaxMs", _busyMax); Raw("inactiveThrottleIterations", _inactiveIterations); RawWaitKinds();
+            Raw("uiGapMaxMs", _gapMax); Raw("uiBusyMaxMs", _busyMax); Raw("powerCapIterations", _powerCapIterations); RawWaitKinds();
             Raw("streamSizeUpdates", System.Threading.Interlocked.Read(ref _streamSizeLines) - streams0);
 
             IntervalInfo("S2 main (pop-out open)", dm, "mainInterval");

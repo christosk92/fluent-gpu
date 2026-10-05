@@ -159,6 +159,11 @@ public sealed partial class SliceRecorder
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
+        // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
+        public byte LowRes;
+        public bool Screen;   // BoxEl.LayerBlend.Screen: the item composites with CompositeItem.BlendCopy = BlendScreen
+        public bool HasFeedback;          // BoxEl.Feedback: the item advances a trail surface (CompositeItem.Feedback*)
+        public FeedbackState Feedback;
         // acrylic surfaces this slice's own walk recorded as their FallbackColor plate (carried when the slice is kept)
         public int AcrylicFallbacks;
         // an acrylic slice root: its frosted rect (the node box, containing-slice DIP), corner radii (DIP) and opacity
@@ -302,6 +307,9 @@ public sealed partial class SliceRecorder
         {
             if (_recs[s].RegFrame == _frame) return -1;
             _recs[s].Kind = kind;
+            _recs[s].LowRes = 0;   // the cut that registers it re-states its raster downscale (SetLowRes)
+            _recs[s].Screen = false;   // …and its composite blend (SetScreen)
+            _recs[s].HasFeedback = false;   // …and its feedback trail (SetFeedback)
             return s;
         }
         s = Allocate();
@@ -422,6 +430,12 @@ public sealed partial class SliceRecorder
 
     /// <summary>The cut budget <paramref name="slot"/> spends from now on (set at the cut, before its walk registers it).</summary>
     internal void SetBudget(int slot, BudgetClass budget) => _recs[slot].Budget = budget;
+    /// <summary>The slice's raster downscale (0/1 = full resolution, tiled). Set by every cut that registers the slot.</summary>
+    internal void SetLowRes(int slot, byte down) => _recs[slot].LowRes = down;
+    /// <summary>BoxEl.LayerBlend.Screen on a repaint boundary: its composite item screens onto the back buffer.</summary>
+    internal void SetScreen(int slot, bool screen) => _recs[slot].Screen = screen;
+    /// <summary>BoxEl.Feedback on a repaint boundary: its composite item is a FEEDBACK item (the backend's trail surface).</summary>
+    internal void SetFeedback(int slot, in FeedbackState state) { _recs[slot].HasFeedback = !state.Spec.IsNone; _recs[slot].Feedback = state; }
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -932,7 +946,10 @@ public sealed partial class SliceRecorder
     private struct ScanMark { public int ByteStart, ByteEnd; public CompositeSliceCmd Cmd; public RectF RoundRect; public float RoundR; }
     /// <summary>A painter-ordered SEGMENT of a slot's stream (the bytes between two markers): its byte range, the
     /// commands in it and the union of their painted footprints (slot space DIP, clipped by the in-stream clips).</summary>
-    private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds; }
+    /// <summary>A scanned segment. <see cref="Opaque"/> (slot space DIP) is the largest rect its stream paints FULLY OPAQUE
+    /// (a solid fill of alpha 1, no corner radius, axis-aligned, outside every layer and non-rectangular clip, cut by the
+    /// rectangular clips): what it hides of the items composited before it. Empty = none known.</summary>
+    private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds, Opaque; }
     /// <summary>A video hole a segment punched: its rect (slot space DIP, cut by the in-stream clips) and where its composite
     /// erase goes relative to that segment (<see cref="VideoHoleErase.Order"/> — on the tile, before it; inside an inline
     /// group layer, after it). The composite erase must be the SAME shape and strength as the in-tile punch (F078), so the scan
@@ -996,7 +1013,9 @@ public sealed partial class SliceRecorder
         ulong whole = FluentGpu.Render.Evidence.TileContentHash.Empty;
         ContentScanBegin(s);
         int pos = 0, segStart = 0, cmds = 0;
-        RectF segBounds = default;
+        RectF segBounds = default, segOpaque = default;
+        bool segVideo = false;
+        int stencils = 0;   // stencil (path) clips open: nothing inside them is a known opaque rect
         RectF top = RectF.Infinite, round = default;
         float roundR = 0f;
         while (pos + sizeof(int) <= bytes.Length)
@@ -1017,7 +1036,7 @@ public sealed partial class SliceRecorder
                     if (c.CornerRadius > 0f) { round = c.RoundedRect; roundR = c.CornerRadius; }
                     _scanClip.Add((r, round, roundR));
                     top = r;
-                    ContentScanOp(s, pos, in r, oh, scope: true);
+                    ContentScanOp(s, pos, in r, oh, scope: true, clip: true);
                     break;
                 }
                 case DrawOp.PushLayer:
@@ -1032,13 +1051,15 @@ public sealed partial class SliceRecorder
                 {
                     var c = MemoryMarshal.Read<PushStencilClipCmd>(p);
                     RectF r = top.IsInfinite ? c.DeviceRect : c.DeviceRect.Intersect(top);
+                    stencils++;
                     _scanClip.Add((r, round, roundR));
                     top = r;
-                    ContentScanOp(s, pos, in r, oh, scope: true);
+                    ContentScanOp(s, pos, in r, oh, scope: true, clip: true);
                     break;
                 }
                 case DrawOp.PopClip:
                 case DrawOp.PopStencilClip:
+                    if (op == DrawOp.PopStencilClip && stencils > 0) stencils--;
                     if (_scanClip.Count > 0) _scanClip.RemoveAt(_scanClip.Count - 1);
                     if (_scanClip.Count > 0) { var e = _scanClip[^1]; top = e.Rect; round = e.Round; roundR = e.R; }
                     else { top = RectF.Infinite; round = default; roundR = 0f; }
@@ -1050,7 +1071,7 @@ public sealed partial class SliceRecorder
                     break;
                 case DrawOp.CompositeSlice:
                 {
-                    AddSeg(s, marks, segStart, pos, cmds, segBounds);
+                    AddSeg(s, marks, segStart, pos, cmds, segBounds, segVideo ? default : segOpaque);
                     if (marks == _scanMarks[s].Length) Array.Resize(ref _scanMarks[s], marks * 2);
                     _scanMarks[s][marks++] = new ScanMark
                     {
@@ -1059,7 +1080,7 @@ public sealed partial class SliceRecorder
                     };
                     ContentScanSegment(s, marks);   // the scopes still open where segment `marks` starts
                     segStart = payload + body;
-                    segBounds = default;
+                    segBounds = default; segOpaque = default; segVideo = false;
                     cmds = 0;
                     pos = payload + body;
                     continue;
@@ -1068,7 +1089,14 @@ public sealed partial class SliceRecorder
                     if (SliceOpBounds.TryGet(op, p, out RectF b))
                     {
                         if (!top.IsInfinite) b = b.Intersect(top);
-                        if (!b.IsEmpty) segBounds = Union(segBounds, b);
+                        // An INVISIBLE fill (opacity 0, or a solid colour of alpha 0 — a dimming plate parked at rest, a
+                        // transparent hit plate) paints nothing: it must not stretch the segment's painted bounds, or a
+                        // full-window plate makes its segment hold a window of empty tiles. Its bytes stay in the stream and
+                        // its content scan below is unchanged; the day it becomes visible its bytes change and it is scanned in.
+                        if (!b.IsEmpty && !InvisibleFill(op, p)) segBounds = Union(segBounds, b);
+                        if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && OpaqueFill(op, p, in top, out RectF o)
+                            && o.W * o.H > segOpaque.W * segOpaque.H)
+                            segOpaque = o;
                         ContentScanOp(s, pos, in b, oh, layerPush);
                         // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
                         // own DrawVideo is added below, after this, and never counts against itself).
@@ -1094,6 +1122,7 @@ public sealed partial class SliceRecorder
                                     RoundRect = round, RoundR = roundR,
                                     SurfaceId = v.SurfaceId,
                                 };
+                                segVideo = true;   // a video hole erases its segment's pixels: no opaque claim
                                 WarnFadedVideo(v.Opacity);
                             }
                         }
@@ -1116,7 +1145,7 @@ public sealed partial class SliceRecorder
         if (pos < bytes.Length)
             whole = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, FluentGpu.Render.Evidence.TileContentHash.OpHash(bytes[pos..]));
         _scanHash[s] = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, (ulong)bytes.Length);
-        AddSeg(s, marks, segStart, bytes.Length, cmds, segBounds);
+        AddSeg(s, marks, segStart, bytes.Length, cmds, segBounds, segVideo ? default : segOpaque);
         _scanMarkCount[s] = marks;
         _scanVideoCount[s] = videos;
         _scanFadeCount[s] = fades;
@@ -1135,10 +1164,10 @@ public sealed partial class SliceRecorder
         FluentGpu.Foundation.Diag.Line($"[video] DrawVideo recorded with opacity {opacity:0.##} < 1: the video visual cannot fade, so the video stays at full strength under a faded hole (gpu-renderer.md 7.3)");
     }
 
-    private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds)
+    private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds, in RectF opaque)
     {
         if (k >= _scanSegs[s].Length) Array.Resize(ref _scanSegs[s], Math.Max(k + 1, _scanSegs[s].Length * 2));
-        _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds };
+        _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds, Opaque = opaque };
     }
 
     /// <summary>Recorded commands across every live slice arena (the frame's command census).</summary>
@@ -2048,8 +2077,11 @@ public sealed partial class SliceRecorder
             }
             row.SpanIndexCount = _frameSpanCount - row.SpanIndexStart;
 
-            // needed tiles: the composite viewport ∩ the segment's painted bounds, and a scroll slice's realized coverage
-            if (!contentPx.IsEmpty)
+            // needed tiles: the composite viewport ∩ the segment's painted bounds, and a scroll slice's realized coverage.
+            // A low-resolution boundary holds none (the backend replays it into one downscaled surface instead).
+            byte lowRes = r.LowRes > 1 && r.Kind == SliceKind.Effect ? r.LowRes : (byte)0;
+            if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed): no tiles
+            if (!contentPx.IsEmpty && lowRes == 0)
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
                 // A self-blurred leaf samples its whole blur SOURCE (the visible output grown by the kernel's reach),
@@ -2106,9 +2138,15 @@ public sealed partial class SliceRecorder
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
-            AddItem(new CompositeItem(id, effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha, StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH),
-                RadiiPx(e.RoundR, scale), feather, sigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
-                feather2, default, e.Dist.Count),
+            RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
+            // A Screen-blended or feedback item never hides what is under it: its result depends on the destination.
+            bool claimsCover = !r.Screen && !r.HasFeedback;
+            AddItem(new CompositeItem(id, lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
+                clipPx,
+                RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
+                feather2, default, e.Dist.Count, lowRes,
+                claimsCover ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
+                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }
@@ -2246,6 +2284,54 @@ public sealed partial class SliceRecorder
 
     /// <summary>A composite clip in device px, snapped OUT to whole pixels (the scissor a direct replay would set);
     /// unbounded → empty (no clip).</summary>
+    /// <summary>A <see cref="DrawOp.FillRoundRect"/> that paints nothing: zero opacity, or a solid fill of alpha 0.</summary>
+    private static bool InvisibleFill(DrawOp op, ReadOnlySpan<byte> payload)
+    {
+        if (op != DrawOp.FillRoundRect) return false;
+        var f = MemoryMarshal.Read<FillRoundRectCmd>(payload);
+        return f.Opacity <= 0f || (f.FillKind == 0 && f.Fill.A <= 0f);
+    }
+
+    /// <summary>The window-px rect a placed segment paints fully opaque (<see cref="CompositeItem.Opaque"/>), or empty: its
+    /// scanned opaque rect (slot DIP) in window px, cut by the item's clip. The raster may place it at x·scale + AccDx·scale
+    /// or at the whole-pixel placement round(AccDx·scale) (+ a residual): the rect is the INTERSECTION of both. The backend
+    /// turns it into the whole pixels the composited item writes opaque. Only an item that composites its pixels unchanged
+    /// can hide what lies beneath it: alpha 1, no blur, no feather, no rounded clip, no distributed fade.</summary>
+    private static RectF OpaquePx(in RectF opaque, in Plan e, float scale, float alpha, float sigma,
+        in EdgeFeather feather, in EdgeFeather feather2, in RectF clipPx)
+    {
+        if (opaque.IsEmpty || alpha < 1f || sigma > 0f || e.RoundR > 0f || e.Dist.Count > 0) return default;
+        if (feather.Rect.W > 0f || feather.Rect.H > 0f || feather2.Rect.W > 0f || feather2.Rect.H > 0f) return default;
+        float ex = e.AccDx * scale, ey = e.AccDy * scale, rx = MathF.Round(ex), ry = MathF.Round(ey);
+        float x0 = opaque.X * scale + MathF.Max(ex, rx), y0 = opaque.Y * scale + MathF.Max(ey, ry);
+        float x1 = opaque.Right * scale + MathF.Min(ex, rx), y1 = opaque.Bottom * scale + MathF.Min(ey, ry);
+        bool unbounded = clipPx.W <= 0f && clipPx.H <= 0f && clipPx.X == 0f && clipPx.Y == 0f;
+        if (!unbounded)
+        {
+            x0 = MathF.Max(x0, clipPx.X); y0 = MathF.Max(y0, clipPx.Y);
+            x1 = MathF.Min(x1, clipPx.Right); y1 = MathF.Min(y1, clipPx.Bottom);
+        }
+        return x1 > x0 && y1 > y0 ? new RectF(x0, y0, x1 - x0, y1 - y0) : default;
+    }
+
+    /// <summary>A <see cref="DrawOp.FillRoundRect"/> that paints its whole rect FULLY OPAQUE: a solid colour of alpha 1 at
+    /// opacity 1, square corners, under a translation-only transform. <paramref name="rect"/> = that rect (slot space DIP)
+    /// cut by the open rectangular <paramref name="clip"/>. Its edges may be anti-aliased: the composite shrinks the rect
+    /// to whole pixels before trusting it.</summary>
+    private static bool OpaqueFill(DrawOp op, ReadOnlySpan<byte> payload, in RectF clip, out RectF rect)
+    {
+        rect = default;
+        if (op != DrawOp.FillRoundRect) return false;
+        var f = MemoryMarshal.Read<FillRoundRectCmd>(payload);
+        if (f.FillKind != 0 || f.Fill.A < 1f || f.Opacity < 1f) return false;
+        if (f.Radii.TopLeft > 0f || f.Radii.TopRight > 0f || f.Radii.BottomRight > 0f || f.Radii.BottomLeft > 0f) return false;
+        var t = f.Transform;
+        if (t.M11 != 1f || t.M12 != 0f || t.M21 != 0f || t.M22 != 1f) return false;
+        rect = new RectF(f.Rect.X + t.Dx, f.Rect.Y + t.Dy, f.Rect.W, f.Rect.H);
+        if (!clip.IsInfinite) rect = rect.Intersect(clip);
+        return !rect.IsEmpty;
+    }
+
     private static RectF ClipPx(in RectF clip, float scale)
     {
         if (clip.IsInfinite) return default;

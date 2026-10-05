@@ -8,8 +8,8 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>Instance record for one series chunk — the GPU twin of <see cref="DrawSeriesCmd"/>, 72 floats (288 B),
-/// laid out exactly as the HLSL <c>Inst</c> below (<c>float4 s[8]</c> at byte offset 160).</summary>
+/// <summary>Instance record for one series chunk — the GPU twin of <see cref="DrawSeriesCmd"/>, 76 floats (304 B),
+/// laid out exactly as the HLSL <c>Inst</c> below (<c>float4 s[8]</c> at byte offset 176).</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct SeriesInstance
 {
@@ -17,9 +17,10 @@ internal struct SeriesInstance
     public float M11, M12, M21, M22;
     public float Dx, Dy, Opacity, Shape;
     public float Count, X0, SampleDx, Baseline;
-    public float Amplitude, Thickness, StopCount, Pad0;
+    public float Amplitude, Thickness, StopCount, Flags;
     public float C0R, C0G, C0B, C0A, C1R, C1G, C1B, C1A, C2R, C2G, C2B, C2A, C3R, C3G, C3B, C3A;
     public float O0, O1, O2, O3;
+    public float Prev, Next, Total, Index;
     public Samples32 S;
 
     public static SeriesInstance From(in DrawSeriesCmd c)
@@ -30,10 +31,11 @@ internal struct SeriesInstance
             M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
             Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity, Shape = c.Shape,
             Count = c.Count, X0 = c.X0, SampleDx = c.Dx, Baseline = c.Baseline,
-            Amplitude = c.Amplitude, Thickness = c.Thickness, StopCount = c.StopCount, Pad0 = 0f,
+            Amplitude = c.Amplitude, Thickness = c.Thickness, StopCount = c.StopCount, Flags = c.Flags,
             C0R = c.C0.R, C0G = c.C0.G, C0B = c.C0.B, C0A = c.C0.A, C1R = c.C1.R, C1G = c.C1.G, C1B = c.C1.B, C1A = c.C1.A,
             C2R = c.C2.R, C2G = c.C2.G, C2B = c.C2.B, C2A = c.C2.A, C3R = c.C3.R, C3G = c.C3.G, C3B = c.C3.B, C3A = c.C3.A,
             O0 = c.O0, O1 = c.O1, O2 = c.O2, O3 = c.O3,
+            Prev = c.Prev, Next = c.Next, Total = c.Total, Index = c.Index,
         };
         for (int k = 0; k < SeriesSpec.ChunkSamples; k++) i.S[k] = c.S[k];
         return i;
@@ -60,6 +62,7 @@ internal sealed unsafe class SeriesPipeline : IDisposable
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
+    private ID3D12PipelineState* _psoAdd;   // DrawOp.SetBlend Additive
     // Instance storage is the device's SHARED per-frame UploadArena (see PolylineStrokePipeline): MaxInstances is this
     // pipeline's per-frame POLICY cap, not a memory reservation.
     private UploadArena _arena = null!;
@@ -74,9 +77,10 @@ struct Inst {
     float4 m;
     float2 t; float opacity; float shape;
     float count; float x0; float dx; float baseline;
-    float amplitude; float thickness; float stopCount; float pad0;
+    float amplitude; float thickness; float stopCount; float flags;
     float4 c0; float4 c1; float4 c2; float4 c3;
     float4 offsets;
+    float4 ext;                                     // x = prev sample, y = next sample, z = total samples, w = this chunk's first index
     float4 s[8];
 };
 StructuredBuffer<Inst> gInst : register(t0);
@@ -91,6 +95,7 @@ struct VSOut
     nointerpolation float4 c3 : TEXCOORD4;
     nointerpolation float4 offsets : TEXCOORD5;
     nointerpolation float2 misc : TEXCOORD6;        // x = stopCount, y = opacity
+    float2 edge : TEXCOORD7;                        // x = signed distance across a ribbon (DIP), y = half the ribbon width (0 = no AA)
 };
 
 float sampleAt(uint iid, int i, int n)
@@ -105,6 +110,15 @@ float sampleAt(uint iid, int i, int n)
     q = k == 4 ? it.s[4] : q; q = k == 5 ? it.s[5] : q; q = k == 6 ? it.s[6] : q; q = k == 7 ? it.s[7] : q;
     float v = lane == 0 ? q.x : lane == 1 ? q.y : lane == 2 ? q.z : q.w;
     return saturate(v);
+}
+
+// A sample by GLOBAL neighbour: inside the chunk from the instance, just outside it from ext (prev/next), so tangents and the
+// Polar seam are continuous across chunk edges.
+float neighbourAt(uint iid, int i, int n, float4 ext)
+{
+    if (i < 0) return saturate(ext.x);
+    if (i >= n) return saturate(ext.y);
+    return sampleAt(iid, i, n);
 }
 
 float4 ramp(float a, float stopCount, float4 c0, float4 c1, float4 c2, float4 c3, float4 o)
@@ -128,18 +142,50 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     // Mirrored measures its amplitude against HALF the height, so a sample of 1.0 reaches the edge from a 0.5 baseline
     float amp = it.amplitude * (it.shape < 1.5 && it.shape >= 0.5 ? 0.5 * H : H);
     float x = it.x0 + i * it.dx;
-    float2 p; float a;
+    bool aa = fmod(it.flags, 2.0) >= 1.0;
+    bool along = fmod(floor(it.flags * 0.5), 2.0) >= 1.0;
+    float halfT = it.thickness * 0.5;
+    float fringe = aa ? 1.0 : 0.0;                 // the quad grows by one DIP each side; the PS feathers coverage into it
+    float2 p; float a; float2 edge = float2(0.0, 0.0);
     if (it.shape < 0.5)       { p = float2(x, side == 0 ? baseY - amp * s : baseY); a = side == 0 ? s : 0.0; }
     else if (it.shape < 1.5)  { p = float2(x, side == 0 ? baseY - amp * s : baseY + amp * s); a = side == 0 ? s : -s; }
+    else if (it.shape < 2.5)
+    {
+        float sPrev = neighbourAt(iid, i - 1, n, it.ext), sNext = neighbourAt(iid, i + 1, n, it.ext);
+        float2 tangent = normalize(float2(2.0 * it.dx, -(sNext - sPrev) * amp));
+        float2 nrm = float2(-tangent.y, tangent.x);
+        float2 c = float2(x, baseY - amp * s);
+        float reach = halfT + fringe;
+        p = side == 0 ? c + nrm * reach : c - nrm * reach; a = s;
+        if (aa) edge = float2(side == 0 ? reach : -reach, halfT);
+    }
     else
     {
-        float sPrev = sampleAt(iid, i - 1, n), sNext = sampleAt(iid, i + 1, n);
-        float2 tangent = normalize(float2(2.0 * it.dx, -(sNext - sPrev) * amp));
-        float2 normal = float2(-tangent.y, tangent.x) * (it.thickness * 0.5);
-        float2 c = float2(x, baseY - amp * s);
-        p = side == 0 ? c + normal : c - normal; a = s;
+        // Polar: a closed loop about the box centre; the angle is the GLOBAL sample index over the whole series.
+        float total = max(it.ext.z - 1.0, 1.0);
+        float2 ctr = float2(it.rect.x + it.rect.z * 0.5, it.rect.y + H * 0.5);
+        float rMax = 0.5 * min(it.rect.z, H) * it.amplitude;
+        float g = it.ext.w + i;
+        float ang = 6.28318530718 * g / total;
+        float2 dir = float2(cos(ang), sin(ang));
+        float2 c = ctr + dir * (rMax * s);
+        a = s;
+        if (it.thickness > 0.0)
+        {
+            float sPrev = neighbourAt(iid, i - 1, n, it.ext), sNext = neighbourAt(iid, i + 1, n, it.ext);
+            float step = 6.28318530718 / total;
+            float2 pp = ctr + float2(cos(ang - step), sin(ang - step)) * (rMax * sPrev);
+            float2 pn = ctr + float2(cos(ang + step), sin(ang + step)) * (rMax * sNext);
+            float2 tangent = normalize(pn - pp + 1e-5);
+            float2 nrm = float2(-tangent.y, tangent.x);
+            float reach = halfT + fringe;
+            p = side == 0 ? c + nrm * reach : c - nrm * reach;
+            if (aa) edge = float2(side == 0 ? reach : -reach, halfT);
+        }
+        else p = side == 0 ? c : ctr;
     }
-    p.y = clamp(p.y, top, bottom);   // never escape the chunk rect (Cull / SliceOpBounds / damage are computed from it)
+    if (along) a = (it.ext.w + i) / max(it.ext.z - 1.0, 1.0);   // the ramp by position along the series, not by height
+    if (it.shape < 2.5) p.y = clamp(p.y, top - fringe, bottom + fringe);   // never escape the chunk rect (+ the AA fringe, inside StrokeHalo)
     float2 world = float2(it.m.x * p.x + it.m.z * p.y + it.t.x, it.m.y * p.x + it.m.w * p.y + it.t.y);
     float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
     VSOut o;
@@ -148,6 +194,7 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     o.c0 = it.c0; o.c1 = it.c1; o.c2 = it.c2; o.c3 = it.c3;
     o.offsets = it.offsets;
     o.misc = float2(it.stopCount, it.opacity);
+    o.edge = edge;
     return o;
 }
 
@@ -155,6 +202,7 @@ float4 PSMain(VSOut i) : SV_Target
 {
     float4 col = ramp(abs(i.amp), i.misc.x, i.c0, i.c1, i.c2, i.c3, i.offsets);   // per pixel: |amp| runs baseline -> peak on BOTH sides of a Mirrored column
     col.a *= i.misc.y;
+    if (i.edge.y > 0.0) col.a *= saturate(i.edge.y + 0.5 - abs(i.edge.x));   // the 1-DIP analytic fringe on a ribbon edge
     return float4(col.rgb * col.a, col.a);
 }
 """;
@@ -201,6 +249,18 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12PipelineState* pso;
         Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "Series.CreateGraphicsPipelineState");
         _pso = pso;
+        // The ADDITIVE variant (visualizer F4): colour ONE/ONE adds the premultiplied source; alpha ZERO/ONE leaves the
+        // target's alpha untouched, so inside a transparent tile the result composites Over the page as page + glow.
+        pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
+        pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+        pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ZERO;
+        pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+        ID3D12PipelineState* psoAdd;
+        Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psoAdd), "Series.CreateGraphicsPipelineState(Additive)");
+        _psoAdd = psoAdd;
         vs->Release();
         ps->Release();
     }
@@ -212,7 +272,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Record one run (the Polyline contract: shared state and the PSO rebind independently; false when full,
     /// state untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<SeriesInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true)
+                       bool bindSharedState = true, bool bindPipelineState = true, bool additive = false)
     {
         int count = Math.Min(instances.Length, MaxInstances - _cursor);
         if (count <= 0) { _dropped += instances.Length; return false; }
@@ -230,7 +290,7 @@ float4 PSMain(VSOut i) : SV_Target
             var qv = _shared.QuadView;
             cmd->IASetVertexBuffers(0, 1, &qv);
         }
-        if (bindPipelineState) cmd->SetPipelineState(_pso);
+        if (bindPipelineState) cmd->SetPipelineState(additive ? _psoAdd : _pso);
         cmd->SetGraphicsRootShaderResourceView(1, gva);
         cmd->DrawInstanced((uint)(2 * SeriesSpec.ChunkSamples), (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
@@ -239,6 +299,7 @@ float4 PSMain(VSOut i) : SV_Target
     public void Dispose()
     {
         // No instance buffers to release: the shared UploadArena owns them (disposed by the device).
-        if (_pso != null) _pso->Release();
+        if (_pso != null) { _pso->Release(); _pso = null; }
+        if (_psoAdd != null) { _psoAdd->Release(); _psoAdd = null; }
     }
 }

@@ -969,8 +969,8 @@ public sealed partial class RenderContext
     public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
     /// <summary><paramref name="cadence"/> is the row's own frame rate (see <c>AnimEngine.Keyframes</c>): <c>null</c>
-    /// = display rate for a one-shot, <c>AnimEngine.DefaultLoopHz</c> for <paramref name="loop"/>. <paramref name="pixelSnap"/>
-    /// rounds each sample to a whole device pixel (see <c>AnimEngine.Keyframes</c>).</summary>
+    /// = display rate, one-shot or <paramref name="loop"/>. <paramref name="pixelSnap"/> rounds each sample to a whole device
+    /// pixel (see <c>AnimEngine.Keyframes</c>).</summary>
     public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null, bool pixelSnap = false)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, pixelSnap: pixelSnap); }, deps);
     public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps)

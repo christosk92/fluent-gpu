@@ -41,9 +41,9 @@ public readonly struct CensusSnapshot
     public readonly int Providers;
     // anim
     public readonly int AnimTracks;
-    /// <summary>Live LOOPING rows whose declared cadence is the DISPLAY rate — the one cadence that pins the
-    /// whole frame loop at the panel rate for as long as it runs (AppHost's always-on [anim.cadence] tripwire reports
-    /// the same number). A steady non-zero value here on an idle page is the leak to chase.</summary>
+    /// <summary>Live LOOPING rows at the DISPLAY rate (every loop without an explicit <c>Cadence.At</c>): each keeps the
+    /// frame loop at the panel rate for as long as it runs. A steady non-zero value here on an idle page is the leak to
+    /// chase.</summary>
     public readonly int AnimDisplayRateLoops;
     public readonly int AnimTransitions;
     public readonly int InteractActive;

@@ -61,7 +61,18 @@ public static class ScrollBarTimeline
     /// (moving, a track in flight or a dwell timer counting) — the ticker keeps it armed; false when it may retire.
     /// <paramref name="fullyHidden"/> reports a row that landed at rest, hidden and contracted.</summary>
     public static bool Advance(ref ScrollBarChromeRow cs, float dtMs, bool scrollable, bool movingNow, out bool fullyHidden, out bool changed)
+        => Advance(ref cs, dtMs, dtMs, scrollable, movingNow, out fullyHidden, out changed, out _);
+
+    /// <summary>Advances one row: the dwell timers (lane expand/contract, the idle and away hides) by
+    /// <paramref name="dwellDtMs"/>, the time that really passed since the row's last advance, and the eased tracks by
+    /// <paramref name="trackDtMs"/>, the frame's delta. Returns what the other overload returns.
+    /// <para><paramref name="dueInMs"/> is when the row next needs an advance: 0 while it needs one every frame (moving,
+    /// a track in flight), the time left on the earliest dwell when only a dwell is counting (nothing on screen changes
+    /// until it expires, so the caller may sleep until then), and +∞ when nothing is pending.</para></summary>
+    public static bool Advance(ref ScrollBarChromeRow cs, float dwellDtMs, float trackDtMs, bool scrollable, bool movingNow,
+                               out bool fullyHidden, out bool changed, out float dueInMs)
     {
+        float dtMs = dwellDtMs;
         bool over = cs.PointerOver;
         bool lane = cs.PointerOverScrollbar && scrollable;
 
@@ -106,8 +117,8 @@ public static class ScrollBarTimeline
 
         // Advance the eased tracks: expand = 167ms KeySpline(0,0,0,1) → FluentPopOpen; fade = 83ms linear.
         float oldExpand = cs.ExpandT, oldFade = cs.FadeT;
-        cs.ExpandT = Step(ref cs.ExpandFrom, cs.ExpandTarget, ref cs.ExpandClockMs, ExpandContractMs, dtMs, Easing.FluentPopOpen, cs.ExpandT);
-        cs.FadeT = Step(ref cs.FadeFrom, cs.FadeTarget, ref cs.FadeClockMs, FadeMs, dtMs, Easing.Linear, cs.FadeT);
+        cs.ExpandT = Step(ref cs.ExpandFrom, cs.ExpandTarget, ref cs.ExpandClockMs, ExpandContractMs, trackDtMs, Easing.FluentPopOpen, cs.ExpandT);
+        cs.FadeT = Step(ref cs.FadeFrom, cs.FadeTarget, ref cs.FadeClockMs, FadeMs, trackDtMs, Easing.Linear, cs.FadeT);
         changed = cs.ExpandT != oldExpand || cs.FadeT != oldFade;
 
         bool expandSettled = cs.ExpandT == cs.ExpandTarget;
@@ -120,11 +131,18 @@ public static class ScrollBarTimeline
             cs.FadeFrom = 0f; cs.FadeTarget = 0f; cs.FadeClockMs = 0f;
         }
 
-        bool dwellPending =
-            (lane && cs.LaneDwellMs < ExpandBeginMs && cs.ExpandTarget != 1f) ||
-            (!lane && over && cs.ExpandT > 0f && cs.ExpandTarget != 0f) ||
-            (!show && cs.FadeT > 0f && !hideDue);
+        // The dwells: each counts toward a threshold with nothing on screen changing until it is reached.
+        dueInMs = float.PositiveInfinity;
+        if (lane && cs.LaneDwellMs < ExpandBeginMs && cs.ExpandTarget != 1f)
+            dueInMs = ExpandBeginMs - cs.LaneDwellMs;
+        if (!lane && over && cs.ExpandT > 0f && cs.ExpandTarget != 0f)
+            dueInMs = MathF.Min(dueInMs, ContractBeginMs - cs.LaneOffDwellMs);
+        if (!show && cs.FadeT > 0f && !hideDue)
+            dueInMs = MathF.Min(dueInMs, cs.ScrolledSinceReveal ? IdleHideMs - cs.IdleMs : LeaveHideMs - cs.AwayMs);
+        bool dwellPending = dueInMs != float.PositiveInfinity;
 
+        if (movingNow || !expandSettled || !fadeSettled) dueInMs = 0f;
+        else if (dwellPending) dueInMs = MathF.Max(dueInMs, 0f);
         return movingNow || !expandSettled || !fadeSettled || dwellPending;
     }
 
@@ -149,15 +167,20 @@ public static class ScrollBarTimeline
 /// The UI-side scrollbar chrome ticker over the scene's <see cref="ScrollBarChromeTable"/>: arms a viewport's row on
 /// hover flips (<see cref="SetPointerOver"/>) and on real motion (<see cref="NotifyMoved"/>), advances every armed row
 /// through <see cref="ScrollBarTimeline.Advance"/> once per frame (<see cref="Tick"/>) and marks the viewport
-/// paint-dirty when its pixels change. <see cref="NeedsFrame"/> is the wake signal.
+/// paint-dirty when its pixels change. <see cref="NeedsFrame"/> is the per-frame wake signal; a row that is only
+/// counting a dwell (the 2 s idle hide, the hover dwells) asks for no frames and publishes the time it is due instead
+/// (<see cref="TryPeekDue"/>), so the host sleeps until then. A viewport whose bar is suppressed
+/// (<c>ScrollState.SuppressBar</c>) never draws one and never arms a row.
 /// </summary>
 public sealed class ScrollBarChrome
 {
     private readonly SceneStore _scene;
     private readonly List<int> _active = new();
     private readonly HashSet<int> _member = new();
+    private readonly List<double> _advancedAtMs = new();   // parallel to _active: the clock at the row's last advance (NaN = not yet)
     private int _needsFrameCount;
     private bool _armedSinceTick;
+    private double _dueAtMs = double.PositiveInfinity;    // the earliest dwell expiry among rows that need no per-frame ticks
 
     public ScrollBarChrome(SceneStore scene) => _scene = scene;
 
@@ -168,11 +191,23 @@ public sealed class ScrollBarChrome
     public bool Active => _active.Count > 0;
     public int Count => _active.Count;
 
-    /// <summary>Wake signal: a real state transition since the last tick, or rows that still have work pending.</summary>
+    /// <summary>Wake signal: a real state transition since the last tick, or rows that need an advance every frame.</summary>
     public bool NeedsFrame => _armedSinceTick || _needsFrameCount > 0;
+
+    /// <summary>The clock time (the <c>nowMs</c> passed to <see cref="Tick"/>) at which a dwell-only row is next due.
+    /// False when no row is waiting on a dwell.</summary>
+    public bool TryPeekDue(out double dueAtMs)
+    {
+        dueAtMs = _dueAtMs;
+        return !double.IsPositiveInfinity(_dueAtMs);
+    }
+
+    /// <summary>A dwell-only row is due at <paramref name="nowMs"/>: the host owes a frame.</summary>
+    public bool IsDue(double nowMs) => _dueAtMs <= nowMs;
 
     public void SetPointerOver(int node, bool over, bool overLane)
     {
+        if (BarSuppressed(node)) return;
         ref var row = ref _scene.ScrollChrome.GetOrAddRow(node);
         bool changed = row.PointerOver != over || row.PointerOverScrollbar != overLane;
         row.PointerOver = over;
@@ -236,24 +271,38 @@ public sealed class ScrollBarChrome
             }
             _scene.ScrollChrome.Clear(node);
         }
-        if (_member.Remove(node)) _active.Remove(node);
+        if (_member.Remove(node))
+        {
+            int i = _active.IndexOf(node);
+            _active.RemoveAt(i);
+            _advancedAtMs.RemoveAt(i);
+        }
+        if (_active.Count == 0) _dueAtMs = double.PositiveInfinity;
     }
 
     private void Arm(int node)
     {
-        if (_member.Add(node)) _active.Add(node);
+        if (!_member.Add(node)) return;
+        _active.Add(node);
+        _advancedAtMs.Add(double.NaN);
     }
 
     private void Drop(int i, int node, bool forget)
     {
         _member.Remove(node);
         _active.RemoveAt(i);
+        _advancedAtMs.RemoveAt(i);
         if (forget) _scene.ScrollChrome.Clear(node);
     }
 
-    public void Tick(float dtMs)
+    /// <summary>Advances every armed row. <paramref name="dtMs"/> is the frame's delta (the eased tracks step by it);
+    /// <paramref name="nowMs"/> is the host's timer clock (the wall clock live, the accumulated frame delta headless),
+    /// which times the dwells across frames the host slept through.</summary>
+    public void Tick(float dtMs, double nowMs)
     {
         _armedSinceTick = false;
+        _dueAtMs = double.PositiveInfinity;
+        int perFrame = 0;
         for (int i = _active.Count - 1; i >= 0; i--)
         {
             int node = _active[i];
@@ -271,11 +320,17 @@ public sealed class ScrollBarChrome
             ref var cs = ref _scene.ScrollChrome.GetOrAddRow(node);
             bool movingNow = cs.MotionStamp == FrameIndex;
             float overflow = sc.ContentMain - sc.ViewportMain;
-            bool scrollable = overflow > ScrollBarTimeline.MinBarOverflowPx;
-            bool pending = ScrollBarTimeline.Advance(ref cs, dtMs, scrollable, movingNow, out bool fullyHidden, out bool changed);
+            bool scrollable = !sc.SuppressBar && overflow > ScrollBarTimeline.MinBarOverflowPx;
+            double last = _advancedAtMs[i];
+            float dwellDt = double.IsNaN(last) ? dtMs : (float)Math.Max(0.0, nowMs - last);
+            _advancedAtMs[i] = nowMs;
+            bool pending = ScrollBarTimeline.Advance(ref cs, dwellDt, dtMs, scrollable, movingNow,
+                                                     out bool fullyHidden, out bool changed, out float dueInMs);
             if (changed) _scene.Mark(h, NodeFlags.PaintDirty);
-            if (!pending) Drop(i, node, forget: fullyHidden);
+            if (!pending) { Drop(i, node, forget: fullyHidden); continue; }
+            if (dueInMs <= 0f) perFrame++;
+            else _dueAtMs = Math.Min(_dueAtMs, nowMs + dueInMs);
         }
-        _needsFrameCount = _active.Count;
+        _needsFrameCount = perFrame;
     }
 }

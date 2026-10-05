@@ -75,17 +75,6 @@ public sealed class RenderThread : IDisposable
     // The [render.pace] line's child= section: BEGIN opens every child's window with the line's, REPORT formats them (null/empty ⇒ none).
     private readonly Action? _childPaceBegin;
     private readonly Func<string?>? _childPaceReport;
-    // The inactive throttle (AppHost.RenderLoopThrottleMs, F241): the interval (ms) the loop may sleep between motion turns while
-    // every host with live render motion is a BACKGROUND window whose motion is only perpetual loops; 0 = the display rate.
-    // Null ⇒ never throttled (tests / hosts that do not wire it).
-    private readonly Func<int>? _motionThrottleMs;
-    private long _lastTurnEndQpc;      // render thread only: when the previous loop turn finished (the throttle sleeps relative to it)
-    private long _lastOwnPresentQpc;   // render thread only: when this host's primary swapchain last presented (a throttled motion turn compares to it)
-    private long _motionThrottleSkips; // motion turns held back by the throttle (render thread writes, UI/tests read)
-    private const int ThrottleSlackMs = 2;   // a throttled turn may run this much early (timer granularity)
-    /// <summary>Motion turns this thread skipped because the inactive throttle (<c>motionThrottleMs</c>) had not yet elapsed
-    /// since its last present (CUMULATIVE). 0 for a host that is never throttled.</summary>
-    public long MotionThrottleSkips => Volatile.Read(ref _motionThrottleSkips);
     private readonly Action? _tick;            // motion re-present of the retained scene (AppHost.RenderMotion)
     // The refresh period (QPC ticks): the motion fallback period when no display clock exists, and the tick backstop.
     private readonly Func<long>? _tickPeriod;
@@ -220,12 +209,11 @@ public sealed class RenderThread : IDisposable
                         Func<long>? tickPeriod = null, IRenderDisplayClock? displayClock = null,
                         Func<int, bool>? takePresentSlot = null, Func<RenderPaceHostState>? paceHost = null,
                         Action<nint>? submitAbortHandleSink = null, Func<bool>? ownMotion = null,
-                        Action? childPaceBegin = null, Func<string?>? childPaceReport = null, Func<int>? motionThrottleMs = null,
+                        Action? childPaceBegin = null, Func<string?>? childPaceReport = null,
                         Func<PresentSplit>? presentSplit = null, Action? preTurn = null)
     {
         _presentSplit = presentSplit;
         _preTurn = preTurn;
-        _motionThrottleMs = motionThrottleMs;
         _paceHost = paceHost;
         _ownMotion = ownMotion;
         _childPaceBegin = childPaceBegin;
@@ -304,8 +292,7 @@ public sealed class RenderThread : IDisposable
             // in the same turn): present it now instead of blocking on a wake that already happened.
             if (!(!motionDue && _publisher.HasPendingFrame))
             {
-                if (motionDue && SleepOutMotionThrottle()) { /* woken early: the wake IS this turn's work (a publication, a quiesce, a child) - run it now */ }
-                else if (motionDue && _displayClock?.IsAvailable == true)
+                if (motionDue && _displayClock?.IsAvailable == true)
                     WaitHandle.WaitAny(_displayWaits!, BackstopMs());   // the tick is the turn (or a wake / the backstop)
                 else if (motionDue)
                     _wake.WaitOne((int)Math.Max(1, Math.Round(PeriodQpc() * 1000.0 / Stopwatch.Frequency)));   // no display clock: refresh-derived fallback
@@ -370,32 +357,8 @@ public sealed class RenderThread : IDisposable
                 Volatile.Write(ref _completedDrains, requestedDrain);
                 _done.Set();
             }
-            _lastTurnEndQpc = Stopwatch.GetTimestamp();
         }
         _displayClock?.SetActive(false);
-    }
-
-    /// <summary>The inactive throttle's sleep (F241): while every host with live render motion is a background window whose
-    /// motion is only perpetual loops (<c>motionThrottleMs</c> &gt; 0), sleep out the rest of that interval since the previous
-    /// turn finished instead of waking on every vblank for a turn that mostly re-poses an identical frame. Returns true when
-    /// the wait ended on the wake event (a publication, a quiesce/resume, a child's wake, teardown) - the caller then runs the
-    /// turn at once; false when the sleep ran out (or none was due), and the caller discards the tick that went stale during
-    /// the sleep and waits for a fresh display tick, so the present stays vblank-phased. A throttled turn is not a missed tick, so the motion run and the catch-up policy are
-    /// broken (the next present starts a fresh run) rather than charged for the gap.</summary>
-    private bool SleepOutMotionThrottle()
-    {
-        int throttleMs = _motionThrottleMs?.Invoke() ?? 0;
-        if (throttleMs <= 0 || _publisher.HasPendingFrame) return false;
-        long remainMs = throttleMs - (Stopwatch.GetTimestamp() - _lastTurnEndQpc) * 1000 / Stopwatch.Frequency;
-        if (remainMs <= ThrottleSlackMs) return false;
-        _motionRun.Break();
-        _catchUp.Break();
-        if (_wake.WaitOne((int)remainMs)) return true;
-        // The clock stays armed through the sleep and its waiter keeps signalling the (auto-reset) tick event every vblank, so
-        // an event left set now would end the caller's tick wait at once on a tick from mid-sleep and the throttled present
-        // would land off the vblank. Consume it: the next wait ends on a FRESH tick.
-        _displayClock?.Tick.WaitOne(0);
-        return false;
     }
 
     /// <summary>The one present decision of a turn. Returns whether render motion is live (for the pace report).
@@ -433,21 +396,7 @@ public sealed class RenderThread : IDisposable
         long tickSeq = clockPaced ? _displayClock!.TickSeq : 0;
         long tickQpc = clockPaced ? _displayClock!.TickQpc : 0;
         bool fresh = _publisher.HasPendingFrame;
-        if (!fresh && !ownMotion) return motion;   // bare wake (child drain, quiesce nudge) or child-only motion: nothing for the parent, no slot reserved (extraDrain still runs)
-        // A background window's loop motion re-presents at most once per throttle interval (F241): a wake that landed sooner than
-        // that (a child's publication, a UI post) re-poses nothing for the parent. A fresh publication is never held back, and a
-        // throttled turn is not a missed tick (the run restarts at the next present).
-        int throttleMs = fresh ? 0 : _motionThrottleMs?.Invoke() ?? 0;
-        if (throttleMs > 0)
-        {
-            _motionRun.Break();
-            _catchUp.Break();
-            if ((turnStart - _lastOwnPresentQpc) * 1000 / Stopwatch.Frequency < throttleMs - ThrottleSlackMs)
-            {
-                Volatile.Write(ref _motionThrottleSkips, _motionThrottleSkips + 1);
-                return motion;
-            }
-        }
+        if (!fresh && !ownMotion) return motion;   // bare wake (child drain, quiesce nudge) or child-only motion: nothing for the parent, no slot reserved (extraDrain already ran)
         // This tick has already been presented for: the work waits for the next tick. Decided BEFORE the slot wait so
         // the loop goes back to its tick wait instead of blocking for a credit it would not spend on this vblank.
         if (tickSeq != 0 && tickSeq == _lastPresentedTickSeq)
@@ -554,7 +503,6 @@ public sealed class RenderThread : IDisposable
         if (presented)
         {
             long done = Stopwatch.GetTimestamp();
-            _lastOwnPresentQpc = done;
             long missed = _motionRun.Presented(tickSeq);
             if (missed > 0) Volatile.Write(ref _missedMotionTicks, _missedMotionTicks + missed);
             _lastPresentedTickSeq = tickSeq;

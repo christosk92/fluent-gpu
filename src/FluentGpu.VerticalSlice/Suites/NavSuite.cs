@@ -292,7 +292,7 @@ static class NavSuite
             // AnyUserScrollMoving is the closed-form plans' own "is anything still gliding" signal (2-frame latch).
             for (int i = 0; i < 60 && host.AnyUserScrollMoving; i++) host.RunFrame();
             host.RunFrame();
-            return !host.AnyUserScrollMoving && host.ScrollChrome.NeedsFrame
+            return !host.AnyUserScrollMoving && host.ScrollChrome.Active   // armed: counting its idle hide (no per-frame ticks)
                    && host.Scene.ScrollChrome.Get(viewport).FadeT > 0f;
         }
 

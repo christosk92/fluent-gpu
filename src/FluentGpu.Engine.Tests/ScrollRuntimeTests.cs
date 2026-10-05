@@ -383,6 +383,8 @@ public sealed class ScrollRuntimeTests
         public int ParentScroller(int vp) => vp == Shelf ? Page : -1;
         public bool CanMove(int vp, bool horizontal, int sign, double tNow) => Movable.TryGetValue((vp, horizontal, sign), out bool m) && m;
         public void Set(int vp, bool horizontal, int sign, bool can) => Movable[(vp, horizontal, sign)] = can;
+        public readonly Dictionary<int, uint> Ids = new();
+        public uint Identity(int vp) => Ids.TryGetValue(vp, out uint id) ? id : 1u;
     }
 
     private static Tree PageWithShelf(bool shelfCanMoveDown)
@@ -407,6 +409,35 @@ public sealed class ScrollRuntimeTests
         Assert.Equal(Tree.Shelf, r.Route(Tree.Shelf, false, +1, 0.30, ScrollSource.MouseWheel));
         // After latch silence the gesture restarts AT the edge → now the page takes it.
         Assert.Equal(Tree.Page, r.Route(Tree.Shelf, false, +1, 0.70, ScrollSource.MouseWheel));
+    }
+
+    [Fact]
+    public void Router_AWheelLatchWhoseScrollerIsGone_LatchesOnTheHitInstead()
+    {
+        // A spin on the shelf, then a navigation parks (or frees) it mid-spin and the next notch lands on another
+        // scroller under the pointer: the latch must not keep feeding a scroller that can never move again.
+        var tree = PageWithShelf(shelfCanMoveDown: true);
+        var r = new ScrollRouter(tree, wheelLatchSilenceS: 0.3);
+        Assert.Equal(Tree.Shelf, r.Route(Tree.Shelf, false, +1, 0.00, ScrollSource.MouseWheel));
+        tree.Ids[Tree.Shelf] = 0;   // gone
+        Assert.Equal(Tree.Page, r.Route(Tree.Page, false, +1, 0.05, ScrollSource.MouseWheel));
+        Assert.Equal(Tree.Page, r.LatchedScroller);
+        // The same index reused by a NEW scroller is not the latched one either.
+        tree.Ids[Tree.Shelf] = 7;
+        Assert.Equal(Tree.Shelf, r.Route(Tree.Shelf, false, +1, 0.50, ScrollSource.MouseWheel));
+        tree.Ids[Tree.Shelf] = 8;
+        Assert.Equal(Tree.Page, r.Route(Tree.Page, false, +1, 0.55, ScrollSource.MouseWheel));
+    }
+
+    [Fact]
+    public void Router_AContactWhoseScrollerIsGone_IsDroppedUntilTheNextBegin()
+    {
+        var tree = PageWithShelf(shelfCanMoveDown: true);
+        var r = new ScrollRouter(tree, wheelLatchSilenceS: 0.3);
+        Assert.Equal(Tree.Shelf, r.Decide(Tree.Shelf, false, +1, 0.00, ScrollSource.Touchpad, ScrollGesture.Begin, KeyModifiers.None).Vp);
+        tree.Ids[Tree.Shelf] = 0;
+        Assert.True(r.Decide(Tree.Page, false, +1, 0.02, ScrollSource.Touchpad, ScrollGesture.Sample, KeyModifiers.None).IsNone);
+        Assert.Equal(Tree.Page, r.Decide(Tree.Page, false, +1, 0.10, ScrollSource.Touchpad, ScrollGesture.Begin, KeyModifiers.None).Vp);
     }
 
     [Fact]

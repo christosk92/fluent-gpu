@@ -3993,22 +3993,23 @@ static class AnimSuite
     /// pixel per sample and damaged the whole window every other refresh, for the whole song, in every window.</summary>
     static void MarqueeQuantiseChecks(HeadlessPlatformApp app, StringTable strings)
     {
-        // M5a: the sampling cadence derives from the speed in DEVICE px/s (30 Hz for a ~1 px step, 60 Hz only for a fast row),
-        // and the whole-pixel snap is the scroll system's one snap.
+        // M5a: the whole-pixel snap is the scroll system's one snap (ScrollEffectEval.SnapToDevicePixel), and the travel time the
+        // bar's style resolves to (the Speed floor for a short tail, the CycleMs cap for a long one) is what the row traverses.
+        // There is no speed-derived sampling rate: the row is a display-cadence loop (M5c) and the SNAP alone decides which
+        // ticks change a pixel — the others pose the identical value and the host elides them.
         var barStyle = new Marquee.Style
         {
             Speed = 18f, CycleMs = 14_000f, EndPauseMs = 3_000f, StartDelayMs = 2_000f,
             Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Always, SyncCycle = true,
         };
-        float slowDip = MarqueeScroller.TravelSpeedDip(barStyle, 100f);    // 100 DIP tail: 18 DIP/s (the Speed floor)
-        float fastDip = MarqueeScroller.TravelSpeedDip(barStyle, 500f);    // 500 DIP tail: capped to the 14 s cycle -> ~35.7 DIP/s
-        bool cadenceFromSpeed = Near(slowDip, 18f, 0.01f) && Near(fastDip, 500f / 14f, 0.01f)
-            && MarqueeScroller.StepHz(slowDip * 1.65f) == 30f && MarqueeScroller.StepHz(fastDip * 1.65f) == 60f;
+        float slowMs = MarqueeScroller.TravelMs(barStyle, 100f);    // 100 DIP tail: 18 DIP/s (the Speed floor) -> 5.56 s
+        float fastMs = MarqueeScroller.TravelMs(barStyle, 500f);    // 500 DIP tail: capped to the 14 s cycle
+        bool travelFromStyle = Near(slowMs, 100f / 18f * 1000f, 1f) && Near(fastMs, 14_000f, 0.01f);
         bool snapsToPixels = Near(AnimEngine.SnapToDevicePx(1.26f, 2f), 1.5f, 1e-5f)
             && Near(AnimEngine.SnapToDevicePx(-0.74f, 2f), -0.5f, 1e-5f) && Near(AnimEngine.SnapToDevicePx(3.4f, 1f), 3f, 1e-5f);
-        Check("M5a. marquee cadence derives from its device-px speed (30 Hz for a ~1 px step, 60 Hz for a fast row) and the translate snaps to whole device pixels",
-              cadenceFromSpeed && snapsToPixels,
-              $"slowDip={slowDip:0.###} fastDip={fastDip:0.###} hzSlow={MarqueeScroller.StepHz(slowDip * 1.65f)} hzFast={MarqueeScroller.StepHz(fastDip * 1.65f)} snap={snapsToPixels}");
+        Check("M5a. the marquee's travel time follows its style (Speed floor, CycleMs cap) and the translate snaps to whole device pixels",
+              travelFromStyle && snapsToPixels,
+              $"slowMs={slowMs:0.#} fastMs={fastMs:0.#} snap={snapsToPixels}");
 
         // M5b: SyncCycle gives the title and the artist line ONE cycle length whatever their tails, so they leave the head
         // together and finish the cycle together; without it each row has its own length and they drift out of phase.
@@ -4025,11 +4026,12 @@ static class AnimSuite
               shared && !Near(freeA, freeB, 1f),
               $"sync: {durA:0.#}/{durB:0.#} head {keysA[1].Offset:0.####}/{keysB[1].Offset:0.####}; free: {freeA:0.#}/{freeB:0.#}");
 
-        // M5c: behavioural — at a 2x device scale every sample the marquee posed sits on the 0.5 DIP (whole device pixel) grid.
+        // M5c: behavioural — at a 2x device scale every sample the marquee posed sits on the 0.5 DIP (whole device pixel) grid,
+        // and the row is a DISPLAY-RATE loop (the scheduler's census counts it): no sub-display cadence of its own.
         var probeQ = new MarqueePingPongProbe();
         var windowQ = new HeadlessWindow(new WindowDesc("marquee-px", new Size2(220, 120), 2f)); windowQ.Show();
         using var hostQ = new AppHost(app, windowQ, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probeQ);
-        bool onGrid = true;
+        bool onGrid = true, displayLoop = false;
         int distinct = 0;
         float lastV = float.NaN, peakQ = 0f;
         for (int i = 0; i < 90; i++)
@@ -4040,10 +4042,11 @@ static class AnimSuite
             if (MathF.Abs(px - MathF.Round(px)) > 1e-3f) onGrid = false;
             if (v != lastV) { distinct++; lastV = v; }
             peakQ = MathF.Max(peakQ, v);
+            displayLoop |= hostQ.Animation.DisplayRateLoopCount >= 1;
         }
-        Check("M5c. a marquee on a 2x window poses only whole-device-pixel translates, and still travels",
-              onGrid && peakQ > 10f && distinct > 5,
-              $"onGrid={onGrid} peak={peakQ:0.##} distinct={distinct}");
+        Check("M5c. a marquee on a 2x window is a display-cadence loop that poses only whole-device-pixel translates, and still travels",
+              onGrid && peakQ > 10f && distinct > 5 && displayLoop,
+              $"onGrid={onGrid} peak={peakQ:0.##} distinct={distinct} displayLoop={displayLoop}");
 
         // M5d: parked in the BACKGROUND — an unfocused window, then a covered one, glides the marquee home and holds it there;
         // foregrounding it again resumes the scroll. ParkInBackground = false opts out.

@@ -636,6 +636,7 @@ static partial class ControlsSuite
             host.RunFrame();
             var pt = CenterOf(host.Scene, probe.RowA);
             Right(w, pt); RunN(host, 3);
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool opened = probe.Service!.AnyOpen && !mi.IsNull;
@@ -696,6 +697,7 @@ static partial class ControlsSuite
             var rowRect = host.Scene.AbsoluteRect(probe.RowA);
             Left(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 2);   // focus the row (pointer focus)
             w.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Apps)); RunN(host, 4);
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool nodeAnchored = !mi.IsNull && Near(r.X, rowRect.X, 30f) && r.Y >= rowRect.Bottom - 2f;   // below the ROW, not at a point
@@ -800,6 +802,7 @@ static partial class ControlsSuite
             host.RunFrame();
             bool pressedDuringHold = (host.Scene.Flags(probe.RowA) & NodeFlags.Pressed) != 0;
             for (int i = 0; i < 38; i++) host.RunFrame();   // > 500ms hold → Hold win fires the context request
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool opened = probe.Service!.AnyOpen && !mi.IsNull && Near(r.X, pt.X, 30f) && r.Y >= pt.Y - 2f && r.Y <= pt.Y + 30f;
@@ -823,6 +826,7 @@ static partial class ControlsSuite
             probe.Rev.Value = 2; RunN(host, 2);
             var pt = CenterOf(host.Scene, probe.RowA);
             Right(w, pt); RunN(host, 3);
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool opened = probe.Service!.AnyOpen && !mi.IsNull;
@@ -842,6 +846,7 @@ static partial class ControlsSuite
             host.RunFrame();
             var btn = host.Scene.AbsoluteRect(probe.MoreB);
             Left(w, CenterOf(host.Scene, probe.MoreB)); RunN(host, 3);
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool opened = probe.Service!.AnyOpen && probe.BuildsB == 1 && !mi.IsNull;
@@ -887,6 +892,7 @@ static partial class ControlsSuite
             w.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Space));
             w.QueueInput(new InputEvent(InputKind.KeyUp, default, 0, Keys.Space));
             RunN(host, 4);
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool opened = probe.Service!.AnyOpen && !mi.IsNull && probe.LastTrigger == ContextRequestTrigger.Keyboard;
@@ -910,6 +916,7 @@ static partial class ControlsSuite
             probe.Rev.Value = 2; RunN(host, 2);
             var btn = host.Scene.AbsoluteRect(probe.MoreB);
             Left(w, CenterOf(host.Scene, probe.MoreB)); RunN(host, 3);
+            RunN(host, 20);   // an in-window menu (it fits) plays the engine open slide: read the SETTLED placement
             var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
             var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
             bool opened = probe.Service!.AnyOpen && probe.BuildsB == 1 && !mi.IsNull;
@@ -8959,10 +8966,13 @@ static partial class ControlsSuite
                 $"wrapper=({wr.X:0.0},{wr.Y:0.0}) exp=({expX:0.0},{expY:0.0}) minVisTop={minVisTop:0.0} opaque={opaqueAllTheWay} settled={settled}");
         }
 
-        // cp6.c + cp7.d/e/f/g — the OverlayHost motion paths against the OverlayProbe's 120×32 anchor at (20,20).
+        // cp6.c/h/i — the WINDOWED menu paths. A menu leases an OS popup window only when it cannot fit inside the
+        // window (OverlayHost.NeedsPopupWindow — gate.overlay.window-only-when-escaping), so these run in a window too
+        // SHORT for any of their menus below the OverlayProbe's 120×32 anchor at (20,20): at 480×80 the work-area
+        // placement opens below the window edge while the in-window one would have to move, so each menu escapes.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("d67motion", new Size2(480, 400), 1f));
+            var window = new HeadlessWindow(new WindowDesc("d67windowed", new Size2(480, 80), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -9042,6 +9052,22 @@ static partial class ControlsSuite
                     zero && seededBeforeShow,
                     $"zero={zero} present={hs?.PresentCount ?? 0} played={hs?.PopupOpenPlayed}");
             }
+        }
+
+        // cp7.d/e/f/g — the OverlayHost motion paths against the OverlayProbe's 120×32 anchor at (20,20).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("d67motion", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+            var svc = root.Service!;
+            void Settle() { for (int i = 0; i < 40; i++) { clock.Advance(16f); host.RunFrame(); } }
+            var anchorRect = host.Scene.AbsoluteRect(root.Anchor);
 
             host.PopupWindowsEnabled = false;   // remaining checks exercise the in-window transition implementation
 
@@ -10360,6 +10386,7 @@ static partial class ControlsSuite
             window.QueueInput(new InputEvent(InputKind.PointerDown, point, 1, 0));
             window.QueueInput(new InputEvent(InputKind.PointerUp, point, 1, 0));
             host.RunFrame();
+            for (int i = 0; i < 20; i++) host.RunFrame();   // the menu fits in-window: let its engine open slide settle
             for (int i = 0; i < 3; i++) host.Paint(0);
             var pointerRow = Roles(host.Scene, AutomationRole.RadioButton)[0];
             RectF pointerMenuRect = pointerRow.IsNull ? default : host.Scene.AbsoluteRect(pointerRow);
@@ -10671,6 +10698,8 @@ static partial class ControlsSuite
                 case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
                 case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
                 case DrawOp.DrawSeries: pos += Unsafe.SizeOf<DrawSeriesCmd>(); break;
+                case DrawOp.SetBlend: pos += Unsafe.SizeOf<SetBlendCmd>(); break;
+                case DrawOp.DrawSprites: pos += Unsafe.SizeOf<DrawSpritesCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); layerBalance++; break;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); layerBalance--; break;
                 case DrawOp.DrawVideo:

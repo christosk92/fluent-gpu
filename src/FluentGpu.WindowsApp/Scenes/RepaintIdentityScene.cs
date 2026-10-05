@@ -98,6 +98,9 @@ sealed class RepaintIdentityScene : Component
             20 => ScrollChrome(),
             21 => StickyClipPage(grouped: false, whileStuck: true),
             22 => ItemBandList(),
+            24 => OpaqueOverlay(inset: true, rasterScale: 1f),
+            25 => OpaqueOverlay(inset: false, rasterScale: 0.25f),
+            26 => OpaqueOverlay(inset: true, rasterScale: 0.25f),
             _ => FeatherPanel(),
         };
         return new BoxEl
@@ -653,6 +656,70 @@ sealed class RepaintIdentityScene : Component
                 Children = [new TextEl("Frosted plate") { Size = 15f, Color = ColorF.FromRgba(0xF0, 0xF0, 0xF4) }],
             });
         return new BoxEl { Grow = 1f, ZStack = true, Children = children.ToArray() };
+    }
+
+    // ── 24-26 — occlusion-identity: a page (bars, a frosted plate, text — a pulse on Tick) under an OPAQUE overlay in its
+    //    own repaint boundary — the Wavee stage over the app shell. The overlay carries a moving shape (Tick) and a frosted
+    //    bar ABOVE it, whose blur source is the overlay alone. 24: an inset overlay rastered to tiles (a straddling bar
+    //    stays drawn); 25: a full-window overlay at RasterScale 1/4 (the stage's backdrop); 26: the same inset (the
+    //    upsample's inner edges). The probe compares the occluded composite with the NoOcclusion control: 0 px.
+    static Element OpaqueOverlay(bool inset, float rasterScale)
+    {
+        int t = Tick.Value;
+        var page = new List<Element>(10);
+        for (int i = 0; i < 6; i++)
+            page.Add(new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(30f + i * 140f, 40f, 0f, 0f), Width = 90f, Height = 520f,
+                Fill = Pulse(t + i, (byte)(40 + i * 25), 0x60, 0xA0, 0xFF),
+            });
+        page.Add(new BoxEl
+        {
+            AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+            Margin = new Edges4(AcrylicPlateX, AcrylicPlateY, 0f, 0f), Width = AcrylicPlateW, Height = AcrylicPlateH,
+            Corners = CornerRadius4.All(8f), Acrylic = PlateAcrylic, Fill = PlateAcrylic.Fallback,
+        });
+        page.Add(new BoxEl
+        {
+            AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(60f, 300f, 0f, 0f),
+            Children = [new TextEl("Hidden page text " + t) { Size = 22f, Color = ColorF.FromRgba(0xF4, 0xF4, 0xF8) }],
+        });
+        var blob = new BoxEl
+        {
+            AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Width = 420f, Height = 300f, Corners = CornerRadius4.All(150f),
+            Margin = new Edges4(120f + t * 11f, 90f + t * 5f, 0f, 0f),
+            Gradient = new GradientSpec(GradientShape.Radial, 0f, [new GradientStop(0f, ColorF.FromRgba(0xE0, 0x50, 0x90)), new GradientStop(1f, ColorF.FromRgba(0xE0, 0x50, 0x90, 0))]),
+        };
+        var cover = inset ? new Edges4(70.5f, 50.25f, 90f, 60.75f) : default;
+        var overlay = new BoxEl
+        {
+            AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, ZStack = true,
+            Margin = cover,
+            Fill = ColorF.FromRgba(0x22, 0x26, 0x30), RepaintBoundary = true, RasterScale = rasterScale,
+            Children = [blob],
+        };
+        var bar = new BoxEl
+        {
+            AlignSelf = FlexAlign.End, JustifySelf = FlexAlign.Stretch, Height = 110f, Margin = new Edges4(100f, 0f, 120f, 80f),
+            Acrylic = PlateAcrylic, Fill = PlateAcrylic.Fallback, Padding = Edges4.All(20f),
+            Children = [new TextEl("Overlay bar") { Size = 18f, Color = ColorF.FromRgba(0xF0, 0xF0, 0xF4) }],
+        };
+        return new BoxEl
+        {
+            Grow = 1f, ZStack = true,
+            // the page is clipped just inside the overlay: at every scale its items lie wholly under it (bars that run past
+            // the clip are cut by it, so their footprints stay inside)
+            Children =
+            [
+                new BoxEl
+                {
+                    Grow = 1f, ZStack = true, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, ClipToBounds = true,
+                    Margin = new Edges4(cover.Left + 8f, cover.Top + 8f, cover.Right + 8f, cover.Bottom + 8f), Children = page.ToArray(),
+                },
+                overlay, bar,
+            ],
+        };
     }
 
     // ── 14 — fade-distribute-identity: a vertical AutoEdgeFade page (no fill — distributable) over rows of cards, and

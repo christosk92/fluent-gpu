@@ -53,12 +53,12 @@ public sealed partial class SliceRecorder
     /// <summary>ScanSlot: one op at byte <paramref name="pos"/> with its effective footprint (slice-space DIP) and hash;
     /// <paramref name="scope"/> = it opens a clip / stencil clip / layer the following ops are drawn inside.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope)
+    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false)
     {
         int n = _cOpCount[s];
         ref TileOp[] ops = ref _cOps[s];
         if (n == ops.Length) Array.Resize(ref ops, n * 2);
-        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope };
+        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip };
         _cOpCount[s] = n + 1;
         if (!scope) return;
         if (_cScopeDepth == _cScope.Length) Array.Resize(ref _cScope, _cScope.Length * 2);
@@ -99,14 +99,14 @@ public sealed partial class SliceRecorder
     }
 
     /// <summary>The content hash tile <paramref name="tilePx"/> of segment <paramref name="seg"/> of <paramref name="slot"/>
-    /// draws (valid only under a non-zero <see cref="ContentKey"/>).</summary>
-    private ulong TileWantOf(int slot, int seg, float ox, float oy, float scale, in RectF tilePx, out int hits)
+    /// draws (valid only under a non-zero <see cref="ContentKey"/>), and the part of the tile it paints (tile px).</summary>
+    private ulong TileWantOf(int slot, int seg, float ox, float oy, float scale, in RectF tilePx, out int hits, out RectF paint)
     {
         ref ScanSeg sg = ref _scanSegs[slot][seg];
         ReadOnlySpan<TileOp> ops = _cOps[slot].AsSpan(0, _cOpCount[slot]);
         ReadOnlySpan<int> open = seg < _cSegScopeStart[slot].Length
             ? _cSegScopeIdx[slot].AsSpan(_cSegScopeStart[slot][seg], _cSegScopeCount[slot][seg]) : default;
-        return TileContentHash.TileWant(ops, open, seg, sg.ByteStart, sg.ByteEnd, in tilePx, scale, ox, oy, out _, out hits);
+        return TileContentHash.TileWant(ops, open, seg, sg.ByteStart, sg.ByteEnd, in tilePx, scale, ox, oy, out _, out hits, out paint);
     }
 
     // Per composite row (BuildComposite): which slot / segment it is and the device grid it is cut on.
@@ -140,7 +140,7 @@ public sealed partial class SliceRecorder
 
         public ulong Key { get; }
 
-        public ulong Want(in RectF tilePx, out int ops) => _r.TileWantOf(_slot, _seg, _ox, _oy, _scale, in tilePx, out ops);
+        public ulong Want(in RectF tilePx, out int ops, out RectF paint) => _r.TileWantOf(_slot, _seg, _ox, _oy, _scale, in tilePx, out ops, out paint);
     }
 
     /// <summary>BuildComposite, after the placements of row <paramref name="row"/> were collected into
@@ -158,8 +158,9 @@ public sealed partial class SliceRecorder
         {
             ref readonly TilePlacement tp = ref _placements[p];
             if (table.SurfaceWantKey(tp.Surface) == key) continue;
-            ulong want = TileWantOf(slot, seg, ox, oy, scale, TileGrid.TileRect(tp.Key), out int ops);
-            table.SetSurfaceWant(tp.Surface, key, want, ops);
+            ulong want = TileWantOf(slot, seg, ox, oy, scale, TileGrid.TileRect(tp.Key), out int ops, out RectF paint);
+            table.SetSurfaceWant(tp.Surface, key, want, ops, paint);
+            _placements[p] = table.PlacementPaint(in tp);   // it rasters this submission: its quad is what it now paints
         }
     }
 }

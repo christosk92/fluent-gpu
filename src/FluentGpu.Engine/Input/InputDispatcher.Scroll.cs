@@ -99,6 +99,13 @@ public sealed partial class InputDispatcher : IScrollerQuery
         return -1;
     }
 
+    uint IScrollerQuery.Identity(int vp)
+    {
+        var h = _scene.HandleAt(vp);
+        if (h.IsNull || !_scene.IsLive(h) || !_scene.HasScroll(h) || (_scene.Flags(h) & NodeFlags.Parked) != 0) return 0;
+        return h.Raw.Gen;
+    }
+
     bool IScrollerQuery.CanMove(int vp, bool horizontal, int sign, double tNow)
     {
         var h = _scene.HandleAt(vp);

@@ -48,7 +48,7 @@ static class HooksSuite
         FrameClockPublishChecks.Run(strings);
         FrameClockPollerCensusChecks.Run(strings);
         FrameClockPollersSeenChecks.Run(strings);
-        InactiveThrottleChecks.Run(strings);
+        BackgroundMotionChecks.Run(strings);
         ReuseGuardChecks(strings);
         KeyIgnoredInSingleChildSlotChecks(strings);
         PropsChannelChecks(strings);
@@ -1362,14 +1362,13 @@ static class HooksSuite
             var probe = new TimeoutProbe(5000f);
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (leaves the pending 5 s timer)
-            host.Animation.DefaultLoopHz = 30;                // the cadence a plain loop runs at (the branch that owns a throttled wait)
             int wPending = host.RecommendedWaitMs();          // idle + future timer: the clamp still shapes the wait to reach it
             bool pendingReachesDue = wPending >= 4000 && wPending <= 5100;
 
-            // A plain 30 Hz loop makes the wait CADENCE-classified: the pending 5 s timer must neither shorten it below
-            // the row's own period nor rewrite it to 0.
+            // An explicit 30 Hz loop (Cadence.At — loops default to the display rate) makes the wait CADENCE-classified:
+            // the pending 5 s timer must neither shorten it below the row's own period nor rewrite it to 0.
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
-                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
+                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true, cadence: Cadence.At(30f));
             host.RunFrame();
             int wLoop = host.RecommendedWaitMs();
             bool cadenceOwnsWait = host.LastWaitKind == HostWaitKind.Cadence && wLoop >= 1 && wLoop <= 34;
@@ -1395,7 +1394,7 @@ static class HooksSuite
             host.RunFrame();                                  // and the timer is not stranded: Paint drains it
             bool drained = fires == 1;
 
-            Check("gate.timer.clamp-never-spins a throttled wait never clamps to 0 (the drain is a frame away and may be skipped): a pending timer shapes an idle wait to reach it, a plain 30 Hz loop keeps the wait Cadence-classified at its own period, an overdue timer takes the due-now display-rate branch instead of a poll, a minimized host keeps its blocking -1, and the timer still drains on the next painted frame",
+            Check("gate.timer.clamp-never-spins a throttled wait never clamps to 0 (the drain is a frame away and may be skipped): a pending timer shapes an idle wait to reach it, an explicit 30 Hz loop keeps the wait Cadence-classified at its own period, an overdue timer takes the due-now display-rate branch instead of a poll, a minimized host keeps its blocking -1, and the timer still drains on the next painted frame",
                 pendingReachesDue && cadenceOwnsWait && dueNeverSpins && minimizedBlocks && restoredUnblocks && drained,
                 $"wPending={wPending} (want 4000..5100) wLoop={wLoop} (want 1..34, kind Cadence) wDue={wDue} (kind {dueKind}) wMin={wMin} (want -1, kind Idle) wRestored={wRestored} (want >=0) fires={fires} lastKind={host.LastWaitKind}");
         }

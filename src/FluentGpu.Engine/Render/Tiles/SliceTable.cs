@@ -10,7 +10,19 @@ public readonly record struct TileRaster(TileKey Key, int Surface, InvalidationR
 
 /// <summary>One resident tile a composite item samples: its key, the surface slot holding its pixels and that surface's
 /// device-px extent (the placed quad is W×H at the tile's origin).</summary>
-public readonly record struct TilePlacement(TileKey Key, int Surface, int W = TileGrid.W, int H = TileGrid.H);
+/// <summary>A resident tile the composite places: its key, its surface, the surface's extent (<paramref name="W"/> ×
+/// <paramref name="H"/>) and the part of it the tile PAINTS ([<paramref name="PaintX0"/>, <paramref name="PaintX1"/>) ×
+/// [<paramref name="PaintY0"/>, <paramref name="PaintY1"/>), tile px): the composite draws only that part — the rest of
+/// the surface is transparent. The default is the whole surface.</summary>
+public readonly record struct TilePlacement(TileKey Key, int Surface, int W = TileGrid.W, int H = TileGrid.H,
+    short PaintX0 = 0, short PaintY0 = 0, short PaintX1 = short.MaxValue, short PaintY1 = short.MaxValue)
+{
+    /// <summary>The painted part, cut by the surface extent (tile px).</summary>
+    public int Px0 => Math.Min((int)PaintX0, W);
+    public int Py0 => Math.Min((int)PaintY0, H);
+    public int Px1 => Math.Min((int)PaintX1, W);
+    public int Py1 => Math.Min((int)PaintY1, H);
+}
 
 /// <summary>
 /// The retained-tile bookkeeping (docs/plans/scroll-gpu-retained-tiles-implementation.md §A.3/§A.4/§A.6): a FIXED slab of
@@ -605,7 +617,7 @@ public sealed partial class SliceTable
             ref TileState ts = ref _tiles[t];
             if (_used[t] && ts.Surface >= 0 && ts.LastUsedFrame == _frame
                 && (ts.Invalid == InvalidationReason.None || _scheduledFrame[t] == _frame))
-                dst[n++] = new TilePlacement(KeyOf(t), ts.Surface, ts.SurfW, ts.SurfH);
+                dst[n++] = PlacementPaint(new TilePlacement(KeyOf(t), ts.Surface, ts.SurfW, ts.SurfH));
         }
         return n;
     }

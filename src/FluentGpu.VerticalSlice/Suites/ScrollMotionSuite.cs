@@ -1174,7 +1174,7 @@ static class ScrollMotionSuite
         Settle(host, vp, 16);
         handle.ScrollTo(3107.0, ScrollMove.Immediate);
         host.ScrollChrome.NotifyMoved((int)vp.Raw.Index);          // the user's scroll: a programmatic move alone no longer arms the bar, and the live chrome is what keeps these frames running
-        for (int i = 0; i < 30; i++) host.RunFrame();              // at rest (well past the detector's at-rest window)
+        ElapseFrames(host, 30);              // at rest (well past the detector's at-rest window)
         var before = PoseOf(host, vp);
         host.Scene.TryGetScroll(vp, out var sc0);
         long jumps0 = FluentGpu.Scroll.Diag.ScrollProbe.Jumps;

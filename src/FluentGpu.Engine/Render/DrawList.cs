@@ -62,6 +62,34 @@ public enum DrawOp : int
                                // amplitude. Fixed-size POD (nothing variable-length rides the stream, so clean-span reuse
                                // and every TryBodySize walker stay valid) — a series of N samples is ⌈(N−1)/31⌉ chunks.
                                // See DrawSeriesCmd.
+    SetBlend = 25,             // the PAINT BLEND for the primitives that follow in this stream (visualizer F4): SetBlendCmd.Mode
+                               // 0 = SrcOver, 1 = Additive (colour ONE/ONE, alpha ZERO/ONE — inside a transparent-cleared tile
+                               // the tile then composites Over the page as page + glow). The recorder emits it in balanced
+                               // pairs around an additive subtree (BoxEl.Blend) or leaf (SeriesEl/SpriteFieldEl.Blend), so a
+                               // stream always ends SrcOver. Rects, gradients, series and sprites honour it; glyphs, images
+                               // and paths stay SrcOver. No bounds of its own: every tile replay keeps it.
+    DrawSprites = 26,          // one CHUNK (≤ 16 inline sprites) of a SpriteFieldEl (visualizer F5): discs / capsules / streaks /
+                               // segments from a bound instance buffer, expanded by the GPU into SDF quads. See DrawSpritesCmd.
+}
+
+/// <summary>The payload of <see cref="DrawOp.SetBlend"/>: the <see cref="PaintBlend"/> as an int.</summary>
+public readonly record struct SetBlendCmd(int Mode);
+
+/// <summary>16 inline sprites (C# inline array) — the chunk payload of <see cref="DrawSpritesCmd"/>.</summary>
+[InlineArray(16)]
+public struct Sprites16 { private Sprite _e0; }
+
+/// <summary>One CHUNK of a <c>SpriteFieldEl</c> (DrawOp.DrawSprites, visualizer F5): ≤ 16 sprites inline, so nothing
+/// variable-length rides the stream. <see cref="Rect"/> is the union of THIS chunk's sprite bounds (kernel-exact,
+/// rotation-safe; node-local) — what cull, slice bounds and damage use. A plain struct (the inline array must not enter a
+/// generated Equals); a slice translation patches <see cref="Transform"/> only.</summary>
+public struct DrawSpritesCmd
+{
+    public RectF Rect;
+    public Affine2D Transform;
+    public float Opacity;
+    public int Kernel, Count, Total, Index;
+    public Sprites16 S;
 }
 
 /// <summary>What the composite applies around a <see cref="CompositeSliceCmd"/>'s child slice, and in which space its
@@ -115,6 +143,10 @@ public struct DrawListOpcodeStats
     public int PushStencilClip, PopStencilClip;
     /// <summary>Series chunks (<see cref="DrawOp.DrawSeries"/>) — a SeriesEl of N samples records ⌈(N−1)/31⌉ of these.</summary>
     public int DrawSeries;
+    /// <summary>Paint-blend switches (<see cref="DrawOp.SetBlend"/>).</summary>
+    public int SetBlend;
+    /// <summary>Sprite chunks (<see cref="DrawOp.DrawSprites"/>) — a SpriteFieldEl of N sprites records ⌈N/16⌉ of these.</summary>
+    public int DrawSprites;
     /// <summary>Retained-tile slice markers (<see cref="DrawOp.CompositeSlice"/>) — a span whose stats carry any holds a
     /// child slice's paint position.</summary>
     public int CompositeSlice;
@@ -153,6 +185,8 @@ public struct DrawListOpcodeStats
             case DrawOp.PopStencilClip: PopStencilClip++; break;
             case DrawOp.CompositeSlice: CompositeSlice++; break;
             case DrawOp.DrawSeries: DrawSeries++; break;
+            case DrawOp.SetBlend: SetBlend++; break;
+            case DrawOp.DrawSprites: DrawSprites++; break;
         }
     }
 
@@ -442,6 +476,12 @@ public struct DrawSeriesCmd
     public ColorF C0, C1, C2, C3;
     public float O0, O1, O2, O3;
     public int StopCount;
+    /// <summary>Bit 0: AA fringe on a ribbon (Stroke/Polar). Bit 1: the gradient runs ALONG the series (by sample index),
+    /// not by amplitude.</summary>
+    public int Flags;
+    /// <summary>The samples just outside this chunk (the neighbour of S[0] and of S[Count−1]), so a ribbon's tangent and a
+    /// Polar loop's closing seam are continuous across chunk edges.</summary>
+    public float Prev, Next;
     public Samples32 S;
 }
 
@@ -577,6 +617,41 @@ public sealed class DrawList
     {
         WriteOp(DrawOp.PushClip);
         WritePayload(new ClipCmd(deviceRect, roundedRect, MathF.Max(0f, cornerRadius)));
+        PushSort(sortKey);
+    }
+
+    /// <summary>Record a sprite field as chunked <see cref="DrawSpritesCmd"/>s of 16; each chunk's rect is the union of its
+    /// sprites' bounds. Alloc-free.</summary>
+    public void Sprites(SpriteKernel kernel, ReadOnlySpan<Sprite> sprites, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        int n = sprites.Length;
+        for (int start = 0; start < n; start += 16)
+        {
+            int count = Math.Min(16, n - start);
+            var cmd = new DrawSpritesCmd { Transform = transform, Opacity = opacity, Kernel = (int)kernel, Count = count, Total = n, Index = start };
+            float l = float.PositiveInfinity, t = float.PositiveInfinity, r = float.NegativeInfinity, b = float.NegativeInfinity;
+            for (int i = 0; i < count; i++)
+            {
+                Sprite s = sprites[start + i];
+                cmd.S[i] = s;
+                RectF sb = s.Bounds(kernel);
+                if (sb.X < l) l = sb.X;
+                if (sb.Y < t) t = sb.Y;
+                if (sb.X + sb.W > r) r = sb.X + sb.W;
+                if (sb.Y + sb.H > b) b = sb.Y + sb.H;
+            }
+            cmd.Rect = new RectF(l, t, MathF.Max(0f, r - l), MathF.Max(0f, b - t));
+            WriteOp(DrawOp.DrawSprites);
+            WritePayload(in cmd);
+            PushSort(sortKey);
+        }
+    }
+
+    /// <summary>Switch the paint blend for the primitives that follow (<see cref="DrawOp.SetBlend"/>). Alloc-free.</summary>
+    public void SetBlend(PaintBlend mode, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.SetBlend);
+        WritePayload(new SetBlendCmd((int)mode));
         PushSort(sortKey);
     }
 
@@ -843,7 +918,8 @@ public sealed class DrawList
 
     /// <summary>Record a sample series as chunked <see cref="DrawSeriesCmd"/>s. <paramref name="rect"/> is the node box;
     /// <paramref name="samples"/> beyond <see cref="SeriesSpec.MaxSamples"/> are dropped. Alloc-free.</summary>
-    public void Series(in RectF rect, in SeriesSpec spec, ReadOnlySpan<float> samples, in Affine2D transform, float opacity, ulong sortKey = 0)
+    public void Series(in RectF rect, in SeriesSpec spec, ReadOnlySpan<float> samples, in Affine2D transform, float opacity, ulong sortKey = 0,
+                       float gradientMix = 0f)
     {
         int n = Math.Min(samples.Length, SeriesSpec.MaxSamples);
         if (n < 2 || rect.W <= 0f || rect.H <= 0f) return;
@@ -858,20 +934,42 @@ public sealed class DrawList
             if (stops > 1) { c1 = st[1].Color; o1 = st[1].Offset; }
             if (stops > 2) { c2 = st[2].Color; o2 = st[2].Offset; }
             if (stops > 3) { c3 = st[3].Color; o3 = st[3].Offset; }
+            // GradientMix: blend the stops toward GradientTo on stack locals (the BoxEl LerpStops rule: shared prefix only).
+            if (gradientMix > 0.001f && spec.GradientTo is { } gt && gt.Stops is { Length: > 0 } ts)
+            {
+                float t = MathF.Min(1f, gradientMix);
+                int m = Math.Min(stops, Math.Min(ts.Length, GradientSpec.MaxStops));
+                if (m > 0) { c0 = ColorF.LerpLinear(c0, ts[0].Color, t); o0 += (ts[0].Offset - o0) * t; }
+                if (m > 1) { c1 = ColorF.LerpLinear(c1, ts[1].Color, t); o1 += (ts[1].Offset - o1) * t; }
+                if (m > 2) { c2 = ColorF.LerpLinear(c2, ts[2].Color, t); o2 += (ts[2].Offset - o2) * t; }
+                if (m > 3) { c3 = ColorF.LerpLinear(c3, ts[3].Color, t); o3 += (ts[3].Offset - o3) * t; }
+            }
         }
+        bool polar = spec.Shape == SeriesShape.Polar;
         float baseline = float.IsNaN(spec.Baseline) ? (spec.Shape == SeriesShape.Mirrored ? 0.5f : 1f) : spec.Baseline;
+        int flags = (spec.AntiAlias ? 1 : 0) | (spec.GradientAxis == SeriesGradientAxis.Along ? 2 : 0);
         for (int start = 0; start < n - 1; start += SeriesSpec.ChunkSamples - 1)
         {
             int count = Math.Min(SeriesSpec.ChunkSamples, n - start);
+            int before = start - 1, after = start + count;
+            float prev = before >= 0 ? samples[before] : (polar ? samples[Math.Max(0, n - 2)] : samples[0]);
+            float next = after < n ? samples[after] : (polar ? samples[Math.Min(1, n - 1)] : samples[n - 1]);
+            // A Polar loop stays inside its box (radius ≤ min(W, H)/2): its cull rect is the box plus the ribbon halo, so a
+            // point past it would be clipped at whatever tile edge it crossed.
+            if (polar) { prev = Math.Clamp(prev, 0f, 1f); next = Math.Clamp(next, 0f, 1f); }
             var cmd = new DrawSeriesCmd
             {
-                Rect = new RectF(rect.X + start * dx, rect.Y, (count - 1) * dx, rect.H),
+                // A Polar chunk can reach anywhere in the node box, so its cull/slice rect is the whole box.
+                Rect = polar ? rect : new RectF(rect.X + start * dx, rect.Y, (count - 1) * dx, rect.H),
                 Transform = transform, Opacity = opacity,
                 Shape = (int)spec.Shape, Count = count, Total = n, Index = start,
-                X0 = rect.X + start * dx, Dx = dx, Baseline = baseline, Amplitude = spec.Amplitude, Thickness = spec.Thickness,
+                X0 = rect.X + start * dx, Dx = dx, Baseline = baseline, Amplitude = polar ? Math.Clamp(spec.Amplitude, 0f, 1f) : spec.Amplitude,
+                Thickness = spec.Thickness,
                 C0 = c0, C1 = c1, C2 = c2, C3 = c3, O0 = o0, O1 = o1, O2 = o2, O3 = o3, StopCount = stops,
+                Flags = flags, Prev = prev, Next = next,
             };
-            for (int i = 0; i < count; i++) cmd.S[i] = samples[start + i];
+            if (polar) for (int i = 0; i < count; i++) cmd.S[i] = Math.Clamp(samples[start + i], 0f, 1f);
+            else for (int i = 0; i < count; i++) cmd.S[i] = samples[start + i];
             WriteOp(DrawOp.DrawSeries);
             WritePayload(in cmd);
             PushSort(sortKey);

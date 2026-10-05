@@ -439,7 +439,7 @@ static class SliceSuite
             host.TryGetScrollHandle(page)!.ScrollTo(400.0, ScrollMove.Immediate);
             for (int k = 1; k < 5; k++) host.TryGetScrollHandle(scrollers[k])!.ScrollTo(200.0, ScrollMove.Immediate);
         }
-        for (int i = 0; i < 30; i++) host.RunFrame();
+        FluentGpu.VerticalSlice.Harness.Asserts.ElapseFrames(host, 30);   // at rest: time passes and the slices store their spans
 
         // fade-leaf: the page fade and the three plain shelves composite as analytic per-item feathers — no group
         // surface; the filled shelf stays the ONE group (its item carrying the page feather); a visible plain shelf's

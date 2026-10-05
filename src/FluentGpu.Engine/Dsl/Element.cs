@@ -143,6 +143,31 @@ public sealed record BoxEl : Element
     /// keeps <see cref="GradientSpec.RadialCenter"/> as the source of truth; a signal updates paint only, without a
     /// component render or gradient-spec rebuild (pointer-driven spotlight/reveal effects).</summary>
     public Prop<Point2> RadialGradientCenter { get; init; } = new Point2(float.NaN, float.NaN);
+    /// <summary>A second gradient the fill blends toward by <see cref="GradientMix"/> (0 = <see cref="Gradient"/>, 1 = this).
+    /// Must share <see cref="Gradient"/>'s stop count (the <see cref="HoverGradient"/> rule; a different count blends only
+    /// the shared prefix). Static; the blend happens at record time on stack locals, so a palette cross-fade costs no
+    /// re-render and no allocation.</summary>
+    public GradientSpec? GradientTo { get; init; }
+    /// <summary>The 0..1 blend from <see cref="Gradient"/> toward <see cref="GradientTo"/>. Bindable and paint-only (no
+    /// relayout): a signal moves the colours without rebuilding a <see cref="GradientSpec"/>.</summary>
+    public Prop<float> GradientMix { get; init; } = 0f;
+    /// <summary>How this box's subtree paints onto what is under it: <see cref="PaintBlend.Additive"/> adds light (glow,
+    /// particles) for every rect, gradient, series and sprite field below it. Glyphs, images and paths stay source-over.
+    /// Put it on a child of a <see cref="RepaintBoundary"/>, not on the boundary itself: a boundary (also a Feedback or
+    /// RasterScale box) records its subtree into its own slice, which starts source-over — an additive ancestor never
+    /// reaches into it.</summary>
+    public PaintBlend Blend { get; init; } = PaintBlend.SrcOver;
+    /// <summary>How a <see cref="RepaintBoundary"/> slice composites onto the back buffer: <see cref="LayerBlend.Screen"/>
+    /// = <c>1 − (1 − s)(1 − d)</c> (soft clouds that brighten what they overlap). Needs <see cref="RepaintBoundary"/>;
+    /// detached windows (no layer route) fold it to source-over.</summary>
+    public LayerBlend LayerBlend { get; init; } = LayerBlend.SrcOver;
+    /// <summary>Make this box a FEEDBACK boundary (visualizer F6; see <see cref="FeedbackSpec"/>). Implies a repaint boundary
+    /// at <see cref="FeedbackSpec.RasterScale"/>. Detached windows (no layer route) draw the fresh content only.</summary>
+    public FeedbackSpec? Feedback { get; init; }
+    /// <summary>The per-advance warp of the previous frame about the box centre (zoom / rotate / drift), DIP. Bindable.</summary>
+    public Prop<Affine2D> FeedbackTransform { get; init; } = Affine2D.Identity;
+    /// <summary>Overrides <see cref="FeedbackSpec.Decay"/> per advance (NaN = the spec's). Bindable: a kick can burst the trail.</summary>
+    public Prop<float> FeedbackDecay { get; init; } = float.NaN;
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
@@ -151,6 +176,19 @@ public sealed record BoxEl : Element
     public GradientSpec? HoverBorderBrush { get; init; }
     public GradientSpec? PressedBorderBrush { get; init; }
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
+    /// <summary>Record this subtree into its OWN retained slice (Flutter's RepaintBoundary, CSS <c>will-change</c>): a
+    /// change inside it — a looping keyframe, a bound transform/opacity, a per-frame visualizer — re-rasters only this
+    /// slice's tiles, and a change around it never re-rasters this one. Put it on the root of content that animates
+    /// continuously while the content painted under and over it stays still. Spends the effect-slice budget
+    /// (<c>SliceRecorder.EffectSliceCap</c>); past it, or inside an inline group layer, the subtree records inline as
+    /// before (identical pixels either way).</summary>
+    public bool RepaintBoundary { get; init; }
+    /// <summary>The raster resolution of a <see cref="RepaintBoundary"/> slice relative to the window (1 = full; snapped
+    /// to 1/2, 1/4 or 1/8). Below 1 the slice holds NO tiles: each change replays it once into one surface at that scale
+    /// and the composite upsamples it bilinearly — a fraction of the raster work and memory. Only for SOFT content whose
+    /// look survives the upsample (large radial gradients, drifting colour fields, heavily blurred art); text and crisp
+    /// edges soften. Ignored without <see cref="RepaintBoundary"/>.</summary>
+    public float RasterScale { get; init; } = 1f;
     public bool TabShape { get; init; }            // selected TabView header: rounded top + bottom flares
     public float TabFlareRadius { get; init; } = 4f;
     /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels

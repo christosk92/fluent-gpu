@@ -40,6 +40,13 @@ public static class FrameClock
 {
     public static readonly Context<long> Tick = new(0L);
 
+    /// <summary>The <see cref="Tick"/> twin the adaptive GPU governor MAY pace. A <see cref="Tick"/> subscriber is never
+    /// paced (it is the smooth playhead, a drag dwell — latency the user feels); a continuous visual that only has to look
+    /// smooth (a full-screen visualizer) subscribes here instead, so a GPU that cannot hold the panel rate drops THAT
+    /// motion to the governor's steady cadence rather than thrashing into vblank misses. <c>AppHost.PowerCapFps</c> caps
+    /// both. Same value as <see cref="Tick"/> on every frame it is published.</summary>
+    public static readonly Context<long> PaceableTick = new(0L);
+
     /// <summary>This frame's lattice-snapped "now" in QPC ticks (<see cref="System.Diagnostics.Stopwatch.Frequency"/>
     /// units — the <c>Stopwatch.GetTimestamp()</c> domain): the host's <see cref="FluentGpu.Pal.FrameClock.FrameQpc"/>,
     /// the same target time the scroll frame step and DirectManipulation consume. Monotone frame to frame within one host

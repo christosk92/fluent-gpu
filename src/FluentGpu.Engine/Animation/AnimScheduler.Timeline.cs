@@ -27,23 +27,19 @@ public sealed partial class AnimEngine
 
     /// <summary>Multi-keyframe eased track (@keyframes). Offsets ascending in 0..1; per-segment easing.
     /// <paramref name="cadence"/> is the row's own frame rate (<see cref="Cadence"/>, AnimClock.cs) — the DATA that
-    /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means: <see cref="Cadence.Display"/>
-    /// for a one-shot — it is short and must look smooth — and <see cref="Cadence.Default"/> for <c>loop: true</c>,
-    /// i.e. <see cref="DefaultLoopHz"/>, resolved live so a power policy can retune every idle loop. Pass
-    /// <c>cadence: Cadence.Display</c> for a TRANSIENT loop that must run at the panel refresh (an indeterminate
-    /// ProgressBar), or <c>Cadence.At(hz)</c> for a source with a native rate (a Lottie composition's frame rate). On a
-    /// weak GPU tier EVERY looping row is clamped to <see cref="TierCadenceCap.WeakLoopMaxHz"/> at cadence resolution
-    /// (<see cref="TierCadenceCap"/>); <see cref="Cadence.WithoutTierCap"/> is the explicit opt-out.
+    /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means <see cref="Cadence.Display"/>,
+    /// one-shot or loop alike. Pass <c>Cadence.At(hz)</c> only for a source with a native rate (a Lottie composition's
+    /// frame rate) or one that genuinely wants fewer frames — it is opt-in, never inferred.
     /// <paramref name="pixelSnap"/> rounds every sample to a whole DEVICE pixel (<see cref="SnapToDevicePx"/>) — a slow
     /// translate (a marquee) then changes the pixels only when it crosses a pixel edge, so a sub-pixel step is a held
-    /// value (a byte-identical frame the host elides) instead of a re-record + present of the whole window.</summary>
+    /// value (a byte-identical frame the host elides) instead of a re-record + present of the whole window. It is a
+    /// quantisation of the VALUE, never of the rate: the row still samples on every tick its cadence allows.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
                           bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
                           Cadence? cadence = null, bool pixelSnap = false)
     {
         int s = Get(node, channel, composite != CompositeOp.Replace);
-        Cadence resolved = cadence ?? (loop ? Cadence.Default : Cadence.Display);
-        SetCadence(s, resolved);
+        SetCadence(s, cadence ?? Cadence.Display);
         ref AnimValue r = ref _slab.At(s);
         r.Kind = GenKind.Keyframes;
         r.Gen = default;
@@ -55,7 +51,6 @@ public sealed partial class AnimEngine
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven);
         if (loop) r.Flags |= AnimFlags.Loop; else r.Flags &= ~AnimFlags.Loop;
         if (pixelSnap) r.Flags |= AnimFlags.PixelSnap; else r.Flags &= ~AnimFlags.PixelSnap;
-        if (resolved.TierUncapped) r.Flags |= AnimFlags.TierUncapped; else r.Flags &= ~AnimFlags.TierUncapped;
         r.Flags |= AnimFlags.JustSeeded;   // seed frame holds the initial value (advance begins next frame)
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;

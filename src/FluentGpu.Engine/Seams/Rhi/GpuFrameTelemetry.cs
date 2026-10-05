@@ -66,6 +66,14 @@ public enum GpuKnockouts : byte
     /// IDENTITY / measurement control like <see cref="GroupFades"/>: the two routes are pixel-identical
     /// (<c>stickyclip-identity</c>). Read by the scene recorder, not the device.</summary>
     StickyClipInPaint = 32,
+    /// <summary>The primary target composites and presents WHOLE frames (CLEAR load, full Present) instead of the partial
+    /// route (PRESERVE + repaint rects + Present1 dirty rects). A probe-only IDENTITY control: the two routes are
+    /// pixel-identical (<c>partial-present-identity</c>).</summary>
+    FullPresent = 64,
+    /// <summary>Every item composites, including one hidden under a later opaque item (<c>CompositeItem.Opaque</c>) that
+    /// the occlusion pass would leave out. A probe-only IDENTITY control: the two routes are pixel-identical
+    /// (<c>occlusion-identity</c>).</summary>
+    NoOcclusion = 128,
 }
 
 /// <summary>Always-on, device-side per-submit counters for one swapchain target (plain fields — never compiled out).

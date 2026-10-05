@@ -53,6 +53,242 @@ static class TileSuite
         NoBlankChecks(strings, fonts);
         SegmentExtentChecks(strings, fonts);
         RenderAllocZeroChecks(strings, fonts);
+        RepaintBoundaryChecks(strings, fonts);
+        InvisibleBoundsChecks(strings, fonts);
+        OpaqueCoverChecks(strings, fonts);
+        TilePaintChecks(strings, fonts);
+    }
+
+    // ── gate.tiles.paint ─────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>A small box in a segment whose bounds a second box far away stretches over the whole window: every tile
+    /// placement carries the part of its tile its ops paint, so the composite draws two small quads, not the cells.</summary>
+    sealed class SparseProbe : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Grow = 1f, ZStack = true,
+            Children =
+            [
+                new BoxEl { AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(40f, 40f, 0f, 0f), Width = 160f, Height = 40f, Fill = ColorF.FromRgba(200, 90, 60) },
+                new BoxEl { AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(1000f, 900f, 0f, 0f), Width = 120f, Height = 60f, Fill = ColorF.FromRgba(60, 90, 200) },
+            ],
+        };
+    }
+
+    static void TilePaintChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var (app, window, dev, host) = Host("tiles-paint", strings, fonts, new SparseProbe());
+        using var _a = app; using var _h = host;
+        Frames(host, 20);
+        long cells = 0, painted = 0;
+        bool inside = true;
+        string seen = "";
+        foreach (var p in dev.LastCompositePlacements)
+        {
+            cells += (long)p.W * p.H;
+            painted += (long)Math.Max(0, p.Px1 - p.Px0) * Math.Max(0, p.Py1 - p.Py0);
+            inside &= p.Px0 >= 0 && p.Py0 >= 0 && p.Px1 <= p.W && p.Py1 <= p.H;
+            seen += $" [{p.Key.Tx},{p.Key.Ty} {p.W}x{p.H} paint {p.Px0},{p.Py0}-{p.Px1},{p.Py1}]";
+        }
+        Check("gate.tiles.paint a sparse segment's placements composite only what their tiles paint (two small boxes, not the cells)",
+            cells > 0 && painted > 0 && painted * 20 < cells && inside, $"cells={cells} painted={painted}{seen}");
+    }
+
+    // ── gate.tiles.opaque-cover ──────────────────────────────────────────────────────────────────────────────────
+    /// <summary>A page under an overlay in its own repaint boundary (the Wavee stage over the app shell). The overlay's
+    /// composite item carries <see cref="CompositeItem.Opaque"/> — the window-px rect it paints fully opaque, which lets the
+    /// backend leave out what it hides — ONLY when that is true: an opaque square fill at alpha 1, opacity 1.</summary>
+    sealed class CoverProbe(int mode) : Component
+    {
+        // 0 opaque full-window (tiles) · 1 the same at RasterScale 1/4 · 2 a translucent fill · 3 rounded corners ·
+        // 4 opacity 0.5 · 5 opaque at fractional insets
+        public override Element Render()
+        {
+            var page = new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(40f, 40f, 0f, 0f),
+                Width = 300f, Height = 200f, Fill = ColorF.FromRgba(200, 90, 60),
+            };
+            var overlay = new BoxEl
+            {
+                AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, ZStack = true, RepaintBoundary = true,
+                RasterScale = mode == 1 ? 0.25f : 1f,
+                Margin = mode == 5 ? new Edges4(40.5f, 30.25f, 60f, 50.75f) : default,
+                Fill = mode == 2 ? ColorF.FromRgba(20, 22, 28, 0xF0) : ColorF.FromRgba(20, 22, 28),
+                Corners = mode == 3 ? CornerRadius4.All(12f) : default,
+                Opacity = mode == 4 ? 0.5f : 1f,
+                Children = [new BoxEl { AlignSelf = FlexAlign.Center, JustifySelf = FlexAlign.Center, Width = 100f, Height = 100f, Fill = ColorF.FromRgba(90, 160, 220) }],
+            };
+            return new BoxEl { Grow = 1f, ZStack = true, Children = [page, overlay] };
+        }
+    }
+
+    static RectF CoverOf(StringTable strings, HeadlessFontSystem fonts, int mode, out bool found)
+    {
+        var (app, window, dev, host) = Host("tiles-cover-" + mode, strings, fonts, new CoverProbe(mode));
+        using var _a = app; using var _h = host;
+        Frames(host, 20);
+        int effect = -1;
+        foreach (var row in dev.LastCompositeSlices) if (row.Kind == SliceKind.Effect) effect = row.Id;
+        RectF opaque = default;
+        found = false;
+        foreach (var op in dev.LastCompositeRecords)
+            if (op.Kind == CompositeRecordKind.DrawItem && op.Item.SliceId == effect && effect >= 0) { opaque = op.Item.Opaque; found = true; }
+        return opaque;
+    }
+
+    static void OpaqueCoverChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var tiles = CoverOf(strings, fonts, 0, out bool f0);
+        Check("gate.tiles.opaque-cover an opaque full-window overlay boundary covers the window",
+            f0 && tiles.X <= 0f && tiles.Y <= 0f && tiles.Right >= 1200f && tiles.Bottom >= 1000f, $"found={f0} opaque={tiles}");
+        var low = CoverOf(strings, fonts, 1, out bool f1);
+        Check("gate.tiles.opaque-cover the same overlay at RasterScale 1/4 carries the same cover (the backend maps it through the upsample)",
+            f1 && low.X <= 0f && low.Y <= 0f && low.Right >= 1200f && low.Bottom >= 1000f, $"found={f1} opaque={low}");
+        var inset = CoverOf(strings, fonts, 5, out bool f5);
+        Check("gate.tiles.opaque-cover fractional insets keep the fill's exact edges (the backend rounds them in)",
+            f5 && inset.X == 40.5f && inset.Y == 30.25f && inset.Right == 1140f && inset.Bottom == 949.25f, $"found={f5} opaque={inset}");
+        // the overlay's own fill claims nothing when it is translucent or rounded: the cover left is the opaque square
+        // centred inside it (550,450 100x100); at opacity 0.5 nothing in the overlay is opaque
+        string seen = "";
+        bool exact = true;
+        foreach (int m in (int[])[2, 3, 4])
+        {
+            var r = CoverOf(strings, fonts, m, out bool f);
+            bool want = m == 4 ? r.W <= 0f && r.H <= 0f : r.X == 550f && r.Y == 450f && r.W == 100f && r.H == 100f;
+            if (!f || !want) exact = false;
+            seen += $" mode{m}: found={f} opaque={r.X},{r.Y} {r.W}x{r.H}";
+        }
+        Check("gate.tiles.opaque-cover a translucent fill, rounded corners or opacity 0.5 claim no cover of their own", exact, seen);
+    }
+
+    // ── gate.tiles.invisible-bounds ──────────────────────────────────────────────────────────────────────────────
+    /// <summary>A full-window plate parked at opacity 0 (Wavee's setup cover scrim, always mounted) after a small box: the
+    /// plate paints nothing, so the box's segment must not hold a window of tiles for it.</summary>
+    sealed class PlateProbe(int mode) : Component   // 0 = no plate, 1 = plate at opacity 0, 2 = plate at opacity 1
+    {
+        public override Element Render()
+        {
+            var box = new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Margin = new Edges4(40f, 40f, 0f, 0f),
+                Width = 160f, Height = 40f, Fill = ColorF.FromRgba(200, 90, 60),
+            };
+            Element[] kids = mode == 0 ? [box]
+                : [box, new BoxEl { Grow = 1f, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
+                       Fill = ColorF.FromRgba(0, 0, 0, 0x4D), Opacity = mode == 1 ? 0f : 1f, HitTestVisible = false }];
+            return new BoxEl { Grow = 1f, ZStack = true, Children = kids };
+        }
+    }
+
+    static void InvisibleBoundsChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        long Tiles(int mode)
+        {
+            var (app, window, dev, host) = Host("tiles-plate-" + mode, strings, fonts, new PlateProbe(mode));
+            using var _a = app; using var _h = host;
+            Frames(host, 20);
+            return host.LastTileCensus.VisibleNeedBytes;
+        }
+        long none = Tiles(0), hidden = Tiles(1), shown = Tiles(2);
+        Check("gate.tiles.invisible-bounds a full-window plate at opacity 0 adds no tiles to its segment",
+            hidden == none, $"visible tile bytes: no plate={none} plate@0={hidden} plate@1={shown}");
+        Check("gate.tiles.invisible-bounds the same plate at opacity 1 is painted and tiled",
+            shown > none, $"visible tile bytes: no plate={none} plate@1={shown}");
+    }
+
+
+    // ── gate.tiles.repaint-boundary ──────────────────────────────────────────────────────────────────────────────
+    /// <summary>A moving shape UNDER static content (the fullscreen stage's drifting Field under its scrim, bars and
+    /// panels): inline, every tile it crosses re-rasters with all the static paint in it; behind a BoxEl.RepaintBoundary
+    /// it re-rasters only its own isolation slice and the static tiles stay valid.</summary>
+    sealed class BoundaryProbe(bool boundary, float rasterScale = 1f) : Component
+    {
+        public static readonly Signal<int> Shift = new(0);
+        public override Element Render()
+        {
+            var cells = new Element[24];
+            for (int i = 0; i < cells.Length; i++)
+            {
+                int c = i % 6, r = i / 6;
+                cells[i] = new BoxEl
+                {
+                    AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                    Margin = new Edges4(50f + c * 190f, 50f + r * 230f, 0f, 0f), Width = 150f, Height = 150f,
+                    Fill = ColorF.FromRgba(40, 44, (byte)(60 + i * 4)),
+                };
+            }
+            var blob = new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Width = 900f, Height = 700f, Corners = CornerRadius4.All(350f),
+                Fill = ColorF.FromRgba(120, 60, 160),
+                Transform = Prop.Of(() => Affine2D.Translation(Shift.Value * 7f, Shift.Value * 3f)),
+            };
+            return new BoxEl
+            {
+                Grow = 1f, ZStack = true, Fill = ColorF.FromRgba(18, 18, 22),
+                Children =
+                [
+                    new BoxEl { Grow = 1f, ZStack = true, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, RepaintBoundary = boundary, RasterScale = rasterScale, Children = [blob] },
+                    new BoxEl { Grow = 1f, ZStack = true, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch, Children = cells },
+                ],
+            };
+        }
+    }
+
+    static (int Rasters, int Outside, int EffectSlice) BoundaryRun(StringTable strings, HeadlessFontSystem fonts, bool boundary)
+        => BoundaryRun(strings, fonts, boundary, 1f, out _);
+
+    static (int Rasters, int Outside, int EffectSlice) BoundaryRun(StringTable strings, HeadlessFontSystem fonts, bool boundary,
+        float rasterScale, out int lowResItems)
+    {
+        BoundaryProbe.Shift.Value = 0;
+        lowResItems = 0;
+        var (app, window, dev, host) = Host(boundary ? "tiles-boundary" : "tiles-boundary-inline", strings, fonts, new BoundaryProbe(boundary, rasterScale));
+        using var _a = app; using var _h = host;
+        Frames(host, 30);
+        int effect = -1;
+        foreach (var row in dev.LastCompositeSlices) if (row.Kind == SliceKind.Effect) effect = row.Id;
+        int rasters = 0, outside = 0;
+        int seen = dev.CompositeFrameCount;
+        for (int step = 0; step < 4; step++)
+        {
+            BoundaryProbe.Shift.Value++;
+            for (int i = 0; i < 4; i++)
+            {
+                host.RunFrame();
+                if (dev.CompositeFrameCount == seen) continue;
+                seen = dev.CompositeFrameCount;
+                foreach (var op in dev.LastCompositeRecords)
+                {
+                    if (op.Kind == CompositeRecordKind.DrawItem && op.Item.Kind == CompositeKind.Direct && op.Item.LowResDown == 4) lowResItems++;
+                    if (op.Kind != CompositeRecordKind.RasterTile) continue;
+                    rasters++;
+                    if (op.Tile.SliceId != effect) outside++;
+                }
+            }
+        }
+        return (rasters, outside, effect);
+    }
+
+    static void RepaintBoundaryChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var inline = BoundaryRun(strings, fonts, boundary: false);
+        var cut = BoundaryRun(strings, fonts, boundary: true);
+        Check("gate.tiles.repaint-boundary control: INLINE, a shape moving under static cells re-rasters the static tiles it crosses",
+            inline.EffectSlice < 0 && inline.Outside > 0, $"inline rasters={inline.Rasters} outside={inline.Outside} effect={inline.EffectSlice}");
+        Check("gate.tiles.repaint-boundary a RepaintBoundary cuts its own Effect slice and the move re-rasters ONLY that slice's tiles",
+            cut.EffectSlice >= 0 && cut.Rasters > 0 && cut.Outside == 0,
+            $"boundary rasters={cut.Rasters} outside={cut.Outside} effect={cut.EffectSlice} (inline rasters={inline.Rasters})");
+        var low = BoundaryRun(strings, fonts, boundary: true, rasterScale: 0.25f, out int lowItems);
+        Check("gate.tiles.repaint-boundary RasterScale 1/4: the boundary composites as ONE low-resolution Direct item (LowResDown 4) and rasters NO tiles, its own or the static ones",
+            low.EffectSlice >= 0 && lowItems > 0 && low.Rasters == 0,
+            $"lowres items={lowItems} rasters={low.Rasters} outside={low.Outside} effect={low.EffectSlice}");
+        Check("gate.tiles.repaint-boundary RasterScale snaps to the downscale ladder (≥0.75→1, 0.5→2, 0.25→4, below→8)",
+            SceneStore.RasterDown(1f) == 1 && SceneStore.RasterDown(0.8f) == 1 && SceneStore.RasterDown(0.5f) == 2
+            && SceneStore.RasterDown(0.25f) == 4 && SceneStore.RasterDown(0.1f) == 8 && SceneStore.RasterDown(float.NaN) == 1,
+            $"1→{SceneStore.RasterDown(1f)} 0.5→{SceneStore.RasterDown(0.5f)} 0.25→{SceneStore.RasterDown(0.25f)} 0.1→{SceneStore.RasterDown(0.1f)}");
+        BoundaryProbe.Shift.Value = 0;
     }
 
     // ── gate.tiles.needed-order ─────────────────────────────────────────────────────────────────────────────────

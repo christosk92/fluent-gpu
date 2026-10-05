@@ -37,6 +37,7 @@ internal sealed unsafe class GradientPipeline : IDisposable
     private ID3D12PipelineState* _pso;
     // Tier-3 stencil path clip (gpu-renderer.md S6): the EQUAL-tested clone, built lazily on the first stencil scope.
     private ID3D12PipelineState* _psoStencilTest;
+    private ID3D12PipelineState* _psoAdd;   // DrawOp.SetBlend Additive
     private bool _stencilTried;
     private ID3D12Device* _device;   // non-owning; the device outlives every pipeline
     // Instance storage is the device's SHARED per-frame UploadArena (one persistently-mapped UPLOAD buffer per
@@ -166,6 +167,18 @@ float4 PSMain(VSOut i) : SV_Target
             ID3D12PipelineState* pso;
             Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "Gradient.CreateGraphicsPipelineState");
             _pso = pso;
+            // The ADDITIVE variant (visualizer F4): colour ONE/ONE adds the premultiplied source; alpha ZERO/ONE leaves the
+            // target's alpha untouched, so inside a transparent tile the result composites Over the page as page + glow.
+            pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
+            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+            pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+            pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+            pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ZERO;
+            pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
+            pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+            ID3D12PipelineState* psoAdd;
+            Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psoAdd), "Gradient.CreateGraphicsPipelineState(Additive)");
+            _psoAdd = psoAdd;
         }
         vs->Release();
         ps->Release();
@@ -178,7 +191,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Record one run; shared SDF state and this pipeline's PSO can be rebound independently. Returns false
     /// when full (state untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<GradientInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true, bool stencilTest = false)
+                       bool bindSharedState = true, bool bindPipelineState = true, bool stencilTest = false, bool additive = false)
     {
         int count = Math.Min(instances.Length, MaxInstances - _cursor);
         if (count <= 0) { _dropped += instances.Length; return false; }
@@ -202,7 +215,7 @@ float4 PSMain(VSOut i) : SV_Target
         // See RoundRectPipeline.Record: the stencil clone is bound unconditionally, never through the _boundPipe skip.
         ID3D12PipelineState* want = stencilTest ? StencilTestPso() : null;
         if (want != null) cmd->SetPipelineState(want);
-        else if (bindPipelineState) cmd->SetPipelineState(_pso);
+        else if (bindPipelineState) cmd->SetPipelineState(additive ? _psoAdd : _pso);
         cmd->SetGraphicsRootShaderResourceView(1, gva);
         cmd->DrawInstanced(4, (uint)count, 0, 0); GpuDrawCount.Frame++;
         return true;
@@ -223,5 +236,6 @@ float4 PSMain(VSOut i) : SV_Target
         // No instance buffers to release: the shared UploadArena owns them (disposed by the device).
         if (_pso != null) _pso->Release();
         if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
+        if (_psoAdd != null) { _psoAdd->Release(); _psoAdd = null; }
     }
 }

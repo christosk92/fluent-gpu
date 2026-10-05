@@ -79,14 +79,14 @@ public sealed partial class AnimEngine
                 if (r.Has(AnimFlags.Parked)) continue;
                 if (RenderOwnsCompositor && IsCompositorRow(in r)) continue;
 
-                // CADENCE gate. A row with its own period (a 30Hz shimmer, a 10Hz HUD) only advances when it is due;
+                // CADENCE gate. A row with its own period (an explicit Cadence.At — a 10Hz HUD) only advances when it is due;
                 // in between, Position is HELD and ElapsedMs is untouched, so the row simply isn't redrawn — the loop
                 // itself may still be running at panel rate for something else. When it IS due, it steps by the REAL
                 // elapsed since its own last advance (never the frame dt): rows sample at absolute ElapsedMs, so the
                 // shimmer traverses its keyframes at 30Hz whether the host runs at 30 or 120 fps.
                 float stepMs = step;
                 bool justSeeded = r.Has(AnimFlags.JustSeeded);
-                int periodMs = ResolvedPeriodMs(s);
+                int periodMs = PeriodMsOf(s);
                 // The SEED frame counts as the row's advance #0 (it shows the initial value): it is never held, and it
                 // stamps the cadence so the first real step lands one period later and the host's wait is already the
                 // row's own period on the very next RecommendedWaitMs.
@@ -331,7 +331,7 @@ public sealed partial class AnimEngine
     /// seam for the deleted AdvanceBrushAnims + InteractionAnimator tickers.</summary>
     private static bool IsSideTableChannel(AnimChannel ch)
         => ch == AnimChannel.BrushFade || ch == AnimChannel.HoverFade || ch == AnimChannel.PressFade
-           || ch == AnimChannel.DisclosureProgress;
+           || ch == AnimChannel.DisclosureProgress || ch == AnimChannel.GlyphWipeSplit;
 
     private void WriteSideTable(AnimChannel ch, NodeHandle node, float v)
     {
@@ -341,6 +341,7 @@ public sealed partial class AnimEngine
             case AnimChannel.HoverFade: _scene.SetInteractT(node, press: false, v); break;
             case AnimChannel.PressFade: _scene.SetInteractT(node, press: true, v); break;
             case AnimChannel.DisclosureProgress: _scene.SetVirtualDisclosureProgress(node, v); break;
+            case AnimChannel.GlyphWipeSplit: _scene.SetGlyphWipeSplit(node, v); break;
         }
     }
 
@@ -467,7 +468,7 @@ public sealed partial class AnimEngine
                 {
                     ClearKeys(s);
                     ResetCadence(s);   // a re-seed inherits nothing: display rate unless this seed asks for a cadence
-                    _slab.At(s).Flags &= ~(AnimFlags.PixelSnap | AnimFlags.TierUncapped);   // …and whole-pixel snapping / the tier-cap opt-out likewise (Keyframes re-asks for them)
+                    _slab.At(s).Flags &= ~AnimFlags.PixelSnap;   // …and whole-pixel snapping likewise (Keyframes re-asks for it)
                     StampCompositorSeed(s, newInstance: false, explicitFrom: true);
                     return s;
                 }

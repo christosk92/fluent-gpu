@@ -33,6 +33,8 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     private readonly List<FillPathCmd> _fillPaths = new(16);
     private readonly List<StrokePathCmd> _strokePaths = new(16);
     private readonly List<DrawSeriesCmd> _series = new(16);
+    private readonly List<int> _blends = new(4);
+    private readonly List<DrawSpritesCmd> _spriteChunks = new(8);
     private readonly List<int> _videoClipDepth = new(4);
     private readonly List<PushStencilClipCmd> _stencilClips = new(4);
     private readonly List<PopStencilClipCmd> _stencilPops = new(4);
@@ -103,6 +105,10 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<StrokePathCmd> LastStrokePaths => _strokePaths;
     /// <summary>Series chunks (DrawOp.DrawSeries) recorded this frame, in emission order.</summary>
     public IReadOnlyList<DrawSeriesCmd> LastSeries => _series;
+    /// <summary>Paint-blend switches (DrawOp.SetBlend) recorded this frame, in order (0 = SrcOver, 1 = Additive).</summary>
+    public IReadOnlyList<int> LastBlends => _blends;
+    /// <summary>Sprite chunks (DrawOp.DrawSprites) recorded this frame, in emission order.</summary>
+    public IReadOnlyList<DrawSpritesCmd> LastSprites => _spriteChunks;
     /// <summary>Sum of <see cref="FillPathCmd.VtxCount"/>/<see cref="StrokePathCmd.VtxCount"/> across this frame's path
     /// draws — a cheap "did anything actually tessellate/draw" probe for gates, without re-decoding the stream.</summary>
     public int LastPathVertexCount
@@ -261,6 +267,8 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
         _fillPaths.Clear();
         _strokePaths.Clear();
         _series.Clear();
+        _blends.Clear();
+        _spriteChunks.Clear();
         _videoClipDepth.Clear();
         _stencilClips.Clear();
         _stencilPops.Clear();
@@ -420,6 +428,14 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.DrawSeries:
                     _series.Add(MemoryMarshal.Read<DrawSeriesCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawSeriesCmd>();
+                    break;
+                case DrawOp.DrawSprites:
+                    _spriteChunks.Add(MemoryMarshal.Read<DrawSpritesCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawSpritesCmd>();
+                    break;
+                case DrawOp.SetBlend:
+                    _blends.Add(MemoryMarshal.Read<SetBlendCmd>(drawList.Slice(pos)).Mode);
+                    pos += Unsafe.SizeOf<SetBlendCmd>();
                     break;
                 // A stencil clip IS a clip level (its DeviceRect is the scope's scissor), so it moves `balance` too —
                 // that keeps ClipBalance honest for every existing gate that asserts on it.

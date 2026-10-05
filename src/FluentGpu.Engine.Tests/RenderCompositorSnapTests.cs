@@ -8,10 +8,11 @@ using Xunit;
 
 namespace FluentGpu.Engine.Tests;
 
-/// <summary>F239 / F241 on the render-thread compositor: a <see cref="AnimFlags.PixelSnap"/> row (the player-bar marquee) poses
-/// whole device pixels and re-samples on a shared per-period clock, so two such rows step on the SAME ticks whatever instant each was
-/// seeded at; <see cref="RenderCompositorAnimations.LoopFloorMs"/> lengthens a perpetual loop's period (the inactive-window
-/// throttle) and never touches a one-shot; <see cref="RenderCompositorAnimations.HasNonLoopActive"/> tells the two apart.</summary>
+/// <summary>F239 on the render-thread compositor: a <see cref="AnimFlags.PixelSnap"/> row (the player-bar marquee) poses whole
+/// device pixels, and two such rows with the same explicit cadence re-sample on a shared per-period clock, so they step on the
+/// SAME ticks whatever instant each was seeded at. The snap quantises the VALUE only: a display-cadence row (period 0) samples on
+/// every tick and the snap decides which ticks change a pixel (the host elides the others as byte-identical frames). There is
+/// no background or tier floor on a loop's period: a visible loop runs at the rate its cadence names.</summary>
 public sealed class RenderCompositorSnapTests
 {
     // 100 DIP/s: 1 px per 10 ms tick at scale 1, so every lattice sample moves and the changes are countable.
@@ -134,57 +135,54 @@ public sealed class RenderCompositorSnapTests
         Assert.True(offGrid, "an un-snapped row is sampled analytically, not rounded");
     }
 
-    private static int CountSteps(float floorMs)
-    {
-        var (scene, node, anim) = Engine(1f);
-        anim.Keyframes(node, AnimChannel.TranslateX, Ramp, 10_000f, loop: true, cadence: Cadence.At(60f), pixelSnap: true);
-        var desired = new CompositorAnimationSnapshot();
-        anim.CaptureCompositorAnimations(desired, 0);
-        var snapshot = new SceneRecordingSnapshot();
-        snapshot.Capture(scene);
-        var renderer = new RenderCompositorAnimations { LoopFloorMs = floorMs };
-        renderer.Adopt(desired, snapshot, 0);
-        int steps = 0;
-        float prev = snapshot.Paint(node).LocalTransform.Dx;
-        for (double t = 10; t <= 1000; t += 10)
-        {
-            renderer.Tick(snapshot, t);
-            float dx = snapshot.Paint(node).LocalTransform.Dx;
-            if (dx != prev) { steps++; prev = dx; }
-        }
-        return steps;
-    }
-
+    /// <summary>A display-cadence snapped row (the marquee's default): sampled on EVERY tick, so no tick that can move a pixel is
+    /// missed, and every pose on the device-pixel grid — the quantisation is of the value, never of the rate.</summary>
     [Fact]
-    public void LoopFloor_LengthensAPerpetualLoopsPeriod_ForTheInactiveWindowThrottle()
+    public void PixelSnapRow_AtDisplayCadence_SamplesEveryTick_AndPosesOnlyWholePixels()
     {
-        int free = CountSteps(0f);        // a 60 Hz loop on 10 ms render ticks: a new sample about every 17 ms
-        int throttled = CountSteps(100f); // the inactive floor: a new sample every 100 ms
-        Assert.True(free > 40, $"free-running loop steps={free}");
-        Assert.InRange(throttled, 8, 12);
-    }
-
-    [Fact]
-    public void HasNonLoopActive_SeparatesAOneShotFromAPerpetualLoop()
-    {
-        var (scene, node, anim) = Engine(1f);
-        anim.Keyframes(node, AnimChannel.TranslateX, Ramp, 10_000f, loop: true, cadence: Cadence.At(30f), pixelSnap: true);
-        anim.Animate(node, AnimChannel.Opacity, 0f, 1f, 200f, Easing.Linear);
+        // 100 DIP/s at scale 2: 200 px/s, so a 10 ms tick moves exactly 2 px and every tick must change the pose.
+        var (scene, node, anim) = Engine(2f);
+        anim.Keyframes(node, AnimChannel.TranslateX, Ramp, 10_000f, loop: true, pixelSnap: true);   // cadence null = display rate
         var desired = new CompositorAnimationSnapshot();
         anim.CaptureCompositorAnimations(desired, 0);
         var snapshot = new SceneRecordingSnapshot();
         snapshot.Capture(scene);
         var renderer = new RenderCompositorAnimations();
         renderer.Adopt(desired, snapshot, 0);
-        renderer.Tick(snapshot, 10);
+        int steps = 0;
+        bool onGrid = true;
+        float prev = snapshot.Paint(node).LocalTransform.Dx;
+        for (double t = 10; t <= 1000; t += 10)
+        {
+            renderer.Tick(snapshot, t);
+            float dx = snapshot.Paint(node).LocalTransform.Dx;
+            if (dx != prev) { steps++; prev = dx; }
+            onGrid &= MathF.Abs(dx * 2f - MathF.Round(dx * 2f)) < 1e-3f;
+        }
+        Assert.Equal(100, steps);   // every tick moved the text: nothing held it back
+        Assert.True(onGrid, "every pose sits on the device-pixel grid");
         Assert.True(renderer.HasActive);
-        Assert.True(renderer.HasNonLoopActive, "the 200 ms fade is a one-shot: the host must not throttle it");
-        renderer.Tick(snapshot, 400);     // the fade finished; only the loop is live
-        Assert.True(renderer.HasActive);
-        Assert.False(renderer.HasNonLoopActive, "a loop alone is what the inactive throttle may slow");
-        renderer.Pause(500);
-        Assert.False(renderer.HasActive);
-        Assert.False(renderer.HasNonLoopActive);
+
+        // A slower row (12 DIP/s at scale 1: 0.12 px per 10 ms tick) changes a pixel about every 8th tick and poses the IDENTICAL
+        // value in between — the held frames the host elides. Still sampled every tick: the first tick past a pixel edge moves.
+        var (scene2, node2, anim2) = Engine(1f);
+        anim2.Keyframes(node2, AnimChannel.TranslateX, [new(0f, 0f, Easing.Linear), new(1f, -120f, Easing.Linear)], 10_000f, loop: true, pixelSnap: true);
+        anim2.CaptureCompositorAnimations(desired, 0);
+        var snapshot2 = new SceneRecordingSnapshot();
+        snapshot2.Capture(scene2);
+        var slow = new RenderCompositorAnimations();
+        slow.Adopt(desired, snapshot2, 0);
+        int slowSteps = 0, held = 0;
+        prev = snapshot2.Paint(node2).LocalTransform.Dx;
+        for (double t = 10; t <= 1000; t += 10)
+        {
+            slow.Tick(snapshot2, t);
+            float dx = snapshot2.Paint(node2).LocalTransform.Dx;
+            if (dx != prev) { slowSteps++; prev = dx; } else held++;
+            Assert.Equal(MathF.Round(dx), dx);
+        }
+        Assert.InRange(slowSteps, 11, 13);   // 12 px of travel in the second: one pixel per step, never a half
+        Assert.True(held > 80, $"held={held}: the ticks between pixel edges re-pose the identical value");
     }
 
     [Fact]

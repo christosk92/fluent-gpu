@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Threading;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
@@ -38,33 +37,18 @@ public sealed partial class AnimEngine
     // AnimValue.cs). They grow ONLY in Get(), the same seed-time path that already grows the slab's own _rows, never
     // in a frame phase. Every seed writes both (Get resets them to "display rate, never advanced"), so a recycled
     // slot can never inherit the previous tenant's cadence and Free/ClearNode need not touch them.
-    //   _cadencePeriodMs[s] : 0 = display rate (present every frame while alive)
-    //                         ushort.MaxValue = Cadence.Default → resolve 1000/DefaultLoopHz at USE time, so an app
-    //                         power-policy write to DefaultLoopHz retunes every idle loop with no re-seed
-    //                         anything else = the literal period in ms (an explicit Cadence.At(hz))
+    //   _cadencePeriodMs[s] : 0 = display rate (present every frame while alive) — every row without an explicit cadence,
+    //                         loops included
+    //                         anything else = the literal period in ms (an explicit, opt-in Cadence.At(hz))
     //   _lastAdvanceMs[s]   : AnimClock.NowMs of the row's last advance; 0 = never advanced (⇒ due now)
+    // There is no engine-wide loop rate. A DefaultLoopHz knob (30 Hz, retuned live by an app's power policy) used to
+    // resolve every cadence-less loop; no reference engine has one (Chromium, Gecko, Flutter, WinUI run loops at the
+    // display rate; GPUI's with_max_fps is per-animation and opt-in), and it made idle motion visibly choppy on a
+    // high-refresh panel. A row that genuinely wants fewer frames says so with Cadence.At(hz).
     private ushort[] _cadencePeriodMs = new ushort[64];
     private double[] _lastAdvanceMs = new double[64];
 
-    private const ushort CadenceDefaultSentinel = ushort.MaxValue;
-    private const ushort CadenceMaxPeriodMs = ushort.MaxValue - 1;   // keeps a literal period distinct from the sentinel
-
-    private float _defaultLoopHz = 30f;
-
-    /// <summary>The rate a <see cref="Cadence.Default"/> row (every perpetual <c>loop: true</c> keyframe track seeded
-    /// without an explicit cadence — shimmers, skeleton pulses, spinners) actually runs at. Resolved LATE, on every
-    /// advance and every wake computation, so the app's power policy can write it live (battery ⇒ 15, AC ⇒ 30) and
-    /// the change applies to already-running rows. <c>0</c> or less = uncapped (display rate). Read through
-    /// <see cref="Volatile"/> — the render thread reads it while the UI thread writes it.</summary>
-    public float DefaultLoopHz
-    {
-        get => Volatile.Read(ref _defaultLoopHz);
-        set
-        {
-            Volatile.Write(ref _defaultLoopHz, value > 0f ? value : 0f);
-            _censusVersion = -1;   // every Default row's due time just moved: recompute on the next NextDueMs
-        }
-    }
+    private const ushort CadenceMaxPeriodMs = ushort.MaxValue;
 
     /// <summary>Grow the cadence side arrays to cover <paramref name="slot"/> and reset it to the default cadence
     /// (display rate, never advanced). Called from <see cref="Get"/> ONLY — a seed-time path, never a frame phase.</summary>
@@ -92,45 +76,15 @@ public sealed partial class AnimEngine
 
     private static ushort PeriodFor(in Cadence c)
     {
-        if (c.IsDefault) return CadenceDefaultSentinel;
         float ms = c.PeriodMs;
-        if (ms <= 0f) return 0;                                   // DisplayRate
+        if (ms <= 0f) return 0;                                   // DisplayRate (and an At(hz ≤ 0))
         if (float.IsPositiveInfinity(ms)) return 0;               // Driven/OneShot/Paused: the row's FLAGS decide, not a period
         int r = (int)MathF.Round(ms);
         return r <= 0 ? (ushort)0 : (r >= CadenceMaxPeriodMs ? CadenceMaxPeriodMs : (ushort)r);
     }
 
-    /// <summary>Test seam for the weak-GPU tier (<c>GpuProfile.IsWeak</c> is ALWAYS false headlessly, so the cap could
-    /// otherwise never be exercised): <c>null</c> (production) reads the process-global profile.</summary>
-    internal bool? WeakTierForTest { get; set; }
-
-    private bool WeakTier => WeakTierForTest ?? GpuProfile.IsWeak;
-
-    /// <summary>The row's period in ms with <see cref="Cadence.Default"/> resolved against the LIVE
-    /// <see cref="DefaultLoopHz"/>, then (for a LOOPING row) clamped by the weak-tier cap (<see cref="TierCadenceCap"/>) -
-    /// resolved LATE like the default, so the tier published at device init reaches rows seeded before it. <c>0</c> = display
-    /// rate. This is the ONE place a period is read for the advance gate, the wake census and the render-thread capture, so
-    /// the UI loop and the compositor can never disagree about a capped row.</summary>
-    private int ResolvedPeriodMs(int slot)
-    {
-        int ms;
-        ushort p = _cadencePeriodMs[slot];
-        if (p != CadenceDefaultSentinel) ms = p;
-        else
-        {
-            float hz = DefaultLoopHz;
-            if (hz <= 0f) ms = 0;                                 // uncapped policy ⇒ default loops run at display rate
-            else
-            {
-                ms = (int)MathF.Round(1000f / hz);
-                ms = ms <= 0 ? 0 : (ms >= CadenceMaxPeriodMs ? CadenceMaxPeriodMs : ms);
-            }
-        }
-        AnimFlags f = _slab.At(slot).Flags;
-        return (f & AnimFlags.Loop) != 0
-            ? TierCadenceCap.LoopPeriodMs(ms, WeakTier, (f & AnimFlags.TierUncapped) != 0)
-            : ms;
-    }
+    /// <summary>The row's period in ms. <c>0</c> = display rate.</summary>
+    private int PeriodMsOf(int slot) => _cadencePeriodMs[slot];
 
     // ── the wake answer: min(next-due) over the live rows ─────────────────────────────────────────
     // Recomputed at the END of every Tick (that walk is already paid for) and lazily whenever the slab's mutation
@@ -217,7 +171,7 @@ public sealed partial class AnimEngine
                 // Parked/Done/Driven rows are never TIMER-due: parked is quiesced, done retires this tick, driven is
                 // event-woken by its signal write (that was the whole point — a paused playhead costs zero frames).
                 if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven)) != 0) continue;
-                int period = ResolvedPeriodMs(s);
+                int period = PeriodMsOf(s);
                 if (period <= 0)
                 {
                     dueNow = true;
@@ -255,10 +209,9 @@ public sealed partial class AnimEngine
         return remaining <= 0d ? 0f : (float)remaining;
     }
 
-    /// <summary>Census tripwire: live <c>loop: true</c> rows running at <see cref="CadenceKind.DisplayRate"/> — a
-    /// perpetual loop that pins the whole frame loop to the panel refresh. The host samples it once per 30s and
-    /// complains; a legitimate one (an indeterminate ProgressBar) is transient, a permanent one is a bug. Memoized
-    /// with <see cref="NextDueMs"/>.</summary>
+    /// <summary>Census: live <c>loop: true</c> rows running at <see cref="CadenceKind.DisplayRate"/> (every loop without
+    /// an explicit <see cref="Cadence.At"/>). Diagnostics only — a loop at the display rate is the default, not a bug;
+    /// a loop that never ends on an idle page is, at any rate. Memoized with <see cref="NextDueMs"/>.</summary>
     public int DisplayRateLoopCount { get { RefreshCensus(); return _displayRateLoopCount; } }
 
     /// <summary>Live looping rows (the <see cref="AnimFlags.Loop"/> bit) — census/diagnostics ONLY; nothing infers a

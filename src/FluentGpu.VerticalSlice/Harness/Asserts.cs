@@ -36,6 +36,20 @@ namespace FluentGpu.VerticalSlice.Harness;
 /// <summary>Scene / draw-list / input helpers shared by suite modules.</summary>
 public static class Asserts
 {
+    /// <summary>Let <paramref name="frames"/> frames of host time pass. Each turn runs a normal frame; a turn the host idles
+    /// through (nothing due: a still scrollbar counting its hide delay, a settled list) is painted anyway, because the
+    /// headless clock only advances on a painted frame while the wall clock always advances live. For gates whose
+    /// settle loop means "this much time passes", not "this many frames were owed".</summary>
+    public static void ElapseFrames(AppHost host, int frames)
+    {
+        for (int i = 0; i < frames; i++)
+        {
+            double before = host.FrameClockMsForTest;
+            host.RunFrame();
+            if (host.FrameClockMsForTest == before) host.Paint(0);
+        }
+    }
+
     public static NodeHandle Child(SceneStore s, NodeHandle parent, int index)
     {
         var c = s.FirstChild(parent);
@@ -206,6 +220,8 @@ public static class Asserts
         DrawOp.FillPath => Unsafe.SizeOf<FillPathCmd>(),
         DrawOp.StrokePath => Unsafe.SizeOf<StrokePathCmd>(),
         DrawOp.DrawSeries => Unsafe.SizeOf<DrawSeriesCmd>(),
+        DrawOp.SetBlend => Unsafe.SizeOf<SetBlendCmd>(),
+        DrawOp.DrawSprites => Unsafe.SizeOf<DrawSpritesCmd>(),
         DrawOp.PushStencilClip => Unsafe.SizeOf<PushStencilClipCmd>(),
         DrawOp.PopStencilClip => Unsafe.SizeOf<PopStencilClipCmd>(),
         _ => 0,

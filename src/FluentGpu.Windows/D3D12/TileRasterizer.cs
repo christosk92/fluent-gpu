@@ -154,6 +154,7 @@ public sealed unsafe partial class D3D12Device
         ResetDesiredScissor();
 
         int baseGroups = _inlineGroups.Count;
+        _blendAdditive = _blendBase;   // every replay starts at its floor; the prefix re-opens an additive bracket the cut fell inside
         ReplayPrefix(frame.PrefixOf(in row), sx, sy);
         ReadOnlySpan<SliceSpan> spans = row.SpanIndexCount > 0 && row.SpanIndexStart + row.SpanIndexCount <= frame.SliceSpans.Length
             ? frame.SliceSpans.Slice(row.SpanIndexStart, row.SpanIndexCount) : default;
@@ -171,11 +172,13 @@ public sealed unsafe partial class D3D12Device
         _cullActive = false;
     }
 
-    /// <summary>Re-open the scopes the segment's arena left open before its first byte (in stream order).</summary>
+    /// <summary>Re-open the scopes the segment's arena left open before its first byte (in stream order), and the paint
+    /// blend the arena's last <see cref="DrawOp.SetBlend"/> before it left set.</summary>
     private void ReplayPrefix(ReadOnlySpan<byte> prefix, float sx, float sy)
     {
         if (prefix.IsEmpty) return;
         int open = 0, pos = 0;
+        bool additive = false;
         while (pos + sizeof(int) <= prefix.Length)
         {
             var op = (DrawOp)MemoryMarshal.Read<int>(prefix[pos..]);
@@ -193,9 +196,13 @@ public sealed unsafe partial class D3D12Device
                 case DrawOp.PopLayer:
                     if (open > 0) open--;
                     break;
+                case DrawOp.SetBlend:
+                    additive = MemoryMarshal.Read<SetBlendCmd>(prefix[(pos + sizeof(int))..]).Mode == (int)PaintBlend.Additive;
+                    break;
             }
             pos += sizeof(int) + body;
         }
+        _blendAdditive = _blendBase || additive;
         open = Math.Min(open, _prefixOpen.Length);
         for (int i = 0; i < open; i++)
         {
