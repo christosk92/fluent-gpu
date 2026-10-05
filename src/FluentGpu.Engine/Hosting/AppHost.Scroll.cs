@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using FluentGpu.Dsl;
@@ -149,7 +149,9 @@ public sealed partial class AppHost
     private ScrollHandle ResolveScrollHandle(int idx)
     {
         var node = _scene.HandleAt(idx);
-        ref ScrollState sc = ref _scene.ScrollRef(node);
+        // Read-only here, and resolved for every viewport several times a frame: an existing row is read without the
+        // write-intent ledger mark (which made every scroller look changed on every frame); a missing one is created as before.
+        ref readonly ScrollState sc = ref _scene.HasScroll(node) ? ref _scene.ScrollRefUnledgered(node) : ref _scene.ScrollRef(node);
         bool horizontal = sc.Orientation == 1;
         var vp = new ScrollViewportId(idx, node.Raw.Gen);
         _scene.TryGetAuthoredScrollHandle(idx, out var authored);
@@ -216,7 +218,14 @@ public sealed partial class AppHost
             // Plans are functions of absolute time, so the unpark frame simply evaluates wherever the plan is by then.
             if ((_scene.Flags(node) & NodeFlags.Parked) != 0) continue;
             var handle = ResolveScrollHandle(idx);
-            ref ScrollState sc = ref _scene.ScrollRef(node);
+            // Unledgered: this step runs for every viewport on every frame and usually rewrites the values already there.
+            // ScrollRef's unconditional write-intent mark made every page with a scroller look changed on every frame, which
+            // published a scene per wake (the no-op publication skip could never hold). The row is ledgered below, exactly
+            // when one of the captured fields this step writes (Offset, Velocity, Motion, AnchorIndex) moved.
+            ref ScrollState sc = ref _scene.ScrollRefUnledgered(node);
+            double velocity0 = sc.Velocity;
+            var motion0 = sc.Motion;
+            int anchor0 = sc.AnchorIndex;
             float zoom = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
             handle.SetExtent(sc.ContentMain * zoom, sc.ViewportMain);
             handle.SetSnap(ScrollContentPose.SnapGridOf(in sc));
@@ -249,6 +258,8 @@ public sealed partial class AppHost
                 if (!rw.IsEmpty) sc.AnchorIndex = rw.AnchorIndex;
                 if (ScrollContentPose.NeedsRealize(in sc, in rw)) _scene.Mark(node, NodeFlags.VirtualRangeDirty);
             }
+            if (!moved && (!sc.Velocity.Equals(velocity0) || sc.Motion != motion0 || sc.AnchorIndex != anchor0))
+                _scene.NoteCaptureChanged(idx);
         }
         Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.Scroll, AnyUserScrollMoving);
     }
@@ -337,7 +348,7 @@ public sealed partial class AppHost
             var node = _scene.HandleAt(idx);
             if (node.IsNull || !_scene.IsLive(node) || !_scene.HasScroll(node)) continue;
             if ((_scene.Flags(node) & NodeFlags.Parked) != 0) continue;
-            ref ScrollState sc = ref _scene.ScrollRef(node);
+            ref readonly ScrollState sc = ref _scene.ScrollRefUnledgered(node);   // read-only: no write-intent ledger mark
             var content = sc.ContentNode;
             if (content.IsNull || !_scene.IsLive(content)) continue;
             bool horizontal = sc.Orientation == 1;
@@ -443,9 +454,10 @@ public sealed partial class AppHost
             acc += horizontal ? b.X : b.Y;
             if (_scene.Parent(n).IsNull) { pos = 0; extent = 0; return false; }
         }
-        ref ScrollState sc = ref _scene.ScrollRef(scroller);
+        // Read-only: no write-intent ledger mark (a scroller always has its row; a missing one reads as origin 0, as before).
+        double windowOrigin = _scene.HasScroll(scroller) ? _scene.ScrollRefUnledgered(scroller).WindowOrigin : 0.0;
         ref readonly RectF nb = ref _scene.Bounds(node);
-        pos = sc.WindowOrigin + acc;
+        pos = windowOrigin + acc;
         extent = horizontal ? nb.W : nb.H;
         return true;
     }

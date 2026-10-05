@@ -1544,6 +1544,12 @@ public sealed partial class SceneStore : ISceneBackend
         return ref s;
     }
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
+
+    /// <summary>The scroll row of an existing viewport WITHOUT the write-intent ledger mark <see cref="ScrollRef"/> makes.
+    /// For a per-frame writer that usually writes what is already there (the host's frame step): it must call
+    /// <see cref="NoteCaptureChanged"/> itself whenever a captured field actually changed. The row must exist
+    /// (<see cref="HasScroll"/>).</summary>
+    internal ref ScrollState ScrollRefUnledgered(NodeHandle h) => ref _scroll.GetOrAdd((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
 
