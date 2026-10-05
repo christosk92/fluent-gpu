@@ -144,8 +144,10 @@ internal sealed class WakeDiagnostics
     // Cached snapshot of the CURRENT subscriber set's names. Refreshed only when Signal.SubscriberSetVersion moves
     // (an actual subscribe/unsubscribe), not on every kept-awake frame — walking SubscriberAt + DiagOwner for a
     // steady-state set that isn't changing would be pure waste on a bit that can be set every frame for minutes.
+    // Kept per clock: a frame is charged only to the subscribers of the clock whose bit it carried.
     private readonly string?[] _currentPollerNames = new string?[MaxPollersSeen];
-    private int _currentPollerCount;
+    private readonly string?[] _currentPaceableNames = new string?[MaxPollersSeen];
+    private int _currentPollerCount, _currentPaceableCount;
     private int _lastPollerSetVersion = -1, _lastPaceableSetVersion = -1;
 
     // The animation engine + scene, for the live-track and orphan census below. A compositor-owned track is the ONE
@@ -319,34 +321,45 @@ internal sealed class WakeDiagnostics
             if (set == 1) _soleFrames[i]++;
         }
 
-        if ((reasons & (WakeReasons.FrameClockPoller | WakeReasons.FrameClockPaceable)) != 0) NotePollersSeen();
+        if ((reasons & (WakeReasons.FrameClockPoller | WakeReasons.FrameClockPaceable)) != 0) NotePollersSeen(reasons);
     }
 
-    /// <summary>Attribute this kept-awake frame to every currently-live <c>FrameClock.Tick</c> and <c>FrameClock.PaceableTick</c>
-    /// subscriber, by name.
-    /// Re-walks the subscriber list only when <see cref="FluentGpu.Signals.Signal{T}.SubscriberSetVersion"/> moved
+    /// <summary>Attribute this kept-awake frame, by name, to every currently-live subscriber of the clock whose bit it
+    /// carried: <c>FrameClock.Tick</c> for <see cref="WakeReasons.FrameClockPoller"/>, <c>FrameClock.PaceableTick</c> for
+    /// <see cref="WakeReasons.FrameClockPaceable"/> — a paceable ticker the governor held back is not charged for a frame
+    /// another poller requested, nor the other way round.
+    /// Re-walks a subscriber list only when its <see cref="FluentGpu.Signals.Signal{T}.SubscriberSetVersion"/> moved
     /// since the last call — steady state (the common case: the same 1-3 pollers ticking for seconds) is a handful of
     /// string== compares against the reused tally, no allocation.</summary>
-    private void NotePollersSeen()
+    private void NotePollersSeen(WakeReasons reasons)
     {
-        int ver = _frameClockSig.SubscriberSetVersion;
-        int pver = _paceableSig?.SubscriberSetVersion ?? -1;
-        if (ver != _lastPollerSetVersion || pver != _lastPaceableSetVersion)
+        if ((reasons & WakeReasons.FrameClockPoller) != 0)
         {
-            _lastPollerSetVersion = ver;
-            _lastPaceableSetVersion = pver;
-            int n = 0;
-            for (int i = 0; i < _frameClockSig.SubscriberCount && n < MaxPollersSeen; i++)
-                _currentPollerNames[n++] = PollerName(_frameClockSig, i);
-            if (_paceableSig is { } paceable)
-                for (int i = 0; i < paceable.SubscriberCount && n < MaxPollersSeen; i++)
-                    _currentPollerNames[n++] = PollerName(paceable, i);
-            _currentPollerCount = n;
+            RefreshNames(_frameClockSig, ref _lastPollerSetVersion, _currentPollerNames, ref _currentPollerCount);
+            Tally(_currentPollerNames, _currentPollerCount);
         }
-
-        for (int i = 0; i < _currentPollerCount; i++)
+        if ((reasons & WakeReasons.FrameClockPaceable) != 0 && _paceableSig is { } paceable)
         {
-            string name = _currentPollerNames[i]!;
+            RefreshNames(paceable, ref _lastPaceableSetVersion, _currentPaceableNames, ref _currentPaceableCount);
+            Tally(_currentPaceableNames, _currentPaceableCount);
+        }
+    }
+
+    private static void RefreshNames(FluentGpu.Signals.Signal<object?> clock, ref int lastVersion, string?[] names, ref int count)
+    {
+        int ver = clock.SubscriberSetVersion;
+        if (ver == lastVersion) return;
+        lastVersion = ver;
+        int n = Math.Min(clock.SubscriberCount, MaxPollersSeen);
+        for (int i = 0; i < n; i++) names[i] = PollerName(clock, i);
+        count = n;
+    }
+
+    private void Tally(string?[] names, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            string name = names[i]!;
             int idx = -1;
             for (int j = 0; j < _pollersSeenCount; j++)
                 if (_pollersSeenNames[j] == name) { idx = j; break; }
