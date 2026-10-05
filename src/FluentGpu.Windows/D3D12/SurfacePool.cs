@@ -56,6 +56,9 @@ internal sealed unsafe class SurfacePool : IDisposable
         public bool Retained;        // scratch: holds a content-keyed result across turns
         public ulong RetainKey;
         public int RetainAux;        // what the result needs to be drawn again (e.g. its downsample factor)
+        public int CreatedTurn;      // tile: the turn its texture was (re)created — it holds no pixels a partial raster may keep
+        public bool LastPartial;     // tile: its last raster wrote only LastDamage (tile px); the serial after it is Serial
+        public PixelRect LastDamage;
     }
 
     private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; }
@@ -195,6 +198,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             e.W = w; e.H = h;
             e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             _device->CreateRenderTargetView(e.Res, null, Rtv(slot));
+            e.CreatedTurn = _turn;
         }
         e.LastTurn = _turn;
         e.LastUseFence = frameFence;
@@ -216,6 +220,29 @@ internal sealed unsafe class SurfacePool : IDisposable
     }
 
     public uint TileSerial(int slot) => (uint)slot < (uint)_tiles.Length ? _tiles[slot].Serial : 0u;
+
+    /// <summary>The tile slot's texture was created THIS turn (by <see cref="EnsureTile"/>): it holds no previous pixels, so
+    /// a partial raster into it must raster whole.</summary>
+    public bool TileFresh(int slot) => (uint)slot < (uint)_tiles.Length && _tiles[slot].Res != null && _tiles[slot].CreatedTurn == _turn;
+
+    /// <summary>Record what the raster that produced the slot's current serial wrote: only <paramref name="damage"/> (tile
+    /// px) when <paramref name="partial"/>, else the whole surface. The partial-present diff repaints just that part of the
+    /// tile's placement when its serial moved by exactly this raster.</summary>
+    public void NoteTileWrite(int slot, bool partial, in PixelRect damage)
+    {
+        if ((uint)slot >= (uint)_tiles.Length) return;
+        _tiles[slot].LastPartial = partial;
+        _tiles[slot].LastDamage = partial ? damage : default;
+    }
+
+    /// <summary>What the slot's last raster wrote (see <see cref="NoteTileWrite"/>); false = the whole surface.</summary>
+    public bool TileLastWrite(int slot, out PixelRect damage)
+    {
+        damage = default;
+        if ((uint)slot >= (uint)_tiles.Length || !_tiles[slot].LastPartial) return false;
+        damage = _tiles[slot].LastDamage;
+        return true;
+    }
     public ID3D12Resource* TileResource(int slot) => _tiles[slot].Res;
     public D3D12_CPU_DESCRIPTOR_HANDLE TileRtv(int slot) => Rtv(slot);
     public D3D12_GPU_DESCRIPTOR_HANDLE TileSrv(int slot) => Srv(ref _tiles[slot], slot);

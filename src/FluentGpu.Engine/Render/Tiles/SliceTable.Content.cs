@@ -113,6 +113,7 @@ public sealed partial class SliceTable
         _surfWantOps[surface] = _surfRasterOps[surface] = 0;
         _surfWantPaint[surface] = FullPaint;   // not known until its want is computed
         _surfRasterPaint[surface] = default;   // it holds no pixels
+        DamageForget(surface);
     }
 
     /// <summary>The backend completed a raster into <paramref name="surface"/>: its pixels now hold the current want.</summary>

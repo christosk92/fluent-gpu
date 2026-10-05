@@ -18,6 +18,14 @@ public struct TileOp
     /// <summary>A clip scope (PushClip / PushStencilClip): it limits what follows and paints nothing itself — left out of
     /// a tile's painted rect. A layer scope composites its content back and is part of it.</summary>
     public bool Clip;
+    /// <summary>An inline blur / edge-fade layer scope: what it composites at a pixel depends on its content AROUND the pixel
+    /// (the Gaussian's reach), so a sub-tile repaint cannot bound its effect — a tile holding one re-rasters whole
+    /// (<see cref="TileDamage"/>).</summary>
+    public bool Spread;
+    /// <summary>The fold of the hashes of every scope open around the op (outermost first; the arena's own scopes, not
+    /// the op itself): moving an op into or out of a clip or a layer keeps its bytes and footprint but not this. Not part
+    /// of any want — the sub-tile damage diff pairs ops by it (folded into <see cref="TileOpRec.Hash"/>).</summary>
+    public ulong ScopeSig;
 }
 
 /// <summary>
@@ -128,6 +136,43 @@ public static class TileContentHash
         }
         paint = px1 > px0 && py1 > py0 ? new RectF(px0 - tilePx.X, py0 - tilePx.Y, px1 - px0, py1 - py0) : default;
         return h == 0 ? 1UL : h;
+    }
+
+    /// <summary>
+    /// The ops <see cref="TileWant(ReadOnlySpan{TileOp}, ReadOnlySpan{int}, int, int, int, in RectF, float, float, float, out int, out int, out RectF)"/>
+    /// folds for tile <paramref name="tilePx"/>, in the same order and by the same overlap test, written to
+    /// <paramref name="dst"/> as <see cref="TileOpRec"/>s (hash + footprint in the tile's own px): what the tile's replay
+    /// draws, which <see cref="TileDamage.Diff"/> compares against the list its pixels were rastered from. The array grows
+    /// when too small (a tile's list only grows once per high-water mark). Returns the count written.
+    /// </summary>
+    public static int CollectTileOps(ReadOnlySpan<TileOp> ops, ReadOnlySpan<int> openScopes, int segStart, int segEnd,
+        in RectF tilePx, float scale, float originX, float originY, ref TileOpRec[] dst)
+    {
+        int n = 0;
+        for (int i = 0; i < openScopes.Length; i++)
+        {
+            int k = openScopes[i];
+            if ((uint)k < (uint)ops.Length && Hits(in ops[k], in tilePx, scale, originX, originY))
+                Put(ref dst, ref n, in ops[k], in tilePx, scale, originX, originY);
+        }
+        for (int i = FirstAtOrAfter(ops, segStart); i < ops.Length && ops[i].Pos < segEnd; i++)
+            if (Hits(in ops[i], in tilePx, scale, originX, originY))
+                Put(ref dst, ref n, in ops[i], in tilePx, scale, originX, originY);
+        return n;
+    }
+
+    private static void Put(ref TileOpRec[] dst, ref int n, in TileOp op, in RectF tilePx, float scale, float ox, float oy)
+    {
+        if (n == dst.Length) Array.Resize(ref dst, Math.Max(16, n * 2));
+        byte flags = op.Spread ? TileOpRec.FlagSpread : (byte)0;
+        RectF px = default;
+        if (op.Bounds.IsInfinite) flags |= TileOpRec.FlagInfinite;
+        else
+        {
+            RectF r = ToTilePx(op.Bounds, scale, ox, oy);
+            px = new RectF(r.X - tilePx.X, r.Y - tilePx.Y, r.W, r.H);
+        }
+        dst[n++] = TileOpRec.Of(op.Hash, op.ScopeSig, in px, flags, (int)tilePx.W, (int)tilePx.H);
     }
 
     /// <summary>Grow the painted extent by a hit op's footprint cut by the tile (an infinite footprint: the whole tile).</summary>

@@ -79,6 +79,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public byte FenceQueue;                  // 0 none | 1 copy (upload) | 2 compute (baked derivative)
         public ulong ComputeReadFence;           // the last compute batch that READS it (a bake source); 0 = none
         public bool Derived;                     // a baked derivative (RGBA8 UAV texture from the derived pool)
+        public uint Serial;                      // content identity of this placement's pixels (ContentSerial)
     }
 
     private sealed class AtlasPage
@@ -379,6 +380,14 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     /// <summary>True when the frame can sample pixels for <paramref name="id"/> now (<see cref="TryGet"/> succeeds).</summary>
     public bool IsResident(int id) => TryDrawable(id, out _);
+
+    private uint _contentSerial;
+
+    /// <summary>The identity of the pixels a draw of <paramref name="id"/> samples NOW (0 = none drawable): it changes
+    /// whenever different pixels become drawable under the same id — a replacement published in place, or a staged one
+    /// whose side-queue fence passed (it supersedes the prior it kept drawable). A retained tile that drew the id under
+    /// another serial holds stale pixels of it (a partial raster re-draws the image whole — D3D12Device.TileDamage.cs).</summary>
+    public uint ContentSerial(int id) => TryDrawable(id, out var t) ? t.Serial : 0u;
 
     /// <summary>True when <paramref name="id"/> has pixels staged or on a side queue that have not landed yet — a frame that
     /// drew its placeholder instead is not the final picture (the tile holding it re-rasters once they land).</summary>
@@ -724,6 +733,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     private void PublishReplacement(int id, Tex t, Tex prior, bool reroute)
     {
+        t.Serial = ++_contentSerial;   // new pixels under the same id (an LQIP → full-res swap, a re-bake): a new identity
         if (reroute)
         {
             // Keep the prior pixels drawable while the new ones are still on a side queue (the first such prior only:

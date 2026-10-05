@@ -133,6 +133,7 @@ public sealed unsafe partial class D3D12Device
         _frameScale = frame.Info.Scale <= 0f ? 1f : frame.Info.Scale;
         _imageClockMs = frame.Info.ImageClockMs;
         _glyphs!.BeginFrame(slot);
+        if (TileDamage.Validate) PollDamageChecks();
         int maxSurface = 0;
         for (int i = 0; i < frame.Rasters.Length; i++) maxSurface = Math.Max(maxSurface, frame.Rasters[i].Surface + 1);
         for (int i = 0; i < frame.Placements.Length; i++) maxSurface = Math.Max(maxSurface, frame.Placements[i].Surface + 1);
@@ -313,6 +314,7 @@ public sealed unsafe partial class D3D12Device
         }
         FlushBarriers(nb);
 
+        float* zero = stackalloc float[4] { 0f, 0f, 0f, 0f };   // a partial raster's damage clear (transparent, as the CLEAR load)
         for (int i = 0; i < rasters.Length; i++)
         {
             ref readonly TileRaster tr = ref rasters[i];
@@ -325,17 +327,52 @@ public sealed unsafe partial class D3D12Device
             int inFlight = _frameImagesInFlight;
             int refused0 = _surfaces!.ScratchRefused;
             var rtv = _surfaces!.TileRtv(tr.Surface);
-            BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
-            ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, rtv,
-                new RectF(tr.Key.Tx * (float)TileGrid.W, tr.Key.Ty * (float)TileGrid.H, tr.W, tr.H));
-            EndPassIfOpen();
+            // Sub-tile damage (D3D12Device.TileDamage.cs): a PARTIAL raster keeps the surface and repaints only its damage —
+            // unless the texture is new this turn (nothing to keep).
+            bool fresh = tr.Partial && _surfaces.TileFresh(tr.Surface);
+            bool partial = tr.Partial && !fresh;
+            PixelRect damage = tr.Damage;
+            if (partial)
+            {
+                // an image of the tile whose pixels changed under the same id re-draws whole (ImageDamage)
+                damage = ImageDamage(in frame, in row, in tr, damage);
+                if (TileDamage.Area(in damage) >= (long)(TileDamage.MaxPartialShare * tr.W * tr.H)) partial = false;
+            }
+            bool beyondPlan = tr.Partial && (!partial || !damage.Equals(tr.Damage));
+            if (TileDamage.Log) LogRaster(in tr, in row, partial, fresh, in damage);
+            BeginImageRecord(tr.Surface, whole: !partial);
+            if (!partial)
+            {
+                BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
+                ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, rtv,
+                    new RectF(tr.Key.Tx * (float)TileGrid.W, tr.Key.Ty * (float)TileGrid.H, tr.W, tr.H));
+                EndPassIfOpen();
+            }
+            else if (!damage.IsEmpty)
+            {
+                // the damage reads as a whole raster's CLEAR load wrote it, then only what reaches it replays, scissored to it
+                EndPassIfOpen();
+                RECT rc = new() { left = damage.Left, top = damage.Top, right = damage.Right, bottom = damage.Bottom };
+                _cmdList->ClearRenderTargetView(rtv, zero, 1, &rc);
+                Rec(RecordedOp.ClearRtv, (uint)rtv.ptr, (uint)(rc.right - rc.left) << 16 | (uint)(rc.bottom - rc.top));
+                BeginPass(rtv, tr.W, tr.H, PassLoad.Preserve);
+                ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, rtv,
+                    new RectF(tr.Key.Tx * (float)TileGrid.W + damage.Left, tr.Key.Ty * (float)TileGrid.H + damage.Top,
+                        damage.Right - damage.Left, damage.Bottom - damage.Top),
+                    clamp: true, damage: damage);
+                EndPassIfOpen();
+            }
+            EndImageRecord();
+            _surfaces.NoteTileWrite(tr.Surface, partial, damage);
+            NoteRasterCensus(partial, damage, tr.W, tr.H);
+            if (beyondPlan && i < frame.RasterFlags.Length) frame.RasterFlags[i] |= CompositeFrameFlags.RasterBeyondPlan;
             _frameTilesRastered++;
             // Faithful only when nothing was dropped and every image it drew was resident: an overflowed bank grows at
             // the next BeginFrame, an image lands when its side-queue fence passes — either way the tile, left invalid,
             // rasters again (the host keeps turning while uploads are in flight).
-            if (i < frame.RasterDone.Length)
-                frame.RasterDone[i] = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped
-                    && _frameImagesInFlight == inFlight ? (byte)1 : (byte)0;
+            bool faithful = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped && _frameImagesInFlight == inFlight;
+            if (i < frame.RasterDone.Length) frame.RasterDone[i] = faithful ? (byte)1 : (byte)0;
+            if (TileDamage.Validate && partial && faithful && !damage.IsEmpty) QueueDamageCheck(in frame, in row, in tr, damage, tileX, tileY);
             // evidence (§A.3): an inline group inside this tile asked for a scratch and was refused — it drew nothing
             if (i < frame.RasterFlags.Length && _surfaces.ScratchRefused != refused0)
                 frame.RasterFlags[i] |= CompositeFrameFlags.RasterScratchRefused;

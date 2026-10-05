@@ -45,6 +45,12 @@ namespace FluentGpu.Hosting;
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
 /// </list>
+/// <item><c>no-partial-raster</c> — every invalid retained tile re-rasters whole (the sub-tile damage A/B arm,
+/// <see cref="FluentGpu.Render.Tiles.TileDamage"/>). <c>damage-validate</c> — the backend re-rasters every partially
+/// rastered tile whole into a shadow surface and compares the bytes (a mismatch is logged). <c>damage-log</c> — one line
+/// per scheduled tile raster (slice, extent, reason, damage). <c>no-precise-present</c> — the partial-present diff dirties a
+/// re-rastered tile's whole placement and takes the whole frame on an item-structure change (the pre-damage behaviour,
+/// the A/B arm).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -183,6 +189,10 @@ public static class EngineSwitches
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
+            case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
+            case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
+            case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             default: return false;
         }
     }

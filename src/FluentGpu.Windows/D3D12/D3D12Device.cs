@@ -2084,6 +2084,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(im.Rect.X, im.Rect.Y, im.Rect.W, im.Rect.H, im.Transform.M11, im.Transform.M12,
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip);
+                    if (_imgRecSlot >= 0) NoteRasterImage(im.ImageId);   // a tile raster records which pixels of the id it drew
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
                     if (_imageTextures!.IsResident(im.ImageId)) AddReadyImage(in im);
@@ -2552,6 +2553,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // command-list state — only invalidated when a compositor pass sets its own scissor, via InvalidateCmdState).
     private void SetScissorRect(RECT sc)
     {
+        sc = ClampToReplay(sc);
         int tw = _targetWidth > 0 ? _targetWidth : (int)_w;
         int th = _targetHeight > 0 ? _targetHeight : (int)_h;
         RECT targetScissor = new()
@@ -5052,6 +5054,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imagePipe?.Dispose();
         _bakedBlur?.Dispose();
         _surfaces?.Dispose();
+        ReleaseDamageChecks();
         _compositor?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();

@@ -1,12 +1,20 @@
 using System.Runtime.CompilerServices;
 using FluentGpu.Foundation;
+using FluentGpu.Rhi;
 
 namespace FluentGpu.Render.Tiles;
 
 /// <summary>One tile the backend must raster this turn: its key, the surface slot to raster into, why, its needed-set
 /// order (the list is ordered visible → ahead → behind) and the device-px extent of that surface (a region surface for an
-/// effect slice's tile, the full tile otherwise).</summary>
-public readonly record struct TileRaster(TileKey Key, int Surface, InvalidationReason Reason, byte Order, int W = TileGrid.W, int H = TileGrid.H);
+/// effect slice's tile, the full tile otherwise). <paramref name="Partial"/> = re-raster only <paramref name="Damage"/> (tile
+/// px, half-open; empty = nothing changed): the surface already holds every other pixel of the current content
+/// (<see cref="TileDamage"/>, <see cref="SliceTable.PlanDamage"/>); otherwise the whole surface is rastered.</summary>
+public readonly record struct TileRaster(TileKey Key, int Surface, InvalidationReason Reason, byte Order, int W = TileGrid.W, int H = TileGrid.H,
+    PixelRect Damage = default, bool Partial = false)
+{
+    /// <summary>The pixel rect this raster writes (tile px): <see cref="Damage"/> for a partial raster, else the surface.</summary>
+    public PixelRect Written => Partial ? Damage : new PixelRect(0, 0, W, H);
+}
 
 /// <summary>One resident tile a composite item samples: its key, the surface slot holding its pixels and that surface's
 /// device-px extent (the placed quad is W×H at the tile's origin).</summary>
@@ -245,6 +253,7 @@ public sealed partial class SliceTable
         // Idle aging is housekeeping, not this frame's budget pressure: the census starts clean after it.
         _evicted = _rastered = _scheduled = _degradedSlices = 0;
         _contentChecked = _contentCaught = 0;
+        DamageBeginFrame();
         Array.Clear(_reasonCounts);
     }
 
@@ -310,6 +319,7 @@ public sealed partial class SliceTable
             _tiles[t] = default;
             _tiles[t].Surface = -1;
             _scheduledFrame[t] = int.MinValue;
+            _tExtra[t] = default;
         }
         _live[s] = false;
         _rows[s] = default;
@@ -328,7 +338,9 @@ public sealed partial class SliceTable
         {
             int t = b + i;
             if (!_used[t]) continue;
-            if (TileGrid.TileRect(_tx[t], _ty[t]).Overlaps(sliceRect) && Invalidate(t, reason)) n++;
+            if (!TileGrid.TileRect(_tx[t], _ty[t]).Overlaps(sliceRect)) continue;
+            DamageExtra(t, in sliceRect, reason);   // a sub-tile raster must cover it (no op describes it)
+            if (Invalidate(t, reason)) n++;
         }
         return n;
     }
@@ -600,6 +612,7 @@ public sealed partial class SliceTable
         ts.Invalid = InvalidationReason.None;
         ts.ContentEpoch++;
         LedgerRastered(ts.Surface);
+        DamageRastered(t, ts.Surface);
         _rastered++;
         return true;
     }
@@ -699,6 +712,7 @@ public sealed partial class SliceTable
         _tiles[slot] = default;
         _tiles[slot].Surface = -1;
         _tiles[slot].Invalid = InvalidationReason.NoTexture;
+        _tExtra[slot] = default;
         _tiles[slot].LastUsedFrame = int.MinValue;   // "not yet requested": Request stamps the frame + order next
         SurfaceExtent(s, tx, ty, out _tiles[slot].SurfW, out _tiles[slot].SurfH);
         _reasonCounts[(int)InvalidationReason.NoTexture]++;
