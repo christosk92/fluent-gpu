@@ -1868,8 +1868,8 @@ public sealed partial class AppHost : IDisposable
     /// create / bind (a handle that arrived, a failed bind's retry); geometry and destroys belong to the turn that presents the
     /// matching hole, and the elided publication's own geometry was applied by the turn that recorded it.</para>
     /// <para>F080: the placement is APPLIED here but not committed. The turn's ONE device-level commit is
-    /// <see cref="CommitVideoTurn"/>, at the end of <see cref="DrainChildRenderSources"/>, after the parent and every child
-    /// drained, so the shared composition device is flushed once per turn instead of once per window. A turn that MOVES an
+    /// <see cref="CommitVideoTurn"/> (<see cref="CommitVideoTurnAfterPresent"/>, the render loop's post-turn), after every child
+    /// and then the parent drained, so the shared composition device is flushed once per turn instead of once per window. A turn that MOVES an
     /// already-placed surface commits at once instead (F070 Stage B), right after the present that carries the new hole and with no
     /// flush in between: the hole's flip and the video's new rect then become eligible for the same DWM composition.
     /// <paramref name="placement"/> false is a present that stood down: only releases are applied.</para></summary>
@@ -2956,7 +2956,12 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>Render thread (parent host): drain each registered child host's seam on this present turn — a fresh child
     /// publish is submitted+presented against the CHILD's own swapchain + video presenter, render-confined (the child reuses
-    /// the same per-host <see cref="SubmitPresentOnRenderThread"/>). Runs every turn; a child with no new publish is a cheap
+    /// the same per-host <see cref="SubmitPresentOnRenderThread"/>). Runs every turn, BEFORE the parent's own present decision
+    /// (<c>RenderThread.Loop</c>): a pop-out's present then never queues behind the main window's present-slot wait, which is
+    /// the one place a turn blocks (up to a vblank while paced, the liveness bound when the primary's queue is full) — the
+    /// shared thread serves the child's frame first and the parent's pacing is untouched (F241, without throttling anything:
+    /// an unfocused main window keeps its display-rate motion). Every take here is non-blocking, so the parent's present is
+    /// delayed only by the child's own record + submit (the pace line's childDrain). A child with no new publish is a cheap
     /// <c>TryAcquire</c>-false no-op. One snapshot of the copy-on-write list is taken per turn; a child is only ever removed
     /// under a Quiesce rendezvous, so a child in the snapshot is alive for the whole turn.</summary>
     private void DrainChildRenderSources()
@@ -3029,10 +3034,12 @@ public sealed partial class AppHost : IDisposable
             }
             child._deferredSinceQpc = 0;
         }
-        // The turn's one composition commit: the parent's own drain (earlier in this turn) and every child's applied their
-        // placement without one (F080).
-        CommitVideoTurn(list);
     }
+
+    /// <summary>Render thread, parent host, after the parent's present decision: the turn's ONE composition commit (F080). The
+    /// children drained BEFORE the parent's slot wait (<see cref="DrainChildRenderSources"/>, F241) and the parent's own drain
+    /// (inside its present) applied their placements without a commit; this flushes them all in one DWM frame.</summary>
+    private void CommitVideoTurnAfterPresent() => CommitVideoTurn(Volatile.Read(ref _childRenderSources));
 
     /// <summary>UI thread: stop + join this host's render thread on window close (idempotent with Dispose). Ordered BEFORE
     /// any swapchain/device teardown so the render thread — the sole ComPtr owner — is gone first.</summary>
@@ -4441,7 +4448,7 @@ public sealed partial class AppHost : IDisposable
                 takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
                 submitAbortHandleSink: _device.SetSubmitAbortHandle,
                 ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
-                presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn);
+                presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent);
             _device.MarkRenderConfined();
             _videoSurfaces.StructuralWake = _renderThread.WakeForVideo;   // a handle arriving wakes the loop: no UI publication needed (F208)
         }

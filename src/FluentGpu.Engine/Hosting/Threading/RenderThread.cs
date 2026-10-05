@@ -19,7 +19,7 @@ namespace FluentGpu.Hosting.Threading;
 /// this one. While frames fit the early phase the turn presents nothing and the next tick presents on time
 /// (<see cref="SlotCatchUp"/>, <see cref="CatchUpSkips"/>); over-budget frames keep the unbounded wait.</para>
 /// <para><b>Pacing is per target.</b> The tick rule, the credit and the motion run above are the PARENT swapchain's and
-/// follow the parent's OWN motion; a detached child's presents ride <c>extraDrain</c> on the child's own swapchain, probe
+/// follow the parent's OWN motion; a detached child's presents ride <c>extraDrain</c> on the child's own swapchain, BEFORE the parent's slot wait, probe
 /// that swapchain's own slot without waiting, and keep their own evidence (<see cref="ChildPresentPace"/>).</para>
 /// Resize/recovery/shutdown take priority over render turns. <see cref="DrainSync"/> is an explicit request/ack
 /// rendezvous for deterministic hosts, not the production async path.
@@ -66,6 +66,9 @@ public sealed class RenderThread : IDisposable
     // the registry's snapshot in the publisher and wakes this loop with WakeForVideo, publishing no frame): such a turn takes no
     // slot, records nothing and presents nothing. Null => nothing early to do.
     private readonly Action? _preTurn;
+    // After the parent's present decision, every turn: the host's one composition commit for the turn (AppHost.CommitVideoTurn,
+    // F080), now that the children (extraDrain, before the decision) and the parent (inside it) have applied their placements.
+    private readonly Action? _postTurn;
     private readonly Func<bool>? _needsTick;   // render-side motion live, on this host OR a detached child? (AppHost.HasRenderMotion) — wakes the loop at the display clock
     // Render-side motion live on THIS host alone (AppHost.HasOwnRenderMotion). Only this makes the turn a parent present: the
     // tick rule, the primary present credit, the motion run and the tick-spent mark are the parent swapchain's; a child's motion
@@ -129,7 +132,7 @@ public sealed class RenderThread : IDisposable
     // the window opened, plus the counter values at the window start. Nothing here allocates; the line does, once a second.
     private long _paceWindowStartQpc, _paceWindowTickSeq, _paceFresh0, _paceMotion0, _paceSkipped0, _paceMissed0, _paceRace0;
     private long _slotWaitSumQpc, _slotWaitMaxQpc, _slotWaitCount, _presentLagMaxQpc;
-    // F215: the detached children's present drain (extraDrain, which runs AFTER the primary's present and so is in no worst present's
+    // F215: the detached children's present drain (extraDrain, which runs BEFORE the primary's present decision and so is in no worst present's
     // work): sum / max / count of its wall time per turn in the window. A pop-out that submits, waits its fence or presents slowly
     // stalls the PARENT's next turn here, and the line must be able to say so.
     private long _childDrainSumQpc, _childDrainMaxQpc, _childDrainCount;
@@ -210,10 +213,11 @@ public sealed class RenderThread : IDisposable
                         Func<int, bool>? takePresentSlot = null, Func<RenderPaceHostState>? paceHost = null,
                         Action<nint>? submitAbortHandleSink = null, Func<bool>? ownMotion = null,
                         Action? childPaceBegin = null, Func<string?>? childPaceReport = null,
-                        Func<PresentSplit>? presentSplit = null, Action? preTurn = null)
+                        Func<PresentSplit>? presentSplit = null, Action? preTurn = null, Action? postTurn = null)
     {
         _presentSplit = presentSplit;
         _preTurn = preTurn;
+        _postTurn = postTurn;
         _paceHost = paceHost;
         _ownMotion = ownMotion;
         _childPaceBegin = childPaceBegin;
@@ -338,10 +342,14 @@ public sealed class RenderThread : IDisposable
             // Before the present decision: the slot wait inside it may take far longer than any structural video work (F208), and
             // the bare-wake early-out inside it must not skip this.
             _preTurn?.Invoke();
-            bool motionLive = PresentTurn(turnStart);
-            // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render
-            // thread. Runs every turn (a child's wake may carry no parent publish, so it must not hang off the parent
-            // TryAcquire above). Cheap no-op when no child has published since its last present (dedup in TryAcquire).
+            // Detached child hosts FIRST (F241): present any freshly-published child frame on ITS own swapchain, on this same
+            // render thread, BEFORE the parent's present decision. That decision is the one place a turn blocks — the
+            // primary's present-slot wait (up to a vblank while paced, the liveness bound when the queue is full) — and a
+            // pop-out's present must never queue behind it: the main window's autonomous frames (a stepper, a loop) would
+            // otherwise push every pop-out present towards the next vblank. The drain itself never blocks (the child's slot is
+            // probed, not waited for), so the parent's present is delayed only by the child's own record + submit, which the
+            // pace line reports as childDrain. Runs every turn (a child's wake may carry no parent publish, so it must not hang
+            // off the parent TryAcquire); a cheap no-op when no child has published since its last present (dedup in TryAcquire).
             if (_extraDrain is { } extraDrain)
             {
                 long drainStart = Stopwatch.GetTimestamp();
@@ -351,6 +359,8 @@ public sealed class RenderThread : IDisposable
                 _childDrainCount++;
                 if (drainQpc > _childDrainMaxQpc) _childDrainMaxQpc = drainQpc;
             }
+            bool motionLive = PresentTurn(turnStart);
+            _postTurn?.Invoke();   // the turn's one composition commit: the children's and the parent's placements, one DWM frame (F080)
             ReportPace(turnStart, motionLive);
             if (requestedDrain > Volatile.Read(ref _completedDrains))
             {
@@ -396,7 +406,7 @@ public sealed class RenderThread : IDisposable
         long tickSeq = clockPaced ? _displayClock!.TickSeq : 0;
         long tickQpc = clockPaced ? _displayClock!.TickQpc : 0;
         bool fresh = _publisher.HasPendingFrame;
-        if (!fresh && !ownMotion) return motion;   // bare wake (child drain, quiesce nudge) or child-only motion: nothing for the parent, no slot reserved (extraDrain already ran)
+        if (!fresh && !ownMotion) return motion;   // bare wake (child drain, quiesce nudge) or child-only motion: nothing for the parent, no slot reserved (extraDrain already ran, before this decision)
         // This tick has already been presented for: the work waits for the next tick. Decided BEFORE the slot wait so
         // the loop goes back to its tick wait instead of blocking for a credit it would not spend on this vblank.
         if (tickSeq != 0 && tickSeq == _lastPresentedTickSeq)
@@ -547,7 +557,7 @@ public sealed class RenderThread : IDisposable
     /// worst present's split (wake / slot / work, then the host's phases of that work and the blocking one named:
     /// <see cref="PresentSplit"/>), and the slot catch-up (<see cref="SlotCatchUp"/>): skips in the window, the smoothed frame
     /// cost it compares against the refresh, and whether it is backing off, then <c>childDrain(avg max n)</c>: the wall time of the detached children's present
-    /// drain per turn in the window (F215; it runs after the primary's present, so no worst present's work contains it). Every figure up to there is the PRIMARY
+    /// drain per turn in the window (F215; it runs before the primary's present decision, so no worst present's work contains it). Every figure up to there is the PRIMARY
     /// swapchain's; a trailing <c>child=[t&lt;id&gt;(presents deferred skipped slotWaitAvg/Max lagMax workMax) ...]</c> section carries each
     /// detached pop-out's own (<see cref="ChildPresentPace"/>), present only while a child presented or was deferred in the window.
     /// Allocation only here, on the 1 Hz path; the window resets when motion stops.</summary>

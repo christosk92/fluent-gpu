@@ -345,6 +345,53 @@ public sealed class RenderThreadPacingTests
         finally { rt.Dispose(); display.Dispose(); }
     }
 
+    // F241 without a throttle: a detached pop-out's present must never wait behind the main window's present-slot wait. The
+    // children's drain (extraDrain) runs BEFORE the parent's present decision on every turn — including a turn whose parent slot
+    // take then blocks — and the turn's one composition commit (postTurn) runs after it. Replaces the deleted focus throttle
+    // (InactiveFrameIntervalMs / motionThrottleMs): the parent keeps its display-rate motion, the child keeps its place in line.
+    [Fact]
+    public void ChildrenDrain_BeforeTheParentsSlotWait_AndTheCommitFollowsThePresent()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        var display = new VirtualDisplay();
+        byte[] one = [1];
+        var order = new List<string>();
+        var rt = new RenderThread(seam, _ => order.Add("parentPresent"), async: false,
+            needsTick: () => true, ownMotion: () => true,
+            tick: () => order.Add("parentMotion"), tickPeriod: () => PeriodQpc, displayClock: display,
+            takePresentSlot: _ => { order.Add("parentSlotWait"); Thread.Sleep(20); return true; },   // a slow primary slot
+            extraDrain: () => order.Add("childDrain"), postTurn: () => order.Add("commit"));
+        try
+        {
+            for (int k = 0; k < 4; k++)
+            {
+                order.Clear();
+                display.Now = k;
+                if (k % 2 == 1) seam.Publish(one, default, default);   // alternate fresh parent publications and motion re-presents
+                rt.DrainSync();
+                int drain = order.IndexOf("childDrain"), slot = order.IndexOf("parentSlotWait"), commit = order.IndexOf("commit");
+                int present = Math.Max(order.IndexOf("parentPresent"), order.IndexOf("parentMotion"));
+                Assert.True(drain >= 0 && slot >= 0 && present >= 0 && commit >= 0, string.Join(",", order));
+                Assert.True(drain < slot, $"the children drain before the parent's slot wait: {string.Join(",", order)}");
+                Assert.True(slot < present && present < commit, $"slot, present, then the one commit: {string.Join(",", order)}");
+            }
+            // A bare wake (no parent work at all) still drains the children and still commits, with no slot wait.
+            order.Clear();
+            var idle = new RenderThread(seam, _ => order.Add("parentPresent"), async: false,
+                needsTick: () => false, tickPeriod: () => PeriodQpc,
+                takePresentSlot: _ => { order.Add("parentSlotWait"); return true; },
+                extraDrain: () => order.Add("childDrain"), postTurn: () => order.Add("commit"));
+            try
+            {
+                idle.DrainSync();
+                Assert.Equal(["childDrain", "commit"], order);
+            }
+            finally { idle.Dispose(); }
+        }
+        finally { rt.Dispose(); display.Dispose(); }
+    }
+
     // F244: the worst present's work is split into the host's phases and the blocking one is named. The host's stamps arrive through
     // the presentSplit callback (sampled right after the turn that set a new worst); the 1 Hz line prints them next to wake/slot/work.
     [Fact]
