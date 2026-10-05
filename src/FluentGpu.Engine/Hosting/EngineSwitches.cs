@@ -41,6 +41,9 @@ namespace FluentGpu.Hosting;
 /// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
 /// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
 /// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
+/// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
+/// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
+/// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
 /// </list>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
@@ -62,6 +65,8 @@ public static class EngineSwitches
     public static string? ImageTrace;
     public static bool D3DMemLog;
     public static bool NcDiag;
+    /// <summary>Accept the <c>FluentGpu.TestInput</c> window message (<c>--fg test-input</c>); read once when the first window is created.</summary>
+    public static bool TestInput;
     /// <summary>One-shot scene dump mode (null = off).</summary>
     public static string? SceneDump;
     public static bool ShelfLog;
@@ -152,6 +157,7 @@ public static class EngineSwitches
             case "img": ImageTrace = string.IsNullOrEmpty(value) ? null : value; return ImageTrace is not null;
             case "d3d-mem": D3DMemLog = true; return true;
             case "nc": NcDiag = true; return true;
+            case "test-input": TestInput = true; return true;
             case "dump": SceneDump = string.IsNullOrEmpty(value) ? "1" : value; return true;
             case "shelf": ShelfLog = true; return true;
             case "morph": MorphLog = true; return true;

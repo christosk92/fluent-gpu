@@ -693,6 +693,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const int APPCOMMAND_BROWSER_BACKWARD = 1, APPCOMMAND_BROWSER_FORWARD = 2;
     private const uint MsgfltAllow = 1;                // MSGFLT_ALLOW — ChangeWindowMessageFilterEx
     private static uint s_taskbarButtonCreatedMsg;     // RegisterWindowMessageW("TaskbarButtonCreated")
+    private static uint s_testInputMsg;                // RegisterWindowMessageW("FluentGpu.TestInput"); 0 unless --fg test-input
 
     [StructLayout(LayoutKind.Sequential)]
     private struct COPYDATASTRUCT { public nuint dwData; public uint cbData; public nint lpData; }
@@ -719,6 +720,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             // explorer restarts). ThumbBarAddButtons is only legal after it; cached once, compared in Handle32.
             fixed (char* tbb = "TaskbarButtonCreated")
                 s_taskbarButtonCreatedMsg = RegisterWindowMessageW(tbb);
+            if (FluentGpu.Hosting.EngineSwitches.TestInput)
+                fixed (char* tim = Win32TestInput.MessageName)
+                    s_testInputMsg = RegisterWindowMessageW(tim);
             fixed (char* cn = ClassName)
             {
                 WNDCLASSEXW wc = default;
@@ -1838,6 +1842,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             Win32App.RaiseTaskbarButtonCreated();
             return false;   // don't consume — DefWindowProc still runs
         }
+        if (s_testInputMsg != 0 && msg == s_testInputMsg) { HandleTestInput(wParam, lParam); result = 0; return true; }
         long lp = (long)(nint)lParam;
         switch (msg)
         {
@@ -2399,6 +2404,46 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     // GET_POINTERID_WPARAM (winuser.h): the pointer id is the LOW word of wParam on every WM_(NC)POINTER* message.
     private static uint GET_POINTERID_WPARAM(WPARAM wParam) => (uint)((nuint)wParam & 0xFFFF);
+
+    // --fg test-input: one Win32TestInput message → the SAME InputEvents WM_POINTER* produces (move/down/up/leave through the
+    // PointerMove/PointerDown/PointerUp events, a notch through the detented wheel path), on the reserved test pointer id so a
+    // driver never collides with a real contact. Client px → DIP with the window scale, exactly like ScreenPtToDip.
+    private void HandleTestInput(WPARAM wParam, LPARAM lParam)
+    {
+        Win32TestInput.Decode((nuint)wParam, (nint)lParam, out var kind, out int xPx, out int yPx, out short notch);
+        float s = _scale <= 0f ? 1f : _scale;
+        var dip = new Point2(xPx / s, yPx / s);
+        uint id = Win32TestInput.PointerId;
+        switch (kind)
+        {
+            case Win32TestInput.Kind.Move:
+                _queue.Enqueue(new InputEvent(InputKind.PointerMove, dip, 0, 0, Mods: Mods(), TimestampMs: Now(), PointerId: id));
+                break;
+            case Win32TestInput.Kind.Down:
+            case Win32TestInput.Kind.RightDown:
+                _queue.Enqueue(new InputEvent(InputKind.PointerDown, dip, kind == Win32TestInput.Kind.Down ? 0 : 1, 0,
+                    Mods: Mods(), TimestampMs: Now(), PointerId: id));
+                break;
+            case Win32TestInput.Kind.Up:
+            case Win32TestInput.Kind.RightUp:
+                _queue.Enqueue(new InputEvent(InputKind.PointerUp, dip, kind == Win32TestInput.Kind.Up ? 0 : 1, 0,
+                    Mods: Mods(), TimestampMs: Now(), PointerId: id));
+                break;
+            case Win32TestInput.Kind.Leave:
+                _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0, Mods: Mods(), TimestampMs: Now(), PointerId: id));
+                break;
+            case Win32TestInput.Kind.Wheel:
+            {
+                int whole = FluentGpu.Scroll.Runtime.WheelClassifier.Carryover(ref _wheelAccumY, notch);
+                if (whole == 0) break;
+                float axisMul = SystemParams.WheelScrollPage ? PageScrollLinesEquivalent : SystemParams.WheelScrollLines / 3f;
+                DeliverScroll(FluentGpu.Scroll.Runtime.WheelClassifier.DetentNotch(whole, 0, axisMul, 0, dip, id, Mods()), PointerKind.Mouse, Now());
+                break;
+            }
+            default: return;
+        }
+        PaintRequested?.Invoke();   // input can arrive while the frame loop idles
+    }
 
     // One coalesced WM_POINTERUPDATE: drain the OS-side history (highest-rate samples the pump missed) OLDEST→newest so
     // the ring re-coalesces to the latest per contact. One screen→client→DIP convert per sample (never double-converted).
