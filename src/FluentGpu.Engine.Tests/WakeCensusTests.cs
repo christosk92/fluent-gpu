@@ -44,6 +44,23 @@ public sealed class WakeCensusTests
     }
 
     [Fact]
+    public void EveryWakeBit_PrintsUnderItsOwnName()
+    {
+        // A stale or missing name made a playing meter (FrameClockPaceable, bit 25) read as "budgetDeferredVirtuals".
+        foreach (WakeReasons bit in Enum.GetValues<WakeReasons>())
+        {
+            if (bit == WakeReasons.None) continue;
+            string name = bit.ToString();
+            Assert.Equal(char.ToLowerInvariant(name[0]) + name[1..], WakeDiagnostics.ReasonName(bit));
+        }
+    }
+
+    [Fact]
+    public void APaceableClockFrame_IsAPollerPresent()
+        => Assert.Equal(WakeDiagnostics.UiPresentCause.Poller,
+            WakeDiagnostics.ClassifyUiPresent(WakeReasons.FrameClockPaceable, reconciled: false, laidOut: false));
+
+    [Fact]
     public void ACallbackWithATarget_IsAttributedToThatTargetsType_WhenNoOwnerIsPassed()
     {
         double now = 0;
