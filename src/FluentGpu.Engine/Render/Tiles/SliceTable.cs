@@ -69,6 +69,15 @@ public sealed partial class SliceTable
     /// backend went without sampling it.</summary>
     public const int SurfaceTrimTurns = 120;
 
+    /// <summary>WALL-CLOCK idle trim (<see cref="EvictStale"/>): a resident tile the last composite turn did not request and
+    /// that no turn has requested for this long is evicted, and its slot's texture released at once
+    /// (<see cref="TrimFreeSlotsNow"/>). The turn-counted rules above (<see cref="IdleEvictFrames"/>,
+    /// <see cref="SurfaceTrimTurns"/>) never fire in an app that stops compositing — a still window runs no turns, so the
+    /// leftovers of the last scroll (the old viewport's tiles, 10s of MiB on a UMA adapter) stayed resident for ever. The
+    /// last turn's own set (visible + the ahead / behind band it requested) is never touched, so returning to the page
+    /// re-rasters nothing it could have scrolled onto.</summary>
+    public const long StaleTileMs = 10_000;
+
     public const int ReasonCount = (int)InvalidationReason.Degraded + 1;
 
     public int SliceCap { get; }
@@ -90,6 +99,7 @@ public sealed partial class SliceTable
     private readonly bool[] _used;
     private readonly int[] _pendingFrame;
     private readonly int[] _scheduledFrame;
+    private readonly long[] _usedMs;   // wall clock (Environment.TickCount64) of the tile's latest Request — the idle trim's clock
 
     // ── surfaces ──────────────────────────────────────────────────────────────────────────────────────────────
     private readonly int[] _freeSurfaces;
@@ -144,6 +154,7 @@ public sealed partial class SliceTable
         _used = new bool[slab];
         _pendingFrame = new int[slab];
         _scheduledFrame = new int[slab];
+        _usedMs = new long[slab];
         _pend0 = new int[slab]; _pend1 = new int[slab]; _pend2 = new int[slab];
 
         _freeSurfaces = new int[surfaceCap];
@@ -246,6 +257,44 @@ public sealed partial class SliceTable
         _evicted = _rastered = _scheduled = _degradedSlices = 0;
         _contentChecked = _contentCaught = 0;
         Array.Clear(_reasonCounts);
+    }
+
+    /// <summary>Pure idle-trim decision for one resident tile: not part of the last composite turn's request set and unrequested
+    /// for at least <paramref name="staleMs"/> of wall clock.</summary>
+    public static bool IsStale(long nowMs, long usedMs, long staleMs, bool requestedLastTurn)
+        => !requestedLastTurn && nowMs - usedMs >= staleMs;
+
+    /// <summary>Evict every resident tile that <see cref="IsStale"/> (render thread, BETWEEN turns). Returns how many were
+    /// evicted; follow with <see cref="TrimFreeSlotsNow"/> to hand their textures back. A visible tile is never stale: the last
+    /// turn requested it.</summary>
+    public int EvictStale(long nowMs, long staleMs = StaleTileMs)
+    {
+        int n = 0;
+        for (int t = 0; t < _tiles.Length; t++)
+        {
+            if (!_used[t] || _tiles[t].Surface < 0) continue;
+            if (!IsStale(nowMs, _usedMs[t], staleMs, _tiles[t].LastUsedFrame == _frame)) continue;
+            Evict(t);
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>Name EVERY free slot that may still hold a texture, without waiting out <see cref="SurfaceTrimTurns"/> (the
+    /// idle path: no turn is coming to age them). Replaces this turn's trim list; the caller hands the span straight to the
+    /// backend. A slot a tile holds is not on the free list, so it is never named.</summary>
+    public ReadOnlySpan<int> TrimFreeSlotsNow()
+    {
+        _trimCount = 0;
+        for (int i = 0; i < _freeCount && _trimCount < _trimList.Length; i++)
+        {
+            int s = _freeSurfaces[i];
+            if (!_surfBacked[s]) continue;
+            _surfBacked[s] = false;
+            _trimList[_trimCount++] = s;
+            _trimmedTotal++;
+        }
+        return _trimList.AsSpan(0, _trimCount);
     }
 
     /// <summary>Open (or re-open) the slice cut at scene node (<paramref name="nodeIndex"/>, <paramref name="gen"/>) in role /
@@ -409,6 +458,7 @@ public sealed partial class SliceTable
             ref TileState ts = ref _tiles[t];
             if (ts.LastUsedFrame == _frame && ts.Order < ord) ord = ts.Order;   // a duplicate keeps its best order
             ts.LastUsedFrame = _frame;
+            _usedMs[t] = Environment.TickCount64;
             ts.Order = ord;
 
             // The surface extent this tile needs: an effect slice's region, else the whole tile.

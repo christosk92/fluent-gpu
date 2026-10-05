@@ -208,6 +208,10 @@ public sealed class RenderThread : IDisposable
         return true;
     }
     private readonly WaitHandle[]? _displayWaits;
+    // Wall-clock housekeeping (TrimIdleResources & co): called between turns with Environment.TickCount64, returns the ms until
+    // it wants to run again (-1 = never). A clean-idle wait is bounded by it so an app that stops presenting still trims.
+    private readonly Func<long, int>? _idleTrim;
+    private int _idleTrimWaitMs = -1;
     private volatile bool _running = true;
     private ulong _presentAck;
 
@@ -218,8 +222,10 @@ public sealed class RenderThread : IDisposable
                         Func<int, bool>? takePresentSlot = null, Func<RenderPaceHostState>? paceHost = null,
                         Action<nint>? submitAbortHandleSink = null, Func<bool>? ownMotion = null,
                         Action? childPaceBegin = null, Func<string?>? childPaceReport = null,
-                        Func<PresentSplit>? presentSplit = null, Action? preTurn = null, Action? postTurn = null)
+                        Func<PresentSplit>? presentSplit = null, Action? preTurn = null, Action? postTurn = null,
+                        Func<long, int>? idleTrim = null)
     {
+        _idleTrim = idleTrim;
         _presentSplit = presentSplit;
         _preTurn = preTurn;
         _postTurn = postTurn;
@@ -289,6 +295,19 @@ public sealed class RenderThread : IDisposable
         return ms < 8 ? 8 : ms > 34 ? 34 : ms;
     }
 
+    private long _idleTrimDueMs;
+    private bool _idleTrimStarted;
+    private int RunIdleTrim()
+    {
+        _idleTrimStarted = true;
+        long now = Environment.TickCount64;
+        int next;
+        try { next = _idleTrim!(now); }
+        catch (Exception ex) { Console.Error.WriteLine($"[render] idle trim THREW: {ex}"); next = 5000; }   // housekeeping must never kill the loop
+        if (next >= 0) { if (next < 1) next = 1; _idleTrimDueMs = now + next; }
+        return next;
+    }
+
     private void Loop()
     {
         ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Render);   // this thread is the SOLE ComPtr owner for submit/present
@@ -305,6 +324,15 @@ public sealed class RenderThread : IDisposable
                     WaitHandle.WaitAny(_displayWaits!, BackstopMs());   // the tick is the turn (or a wake / the backstop)
                 else if (motionDue)
                     _wake.WaitOne((int)Math.Max(1, Math.Round(PeriodQpc() * 1000.0 / Stopwatch.Frequency)));   // no display clock: refresh-derived fallback
+                else if (_idleTrimWaitMs >= 0)
+                {
+                    // Clean idle with housekeeping due: a timed-out wait runs it (no turn: nothing woke us) and waits again.
+                    if (!_wake.WaitOne(_idleTrimWaitMs))
+                    {
+                        _idleTrimWaitMs = RunIdleTrim();
+                        continue;
+                    }
+                }
                 else
                     _wake.WaitOne();   // clean idle: block without releasing the retained scene
             }
@@ -367,6 +395,7 @@ public sealed class RenderThread : IDisposable
             bool motionLive = PresentTurn(turnStart);
             _postTurn?.Invoke();   // the turn's one composition commit: the children's and the parent's placements, one DWM frame (F080)
             ReportPace(turnStart, motionLive);
+            if (_idleTrim is not null && (!_idleTrimStarted || (_idleTrimWaitMs >= 0 && Environment.TickCount64 >= _idleTrimDueMs))) _idleTrimWaitMs = RunIdleTrim();
             if (requestedDrain > Volatile.Read(ref _completedDrains))
             {
                 Volatile.Write(ref _completedDrains, requestedDrain);

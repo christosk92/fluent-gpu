@@ -116,6 +116,17 @@ public partial interface IGpuDevice : IDisposable
     /// (<see cref="SlotLivenessTimeouts"/>).</para></summary>
     bool TryTakePresentSlot(int timeoutMs) => true;
 
+    /// <summary>Release the textures behind the tile surface slots the table freed on the IDLE path
+    /// (<c>SliceTable.TrimFreeSlotsNow</c>) — the same retire-behind-the-fence release a composite turn's
+    /// <c>CompositeFrame.TrimSurfaces</c> performs, for an app that is not compositing. Render thread, between turns. Default: none.</summary>
+    void TrimTileSurfaces(ReadOnlySpan<int> slots) { }
+
+    /// <summary>Periodic render-thread housekeeping between turns: drain the retired-resource queues the fence has passed and
+    /// release idle, fully-rebuildable resources (free scratch surfaces, the stencil surface, staging banks) — all on wall
+    /// clock, because an idle app runs no turns to age them. Returns the milliseconds until it wants to run again (-1 = nothing
+    /// pending). Default: nothing to do.</summary>
+    int TrimIdleResources(long nowMs) => -1;
+
     /// <summary>Liveness-bounded present-slot takes of the PRIMARY swapchain that timed out so far (CUMULATIVE; render thread writes,
     /// any thread reads): the take proceeded without the slot ever opening. A secondary swapchain's are
     /// <see cref="NonPrimaryLatencyTimeouts"/>. Surfaced as <c>slotTimeouts=</c> in the <c>[render.pace]</c> line.

@@ -718,6 +718,28 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
+    private const int IdleTrimPeriodMs = 5000;
+    private long _idleTrimNextMs;
+
+    /// <summary>Render-thread housekeeping between turns, on wall clock (never a turn count: an idle app runs no turns). Evicts
+    /// retained tiles nothing has requested for <see cref="FluentGpu.Render.Tiles.SliceTable.StaleTileMs"/> (never the last turn's
+    /// own set) and hands their textures back, then lets the device drain its retired queues and drop idle scratch / stencil /
+    /// staging resources. Returns the ms until the next pass.</summary>
+    private int TrimIdleOnRenderThread(long nowMs)
+    {
+        if (nowMs < _idleTrimNextMs) return (int)(_idleTrimNextMs - nowMs);
+        int next = IdleTrimPeriodMs;
+        if (_renderTiles is { } tiles && tiles.EvictStale(nowMs) > 0)
+        {
+            _device.TrimTileSurfaces(tiles.TrimFreeSlotsNow());
+            next = 500;   // the retired textures release once the fence passes them: look again soon
+        }
+        int dev = _device.TrimIdleResources(nowMs);
+        if (dev >= 0 && dev < next) next = dev;
+        _idleTrimNextMs = nowMs + next;
+        return next;
+    }
+
     private long RenderPeriodTicks() => Volatile.Read(ref _renderPeriodTicks);
 
     /// <summary>Every image id something in this host still HOLDS — the proof the image cache needs before reclaiming a
@@ -3033,7 +3055,8 @@ public sealed partial class AppHost : IDisposable
             takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
             submitAbortHandleSink: _device.SetSubmitAbortHandle,
             ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
-            presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent);
+            presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent,
+            idleTrim: TrimIdleOnRenderThread);
 
     /// <summary>Test-only: give a HEADLESS primary host the force-sync render loop a windowed one would have (one
     /// <c>RunFrame</c> = one publish + one <c>DrainSync</c> turn on the fgpu-render thread), wired by the same
