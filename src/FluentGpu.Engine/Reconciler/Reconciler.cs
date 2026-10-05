@@ -2773,7 +2773,7 @@ public sealed partial class TreeReconciler
                     // by a re-wire and every later fire alike, and a re-wire's re-run never re-applies stale mount values
                     // over what WriteColumns just wrote. The decode target is recomputed per fire (pure, allocation-free).
                     var im = (ImageEl)fx.El;
-                    (int dW, int dH) = ImageDecodeTarget(in im);
+                    (int dW, int dH) = ImageDecodeTarget(in im, _scene.DeviceScale);
                     if (Images is not null && !ReferenceEquals(src, lastSrc))
                     {
                         if (src.Length == 0) { if (emptySince == 0) emptySince = System.Diagnostics.Stopwatch.GetTimestamp(); }
@@ -2857,14 +2857,18 @@ public sealed partial class TreeReconciler
         }
     }
 
-    // Decode-target px for an image: explicit Width/Height drive it; otherwise the DecodePx hint (a fluid/aspect image's
-    // real box size isn't known until layout), deriving the missing cross extent from AspectRatio. 0 ⇒ source resolution.
-    private static (int W, int H) ImageDecodeTarget(in ImageEl im)
+    // Decode-target PHYSICAL px for an image: explicit Width/Height (DIPs) × the device scale — decoding at the DIP extent
+    // under-decodes by 1/scale at 125-200 % and the cover is then upscaled on the GPU (soft), so the target is exactly the
+    // pixels the box paints (ceil, never smaller); otherwise the DecodePx hint (already physical px — a fluid/aspect image's
+    // real box size isn't known until layout, so the caller scales it), deriving the missing cross extent from AspectRatio.
+    // 0 ⇒ source resolution.
+    internal static (int W, int H) ImageDecodeTarget(in ImageEl im, float scale = 1f)
     {
+        if (!(scale > 0f) || !float.IsFinite(scale)) scale = 1f;
         int hint = !float.IsNaN(im.DecodePx) ? (int)im.DecodePx : 0;
-        int w = !float.IsNaN(im.Width) ? (int)im.Width : hint;
+        int w = !float.IsNaN(im.Width) ? (int)MathF.Ceiling(im.Width * scale - 0.001f) : hint;
         int h;
-        if (!float.IsNaN(im.Height)) h = (int)im.Height;
+        if (!float.IsNaN(im.Height)) h = (int)MathF.Ceiling(im.Height * scale - 0.001f);
         else if (!float.IsNaN(im.AspectRatio) && im.AspectRatio > 0f && w > 0) h = (int)MathF.Round(w / im.AspectRatio);
         else h = hint;
         return (w, h);
@@ -5548,7 +5552,7 @@ public sealed partial class TreeReconciler
 
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
                 // real box size isn't known until layout), deriving the cross dimension from AspectRatio when possible.
-                (int decodeW, int decodeH) = ImageDecodeTarget(in im);
+                (int decodeW, int decodeH) = ImageDecodeTarget(in im, _scene.DeviceScale);
 
                 // ── image-pipeline trace (DIAGNOSTIC ONLY, --fg diag + optional --fg img=FILTER=<substring>) ──────────
                 // Distinguishes the three ways a cover can visibly re-load: it MOUNTED fresh, its SOURCE url changed
@@ -5562,7 +5566,7 @@ public sealed partial class TreeReconciler
                             $"decode={decodeW}x{decodeH}");
                     else if (old is ImageEl oldIm && !oldIm.Source.IsBound)
                     {
-                        (int oldW, int oldH) = ImageDecodeTarget(in oldIm);
+                        (int oldW, int oldH) = ImageDecodeTarget(in oldIm, _scene.DeviceScale);
                         bool srcChanged = !string.Equals(oldIm.Source.Value, im.Source.Value, StringComparison.Ordinal);
                         if (srcChanged)
                             Diag.Event("img", $"src-change node={node.Raw.Index} " +
