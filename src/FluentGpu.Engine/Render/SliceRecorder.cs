@@ -161,6 +161,9 @@ public sealed partial class SliceRecorder
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
         public byte LowRes;
+        public bool Screen;   // BoxEl.LayerBlend.Screen: the item composites with CompositeItem.BlendCopy = BlendScreen
+        public bool HasFeedback;          // BoxEl.Feedback: the item advances a trail surface (CompositeItem.Feedback*)
+        public FeedbackState Feedback;
         // acrylic surfaces this slice's own walk recorded as their FallbackColor plate (carried when the slice is kept)
         public int AcrylicFallbacks;
         // an acrylic slice root: its frosted rect (the node box, containing-slice DIP), corner radii (DIP) and opacity
@@ -305,6 +308,8 @@ public sealed partial class SliceRecorder
             if (_recs[s].RegFrame == _frame) return -1;
             _recs[s].Kind = kind;
             _recs[s].LowRes = 0;   // the cut that registers it re-states its raster downscale (SetLowRes)
+            _recs[s].Screen = false;   // …and its composite blend (SetScreen)
+            _recs[s].HasFeedback = false;   // …and its feedback trail (SetFeedback)
             return s;
         }
         s = Allocate();
@@ -427,6 +432,10 @@ public sealed partial class SliceRecorder
     internal void SetBudget(int slot, BudgetClass budget) => _recs[slot].Budget = budget;
     /// <summary>The slice's raster downscale (0/1 = full resolution, tiled). Set by every cut that registers the slot.</summary>
     internal void SetLowRes(int slot, byte down) => _recs[slot].LowRes = down;
+    /// <summary>BoxEl.LayerBlend.Screen on a repaint boundary: its composite item screens onto the back buffer.</summary>
+    internal void SetScreen(int slot, bool screen) => _recs[slot].Screen = screen;
+    /// <summary>BoxEl.Feedback on a repaint boundary: its composite item is a FEEDBACK item (the backend's trail surface).</summary>
+    internal void SetFeedback(int slot, in FeedbackState state) { _recs[slot].HasFeedback = !state.Spec.IsNone; _recs[slot].Feedback = state; }
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -1906,6 +1915,7 @@ public sealed partial class SliceRecorder
             // needed tiles: the composite viewport ∩ the segment's painted bounds, and a scroll slice's realized coverage.
             // A low-resolution boundary holds none (the backend replays it into one downscaled surface instead).
             byte lowRes = r.LowRes > 1 && r.Kind == SliceKind.Effect ? r.LowRes : (byte)0;
+            if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed): no tiles
             if (!contentPx.IsEmpty && lowRes == 0)
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
@@ -1964,11 +1974,14 @@ public sealed partial class SliceRecorder
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
-            AddItem(new CompositeItem(id, lowRes > 1 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
+            // A Screen-blended or feedback item never hides what is under it: its result depends on the destination.
+            bool claimsCover = !r.Screen && !r.HasFeedback;
+            AddItem(new CompositeItem(id, lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 clipPx,
-                RadiiPx(e.RoundR, scale), feather, sigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
+                RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,
-                OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx)),
+                claimsCover ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
+                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }

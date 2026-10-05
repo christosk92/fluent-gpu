@@ -23,6 +23,7 @@ static class SeriesSuite
     {
         RecordChecks();
         BoundChecks(strings);
+        BlendBracketCheck(strings);
         OcclusionCheck(strings);
     }
 
@@ -75,6 +76,44 @@ static class SeriesSuite
             dl.Series(new RectF(0f, 0f, 64f, 40f), new SeriesSpec(SeriesShape.Baseline, white, null, 2f, float.NaN, 1f, 1f), [], Affine2D.Identity, 1f);
             Check("gate.series.record.degenerate", Decode(dl).LastSeries.Count == 0, "1 and 0 samples emit no chunk");
         }
+        {
+            // a Polar loop stays inside its box: samples and Amplitude clamp to 0..1
+            var dl = new DrawList();
+            dl.Series(new RectF(0f, 0f, 64f, 64f), new SeriesSpec(SeriesShape.Polar, white, null, 2f, float.NaN, 1.5f, 1f), [0.5f, 2f, -1f, 0.5f], Affine2D.Identity, 1f);
+            var dev = Decode(dl);
+            var c = dev.LastSeries.Count == 1 ? dev.LastSeries[0] : default;
+            Check("gate.series.record.polar-clamp", dev.LastSeries.Count == 1 && c.Amplitude == 1f && c.S[1] == 1f && c.S[2] == 0f && c.S[0] == 0.5f,
+                  $"n={dev.LastSeries.Count} amp={c.Amplitude} s1={c.S[1]} s2={c.S[2]}");
+        }
+    }
+
+    /// <summary>BoxEl.Blend brackets: an additive box NESTED in an additive box emits nothing of its own, the outer pair
+    /// closes after ALL of the outer content, and a later additive sibling still opens its own pair (the depth stays
+    /// balanced across the record).</summary>
+    static void BlendBracketCheck(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var dev = new HeadlessGpuDevice();
+        var host = Mount(strings, app, dev, new BlendProbe(), "blend", 320f, 240f);
+        host.RunFrame();
+        var b = dev.LastBlends;
+        bool shape = b.Count == 4 && b[0] == 1 && b[1] == 0 && b[2] == 1 && b[3] == 0;
+        Check("gate.blend.nested-bracket", shape, $"blends=[{string.Join(",", b)}] expected=[1,0,1,0]");
+        host.Dispose();
+    }
+
+    sealed class BlendProbe : Component
+    {
+        static SeriesEl Wave() => new() { Width = 100f, Height = 40f, Shape = SeriesShape.Mirrored, Samples = new SeriesSamples([0.2f, 0.8f, 0.4f], 3, 1u) };
+        public override Element Render() => new BoxEl
+        {
+            Width = 320f, Height = 240f,
+            Children =
+            [
+                new BoxEl { Blend = PaintBlend.Additive, Width = 320f, Height = 100f, Children = [new BoxEl { Blend = PaintBlend.Additive, Width = 100f, Height = 40f, Children = [Wave()] }, Wave()] },
+                new BoxEl { Blend = PaintBlend.Additive, Width = 320f, Height = 100f, Children = [Wave()] },
+            ],
+        };
     }
 
     /// <summary>The ListRowSuite.Mount body (ListRowSuite.cs:91-100) with the device kept so the gates can read LastSeries / the swapchain.</summary>

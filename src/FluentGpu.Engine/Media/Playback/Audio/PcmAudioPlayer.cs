@@ -569,6 +569,7 @@ public sealed partial class PcmAudioSession : IMediaSession
     private bool _spectrumArmed;                         // RT-only
     private SpectrumAnalyzer? _spectrumAnalyzer;         // control-thread only
     private float[]? _spectrumWindow, _spectrumBands;    // control-thread only
+    private OnsetDetector? _onsets;                       // control-thread only; created with the analyzer
     private long _spectrumPublishes;
     private const float SpectrumRingSeconds = 1.5f;      // rounded up to a power of two by the ring (131 072 at 48 kHz = 2.7 s): device latency + a ±500 ms offset + the RT burst
     /// <summary>Spectrum windows analysed and published (diagnostics).</summary>
@@ -1823,6 +1824,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             analyzer = _spectrumAnalyzer = new SpectrumAnalyzer(rate);
             window = _spectrumWindow = new float[analyzer.FftSize];
             bands = _spectrumBands = new float[analyzer.BandCount];
+            _onsets = new OnsetDetector(analyzer.BandCount);
         }
         var ring = _spectrumRing;
         if (ring is null)
@@ -1844,7 +1846,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         long offsetFrames = (long)Math.Round(ae.SpectrumOffsetMs * rate / 1000.0);
         long newest = ring.NewestContent;
         long end = Math.Min(audible - offsetFrames + analyzer.FftSize / 2, newest);
-        if (!ring.TryCopyContentWindow(end, window)) return;   // not yet filled after an arm, lapped, torn or re-armed: skip this tick
+        if (!ring.TryCopyContentWindow(end, window)) { _onsets?.Reset(); return; }   // a gap: the next frame must not read as an onset   // not yet filled after an arm, lapped, torn or re-armed: skip this tick
         long t0 = Stopwatch.GetTimestamp();
         analyzer.Analyze(window, bands);
         float fftMs = (float)((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency);
@@ -1852,7 +1854,11 @@ public sealed partial class PcmAudioSession : IMediaSession
         foreach (float v in window) sumSq += (double)v * v;
         float windowRms = (float)Math.Sqrt(sumSq / window.Length);   // PRE-gain: the tap sits before _masterGain
         bool muted = _muted || _volume <= 0.0005f;
-        if (ae.PublishSpectrum(source, epoch, bands, muted, windowRms, newest - end, fftMs))
+        // Flux/onset from consecutive band frames; the waveform is the CENTRE of the same aligned window (no extra copy here).
+        bool onset = _onsets!.Step(bands, t0 * 1000.0 / Stopwatch.Frequency, out float flux, out float onsetStrength);
+        int wave = Math.Min(AudioEffects.WaveformSamples, window.Length);
+        var centre = window.AsSpan((window.Length - wave) / 2, wave);
+        if (ae.PublishSpectrum(source, epoch, bands, muted, windowRms, newest - end, fftMs, centre, rate, flux, onset, onsetStrength))
             Interlocked.Increment(ref _spectrumPublishes);
     }
 

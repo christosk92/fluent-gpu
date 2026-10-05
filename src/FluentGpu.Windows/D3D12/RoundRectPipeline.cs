@@ -48,6 +48,8 @@ internal enum RectPass : byte
     /// <summary>The video hole punch (DrawOp.DrawVideo): DestOut — ZERO/INV_SRC_ALPHA on color AND alpha, so the
     /// destination is ERASED toward premultiplied zero by the instance's coverage×alpha.</summary>
     DestOut = 2,
+    /// <summary>Additive light (DrawOp.SetBlend): colour ONE/ONE, alpha ZERO/ONE.</summary>
+    Additive = 3,
 }
 
 /// <summary>
@@ -75,6 +77,7 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     // erased toward premultiplied zero and the DComp video visual below the swapchain shows through. Unlike the opaque
     // fast path this is CORRECTNESS, not an optimization: there is no equivalent fallback, so its build throws.
     private ID3D12PipelineState* _psoDestOut;
+    private ID3D12PipelineState* _psoAdd;   // RectPass.Additive
     // Tier-3 stencil path clip (gpu-renderer.md S6): the EQUAL-tested clone of the BLENDED arm only. The opaque
     // no-blend fast path deliberately gets NO variant — the device forces opaque plates onto the blended arm inside a
     // stencil scope (D6), because an unmasked opaque plate would paint straight over the clip silhouette. Built lazily
@@ -376,6 +379,19 @@ float4 PSMain(VSO i) : SV_Target
             ID3D12PipelineState* psoDestOut;
             Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psoDestOut), "CreateGraphicsPipelineState(DestOut)");
             _psoDestOut = psoDestOut;
+
+            // The ADDITIVE variant (visualizer F4): colour ONE/ONE adds the premultiplied source; alpha ZERO/ONE leaves the
+            // target's alpha untouched, so inside a transparent tile the result composites Over the page as page + glow.
+            pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
+            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+            pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+            pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+            pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ZERO;
+            pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
+            pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+            ID3D12PipelineState* psoAdd;
+            Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psoAdd), "CreateGraphicsPipelineState(Additive)");
+            _psoAdd = psoAdd;
         }
         vs->Release();
         ps->Release();
@@ -476,6 +492,7 @@ float4 PSMain(VSO i) : SV_Target
             {
                 RectPass.Opaque when _psoOpaque != null => _psoOpaque,   // absent ⇒ the blended PSO draws it identically
                 RectPass.DestOut => _psoDestOut,
+                RectPass.Additive => _psoAdd,
                 _ => _pso,
             });
         cmd->SetGraphicsRootShaderResourceView(1, gva);
@@ -500,6 +517,7 @@ float4 PSMain(VSO i) : SV_Target
         if (_pso != null) _pso->Release();
         if (_psoOpaque != null) { _psoOpaque->Release(); _psoOpaque = null; }
         if (_psoDestOut != null) { _psoDestOut->Release(); _psoDestOut = null; }
+        if (_psoAdd != null) { _psoAdd->Release(); _psoAdd = null; }
         if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
     }
 }

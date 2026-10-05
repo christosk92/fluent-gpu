@@ -245,6 +245,10 @@ internal sealed class OverlayEntry
     /// property of the HOST (its device/async-render-loop configuration), not of this popup's placement, so it cannot
     /// become a grant later in this entry's life — see the lease site.</summary>
     public bool PopupWindowRefused;
+    /// <summary>One-way latch: at its first measured placement this entry FIT the root bounds — the work-area placement
+    /// an OS popup window would give it was the very rect the in-window placement gives it — so it renders in-window for
+    /// its whole life and never leases a window. See <see cref="OverlayHost.NeedsPopupWindow"/>.</summary>
+    public bool InWindowByFit;
     public bool WantWindowedLogged;
     public bool OwnerWasLive;         // latch: this entry's owner node has been observed live at least once
     public bool AnchorDeathNotified;  // one-shot: don't re-BeginClose every frame after a vetoed dead-anchor close
@@ -866,7 +870,8 @@ public sealed class OverlayHost : Component
     const float PopupTranslateMs = 367f, PopupOpacityDelayMs = 83f;
 
     // WHICH material a popup HWND would carry IF one is leased. This answers "what kind of window", NOT "window or
-    // not" — the lease itself is decided by ConstrainToRootBounds (see the wantWindowed gate). Menu + CommandBar chrome
+    // not" — the lease itself is decided by ConstrainToRootBounds AND fit (see the wantWindowed gate and
+    // NeedsPopupWindow: only a popup that must leave the window leases one). Menu + CommandBar chrome
     // ask for the transparent composited acrylic host (CompositionBackdrop's rounded host-backdrop group + tint over an
     // opaque FallbackColor, plus its masked drop shadow); every other chrome maps to None, which means a popup HWND is
     // never leased for it at all — a material-less popup window gets no CompositionBackdrop, and the engine acrylic
@@ -881,6 +886,29 @@ public sealed class OverlayHost : Component
     /// host unfold on top of it would double-animate the surface.</summary>
     internal static float ClosedRatioFor(OverlayEntry e)
         => e.Chrome == PopupChrome.Flyout ? (e.ParentId >= 0 ? 0.67f : 0.5f) : 0f;
+
+    /// <summary>Does a popup that MAY leave the root bounds actually need an OS popup window? Only when the window would
+    /// change what the user sees: the work-area placement (<paramref name="windowed"/>) differs from the in-window one
+    /// (<paramref name="inWindow"/>) — it opens past the window edge, or the in-window placement had to flip, clamp or
+    /// shrink it — or its parent menu is already windowed (an in-window child would draw UNDER the parent's HWND). An
+    /// identical rect means the window buys nothing but its cost. Pure; pinned by gate.overlay.window-only-when-escaping.</summary>
+    internal static bool NeedsPopupWindow(in PopupPlacementResult windowed, in PopupPlacementResult inWindow, bool parentWindowed)
+    {
+        const float Eps = 0.5f;
+        return parentWindowed
+            || MathF.Abs(windowed.X - inWindow.X) > Eps || MathF.Abs(windowed.Y - inWindow.Y) > Eps
+            || MathF.Abs(windowed.MeasuredW - inWindow.MeasuredW) > Eps || MathF.Abs(windowed.MeasuredH - inWindow.MeasuredH) > Eps
+            || windowed.OpensUp != inWindow.OpensUp;
+    }
+
+    /// <summary>Whether <paramref name="e"/>'s parent menu (a cascade) holds a popup-window lease.</summary>
+    private static bool ParentIsWindowed(OverlayServiceImpl svc, OverlayEntry e)
+    {
+        if (e.ParentId < 0) return false;
+        foreach (var p in svc.Entries)
+            if (p.Id == e.ParentId) return p.PopupWindowToken >= 0;
+        return false;
+    }
 
     /// <summary>The WinUI acrylic recipe painted as ONE FLAT FILL: the tint COLOR at the coverage the in-app
     /// compositor's luminosity+tint layers apply over the blurred backdrop = 1 − (1−LuminosityOpacity)·(1−TintOpacity)
@@ -1124,9 +1152,20 @@ public sealed class OverlayHost : Component
                         // clip/translate itself (the `e.PopupWindowToken < 0` branch of the open seed) instead of
                         // handing the slide to the composition root — which is the same code path a windowed lease
                         // REFUSAL already took.
+                        //
+                        // And "may escape" is not "does escape". The permission is the caller's; whether this popup
+                        // actually needs the window is GEOMETRY, decided once at its first measured placement
+                        // (NeedsPopupWindow): a menu whose work-area placement is the very rect its in-window placement
+                        // gives stays in-window for its whole life. The lease is the expensive half — a new HWND,
+                        // swapchain and composition tree per open, the render thread parked while they are built, the
+                        // window shown only after its first frame lands — and on a desktop-sized window almost every
+                        // menu fits. Measured in Wavee (--menu-bench, the real right-click path, 2026-10-03): a leased
+                        // track menu reached the screen at a median 21.7 ms vs 8.2 ms in-window and cost the UI thread
+                        // 5.6 ms vs 1.0 ms per open; the first lease in a process took 16 ms on its own.
                         bool wantWindowed = !e.ConstrainToRootBounds
                                             && WindowMaterialFor(e) != PopupWindowMaterial.None
-                                            && svc.Hooks is { OpenPopupWindow: not null };
+                                            && svc.Hooks is { OpenPopupWindow: not null }
+                                            && !e.InWindowByFit;
                         RectF container = vpRect;
                         if (wantWindowed && svc.Hooks!.GetWorkArea is { } workArea)
                             container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
@@ -1134,6 +1173,24 @@ public sealed class OverlayHost : Component
                         var place = ApplyAnchorOffsetX(
                             FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: wantWindowed),
                             e.AnchorOffsetX, in aRect);
+
+                        if (wantWindowed && e.PopupWindowToken < 0 && !e.PopupWindowRefused)
+                        {
+                            var inWindow = ApplyAnchorOffsetX(
+                                FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false),
+                                e.AnchorOffsetX, in aRect);
+                            // Only a MEASURED popup can be judged: an unmeasured (0×0) one fits anywhere, and latching on
+                            // that would keep a menu that does overflow in-window, clamped, for its whole life. Until it
+                            // has a size it neither leases nor latches — it places in-window for that pass.
+                            bool measured = popupSize.Width > 0f && popupSize.Height > 0f;
+                            if (!measured || !NeedsPopupWindow(in place, in inWindow, ParentIsWindowed(svc, e)))
+                            {
+                                if (measured) e.InWindowByFit = true;   // latched: decided once, never revisited mid-life
+                                wantWindowed = false;
+                                place = inWindow;
+                                SyncWindowedMenuBackdrop(scene, e);
+                            }
+                        }
 
                         if (wantWindowed && e.PopupWindowToken < 0 && !e.PopupWindowRefused && !e.WantWindowedLogged)
                         {

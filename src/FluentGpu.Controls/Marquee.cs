@@ -207,12 +207,11 @@ internal sealed class MarqueeScroller : Component
             (Keyframe[] keys, float durMs, bool looping) = paused
                 ? HomeTrack(homeFrom, Sty)
                 : BuildTrack(loop, canScroll, loopDist, tailDist);
-            // A scrolling title is perpetual (it would default to DefaultLoopHz) but text motion at 30 Hz reads as
-            // stepping; 60 Hz halves the frames on a 120 Hz panel and is one refresh at 60/50 Hz. The home glide is a
-            // short one-shot and takes the display cadence (null) like every other one-shot.
+            // The scroll and the home glide both take the display cadence (null) like every other row: scrolling TEXT is the
+            // motion a sub-refresh cadence betrays first (it read as stepping at 30 Hz, and a 60 Hz cap still halved it on a
+            // 120 Hz panel), and the host's one power ceiling (AppHost.PowerCapFps) still reaches it under energy saver.
             UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping,
-                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)),
-                         cadence: paused ? null : Cadence.At(60f));
+                         DepKey.From(HashCode.Combine(canScroll, paused, loop, loopDist, tailDist)));
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };

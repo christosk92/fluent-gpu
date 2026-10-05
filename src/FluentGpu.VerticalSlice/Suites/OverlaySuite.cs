@@ -2450,7 +2450,9 @@ static class OverlaySuite
         // back silently.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("e4win", new Size2(480, 360), 1f));
+            // 480×110: too short for the menu below the anchor at (20,20)–(140,52) — it must ESCAPE to take the windowed path
+            // (a menu that fits never leases: gate.overlay.window-only-when-escaping). Bodies ≤ 50 DIP tall still fit in-window.
+            var window = new HeadlessWindow(new WindowDesc("e4win", new Size2(480, 110), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -2578,7 +2580,9 @@ static class OverlaySuite
         // play the open motion on the frame the content actually presents.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("e4reveal", new Size2(480, 360), 1f));
+            // 480×110: too short for the menu below the anchor at (20,20)–(140,52) — it must ESCAPE to take the windowed path
+            // (a menu that fits never leases: gate.overlay.window-only-when-escaping). Bodies ≤ 50 DIP tall still fit in-window.
+            var window = new HeadlessWindow(new WindowDesc("e4reveal", new Size2(480, 110), 1f));
             window.Show();
             var device = new HeadlessGpuDevice { StandDownPopupPresents = true };
             var fonts = new HeadlessFontSystem(strings);
@@ -3131,7 +3135,11 @@ static class OverlaySuite
         // original invoker; both windowed-popup leases release with their entries.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("e4cascade", new Size2(480, 360), 1f));
+            // 480×110: too short for the menu below the anchor at (20,20)–(140,52) — it must ESCAPE to take the windowed path
+            // (a menu that fits never leases: gate.overlay.window-only-when-escaping). Bodies ≤ 50 DIP tall still fit in-window.
+            // The child fits, but its parent is windowed: an in-window child would draw UNDER the parent's HWND, so it
+            // leases too (NeedsPopupWindow's parentWindowed clause).
+            var window = new HeadlessWindow(new WindowDesc("e4cascade", new Size2(480, 110), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -3322,7 +3330,9 @@ static class OverlaySuite
         // (Tint at TintOpacity) rather than the near-opaque coverage that would occlude the window's own backdrop.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("menu-windowed", new Size2(480, 400), 1f));
+            // 480×110: too short for the menu below the anchor at (20,20)–(140,52) — it must ESCAPE to take the windowed path
+            // (a menu that fits never leases: gate.overlay.window-only-when-escaping). Bodies ≤ 50 DIP tall still fit in-window.
+            var window = new HeadlessWindow(new WindowDesc("menu-windowed", new Size2(480, 110), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -3360,6 +3370,58 @@ static class OverlaySuite
             Check("gate.overlay.menu-windowed-when-unconstrained an unconstrained menu takes the windowed path with its composition fallback chrome (shadow insets) and hands its material to the window",
                 leased && shadowInset && plateHandedOver && mainAcrylicOps == 0 && released,
                 $"leased={leased} insets={shadowInset} plate={plateHandedOver} mainAcrylicOps={mainAcrylicOps} released={released}");
+        }
+
+        // gate.overlay.window-only-when-escaping — "may escape" (ConstrainToRootBounds = false) is not "does escape". An OS
+        // popup window is leased only when it changes what the user sees: the work-area placement differs from the
+        // in-window one (OverlayHost.NeedsPopupWindow), or the parent menu is windowed. A menu that FITS stays in-window
+        // for its whole life — no HWND, no second swapchain, no render-thread park — with the engine acrylic on its plate.
+        // Why it matters, measured in Wavee (--menu-bench, the real right-click path, 2026-10-03): a leased track menu
+        // reached the screen at a median 21.7 ms vs 8.2 ms in-window and cost the UI thread 5.6 ms vs 1.0 ms per open.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("menu-fits", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+
+            // (a) fits below the anchor with room to spare → in-window, latched, never asked.
+            var hFit = svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            var eFit = svc.Entries.Count == 1 ? svc.Entries[0] : null;
+            bool stayedInWindow = eFit is { InWindowByFit: true, PopupWindowToken: < 0, PopupWindowRefused: false }
+                && host.PopupWindows.Count == 0 && app.PopupWindows.Count == 0;
+            bool engineAcrylic = eFit is not null && !eFit.PlateNode.IsNull && host.Scene.TryGetAcrylic(eFit.PlateNode, out _);
+            hFit.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            // (b) too tall for below/above the anchor: in-window it would have to move to the anchor's side, while the
+            // work area has room below → the placements differ → it leases.
+            var hEsc = svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 380f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            var eEsc = svc.Entries.Count == 1 ? svc.Entries[0] : null;
+            bool escaped = eEsc is { InWindowByFit: false, PopupWindowToken: >= 0 } && host.PopupWindows.Count == 1;
+            hEsc.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool released = host.PopupWindows.Count == 0;
+
+            // (c) the rule itself.
+            var at = new PopupPlacementResult(10f, 60f, false, 80f, FlyoutPlacement.BottomEdgeAlignedLeft, CornerJoin.None, 220f);
+            bool rule = !OverlayHost.NeedsPopupWindow(at, at, parentWindowed: false)
+                && OverlayHost.NeedsPopupWindow(at with { Y = 70f }, at, parentWindowed: false)
+                && OverlayHost.NeedsPopupWindow(at, at with { MeasuredH = 60f }, parentWindowed: false)
+                && OverlayHost.NeedsPopupWindow(at, at with { OpensUp = true }, parentWindowed: false)
+                && OverlayHost.NeedsPopupWindow(at, at, parentWindowed: true);
+
+            Check("gate.overlay.window-only-when-escaping an unconstrained menu that fits stays in-window (no lease, engine acrylic); one that would move leases; a windowed parent forces its child",
+                stayedInWindow && engineAcrylic && escaped && released && rule,
+                $"fit={stayedInWindow} acrylic={engineAcrylic} escaped={escaped} released={released} rule={rule}");
         }
 
         // gate.overlay.static-chrome-acrylic - the AutoSuggestBox SuggestionsContainer (PopupChrome.Static: a bare
@@ -3743,7 +3805,8 @@ static class OverlaySuite
         // exactly where the layer cannot run, and the sync rewrites this fill on every frame of every entry.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("video-hole-resting", new Size2(480, 400), 1f));
+            // 480×110: the unconstrained menu below must ESCAPE to ask for a window at all (one that fits never asks).
+            var window = new HeadlessWindow(new WindowDesc("video-hole-resting", new Size2(480, 110), 1f));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -3765,8 +3828,8 @@ static class OverlaySuite
             // so there is nothing to refuse and nothing to latch.
             bool neverAsked = opened && !svc.Entries[0].PopupWindowRefused && svc.Entries[0].PopupWindowToken < 0;
 
-            // …whereas an UNCONSTRAINED menu does ask, the host refuses (PopupWindowsEnabled is off), and the refusal
-            // LATCHES: asked exactly once, not once per frame for as long as the menu is up.
+            // …whereas an UNCONSTRAINED menu that does not fit does ask, the host refuses (PopupWindowsEnabled is off), and
+            // the refusal LATCHES: asked exactly once, not once per frame for as long as the menu is up.
             hRest.Close();
             for (int i = 0; i < 20; i++) host.RunFrame();
             svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },

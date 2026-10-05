@@ -34,6 +34,7 @@ public static class DrawOpTranslate
             case DrawOp.FillPath: { var c = Read<FillPathCmd>(payload); Write(payload, c with { Transform = Move(c.Transform, dx, dy) }); break; }
             case DrawOp.StrokePath: { var c = Read<StrokePathCmd>(payload); Write(payload, c with { Transform = Move(c.Transform, dx, dy) }); break; }
             case DrawOp.DrawSeries: { var c = Read<DrawSeriesCmd>(payload); c.Transform = Move(c.Transform, dx, dy); Write(payload, c); break; }
+            case DrawOp.DrawSprites: { var c = Read<DrawSpritesCmd>(payload); c.Transform = Move(c.Transform, dx, dy); Write(payload, c); break; }
             case DrawOp.DrawGlyphRun: { var c = Read<DrawGlyphRunCmd>(payload); Write(payload, c with { Transform = Move(c.Transform, dx, dy) }); break; }
             case DrawOp.DrawGlyphRunGradient: { var c = Read<DrawGlyphRunGradientCmd>(payload); Write(payload, c with { Transform = Move(c.Transform, dx, dy) }); break; }
             case DrawOp.PushClip:

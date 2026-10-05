@@ -99,10 +99,11 @@ public static class ContextMenu
         Action close = () => handle?.Close();
         Func<Element> content = () => Body(model, opts, close, fadeSlot, focusFirst: keyboard, touch: touch);
 
-        // Identical to the DropDownButton canon: windowed DWM-acrylic popup (ConstrainToRootBounds=false), work-area
-        // flip, Esc / outside / blur light-dismiss, SavedFocus restore, FocusTrap Tab-cycle. Motion is per-chrome:
-        // Menu style = MenuPopupThemeTransition slide-reveal; CommandBar style = the WinUI CommandBarFlyout contract
-        // (no popup transition — the body's own 83ms OpeningOpacityStoryboard fade — but still windowed with the
+        // Identical to the DropDownButton canon: allowed to leave the window (ConstrainToRootBounds=false — an OS
+        // DWM-acrylic popup window when it actually has to, in-window engine acrylic when it fits, OverlayHost
+        // .NeedsPopupWindow), work-area flip, Esc / outside / blur light-dismiss, SavedFocus restore, FocusTrap Tab-cycle.
+        // Motion is per-chrome: Menu style = MenuPopupThemeTransition slide-reveal; CommandBar style = the WinUI
+        // CommandBarFlyout contract (no popup transition — the body's own 83ms OpeningOpacityStoryboard fade — and the
         // transient-acrylic material + 83ms host close fade, CommandBarFlyout.cpp:43-44 ShouldConstrainToRootBounds(false)).
         var popts = new PopupOptions(
             FocusTrap: true,

@@ -1514,7 +1514,8 @@ static class LayoutShellSuite
 
         // RZ-MOVE2 — composited edge resize: a tick with nothing DUE bails; span reuse disabled for modal paint.
         // The bail predicate is the row's own answer now (AnimEngine.NextDueMs > 0), not a host-side "is this ambient?"
-        // guess — so seed the loop and run ONE frame first, which puts the 30 Hz row between edges exactly as it would
+        // guess — so seed an explicit 30 Hz loop (Cadence.At; a plain loop runs at the display rate and is always due) and
+        // run ONE frame first, which puts the row between edges exactly as it would
         // be on most WM_TIMER ticks of a real drag. A row that IS due (a one-shot layout transition mid-resize) keeps
         // painting, which is the half of this behaviour RZ-MOVE covers.
         {
@@ -1527,7 +1528,7 @@ static class LayoutShellSuite
 
             host.RunFrame();
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
-                [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
+                [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true, cadence: Cadence.At(30f));
             // Land BETWEEN the row's cadence edges: a freshly seeded row is owed its first frame (due now), so tick
             // until it has one behind it and its next edge is in the future.
             for (int i = 0; i < 4 && host.Animation.NextDueMs(host.FrameClockMsForTest) <= 0f; i++) host.RunFrame();

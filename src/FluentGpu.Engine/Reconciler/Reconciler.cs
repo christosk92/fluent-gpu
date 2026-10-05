@@ -1023,6 +1023,7 @@ public sealed partial class TreeReconciler
         PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
         PathEl x => b is PathEl y ? PathElDiff.FirstBoundFlip(x, y) : null,
         SeriesEl x => b is SeriesEl y ? SeriesElDiff.FirstBoundFlip(x, y) : null,
+        SpriteFieldEl x => b is SpriteFieldEl y ? SpriteFieldElDiff.FirstBoundFlip(x, y) : null,
         _ => null,
     };
 
@@ -1041,6 +1042,7 @@ public sealed partial class TreeReconciler
         PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
         PathEl x => b is not PathEl y || PathElDiff.AnyChanged(x, y),
         SeriesEl x => b is not SeriesEl y || SeriesElDiff.AnyChanged(x, y),
+        SpriteFieldEl x => b is not SpriteFieldEl y || SpriteFieldElDiff.AnyChanged(x, y),
         _ => true,
     };
 
@@ -2588,6 +2590,47 @@ public sealed partial class TreeReconciler
                     else _scene.ClearRadialGradientCenter(node);
                 }));
             }
+            if (b.FeedbackTransform.IsBound)
+            {
+                var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.FeedbackTransform : default);
+                AddBinding(node, fx.Start(() =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node) || !_scene.TryGetFeedback(node, out var st)) return;
+                    Affine2D warp = fx.Read();
+                    if (st.Warp.Equals(warp)) return;
+                    NodeBindingWriteCount++;
+                    _scene.SetFeedback(node, st with { Warp = warp });
+                }));
+            }
+            if (b.FeedbackDecay.IsBound)
+            {
+                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.FeedbackDecay : default);
+                AddBinding(node, fx.Start(() =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node) || !_scene.TryGetFeedback(node, out var st)) return;
+                    float decay = fx.Read();
+                    if (st.Decay.Equals(decay)) return;
+                    NodeBindingWriteCount++;
+                    _scene.SetFeedback(node, st with { Decay = decay });
+                }));
+            }
+            if (b.GradientMix.IsBound)
+            {
+                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.GradientMix : default);
+                AddBinding(node, fx.Start(() =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    float mix = fx.Read();
+                    float prev = _scene.TryGetGradientMix(node, out float m) ? m : 0f;
+                    float next = float.IsFinite(mix) ? Math.Clamp(mix, 0f, 1f) : 0f;
+                    if (prev == next) return;
+                    NodeBindingWriteCount++;
+                    _scene.SetGradientMix(node, next);
+                }));
+            }
             if (b.Validation.IsBound)
             {
                 // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
@@ -2784,6 +2827,10 @@ public sealed partial class TreeReconciler
         else if (el is SeriesEl se)
         {
             BindSeriesSamples(node, se);   // Reconciler.Series.cs — the bound sample-source channel
+        }
+        else if (el is SpriteFieldEl sf)
+        {
+            BindSprites(node, sf);   // Reconciler.Sprites.cs — the bound instance-buffer channel
         }
         else if (el is ListRowEl lr)
         {
@@ -3844,14 +3891,17 @@ public sealed partial class TreeReconciler
             case PolylineStrokeEl:
                 return true;
             case SeriesEl se:
-                return !se.Samples.IsBound;   // a bound sample source is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
+                return !se.Samples.IsBound && !se.GradientMix.IsBound;   // a bound sample source / mix is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
+            case SpriteFieldEl sf:
+                return !sf.Instances.IsBound; // likewise the bound instance buffer (Reconciler.Sprites.cs)
             case PathEl pe:
                 // Mirrors the BoxEl rule just below: a path with an OnRealized capture (the hero-art draw-on timelines)
                 // must mount fresh every time so the callback fires and the caller's ref stays pointed at a live node.
                 return pe.OnRealized is null;
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
-                    || b.RadialGradientCenter.IsBound || b.Width.IsBound || b.Height.IsBound
+                    || b.RadialGradientCenter.IsBound || b.GradientMix.IsBound || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound
+                    || b.Width.IsBound || b.Height.IsBound
                     || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
@@ -4824,13 +4874,26 @@ public sealed partial class TreeReconciler
                     if (float.IsFinite(center.X) && float.IsFinite(center.Y)) _scene.SetRadialGradientCenter(node, center);
                     else _scene.ClearRadialGradientCenter(node);
                 }
+                if (b.GradientTo is { } gto) _scene.SetGradientTo(node, gto); else _scene.ClearGradientTo(node);
+                if (!b.GradientMix.IsBound) _scene.SetGradientMix(node, b.GradientMix.Value);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.HoverGradient is { } hg) _scene.SetHoverGradient(node, hg); else _scene.ClearHoverGradient(node);
                 if (b.PressedGradient is { } pg) _scene.SetPressedGradient(node, pg); else _scene.ClearPressedGradient(node);
                 if (b.HoverBorderBrush is { } hbb) _scene.SetHoverBorderBrush(node, hbb); else _scene.ClearHoverBorderBrush(node);
                 if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
-                _scene.SetRepaintBoundary(node, b.RepaintBoundary, SceneStore.RasterDown(b.RasterScale));
+                // A feedback box IS a repaint boundary, at the feedback surface scale.
+                _scene.SetRepaintBoundary(node, b.RepaintBoundary || b.Feedback is not null,
+                    SceneStore.RasterDown(b.Feedback is { } fspec ? fspec.RasterScale : b.RasterScale));
+                _scene.SetBlend(node, b.Blend, b.LayerBlend);
+                if (b.Feedback is { } fb)
+                {
+                    // the bound channels own their halves (BindNode): seed from the previous state when bound
+                    Affine2D warp = b.FeedbackTransform.IsBound && _scene.TryGetFeedback(node, out var prevFb) ? prevFb.Warp : b.FeedbackTransform.IsBound ? Affine2D.Identity : b.FeedbackTransform.Value;
+                    float decay = b.FeedbackDecay.IsBound && _scene.TryGetFeedback(node, out var prevFd) ? prevFd.Decay : b.FeedbackDecay.IsBound ? float.NaN : b.FeedbackDecay.Value;
+                    _scene.SetFeedback(node, new FeedbackState(fb, warp, decay));
+                }
+                else _scene.SetFeedback(node, null);
                 if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
                 _scene.SetHitTestPassThrough(node, b.HitTestPassThrough ? node : NodeHandle.Null);   // self = yield to behind, except own children
                 _scene.SetBlocksBackgroundScroll(node, b.BlocksBackgroundScroll);
@@ -5397,7 +5460,9 @@ public sealed partial class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Series;
                 paint.Opacity = se.Opacity;
-                _scene.SetSeries(node, new SeriesSpec(se.Shape, se.Color, se.Gradient, se.Thickness, se.Baseline, se.Amplitude, se.Opacity));
+                _scene.SetSeries(node, new SeriesSpec(se.Shape, se.Color, se.Gradient, se.Thickness, se.Baseline, se.Amplitude, se.Opacity,
+                                                      se.GradientTo, se.GradientAxis, se.AntiAlias, se.Blend));
+                if (!se.GradientMix.IsBound) _scene.SetGradientMix(node, se.GradientMix.Value);
                 if (!se.Samples.IsBound) _scene.SetSeriesSamples(node, se.Samples.Value.AsSpan());
                 // else: the bound path defers to BindSeriesSamples' mount-time effect (the ListRowEl.Cells deferral).
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -5406,6 +5471,22 @@ public sealed partial class TreeReconciler
                 li.MinW = se.MinWidth; li.MinH = se.MinHeight; li.MaxW = se.MaxWidth; li.MaxH = se.MaxHeight;
                 li.FlexGrow = se.Grow; li.FlexShrink = se.Shrink; li.FlexBasis = se.Basis;
                 li.AlignSelf = se.AlignSelf; li.JustifySelf = se.JustifySelf;
+                break;
+            }
+            case SpriteFieldEl sf:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.Sprites;
+                paint.Opacity = sf.Opacity;
+                _scene.SetSpriteSpec(node, new SpriteSpec(sf.Kernel, sf.Blend, sf.Opacity));
+                if (!sf.Instances.IsBound) _scene.SetSprites(node, sf.Instances.Value.AsSpan());
+                // else: the bound path defers to BindSprites' mount-time effect.
+                ref LayoutInput li = ref _scene.Layout(node);
+                li.Margin = sf.Margin;
+                li.Width = sf.Width; li.Height = sf.Height;
+                li.MinW = sf.MinWidth; li.MinH = sf.MinHeight; li.MaxW = sf.MaxWidth; li.MaxH = sf.MaxHeight;
+                li.FlexGrow = sf.Grow; li.FlexShrink = sf.Shrink; li.FlexBasis = sf.Basis;
+                li.AlignSelf = sf.AlignSelf; li.JustifySelf = sf.JustifySelf;
                 break;
             }
             case ListRowEl lr:

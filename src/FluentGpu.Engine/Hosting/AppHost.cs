@@ -344,6 +344,8 @@ public sealed class PopupWindowSlot
     public DrawList DrawList { get; } = new();
     internal SceneRecordingContext Recording { get; } = new();
     internal ulong FirstSceneSequence;
+    /// <summary>This popup's cost, for the always-on <c>[overlay.popup]</c> line written at close.</summary>
+    internal PopupLifecycle Lifecycle { get; } = new();
 }
 
 /// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
@@ -363,6 +365,7 @@ public enum HostWaitKind : byte
     SoftwarePace,    // async without a display clock: wall-clock pace at the refresh period (60 Hz floor when unknown)
     DisplayRate,     // 0: sync render path — present-throttled (panel rate)
     AdaptiveGpu,     // CadencePacing at the governor's fixed 30 fps, selected by fresh on-GPU execution samples
+    PowerCap,        // CadencePacing at the app's PowerCapFps ceiling (the OS asked for less work); never interaction
 }
 
 public sealed partial class AppHost : IDisposable
@@ -504,7 +507,8 @@ public sealed partial class AppHost : IDisposable
         if (!paused && _hasActiveRenderFrame && _renderSeam.IsCurrentTarget(_activeRenderFrame))
         {
             var frame = _renderSeam.Scene(_activeRenderFrame);
-            active = _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame));
+            active = _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
+                || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
         return active;
@@ -800,6 +804,9 @@ public sealed partial class AppHost : IDisposable
     private readonly InputHooks _inputHooks = new();
     private readonly Signal<object?> _inputHooksSig;
     private readonly Signal<object?> _frameClockSig = new(0L);
+    /// <summary>The <c>FrameClock.PaceableTick</c> ambient: the same frame counter as <see cref="_frameClockSig"/>, but its
+    /// subscribers raise <see cref="WakeReasons.FrameClockPaceable"/>, which the GPU governor may pace.</summary>
+    private readonly Signal<object?> _frameClockPaceableSig = new(0L);
     private long _frameClock;
     // Drag epoch → UseDragState. EDGE-triggered (session begin/end, OverTarget / Effect / Caption change, settle
     // start+expiry): the chip FOLLOWS through the DragPosX/Y binds below, so bumping this per frame — as it used to —
@@ -1396,7 +1403,7 @@ public sealed partial class AppHost : IDisposable
                 // stream AND an empty repaint region, which is exactly the question ShouldSkipRenderSubmit asks. A row
                 // that DID move fails the hash compare on its own. Only image crossfades advance pixels with no bit
                 // anywhere to show for it, so they alone keep a frame owed.
-                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs);
+                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || _device.HasLiveFeedback;   // + a settling feedback trail (F6)
                 // An armed frame capture must present (evidence-diagnostics §A.6) — no tile is invalidated: the capture shows
                 // exactly the retained pixels.
                 bool skip = Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
@@ -1545,7 +1552,7 @@ public sealed partial class AppHost : IDisposable
             var popup = _popupWindows[i];
             if (!popup.Window.IsShown && popup.Swapchain is { HasPresentedContent: true }
                 && popup.FirstSceneSequence != 0 && popup.FirstSceneSequence <= feedback.SceneSequence)
-                popup.Window.Show();
+                ShowPopupWindow(popup);
         }
     }
 
@@ -1665,14 +1672,21 @@ public sealed partial class AppHost : IDisposable
     // frame drives interactive or one-shot motion, killing the first-frame lurch on a scroll-start or a connected fly.
     private int _lastWaitMs;
     private HostWaitKind _lastWaitKind;   // which RecommendedWaitMsCore branch produced _lastWaitMs (present/pacing diagnosis)
-    /// <summary>Window-state throttle (GPUI's <c>inactive_frame_interval</c>): the FLOOR, in ms, on a
-    /// <see cref="HostWaitKind.Cadence"/> wait while the window is not active — ~30 fps by default. A background
-    /// window's autonomous motion (a shimmer, an equalizer, a playhead) is not worth the panel rate, and the cap can
-    /// only ever LENGTHEN a wait the cadence branch already chose: input, scroll, images, timers, video and popups all
-    /// mark themselves due-now and never reach that branch, so this can never add interaction latency.
-    /// <para>Set it to 0 to disable the throttle (a background window then paces purely by row cadence). The engine
-    /// default is the GPUI number, 33.</para></summary>
-    public int InactiveFrameIntervalMs { get; set; } = 33;
+    /// <summary>A host-wide frame-rate CEILING for motion, in fps; 0 (the default) = none. It is for the OS asking for
+    /// less work — Windows Energy Saver; Chromium's Energy Saver caps the same way — and nothing else: the engine never
+    /// throttles a visible window for losing focus (the GPUI-style <c>InactiveFrameIntervalMs</c> floor was deleted on
+    /// 2026-10-03; no other reference engine throttles on focus) nor for motion it guesses is "ambient".
+    /// <para>While set, every frame the loop would produce for motion — cadence rows, one-shot transitions, loops,
+    /// <c>FrameClock.Tick</c> subscribers, image reveals, timers — is paced to at most this rate on the vblank lattice,
+    /// uniformly, so nothing runs smooth beside something choppy (<see cref="CadencePacing.FlooredWaitMs"/>). Scroll,
+    /// drag, touch and auto-repeat are never capped (<see cref="PowerCapNeverPace"/>), and input still DISPATCHES the
+    /// moment it arrives — only frame production waits. UI thread only.</para></summary>
+    public int PowerCapFps { get; set; }
+
+    /// <summary>The frames <see cref="PowerCapFps"/> never paces: the GPU governor's interaction set
+    /// (<see cref="GpuGovernorWake.NeverPace"/>) minus the frame-clock poller bit — a per-frame subscriber is exactly the
+    /// continuous motion an energy-saver ceiling is meant to reach.</summary>
+    internal const WakeReasons PowerCapNeverPace = GpuGovernorWake.NeverPace & ~WakeReasons.FrameClockPoller;
 
     /// <summary>Adaptive GPU pacing (default on): when measured whole-frame on-GPU execution proves the panel rate is
     /// unsustainable at this window size, pace continuous motion to a steady <see cref="GpuGovernorFps"/> instead of
@@ -1796,7 +1810,7 @@ public sealed partial class AppHost : IDisposable
         WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
         WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageReady | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
         // An explicit UI frame-clock poller or a queued native-video hand-off must not be swallowed by a modal loop.
-        WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending |
+        WakeReasons.FrameClockPoller | WakeReasons.FrameClockPaceable | WakeReasons.VideoPumpPending |
         // A due frame-clock timer (a debounce/timeout/interval) must still fire while the user drags/resizes the window.
         WakeReasons.Timer |
         // …and a due pinned-leftover image restart (T10) is the same kind of deadline.
@@ -2482,7 +2496,7 @@ public sealed partial class AppHost : IDisposable
         // ImageWake / the scroll-grace + scroll-hold + mount-grace windows). The host no longer infers a frame CLASS
         // from a bitmask and a set of time windows — at least eight recorded regressions came from that inference
         // guessing wrong in one direction or the other. Each animation row now carries its own Cadence
-        // (Cadence.Display / Cadence.At(hz) / the DefaultLoopHz for a plain loop) and the scheduler answers ONE
+        // (Cadence.Display — every row's default, loops included — or an opt-in Cadence.At(hz)) and the scheduler answers ONE
         // question: how long until the earliest of them is due. The caret answers the same question for its blink.
         //
         // Only Anim|Caret can be paced into the future; every other wake bit means "due now" (input, scroll, images,
@@ -2498,12 +2512,28 @@ public sealed partial class AppHost : IDisposable
             double refreshMs = RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency;
             long lastPresent = Volatile.Read(ref _lastPresentQpc);
             double sincePresentMs = lastPresent == 0 ? -1.0 : (now - lastPresent) * 1000.0 / Stopwatch.Frequency;
-            int wait = CadencePacing.QuantizedWaitMs(due, refreshMs, sincePresentMs);
-            // Window-state throttle (GPUI's inactive_frame_interval): a background window's autonomous motion is not
-            // worth the panel rate. It can only LENGTHEN the wait, and input/scroll never reach this branch.
-            if (!_window.IsActive && wait < InactiveFrameIntervalMs) wait = InactiveFrameIntervalMs;
+            // The power ceiling floors the PERIOD before quantization (an interval between presents, on the vblank
+            // lattice), so it can only LENGTHEN a row's own wait. 0 = no ceiling: the row's cadence verbatim.
+            int pcap = PowerCapFps;
+            int wait = pcap > 0
+                ? CadencePacing.FlooredWaitMs(due, 1000.0 / pcap, refreshMs, sincePresentMs)
+                : CadencePacing.QuantizedWaitMs(due, refreshMs, sincePresentMs);
             _lastWaitKind = HostWaitKind.Cadence;
             return wait;
+        }
+        // Power ceiling: POLICY the OS asked for (PowerCapFps — Windows Energy Saver), applied uniformly to every frame
+        // the loop would produce for motion, due-now rows and frame-clock pollers included, so nothing runs smooth
+        // beside something choppy. Interaction (PowerCapNeverPace: scroll, drag, touch, repeat) is never capped. The
+        // same Resync-exempt quantized wait as the governor below; the slower of the two wins when both apply.
+        if (PowerCapFps > 0 && (r & PowerCapNeverPace) == 0)
+        {
+            int fps = PowerCapFps;
+            if (AdaptiveGpuPacing && adaptiveGpuWaitEligible && GpuGovernorWake.MayPace(r) && GpuGovernorFps < fps) fps = GpuGovernorFps;
+            double refreshMs = RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency;
+            long lastPresent = Volatile.Read(ref _lastPresentQpc);
+            double sincePresentMs = lastPresent == 0 ? -1.0 : (now - lastPresent) * 1000.0 / Stopwatch.Frequency;
+            _lastWaitKind = HostWaitKind.PowerCap;
+            return CadencePacing.QuantizedWaitMs(1000.0 / fps, refreshMs, sincePresentMs);
         }
         // Adaptive-GPU governor: MEASUREMENT, not policy. The frame is not cadence-paceable (a due row, a one-shot
         // transition, the smooth playhead, an image reveal), but sampled on-GPU execution says the panel rate is
@@ -2641,24 +2671,6 @@ public sealed partial class AppHost : IDisposable
         if (serviced) ColdMaintenanceRuns++;
     }
 
-    // ── Display-rate loop tripwire ───────────────────────────────────────────────────────────────────────────────────
-    // A LOOPING row at Cadence.Display pins the whole loop at the panel rate forever — it is the one cadence that can
-    // silently undo everything the per-source model bought, and the only legitimate uses are transient (an
-    // indeterminate progress bar while it is on screen). So say so, always-on, when one is live: once on the
-    // transition into "some display-rate loop is running", then at most once per 30 s while that stays true. Never
-    // per frame — one int read (the scheduler memoizes the census per slab version) plus a timestamp compare.
-    private long _displayRateLoopReportTicks;   // 0 = nothing reported / no display-rate loop live
-    private static readonly long DisplayRateLoopReportCadenceTicks = (long)(30.0 * Stopwatch.Frequency);
-    private void MaybeReportDisplayRateLoops()
-    {
-        int n = _anim.DisplayRateLoopCount;
-        if (n <= 0) { _displayRateLoopReportTicks = 0; return; }   // cleared, so the next one reports on its own edge
-        long now = Stopwatch.GetTimestamp();
-        if (_displayRateLoopReportTicks != 0 && now - _displayRateLoopReportTicks < DisplayRateLoopReportCadenceTicks) return;
-        _displayRateLoopReportTicks = now;
-        Diag.Line($"[anim.cadence] displayRate-loops={n}");
-    }
-
     // ── Repaint-damage host state (gpu-renderer.md §13.1) ────────────────────────────────────────────────────────────
     // The recorder can only see what the SCENE changed. These are the host-level facts that invalidate the target
     // itself — nothing in the scene is dirty, yet every pixel is untrustworthy. Each forces a full repaint with a named
@@ -2774,6 +2786,10 @@ public sealed partial class AppHost : IDisposable
         // A compositor-bound UI clock (not native video presentation) is an explicit request for panel-rate frames.
         // This keeps the seek playhead smooth while a native DirectComposition video presents decoded frames on its own.
         if (_frameClockSig.HasSubscribers) r |= WakeReasons.FrameClockPoller;
+        // A paceable per-frame clock (a visualizer) asks for frames too, but the governor may pace it (GpuGovernorWake.NeverPace).
+        if (_frameClockPaceableSig.HasSubscribers) r |= WakeReasons.FrameClockPaceable;
+        // A feedback trail (visualizer F6) still settling: the backend advances it on frames with no scene change.
+        if (_device.HasLiveFeedback) r |= WakeReasons.FeedbackSettle;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
         // from playback state: a playing DComp video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
@@ -3234,6 +3250,7 @@ public sealed partial class AppHost : IDisposable
         // Fully qualified: FluentGpu.Pal.FrameClock (the scroll-v3 seam clock, §5.1) is now ALSO in scope via
         // `using FluentGpu.Pal;` — bare `FrameClock` is ambiguous with FluentGpu.Hooks.FrameClock (this ambient key).
         _reconciler.SetAmbient(FluentGpu.Hooks.FrameClock.Tick, _frameClockSig);
+        _reconciler.SetAmbient(FluentGpu.Hooks.FrameClock.PaceableTick, _frameClockPaceableSig);
         _uiPoster = Post;   // ONE delegate instance so HostDispatch.Current can be identity-compared on teardown
         _hostPostSig = new Signal<object?>(_uiPoster);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
@@ -3278,7 +3295,7 @@ public sealed partial class AppHost : IDisposable
         EnableEvidence();   // the evidence ledgers live on the recorder pair that composites (AppHost.Evidence.cs)
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
-        _wakeDiag = new WakeDiagnostics(_frameClockSig, _anim, _scene, AppendRenderWakeCensus);   // always-on: see WakeDiagnostics (the [wake] census)
+        _wakeDiag = new WakeDiagnostics(_frameClockSig, _anim, _scene, AppendRenderWakeCensus, () => _window.IsActive);   // always-on: see WakeDiagnostics (the [wake] census)
         if (s_memDiag)
         {
             _memCensus = new MemCensus(this, EngineSwitches.MemDiagSeconds);
@@ -3397,7 +3414,6 @@ public sealed partial class AppHost : IDisposable
         // [Conditional("FGGUARD")] — live in Debug/CI (proves single-UI-thread ownership), erased from Release/Ship.
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         Threading.ThreadGuard.AssertUi();
-        MaybeReportDisplayRateLoops();   // always-on tripwire: a LOOPING display-rate row pins the panel rate forever
 
         // ── ONE frame clock (scroll-v3-plan §5.1) — built HERE, before the pump/dispatch below, so a frame-aligned
         // producer's PumpScroll (Paint, after the production gate) and the scroll frame step (also Paint) both
@@ -3871,7 +3887,8 @@ public sealed partial class AppHost : IDisposable
             // leaping ~34 ms. "Not chosen for it" is decidable from the branch that produced the wait: Idle / Hud /
             // Baked never paced animation, so their gap is always stale; a Cadence wait IS the earliest row's own period
             // UNLESS it was cut short by work the cadence branch would have refused; an AdaptiveGpu wait is a
-            // measurement-chosen period for exactly this frame's motion, so it is never stale.
+            // measurement-chosen period for exactly this frame's motion (and a PowerCap wait a policy-chosen one), so
+            // neither is ever stale.
             if (!_lastWaitWasDisplayRate)
             {
                 WakeReasons stepUp = ComputeWakeReasons();
@@ -3960,7 +3977,12 @@ public sealed partial class AppHost : IDisposable
             // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
             // frame and the loop could never fall out of display rate. Only when watched — 0-alloc when nothing polls.
-            if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;
+            if (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers)
+            {
+                ++_frameClock;
+                if (_frameClockSig.HasSubscribers) _frameClockSig.Value = _frameClock;
+                if (_frameClockPaceableSig.HasSubscribers) _frameClockPaceableSig.Value = _frameClock;
+            }
             // ── Live drag publication (see the _dragEpoch field comment) ────────────────────────────────────────────
             // POSITION goes out as two float SIGNALS every frame: a bound preview transform is a compositor write, so a
             // drag move costs no render/reconcile/layout and no allocation. The EPOCH — which does re-render the preview
@@ -4870,12 +4892,15 @@ public sealed partial class AppHost : IDisposable
     private int OpenPopupWindow(NodeHandle subtreeRoot, PopupWindowMaterial material)
     {
         if (!PopupWindowsEnabled || subtreeRoot.IsNull) return -1;
+        long leaseStart = Stopwatch.GetTimestamp();
         var renderOwner = OwningRenderThread;
         renderOwner?.Quiesce();
+        long parked = Stopwatch.GetTimestamp();
         try
         {
         var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
         if (palWindow is null) return -1;
+        long windowDone = Stopwatch.GetTimestamp();
         bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
         // Flat tint over the host-backdrop (blurred desktop): the dark MenuFlyout fallback color at ~0.5 so the desktop
         // reads through as a frosted grey (WinUI DesktopAcrylicBackdrop look). Tunable.
@@ -4888,6 +4913,13 @@ public sealed partial class AppHost : IDisposable
             Swapchain = _device.CreateSwapchain(new SwapchainDesc(palWindow.Handle, new Size2(1, 1),
                 Composited: true, DesktopAcrylic: acrylic, AcrylicTint: tint, CornerRadiusPx: cornerPx)),
         };
+        long leaseDone = Stopwatch.GetTimestamp();
+        var life = slot.Lifecycle;
+        life.LeaseStartQpc = leaseStart;
+        life.ParkMs = ToMs(parked - leaseStart);
+        life.WindowMs = ToMs(windowDone - parked);
+        life.SwapchainMs = ToMs(leaseDone - windowDone);
+        life.LeaseMs = ToMs(leaseDone - leaseStart);
         _popupWindows.Add(slot);
         Volatile.Write(ref _popupWindowCount, _popupWindows.Count);   // render-thread mirror: never elide a popup turn
         WakeFrame();
@@ -4970,6 +5002,8 @@ public sealed partial class AppHost : IDisposable
         {
             var slot = _popupWindows[i];
             if (slot.Token != token) continue;
+            // Parked above, so the render thread's per-pass fields are settled: the one line this popup leaves behind.
+            Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
             slot.Window.Hide();
             // The loop is PARKED at its top-of-turn gate, so no drain is in flight: dropping the queued actions that
             // name this swapchain is what makes disposing it here safe.
@@ -4983,6 +5017,16 @@ public sealed partial class AppHost : IDisposable
         }
         }
         finally { renderOwner?.Resume(); }
+    }
+
+    /// <summary>Reveal a popup window (UI thread) and time the OS call — the reveal half of its <c>[overlay.popup]</c> line.</summary>
+    private static void ShowPopupWindow(PopupWindowSlot slot)
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        slot.Window.Show();
+        long t1 = Stopwatch.GetTimestamp();
+        slot.Lifecycle.ShownQpc = t1;
+        slot.Lifecycle.ShowMs = ToMs(t1 - t0);
     }
 
     /// <summary>Phase 8b: re-record each popup window's subtree into its own DrawList (recorder root-override,
@@ -5013,6 +5057,7 @@ public sealed partial class AppHost : IDisposable
             // anyway would latch its reveal evidence on the 1×1 creation-size surface — a revealed popup window with
             // nothing in it. It is placed on the very next layout effect.
             if (origin.IsEmpty) continue;
+            long passStart = Stopwatch.GetTimestamp();
             SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 slot.Root, new Point2(origin.X, origin.Y));
             if (slot.Swapchain is { } sc)
@@ -5022,6 +5067,7 @@ public sealed partial class AppHost : IDisposable
                     _device.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
                         new FrameInfo(sc.SizePx, _window.Scale, ColorF.Transparent), sc);
                     sc.Present();
+                    slot.Lifecycle.NoteTurn(passStart, Stopwatch.GetTimestamp(), sc.HasPresentedContent);
                     // Atomic creation: the popup HWND stays hidden until its swapchain contains the seeded first frame.
                     // This prevents an uninitialized/full-opacity plate from flashing before the engine/compositor
                     // entrance state exists. The gate is the swapchain's OWN report that it presented content — NOT
@@ -5031,7 +5077,7 @@ public sealed partial class AppHost : IDisposable
                     // what showed a popup as its frosted chrome with no menu inside it.
                     if (!slot.Window.IsShown && sc.HasPresentedContent)
                     {
-                        slot.Window.Show();
+                        ShowPopupWindow(slot);
                         sc.AnimatePopupOpen();
                     }
                 }

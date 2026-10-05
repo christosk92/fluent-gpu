@@ -41,7 +41,7 @@ public enum AnimFlags : ushort
     Accumulate    = 1 << 9,   // distinguishes Add vs Accumulate when Additive is set
     // 1 << 10 (was DisplayRate — the "transient loop opts out of the ambient cap" bit) is now StartPending. Frame class
     // is no longer inferred from flags: every row carries its own Cadence in the engine's `_cadencePeriodMs` side array
-    // (0 = display rate, ushort.MaxValue = AnimEngine.DefaultLoopHz), and AnimEngine.NextDueMs answers the wake.
+    // (0 = display rate, else an explicit Cadence.At period in ms), and AnimEngine.NextDueMs answers the wake.
     StartPending  = 1 << 10,  // structural enter/exit: the start time resolves at the first PRESENTED frame (Web Animations'
                               // pending play task) — the first advance after the seed-frame hold is capped to one steady
                               // frame, so a long commit frame cannot eat the start (AnimEngine.PendingStartStep)

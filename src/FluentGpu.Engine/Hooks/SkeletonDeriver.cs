@@ -118,6 +118,9 @@ internal static class SkeletonDeriver
             case SeriesEl se:
                 return Bar(s, se.Width, se.Height, se.Grow, default, default, FlexAlign.Auto);
 
+            case SpriteFieldEl sf:
+                return Bar(s, sf.Width, sf.Height, sf.Grow, default, default, FlexAlign.Auto);
+
             case ScrollEl sc:
                 return sc with { Content = Derive(sc.Content, s) };
 

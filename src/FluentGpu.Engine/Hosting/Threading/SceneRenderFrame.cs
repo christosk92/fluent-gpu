@@ -86,7 +86,7 @@ internal sealed class SceneRenderFrame
             // surface — a revealed popup window with nothing in it.
             bool placed = !target.WindowBoundsDip.IsEmpty || !target.BoundsDip.IsEmpty;
             _popups[i] = new(target.Root, new(origin.X, origin.Y), target.Swapchain, target.Window,
-                target.DrawList, target.Recording, target.Swapchain?.SizePx ?? default, placed);
+                target.DrawList, target.Recording, target.Swapchain?.SizePx ?? default, placed, target.Lifecycle);
         }
         _popups.AsSpan(_popupCount).Clear();
     }
@@ -131,12 +131,14 @@ internal sealed class SceneRenderFrame
             ref readonly var popup = ref _popups[i];
             if (popup.Swapchain is not { } swapchain || popup.Root.IsNull || !Scene.IsLive(popup.Root)) continue;
             if (!popup.Placed) continue;   // no placement yet ⇒ nothing to paint (and nothing to reveal on)
+            long passStart = System.Diagnostics.Stopwatch.GetTimestamp();
             popup.Recording.CopyConfigurationFrom(Scene.Recording);
             popup.Recording.RecordSubtree(Scene, popup.Commands, Images, Options.Focus, Options.ScrollThumb,
                 Options.ScrollTrack, Options.TextEdit, popup.Root, popup.Origin);
             device.SubmitDrawList(popup.Commands.Bytes, popup.Commands.SortKeys,
                 new FrameInfo(popup.Size, scale, ColorF.Transparent) { ImageClockMs = imageClockMs }, swapchain);
             swapchain.Present();
+            popup.Lifecycle.NoteTurn(passStart, System.Diagnostics.Stopwatch.GetTimestamp(), swapchain.HasPresentedContent);
             // The open motion starts on the frame the popup's content is actually ON its composition surface — the
             // swapchain's own report, not the fact that Present() was called: a backend stands down for a covered /
             // hidden target and presents nothing, and a popup HWND is hidden precisely until this first frame lands.
@@ -179,7 +181,8 @@ internal sealed class SceneRenderFrame
     }
 
     private readonly record struct PopupRecordingTarget(NodeHandle Root, Point2 Origin, ISwapchain? Swapchain,
-        IPlatformPopupWindow Window, DrawList Commands, SceneRecordingContext Recording, Size2 Size, bool Placed);
+        IPlatformPopupWindow Window, DrawList Commands, SceneRecordingContext Recording, Size2 Size, bool Placed,
+        PopupLifecycle Lifecycle);
 
     private static void Copy<T>(ReadOnlySpan<T> source, ref T[] destination, out int count)
     {
