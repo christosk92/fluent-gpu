@@ -205,7 +205,18 @@ public sealed unsafe partial class D3D12Device
                     int end = _itemChunkStart[i] + _itemChunkCount[i];
                     for (int c = _itemChunkStart[i]; c < end; c++) foot = PpUnion(in foot, PpIntersect(_chunks[c].Rect, in sci));
                     ulong s = sig;
-                    if (_itemKey[i] != 0 && (it.Kind != CompositeKind.Direct || it.LowResDown > 1)) Mix(ref s, _itemKey[i]);
+                    if (it.Kind == CompositeKind.Group && it.BlurSigma <= 0f && _itemKey[i] != 0 && _itemSurface[i] >= 0)
+                    {
+                        // An UNBLURRED group's surface changes only where an item inside it changed, and every enclosed
+                        // item carries its own entry below (its tiles' serials, its surface's key): its own entry signs only
+                        // how it is drawn — its parameters and its region — so a karaoke line re-rastered inside a faded
+                        // rail repaints that line, not the rail. A blurred group spreads a change past the item: it keeps
+                        // its content key.
+                        PixelRect gr = _itemRegion[i];
+                        Mix(ref s, (ulong)(uint)gr.Left << 32 | (uint)gr.Top);
+                        Mix(ref s, (ulong)(uint)gr.Right << 32 | (uint)gr.Bottom);
+                    }
+                    else if (_itemKey[i] != 0 && (it.Kind != CompositeKind.Direct || it.LowResDown > 1)) Mix(ref s, _itemKey[i]);
                     else if (it.Kind == CompositeKind.Direct && it.BlurSigma <= 0f && !PpDamaged(in frame, in foot) && RowOf(it.SliceId) is int row and >= 0)
                     {
                         // A DEGRADED segment re-rasters every turn, but from its bytes alone: the same stream (+ prefix) at the

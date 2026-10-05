@@ -85,6 +85,7 @@ public sealed unsafe partial class D3D12Device
     private void ResetOffscreenSplit()
     {
         _offGroupN = _offGroupHits = _offBlurN = _offBlurHits = _offBackdropN = _offBackdropHits = _offDirectN = _offInlineN = _groupRenders = 0;
+        _groupRepairs = 0;
         _offGroupPx = _offBlurPx = _offBackdropPx = _offDirectPx = _offInlinePx = 0L;
     }
 
@@ -857,6 +858,19 @@ public sealed unsafe partial class D3D12Device
                 return;
             }
         }
+        // An unblurred group whose key missed only because something inside it changed is REPAIRED in place over the
+        // pixels that changed (GroupDelta) — bit-identical to the full render below, at the cost of the changed area.
+        GroupMemo? memo = null;
+        ulong shape = 0;
+        int entryCount = 0;
+        bool repairable = cacheable && it.BlurSigma <= 0f;
+        if (repairable)
+        {
+            ulong fresh = 0xF2E5_0000_0000_0000UL ^ (ulong)(uint)_compositeTurn * 0x9E3779B97F4A7C15UL;
+            shape = GroupDelta.Build(in frame, i, in region, ref serials, _itemKey, _itemRegion, _itemSurface, fresh, ref _groupEntries, out entryCount);
+            memo = FindGroupMemo(shape);
+            if (memo is not null && RepairGroup(in frame, i, in region, key, memo, entryCount)) return;
+        }
         int s = _surfaces!.AcquireScratch(w, h, fence);
         if (s < 0) return;
         _groupRenders++;
@@ -875,6 +889,105 @@ public sealed unsafe partial class D3D12Device
         }
         _itemSurface[i] = result; _itemDown[i] = down; _itemRegion[i] = region;
         if (cacheable && result >= 0) _surfaces.Retain(result, key, down, RetainedCap());
+        if (repairable && result >= 0) RememberGroup(memo ?? NewGroupMemo(shape), key, entryCount);
+    }
+
+    // ── the group repair (GroupDelta) ─────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>What a retained unblurred group surface was last rendered from: its shape, the content key it is retained
+    /// under, and its entries.</summary>
+    private sealed class GroupMemo
+    {
+        public ulong Shape, Key;
+        public GroupEntry[] Entries = new GroupEntry[16];
+        public int Count;
+        public int Turn;
+    }
+
+    private readonly List<GroupMemo> _groupMemos = new(MaxGroupMemos);
+    private GroupEntry[] _groupEntries = new GroupEntry[16];
+    private readonly PixelRect[] _groupDirty = new PixelRect[GroupDelta.MaxDirtyRects];
+    private PixelRect _drawClip;
+    private bool _drawClipOn;
+    private int _groupRepairs;
+
+    /// <summary>Unblurred group surfaces the last composite repaired in place (counted in the renders too).</summary>
+    public int LastGroupRepairs => _groupRepairs;
+
+    private GroupMemo? FindGroupMemo(ulong shape)
+    {
+        for (int k = 0; k < _groupMemos.Count; k++) if (_groupMemos[k].Shape == shape) return _groupMemos[k];
+        return null;
+    }
+
+    /// <summary>At most this many group memos are kept; a new shape recycles the least recently used one (a hand-off whose
+    /// lines move mints a new shape every turn — recycling keeps that allocation-free).</summary>
+    private const int MaxGroupMemos = 8;
+
+    /// <summary>A memo for a shape seen for the first time: a fresh one while fewer than <see cref="MaxGroupMemos"/> exist,
+    /// else the least recently used one, recycled.</summary>
+    private GroupMemo NewGroupMemo(ulong shape)
+    {
+        GroupMemo? memo = null;
+        if (_groupMemos.Count >= MaxGroupMemos)
+        {
+            memo = _groupMemos[0];
+            for (int k = 1; k < _groupMemos.Count; k++) if (_groupMemos[k].Turn < memo.Turn) memo = _groupMemos[k];
+        }
+        else _groupMemos.Add(memo = new GroupMemo());
+        memo.Shape = shape;
+        memo.Count = 0;
+        return memo;
+    }
+
+    /// <summary><paramref name="memo"/> now describes the surface retained under <paramref name="key"/>: this turn's
+    /// <paramref name="count"/> entries (in <see cref="_groupEntries"/>; the buffers swap, so neither allocates).</summary>
+    private void RememberGroup(GroupMemo memo, ulong key, int count)
+    {
+        memo.Key = key;
+        memo.Turn = _compositeTurn;
+        (memo.Entries, _groupEntries) = (_groupEntries, memo.Entries);
+        memo.Count = count;
+    }
+
+    /// <summary>Repair the surface <paramref name="memo"/> describes into this turn's content (<paramref name="key"/>): clear
+    /// each rect whose entries changed and redraw every enclosed item scissored to it. False (nothing touched) when the
+    /// entries cannot be compared, too much changed, or the surface is gone or already drawn this turn.</summary>
+    private bool RepairGroup(in CompositeFrame frame, int i, in PixelRect region, ulong key, GroupMemo memo, int count)
+    {
+        int w = region.Right - region.Left, h = region.Bottom - region.Top;
+        int n = GroupDelta.Diff(memo.Entries.AsSpan(0, memo.Count), _groupEntries.AsSpan(0, count), (long)w * h, _groupDirty);
+        if (n < 0) return false;
+        int s = _surfaces!.FindRetainedForRepair(memo.Key, _fenceValue + 1);
+        if (s < 0) return false;
+        _groupRenders++;
+        _groupRepairs++;
+        if (n > 0)
+        {
+            ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+            BeginPass(_surfaces.ScratchRtv(s), w, h, PassLoad.Preserve);
+            BindCompositor(_surfaces.ScratchW(s), _surfaces.ScratchH(s));
+            int end = Math.Min(frame.Items.Length, i + 1 + frame.Items[i].GroupCount);
+            for (int k = 0; k < n; k++)
+            {
+                PixelRect d = _groupDirty[k];
+                // what the full render's CLEAR load op writes, inside this rect only
+                _compositor!.Scissor(_cmdList, d.Left, d.Top, d.Right, d.Bottom);
+                _compositor.Begin(d.Left, d.Top, d.Right, d.Bottom);
+                _compositor.Color(new ColorF(0f, 0f, 0f, 0f));
+                _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
+                _drawClip = new PixelRect(d.Left + region.Left, d.Top + region.Top, d.Right + region.Left, d.Bottom + region.Top);
+                _drawClipOn = true;
+                DrawRange(in frame, i + 1, end, region.Left, region.Top, w, h, -1);
+                _drawClipOn = false;
+            }
+            EndPassIfOpen();
+            ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        _itemSurface[i] = s; _itemDown[i] = 1; _itemRegion[i] = region;
+        _surfaces.Retain(s, key, 1, RetainedCap());
+        RememberGroup(memo, key, count);
+        return true;
     }
 
     /// <summary>An in-app ACRYLIC backdrop (§A.5): a mini-composite of everything painted before the surface — the clear
@@ -1322,6 +1435,13 @@ public sealed unsafe partial class D3D12Device
             // a partial composite: nothing outside the current repaint rect may be touched (that pixel is the previous frame)
             l = Math.Max(l, _frameClip.Left - ox); t = Math.Max(t, _frameClip.Top - oy);
             r = Math.Min(r, _frameClip.Right - ox); b = Math.Min(b, _frameClip.Bottom - oy);
+            if (r <= l || b <= t) { l = t = r = b = 0; }
+        }
+        if (_drawClipOn)
+        {
+            // a group repair: nothing outside the rect being repaired may be touched (that pixel is already current)
+            l = Math.Max(l, _drawClip.Left - ox); t = Math.Max(t, _drawClip.Top - oy);
+            r = Math.Min(r, _drawClip.Right - ox); b = Math.Min(b, _drawClip.Bottom - oy);
             if (r <= l || b <= t) { l = t = r = b = 0; }
         }
         _compositor.Scissor(_cmdList, l, t, r, b);

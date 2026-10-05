@@ -304,6 +304,25 @@ internal sealed unsafe class SurfacePool : IDisposable
         return -1;
     }
 
+    /// <summary><see cref="FindRetained"/> for a result about to be REPAIRED in place (an unblurred group surface patched over
+    /// the pixels that changed — <c>GroupDelta</c>): −1 unless a result is retained under <paramref name="key"/> AND nothing
+    /// has drawn it this turn yet (it is about to stop being that content). Earlier turns' reads of it precede this turn's
+    /// writes on the one queue.</summary>
+    public int FindRetainedForRepair(ulong key, ulong frameFence)
+    {
+        for (int i = 0; i < _scratch.Length; i++)
+        {
+            ref Entry e = ref _scratch[i];
+            if (!e.Retained || e.RetainKey != key || e.Res == null) continue;
+            if (e.LastTurn == _turn) return -1;
+            e.InUse = true;
+            e.LastTurn = _turn;
+            e.LastUseFence = frameFence;
+            return i;
+        }
+        return -1;
+    }
+
     /// <summary>Keep scratch <paramref name="i"/> (leased this turn) across turns under <paramref name="key"/>, replacing
     /// whatever was retained under it before — within <paramref name="capBytes"/> of retained surfaces in all
     /// (<c>TileBudget.RetainedBytesCap</c>): past it the least recently used retained results NOT used this turn return to
