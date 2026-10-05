@@ -6,7 +6,8 @@
     <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
   <!-- Windows OS-services surface (WinAppSDK-shaped): runtime wrappers for toast notifications, credential
-       vault, package identity, and activation. Scaffold today — grows as app needs land. MSIX packaging is
+       vault, package identity, and activation, plus the later pillars (media, dialogs, shell, power, network, storage, and
+       devices — DXCore compute-adapter / NPU enumeration). Scaffold today — grows as app needs land. MSIX packaging is
        deliberately NOT here: packaging is delivered app-side (.wapproj / packaging MSBuild props on the consuming
        app), not by a class library. -->
   <ItemGroup>

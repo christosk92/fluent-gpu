@@ -19,7 +19,12 @@ namespace FluentGpu.WindowsApi;
 /// command-line activation classification (<see cref="Activation.ActivationArgs"/>), and single-instance redirect
 /// (<see cref="Activation.SingleInstanceGate"/>) into the app host's <c>IPlatformApp.ActivationRedirected</c> seam.
 /// <b>Shipped</b> (unpackaged path; packaged protocol-arg delivery owes live validation — research §5 #4).</item>
+/// <item><c>Devices/</c> — which hardware compute adapters (GPU / compute accelerator / NPU / media accelerator) the PC
+/// has, over DXCore (<see cref="Devices.ComputeAdapters"/>: fail-soft, any thread, one-shot snapshots of
+/// <see cref="Devices.ComputeAdapterInfo"/>) — the gate for on-device AI features. <b>Shipped.</b></item>
 /// </list>
+/// The later OS-services pillars (<c>Media/</c>, <c>Dialogs/</c>, <c>Shell/</c>, <c>Power/</c>, <c>Network/</c>,
+/// <c>Storage/</c>) are documented on their own types.
 /// MSIX packaging itself stays app-side (publish-then-package), deliberately not in this class library.
 /// </summary>
 public static class WindowsApiInfo

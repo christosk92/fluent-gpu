@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using FluentGpu.WindowsApi.Activation;
 using FluentGpu.WindowsApi.Credentials;
+using FluentGpu.WindowsApi.Devices;
 using FluentGpu.WindowsApi.Dialogs;
 using FluentGpu.WindowsApi.Media;
 using FluentGpu.WindowsApi.Network;
@@ -108,6 +109,11 @@ internal static partial class WindowsApiSmoke
             DropTargetSuite();
             ShellSuite();
             DialogsAndMediaSuite();
+            // Devices (DXCore) needs Windows 10 2004+; the guard keeps the call analyzer-clean under this class's 10240 floor.
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+                DevicesSuite();
+            else
+                Manual("10 Devices — ComputeAdapters", "dxcore.dll needs Windows 10 2004 (build 19041) or later");
         }
         catch (Exception ex)
         {
@@ -118,7 +124,7 @@ internal static partial class WindowsApiSmoke
         Console.WriteLine();
         if (s_failures == 0)
         {
-            Console.WriteLine($"WINDOWSAPI SMOKE PASS — {s_total} checks, all nine pillars exercised end-to-end.");
+            Console.WriteLine($"WINDOWSAPI SMOKE PASS — {s_total} checks, all ten pillars exercised end-to-end.");
             return 0;
         }
         Console.WriteLine($"WINDOWSAPI SMOKE: {s_failures}/{s_total} CHECK(S) FAILED.");
@@ -676,6 +682,50 @@ internal static partial class WindowsApiSmoke
             MediaButton.Play != MediaButton.Unknown && MediaButton.Next != MediaButton.Previous);
         Manual("8.4 SMTC GetForWindow + hardware media-key ButtonPressed", "needs the real window HWND + a key press (gallery Media card)");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (10) Devices — DXCore compute-adapter enumeration (windowless, real OS). A desktop always has a GPU; an NPU is
+    //      reported either way (count + vendor/driver when present) — its absence is not a failure.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    [SupportedOSPlatform("windows10.0.19041")]
+    private static void DevicesSuite()
+    {
+        Section("[10] Devices — ComputeAdapters (DXCore)");
+
+        bool supported = false;
+        bool supportedOk = true;
+        try { supported = ComputeAdapters.IsSupported; }
+        catch (Exception ex) { supportedOk = false; Check("10.1 ComputeAdapters.IsSupported returns without throwing", false, ex.Message); }
+        if (supportedOk) Check("10.1 ComputeAdapters.IsSupported returns without throwing", true, $"IsSupported={supported}");
+
+        try
+        {
+            IReadOnlyList<ComputeAdapterInfo> gpus = ComputeAdapters.Enumerate(ComputeAdapterKind.Gpu);
+            bool described = true;
+            foreach (ComputeAdapterInfo g in gpus)
+                described &= g.IsHardware && !string.IsNullOrWhiteSpace(g.Description);
+            string first = gpus.Count > 0 ? Describe(gpus[0]) : "none";
+            Check("10.2 Enumerate(Gpu) lists ≥ 1 described hardware GPU", gpus.Count >= 1 && described, $"{gpus.Count} GPU(s); first: {first}");
+        }
+        catch (Exception ex) { Check("10.2 Enumerate(Gpu) lists ≥ 1 described hardware GPU", false, ex.Message); }
+
+        try
+        {
+            IReadOnlyList<ComputeAdapterInfo> npus = ComputeAdapters.Enumerate(ComputeAdapterKind.Npu);
+            var sb = new StringBuilder();
+            sb.Append(npus.Count).Append(" NPU(s)");
+            foreach (ComputeAdapterInfo n in npus)
+                sb.Append("; ").Append(Describe(n));
+            // PASS either way: most machines have no NPU. The line is the evidence on the Snapdragon box.
+            Check("10.3 Enumerate(Npu) returns without throwing", true, sb.ToString());
+        }
+        catch (Exception ex) { Check("10.3 Enumerate(Npu) returns without throwing", false, ex.Message); }
+    }
+
+    /// <summary>One adapter as a smoke detail: vendor (raw id), description, driver version.</summary>
+    private static string Describe(ComputeAdapterInfo a) =>
+        $"{ComputeAdapterVendors.DisplayName(a.Vendor)} (0x{a.VendorId:X}) \"{a.Description}\" driver {a.DriverVersion}";
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
     // Child mode: the spawned second instance for the single-instance-redirect test.
