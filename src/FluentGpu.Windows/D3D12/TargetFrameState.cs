@@ -28,7 +28,8 @@ internal sealed unsafe class TargetFrameState
     internal ID3D12GraphicsCommandList* List;                                    // ONE command list per target
     internal void* List4;                                                        // the same object as ID3D12GraphicsCommandList4 (render passes)
     internal readonly ulong[] FenceValues = new ulong[D3D12Device.FRAME_COUNT];  // fence value of the last submit that used back buffer k
-    internal ulong LastSubmitFence;                                              // max(FenceValues): the stamp Resize/teardown waits on
+    internal ulong LastSubmitFence;                                              // max(FenceValues): the stamp of the last submit
+    internal ulong LastPresentFence;                                             // signalled right after this target's last Present that ran: the present's own queue work (the flip; a WARP copy) — folded into TargetFenceHorizon, so Resize/teardown wait for it too
     internal uint FrameIndex;                                                    // GetCurrentBackBufferIndex() at submit entry
 
     // ── Tier-3 stencil path clip (moved from D3D12Swapchain.StencilDsv* + D3D12Device._stencil*) ───────────────────

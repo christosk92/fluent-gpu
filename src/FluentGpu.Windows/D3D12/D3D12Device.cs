@@ -3527,6 +3527,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // reserved is still free and the next turn must not wait for it twice. Per target: a non-primary swapchain obeys
         // the same semaphore contract as the primary (see WaitForLatency, F107).
         if (target.LatencyCreditHeld) target.LatencyCreditHeld = false;
+        // The present's OWN queue work (the flip; on WARP a copy task) runs after Present returns, and the stamp SubmitDrawList
+        // wrote (LastSubmitFence) precedes it — so a teardown or resize that waited for that stamp alone could free this target's
+        // back buffers under the present (the WARP test-host access violation, d3d10warp!Task_Copy under ~CDXGISwapChain).
+        // Signal the device fence past the present and remember the value on THIS target; TargetFenceHorizon folds it in. Per
+        // target, never a device-wide wait (F117). Skipped when the present failed: the device may be gone, and the recover path
+        // drains everything.
+        if ((int)pr >= 0 && _fence != null) target.Frame.LastPresentFence = SignalNext();
         // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
         // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
         if ((int)pr == DxgiStatusOccluded)
@@ -4816,8 +4823,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.Disposed || (w == target.W && h == target.H)) return;
         BeginTargetFrame(target.Frame);
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
-        // stamped, never a full device drain — a detached child's resize must not stall the main window's recorder.
-        WaitForFenceValue(target.Frame.LastSubmitFence);
+        // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
+        // resize must not stall the main window's recorder, and the old back buffers must not be released under a present.
+        WaitForFenceValue(TargetFenceHorizon(target.Frame));
         // Swapchain-sized; recreated lazily at the new size on the next stencil scope. EXPLICIT target (INCIDENT 2026-09
         // §1.4): the old no-arg release freed only the working copy — this clears the target's own storage directly
         // (Phase 1 removes the working-copy concept structurally, so there is no reload to guard against any more).
@@ -4869,12 +4877,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     /// <summary>The fence value that retires everything a target has in flight: the highest value its own submits stamped
     /// (<see cref="TargetFrameState.LastSubmitFence"/> is the running max; the per-back-buffer ledger is folded in as well so a
-    /// stale max can never under-wait). Fence values are device-monotonic, so waiting for this one value also covers every
-    /// earlier submit of the target. 0 = nothing in flight (<see cref="WaitForFenceValue"/> returns at once). Another target's
-    /// stamps are never read: that is the whole point of F117 (a secondary's dispose must not wait on the primary's frame).</summary>
+    /// stale max can never under-wait) AND the value signalled right after its last Present that ran
+    /// (<see cref="TargetFrameState.LastPresentFence"/>: the present's own queue work comes after the submit's stamp). Fence
+    /// values are device-monotonic, so waiting for this one value also covers every earlier submit of the target. 0 = nothing in
+    /// flight (<see cref="WaitForFenceValue"/> returns at once). Another target's stamps are never read: that is the whole point of
+    /// F117 (a secondary's dispose must not wait on the primary's frame).</summary>
     internal static ulong TargetFenceHorizon(TargetFrameState f)
     {
         ulong v = f.LastSubmitFence;
+        if (f.LastPresentFence > v) v = f.LastPresentFence;
         for (int i = 0; i < f.FenceValues.Length; i++)
             if (f.FenceValues[i] > v) v = f.FenceValues[i];
         return v;
@@ -5012,6 +5023,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         {
             System.Array.Clear(_swapchains[i].Frame.FenceValues, 0, _swapchains[i].Frame.FenceValues.Length);
             _swapchains[i].Frame.LastSubmitFence = 0;
+            _swapchains[i].Frame.LastPresentFence = 0;
         }
         System.Array.Clear(_ring.Fence, 0, _ring.Fence.Length);
         // 5. Recreate all pipelines + a fresh (empty) image store; re-arm async image confinement on the new store.

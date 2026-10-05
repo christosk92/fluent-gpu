@@ -44,6 +44,24 @@ public sealed unsafe class TargetTeardownFenceTests
         Assert.Equal(40UL, D3D12Device.TargetFenceHorizon(target.Frame));
     }
 
+    /// <summary>The present's own queue work (the flip; on WARP a copy) runs AFTER the submit's stamp: the device signals the
+    /// fence again right after a Present that ran and records it per target, and the horizon folds that value in — so a teardown or
+    /// resize waiting for the horizon never frees the back buffers under the present. (The signal itself needs a queue: only the
+    /// fold is pinned here, device-free.)</summary>
+    [Fact]
+    public void TheHorizon_CoversTheTargetsOwnPresent_SignalledAfterItsSubmit()
+    {
+        var device = NewDevice();
+        var target = NewTarget(device, 2);
+        target.Frame.FenceValues[0] = 10; target.Frame.LastSubmitFence = 10;
+        target.Frame.LastPresentFence = 11;   // signalled after the present of the frame stamped 10
+
+        Assert.Equal(11UL, D3D12Device.TargetFenceHorizon(target.Frame));
+
+        target.Frame.FenceValues[1] = 14; target.Frame.LastSubmitFence = 14;   // a later submit still wins
+        Assert.Equal(14UL, D3D12Device.TargetFenceHorizon(target.Frame));
+    }
+
     [Fact]
     public void ATargetThatNeverSubmitted_HasNothingToWaitFor()
     {
