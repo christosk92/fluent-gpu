@@ -484,14 +484,15 @@ flowchart TB
 </section>
 
 <section id="s13">
-  <h2><span class="n">13</span>Frame production policy <span class="chip plan">Planned</span></h2>
-  <p>Steady UI work also loads the GPU that the video uses. On the owner's Adreno X1-85 at 120 Hz, the lyrics stepper alone causes about 115 presents per second.</p>
+  <h2><span class="n">13</span>Frame production policy <span class="chip done">Implemented</span></h2>
+  <p>Steady UI work also loads the GPU that the video uses. On the owner's Adreno X1-85 at 120 Hz, the lyrics stepper alone caused about 115 presents per second before the wipe moved to the render thread.</p>
+  <p>The rule (owner decision, 2026-10-03): the engine does not slow VISIBLE motion for focus, for the GPU tier, or for what plays beside it. Only three things pace a frame: a window that is hidden, minimized or covered; the adaptive GPU governor, which measures on-GPU execution; and the Windows Energy Saver cap (<code>AppHost.PowerCapFps</code>). A fixed low rate that drives continuous motion is the anti-pattern. The audit's F241 and F245 proposals (a background-window throttle, a static weak-tier cap) were replaced by the mechanisms below.</p>
   <ul>
-    <li>The engine will apply a central cadence cap. On a weak GPU, loops run at 30 Hz or less (F245).</li>
-    <li>An inactive or covered window will throttle all autonomous wakes (F241, F118).</li>
-    <li>Marquees will move in whole pixels at about 30 Hz (F239).</li>
-    <li>The governor threshold will be a fraction of the display period (F250).</li>
-    <li>The lyrics stepper, the equalizer and the seek rail will run only when they are visible (F237, F240, F182).</li>
+    <li>A pop-out's present never waits behind the main window's present-slot wait. The render thread drains the detached children BEFORE the parent's present decision (every take non-blocking) and commits the composition once after it (F241, F080). The main window keeps its display-rate motion, focused or not.</li>
+    <li>A covered or cloaked window parks its render motion and its marquees like a minimized window does (F118, F239). An unfocused but visible window is not parked.</li>
+    <li>Marquees move in whole device pixels at the display cadence. A tick on which the text has not crossed a pixel edge poses the identical value, and the host elides that frame (F239).</li>
+    <li>The governor's engage and release thresholds are fractions of the measured display period, lower on a weak GPU while a video surface is live because the UI's GPU sample excludes the video processor (F250). There is no static cadence cap.</li>
+    <li>The lyrics stepper, the equalizer and the seek rail run only when they are visible and only while their content moves (F237, F240, F182). Their rate is the display rate, not a fixed cadence.</li>
   </ul>
 </section>
 
