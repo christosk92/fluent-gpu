@@ -1311,6 +1311,7 @@ public sealed partial class AppHost : IDisposable
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         _evBuildTicks = t1 - t0; _evSubmitTicks = t2 - t1;
         NoteTileCensus(slices, tiles);
+        _ledgerTurnTiles += slices.LastRasteredTiles;
         FluentGpu.Scroll.Diag.ScrollProbe.RenderCost(FluentGpu.Scroll.Diag.ScrollCostPhase.Composite, t1 - t0,
             frame.Items.Length, slices.LastExposedTileMissing);
         FluentGpu.Scroll.Diag.ScrollProbe.RenderCost(FluentGpu.Scroll.Diag.ScrollCostPhase.TileRaster, t2 - t1,
@@ -1626,6 +1627,7 @@ public sealed partial class AppHost : IDisposable
                     && !sceneFrame.Images.HasCrossfades(RenderImageClock(rf, sceneFrame)))
                 {
                     Interlocked.Increment(ref _framesSkippedSubmit);
+                    _ledgerTurnOutcome = LedgerTurnOutcome.Elided;
                     long splitElided = Stopwatch.GetTimestamp();
                     DrainVideoForPresentTurn(in rf, elided: true);   // owed regardless (content only) — see its remarks
                     _presentSplit = BuildPresentSplit(splitT0, splitStaged, splitElided, splitElided, splitElided, submitted: false);
@@ -1715,6 +1717,8 @@ public sealed partial class AppHost : IDisposable
                     RepaintDamage = repaint,
                     CarriedFromSeq = _renderSubmissionContinuity.ExtendCarry(rf.Submit.CarriedFromSeq),
                 };
+                if (FrameLedger.Enabled) NoteLedgerSubmit(in repaint, in rf.Submit, compositeOnly ? LedgerTurnOutcome.CompositeOnly
+                    : skip ? LedgerTurnOutcome.SkipSubmit : LedgerTurnOutcome.Recorded);
                 if (skip)
                 {
                     _renderSubmissionContinuity.Elided(rf.PublishSeq);
@@ -1766,6 +1770,7 @@ public sealed partial class AppHost : IDisposable
             {
                 ApplyPresentPacing(in rf, motionRepresent);
                 _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
+                _ledgerTurnOutcome = LedgerTurnOutcome.Direct;
             }
             // A REFUSED non-blocking present (false) skips the video drain below: its Place/Destroy/bind commits stay coupled to
             // the UI frame that reaches the glass, so they ride the owed frame's retry (or the superseding publication).
@@ -1773,6 +1778,7 @@ public sealed partial class AppHost : IDisposable
             if (presented) ArmGeometryMotionPresent(in rf);
             bool landed = !presented || PresentFrame(in rf, composited);
             long splitPresented = Stopwatch.GetTimestamp();
+            _ledgerTurnPresented = presented && landed;
             if (feedbackSize != 0)
             {
                 // Import only successfully presented poses; failed presents must not complete UI lifecycles.
@@ -3026,14 +3032,15 @@ public sealed partial class AppHost : IDisposable
     /// <see cref="InstallRenderThreadForTest"/> for a headless one — so a test can pin which callback runs where (a headless
     /// window never goes async on its own, which is how the wiring used to have no coverage).</summary>
     private Threading.RenderThread BuildRenderThread(bool async, FluentGpu.Pal.IRenderDisplayClock? displayClock)
-        => new(_renderSeam, rf => SubmitPresentOnRenderThread(rf), async: async,
+        => new Threading.RenderThread(_renderSeam, rf => SubmitPresentOnRenderThread(rf), async: async,
             deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
             extraDrain: DrainChildRenderSources, needsTick: HasRenderMotion, tick: RenderMotion,
             tickPeriod: RenderPeriodTicks, displayClock: displayClock,
             takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
             submitAbortHandleSink: _device.SetSubmitAbortHandle,
             ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
-            presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent);
+            presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent)
+        { LedgerSink = LedgerRenderTurn };
 
     /// <summary>Test-only: give a HEADLESS primary host the force-sync render loop a windowed one would have (one
     /// <c>RunFrame</c> = one publish + one <c>DrainSync</c> turn on the fgpu-render thread), wired by the same
@@ -4588,9 +4595,11 @@ public sealed partial class AppHost : IDisposable
         | (1u << (int)InputKind.KeyUp) | (1u << (int)InputKind.Char)
         | (1u << (int)InputKind.Scroll);
 
-    /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
-    public FrameStats RunFrame()
+    /// <summary>The frame proper (<see cref="RunFrame"/> wraps it with the frame ledger, AppHost.Ledger.cs). Every early-out
+    /// stamps <see cref="_ledgerExit"/> (a plain store) so a ledgered frame says which gate stopped it.</summary>
+    private FrameStats RunFrameCore()
     {
+        _ledgerExit = LedgerFrameExit.Painted;
         ImportRecordingFeedback();
         // Seam confinement backstop: the frame pump IS the UI thread. Bind it (idempotent) + assert. Both are
         // [Conditional("FGGUARD")] — live in Debug/CI (proves single-UI-thread ownership), erased from Release/Ship.
@@ -4636,7 +4645,7 @@ public sealed partial class AppHost : IDisposable
         _ring.Clear();
         long gapT = Stopwatch.GetTimestamp();                 // UI-gap segments (AppHost.UiGap.cs)
         _pumpedEvents = _window.PumpInto(_ring);              // 1 pump
-        GapSegment(ref _gapMessagesTicks, gapT);
+        _ledgerPumpQpc = GapSegment(ref _gapMessagesTicks, gapT);
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
 
         // Window-close gate: the pump above dispatches WM_CLOSE (→ _closed = true, HWND destroyed). Once closed, STOP driving
@@ -4649,6 +4658,7 @@ public sealed partial class AppHost : IDisposable
         if (_window.IsClosed)
         {
             ShutdownRenderThreadOnClose();
+            _ledgerExit = LedgerFrameExit.Closed;
             LastStats = new FrameStats(0, 0, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             NoteNoPresentTurn();   // closing: no present this turn either (see _lastNoPresentQpc's doc)
             return LastStats;
@@ -4719,6 +4729,7 @@ public sealed partial class AppHost : IDisposable
                 }
                 else
                 {
+                    _ledgerExit = LedgerFrameExit.Recovering;
                     LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                     NoteNoPresentTurn();   // blocked on recovery: no present this turn (see _lastNoPresentQpc's doc)
                     return LastStats;   // block cleanly; the render thread's windowWake nudges us when RecoverDone flips
@@ -4842,6 +4853,7 @@ public sealed partial class AppHost : IDisposable
             // the scene) instead of piling up until the restore frame. Same intent as the minimize-EDGE flush above, now
             // per drained minimized frame; a frame with nothing drained costs nothing.
             if (drainedPosts || _runtime.HasPending) FlushToQuiescence();
+            _ledgerExit = LedgerFrameExit.Parked;
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             // Nothing presented this frame (minimized: Paint never runs) — the next present must not be charged for
             // the gap this created (see _lastNoPresentQpc's doc on NotePresented).
@@ -4879,6 +4891,7 @@ public sealed partial class AppHost : IDisposable
                 // NEXT active frame (which may be seconds away at rest) to be released. Async gate off only — under
                 // Async/ForceSync the render thread owns every device touch and reclaims on its own turns instead.
                 if (!_asyncActive) _device.ReclaimCompletedUploads();
+                _ledgerExit = LedgerFrameExit.Idle;
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 // Genuinely idle — no active work, no completed image (the deep-idle case: streak/idleAgo in the
                 // [wake] census). Nothing was owed a present during this stretch; stamp so the NEXT present (the
@@ -4906,6 +4919,7 @@ public sealed partial class AppHost : IDisposable
         // dirty layout) takes the ordinary frame below.
         if (wake == WakeReasons.VideoPumpPending && inputKindMask == 0 && clicks == 0 && TryRunVideoOnlyTurn())
         {
+            _ledgerExit = LedgerFrameExit.VideoOnly;
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             NoteNoPresentTurn();   // no present this turn (see _lastNoPresentQpc's doc)
             if (_wakeDiag is not null) { _wakeDiag.Record(wake, awake: true, rendered: false, reconciled: false, laidOut: false, minimized: false); _wakeDiag.MaybeReport(); }
@@ -4921,6 +4935,7 @@ public sealed partial class AppHost : IDisposable
         // shown. Reported Rendered:false, which is already the shape of the five other early-outs in this method.
         if (ProductionGateBlocks())
         {
+            _ledgerExit = LedgerFrameExit.Gated;
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             // Awake (input/wake reasons were live) but production was gated — nothing was submitted, so the next
             // present must not be charged for this turn's slice of the gap (see _lastNoPresentQpc's doc).
@@ -6170,6 +6185,7 @@ public sealed partial class AppHost : IDisposable
                 RefreshIntervalMs = refreshIntervalMs,
             };
             GapPaintEnd(frameStart);                           // the next UI gap starts here (AppHost.UiGap.cs)
+            if (FrameLedger.Enabled) _ledgerPaint = new LedgerPaintStamps(frameStart, tFlush, tLayout, tAnim, tRecord, tSubmit);
             // scroll-lab E3: the main window's present truth (the same values FrameStats just took) into the probe's UI ring.
             if (!_isDetachedChild && FluentGpu.Scroll.Diag.ScrollProbe.Level != FluentGpu.Scroll.Diag.ProbeLevel.Off)
                 FluentGpu.Scroll.Diag.ScrollProbe.Present(Stopwatch.GetTimestamp(), LastStats.PresentsDisplayed, LastStats.PresentsDropped,
@@ -7330,6 +7346,7 @@ public sealed partial class AppHost : IDisposable
 
     public void Dispose()
     {
+        FrameLedger.Release(this);
         PrepareDispose();
         _renderThread?.Dispose();   // Step 4: stop + join the fgpu-render thread before tearing down the device it submits to
         // Detached child windows FIRST and OUTSIDE our own park (INCIDENT 2026-09 §2.4): each child's Dispose parks

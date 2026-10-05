@@ -156,6 +156,16 @@ public sealed class RenderThread : IDisposable
     private PresentSplit _worstSplit;
     private ulong _turnStartCycles;
     private double _renderCyclesPerMs;
+    // The frame ledger's view of the turn (FrameLedger): what the present decision did, when the slot opened and the present
+    // returned, the publication it presented and the ticks it skipped. Plain render-thread stores every turn; read only by the
+    // ledger hand-off at the turn's end, and only while the ledger is on.
+    private LedgerTurnKind _turnKind;
+    private long _turnSlotOpenQpc, _turnDoneQpc, _turnLedgerTickSeq, _turnLedgerTickQpc, _turnStartAlloc;
+    private ulong _turnPublishSeq;
+    private int _turnMissed;
+    /// <summary>The owning host's frame-ledger hand-off (AppHost.Ledger.cs), called at the end of every turn while
+    /// <see cref="FrameLedger.Enabled"/>. Set once, right after construction (the first turn needs a publish or a wake).</summary>
+    internal LedgerTurnSink? LedgerSink { get; set; }
     // The host's side of the [render.pace] line (governor, present-queue depth, GPU execution) — read once a second.
     private readonly Func<RenderPaceHostState>? _paceHost;
     private long _requestedDrains, _completedDrains;
@@ -294,6 +304,7 @@ public sealed class RenderThread : IDisposable
         ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Render);   // this thread is the SOLE ComPtr owner for submit/present
         while (true)
         {
+            long waitStart = Stopwatch.GetTimestamp();
             bool motionDue = _needsTick?.Invoke() == true;
             if (!motionDue) { _motionRun.Break(); _catchUp.Break(); }   // idle is not a missed tick: the next paced present starts a new run
             _displayClock?.SetActive(motionDue);
@@ -310,6 +321,11 @@ public sealed class RenderThread : IDisposable
             }
             long turnStart = Stopwatch.GetTimestamp();
             _turnStartCycles = FluentGpu.Foundation.ThreadCycles.Read();
+            _turnStartAlloc = GC.GetAllocatedBytesForCurrentThread();
+            _turnKind = LedgerTurnKind.Bare;
+            _turnSlotOpenQpc = _turnDoneQpc = _turnLedgerTickSeq = _turnLedgerTickQpc = 0;
+            _turnPublishSeq = 0;
+            _turnMissed = 0;
             long requestedDrain = Volatile.Read(ref _requestedDrains);
             if (!_running) break;
             // Step 4: device-lost recovery takes priority. The UI observed a lost device and is BLOCKING (not publishing)
@@ -366,6 +382,7 @@ public sealed class RenderThread : IDisposable
             }
             bool motionLive = PresentTurn(turnStart);
             _postTurn?.Invoke();   // the turn's one composition commit: the children's and the parent's placements, one DWM frame (F080)
+            if (FrameLedger.Enabled && LedgerSink is { } ledger) HandLedgerTurn(ledger, waitStart, turnStart);
             ReportPace(turnStart, motionLive);
             if (requestedDrain > Volatile.Read(ref _completedDrains))
             {
@@ -374,6 +391,23 @@ public sealed class RenderThread : IDisposable
             }
         }
         _displayClock?.SetActive(false);
+    }
+
+    /// <summary>The frame ledger's hand-off at a turn's end (only while it records): the loop's own facts of the turn - stamps, the
+    /// present decision, this thread's cycles and allocations - to the owning host, which adds its submit's and records the turn.</summary>
+    private void HandLedgerTurn(LedgerTurnSink sink, long waitStart, long turnStart)
+    {
+        long end = Stopwatch.GetTimestamp();
+        ulong cycles = FluentGpu.Foundation.ThreadCycles.Read();
+        var facts = new LedgerTurnFacts
+        {
+            WaitStartQpc = waitStart, StartQpc = turnStart, SlotOpenQpc = _turnSlotOpenQpc, DoneQpc = _turnDoneQpc, EndQpc = end,
+            TickSeq = _turnLedgerTickSeq, TickQpc = _turnLedgerTickQpc, PublishSeq = _turnPublishSeq, Kind = _turnKind,
+            MissedTicks = _turnMissed,
+            Cycles = cycles >= _turnStartCycles && _turnStartCycles != 0 ? cycles - _turnStartCycles : 0, CyclesTotal = cycles,
+            AllocBytes = GC.GetAllocatedBytesForCurrentThread() - _turnStartAlloc,
+        };
+        sink(in facts);
     }
 
     /// <summary>The one present decision of a turn. Returns whether render motion is live (for the pace report).
@@ -416,6 +450,7 @@ public sealed class RenderThread : IDisposable
         // the loop goes back to its tick wait instead of blocking for a credit it would not spend on this vblank.
         if (tickSeq != 0 && tickSeq == _lastPresentedTickSeq)
         {
+            _turnKind = LedgerTurnKind.TickSpent;
             Volatile.Write(ref _skippedTicks, _skippedTicks + 1);
             if (fresh && _lastPresentWasMotion && tickSeq != _raceTickSeq)
             {
@@ -429,8 +464,10 @@ public sealed class RenderThread : IDisposable
         // a slot take or a policy call. Retaking would either be charged by the policy as a catch-up that did not hold (a
         // re-run is not a new busy tick — it would back off for a second on every such wake), or, near the end of the
         // tick, open the slot just after the next vblank and present THIS tick's frame there: the late phase the skip escaped.
-        if (tickSeq != 0 && tickSeq == _catchUpTickSeq) return motion;
+        if (tickSeq != 0 && tickSeq == _catchUpTickSeq) { _turnKind = LedgerTurnKind.CatchUp; return motion; }
         _turnTickQpc = tickQpc;
+        _turnLedgerTickSeq = tickSeq;
+        _turnLedgerTickQpc = tickQpc;
         // The tick this turn's pose is decided for, for the render poser's engaged-edge crossings (same thread).
         FluentGpu.Scroll.Diag.EngagedCrossings.CurrentTickSeq = tickSeq;
         FluentGpu.Scroll.Diag.EngagedCrossings.CurrentTickQpc = tickQpc;
@@ -452,7 +489,7 @@ public sealed class RenderThread : IDisposable
         // The UI asked to park while the slot was being waited for (the take returns false WITHOUT taking the credit when the
         // park request interrupts it): present nothing, and do not retake below — the retake is the wait the UI is blocked
         // behind. The gate at the top of the loop parks next; the publication stays pending for the turn after Resume.
-        if (!held && Volatile.Read(ref _resizeQuiesce) != 0) return motion;
+        if (!held && Volatile.Read(ref _resizeQuiesce) != 0) { _turnKind = LedgerTurnKind.Parked; return motion; }
         if (!held && paced)
         {
             // The previous present missed its vblank and owns this one. Skip while frames fit the early phase (the next
@@ -461,14 +498,16 @@ public sealed class RenderThread : IDisposable
             {
                 _catchUpTickSeq = tickSeq;
                 Volatile.Write(ref _catchUpSkips, _catchUpSkips + 1);
+                _turnKind = LedgerTurnKind.CatchUp;
                 return motion;   // tick NOT marked presented: MotionTickRun charges it at the next present (the next Turn
                                  // row shows missed=1 — no new probe row needed); the credit was not taken, nothing to undo
             }
             // Liveness-bounded: proceeds (credit held) even if the slot never opens. An interrupting park request is the one
             // false it can return — nothing was taken, so there is nothing to undo.
-            if (!_takePresentSlot!.Invoke(-1) && Volatile.Read(ref _resizeQuiesce) != 0) return motion;
+            if (!_takePresentSlot!.Invoke(-1) && Volatile.Read(ref _resizeQuiesce) != 0) { _turnKind = LedgerTurnKind.Parked; return motion; }
         }
         long slotOpen = Stopwatch.GetTimestamp();
+        _turnSlotOpenQpc = slotOpen;
         ulong slotOpenCycles = FluentGpu.Foundation.ThreadCycles.Read();
         long slotWait = slotOpen - slotWait0;
         _slotWaitSumQpc += slotWait; _slotWaitCount++;
@@ -504,6 +543,8 @@ public sealed class RenderThread : IDisposable
                 Volatile.Write(ref _presentAck, rf.PublishSeq);
                 _lastPresentWasMotion = false;
                 presented = true;
+                _turnKind = LedgerTurnKind.Fresh;
+                _turnPublishSeq = rf.PublishSeq;
             }
             else if (ownMotion) verdict = PresentVerdict.PresentMotion;
         }
@@ -514,12 +555,15 @@ public sealed class RenderThread : IDisposable
             _tick?.Invoke();
             _lastPresentWasMotion = true;
             presented = true;
+            _turnKind = LedgerTurnKind.Motion;
         }
         if (presented)
         {
             long done = Stopwatch.GetTimestamp();
             long missed = _motionRun.Presented(tickSeq);
             if (missed > 0) Volatile.Write(ref _missedMotionTicks, _missedMotionTicks + missed);
+            _turnDoneQpc = done;
+            _turnMissed = (int)Math.Min(missed, int.MaxValue);
             _lastPresentedTickSeq = tickSeq;
             long tickBase = tickQpc != 0 && tickQpc <= turnStart ? tickQpc : turnStart;
             long lag = done - tickBase;
@@ -706,3 +750,15 @@ public sealed class RenderThread : IDisposable
         _parkRequested.Dispose();
     }
 }
+
+/// <summary>The render loop's own facts of one turn, handed to <see cref="RenderThread.LedgerSink"/> (FrameLedger).</summary>
+internal struct LedgerTurnFacts
+{
+    public long WaitStartQpc, StartQpc, SlotOpenQpc, DoneQpc, EndQpc, TickSeq, TickQpc, AllocBytes;
+    public ulong PublishSeq, Cycles, CyclesTotal;
+    public LedgerTurnKind Kind;
+    public int MissedTicks;
+}
+
+/// <summary>The owning host's side of a ledgered render turn (render thread; must not allocate).</summary>
+internal delegate void LedgerTurnSink(in LedgerTurnFacts facts);

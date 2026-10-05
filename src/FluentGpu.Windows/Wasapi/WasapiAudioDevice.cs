@@ -176,6 +176,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         {
             int hr = _client->Stop();
             _started = false;
+            AudioHealth.NoteDeviceIdle();
             if (hr < 0 && IsDeviceLostHr(hr)) MarkLost(hr);
         }
     }
@@ -214,6 +215,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(hr);
         }
         Interlocked.Exchange(ref _written, 0);
+        AudioHealth.NoteDeviceIdle();
     }
     /// <inheritdoc/>
     /// <remarks>A NEGATIVE <paramref name="timeoutMs"/> means INFINITE (R-3): the session passes -1 while a pause fade has finished
@@ -252,6 +254,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 if (IsDeviceLostHr(hr)) MarkLost(hr);
                 break;
             }
+            if (written == 0) AudioHealth.NoteDevicePadding((int)padding, (int)_bufferFrames, Format.SampleRate, _started);
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
             {

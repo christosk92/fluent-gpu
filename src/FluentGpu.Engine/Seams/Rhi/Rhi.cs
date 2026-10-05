@@ -24,7 +24,15 @@ public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear,
 /// is monotonic within that target; <paramref name="SubmitAge"/> is how many submissions to the SAME target have happened
 /// since the measured submit (the double-buffered D3D path normally publishes at age 2); <paramref name="PublishedQpc"/>
 /// is the CPU QPC instant at which fence retirement made the timestamp pair readable.</summary>
-public readonly record struct GpuRenderSample(double ExecutionMs, ulong Sequence, ulong SubmitAge, long PublishedQpc);
+public readonly record struct GpuRenderSample(double ExecutionMs, ulong Sequence, ulong SubmitAge, long PublishedQpc)
+{
+    /// <summary>The target-local submit the sample measured (0 = unknown); the current submit is this plus <see cref="SubmitAge"/>.</summary>
+    public ulong SubmitSequence { get; init; }
+    /// <summary>The GPU's begin / end timestamps mapped onto QPC through the queue's clock calibration (0 = unknown).</summary>
+    public long GpuStartQpc { get; init; }
+    /// <inheritdoc cref="GpuStartQpc"/>
+    public long GpuEndQpc { get; init; }
+}
 
 [Flags]
 public enum RectSubmittedAreaFlags : byte

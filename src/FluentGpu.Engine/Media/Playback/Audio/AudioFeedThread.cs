@@ -361,6 +361,7 @@ public sealed class AudioFeedThread : IDisposable
             if (gapFrames > 0 && !suppress)
             {
                 Interlocked.Add(ref _xrunFramesLost, gapFrames);   // severity accrues every block of the incident
+                AudioHealth.NoteXrun(0, gapFrames);
                 if (incidentEdge)
                 {
                     RecordXrun(gapFrames, rings[i].Ring.BufferedFrames, rings[i].VoiceId);
@@ -382,7 +383,7 @@ public sealed class AudioFeedThread : IDisposable
         // Fix 2 hook (spec, PcmAudioSession.SuppressXrunAccounting remarks): a control-requested seek/flush intentionally
         // empties the ring, so the RT loop's very next reads finding it empty are a PLANNED rebuffer, not a real underrun —
         // gate the xrun increment on the session's suppression flag (a single volatile bool read; safe on the RT thread).
-        if (starved && !_session.SuppressXrunAccounting) Interlocked.Increment(ref _xrunCount);
+        if (starved && !_session.SuppressXrunAccounting) { Interlocked.Increment(ref _xrunCount); AudioHealth.NoteXrun(1, 0); }
         if (lowWater)
         {
             Interlocked.Increment(ref _managerLowWaterWakeCount);
