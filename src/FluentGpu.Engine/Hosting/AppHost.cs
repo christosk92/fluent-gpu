@@ -2320,6 +2320,7 @@ public sealed partial class AppHost : IDisposable
     {
         int raw = RecommendedWaitMsCore();          // sets _lastWaitKind
         int w = ClampWaitToTimers(raw, _lastWaitKind);
+        w = ClampWaitToScrollChrome(w, _lastWaitKind);   // a scrollbar dwell (the idle hide) wakes exactly when it expires
         w = ClampWaitToOcclusionProbe(w, _lastWaitKind);   // an occluded (not parked) window still wakes to re-probe its target
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
@@ -2364,6 +2365,18 @@ public sealed partial class AppHost : IDisposable
     /// to 0 — that turns the loop into a pure poll for as long as the drain stays out of reach. Hence the two guards
     /// below: minimized returns untouched, and every other clamp floors at 1 ms.
     /// </para></summary>
+    /// <summary>Shorten an idle/throttled wait to the scrollbar chrome's earliest dwell expiry (the 2 s idle hide, the
+    /// hover dwells): the dwell needs no frames while it counts, only the one where it expires. Same rules as
+    /// <see cref="ClampWaitToTimers"/>: a display-rate wait and a parked host are left alone, and never a 0 wait.</summary>
+    private int ClampWaitToScrollChrome(int w, HostWaitKind kind)
+    {
+        if (IsDisplayRateWait(kind, w) || IsParked) return w;
+        if (!_scrollChrome.TryPeekDue(out double due)) return w;
+        int dueIn = (int)Math.Ceiling(Math.Max(0.0, due - _timers.NowMs));
+        if (dueIn < 1) dueIn = 1;
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
+    }
+
     private int ClampWaitToTimers(int w, HostWaitKind kind)
     {
         if (IsDisplayRateWait(kind, w)) return w;
@@ -2730,7 +2743,8 @@ public sealed partial class AppHost : IDisposable
             r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
         // An unsettled plan needs UI frames (the virtualizer re-windows on it every frame; the render poser moves the
         // pixels on its own ticks) and a live chrome cycle needs its tick.
-        if (_scrollUnsettledCount > 0 || _scrollChrome.NeedsFrame) r |= WakeReasons.ScrollAnim;
+        if (_scrollUnsettledCount > 0 || _scrollChrome.NeedsFrame
+            || (_scrollChrome.TryPeekDue(out double chromeDue) && chromeDue <= _timers.NowMs)) r |= WakeReasons.ScrollAnim;
         // A frame-aligned producer (DirectManipulation engaged/pending, or a touchpad wheel-fallback gesture live) needs one
         // PumpScroll per refresh regardless of whether a plan is already live.
         if (_window.ScrollProducerLive) r |= WakeReasons.ScrollProducer;
@@ -4182,7 +4196,7 @@ public sealed partial class AppHost : IDisposable
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
             bool scrollActive = AnyUserScrollMoving;
             if (_navThrottleFrames > 0) _navThrottleFrames--;   // decay the P1b nav-burst window one frame at a time
-            _scrollChrome.Tick(dtMs);                          // 7 conscious scrollbar fade/expand (chrome never touches motion)
+            _scrollChrome.Tick(dtMs, _timers.NowMs);           // 7 conscious scrollbar fade/expand (chrome never touches motion; dwells on the timer clock)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             // 7 E5 edge auto-scroll (drag near an overflowing viewport edge).
