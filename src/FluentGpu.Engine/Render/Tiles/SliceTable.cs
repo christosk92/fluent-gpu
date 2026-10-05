@@ -99,6 +99,7 @@ public sealed partial class SliceTable
     private readonly bool[] _used;
     private readonly int[] _pendingFrame;
     private readonly int[] _scheduledFrame;
+    private int _reqCount;   // tiles the CURRENT / last turn requested: 0 ⇒ the last turn asked for nothing (a minimized window), so the idle trim must not treat everything as stale
     private readonly long[] _usedMs;   // wall clock (Environment.TickCount64) of the tile's latest Request — the idle trim's clock
 
     // ── surfaces ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -244,6 +245,7 @@ public sealed partial class SliceTable
     public void BeginFrame(int frame)
     {
         _frame = frame;
+        _reqCount = 0;
         _n0 = _n1 = _n2 = 0;
         _trimCount = 0;
         Array.Clear(_degraded);
@@ -269,6 +271,7 @@ public sealed partial class SliceTable
     /// turn requested it.</summary>
     public int EvictStale(long nowMs, long staleMs = StaleTileMs)
     {
+        if (_reqCount == 0) return 0;   // the last turn requested nothing (empty viewport): its protected set is empty, so never judge by it
         int n = 0;
         for (int t = 0; t < _tiles.Length; t++)
         {
@@ -278,6 +281,21 @@ public sealed partial class SliceTable
             n++;
         }
         return n;
+    }
+
+    /// <summary>Milliseconds until the first resident tile outside the last turn's set turns stale (<see cref="EvictStale"/>):
+    /// 0 when one already is, -1 when there is none (nothing for the idle trim to wait for).</summary>
+    public long NextStaleInMs(long nowMs, long staleMs = StaleTileMs)
+    {
+        if (_reqCount == 0) return -1;
+        long best = long.MaxValue;
+        for (int t = 0; t < _tiles.Length; t++)
+        {
+            if (!_used[t] || _tiles[t].Surface < 0 || _tiles[t].LastUsedFrame == _frame) continue;
+            long due = _usedMs[t] + staleMs - nowMs;
+            if (due < best) best = due;
+        }
+        return best == long.MaxValue ? -1 : Math.Max(0, best);
     }
 
     /// <summary>Name EVERY free slot that may still hold a texture, without waiting out <see cref="SurfaceTrimTurns"/> (the
@@ -459,6 +477,7 @@ public sealed partial class SliceTable
             if (ts.LastUsedFrame == _frame && ts.Order < ord) ord = ts.Order;   // a duplicate keeps its best order
             ts.LastUsedFrame = _frame;
             _usedMs[t] = Environment.TickCount64;
+            _reqCount++;
             ts.Order = ord;
 
             // The surface extent this tile needs: an effect slice's region, else the whole tile.

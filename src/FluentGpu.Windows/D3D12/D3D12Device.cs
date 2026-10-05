@@ -2813,21 +2813,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_device == null) return -1;
         AssertSubmitThread();
         ulong completed = _fence->GetCompletedValue();
-        int next = 5000;
+        long next = long.MaxValue;
         if (_surfaces is { } sp)
         {
-            sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
-            if (sp.RetiredCount > 0) next = 500;   // the fence has not passed them yet
+            int n = sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
+            if (n >= 0) next = n;
         }
         for (int i = 0; i < _swapchains.Count; i++)
         {
             var sc = _swapchains[i];
             if (sc.Disposed) continue;
             var f = sc.Frame;
-            if (ShouldReleaseStencil(f.StencilDsv != null, nowMs, f.StencilLastUseMs, f.LastSubmitFence, completed)) ReleaseStencilDsv(f);
-            else if (f.StencilDsv != null) next = Math.Min(next, 2000);
+            if (f.StencilDsv == null) continue;
+            if (ShouldReleaseStencil(true, nowMs, f.StencilLastUseMs, f.LastSubmitFence, completed)) { ReleaseStencilDsv(f); continue; }
+            long left = StencilIdleReleaseMs - (nowMs - f.StencilLastUseMs);
+            next = Math.Min(next, left > 0 ? left : 500);   // idle long enough: only the fence is outstanding
         }
-        return next;
+        return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
     }
 
     /// <summary>Idle-path tile texture release: the same fence-gated retire a composite turn's trim list performs

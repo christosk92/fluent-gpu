@@ -226,6 +226,7 @@ public sealed class RenderThread : IDisposable
                         Func<long, int>? idleTrim = null)
     {
         _idleTrim = idleTrim;
+        _idleTrimWaitMs = idleTrim is null ? -1 : 0;   // due at once: the first clean-idle wait times out into the first pass
         _presentSplit = presentSplit;
         _preTurn = preTurn;
         _postTurn = postTurn;
@@ -327,7 +328,7 @@ public sealed class RenderThread : IDisposable
                 else if (_idleTrimWaitMs >= 0)
                 {
                     // Clean idle with housekeeping due: a timed-out wait runs it (no turn: nothing woke us) and waits again.
-                    if (!_wake.WaitOne(_idleTrimWaitMs))
+                    if (!_wake.WaitOne((int)Math.Max(1, _idleTrimDueMs - Environment.TickCount64)))
                     {
                         _idleTrimWaitMs = RunIdleTrim();
                         continue;
@@ -395,7 +396,7 @@ public sealed class RenderThread : IDisposable
             bool motionLive = PresentTurn(turnStart);
             _postTurn?.Invoke();   // the turn's one composition commit: the children's and the parent's placements, one DWM frame (F080)
             ReportPace(turnStart, motionLive);
-            if (_idleTrim is not null && (!_idleTrimStarted || (_idleTrimWaitMs >= 0 && Environment.TickCount64 >= _idleTrimDueMs))) _idleTrimWaitMs = RunIdleTrim();
+            if (_idleTrim is not null && (!_idleTrimStarted || _idleTrimWaitMs < 0 || Environment.TickCount64 >= _idleTrimDueMs)) _idleTrimWaitMs = RunIdleTrim();
             if (requestedDrain > Volatile.Read(ref _completedDrains))
             {
                 Volatile.Write(ref _completedDrains, requestedDrain);

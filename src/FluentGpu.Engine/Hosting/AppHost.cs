@@ -718,26 +718,29 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
-    private const int IdleTrimPeriodMs = 5000;
-    private long _idleTrimNextMs;
+    private bool _idleTrimDormant;   // the last pass found nothing trimmable; any composite turn clears it (SubmitSlices)
 
     /// <summary>Render-thread housekeeping between turns, on wall clock (never a turn count: an idle app runs no turns). Evicts
     /// retained tiles nothing has requested for <see cref="FluentGpu.Render.Tiles.SliceTable.StaleTileMs"/> (never the last turn's
     /// own set) and hands their textures back, then lets the device drain its retired queues and drop idle scratch / stencil /
-    /// staging resources. Returns the ms until the next pass.</summary>
+    /// staging resources. Returns the ms until it next has something to do, or -1 when nothing is trimmable (the render
+    /// thread then blocks indefinitely until a turn re-arms it): a clean-idle app takes no periodic wake.</summary>
     private int TrimIdleOnRenderThread(long nowMs)
     {
-        if (nowMs < _idleTrimNextMs) return (int)(_idleTrimNextMs - nowMs);
-        int next = IdleTrimPeriodMs;
-        if (_renderTiles is { } tiles && tiles.EvictStale(nowMs) > 0)
+        if (_idleTrimDormant) return -1;
+        long next = long.MaxValue;
+        if (_renderTiles is { } tiles)
         {
-            _device.TrimTileSurfaces(tiles.TrimFreeSlotsNow());
-            next = 500;   // the retired textures release once the fence passes them: look again soon
+            tiles.EvictStale(nowMs);
+            var freed = tiles.TrimFreeSlotsNow();
+            if (!freed.IsEmpty) { _device.TrimTileSurfaces(freed); next = 500; }   // the retired textures release once the fence passes
+            long due = tiles.NextStaleInMs(nowMs);
+            if (due >= 0 && due < next) next = Math.Max(1, due);
         }
         int dev = _device.TrimIdleResources(nowMs);
         if (dev >= 0 && dev < next) next = dev;
-        _idleTrimNextMs = nowMs + next;
-        return next;
+        if (next == long.MaxValue) { _idleTrimDormant = true; return -1; }
+        return (int)Math.Min(next, int.MaxValue);
     }
 
     private long RenderPeriodTicks() => Volatile.Read(ref _renderPeriodTicks);
@@ -1324,6 +1327,7 @@ public sealed partial class AppHost : IDisposable
             throw new InvalidOperationException("A detached child host must present through its own swapchain (SubmitDrawList), never SubmitComposite.");
         if (!_device.SupportsComposite)
             throw new InvalidOperationException(_device.BackendName + " cannot composite the retained tiles (SubmitComposite).");
+        _idleTrimDormant = false;   // a composite turn may leave new stale tiles: the idle trim re-arms
         slices.EvidencePublishSeq = publishSeq;   // the ledger frame names the publication it presents
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         var frame = slices.BuildComposite(tiles, scene, in submit, themeEpoch, submit.RepaintDamage, withStreams: true);
@@ -5178,7 +5182,10 @@ public sealed partial class AppHost : IDisposable
         _anim.RenderOwnsCompositor = OwningRenderThread is not null;
         Volatile.Write(ref _renderPeriodTicks, RefreshPeriodQpcOrDefault());
         // Publish the effective device scale for scroll content-transform device-pixel rounding (before reconcile/layout).
-        _scene.DeviceScale = _window.Scale <= 0f ? 1f : _window.Scale;
+        float deviceScale = _window.Scale <= 0f ? 1f : _window.Scale;
+        bool scaleChanged = deviceScale != _scene.DeviceScale;
+        _scene.DeviceScale = deviceScale;
+        if (scaleChanged) _reconciler.RetargetImagesForScale(deviceScale);   // explicit-extent images follow the display's density
         _reconciler.FrameEpoch++;   // one tick per paint
         long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try

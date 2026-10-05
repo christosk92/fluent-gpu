@@ -174,16 +174,21 @@ internal sealed unsafe class SurfacePool : IDisposable
 
     /// <summary>Idle-path housekeeping on the wall clock (render thread, between turns): drain what the fence has passed and
     /// retire FREE scratch nothing has leased for <see cref="LayerTargetTrim.IdleMs"/>: an idle app runs no composite turn to
-    /// age them. A retained derived result is left alone (re-drawing it is the point of keeping it).</summary>
-    public void TrimIdle(long nowMs, ulong completedFence, bool weak)
+    /// age them. A retained derived result is left alone (re-drawing it is the point of keeping it). Returns the ms until it next
+    /// has something to do (-1 = nothing pending).</summary>
+    public int TrimIdle(long nowMs, ulong completedFence, bool weak)
     {
         DrainRetired(completedFence);
+        long next = long.MaxValue;
         for (int i = 0; i < _scratch.Length; i++)
         {
             ref Entry e = ref _scratch[i];
             if (e.Res == null || e.InUse || e.Retained) continue;
             if (LayerTargetTrim.IsIdleFor(nowMs, e.LastUseMs, weak)) Retire(ref e);
+            else next = Math.Min(next, LayerTargetTrim.IdleMs(weak) - (nowMs - e.LastUseMs));
         }
+        if (RetiredCount > 0) next = Math.Min(next, 500);   // waiting on the fence
+        return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
     }
 
     /// <summary>Retire (behind its last-use fence) the texture of every tile slot the <see cref="SliceTable"/> released this

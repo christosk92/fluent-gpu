@@ -2874,6 +2874,44 @@ public sealed partial class TreeReconciler
         return (w, h);
     }
 
+    /// <summary>Pure re-target of an explicit-extent image for a new device scale: Width (DIPs) x scale, Height likewise or
+    /// derived from the aspect ratio, else the height it already had (a hint-driven height cannot be re-derived here).
+    /// A fluid image (<paramref name="width"/> NaN) is the caller's physical-px hint: never re-targeted (returns false).</summary>
+    internal static bool TryRetargetDecode(float width, float height, float aspect, int oldH, float scale, out int w, out int h)
+    {
+        w = h = 0;
+        if (float.IsNaN(width) || !(scale > 0f) || !float.IsFinite(scale)) return false;
+        w = (int)MathF.Ceiling(width * scale - 0.001f);
+        if (!float.IsNaN(height)) h = (int)MathF.Ceiling(height * scale - 0.001f);
+        else if (aspect > 0f && w > 0) h = (int)MathF.Round(w / aspect);
+        else h = oldH;
+        return true;
+    }
+
+    /// <summary>The device scale changed (monitor move, OS scale change): re-request every live explicit-extent image at its new
+    /// physical decode size. A reused node whose props did not change never re-runs its column write (the RecordChanged gate), so
+    /// nothing else would: moving to a denser display kept the 1x handles (soft covers), moving back kept 4x bytes. A node with a
+    /// baked-blur derivative keeps its decode (the derivative is keyed on it). UI thread; rare event, O(nodes).</summary>
+    internal void RetargetImagesForScale(float scale)
+    {
+        if (Images is null) return;
+        int count = _scene.RecordingNodeCount;
+        for (int i = 0; i < count; i++)
+        {
+            var node = _scene.HandleAt(i);
+            if (node.IsNull || !_scene.IsLive(node)) continue;
+            ref NodePaint paint = ref _scene.Paint(node);
+            if (paint.VisualKind != VisualKind.Image || paint.ImageId == 0) continue;
+            if (_scene.TryGetImageEffects(node, out var fx) && fx.DerivedImageId != 0) continue;
+            if (!Images.TryGetTarget(new ImageHandle(paint.ImageId), out string src, out _, out int oldH)) continue;
+            ref LayoutInput li = ref _scene.Layout(node);
+            if (!TryRetargetDecode(li.Width, li.Height, li.AspectRatio, oldH, scale, out int w, out int h)) continue;
+            ImagePriority prio = ImageRequestPriority(node);
+            int newId = Images.Request(src, w, h, prio).Id;
+            SwapImageId(node, ref paint, newId, prio);
+        }
+    }
+
     private int RequestBakedImage(in ImageEl im, int sourceId, int decodeW, int decodeH)
     {
         if (Images is null || sourceId == 0 || im.BakedBlur is not { } baked || baked.IsNone) return 0;

@@ -40,3 +40,28 @@ public sealed class ImageDecodeTargetTests
         Assert.Equal((40, 40), FluentGpu.Reconciler.TreeReconciler.ImageDecodeTarget(in im, float.NaN));
     }
 }
+
+public sealed class ImageRetargetTests
+{
+    [Fact]
+    public void ExplicitExtentFollowsTheNewScale()
+    {
+        Assert.True(FluentGpu.Reconciler.TreeReconciler.TryRetargetDecode(100f, 100f, float.NaN, 0, 2f, out int w, out int h));
+        Assert.Equal((200, 200), (w, h));
+        Assert.True(FluentGpu.Reconciler.TreeReconciler.TryRetargetDecode(100f, 100f, float.NaN, 0, 1f, out w, out h));
+        Assert.Equal((100, 100), (w, h));   // and back down: no 4x bytes kept
+    }
+
+    [Fact]
+    public void HeightFromAspectElseTheOldHeight()
+    {
+        Assert.True(FluentGpu.Reconciler.TreeReconciler.TryRetargetDecode(100f, float.NaN, 2f, 77, 1.5f, out _, out int h));
+        Assert.Equal(75, h);
+        Assert.True(FluentGpu.Reconciler.TreeReconciler.TryRetargetDecode(100f, float.NaN, float.NaN, 77, 1.5f, out _, out h));
+        Assert.Equal(77, h);
+    }
+
+    [Fact]
+    public void AFluidImageIsNeverRetargeted()
+        => Assert.False(FluentGpu.Reconciler.TreeReconciler.TryRetargetDecode(float.NaN, float.NaN, 1f, 0, 2f, out _, out _));
+}

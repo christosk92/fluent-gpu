@@ -53,11 +53,12 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
     private readonly bool _ownsHttp;
     private readonly DiskImageCache? _disk;
     private readonly string _accept;
-    private ArrayPool<byte> _pool;
+    private volatile ArrayPool<byte> _pool;   // swapped by the idle trim; every rent/return reads the live one
     private readonly bool _ownsPool;          // false for an injected (test) pool: never swapped
     private long _lastUseMs;                  // Environment.TickCount64 of the latest rent
-    private bool _dirty;                      // the pool has held arrays since it was created / last swapped
+    private int _dirty;                      // the pool has held arrays since it was created / last swapped
     private Timer? _idleTimer;
+    internal ArrayPool<byte> PoolForTest => _pool;
 
     public DefaultImageFetcher(HttpClient? http = null, DiskImageCache? diskCache = null, string? acceptHeader = null)
         : this(http, diskCache, acceptHeader, pool: null) { }
@@ -87,20 +88,26 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
 
     private void NoteRent()
     {
-        _lastUseMs = Environment.TickCount64;
-        _dirty = true;
-        if (_idleTimer is not null || !_ownsPool) return;
+        Volatile.Write(ref _lastUseMs, Environment.TickCount64);
+        Volatile.Write(ref _dirty, 1);
+        if (!_ownsPool || Volatile.Read(ref _idleTimer) is not null) return;
         // One cheap 30 s timer for the fetcher's life, started by the first rent (a fetcher that never fetches has none).
-        _idleTimer = new Timer(static o => ((DefaultImageFetcher)o!).TrimIdlePool(), this, PoolIdleTrimMs, PoolIdleTrimMs);
+        // Concurrent first rents (decode workers) race here: the loser's timer is disposed, never left rooted.
+        var t = new Timer(static o => ((DefaultImageFetcher)o!).TrimIdlePool(Environment.TickCount64), this, PoolIdleTrimMs, PoolIdleTrimMs);
+        if (Interlocked.CompareExchange(ref _idleTimer, t, null) is not null) t.Dispose();
     }
 
-    private void TrimIdlePool()
+    /// <summary>Swap in a fresh pool when <see cref="ShouldTrimPool"/> says so (the timer's body; internal for the tests).
+    /// The swap comes first, then the dirty flag is consumed: a rent racing in between re-marks it, so the new pool is trimmed
+    /// later rather than the mark being lost.</summary>
+    internal bool TrimIdlePool(long nowMs)
     {
-        if (!ShouldTrimPool(Environment.TickCount64, Volatile.Read(ref _lastUseMs), _dirty)) return;
-        _dirty = false;
+        if (!ShouldTrimPool(nowMs, Volatile.Read(ref _lastUseMs), Volatile.Read(ref _dirty) != 0)) return false;
         // A rental still in flight returns into the NEW pool (ReturnBuffer/Return both go through _pool): a pow-2 array of
         // any size class is accepted by a fresh pool, so nothing leaks and nothing throws.
         _pool = ArrayPool<byte>.Create(PoolMaxArrayLength, PoolMaxArraysPerBucket);
+        Interlocked.Exchange(ref _dirty, 0);
+        return true;
     }
 
     /// <summary>Hand a <see cref="FetchResult.Buffer"/> back to the dedicated pool (the scheduler's post-decode call).
@@ -112,6 +119,7 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
     {
         if (buffer.Length < 16 || !System.Numerics.BitOperations.IsPow2(buffer.Length)) return;
         _pool.Return(buffer);
+        Volatile.Write(ref _dirty, 1);   // a foreign (disk-cache) array migrating into the pool counts as use
     }
 
     /// <summary>The first rental's requested size: <c>Content-Length</c> + <see cref="ContentLengthSlack"/> when the
