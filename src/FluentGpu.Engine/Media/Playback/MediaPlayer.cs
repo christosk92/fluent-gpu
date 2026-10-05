@@ -503,7 +503,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             if (Interlocked.Exchange(ref _session, null) is { } old)
             {
                 DetachVideoPumpSource();
-                await old.DisposeAsync().ConfigureAwait(false);
+                // Pause first, as Stop() does: a playing session's dispose stops its feed mid-waveform (a click) and plays
+                // whatever it had decoded until then.
+                await PauseAndDisposeAsync(old).ConfigureAwait(false);
             }
             // A session Stop() released may still be disposing in the background: wait for it too, so its engine is back
             // before the backend leases one for this open (the backends' return-before-lease sequencing). Never faults.
