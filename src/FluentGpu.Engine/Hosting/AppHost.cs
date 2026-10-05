@@ -2716,6 +2716,9 @@ public sealed partial class AppHost : IDisposable
         var wsz = _window.ClientSizePx;
         if (_window.Scale != _lastScale || wsz.Width != _lastSize.Width || wsz.Height != _lastSize.Height)
             r |= WakeReasons.FrameNeeded;
+        // A theme mutation (Tok.Use / Tok.SetAccent, from anywhere: a settings click, an async album accent) is work the
+        // next Paint re-renders for: it wakes that frame itself instead of waiting on an unrelated wake. One int compare.
+        if (Tok.Epoch != _lastThemeEpoch) r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so the [wake] census can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
