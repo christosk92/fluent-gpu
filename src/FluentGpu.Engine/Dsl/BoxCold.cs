@@ -6,7 +6,8 @@ namespace FluentGpu.Dsl;
 // The rarely-set BoxEl channels, split into four themed blocks so a box that sets none costs four null references and one
 // that sets a few clones only the block it touches. Copy-on-write: BoxEl's `with` copies share a block until a setter runs
 // on the copy, which clones it first (Owner tells a clone made for that element from a shared one). Defaults mirror the
-// former inline initializers exactly; Owner is excluded from equality.
+// former inline initializers exactly; Owner is excluded from equality. A setter that writes the value a channel already
+// holds (the default included) does not clone the block.
 
 /// <summary>BoxEl's rich paint (gradients, shadow, arc, acrylic, feedback, clip path, border extras).</summary>
 internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
