@@ -166,12 +166,6 @@ public partial interface IGpuDevice : IDisposable
     /// VRAM-pressure eviction (adreno-hang-fixes.md M5); default keeps every other backend unaffected.</summary>
     bool TryGetVramUsage(out long usedBytes, out long budgetBytes) { usedBytes = 0; budgetBytes = 0; return false; }
 
-    /// <summary>The display refresh period (ms) the host paces by, fed by the PRIMARY host whenever it changes: the image-upload
-    /// drain budgets its per-turn staging against it on the weak tier (a fixed byte count per turn is twice the bandwidth at
-    /// 120 Hz that it is at 60 Hz). Any thread; a value that is not positive means "unknown". Default no-op (the headless
-    /// seam stages nothing against a vblank).</summary>
-    void SetImageUploadPacing(double displayPeriodMs) { }
-
     /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
     /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
     /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless

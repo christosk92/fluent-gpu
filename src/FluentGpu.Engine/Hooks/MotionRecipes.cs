@@ -169,7 +169,7 @@ public static class MotionRecipes
         if (Motion.ReducedMotion) return;
         // Every GPU tier gets the same shimmer (owner decision, 2026-10-05). The weak-tier branch that seeded a flat,
         // non-looping opacity instead (the Adreno DEVICE_HUNG era: a hot render loop made every decoded texture upload on the
-        // next frame) is gone: the upload drain is budgeted per turn now (UploadTurnBudget), the image cache is sized per tier,
+        // next frame) is gone: the upload drain is budgeted per turn (one flat budget on every tier), the image cache is sized per tier,
         // and a visible loop is never slowed for the hardware it runs on - only the measured GPU governor may pace it.
         anim.Keyframes(node, AnimChannel.Opacity,
             [new Keyframe(0f, 1f), new Keyframe(0.5f, min, Easing.EaseInOut), new Keyframe(1f, 1f, Easing.EaseInOut)],

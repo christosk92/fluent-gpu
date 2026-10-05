@@ -22,9 +22,8 @@ namespace FluentGpu.Rhi.D3D12;
 /// and the interval between consecutive Present returns on that thread is what <c>AppHost.NotePresented</c> scores as a
 /// missed vblank. Staging is CPU work in that interval (Map + padded row memcpy + Unmap per image, plus the pooled
 /// texture acquire), so an unbounded drain turned a burst of landed covers straight into missed vblanks even though
-/// the UI frames themselves averaged 0.5 ms. The drain therefore stages at most <see cref="UploadTurnBudget.BytesPerTurn"/> per
-/// turn (<see cref="UploadBytesPerTurn"/> on the discrete tier; on the weak tier a budget per millisecond of display
-/// period that halves while a video surface is live) and carries the first over-budget job to the next turn (the queue is drained every present turn, and
+/// the UI frames themselves averaged 0.5 ms. The drain therefore stages at most <see cref="UploadBytesPerTurn"/> per
+/// turn (one budget on every GPU tier) and carries the first over-budget job to the next turn (the queue is drained every present turn, and
 /// <see cref="HasPendingUploads"/> reports the carried job so the host keeps turning until it lands).
 /// <see cref="DeferredImageUploads"/> / <see cref="DeferredImageUploadBytes"/> count those carries for the always-on
 /// stats. The heap-churn half of the same defect is the upload ring in <see cref="ImageTextureStore"/>.</para>
@@ -770,21 +769,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// says whether it is being hit.</summary>
     public const int UploadBytesPerTurn = 2 * 1024 * 1024;
 
-    // F255: the weak tier's per-turn budget follows the display period (UploadTurnBudget). Fed by the host
-    // (SetImageUploadPacing: any thread), read by DrainImageJobs on the render thread once a call. The period crosses as the raw
-    // bits of a double (0 = unknown). A live video surface is not an input any more (owner decision, 2026-10-05).
-    private long _uploadPeriodMsBits;
-
-    /// <inheritdoc/>
-    public void SetImageUploadPacing(double displayPeriodMs)
-        => System.Threading.Volatile.Write(ref _uploadPeriodMsBits, BitConverter.DoubleToInt64Bits(displayPeriodMs));
-
-    /// <summary>The per-turn staging budget the next <see cref="DrainImageJobs"/> would use (the pure
-    /// <see cref="UploadTurnBudget"/> over the fed period). Any thread.</summary>
-    internal int CurrentUploadBudgetBytes()
-        => UploadTurnBudget.BytesPerTurn(GpuProfile.IsWeak,
-            BitConverter.Int64BitsToDouble(System.Threading.Volatile.Read(ref _uploadPeriodMsBits)));
-
     // The first job that did not fit this turn's UploadBytesPerTurn, carried to the head of the next drain. The queue
     // has no peek/push-back (and belongs to another seam), so the device holds exactly one job; ownership of its pixel
     // buffer stays with us until Stage copies it and ReturnUploadBuffer hands it back on that later turn. FIFO order is
@@ -793,7 +777,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private FluentGpu.Hosting.Threading.ImageUploadQueue.Job _heldImageJob;
     private bool _hasHeldImageJob;
 
-    /// <summary>Cumulative count of drain turns that hit their per-turn budget (<see cref="CurrentUploadBudgetBytes"/>) and carried a job over. The
+    /// <summary>Cumulative count of drain turns that hit their per-turn budget (<see cref="UploadBytesPerTurn"/>) and carried a job over. The
     /// carried job always stages FIRST on the next turn (the budget never refuses the first job of a turn), so each
     /// carry is counted exactly once and the count equals the number of budget-truncated turns. Plain counter for the
     /// always-on frame stats; read from any thread as a rough gauge (render-thread writes, no fence).</summary>
@@ -804,7 +788,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Seam Step 1 (ASYNC only): drain the UI→render image-upload queue on the render thread, just before the frame's
     // SubmitDrawList opens its command list (so a staged texture is resident before the draw that references it). Every
     // Stage/Free/return-to-pool here runs render-confined → the texture store is single-toucher, no lock.
-    // Budgeted: stages up to CurrentUploadBudgetBytes() of pixels per call (evictions are free and never counted), then holds
+    // Budgeted: stages up to UploadBytesPerTurn of pixels per call (evictions are free and never counted), then holds
     // the first over-budget job for the next turn — see the class summary for why the unbounded drain read as missed
     // vblanks.
     public void DrainImageJobs(FluentGpu.Hosting.Threading.ImageUploadQueue queue)
@@ -814,7 +798,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_fence != null) _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
         int faultsBefore = _imageTextures.ResourceFaults;
         long stagedBytes = 0;
-        int budgetBytes = CurrentUploadBudgetBytes();
+        int budgetBytes = UploadBytesPerTurn;
         while (true)
         {
             FluentGpu.Hosting.Threading.ImageUploadQueue.Job j;

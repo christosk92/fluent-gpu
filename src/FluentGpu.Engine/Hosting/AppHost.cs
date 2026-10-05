@@ -903,9 +903,6 @@ public sealed partial class AppHost : IDisposable
     private ImageStatusHandler? _onSharedImageStatus;   // detached child only: its own nodes' per-id completion route (F108); detached in PrepareDispose
     // M5 (adreno-hang-fixes.md): hysteresis/cooldown/grace for _images.EvictToVramPressure — see VramShedPolicy.cs.
     private VramShedPolicy _vramShed;
-    // F255: the display period this host last fed the device for the weak tier's image-upload budget (FeedUploadPacing). Touched
-    // only by the thread that drains this host's video surfaces (UI in single-thread mode, the render thread otherwise).
-    private double _fedUploadPeriodMs;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
@@ -1902,7 +1899,6 @@ public sealed partial class AppHost : IDisposable
         // which would leave this video child at its pre-resize geometry while the frame moves under it. Telling the
         // window it carries live video lets it keep a throttled keep-alive instead.
         _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
-        FeedUploadPacing();
         _splitVideoMs = ToMs(Stopwatch.GetTimestamp() - videoStart);   // F244: the drain's share of this turn's work
     }
 
@@ -1920,17 +1916,6 @@ public sealed partial class AppHost : IDisposable
         if (_device.GetVideoPresenter(_swapchain) is null) return;   // nothing composited behind this target: no video to skew against
         if (VideoApplier.PrepareGeometry(_renderSeam.VideoIntents(rf), VideoPosedHoles(in rf), rf.Submit.Scale))
             _swapchain.HintGeometryMotionPresent();
-    }
-
-    /// <summary>F255: tell the device the display period the weak tier's image-upload budget is quoted against, on the thread
-    /// that drains this host's video surfaces. Fed by the primary host only (a child rides the parent's turns) and only when it
-    /// moves. A live video surface is deliberately NOT an input: video never lowers what the main window gets per turn
-    /// (owner decision, 2026-10-05). Zero-alloc.</summary>
-    private void FeedUploadPacing()
-    {
-        if (_isDetachedChild) return;
-        double periodMs = RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency;   // the UI-published measured period: safe on either thread
-        if (Math.Abs(periodMs - _fedUploadPeriodMs) > 0.05) { _fedUploadPeriodMs = periodMs; _device.SetImageUploadPacing(periodMs); }
     }
 
     private void RecoverDeviceAfterDump()
@@ -4111,12 +4096,6 @@ public sealed partial class AppHost : IDisposable
             _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx, Composited: compositeSwapchain));
         }
         finally { parentRenderThread?.Resume(); }
-        // F255: the weak tier (UMA / iGPU: every tile surface is pinned system memory shared with the video decoder) runs a
-        // smaller tile ceiling and retained share. Once, by the primary host, before any frame; the discrete defaults are
-        // the static initial values, and a headless host never reads the GPU tier. GpuProfile.Tier is published only by the
-        // device init the first CreateSwapchain above brings up, so it is read here, after that call, never before it.
-        if (!isDetachedChild && window.Handle.Kind != NativeHandleKind.Headless && FluentGpu.Foundation.GpuProfile.IsWeak)
-            FluentGpu.Render.Tiles.TileBudget.ApplyTierPreset(weak: true);
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
@@ -6023,7 +6002,6 @@ public sealed partial class AppHost : IDisposable
                 // commit composed the new hole one frame ahead of the new video geometry. The UI thread is the presenting
                 // thread here, so blocking one vblank starves no other target.
                 _swapchain.CompleteSettlePresent(blockUntilComposed: true);
-                FeedUploadPacing();   // F255: this thread is the one that presents (and stages uploads) in single-thread mode
             }
             // Advisory, one way engine → PAL: a composited window defers ALL painting during an OS modal
             // edge-resize, which would leave this video child at its pre-resize geometry while the frame moves

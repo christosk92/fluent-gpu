@@ -591,35 +591,6 @@ static class TileSuite
             at2560 == (long)(5.0 * 2560 * 1600 * 4) && atSmall == 48 * MiB && at4k == 128 * MiB,
             $"2560x1600={at2560 / (double)MiB:0.0}MiB 800x600={atSmall / MiB}MiB 4k={at4k / MiB}MiB");
 
-        // F255: the weak tier (UMA / iGPU: tile surfaces are pinned system memory shared with the video decoder) runs a 72 MiB
-        // ceiling and a 0.15 retained share; the floor still guarantees a window its visible tiles, and ResetToDefaults restores
-        // the TIER's values, not the discrete ones.
-        long weakSmall, weak4k, weakRetainedCap, weakReset4k;
-        double weakShare, weakResetShare;
-        try
-        {
-            TileBudget.ApplyTierPreset(weak: true);
-            weakSmall = TileBudget.Current(800, 600);
-            weak4k = TileBudget.Current(3840, 2160);
-            weakShare = TileBudget.RetainedShare;
-            weakRetainedCap = TileBudget.RetainedBytesCap(weak4k);
-            TileBudget.CeilingBytes = 256 * MiB;   // a live tuning write, then the reset
-            TileBudget.ResetToDefaults();
-            weakReset4k = TileBudget.Current(3840, 2160);
-            weakResetShare = TileBudget.RetainedShare;
-        }
-        finally
-        {
-            TileBudget.ApplyTierPreset(weak: false);
-            TileBudget.ResetToDefaults();
-        }
-        long discrete4k = TileBudget.Current(3840, 2160);
-        Check("gate.tiles.weak-tier-budget the weak preset caps the tile budget at 72 MiB (a large window), keeps the 48 MiB floor for a small one, bounds retained surfaces at 0.15 of it, and survives ResetToDefaults; the discrete defaults come back",
-            weakSmall == 48 * MiB && weak4k == TileBudget.WeakCeilingBytes && weak4k == 72 * MiB
-            && MathF.Abs((float)weakShare - 0.15f) < 1e-6f && weakRetainedCap == (long)(72 * MiB * 0.15)
-            && weakReset4k == 72 * MiB && MathF.Abs((float)weakResetShare - 0.15f) < 1e-6f
-            && discrete4k == 128 * MiB && MathF.Abs((float)TileBudget.RetainedShare - 0.25f) < 1e-6f,
-            $"weak 800x600={weakSmall / MiB}MiB 4k={weak4k / MiB}MiB share={weakShare:0.00} retainedCap={weakRetainedCap / (double)MiB:0.0}MiB afterReset 4k={weakReset4k / MiB}MiB share={weakResetShare:0.00}; discrete 4k={discrete4k / MiB}MiB share={TileBudget.RetainedShare:0.00}");
     }
 
     // ── gate.tiles.feather ──────────────────────────────────────────────────────────────────────────────────────
