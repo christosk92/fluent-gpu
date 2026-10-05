@@ -110,11 +110,17 @@ public sealed record BoxEl : Element
 {
     public override ushort ElementTypeId => 1;
 
-    // Rarely-set channels live in one shared, copy-on-write BoxCold (see BoxCold.cs): a BoxEl is allocated and `with`-copied
-    // on every render of every box, so the inline footprint is only the channels most boxes set.
-    private BoxCold? _cold;
-    private BoxCold Cold => _cold is { } c && ReferenceEquals(c.Owner, this) ? c : (_cold = (_cold ?? BoxCold.Default).CloneFor(this));
-
+    // Rarely-set channels live in four shared, copy-on-write blocks (BoxCold.cs), one per theme: a BoxEl is allocated and
+    // `with`-copied on every render of every box, so its inline footprint is only the channels most boxes set. A block is a
+    // null reference until a setter runs; the first setter on an element clones it, the rest write the clone.
+    private BoxColdPaint? _cPaint;
+    private BoxColdPaint CPaint => _cPaint is { } c && ReferenceEquals(c.Owner, this) ? c : (_cPaint = (_cPaint ?? BoxColdPaint.Default).CloneFor(this));
+    private BoxColdInput? _cInput;
+    private BoxColdInput CInput => _cInput is { } c && ReferenceEquals(c.Owner, this) ? c : (_cInput = (_cInput ?? BoxColdInput.Default).CloneFor(this));
+    private BoxColdMotion? _cMotion;
+    private BoxColdMotion CMotion => _cMotion is { } c && ReferenceEquals(c.Owner, this) ? c : (_cMotion = (_cMotion ?? BoxColdMotion.Default).CloneFor(this));
+    private BoxColdMisc? _cMisc;
+    private BoxColdMisc CMisc => _cMisc is { } c && ReferenceEquals(c.Owner, this) ? c : (_cMisc = (_cMisc ?? BoxColdMisc.Default).CloneFor(this));
 
     public byte Direction { get; init; }          // 0 = row, 1 = column
     public float Gap { get; init; }
@@ -129,14 +135,14 @@ public sealed record BoxEl : Element
     public Prop<ColorF> PressedFill { get; init; } = ColorF.Transparent;
     /// <summary>Bindable like <see cref="Fill"/> so retained shell/card borders can follow a live theme switch.</summary>
     public Prop<ColorF> BorderColor { get; init; } = ColorF.Transparent;
-    public ColorF HoverBorderColor { get => (_cold ?? BoxCold.Default).HoverBorderColor; init => Cold.HoverBorderColor = value; } // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
-    public ColorF PressedBorderColor { get => (_cold ?? BoxCold.Default).PressedBorderColor; init => Cold.PressedBorderColor = value; } // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
+    public ColorF HoverBorderColor { get => (_cPaint ?? BoxColdPaint.Default).HoverBorderColor; init => CPaint.HoverBorderColor = value; } // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
+    public ColorF PressedBorderColor { get => (_cPaint ?? BoxColdPaint.Default).PressedBorderColor; init => CPaint.PressedBorderColor = value; } // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
     public float BorderWidth { get; init; }
     /// <summary>Dashed (solid) border: the dash ON/OFF run lengths in DIP along the perimeter (e.g. 6/4). Both 0 (the
     /// default) = a solid stroke. Applies to the plain <see cref="BorderColor"/> stroke only (not a gradient border).
     /// The "drop zone" look (and the <c>DropZone</c> control) uses this.</summary>
-    public float BorderDashOn { get => (_cold ?? BoxCold.Default).BorderDashOn; init => Cold.BorderDashOn = value; }
-    public float BorderDashOff { get => (_cold ?? BoxCold.Default).BorderDashOff; init => Cold.BorderDashOff = value; }
+    public float BorderDashOn { get => (_cPaint ?? BoxColdPaint.Default).BorderDashOn; init => CPaint.BorderDashOn = value; }
+    public float BorderDashOff { get => (_cPaint ?? BoxColdPaint.Default).BorderDashOff; init => CPaint.BorderDashOff = value; }
     // Bindable (like Fill/Opacity): the shell content card squares its rail-side corners while the docked right rail is
     // open — a re-render can't reach it (frozen literal inside OverlayHost.Child), so the corner set must be a bind.
     public Prop<CornerRadius4> Corners { get; init; } = default;
@@ -144,86 +150,86 @@ public sealed record BoxEl : Element
     /// (<c>Validation = Prop.Of(() =&gt; field.Error.Value.IsValid ? ValidationState.None : ValidationState.Error)</c>):
     /// on <see cref="ValidationState.Error"/> the reconciler resolves the theme critical color and the recorder swaps
     /// this node's border to it. A bound channel — no re-render per keystroke; the write is equality-gated.</summary>
-    public Prop<ValidationState> Validation { get => (_cold ?? BoxCold.Default).Validation; init => Cold.Validation = value; }
+    public Prop<ValidationState> Validation { get => (_cPaint ?? BoxColdPaint.Default).Validation; init => CPaint.Validation = value; }
 
     // Optional rich paint (carried into sparse scene side-tables by the reconciler; default = none).
-    public ShadowSpec? Shadow { get => (_cold ?? BoxCold.Default).Shadow; init => Cold.Shadow = value; } // soft drop shadow / elevation, drawn beneath the fill
-    public ArcSpec? Arc { get => (_cold ?? BoxCold.Default).Arc; init => Cold.Arc = value; } // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
-    public GradientSpec? Gradient { get => (_cold ?? BoxCold.Default).Gradient; init => Cold.Gradient = value; } // gradient fill — supersedes Fill at record time when set
+    public ShadowSpec? Shadow { get => (_cPaint ?? BoxColdPaint.Default).Shadow; init => CPaint.Shadow = value; } // soft drop shadow / elevation, drawn beneath the fill
+    public ArcSpec? Arc { get => (_cPaint ?? BoxColdPaint.Default).Arc; init => CPaint.Arc = value; } // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
+    public GradientSpec? Gradient { get => (_cPaint ?? BoxColdPaint.Default).Gradient; init => CPaint.Gradient = value; } // gradient fill — supersedes Fill at record time when set
     /// <summary>Optional bindable radial-gradient origin in normalized element coordinates. A non-finite static value
     /// keeps <see cref="GradientSpec.RadialCenter"/> as the source of truth; a signal updates paint only, without a
     /// component render or gradient-spec rebuild (pointer-driven spotlight/reveal effects).</summary>
-    public Prop<Point2> RadialGradientCenter { get => (_cold ?? BoxCold.Default).RadialGradientCenter; init => Cold.RadialGradientCenter = value; }
+    public Prop<Point2> RadialGradientCenter { get => (_cPaint ?? BoxColdPaint.Default).RadialGradientCenter; init => CPaint.RadialGradientCenter = value; }
     /// <summary>A second gradient the fill blends toward by <see cref="GradientMix"/> (0 = <see cref="Gradient"/>, 1 = this).
     /// Must share <see cref="Gradient"/>'s stop count (the <see cref="HoverGradient"/> rule; a different count blends only
     /// the shared prefix). Static; the blend happens at record time on stack locals, so a palette cross-fade costs no
     /// re-render and no allocation.</summary>
-    public GradientSpec? GradientTo { get => (_cold ?? BoxCold.Default).GradientTo; init => Cold.GradientTo = value; }
+    public GradientSpec? GradientTo { get => (_cPaint ?? BoxColdPaint.Default).GradientTo; init => CPaint.GradientTo = value; }
     /// <summary>The 0..1 blend from <see cref="Gradient"/> toward <see cref="GradientTo"/>. Bindable and paint-only (no
     /// relayout): a signal moves the colours without rebuilding a <see cref="GradientSpec"/>.</summary>
-    public Prop<float> GradientMix { get => (_cold ?? BoxCold.Default).GradientMix; init => Cold.GradientMix = value; }
+    public Prop<float> GradientMix { get => (_cPaint ?? BoxColdPaint.Default).GradientMix; init => CPaint.GradientMix = value; }
     /// <summary>How this box's subtree paints onto what is under it: <see cref="PaintBlend.Additive"/> adds light (glow,
     /// particles) for every rect, gradient, series and sprite field below it. Glyphs, images and paths stay source-over.
     /// Put it on a child of a <see cref="RepaintBoundary"/>, not on the boundary itself: a boundary (also a Feedback or
     /// RasterScale box) records its subtree into its own slice, which starts source-over — an additive ancestor never
     /// reaches into it.</summary>
-    public PaintBlend Blend { get => (_cold ?? BoxCold.Default).Blend; init => Cold.Blend = value; }
+    public PaintBlend Blend { get => (_cPaint ?? BoxColdPaint.Default).Blend; init => CPaint.Blend = value; }
     /// <summary>How a <see cref="RepaintBoundary"/> slice composites onto the back buffer: <see cref="LayerBlend.Screen"/>
     /// = <c>1 − (1 − s)(1 − d)</c> (soft clouds that brighten what they overlap). Needs <see cref="RepaintBoundary"/>;
     /// detached windows (no layer route) fold it to source-over.</summary>
-    public LayerBlend LayerBlend { get => (_cold ?? BoxCold.Default).LayerBlend; init => Cold.LayerBlend = value; }
+    public LayerBlend LayerBlend { get => (_cPaint ?? BoxColdPaint.Default).LayerBlend; init => CPaint.LayerBlend = value; }
     /// <summary>Make this box a FEEDBACK boundary (visualizer F6; see <see cref="FeedbackSpec"/>). Implies a repaint boundary
     /// at <see cref="FeedbackSpec.RasterScale"/>. Detached windows (no layer route) draw the fresh content only.</summary>
-    public FeedbackSpec? Feedback { get => (_cold ?? BoxCold.Default).Feedback; init => Cold.Feedback = value; }
+    public FeedbackSpec? Feedback { get => (_cPaint ?? BoxColdPaint.Default).Feedback; init => CPaint.Feedback = value; }
     /// <summary>The per-advance warp of the previous frame about the box centre (zoom / rotate / drift), DIP. Bindable.</summary>
-    public Prop<Affine2D> FeedbackTransform { get => (_cold ?? BoxCold.Default).FeedbackTransform; init => Cold.FeedbackTransform = value; }
+    public Prop<Affine2D> FeedbackTransform { get => (_cPaint ?? BoxColdPaint.Default).FeedbackTransform; init => CPaint.FeedbackTransform = value; }
     /// <summary>Overrides <see cref="FeedbackSpec.Decay"/> per advance (NaN = the spec's). Bindable: a kick can burst the trail.</summary>
-    public Prop<float> FeedbackDecay { get => (_cold ?? BoxCold.Default).FeedbackDecay; init => Cold.FeedbackDecay = value; }
-    public GradientSpec? BorderBrush { get => (_cold ?? BoxCold.Default).BorderBrush; init => Cold.BorderBrush = value; } // gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
+    public Prop<float> FeedbackDecay { get => (_cPaint ?? BoxColdPaint.Default).FeedbackDecay; init => CPaint.FeedbackDecay = value; }
+    public GradientSpec? BorderBrush { get => (_cPaint ?? BoxColdPaint.Default).BorderBrush; init => CPaint.BorderBrush = value; } // gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
-    public GradientSpec? HoverGradient { get => (_cold ?? BoxCold.Default).HoverGradient; init => Cold.HoverGradient = value; }
-    public GradientSpec? PressedGradient { get => (_cold ?? BoxCold.Default).PressedGradient; init => Cold.PressedGradient = value; }
-    public GradientSpec? HoverBorderBrush { get => (_cold ?? BoxCold.Default).HoverBorderBrush; init => Cold.HoverBorderBrush = value; }
-    public GradientSpec? PressedBorderBrush { get => (_cold ?? BoxCold.Default).PressedBorderBrush; init => Cold.PressedBorderBrush = value; }
-    public AcrylicSpec? Acrylic { get => (_cold ?? BoxCold.Default).Acrylic; init => Cold.Acrylic = value; } // per-node frosted-glass backdrop (blur + tint + noise)
+    public GradientSpec? HoverGradient { get => (_cPaint ?? BoxColdPaint.Default).HoverGradient; init => CPaint.HoverGradient = value; }
+    public GradientSpec? PressedGradient { get => (_cPaint ?? BoxColdPaint.Default).PressedGradient; init => CPaint.PressedGradient = value; }
+    public GradientSpec? HoverBorderBrush { get => (_cPaint ?? BoxColdPaint.Default).HoverBorderBrush; init => CPaint.HoverBorderBrush = value; }
+    public GradientSpec? PressedBorderBrush { get => (_cPaint ?? BoxColdPaint.Default).PressedBorderBrush; init => CPaint.PressedBorderBrush = value; }
+    public AcrylicSpec? Acrylic { get => (_cPaint ?? BoxColdPaint.Default).Acrylic; init => CPaint.Acrylic = value; } // per-node frosted-glass backdrop (blur + tint + noise)
     /// <summary>Record this subtree into its OWN retained slice (Flutter's RepaintBoundary, CSS <c>will-change</c>): a
     /// change inside it — a looping keyframe, a bound transform/opacity, a per-frame visualizer — re-rasters only this
     /// slice's tiles, and a change around it never re-rasters this one. Put it on the root of content that animates
     /// continuously while the content painted under and over it stays still. Spends the effect-slice budget
     /// (<c>SliceRecorder.EffectSliceCap</c>); past it, or inside an inline group layer, the subtree records inline as
     /// before (identical pixels either way).</summary>
-    public bool RepaintBoundary { get => (_cold ?? BoxCold.Default).RepaintBoundary; init => Cold.RepaintBoundary = value; }
+    public bool RepaintBoundary { get => (_cPaint ?? BoxColdPaint.Default).RepaintBoundary; init => CPaint.RepaintBoundary = value; }
     /// <summary>The raster resolution of a <see cref="RepaintBoundary"/> slice relative to the window (1 = full; snapped
     /// to 1/2, 1/4 or 1/8). Below 1 the slice holds NO tiles: each change replays it once into one surface at that scale
     /// and the composite upsamples it bilinearly — a fraction of the raster work and memory. Only for SOFT content whose
     /// look survives the upsample (large radial gradients, drifting colour fields, heavily blurred art); text and crisp
     /// edges soften. Ignored without <see cref="RepaintBoundary"/>.</summary>
-    public float RasterScale { get => (_cold ?? BoxCold.Default).RasterScale; init => Cold.RasterScale = value; }
-    public bool TabShape { get => (_cold ?? BoxCold.Default).TabShape; init => Cold.TabShape = value; } // selected TabView header: rounded top + bottom flares
-    public float TabFlareRadius { get => (_cold ?? BoxCold.Default).TabFlareRadius; init => Cold.TabFlareRadius = value; }
+    public float RasterScale { get => (_cPaint ?? BoxColdPaint.Default).RasterScale; init => CPaint.RasterScale = value; }
+    public bool TabShape { get => (_cPaint ?? BoxColdPaint.Default).TabShape; init => CPaint.TabShape = value; } // selected TabView header: rounded top + bottom flares
+    public float TabFlareRadius { get => (_cPaint ?? BoxColdPaint.Default).TabFlareRadius; init => CPaint.TabFlareRadius = value; }
     /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels
     /// already painted under it toward premultiplied zero, so the DComp video visual composited BELOW the swapchain shows
     /// through. Painter-ordered — anything recorded after it (letterbox bars, transport chrome) paints back OVER the
     /// video. Supersedes <see cref="Fill"/> for this node; see gpu-renderer.md §7.3 for the offscreen-layer limitation
     /// (inside an opacity/blur/acrylic layer the erase hits the layer RT, not the back buffer).</summary>
-    public bool VideoHole { get => (_cold ?? BoxCold.Default).VideoHole; init => Cold.VideoHole = value; }
+    public bool VideoHole { get => (_cPaint ?? BoxColdPaint.Default).VideoHole; init => CPaint.VideoHole = value; }
     /// <summary>The video registry slot token this hole belongs to (diagnostic at replay — the presenter positions the
     /// visual itself). Rides <c>NodePaint.ImageId</c>, so it is meaningful only with <see cref="VideoHole"/> set.</summary>
-    public int VideoSurfaceId { get => (_cold ?? BoxCold.Default).VideoSurfaceId; init => Cold.VideoSurfaceId = value; }
+    public int VideoSurfaceId { get => (_cPaint ?? BoxColdPaint.Default).VideoSurfaceId; init => CPaint.VideoSurfaceId = value; }
     /// <summary>Per-element edge fade (gpu-renderer.md): feather this element's content alpha to transparent (+ optional
     /// blur) near the chosen edges, following its rounded <see cref="Corners"/> (the curve) — it dissolves into whatever
     /// is behind. One offscreen RT per faded element. Null = none.</summary>
-    public EdgeFadeSpec? EdgeFade { get => (_cold ?? BoxCold.Default).EdgeFade; init => Cold.EdgeFade = value; }
+    public EdgeFadeSpec? EdgeFade { get => (_cPaint ?? BoxColdPaint.Default).EdgeFade; init => CPaint.EdgeFade = value; }
 
     public Action? OnClick { get; init; }
-    public Action<KeyEventArgs>? OnKeyDown { get => (_cold ?? BoxCold.Default).OnKeyDown; init => Cold.OnKeyDown = value; }
+    public Action<KeyEventArgs>? OnKeyDown { get => (_cInput ?? BoxColdInput.Default).OnKeyDown; init => CInput.OnKeyDown = value; }
     /// <summary>Text (character) input — the IME/layout-resolved codepoint, routed to the focused node and bubbled
     /// (distinct from <see cref="OnKeyDown"/>'s raw virtual-key). Set by editable controls (EditableText/ComboBox).</summary>
-    public Action<CharEventArgs>? OnCharInput { get => (_cold ?? BoxCold.Default).OnCharInput; init => Cold.OnCharInput = value; }
+    public Action<CharEventArgs>? OnCharInput { get => (_cInput ?? BoxColdInput.Default).OnCharInput; init => CInput.OnCharInput = value; }
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
-    public Action<Point2>? OnPointerDown { get => (_cold ?? BoxCold.Default).OnPointerDown; init => Cold.OnPointerDown = value; }
-    public Action<Point2>? OnDrag { get => (_cold ?? BoxCold.Default).OnDrag; init => Cold.OnDrag = value; }
+    public Action<Point2>? OnPointerDown { get => (_cInput ?? BoxColdInput.Default).OnPointerDown; init => CInput.OnPointerDown = value; }
+    public Action<Point2>? OnDrag { get => (_cInput ?? BoxColdInput.Default).OnDrag; init => CInput.OnDrag = value; }
     /// <summary>Marks an <see cref="OnDrag"/> node a CROSS-AXIS content pan (SwipeControl row swipe, FlipView page drag):
     /// instead of eagerly capturing the contact on touch-down — the Slider/EditableText scrub default — this drag enrolls
     /// an AXIS-LOCKED gesture-arena member that competes with an enclosing scroller's Pan (input-a11y.md §7A). It wins the
@@ -231,18 +237,18 @@ public sealed record BoxEl : Element
     /// declarative form of <c>DragController.YieldsToPan</c>. Its axis is inferred from this node's main axis
     /// (<see cref="Direction"/>): a row box (Direction=0) is a horizontal swipe, a column box a vertical one. No effect
     /// without <see cref="OnDrag"/>, and no effect on the mouse path (mouse drag still captures immediately).</summary>
-    public bool DragYieldsToPan { get => (_cold ?? BoxCold.Default).DragYieldsToPan; init => Cold.DragYieldsToPan = value; }
+    public bool DragYieldsToPan { get => (_cInput ?? BoxColdInput.Default).DragYieldsToPan; init => CInput.DragYieldsToPan = value; }
     /// <summary>Position-aware press carrying click count (double/triple-click), modifier chord, button and device kind —
     /// the text-selection / list-interaction press handler. Fires alongside <see cref="OnPointerDown"/> on left press.</summary>
-    public Action<PointerEventArgs>? OnPointerPressed { get => (_cold ?? BoxCold.Default).OnPointerPressed; init => Cold.OnPointerPressed = value; }
+    public Action<PointerEventArgs>? OnPointerPressed { get => (_cInput ?? BoxColdInput.Default).OnPointerPressed; init => CInput.OnPointerPressed = value; }
     /// <summary>Typed clean-release edge. Fires only when the primary pointer releases over its original press target;
     /// pan, drag, hold, capture loss, cancellation, and release outside suppress it.</summary>
-    public Action<PointerEventArgs>? OnPointerReleased { get => (_cold ?? BoxCold.Default).OnPointerReleased; init => Cold.OnPointerReleased = value; }
+    public Action<PointerEventArgs>? OnPointerReleased { get => (_cInput ?? BoxColdInput.Default).OnPointerReleased; init => CInput.OnPointerReleased = value; }
     /// <summary>Context-menu request (WinUI ContextRequested): right-click release over this node, the Menu key /
     /// Shift+F10 while it has focus, or a touch long-press. The <see cref="ContextRequestEventArgs"/> carries the
     /// node-LOCAL position (keyboard invocations pass the node's centre) and the <see cref="ContextRequestTrigger"/>
     /// so a handler can open AT the pointer/contact but anchor to the element rect for a keyboard invocation.</summary>
-    public Action<ContextRequestEventArgs>? OnContextRequested { get => (_cold ?? BoxCold.Default).OnContextRequested; init => Cold.OnContextRequested = value; }
+    public Action<ContextRequestEventArgs>? OnContextRequested { get => (_cInput ?? BoxColdInput.Default).OnContextRequested; init => CInput.OnContextRequested = value; }
     /// <summary>Declares this node a CONTEXT-INVOKER (input-a11y.md §6.5.1): a left-click / touch-tap / Space-Enter
     /// activation on it re-enters the context-request funnel STARTING AT this node — the dispatcher walks ancestors for
     /// the nearest <see cref="OnContextRequested"/> and raises it exactly as a right-click would, so the same menu,
@@ -259,12 +265,12 @@ public sealed record BoxEl : Element
     /// focus like a button) — declare <c>Cursor = CursorId.Hand</c> yourself if you want the hand. MUTUALLY EXCLUSIVE
     /// with <see cref="OnClick"/> (a node is a click target OR a context-invoker, not both; this prop wins and a DEBUG
     /// assert fires if both are set). Disabled (<see cref="IsEnabled"/> = false) suppresses it like any activation.</summary>
-    public bool ClickRequestsContext { get => (_cold ?? BoxCold.Default).ClickRequestsContext; init => Cold.ClickRequestsContext = value; }
+    public bool ClickRequestsContext { get => (_cInput ?? BoxColdInput.Default).ClickRequestsContext; init => CInput.ClickRequestsContext = value; }
     /// <summary>Keyboard-accelerator chord (WinUI KeyboardAccelerator): invokes <see cref="OnClick"/> from anywhere once
     /// focused routing leaves the chord unhandled (e.g. Ctrl+W close-tab).</summary>
-    public KeyAccelerator? Accelerator { get => (_cold ?? BoxCold.Default).Accelerator; init => Cold.Accelerator = value; }
+    public KeyAccelerator? Accelerator { get => (_cInput ?? BoxColdInput.Default).Accelerator; init => CInput.Accelerator = value; }
     /// <summary>Access-key mnemonic (WinUI AccessKey): Alt+letter invokes <see cref="OnClick"/>. Uppercase 'A'..'Z'/'0'..'9'.</summary>
-    public char AccessKey { get => (_cold ?? BoxCold.Default).AccessKey; init => Cold.AccessKey = value; }
+    public char AccessKey { get => (_cInput ?? BoxColdInput.Default).AccessKey; init => CInput.AccessKey = value; }
     /// <summary>Pointer cursor shown while hovering this node or any cursor-less descendant (WinUI SetCursor). Null =
     /// inherit from the nearest declaring ancestor, else the system arrow — clickability does NOT imply the hand. An
     /// explicit value (Arrow included) terminates the lookup, masking an ancestor's I-beam/hand (the TextBox delete
@@ -272,66 +278,66 @@ public sealed record BoxEl : Element
     public CursorId? Cursor { get; init; }
     /// <summary>Element-level wheel hook (WinUI PointerWheelChanged), consulted BEFORE the enclosing viewport scrolls;
     /// set <c>Handled</c> to consume (NumberBox value stepping). Unhandled keeps walking up (routed-event semantics).</summary>
-    public Action<WheelEventArgs>? OnPointerWheel { get => (_cold ?? BoxCold.Default).OnPointerWheel; init => Cold.OnPointerWheel = value; }
+    public Action<WheelEventArgs>? OnPointerWheel { get => (_cInput ?? BoxColdInput.Default).OnPointerWheel; init => CInput.OnPointerWheel = value; }
     /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
     /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
-    public Action<Point2>? OnHoverMove { get => (_cold ?? BoxCold.Default).OnHoverMove; init => Cold.OnHoverMove = value; }
+    public Action<Point2>? OnHoverMove { get => (_cInput ?? BoxColdInput.Default).OnHoverMove; init => CInput.OnHoverMove = value; }
     /// <summary>Routed mouse/pen move in this node's local coordinates while the pointer is anywhere in its subtree.
     /// Delivered leaf-to-root, including when an interactive child is the hit leaf. Suppressed for touch and capture/
     /// drag paths. Intended for allocation-free container effects such as a pointer-tracked spotlight.</summary>
-    public Action<Point2>? OnPointerMoveWithin { get => (_cold ?? BoxCold.Default).OnPointerMoveWithin; init => Cold.OnPointerMoveWithin = value; }
+    public Action<Point2>? OnPointerMoveWithin { get => (_cInput ?? BoxColdInput.Default).OnPointerMoveWithin; init => CInput.OnPointerMoveWithin = value; }
     /// <summary>Fired when the pointer LEAVES this node (loses hover) — to reset a hover preview to its resting state
     /// (RatingControl reverting to the committed rating, a ToolTip dismissing). Makes the node hit-testable.</summary>
-    public Action? OnPointerExit { get => (_cold ?? BoxCold.Default).OnPointerExit; init => Cold.OnPointerExit = value; }
+    public Action? OnPointerExit { get => (_cInput ?? BoxColdInput.Default).OnPointerExit; init => CInput.OnPointerExit = value; }
     /// <summary>Fired when the dispatcher moves keyboard/pointer focus ONTO (true) or OFF (false) this node — the WinUI
     /// GotFocus/LostFocus pair. Delivered by <c>InputDispatcher.SetFocus</c> directly (never via hit-testing); editable
     /// controls use it to arm the caret blinker / IME and capture the Escape-revert snapshot.</summary>
-    public Action<bool>? OnFocusChanged { get => (_cold ?? BoxCold.Default).OnFocusChanged; init => Cold.OnFocusChanged = value; }
+    public Action<bool>? OnFocusChanged { get => (_cInput ?? BoxColdInput.Default).OnFocusChanged; init => CInput.OnFocusChanged = value; }
     /// <summary>Marks this box a drag-reorder source (WinUI CanDragItems/CanReorderItems item container): a left press
     /// on it (or any non-draggable descendant) arms the engine's DragController; pointer travel past the 4px drag box
     /// (per-axis, ListViewBaseItem_Partial.cpp:1864-1878) promotes the press to a drag — the node follows the pointer
     /// at WinUI ListViewItemDragThemeOpacity 0.80 (ListViewItem_themeresources.xaml:7) with a lifted shadow, stops
     /// hit-testing, and the eventual release SUPPRESSES the click.</summary>
-    public bool CanDrag { get => (_cold ?? BoxCold.Default).CanDrag; init => Cold.CanDrag = value; }
+    public bool CanDrag { get => (_cInput ?? BoxColdInput.Default).CanDrag; init => CInput.CanDrag = value; }
     /// <summary>Drag lifecycle (needs <see cref="CanDrag"/>): fired once when the press crosses the drag box (WinUI
     /// DragItemsStarting). The args instance is reused for the whole gesture — copy what you keep.</summary>
-    public Action<DragEventArgs>? OnDragStarted { get => (_cold ?? BoxCold.Default).OnDragStarted; init => Cold.OnDragStarted = value; }
+    public Action<DragEventArgs>? OnDragStarted { get => (_cInput ?? BoxColdInput.Default).OnDragStarted; init => CInput.OnDragStarted = value; }
     /// <summary>Every pointer move while the drag is active: accumulated gesture deltas + smoothed velocity — feed
     /// <c>ReorderList.Update(e.TotalDy)</c> and re-render with its projected order / offset hints.</summary>
-    public Action<DragEventArgs>? OnDragDelta { get => (_cold ?? BoxCold.Default).OnDragDelta; init => Cold.OnDragDelta = value; }
+    public Action<DragEventArgs>? OnDragDelta { get => (_cInput ?? BoxColdInput.Default).OnDragDelta; init => CInput.OnDragDelta = value; }
     /// <summary>Release after an active drag (WinUI DragItemsCompleted): commit the reorder here
     /// (<c>ReorderList.Complete()</c>); the drop-glide and the displaced-sibling FLIP retarget off this commit.</summary>
-    public Action<DragEventArgs>? OnDragCompleted { get => (_cold ?? BoxCold.Default).OnDragCompleted; init => Cold.OnDragCompleted = value; }
+    public Action<DragEventArgs>? OnDragCompleted { get => (_cInput ?? BoxColdInput.Default).OnDragCompleted; init => CInput.OnDragCompleted = value; }
     /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing.</summary>
-    public Action? OnDragCanceled { get => (_cold ?? BoxCold.Default).OnDragCanceled; init => Cold.OnDragCanceled = value; }
+    public Action? OnDragCanceled { get => (_cInput ?? BoxColdInput.Default).OnDragCanceled; init => CInput.OnDragCanceled = value; }
     /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
     /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
     /// armer) with a string Kind discriminator + a payload factory the engine resolves ONCE when the press promotes
     /// past the drag box. The live <see cref="DragSession"/> then routes to the nearest accepting
     /// <see cref="DropTarget"/> under the pointer on every move.</summary>
-    public DragSource? Draggable { get => (_cold ?? BoxCold.Default).Draggable; init => Cold.Draggable = value; }
+    public DragSource? Draggable { get => (_cInput ?? BoxColdInput.Default).Draggable; init => CInput.Draggable = value; }
     /// <summary>E5-L2 drop TARGET (Flutter DragTarget / SwiftUI dropDestination): accepts sessions whose Kind is in
     /// <c>AcceptKinds</c> — OnEnter/OnOver/OnLeave fire on hover transitions, OnDrop on release over it (before the
     /// L1 completion; <c>SettleOnDrop</c> keeps the drop-glide for reorder targets). Discovery is hit-test-CHAIN
     /// based (nearest accepting ancestor of the node under the pointer) — the spec alone does NOT make this box
     /// click/pointer hit-testable.</summary>
-    public DropTargetSpec? DropTarget { get => (_cold ?? BoxCold.Default).DropTarget; init => Cold.DropTarget = value; }
+    public DropTargetSpec? DropTarget { get => (_cInput ?? BoxColdInput.Default).DropTarget; init => CInput.DropTarget = value; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Pauses while the held pointer leaves the
     /// node (fresh delay on re-entry — RepeatButton_Partial.cpp:530-574); a held Space arms the same engine timer.</summary>
-    public bool Repeats { get => (_cold ?? BoxCold.Default).Repeats; init => Cold.Repeats = value; }
+    public bool Repeats { get => (_cInput ?? BoxColdInput.Default).Repeats; init => CInput.Repeats = value; }
     /// <summary>WinUI RepeatButton <c>Delay</c>/<c>Interval</c> (ms) for <see cref="Repeats"/> nodes. NaN = the WinUI
     /// DP defaults (500/33); the ScrollBar template arrows use Interval=50 (ScrollBar_themeresources.xaml).</summary>
-    public float RepeatDelayMs { get => (_cold ?? BoxCold.Default).RepeatDelayMs; init => Cold.RepeatDelayMs = value; }
-    public float RepeatIntervalMs { get => (_cold ?? BoxCold.Default).RepeatIntervalMs; init => Cold.RepeatIntervalMs = value; }
+    public float RepeatDelayMs { get => (_cInput ?? BoxColdInput.Default).RepeatDelayMs; init => CInput.RepeatDelayMs = value; }
+    public float RepeatIntervalMs { get => (_cInput ?? BoxColdInput.Default).RepeatIntervalMs; init => CInput.RepeatIntervalMs = value; }
     /// <summary>WinUI <c>KeyPress::Button bAcceptsReturn</c>: false = Enter does NOT activate this clickable (it falls
     /// through to normal key routing) — CheckBox (CheckBox_Partial.cpp:27), RadioButton (RadioButton_Partial.cpp:30)
     /// and ToggleSwitch (ToggleSwitch_Partial.cpp:1002-1007) toggle on Space only. Space activation is unaffected.</summary>
-    public bool ActivateOnEnter { get => (_cold ?? BoxCold.Default).ActivateOnEnter; init => Cold.ActivateOnEnter = value; }
+    public bool ActivateOnEnter { get => (_cInput ?? BoxColdInput.Default).ActivateOnEnter; init => CInput.ActivateOnEnter = value; }
     /// <summary>WinUI <c>AllowFocusOnInteraction</c>: false = a pointer press never moves focus to this focusable (and
     /// never falls past it to an ancestor — focus stays where it was, AppBarButton_themeresources.xaml:136); keyboard
     /// Tab still reaches it. True (default) = press focuses the nearest focusable self-or-ancestor.</summary>
-    public bool AllowFocusOnInteraction { get => (_cold ?? BoxCold.Default).AllowFocusOnInteraction; init => Cold.AllowFocusOnInteraction = value; }
+    public bool AllowFocusOnInteraction { get => (_cInput ?? BoxColdInput.Default).AllowFocusOnInteraction; init => CInput.AllowFocusOnInteraction = value; }
     /// <summary>Bindable like <see cref="Fill"/>/<see cref="Visible"/> (E15, home-redesign-remediation.md §2): a
     /// resolved <c>false</c> clears <c>NodeFlags.HitTestVisible</c> on this node WITHOUT a component re-render (a bind
     /// effect owns the flag, wired at mount by <c>Reconciler.BindNode</c>) — the same bind-scoped shape as
@@ -346,7 +352,7 @@ public sealed record BoxEl : Element
     /// whatever is BEHIND it wherever none of its OWN children are hit — so a full-bleed floating overlay can host an
     /// interactive child (a command bar) while clicks in its empty area fall through to the page beneath. (Unlike
     /// <see cref="HitTestVisible"/>=false, which excludes the whole subtree and would make the child unclickable.)</summary>
-    public bool HitTestPassThrough { get => (_cold ?? BoxCold.Default).HitTestPassThrough; init => Cold.HitTestPassThrough = value; }
+    public bool HitTestPassThrough { get => (_cInput ?? BoxColdInput.Default).HitTestPassThrough; init => CInput.HitTestPassThrough = value; }
     /// <summary>An opaque, input-blocking surface (a modal dialog card, a light-dismiss popup plate) sits geometrically
     /// ON TOP of whatever page content is laid out beneath it, but it is a Z-STACK SIBLING of that content, not an
     /// ancestor. The scroll dispatcher's containing-scroller fallback (<c>InputDispatcher.ContainingScrollerForAxis</c>)
@@ -356,7 +362,7 @@ public sealed record BoxEl : Element
     /// that fallback treat it as opaque: any scrollable candidate found in an EARLIER sibling is discarded once this
     /// node is reached, though the fallback still recurses into ITS OWN children (a dialog with genuine scrollable
     /// Content is still found normally, since that inner scroller is a DESCENDANT, not blocked by this reset).</summary>
-    public bool BlocksBackgroundScroll { get => (_cold ?? BoxCold.Default).BlocksBackgroundScroll; init => Cold.BlocksBackgroundScroll = value; }
+    public bool BlocksBackgroundScroll { get => (_cInput ?? BoxColdInput.Default).BlocksBackgroundScroll; init => CInput.BlocksBackgroundScroll = value; }
     /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
     /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
     /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>
@@ -365,54 +371,54 @@ public sealed record BoxEl : Element
     /// <summary>WinUI <c>Control.IsTabStop</c>: null = auto (clickable nodes are focusable), false = NEVER keyboard
     /// focusable even when clickable (the light-dismiss catcher layer — WinUI's dismiss layer is not a tab stop),
     /// true = force focusable.</summary>
-    public bool? TabStop { get => (_cold ?? BoxCold.Default).TabStop; init => Cold.TabStop = value; }
-    public int TabIndex { get => (_cold ?? BoxCold.Default).TabIndex; init => Cold.TabIndex = value; }
+    public bool? TabStop { get => (_cInput ?? BoxColdInput.Default).TabStop; init => CInput.TabStop = value; }
+    public int TabIndex { get => (_cInput ?? BoxColdInput.Default).TabIndex; init => CInput.TabIndex = value; }
     /// <summary>WinUI FocusVisualMargin: negative values push the keyboard-focus ring OUTSIDE the bounds. Null = the
     /// WinUI template default (−3 all around); Slider uses −7,0,−7,0.</summary>
-    public Edges4? FocusVisualMargin { get => (_cold ?? BoxCold.Default).FocusVisualMargin; init => Cold.FocusVisualMargin = value; }
+    public Edges4? FocusVisualMargin { get => (_cInput ?? BoxColdInput.Default).FocusVisualMargin; init => CInput.FocusVisualMargin = value; }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
     public AutomationRole Role { get; init; }
 
     // Composited (animate without relayout): transform (offset/scale/rotate about the transform origin) + opacity, applied to this node + subtree.
-    public float OffsetX { get => (_cold ?? BoxCold.Default).OffsetX; init => Cold.OffsetX = value; }
-    public float OffsetY { get => (_cold ?? BoxCold.Default).OffsetY; init => Cold.OffsetY = value; }
-    public float ScaleX { get => (_cold ?? BoxCold.Default).ScaleX; init => Cold.ScaleX = value; }
-    public float ScaleY { get => (_cold ?? BoxCold.Default).ScaleY; init => Cold.ScaleY = value; }
-    public float Rotation { get => (_cold ?? BoxCold.Default).Rotation; init => Cold.Rotation = value; } // degrees
+    public float OffsetX { get => (_cMotion ?? BoxColdMotion.Default).OffsetX; init => CMotion.OffsetX = value; }
+    public float OffsetY { get => (_cMotion ?? BoxColdMotion.Default).OffsetY; init => CMotion.OffsetY = value; }
+    public float ScaleX { get => (_cMotion ?? BoxColdMotion.Default).ScaleX; init => CMotion.ScaleX = value; }
+    public float ScaleY { get => (_cMotion ?? BoxColdMotion.Default).ScaleY; init => CMotion.ScaleY = value; }
+    public float Rotation { get => (_cMotion ?? BoxColdMotion.Default).Rotation; init => CMotion.Rotation = value; } // degrees
     /// <summary>Unified channel (Prop&lt;T&gt;): a static opacity, a thunk, or a concrete signal.</summary>
     public Prop<float> Opacity { get; init; } = 1f;
-    public float HoverOpacity { get => (_cold ?? BoxCold.Default).HoverOpacity; init => Cold.HoverOpacity = value; }
-    public float PressedOpacity { get => (_cold ?? BoxCold.Default).PressedOpacity; init => Cold.PressedOpacity = value; }
+    public float HoverOpacity { get => (_cMotion ?? BoxColdMotion.Default).HoverOpacity; init => CMotion.HoverOpacity = value; }
+    public float PressedOpacity { get => (_cMotion ?? BoxColdMotion.Default).PressedOpacity; init => CMotion.PressedOpacity = value; }
     /// <summary>Flat opacity group (WinUI Composition LayerVisual semantics): when set and the resolved opacity is
     /// &lt; 1, the subtree renders at FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha —
     /// overlapping children don't double-blend (a fading dialog plate + its buttons). Default false = per-node
     /// multiplied opacity (WinUI's plain Visual.Opacity behavior). Engine primitive: PushLayer{Opacity} (E9).</summary>
-    public bool OpacityGroup { get => (_cold ?? BoxCold.Default).OpacityGroup; init => Cold.OpacityGroup = value; }
+    public bool OpacityGroup { get => (_cMotion ?? BoxColdMotion.Default).OpacityGroup; init => CMotion.OpacityGroup = value; }
     /// <summary>Per-node self-blur radius σ (px) — the Expressive Motion Kit's perceptual softener. &gt; 0 wraps the
     /// node's subtree in a PushLayer{Blur} (subtree → pooled offscreen RT → separable Gaussian → composite at the group
     /// alpha), so the node's OWN pixels blur (CSS <c>filter: blur()</c>, not the backdrop). Animate it via
     /// <c>AnimChannel.BlurSigma</c> (UseTransition/UseKeyframes) for the transitions.dev recipes (number pop-in, skeleton
     /// reveal, icon swap, page slide, …). 0 = no blur (the default). Composited only — never relayout.</summary>
-    public float Blur { get => (_cold ?? BoxCold.Default).Blur; init => Cold.Blur = value; }
+    public float Blur { get => (_cMotion ?? BoxColdMotion.Default).Blur; init => CMotion.Blur = value; }
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
-    public float TransformOriginX { get => (_cold ?? BoxCold.Default).TransformOriginX; init => Cold.TransformOriginX = value; }
-    public float TransformOriginY { get => (_cold ?? BoxCold.Default).TransformOriginY; init => Cold.TransformOriginY = value; }
+    public float TransformOriginX { get => (_cMotion ?? BoxColdMotion.Default).TransformOriginX; init => CMotion.TransformOriginX = value; }
+    public float TransformOriginY { get => (_cMotion ?? BoxColdMotion.Default).TransformOriginY; init => CMotion.TransformOriginY = value; }
 
     // Interaction-driven composited scale (1 = none): grows/shrinks this node about its centre by the eased hover/press
     // progress at record time (a WinUI slider/scrollbar thumb that pops on hover). Needs a pointer handler to receive the
     // hover/press flags. Composited only — never changes layout or hit-testing.
-    public float HoverScale { get => (_cold ?? BoxCold.Default).HoverScale; init => Cold.HoverScale = value; }
-    public float PressScale { get => (_cold ?? BoxCold.Default).PressScale; init => Cold.PressScale = value; }
-    public float HoverDurationMs { get => (_cold ?? BoxCold.Default).HoverDurationMs; init => Cold.HoverDurationMs = value; }
-    public float PressDurationMs { get => (_cold ?? BoxCold.Default).PressDurationMs; init => Cold.PressDurationMs = value; }
-    public EasingSpec HoverEasing { get => (_cold ?? BoxCold.Default).HoverEasing; init => Cold.HoverEasing = value; }
-    public EasingSpec PressEasing { get => (_cold ?? BoxCold.Default).PressEasing; init => Cold.PressEasing = value; }
+    public float HoverScale { get => (_cMotion ?? BoxColdMotion.Default).HoverScale; init => CMotion.HoverScale = value; }
+    public float PressScale { get => (_cMotion ?? BoxColdMotion.Default).PressScale; init => CMotion.PressScale = value; }
+    public float HoverDurationMs { get => (_cMotion ?? BoxColdMotion.Default).HoverDurationMs; init => CMotion.HoverDurationMs = value; }
+    public float PressDurationMs { get => (_cMotion ?? BoxColdMotion.Default).PressDurationMs; init => CMotion.PressDurationMs = value; }
+    public EasingSpec HoverEasing { get => (_cMotion ?? BoxColdMotion.Default).HoverEasing; init => CMotion.HoverEasing = value; }
+    public EasingSpec PressEasing { get => (_cMotion ?? BoxColdMotion.Default).PressEasing; init => CMotion.PressEasing = value; }
 
     /// <summary>Implicit brush transition (WinUI <c>BrushTransition</c>): when a re-render changes Fill/BorderColor on
     /// this LIVE node (a logical state flip — checked, selected…), the displayed color cross-fades over this duration
     /// instead of snapping. NaN = snap (the default); WinUI control templates use 83ms.</summary>
-    public float BrushTransitionMs { get => (_cold ?? BoxCold.Default).BrushTransitionMs; init => Cold.BrushTransitionMs = value; }
+    public float BrushTransitionMs { get => (_cMotion ?? BoxColdMotion.Default).BrushTransitionMs; init => CMotion.BrushTransitionMs = value; }
 
     // ── Fine-grained reactive bindings (signals-first). Every bindable channel is ONE Prop<T> property: a static
     // value (re-asserted each reconcile iff not bound), a Func<T> thunk reading signals, or a concrete signal — the
@@ -438,7 +444,7 @@ public sealed record BoxEl : Element
     public Action<NodeHandle>? OnRealized { get; init; }
     /// <summary>Called after layout when this node's arranged local bounds change. Intended for retained leaf controls
     /// that need their own laid-out width/height without subscribing to raw viewport changes.</summary>
-    public Action<RectF>? OnBoundsChanged { get => (_cold ?? BoxCold.Default).OnBoundsChanged; init => Cold.OnBoundsChanged = value; }
+    public Action<RectF>? OnBoundsChanged { get => (_cInput ?? BoxColdInput.Default).OnBoundsChanged; init => CInput.OnBoundsChanged = value; }
 
     /// <summary>Follow another node's on-screen rect: answers the node this box must cover RIGHT NOW (typically a hollow
     /// reservation captured through <see cref="OnRealized"/>), or <see cref="NodeHandle.Null"/> for "not following". While it
@@ -451,7 +457,7 @@ public sealed record BoxEl : Element
     /// stops (so let the thunk's answer be a function of a signal those bindings read too). The thunk runs on the UI thread
     /// outside any reactive scope (read signals with Peek), must not allocate, and must be the SAME delegate every render
     /// (a fresh closure per render re-diffs the box). The target must not be inside this box's own subtree.</summary>
-    public Func<NodeHandle>? FollowRect { get => (_cold ?? BoxCold.Default).FollowRect; init => Cold.FollowRect = value; }
+    public Func<NodeHandle>? FollowRect { get => (_cInput ?? BoxColdInput.Default).FollowRect; init => CInput.FollowRect = value; }
 
     public Element[] Children { get; init; } = [];
 
@@ -467,21 +473,21 @@ public sealed record BoxEl : Element
     /// <para>HARD EDGE in v1 (the mask discards coverage below 0.5) — an anti-aliased path clip is the offscreen-layer
     /// route (§7.1), not this one. It also clips HIT-TESTING: a point inside the box but outside the geometry takes no
     /// hit on this node or anything under it, so click and pixels agree.</para></summary>
-    public PathData? ClipPath { get => (_cold ?? BoxCold.Default).ClipPath; init => Cold.ClipPath = value; }
+    public PathData? ClipPath { get => (_cPaint ?? BoxColdPaint.Default).ClipPath; init => CPaint.ClipPath = value; }
     /// <summary>Winding rule for <see cref="ClipPath"/> (mirrors <c>PathEl.Rule</c>). Ignored when ClipPath is null.</summary>
-    public FillRule ClipPathRule { get => (_cold ?? BoxCold.Default).ClipPathRule; init => Cold.ClipPathRule = value; }
+    public FillRule ClipPathRule { get => (_cPaint ?? BoxColdPaint.Default).ClipPathRule; init => CPaint.ClipPathRule = value; }
     /// <summary>0 (default) = <see cref="ClipPath"/> is already node-local DIP. Paired with
     /// <see cref="ClipPathViewBoxH"/> &gt; 0, bakes the uniform-fit (min-axis) scale into the clip at record time —
     /// the same contract <c>PathEl.ViewBoxW/H</c> has, so one authored silhouette clips any box size.</summary>
-    public float ClipPathViewBoxW { get => (_cold ?? BoxCold.Default).ClipPathViewBoxW; init => Cold.ClipPathViewBoxW = value; }
-    public float ClipPathViewBoxH { get => (_cold ?? BoxCold.Default).ClipPathViewBoxH; init => Cold.ClipPathViewBoxH = value; }
+    public float ClipPathViewBoxW { get => (_cPaint ?? BoxColdPaint.Default).ClipPathViewBoxW; init => CPaint.ClipPathViewBoxW = value; }
+    public float ClipPathViewBoxH { get => (_cPaint ?? BoxColdPaint.Default).ClipPathViewBoxH; init => CPaint.ClipPathViewBoxH = value; }
 
     /// <summary>Paint-order opt-in (the declarative <c>z-index</c> of a hovered card): while the pointer hover path
     /// passes through this element (it is hovered, or hover-within, or its hover fade is still decaying), it paints
     /// AFTER (above) its non-elevated siblings, so its elevation halo is not overpainted by a later sibling. LAYOUT and
     /// HIT-TESTING are unaffected (pure record order). At most one sibling holds the hover path, so the recorder defers
     /// it with O(1) space and zero allocation; at rest (no hover) the element paints in normal document order.</summary>
-    public bool HoverElevatePaint { get => (_cold ?? BoxCold.Default).HoverElevatePaint; init => Cold.HoverElevatePaint = value; }
+    public bool HoverElevatePaint { get => (_cPaint ?? BoxColdPaint.Default).HoverElevatePaint; init => CPaint.HoverElevatePaint = value; }
 
     /// <summary>Drag-ARM barrier: a press that lands on (or inside) this element never arms a DRAGGABLE ANCESTOR's
     /// gesture. A draggable row/card normally lets a press on any of its children start the drag (the WinUI
@@ -490,27 +496,27 @@ public sealed record BoxEl : Element
     /// control instead of becoming a handle for dragging the card. Purely a discriminator: layout, hit-testing, and
     /// this element's own click/press handling are unaffected, and it says nothing about whether the element itself is
     /// draggable (set <c>Draggable</c>/<c>CanDrag</c> for that).</summary>
-    public bool BlocksDragArm { get => (_cold ?? BoxCold.Default).BlocksDragArm; init => Cold.BlocksDragArm = value; }
+    public bool BlocksDragArm { get => (_cInput ?? BoxColdInput.Default).BlocksDragArm; init => CInput.BlocksDragArm = value; }
 
     /// <summary>A pointer LISTENER that is not an interaction scope (the ToolTip service wrapper): it carries pointer
     /// handlers, so it is hit-testable and receives them normally, but the hover cascade, the lazy-mount hover seed and
     /// the un-hover re-resolve look THROUGH it to the nearest real interactive ancestor. A card's hover then still
     /// reveals a wrapped play FAB. Hit-testing and handler delivery are unchanged.</summary>
-    public bool HoverScopeTransparent { get => (_cold ?? BoxCold.Default).HoverScopeTransparent; init => Cold.HoverScopeTransparent = value; }
+    public bool HoverScopeTransparent { get => (_cInput ?? BoxColdInput.Default).HoverScopeTransparent; init => CInput.HoverScopeTransparent = value; }
 
     /// <summary>Clip-ESCAPE root for a hover-elevated descendant (pairs with <see cref="HoverElevatePaint"/>): set on a
     /// clipping viewport (a shelf's paged strip) to let the hovered card's lift + halo paint OUTSIDE this clip. The
     /// recorder HOISTS the deferred elevated descendant out of this node's whole record scope — its clip AND its
     /// edge-fade — and records it after the scope closes, against the clip in effect outside this node. Resting content
     /// still clips exactly here (nothing else escapes). Innermost flagged ancestor wins; layout/hit-testing unaffected.</summary>
-    public bool HoverElevateClipRoot { get => (_cold ?? BoxCold.Default).HoverElevateClipRoot; init => Cold.HoverElevateClipRoot = value; }
+    public bool HoverElevateClipRoot { get => (_cPaint ?? BoxColdPaint.Default).HoverElevateClipRoot; init => CPaint.HoverElevateClipRoot = value; }
 
     /// <summary>Layout firewall (opt-in): declare that this box's size is PARENT-determined (it fills/clips and is never
     /// content-sized), so a re-render or state change deep inside its subtree re-solves ONLY this subtree (scoped layout)
     /// instead of falling back to a full-tree layout from the root. Use on a page/content host that fills the shell content
     /// region. Contract: only set this where the box truly cannot need to change its own outer size from a descendant — the
     /// scoped relayout reuses its current bounds. A window resize still triggers a full layout, so resize stays correct.</summary>
-    public bool IsolateLayout { get => (_cold ?? BoxCold.Default).IsolateLayout; init => Cold.IsolateLayout = value; }
+    public bool IsolateLayout { get => (_cMisc ?? BoxColdMisc.Default).IsolateLayout; init => CMisc.IsolateLayout = value; }
 
     /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
@@ -519,7 +525,7 @@ public sealed record BoxEl : Element
 
     /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
     /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>
-    public bool CounterScale { get => (_cold ?? BoxCold.Default).CounterScale; init => Cold.CounterScale = value; }
+    public bool CounterScale { get => (_cMotion ?? BoxColdMotion.Default).CounterScale; init => CMotion.CounterScale = value; }
 
     // Flexbox
     /// <summary>Unified channels (Prop&lt;T&gt;): static size, thunk, or concrete signal (bound ⇒ scoped relayout).</summary>
@@ -528,7 +534,7 @@ public sealed record BoxEl : Element
     public float MinWidth { get; init; } = float.NaN;
     public float MinHeight { get; init; } = float.NaN;
     public float MaxWidth { get; init; } = float.NaN;
-    public float MaxHeight { get => (_cold ?? BoxCold.Default).MaxHeight; init => Cold.MaxHeight = value; }
+    public float MaxHeight { get => (_cMisc ?? BoxColdMisc.Default).MaxHeight; init => CMisc.MaxHeight = value; }
     public float Grow { get; init; }
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
@@ -545,12 +551,12 @@ public sealed record BoxEl : Element
     /// at PositiveInfinity instead, reporting its NATURAL content width — for a layer that must overflow its ZStack
     /// parent's bounds (a rail tooltip whose stack pins a fixed narrow width) rather than being squeezed to it.
     /// Ignored outside a ZStack; the parent's own size is unaffected by it (an explicit parent Width still wins).</summary>
-    public bool MeasureUnboundedWidth { get => (_cold ?? BoxCold.Default).MeasureUnboundedWidth; init => Cold.MeasureUnboundedWidth = value; }
+    public bool MeasureUnboundedWidth { get => (_cMisc ?? BoxColdMisc.Default).MeasureUnboundedWidth; init => CMisc.MeasureUnboundedWidth = value; }
     /// <summary>CSS <c>aspect-ratio</c> (width÷height): derive the missing extent for a fluid box. NaN (default) = off.
     /// When exactly one of Width/Height is set the other is derived; when both are fluid, the box takes the offered
     /// width and derives its height. Both explicit ⇒ aspect ignored. Routed through the shared <c>LayoutInput.AspectRatio</c>
     /// column (the ImageEl precedent), so an aspect-sized box is NOT a layout boundary (one dimension stays NaN).</summary>
-    public float AspectRatio { get => (_cold ?? BoxCold.Default).AspectRatio; init => Cold.AspectRatio = value; }
+    public float AspectRatio { get => (_cMisc ?? BoxColdMisc.Default).AspectRatio; init => CMisc.AspectRatio = value; }
 }
 
 /// <summary>
