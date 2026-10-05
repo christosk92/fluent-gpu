@@ -220,7 +220,7 @@ public sealed class RenderCompositorAnimations
             {
                 ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
                 if (!exists) accumulator.Acc = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
-                accumulator.Acc.Fold(row.Channel, state.Value, replace: true);
+                accumulator.Acc.Fold(row.Channel, AnimEngine.Posed(in row, state.Value, in scene.Bounds(row.Node), scene.DeviceScale), replace: true);
                 accumulator.OpacityMoving |= row.Channel == AnimChannel.Opacity && !state.Done;
                 accumulator.OpacityPosed |= row.Channel == AnimChannel.Opacity;
             }
@@ -247,6 +247,13 @@ public sealed class RenderCompositorAnimations
                     CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Hidden = true;
                 // A finite row still ticks to its Done (its lifecycle needs the edge); a loop never ends, so it waits.
                 HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Loop);
+                // Its FEEDBACK reports the value the node already shows, not the one time has reached: the UI composes
+                // every pose it is fed back into its own scene, so an advancing value here dirtied a node nobody can see
+                // on every presented frame, and its slice re-recorded and re-rastered each time (Wavee's Home busy bar,
+                // parked at opacity 0, re-rastered the facet band at the display rate while a meter played). The timing
+                // still advances, and a Done edge still reports its final value: that settles a UI lifecycle.
+                if (!state.Done)
+                    _feedback[i] = _feedback[i] with { Value = state.HasPosed ? state.PosedValue : row.Position };
                 continue;
             }
             // Bitwise compare, deliberately no tolerance: a held or Done row re-poses the IDENTICAL float, and a live
@@ -254,7 +261,9 @@ public sealed class RenderCompositorAnimations
             // that can be re-sent unchanged; our Value is recomputed, not re-sent.) A row that was hidden posed nothing
             // since: it re-poses as a change.
             // A wipe split poses at whole-DIP steps of its run (QuantizeWipe): only a step that crosses one is a change.
-            float posed = row.Channel == AnimChannel.GlyphWipeSplit ? QuantizeWipe(scene, row.Node, state.Value) : state.Value;
+            // A SnapDevicePx row poses whole device pixels of its node (AnimEngine.Posed): only a step that crosses one is a change.
+            float posed = row.Channel == AnimChannel.GlyphWipeSplit ? QuantizeWipe(scene, row.Node, state.Value)
+                : AnimEngine.Posed(in row, state.Value, in scene.Bounds(row.Node), scene.DeviceScale);
             bool changed = !state.HasPosed || posed != state.PosedValue || state.Hidden;
             state.PosedValue = posed;
             state.HasPosed = true;

@@ -166,14 +166,14 @@ public sealed partial class AnimEngine
                 ref AnimValue r = ref _slab.At(s);
                 if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
                     || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
-                acc.Fold(r.Channel, r.Position, replace: true); any = true;
+                acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: true); any = true;
             }
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
                 if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
                     || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
-                acc.Fold(r.Channel, r.Position, replace: false); any = true;
+                acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: false); any = true;
             }
             if (any) Compose(node, in acc);
         }

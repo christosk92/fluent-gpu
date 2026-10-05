@@ -172,7 +172,7 @@ public sealed partial class AnimEngine
                 {
                     ref var accumulation = ref CollectionsMarshal.GetValueRefOrAddDefault(_compositorFeedbackAccumulators, row.Node, out bool exists);
                     if (!exists) accumulation = Accum.FromPaint(in _scene.Paint(row.Node));
-                    accumulation.Fold(row.Channel, row.Position, replace: true);
+                    accumulation.Fold(row.Channel, Posed(in row, row.Position, in _scene.Bounds(row.Node), _scene.DeviceScale), replace: true);
                 }
                 if (pose.Done)
                 {
