@@ -8570,11 +8570,14 @@ static partial class ControlsSuite
         // still eases over the full ~333ms (ExpanderResizeWatcher keeps `transitioning` up the whole time), one frame
         // in it is nowhere near the open height, and it settles there.
         {
-            var (app, host, window, clip, _, _) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
+            var (app, host, window, clip, _, collapsedPollers) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
             var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
             var header = Child(host.Scene, card, 0);
             ClickNode(host, window, header);
             host.RunFrame();
+            int openingPollers = host.FrameClockPollerCount;
+            Check("cp3.acr0b — Expander: a collapsed mount holds no frame-clock poller; the open toggle mounts the resize watcher",
+                collapsedPollers == 0 && openingPollers > 0, $"collapsed={collapsedPollers} opening={openingPollers}");
             float after1 = host.Scene.AbsoluteRect(clip).H;
             for (int i = 0; i < 25; i++) host.RunFrame();
             float open = host.Scene.AbsoluteRect(clip).H;

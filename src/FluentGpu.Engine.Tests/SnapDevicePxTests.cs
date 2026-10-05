@@ -98,4 +98,80 @@ public sealed class SnapDevicePxTests
         Assert.True(animation.TryGetTrackValue(bar, AnimChannel.ScaleY, out float raw));
         Assert.Equal(raw, scene.Paint(bar).LocalTransform.M22, 6);
     }
+    [Fact]
+    public void AHoldPinsThePixelLastPosed_AndAReleaseResumesAtTheClocksPhase()
+    {
+        var (scene, bar, animation) = Fixture(renderOwns: true);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        var desired = new CompositorAnimationSnapshot();
+        animation.CaptureCompositorAnimations(desired, 0);
+        var renderer = new RenderCompositorAnimations();
+        renderer.Adopt(desired, snapshot, 0);
+        renderer.Tick(snapshot, 300);   // 5.85 px → 6
+        renderer.Tick(snapshot, 320);   // 6.24 px → 6: the last pixel presented
+        animation.ApplyCompositorFeedback(renderer.Feedback);
+        float shown = snapshot.Paint(bar).LocalTransform.M22;
+        Assert.Equal(6f / 19.5f, shown, 5);
+
+        // The hover-pause publication lands a little later: by then time has reached 7 px (6.63). It must not move.
+        animation.SetHeld(bar, AnimChannel.ScaleY, true);
+        snapshot.Capture(scene);
+        animation.CaptureCompositorAnimations(desired, 340);
+        renderer.Adopt(desired, snapshot, 340);
+        Assert.Equal(shown, snapshot.Paint(bar).LocalTransform.M22);
+        Assert.False(renderer.ChangedThisTick);
+        Assert.False(renderer.HasActive);   // a held row asks for no frames
+        renderer.Tick(snapshot, 450);
+        Assert.Equal(shown, snapshot.Paint(bar).LocalTransform.M22);
+        animation.ApplyCompositorFeedback(renderer.Feedback);
+        Assert.Equal(shown, scene.Paint(bar).LocalTransform.M22, 5);
+
+        // Released, it resumes at the phase the clock reached (0.5 → 9.75 px → 10), not where it was frozen.
+        animation.SetHeld(bar, AnimChannel.ScaleY, false);
+        snapshot.Capture(scene);
+        animation.CaptureCompositorAnimations(desired, 500);
+        renderer.Adopt(desired, snapshot, 500);
+        Assert.True(renderer.ChangedThisTick);
+        Assert.True(renderer.HasActive);
+        Assert.Equal(10f / 19.5f, snapshot.Paint(bar).LocalTransform.M22, 5);
+        snapshot.ReleaseResources();
+    }
+
+    [Fact]
+    public void OnTheUiTick_AHoldFreezesTheValue_AndAReleaseResumesAtTheClocksPhase()
+    {
+        var (scene, bar, animation) = Fixture(renderOwns: false);
+        animation.Tick(16f);    // seed frame: t = 0
+        for (int i = 0; i < 10; i++) animation.Tick(16f);   // t = 160
+        float shown = scene.Paint(bar).LocalTransform.M22;
+        Assert.Equal(Snapped(0.16f), shown, 5);
+        animation.SetHeld(bar, AnimChannel.ScaleY, true);
+        for (int i = 0; i < 10; i++) animation.Tick(16f);   // t = 320, held
+        Assert.Equal(shown, scene.Paint(bar).LocalTransform.M22);
+        animation.SetHeld(bar, AnimChannel.ScaleY, false);
+        animation.Tick(16f);                                  // t = 336
+        Assert.Equal(Snapped(0.336f), scene.Paint(bar).LocalTransform.M22, 5);
+    }
+
+    [Fact]
+    public void ARe_seed_InheritsNeitherThePixelSnapNorAHold()
+    {
+        var (scene, bar, animation) = Fixture(renderOwns: false);
+        animation.SetHeld(bar, AnimChannel.ScaleY, true);
+        animation.SeedEased(bar, AnimChannel.ScaleY, 0f, 1f, 1000f, Easing.Linear);
+        for (int i = 0; i < 9; i++) animation.Tick(16f);
+        Assert.True(animation.TryGetTrackValue(bar, AnimChannel.ScaleY, out float eased));
+        Assert.True(eased > 0f);                              // not held
+        Assert.Equal(eased, scene.Paint(bar).LocalTransform.M22, 6);   // not snapped
+        Assert.NotEqual(Snapped(eased), eased);
+
+        animation.Keyframes(bar, AnimChannel.ScaleY, [new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.Linear)], 1000f,
+            loop: true, snapToDevicePixels: true);
+        animation.Spring(bar, AnimChannel.ScaleY, 0.77f, SpringParams.Default);
+        for (int i = 0; i < 5; i++) animation.Tick(16f);
+        Assert.True(animation.TryGetTrackValue(bar, AnimChannel.ScaleY, out float sprung));
+        Assert.Equal(sprung, scene.Paint(bar).LocalTransform.M22, 6);
+        Assert.NotEqual(Snapped(sprung), sprung);
+    }
 }

@@ -122,7 +122,7 @@ public sealed partial class AnimEngine
     /// so the node's scaled extent (<paramref name="extentDip"/> x <paramref name="deviceScale"/>) is a whole number of
     /// device pixels; any other channel, or an extent of a pixel or less, unchanged. Pure, so the UI tick, the
     /// compositor feedback and the render thread pose the identical float.</summary>
-    internal static float SnapToDevicePixels(AnimChannel channel, float value, float extentDip, float deviceScale)
+    public static float SnapToDevicePixels(AnimChannel channel, float value, float extentDip, float deviceScale)
     {
         if (channel is not (AnimChannel.ScaleX or AnimChannel.ScaleY)) return value;
         float px = extentDip * (deviceScale > 0f ? deviceScale : 1f);
@@ -135,6 +135,10 @@ public sealed partial class AnimEngine
         => r.Has(AnimFlags.SnapDevicePx)
             ? SnapToDevicePixels(r.Channel, value, r.Channel == AnimChannel.ScaleX ? bounds.W : bounds.H, deviceScale)
             : value;
+
+    /// <summary>A keyframe track's value at progress <paramref name="u"/> (0..1), per-segment easing — exactly what the UI
+    /// tick and the render thread sample (an app pins its own motion function against it).</summary>
+    public static float SampleKeyframes(ReadOnlySpan<Keyframe> keys, float u) => Sample(keys, u);
 
     // sample a multi-keyframe track at progress u (0..1), per-segment easing (ported from AnimEngine.Sample)
     internal static float Sample(ReadOnlySpan<Keyframe> keys, float u)
