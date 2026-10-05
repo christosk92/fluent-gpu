@@ -755,6 +755,14 @@ public sealed partial class TreeReconciler
         }
     }
 
+    // The seams every component's context is handed. A method-group conversion allocates a delegate each time it is evaluated,
+    // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
+    private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
+    private Func<NodeHandle, int, int, bool, bool>? _beginVirtualDisclosureSeam;
+    private Action<NodeHandle, bool>? _completeVirtualDisclosureSeam;
+    private Action<NodeHandle>? _clearVirtualDisclosureSeam;
+    private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
+
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
     {
         ctx.Runtime = Runtime;
@@ -762,12 +770,12 @@ public sealed partial class TreeReconciler
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
-        ctx.BeginVirtualRemoval = BeginVirtualRemoval;
-        ctx.BeginVirtualDisclosure = BeginVirtualDisclosure;
-        ctx.CompleteVirtualDisclosure = CompleteVirtualDisclosure;
-        ctx.ClearVirtualDisclosure = ClearVirtualDisclosure;
+        ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
+        ctx.BeginVirtualDisclosure = _beginVirtualDisclosureSeam ??= BeginVirtualDisclosure;
+        ctx.CompleteVirtualDisclosure = _completeVirtualDisclosureSeam ??= CompleteVirtualDisclosure;
+        ctx.ClearVirtualDisclosure = _clearVirtualDisclosureSeam ??= ClearVirtualDisclosure;
         ctx.AnchorNode = anchor;
-        ctx.ResolveContextSignal = ResolveContext;
+        ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
     }
 
