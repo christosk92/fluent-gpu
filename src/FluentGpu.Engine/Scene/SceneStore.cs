@@ -2308,6 +2308,28 @@ public sealed partial class SceneStore : ISceneBackend
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }
 
+    /// <summary>Does the tree say <paramref name="h"/> is on screen: live, linked to <see cref="Root"/> (a KeepAlive-parked
+    /// tab or an exit orphan is not), <see cref="NodeFlags.Visible"/> on every node of its chain, no zero
+    /// <see cref="NodePaint.Opacity"/> on the chain, and a non-empty box. Clip and scroll culling are NOT considered: a
+    /// caller intersects the rect with the window or its viewport itself. Capture tooling (the Store screenshot export)
+    /// uses it to drop parked pages and collapsed panes from a keyed-rect dump, whose stale last-arranged rects would
+    /// otherwise point at pixels nothing paints. Allocation-free; O(depth).</summary>
+    public bool IsShown(NodeHandle h)
+    {
+        if (h.IsNull) return false;
+        ref RectF own = ref _bounds[h.Raw.Index];
+        if (own.W <= 0f || own.H <= 0f) return false;
+        var last = NodeHandle.Null;
+        for (var n = h; !n.IsNull; n = Parent(n))
+        {
+            if (!IsLive(n)) return false;
+            if ((_flags[n.Raw.Index] & NodeFlags.Visible) == 0) return false;
+            if (_paint[n.Raw.Index].Opacity <= 0f) return false;
+            last = n;
+        }
+        return last == Root;
+    }
+
     /// <summary>Same walk as <see cref="AbsoluteRect"/>, but refuses (returns <c>false</c>) the moment any node on the
     /// parent chain carries a <see cref="NodePaint.LocalTransform"/> whose scale/skew is not identity. This is the E1
     /// image-repaint path's rect source (<c>Reconciler.AddImageNodeRepaint</c>, damage-scoped-repaint-design.md "Step
