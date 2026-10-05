@@ -743,6 +743,10 @@ public sealed partial class PcmAudioSession : IMediaSession
     /// <summary>RT-feed ring underruns (silence written) since this session opened. 0 on the single-thread pull path.</summary>
     public long XrunCount => _feed?.XrunCount ?? 0;
 
+    /// <summary>Times the output DEVICE itself ran dry while streaming (<see cref="IBufferedAudioSink.DeviceUnderruns"/>) — the
+    /// glitches <see cref="XrunCount"/> cannot see, because the app's ring was full and the stall was downstream of it.</summary>
+    public long DeviceUnderrunCount => (_out as IBufferedAudioSink)?.DeviceUnderruns ?? 0;
+
     /// <summary>Approximate independent work totals for off-RT diagnostics; not a coherent audio-state snapshot.</summary>
     public (long Gain, long GainSkipped, long Channel, long ChannelSkipped, long Transport, long TransportSkipped,
         long Meter, long ManagerWakes, long ManagerPasses) ReadWorkCounters()

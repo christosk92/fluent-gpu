@@ -40,6 +40,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     private ulong _clockFreq;
     private long _latencyFrames;
     private long _written;
+    private long _deviceUnderruns;   // RT-incremented, read from any thread (Volatile): see DeviceUnderruns
     private bool _ready;
     private bool _started;
     private bool _disposed;
@@ -134,6 +135,9 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     // ── IAudioClockSource ────────────────────────────────────────────────────────────────────────────────────────────
     /// <inheritdoc/>
     public long WrittenFrames => _written;
+
+    /// <inheritdoc/>
+    public long DeviceUnderruns => Volatile.Read(ref _deviceUnderruns);
     /// <inheritdoc/>
     public long StreamLatencyFrames => _latencyFrames;
     /// <inheritdoc/>
@@ -241,6 +245,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
         int devCh = _deviceChannels;
         int written = 0;
+        bool firstPadding = true;
         // Submit only immediately writable capacity. The caller retains a partial remainder and performs
         // interruptible device/control waiting outside the DSP scope.
         while (written < frames && _ready && !_disposed)
@@ -252,6 +257,11 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 if (IsDeviceLostHr(hr)) MarkLost(hr);
                 break;
             }
+            // Device-side glitch signal: a RUNNING stream whose queue is empty when we come to write has already played silence,
+            // which no app-side counter can see. Only after a full device buffer has gone through since the last Reset, so
+            // a start-up or post-seek prefill (legitimately empty) never counts. One compare + one add: RT-legal.
+            if (firstPadding && padding == 0 && _started && _written > _bufferFrames) _deviceUnderruns++;
+            firstPadding = false;
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
             {
