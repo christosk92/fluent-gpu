@@ -42,8 +42,7 @@ internal sealed class ElementCold : IEquatable<ElementCold>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return 
-EqualityComparer<string?>.Default.Equals(MorphId, o.MorphId)
+        return EqualityComparer<string?>.Default.Equals(MorphId, o.MorphId)
             && EqualityComparer<FluentGpu.Scroll.Effects.ScrollEffectSpec[]>.Default.Equals(ScrollEffects, o.ScrollEffects)
             && EqualityComparer<string?>.Default.Equals(ScrollScope, o.ScrollScope)
             && EqualityComparer<SkeletonMode>.Default.Equals(SkeletonMode, o.SkeletonMode)

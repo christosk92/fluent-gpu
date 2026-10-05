@@ -521,7 +521,7 @@ public sealed record BoxEl : Element
     /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
     /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>
-    public LayoutTransition? Animate { get => (_cMotion ?? BoxColdMotion.Default).Animate; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals((_cMotion ?? BoxColdMotion.Default).Animate, value)) CMotion.Animate = value; } }
+    public LayoutTransition? Animate { get => (_cMisc ?? BoxColdMisc.Default).Animate; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals((_cMisc ?? BoxColdMisc.Default).Animate, value)) CMisc.Animate = value; } }
 
     /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
     /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>

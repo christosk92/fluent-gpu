@@ -63,8 +63,7 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return 
-EqualityComparer<ColorF>.Default.Equals(HoverBorderColor, o.HoverBorderColor)
+        return EqualityComparer<ColorF>.Default.Equals(HoverBorderColor, o.HoverBorderColor)
             && EqualityComparer<ColorF>.Default.Equals(PressedBorderColor, o.PressedBorderColor)
             && EqualityComparer<float>.Default.Equals(BorderDashOn, o.BorderDashOn)
             && EqualityComparer<float>.Default.Equals(BorderDashOff, o.BorderDashOff)
@@ -161,8 +160,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return 
-EqualityComparer<Action<KeyEventArgs>?>.Default.Equals(OnKeyDown, o.OnKeyDown)
+        return EqualityComparer<Action<KeyEventArgs>?>.Default.Equals(OnKeyDown, o.OnKeyDown)
             && EqualityComparer<Action<CharEventArgs>?>.Default.Equals(OnCharInput, o.OnCharInput)
             && EqualityComparer<Action<Point2>?>.Default.Equals(OnPointerDown, o.OnPointerDown)
             && EqualityComparer<Action<Point2>?>.Default.Equals(OnDrag, o.OnDrag)
@@ -212,8 +210,6 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
 
     public BoxEl? Owner;
 
-    public LayoutTransition? Animate;
-
     public float OffsetX;
     public float OffsetY;
     public float ScaleX = 1f;
@@ -245,8 +241,7 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return 
-EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
+        return EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
             && EqualityComparer<float>.Default.Equals(OffsetY, o.OffsetY)
             && EqualityComparer<float>.Default.Equals(ScaleX, o.ScaleX)
             && EqualityComparer<float>.Default.Equals(ScaleY, o.ScaleY)
@@ -264,8 +259,7 @@ EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
             && EqualityComparer<EasingSpec>.Default.Equals(HoverEasing, o.HoverEasing)
             && EqualityComparer<EasingSpec>.Default.Equals(PressEasing, o.PressEasing)
             && EqualityComparer<float>.Default.Equals(BrushTransitionMs, o.BrushTransitionMs)
-            && EqualityComparer<bool>.Default.Equals(CounterScale, o.CounterScale)
-            && EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate);
+            && EqualityComparer<bool>.Default.Equals(CounterScale, o.CounterScale);
     }
 
     public override bool Equals(object? obj) => Equals(obj as BoxColdMotion);
@@ -278,6 +272,8 @@ internal sealed class BoxColdMisc : IEquatable<BoxColdMisc>
     public static readonly BoxColdMisc Default = new();
 
     public BoxEl? Owner;
+
+    public LayoutTransition? Animate;
 
     public bool IsolateLayout;
     public float MaxHeight = float.NaN;
@@ -295,8 +291,8 @@ internal sealed class BoxColdMisc : IEquatable<BoxColdMisc>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return 
-EqualityComparer<bool>.Default.Equals(IsolateLayout, o.IsolateLayout)
+        return EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate)
+            && EqualityComparer<bool>.Default.Equals(IsolateLayout, o.IsolateLayout)
             && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
             && EqualityComparer<bool>.Default.Equals(MeasureUnboundedWidth, o.MeasureUnboundedWidth)
             && EqualityComparer<float>.Default.Equals(AspectRatio, o.AspectRatio);
