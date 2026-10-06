@@ -980,6 +980,11 @@ public sealed record ImageEl : Element
     /// <summary>Optional static bitmap blur. The engine derives a persistent image once; scrolling then remains one
     /// ordinary image draw instead of a per-frame scene blur layer.</summary>
     public BakedBlurSpec? BakedBlur { get; init; }
+    /// <summary>Keep this image's texture resident while the window is hidden: the Deep hidden stage releases the textures of
+    /// everything on screen to give the memory back, and this one it leaves alone. For the one or two images a hidden window
+    /// still shows or restores instantly (a player bar's now-playing artwork); every other image is restored, inside a held
+    /// first frame, when the window returns.</summary>
+    public bool KeepWhileHidden { get; init; }
     /// <summary>Source-over color applied in the image shader after sampling. Transparent disables it.</summary>
     public ColorF ColorOverlay { get; init; }
     /// <summary>Optional leaf-local alpha feather evaluated in the image shader (no offscreen layer).</summary>

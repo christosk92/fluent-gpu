@@ -804,7 +804,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_fence != null) _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
         int faultsBefore = _imageTextures.ResourceFaults;
         long stagedBytes = 0;
-        int budgetBytes = UploadBytesPerTurn;
+        int budgetBytes = System.Threading.Volatile.Read(ref _uploadCapLifted) != 0 ? int.MaxValue : UploadBytesPerTurn;
         while (true)
         {
             FluentGpu.Hosting.Threading.ImageUploadQueue.Job j;
@@ -3503,6 +3503,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.Composited && target.DcompBindPending) BindDComp(target);
         target.Frame.LastPresentStoodDown = false;
         target.Frame.LastPresentRefused = false;
+        target.Frame.LastPresentHeld = false;
+        if (target.Frame.HoldPresentOnce)
+        {
+            // The restore hold: the frame was recorded and submitted (its uploads and copies landed) but the window keeps showing
+            // the frame it had. Taken before the covered / occluded checks so a held frame never reads as a stand-down.
+            target.Frame.HoldPresentOnce = false;
+            HoldPresentFrame(target.Frame);
+            return;
+        }
         HWND hwnd = target.Hwnd;
         // The ATOMIC REVEAL frame is exempt from every stand-down below. A COMPOSITION swapchain
         // (CreateSwapChainForComposition — every windowed popup, see InitSwapChain) reaches the screen through its
@@ -3736,6 +3745,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (hwnd == HWND.NULL) return false;
         if (IsIconic(hwnd) != 0 || IsWindowVisible(hwnd) == 0) return true;
         return DwmGetWindowAttribute((nint)hwnd, DwmwaCloaked, out int cloaked, sizeof(int)) >= 0 && cloaked != 0;
+    }
+
+    /// <summary>A held present (ISwapchain.HoldNextPresent): everything a stood-down present does except report one. The latency
+    /// credit stays held (the slot this turn reserved is still free, so the next held submit does not wait for it twice), and the
+    /// next present that really flips is a whole one - DWM never saw this frame's changes.</summary>
+    private void HoldPresentFrame(TargetFrameState f)
+    {
+        f.LastPresentHeld = true;
+        for (int i = 0; i < _swapchains.Count; i++)
+            if (ReferenceEquals(_swapchains[i].Frame, f)) { _swapchains[i].PpNeedFullPresent = true; _swapchains[i].PpPresentCount = 0; }
+        f.HintSettlePresent = false;
+        f.HintMotionFenceWait = false;
+        f.SkipVsyncOnce = false;
+        Diag.Count("d3d12", "presentHeld");
+        EndTargetFrame();
     }
 
     private void StandDownPresent(TargetFrameState f)
@@ -4735,6 +4759,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// the next unrelated frame.</remarks>
     public bool HasPendingUploads => _hasHeldImageJob || (_imageTextures?.HasPendingUploads ?? false);
 
+    /// <inheritdoc/>
+    public bool IsImageResident(int imageId) => _imageTextures?.IsResident(imageId) ?? false;
+
+    /// <inheritdoc/>
+    public long ImageCommittedBytes(int bucket) => _imageTextures?.MeasuredCommittedBytes(bucket) ?? 0;
+
+    private int _uploadCapLifted;
+    /// <inheritdoc/>
+    public void SetUploadCapLifted(bool lifted) => System.Threading.Volatile.Write(ref _uploadCapLifted, lifted ? 1 : 0);
+
     /// <summary>Fence-only maintenance for an elided/skip-submit frame: reclaims image resources whose retire fence
     /// has completed without opening a command list or presenting. Same thread confinement as the rest of the image
     /// texture store (<see cref="ImageTextureStore.ReclaimCompleted"/> asserts it internally): a no-op assert in
@@ -5539,6 +5573,10 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // against 1-A's actual interface text.
     public bool TextRepaintPending => Frame.TextRepaintPending;
     public bool LastPresentStoodDown => Frame.LastPresentStoodDown;
+    /// <inheritdoc/>
+    public void HoldNextPresent() => Frame.HoldPresentOnce = true;
+    /// <inheritdoc/>
+    public bool LastPresentHeld => Frame.LastPresentHeld;
     /// <inheritdoc/>
     public bool IsOccluded => Frame.OccludedLatched || Frame.LastPresentStoodDown;
     public double LastFenceWaitMs => Frame.LastFenceWaitMs;

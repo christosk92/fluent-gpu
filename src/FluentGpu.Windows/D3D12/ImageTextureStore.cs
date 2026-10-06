@@ -1217,6 +1217,25 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return bytes;
     }
 
+    // What the driver says one square bucket texture commits (64 / 128 / 256 / 512), written the first time each is created and read
+    // by the host's budget code from another thread: a plain long array, one writer (the render thread), aligned 64-bit reads.
+    private readonly long[] _measuredBucketBytes = new long[4];
+
+    private void NoteMeasuredBucket(int w, int h, ulong bytes)
+    {
+        if (bytes == 0 || w != h || w < 64 || w > 512 || (w & (w - 1)) != 0) return;   // only the pool's square power-of-two buckets
+        int i = w <= 64 ? 0 : w <= 128 ? 1 : w <= 256 ? 2 : 3;
+        if (System.Threading.Volatile.Read(ref _measuredBucketBytes[i]) == 0) System.Threading.Volatile.Write(ref _measuredBucketBytes[i], (long)bytes);
+    }
+
+    /// <summary>The driver-measured commit of one square image texture of <paramref name="bucket"/> (0 = not created yet). Any thread.</summary>
+    public long MeasuredCommittedBytes(int bucket)
+    {
+        if (bucket < 64 || bucket > 512) return 0;
+        int i = bucket <= 64 ? 0 : bucket <= 128 ? 1 : bucket <= 256 ? 2 : 3;
+        return System.Threading.Volatile.Read(ref _measuredBucketBytes[i]);
+    }
+
     private ulong TrackTexture(ID3D12Resource* texture, string name, D3D12_RESOURCE_DESC* descriptor)
     {
         ulong bytes = AllocationBytes(descriptor);
@@ -1248,7 +1267,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             // The size joins the CLASS KEY (a dot, not a space): NameKey cuts at the first space, so the old name
             // collapsed every bucket into one `Image.Texture.Uma` row and the census could not say whether 88 MB was
             // 600 thumbnails or 90 heroes. Per-bucket rows are what make the commit-vs-decode over-charge legible.
-            TrackTexture(tex, $"Image.Texture.Uma.{w}x{h} BGRA8", &td);
+            NoteMeasuredBucket(w, h, TrackTexture(tex, $"Image.Texture.Uma.{w}x{h} BGRA8", &td));
             return tex;
         }
 
@@ -1260,7 +1279,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
         { NoteResourceFault("Image.CreateTexture"); return null; }
-        TrackTexture(tex, $"Image.Texture.{w}x{h} BGRA8", &td);   // per-bucket class key, see the UMA arm
+        NoteMeasuredBucket(w, h, TrackTexture(tex, $"Image.Texture.{w}x{h} BGRA8", &td));   // per-bucket class key, see the UMA arm
         return tex;
     }
 

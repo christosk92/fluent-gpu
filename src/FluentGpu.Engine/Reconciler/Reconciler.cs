@@ -327,6 +327,10 @@ public sealed partial class TreeReconciler
     public Action<NodeHandle>? SaveScrollPosition { get; set; }
     private readonly HashSet<long> _imagePinnedNodes = new();
     private readonly Dictionary<int, List<NodeHandle>> _imageNodes = new();   // imageId → nodes that pinned it (for status→dirty)
+    // ImageEl.KeepWhileHidden: nodes (scene index) that asked their image to stay resident while the window is hidden, and the
+    // pins (node, id) that took a keep reference for it, so an unpin gives back exactly what its pin took.
+    private readonly HashSet<int> _keepWhileHiddenNodes = new();
+    private readonly HashSet<long> _keepWhileHiddenPins = new();
     // Hold-last-good (media-pipeline.md §hold-last-good): node index → the NEW (still-decoding) image id a re-keyed
     // Image node is holding while its OLD Ready texture keeps drawing. Absent ⇒ no hold in progress for that node.
     // Lives here, not on ImageVisualEffects, because that struct is rewritten wholesale from the element every reconcile.
@@ -2027,6 +2031,9 @@ public sealed partial class TreeReconciler
         long pinKey = ((long)(int)node.Raw.Index << 32) | (uint)imageId;
         if (_imagePinnedNodes.Add(pinKey))
         {
+            // Before the pin: a keep-while-hidden image must already be protected when the pin restarts a parked entry.
+            if (_keepWhileHiddenNodes.Contains((int)node.Raw.Index) && _keepWhileHiddenPins.Add(pinKey))
+                Images.AddKeepWhileHidden(new ImageHandle(imageId), +1);
             Images.Pin(new ImageHandle(imageId), priority);
             TrackImageNode(imageId, node);
         }
@@ -2134,6 +2141,7 @@ public sealed partial class TreeReconciler
         if (_imagePinnedNodes.Remove(pinKey))
         {
             var h = new ImageHandle(imageId);
+            if (_keepWhileHiddenPins.Remove(pinKey)) Images.AddKeepWhileHidden(h, -1);
             Images.Unpin(h);
             UntrackImageNode(imageId, node);
             if (Images.RefsOf(h) == 0 && Images.StateOf(h) == ImageState.Pending)
@@ -4321,6 +4329,7 @@ public sealed partial class TreeReconciler
             if (_pendingImageId.Remove(idx, out int pendingId)) UnpinImageNode(node, pendingId);
             // A swap crossfade in flight holds its OUTGOING texture pinned — release it with the node.
             if (_imageSwaps.Remove(idx, out var swap)) UnpinImageNode(node, swap.OutgoingId);
+            _keepWhileHiddenNodes.Remove(idx);   // the slot may be reused by a node that never asked to be kept
         }
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
@@ -5590,6 +5599,9 @@ public sealed partial class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Image;
+                // Before any request / pin below: the flag is read when this node pins an id (PinImageNode).
+                if (im.KeepWhileHidden) _keepWhileHiddenNodes.Add((int)node.Raw.Index);
+                else _keepWhileHiddenNodes.Remove((int)node.Raw.Index);
                 if (!im.Placeholder.IsBound) paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
                 paint.Corners = im.Corners;
                 paint.ImageFit = (byte)im.Fit;

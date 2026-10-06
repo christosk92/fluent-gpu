@@ -303,6 +303,22 @@ public partial interface IGpuDevice : IDisposable
     /// <see cref="ReclaimCompletedUploads"/> instead of forcing a submit.</summary>
     bool HasPendingUploads => false;
 
+    /// <summary>True when <paramref name="imageId"/> has a texture a draw samples RIGHT NOW (staged, and any side-queue copy
+    /// done): a frame recorded at this point draws the picture rather than a placeholder for it. The held restore's final gate
+    /// asks it on the render thread, after the frame was recorded. Default true (a backend with no deferred residency).</summary>
+    bool IsImageResident(int imageId) => true;
+
+    /// <summary>What one image texture of the square <paramref name="bucket"/> (64 / 128 / 256 / 512 px) really commits on this
+    /// device, measured from the driver's own allocation requirement the first time such a texture was created (0 = not measured
+    /// yet or not supported). The image cache charges its budget in these units instead of the 64 KiB-aligned formula, which the
+    /// Adreno beats by 25 % for 256 x 256 (320 KiB against 256 KiB). Any thread; default 0.</summary>
+    long ImageCommittedBytes(int bucket) => 0;
+
+    /// <summary>A Deep restore's held frames are not presented, so the missed-vblank reason for the per-turn upload cap does not
+    /// apply to them: while true the render-thread image drain stages every queued upload instead of
+    /// <c>UploadBytesPerTurn</c> of them, and the held first frame lands in the fewest turns. Render thread; default no-op.</summary>
+    void SetUploadCapLifted(bool lifted) { }
+
     /// <summary>Fence-only maintenance for an elided frame: releases image resources whose retire fence completed,
     /// without opening a command list or owing a present. Call this instead of a full submit when the frame would
     /// otherwise be skipped/elided, so a backlog of evicted textures doesn't sit resident forever on a quiet UI.
@@ -440,6 +456,17 @@ public interface ISwapchain : IDisposable
     /// <summary>True when the most recent <see cref="Present"/> of THIS target stood down (cloaked / OCCLUDED probe
     /// still occluded) without a real present. The host treats this like skip-submit for the sync-path pacing floor.</summary>
     bool LastPresentStoodDown => false;
+
+    /// <summary>Make the NEXT <see cref="Present"/> / <see cref="PresentNoWait"/> of this target a HELD present: the frame is
+    /// already fully recorded and submitted (so uploads, the glyph atlas and every texture copy land), but nothing is flipped, so
+    /// the window keeps showing its previous frame. Used by the restore hold. One-shot: consumed by that present. A held present
+    /// is NOT a stand-down: <see cref="LastPresentStoodDown"/> and <see cref="IsOccluded"/> stay false (nothing about the window
+    /// is covered or hidden - a stood-down signal would freeze motion, flap the app-wide occlusion flag and stop visualizers).
+    /// Render thread. Default no-op (a backend that cannot hold presents the frame).</summary>
+    void HoldNextPresent() { }
+
+    /// <summary>True when the most recent present of THIS target was held (<see cref="HoldNextPresent"/>).</summary>
+    bool LastPresentHeld => false;
 
     /// <summary>True while THIS target is not being shown: the backend's DXGI occlusion latch is set (DXGI_STATUS_OCCLUDED —
     /// a fully covered HWND swapchain; NOT reliably reported for composition swapchains) OR its last present stood down

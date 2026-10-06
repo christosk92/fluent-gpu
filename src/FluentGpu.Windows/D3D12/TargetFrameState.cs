@@ -1,4 +1,4 @@
-using TerraFX.Interop.DirectX;
+﻿using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using FluentGpu.Foundation;
 using FluentGpu.Rhi;
@@ -46,6 +46,10 @@ internal sealed unsafe class TargetFrameState
 
     // ── present side (moved from D3D12Device) ────────────────────────────────────────────────────────────────────
     internal bool OccludedLatched, LastPresentStoodDown, SkipLatencyOnce, SkipVsyncOnce, HintSettlePresent;
+    // The restore hold (ISwapchain.HoldNextPresent): the next Present of this target flips nothing; the frame stays in the back
+    // buffer. LastPresentHeld is the result, deliberately separate from LastPresentStoodDown (a held present must not read as the
+    // window being covered). Render-thread-only.
+    internal bool HoldPresentOnce, LastPresentHeld;
     // F070 Stage B: the next Present of this target waits (bounded) for its own submit's fence first. Armed by the host for a turn that
     // moves video geometry, consumed by Present, render-thread-only.
     internal bool HintMotionFenceWait;

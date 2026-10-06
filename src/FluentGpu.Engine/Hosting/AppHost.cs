@@ -567,8 +567,14 @@ public sealed partial class AppHost : IDisposable
         if (RenderMotionMayRun(paused, _renderFailed, _hasActiveRenderFrame && _renderSeam.IsCurrentTarget(_activeRenderFrame)))
         {
             var frame = _renderSeam.Scene(_activeRenderFrame);
-            active = _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
-                || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
+            // HELD (a restore waiting for its images): nothing is presented, so motion re-presents have nothing to show - the one
+            // exception is the retry of the frame that failed the faithful-frame gate, which is exactly what the loop must keep
+            // ticking for. Not "paused": the compositor clocks keep running, so the first presented frame is on time, and the
+            // app-wide occlusion signal is untouched (a held frame is not a covered window).
+            active = _renderHeld
+                ? _holdRetryOwed
+                : _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
+                    || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
         return active;
@@ -736,6 +742,22 @@ public sealed partial class AppHost : IDisposable
     private int _renderHiddenStage;              // the stage the UI wants the render side to be in (HiddenStage); UI writes, render reads
     private int _renderHiddenApplied;            // the stage the render side (or the UI inline in SingleThread) has applied; only its applier touches it
     private readonly HashSet<int> _hiddenChildHeld = new();
+    // Render-thread-owned (the UI thread, inline, in SingleThread): the HELD latch. True from the Deep step (and from the first
+    // adopted publication that carries PresentHeld) until a frame passes the faithful-frame gate: while true a frame is recorded and
+    // submitted but NOT presented, so the window keeps showing the last frame it presented before the hide. _holdRetryOwed: the frame
+    // that was to release it failed the gate, so the render loop retries it every turn; _holdGateSinceQpc stamps the first release
+    // attempt so a gate that can never open (a rejected upload) cannot freeze the window - it releases after HoldGuardMs.
+    private bool _renderHeld, _holdRetryOwed;
+    private long _holdGateSinceQpc;
+    private long _framesHeld, _holdGuardReleases;
+    private const double HoldGuardMs = 500.0;
+    /// <summary>Presents this host held back (the restore hold), cumulative. Not part of <see cref="FramesStoodDown"/>: a held present
+    /// says nothing about the window being covered.</summary>
+    public long FramesHeld => Volatile.Read(ref _framesHeld);
+    /// <summary>Holds the render side gave up on after <see cref="HoldGuardMs"/> because the gate never opened, cumulative.</summary>
+    public long HoldGuardReleases => Volatile.Read(ref _holdGuardReleases);
+    /// <summary>Test: the render-side HELD latch.</summary>
+    internal bool RenderHeldForTest => _renderHeld;
 
     /// <summary>The hidden-window memory stage the policy has reached (<see cref="HiddenStage"/> as an int), for the census.
     /// UI-thread read.</summary>
@@ -754,35 +776,311 @@ public sealed partial class AppHost : IDisposable
     private HiddenPark CurrentHiddenPark()
         => IsOsParked ? HiddenPark.Os : (_coverParked ? HiddenPark.Cover : HiddenPark.None);
 
+    // ── Deep stage + restore hold: UI side ────────────────────────────────────────────────────────────────────────
+    // The hold is a property of the PUBLICATION: every scene published while the hold is armed carries PresentHeld, and the render
+    // thread presents or holds each adopted frame by that bit (plus a render-owned latch and a final faithful-frame gate; see
+    // DecideHold). Nothing the render thread reads is a side flag the UI flips between two of its turns.
+    private bool _restoreHoldArmed;                  // UI: a restore is waiting for its images (armed at the restore edge)
+    private long _restoreHoldStartMs, _restoreHoldDeadlineMs;
+    private bool _lastPublishedHeld;                 // UI: the last publication carried PresentHeld (the release is then owed a publication)
+    private Size2 _lastPublishedFrameSize;           // UI: size / scale of the last publication (a restore into another size holds nothing)
+    private float _lastPublishedScale;
+    private readonly HashSet<int> _deepChildHeld = new();      // ids a VISIBLE pop-out holds while this (primary) host is Deep
+    private readonly HashSet<int> _onScreenImageIds = new();   // scratch of the restore edge
+    private long _restoreHoldReleases;
+    private bool _restoreHoldReparked;               // UI: re-parked while armed; the next un-park restarts the deadline
+    private long _restoreTrackingClearAtMs;          // UI: after an expired hold, when stragglers go back to the warm reveal (0 = none)
+    /// <summary>Test / census: restore holds armed so far.</summary>
+    internal long RestoreHoldsArmedForTest { get; private set; }
+    /// <summary>Test: a restore is currently waiting for its images.</summary>
+    internal bool RestoreHoldArmedForTest => _restoreHoldArmed;
+
     /// <summary>UI thread, once per <see cref="RunFrame"/> (parked frames included): feed the stage machine and run the UI half of a
     /// stage change. Shallow evicts the unpinned image textures through the cache (their evict jobs reach the device on the render
-    /// thread) and trims the CPU pixel pool, then asks the render side to release tiles, scratch, stencil and pools; a restore lifts
-    /// the stage and forces one full repaint, so the first frame back re-rasters everything the release dropped.</summary>
+    /// thread) and trims the CPU pixel pool, then asks the render side to release tiles, scratch, stencil and pools. Deep also parks
+    /// the image textures the window's own content held (they restart on the restore). A restore lifts the stage, restarts what was
+    /// parked, arms the hold for the images the first frame needs, and forces one full repaint.</summary>
     private void AdvanceHiddenMemory()
     {
         if (_isDetachedChild) return;
+        HiddenStage before = _hidden.Stage;
         if (_hidden.Advance(CurrentHiddenPark(), (long)_timers.NowMs) is not { } stage) return;
-        if (stage == HiddenStage.Shallow)
+        if (stage == HiddenStage.Shallow || stage == HiddenStage.Deep)
         {
             long t0 = Stopwatch.GetTimestamp();
-            _hiddenChildHeld.Clear();
-            for (int i = 0; i < _detachedHosts.Count; i++)
+            int evicted = 0;
+            if (before == HiddenStage.Visible)
             {
-                var child = _detachedHosts[i];
-                if (!child._window.IsClosed) child.CollectHeldImageIds(_hiddenChildHeld);   // a pop-out sharing the cache keeps what it holds
+                _hiddenChildHeld.Clear();
+                for (int i = 0; i < _detachedHosts.Count; i++)
+                {
+                    var child = _detachedHosts[i];
+                    if (!child._window.IsClosed) child.CollectHeldImageIds(_hiddenChildHeld);   // a pop-out sharing the cache keeps what it holds
+                }
+                evicted = _images.ReleaseUnpinnedGpu(_hiddenChildHeld);
+                _hiddenChildHeld.Clear();
+                _pixelPool.Trim();
             }
-            int evicted = _images.ReleaseUnpinnedGpu(_hiddenChildHeld);
-            _hiddenChildHeld.Clear();
-            _pixelPool.Trim();
-            RequestHiddenStage(HiddenStage.Shallow);
-            FluentGpu.Foundation.Diag.Line($"[hidden] shallow park={CurrentHiddenPark()} unpinnedReleased={evicted} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
+            if (stage == HiddenStage.Shallow)
+            {
+                _images.HiddenStage = HiddenStage.Shallow;   // a device loss while hidden parks what is held instead of re-decoding it for nobody
+                // ...unless a pop-out sharing the cache is on screen: its images must re-decode at once, not wait for this window's restore.
+                _images.HiddenKeepLandings = AnyVisibleDetachedChild();
+                RequestHiddenStage(HiddenStage.Shallow);
+                FluentGpu.Foundation.Diag.Line($"[hidden] shallow park={CurrentHiddenPark()} unpinnedReleased={evicted} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
+            }
+            else
+            {
+                // Deep keeps what a VISIBLE pop-out holds; a warm-parked pop-out's images park with the primary's (its scene reader is
+                // dropped on the render thread so its stale snapshot cannot keep them alive).
+                _deepChildHeld.Clear();
+                bool anyVisibleChild = false;
+                for (int i = 0; i < _detachedHosts.Count; i++)
+                {
+                    var child = _detachedHosts[i];
+                    if (child._window.IsClosed || child.IsParked) continue;
+                    anyVisibleChild = true;
+                    child.CollectHeldImageIds(_deepChildHeld);
+                }
+                _images.HiddenChildHeld = _deepChildHeld;
+                _images.HiddenKeepLandings = anyVisibleChild;
+                // Parked BEFORE the stage is published: the evict jobs are queued ahead of the render thread's Deep step, which then
+                // drops the scene reader that would otherwise defer them (C1).
+                int parked = _images.ParkPinnedGpu(_deepChildHeld);
+                _images.HiddenStage = HiddenStage.Deep;
+                RequestHiddenStage(HiddenStage.Deep);
+                FluentGpu.Foundation.Diag.Line($"[hidden] deep park={CurrentHiddenPark()} parked={parked} unpinnedReleased={evicted} ready={_images.ReadyCount} visiblePopouts={(anyVisibleChild ? 1 : 0)} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
+            }
         }
         else
         {
-            RequestHiddenStage(HiddenStage.Visible);
-            RequestFullRepaintOnce();   // every tile the release dropped re-rasters in the first frame back; never elide it as unchanged
-            FluentGpu.Foundation.Diag.Line($"[hidden] restore ready={_images.ReadyCount}");
+            RestoreFromHiddenStage(before);
         }
+    }
+
+    /// <summary>UI thread, the memory restore edge (the window is un-parked, whatever the park kind it left): restart every image the
+    /// Deep stage (or a device loss while hidden) parked - the ones that intersect the window first, on the Visible lane - arm the
+    /// hold for them, then lift the render side's stage. Order matters (N2): restart and arm BEFORE the stage write, so the render
+    /// thread never sees a restored stage without the images already requested.</summary>
+    private void RestoreFromHiddenStage(HiddenStage before)
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        int parkedBefore = _images.ParkedCount;
+        _images.HiddenStage = HiddenStage.Visible;
+        int restarted = 0, pending = 0;
+        bool hold = false;
+        string holdNote = "none";
+        if (parkedBefore > 0)
+        {
+            CollectOnScreenImageIds(_onScreenImageIds);
+            restarted = _images.RestartParked(_onScreenImageIds);
+            _onScreenImageIds.Clear();
+            pending = _images.RestorePendingCount;
+            long maxMs = HiddenMemoryBudget.RestoreHoldMaxMs;
+            if (pending == 0) holdNote = "nothing-on-screen";
+            else if (maxMs <= 0) holdNote = "disabled";
+            else if (_window.ClientSizePx != _lastPublishedFrameSize || _window.Scale != _lastPublishedScale) holdNote = "resized-while-hidden";   // the stale frame would be stretched on glass
+            else
+            {
+                hold = true;
+                _restoreHoldArmed = true;
+                _restoreHoldReparked = false;
+                _restoreTrackingClearAtMs = 0;
+                _restoreHoldStartMs = (long)_timers.NowMs;
+                _restoreHoldDeadlineMs = _restoreHoldStartMs + maxMs;
+                RestoreHoldsArmedForTest++;
+                holdNote = "armed";
+            }
+            // Not armed: whatever is still decoding takes the ordinary warm reveal instead of snapping in unseen.
+            if (!hold) _images.ClearRestoreTracking();
+        }
+        _images.HiddenChildHeld = null;
+        _images.HiddenKeepLandings = false;
+        RequestHiddenStage(HiddenStage.Visible);   // AFTER the restart and the arm (see above)
+        RequestFullRepaintOnce();                  // every tile the release dropped re-rasters in the first frame back; never elide it as unchanged
+        FluentGpu.Foundation.Diag.Line($"[hidden] restore from={before} parked={parkedBefore} restarted={restarted} pending={pending} hold={holdNote} holdMaxMs={HiddenMemoryBudget.RestoreHoldMaxMs} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
+    }
+
+    private readonly HashSet<int> _childOnScreenScratch = new();
+
+    /// <summary>UI thread: whether any detached pop-out of this (primary) host is open and not parked.</summary>
+    private bool AnyVisibleDetachedChild()
+    {
+        for (int i = 0; i < _detachedHosts.Count; i++)
+            if (!_detachedHosts[i]._window.IsClosed && !_detachedHosts[i].IsParked) return true;
+        return false;
+    }
+
+    /// <summary>UI thread, a detached pop-out's un-park edge while its primary is Deep (they share the cache): the primary parked this
+    /// pop-out's images with its own (a warm-parked pop-out keeps nothing), so list its held ids as child-held - which lets its
+    /// pins restart them - restart the on-screen ones now (tracked) and hold its first frame for them, exactly like the primary's
+    /// restore. A visible pop-out was never parked, so this runs only for one that was hidden through the Deep edge.</summary>
+    private void RestoreChildUnderDeepPrimary()
+    {
+        // Any hidden stage: a pop-out on screen means a device loss must not park what it shows (see ImageCache.HiddenKeepLandings).
+        if (_images.HiddenStage != HiddenStage.Visible && _parentHost is { } p0 && ReferenceEquals(p0._images, _images)) _images.HiddenKeepLandings = true;
+        if (_images.HiddenStage != HiddenStage.Deep || _parentHost is not { } parent || !ReferenceEquals(parent._images, _images)) return;
+        var mine = parent._deepChildHeld;
+        CollectHeldImageIds(mine);
+        _images.HiddenKeepLandings = true;   // another window is on screen now: landings are not the hidden primary's alone
+        CollectOnScreenImageIds(_childOnScreenScratch);
+        int restarted = _images.RestartParked(_childOnScreenScratch, mine);
+        _childOnScreenScratch.Clear();
+        long maxMs = HiddenMemoryBudget.RestoreHoldMaxMs;
+        if (restarted > 0 && _images.RestorePendingCount > 0 && maxMs > 0)
+        {
+            _restoreHoldArmed = true;
+            _restoreHoldReparked = false;
+            _restoreTrackingClearAtMs = 0;
+            _restoreHoldStartMs = (long)_timers.NowMs;
+            _restoreHoldDeadlineMs = _restoreHoldStartMs + maxMs;   // inside DetachedRevealGate.TimeoutMs, so the reveal never fires with placeholders
+            RestoreHoldsArmedForTest++;
+        }
+        else _images.ClearRestoreTracking();
+        FluentGpu.Foundation.Diag.Line($"[hidden] popout restore restarted={restarted} pending={_images.RestorePendingCount} hold={(_restoreHoldArmed ? "armed" : "none")}");
+    }
+
+    /// <summary>Live, <see cref="NodeFlags.Visible"/> on its whole chain, and linked to the scene root (a KeepAlive-parked page or an
+    /// exit orphan is not). Opacity is deliberately not consulted: a node faded to zero may fade back in right after the restore.</summary>
+    private bool IsInShownTree(NodeHandle node)
+    {
+        var last = NodeHandle.Null;
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Visible) == 0) return false;
+            last = n;
+        }
+        return last == _scene.Root;
+    }
+
+    /// <summary>UI thread: every image id a node of this host shows inside the client rect (a node that cannot be placed as a plain
+    /// translated box counts as visible), plus the ids no node geometry describes (hold-last-good targets, swap outgoing, derived
+    /// sources): the set a restore must have resident before its first frame is shown. Everything else restarts later, off the
+    /// critical path.</summary>
+    private void CollectOnScreenImageIds(HashSet<int> ids)
+    {
+        ids.Clear();
+        float scale = Math.Max(0.01f, _window.Scale);
+        var client = _window.ClientSizePx;
+        float cw = client.Width / scale, ch = client.Height / scale;
+        int count = _scene.RecordingNodeCount;
+        for (int i = 0; i < count; i++)
+        {
+            var node = _scene.HandleAt(i);
+            if (node.IsNull || !_scene.IsLive(node)) continue;
+            ref NodePaint paint = ref _scene.Paint(node);
+            bool hasImage = paint.VisualKind == VisualKind.Image && paint.ImageId != 0;
+            bool hasEffects = _scene.TryGetImageEffects(node, out var fx) && (fx.DerivedImageId != 0 || fx.SwapOutgoingId != 0);
+            bool hasCells = _scene.TryGetRowCells(node, out var cells, out _, out _);
+            if (!hasImage && !hasEffects && !hasCells) continue;
+            // A KeepAlive-parked page or a collapsed pane is not on screen whatever its stale rect says: the hold must not wait
+            // for its images (they restart off the critical path and its re-pin finds them landed).
+            if (!IsInShownTree(node)) continue;
+            bool visible = true;
+            if (_scene.TryAbsoluteRectTranslationOnly(node, out var r))
+                visible = r.X < cw && r.Y < ch && r.X + r.W > 0 && r.Y + r.H > 0;
+            if (!visible) continue;
+            if (hasImage) ids.Add(paint.ImageId);
+            if (hasEffects) { if (fx.DerivedImageId != 0) ids.Add(fx.DerivedImageId); if (fx.SwapOutgoingId != 0) ids.Add(fx.SwapOutgoingId); }
+            if (hasCells) foreach (ref readonly var cell in cells) if (cell.ImageId != 0) ids.Add(cell.ImageId);
+        }
+        _reconciler.CollectHeldImageIds(ids);   // pending hold-last-good / swap targets: no geometry to test, so they count
+    }
+
+    // ── Window-relative image budget + measured committed bytes (UI thread, primary host only) ───────────────────────
+    private Size2 _budgetWindowSize;
+    private int _committedPollTick;
+    private int _committedBucketsKnown;   // bit per 64/128/256/512
+
+    /// <summary>Once per <see cref="RunFrame"/>: size the image budget to the window when its size changed, and (about twice a
+    /// second until every bucket is known) hand the cache what the device measured one texture of each bucket to commit.</summary>
+    private void UpdateImageBudget()
+    {
+        if (_isDetachedChild || !PumpsSharedImages || IsParked) return;
+        var size = _window.ClientSizePx;
+        if (size != _budgetWindowSize && size.Width > 0 && size.Height > 0)
+        {
+            _budgetWindowSize = size;
+            _images.SetWindowBudget((int)size.Width, (int)size.Height);
+        }
+        if (_committedBucketsKnown == 0xF || (++_committedPollTick & 31) != 1) return;
+        for (int i = 0, bucket = 64; i < 4; i++, bucket <<= 1)
+        {
+            if ((_committedBucketsKnown & (1 << i)) != 0) continue;
+            long bytes = _device.ImageCommittedBytes(bucket);
+            if (bytes <= 0) continue;
+            _committedBucketsKnown |= 1 << i;
+            _images.SetMeasuredCommittedBytes(bucket, bytes);
+        }
+    }
+
+    /// <summary>UI thread, every <see cref="RunFrame"/>: when the hold is armed and its end is due (everything it waits for landed,
+    /// or it expired) make sure this frame publishes, so the release publication exists even when nothing else would have woken
+    /// Paint. The decision itself is taken where the publication is built (<see cref="EvaluateRestoreHold"/>), after this frame's
+    /// image pump. A re-park mid-hold (a quick minimize / restore flap) keeps the hold and its tracking: nothing is shown while
+    /// parked, and the next un-park restarts the deadline, so the images the first frame back still waits for are still waited
+    /// for (clearing them there would let that un-park present their placeholders).</summary>
+    private void TickRestoreHold()
+    {
+        long now = (long)_timers.NowMs;
+        if (!_restoreHoldArmed)
+        {
+            // A hold that expired left its late landings tracked, so the render side's faithful-frame gate keeps the old frame on the
+            // glass until they land (see EvaluateRestoreHold). Once that gate's own guard is long past, hand any straggler back to
+            // the ordinary warm reveal.
+            if (_restoreTrackingClearAtMs != 0 && now >= _restoreTrackingClearAtMs)
+            {
+                _restoreTrackingClearAtMs = 0;
+                _images.ClearRestoreTracking();
+            }
+            return;
+        }
+        if (IsParked) { _restoreHoldReparked = true; return; }
+        if (_restoreHoldReparked)
+        {
+            _restoreHoldReparked = false;
+            _restoreHoldStartMs = now;
+            _restoreHoldDeadlineMs = now + HiddenMemoryBudget.RestoreHoldMaxMs;
+        }
+        if (_images.RestorePendingCount == 0 || now >= _restoreHoldDeadlineMs) _frameNeeded = true;
+    }
+
+    /// <summary>UI thread, where a publication is built: whether the frame about to be published must be HELD (recorded and
+    /// submitted but not presented). True while the restore still waits for images; the first call after they landed, the deadline
+    /// passed or the window was resized returns false and ends the hold (counting a timeout when images were still owed).</summary>
+    private bool EvaluateRestoreHold(bool resized)
+    {
+        if (!_restoreHoldArmed) return false;
+        long now = (long)_timers.NowMs;
+        bool done = _images.RestorePendingCount == 0;
+        bool expired = now >= _restoreHoldDeadlineMs;
+        if (!done && !expired && !resized) return true;
+        _restoreHoldArmed = false;
+        _restoreHoldReleases++;
+        bool timedOut = !done && expired;
+        if (timedOut) _images.RestoreHoldTimeouts++;
+        if (!done)
+        {
+            if (timedOut && OwningRenderThread is not null)
+            {
+                // The UI stops holding, but the images the first frame needs stay TRACKED: the render side's faithful-frame gate
+                // (DecideHold) then keeps the last frame shown before the hide on the glass, frame after frame, until they are
+                // resident, bounded by its own guard. Releasing them here presented their placeholders (and then faded the late
+                // landings in) - a restore must show the old frame, then the right one, never a placeholder in between.
+                _restoreTrackingClearAtMs = now + (long)HoldGuardMs + 1_000;
+            }
+            else _images.ClearRestoreTracking();   // a resize, or no render thread to keep holding: late landings take the warm reveal
+        }
+        FluentGpu.Foundation.Diag.Line($"[hidden] hold release ms={now - _restoreHoldStartMs} pending={_images.RestorePendingCount} timeout={(timedOut ? 1 : 0)} resized={(resized && !done && !expired ? 1 : 0)} timeouts={_images.RestoreHoldTimeouts}");
+        return false;
+    }
+
+    /// <summary>Shorten an idle wait so the armed restore hold ends on time even when no decode lands to wake the loop.</summary>
+    private int ClampWaitToRestoreHold(int w)
+    {
+        if (!_restoreHoldArmed || IsParked) return w;
+        int dueIn = (int)Math.Ceiling(Math.Max(1.0, _restoreHoldDeadlineMs - _timers.NowMs));
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
     /// <summary>UI thread: hand a stage to whoever owns the device. A render-thread host publishes it (the render thread applies it
@@ -804,8 +1102,9 @@ public sealed partial class AppHost : IDisposable
     private void ApplyHiddenStage(HiddenStage stage, FluentGpu.Render.Tiles.SliceTable tiles)
     {
         Volatile.Write(ref _renderHiddenApplied, (int)stage);
-        if (stage == HiddenStage.Shallow)
+        if (stage >= HiddenStage.Shallow)
         {
+            if (stage == HiddenStage.Deep) EnterDeepOnRenderSide();   // FIRST: drops the scene readers that would defer the parked images' evictions
             _idleTrimDormant = false;   // the idle trim pass must run its hidden branch
             tiles.EvictAll();
             for (int guard = 0; guard < 8; guard++)
@@ -820,6 +1119,33 @@ public sealed partial class AppHost : IDisposable
             _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
         }
         else _device.ReleaseHiddenResources(HiddenStage.Visible);
+    }
+
+    /// <summary>Render thread (or the UI thread inline), the Deep step. (1) Drop the scene readers: the snapshot of the last published
+    /// frame still names every parked image as Ready, and the upload queue defers an eviction while a reader retains the id - so,
+    /// without this, the parked textures would stay resident until the restore re-registered a fresh snapshot. A warm-parked pop-out
+    /// on the shared queue has the same stale reader and loses it too (a visible pop-out keeps its own). (2) Latch HELD: from here
+    /// until a frame passes the faithful-frame gate, nothing is presented - the window's last presented frame stays on glass.
+    /// Motion is not paused or cleared (the latch decides what presents), so video releases and the rest of the turn run as ever.</summary>
+    private void EnterDeepOnRenderSide()
+    {
+        _imageQueue?.RemoveSceneReader(this);
+        var children = Volatile.Read(ref _childRenderSources);
+        for (int i = 0; i < children.Length; i++)
+        {
+            var child = children[i];
+            if (Volatile.Read(ref child._renderVisible) != 0) continue;
+            child._imageQueue?.RemoveSceneReader(child);
+            // Its images park with the primary's, so its retained frame now names textures that are gone: latch it HELD too, or
+            // the motion loop's first re-present of that frame after the pop-out comes back (a marquee, a progress bar) would put
+            // their placeholders on the glass ahead of its held restore publication. Same render thread, same gate.
+            child._renderHeld = true;
+            child._holdRetryOwed = false;
+            child._holdGateSinceQpc = 0;
+        }
+        _renderHeld = true;
+        _holdRetryOwed = false;
+        _holdGateSinceQpc = 0;
     }
 
     /// <summary>Render thread, between turns: stage the evict (and any upload) jobs the UI queued - legal outside a submit, it
@@ -847,12 +1173,13 @@ public sealed partial class AppHost : IDisposable
     {
         bool had = _device.HasHiddenReleaseBacklog;
         DrainImageJobsOffFrame();
+        var applied = (HiddenStage)Math.Max((int)HiddenStage.Shallow, Volatile.Read(ref _renderHiddenApplied));
         if (_device.HasHiddenReleaseBacklog)
         {
-            _device.ReleaseHiddenResources(HiddenStage.Shallow, OtherWindowVisibleOnRenderThread());
+            _device.ReleaseHiddenResources(applied, OtherWindowVisibleOnRenderThread());
             return 500;
         }
-        if (had) _device.ReleaseHiddenResources(HiddenStage.Shallow, OtherWindowVisibleOnRenderThread());   // the backlog just drained: one last pass refreshes the census
+        if (had) _device.ReleaseHiddenResources(applied, OtherWindowVisibleOnRenderThread());   // the backlog just drained: one last pass refreshes the census
         return -1;
     }
 
@@ -1753,13 +2080,14 @@ public sealed partial class AppHost : IDisposable
                 // and the feedback of that frame already ran with its first attempt. The video drain did NOT: it rides the
                 // turn whose UI frame actually lands, so a hole-punched video never moves ahead of the frame that carries
                 // its hole (a refused retry leaves the intents dirty in the registry for the next one).
-                if (PresentFrame(in rf, _owedComposited)) DrainVideoForPresentTurn(in rf, placement: !_swapchain.LastPresentStoodDown);
+                if (PresentFrame(in rf, _owedComposited)) DrainVideoForPresentTurn(in rf, placement: !(_swapchain.LastPresentStoodDown || _swapchain.LastPresentHeld));
                 return;
             }
             int feedbackSize = 0;
             int settledPoses = 0;
             bool presented = true;
             bool composited = false;
+            int gateImageGaps = 0;   // the faithful-frame gate's image half, judged BEFORE the record (scene frames only; see DecideHold)
             // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
             // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
             // INSIDE the try (deliberately): the staging path touches the device exactly like submit/present does, so a
@@ -1769,7 +2097,12 @@ public sealed partial class AppHost : IDisposable
             // of throwing) — this is the belt to that suspenders.
             if (_imageQueue is { } q)
             {
-                if (rf.HasScene) q.SetSceneReader(this, _renderSeam.Scene(rf).Images);
+                // Never register a reader while Deep: its snapshot would defer the evictions of the very images Deep parked. The
+                // first publication after the restore sees the stage lifted (the UI writes it before that publication exists).
+                if (rf.HasScene && Volatile.Read(ref _renderHiddenApplied) != (int)HiddenStage.Deep) q.SetSceneReader(this, _renderSeam.Scene(rf).Images);
+                // A held restore presents nothing, so the per-turn staging cap (a missed-vblank guard) has no frame to protect:
+                // stage everything this turn and let the held frame land in the fewest turns. The primary host owns the device-wide switch.
+                if (!_isDetachedChild) _device.SetUploadCapLifted(_renderHeld || rf.PresentHeld);
                 _device.DrainImageJobs(q);
             }
             long splitStaged = Stopwatch.GetTimestamp();
@@ -1792,6 +2125,11 @@ public sealed partial class AppHost : IDisposable
                 bool scrollNeedsRecord = _renderSink.RecordRequired;
                 _activeRenderFrame = rf;
                 _hasActiveRenderFrame = true;
+                // The release candidate's image test runs HERE, after this turn's staging and BEFORE the record: residency only ever
+                // grows between this point and the record (nothing evicts in between), so an id found resident now is drawn, while a
+                // side-queue copy whose fence passes during the record would read resident afterwards although the frame drew its
+                // placeholder. Conservative by construction: at worst one more held turn.
+                if (_renderHeld && !rf.PresentHeld) gateImageGaps = sceneFrame.Images.CountRestoreGaps(_isImageResident ??= _device.IsImageResident);
                 // §13.1: a clock-driven turn whose poses did not move records a byte-identical stream and an empty
                 // repaint region, so there is nothing for the rest of this block to do. Elide the RECORD, not just the
                 // submit — HasOwnRenderMotion keeps re-entering here for as long as any row is live, so a Cadence.At(60)
@@ -1799,7 +2137,7 @@ public sealed partial class AppHost : IDisposable
                 // Safe on the !fresh branch only: _lastRecordedScene already equals rf.PublishSeq there, so skipping
                 // leaves no bookkeeping behind, and ChangedThisTick folds in Done transitions precisely because the
                 // feedback publish below is what completes UI lifecycles.
-                if (!fresh && !_renderAnimations.ChangedThisTick && !scrollPosed
+                if (!fresh && !_renderAnimations.ChangedThisTick && !scrollPosed && !_holdRetryOwed
                     && !sceneFrame.Images.HasCrossfades(RenderImageClock(rf, sceneFrame)))
                 {
                     Interlocked.Increment(ref _framesSkippedSubmit);
@@ -1885,7 +2223,9 @@ public sealed partial class AppHost : IDisposable
                 bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || _device.HasLiveFeedback;   // + a settling feedback trail (F6)
                 // An armed frame capture must present (evidence-diagnostics §A.6) — no tile is invalidated: the capture shows
                 // exactly the retained pixels.
-                bool skip = Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
+                // Never while HELD (or when this publication is the one that releases): the held frames must submit for their uploads
+                // and copies to land, and the release must put its frame on the glass even when it is byte-identical to the last.
+                bool skip = !(_renderHeld || rf.PresentHeld) && Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
                     clockActive: clockActive, hasPopupWindows: Volatile.Read(ref _popupWindowCount) != 0);
                 var submit = rf.Submit with
                 {
@@ -1952,10 +2292,14 @@ public sealed partial class AppHost : IDisposable
             // A REFUSED non-blocking present (false) skips the video drain below: its Place/Destroy/bind commits stay coupled to
             // the UI frame that reaches the glass, so they ride the owed frame's retry (or the superseding publication).
             long splitBeforePresent = Stopwatch.GetTimestamp();
-            if (presented) ArmGeometryMotionPresent(in rf);
-            bool landed = !presented || PresentFrame(in rf, composited);
+            // The restore hold: this recorded and submitted frame is presented only when the UI is no longer holding AND the frame is
+            // faithful (no placeholder for an image the user had seen before the hide - judged on this frame's own snapshot just before
+            // its record - and a whole glyph atlas, judged after it).
+            bool hold = presented && DecideHold(in rf, gateImageGaps);
+            if (presented && !hold) ArmGeometryMotionPresent(in rf);
+            bool landed = !presented || PresentFrame(in rf, composited, hold);
             long splitPresented = Stopwatch.GetTimestamp();
-            _ledgerTurnPresented = presented && landed;
+            _ledgerTurnPresented = presented && landed && !hold;
             if (feedbackSize != 0)
             {
                 // Import only successfully presented poses; failed presents must not complete UI lifecycles.
@@ -1965,7 +2309,7 @@ public sealed partial class AppHost : IDisposable
             }
             // A present that stood down (cloaked / minimized / occluded: nothing visible, nothing queued) must not commit video
             // placement for a hole that never reached the glass (F080): the placements stay dirty for the next real present.
-            if (landed) DrainVideoForPresentTurn(in rf, placement: !(presented && _swapchain.LastPresentStoodDown));
+            if (landed) DrainVideoForPresentTurn(in rf, placement: !(presented && (_swapchain.LastPresentStoodDown || _swapchain.LastPresentHeld)));
             _presentSplit = BuildPresentSplit(splitT0, splitStaged, splitRecorded, splitBeforePresent, splitPresented, submitted: presented);
         }
         catch (System.Exception ex) when (_asyncActive)
@@ -2007,13 +2351,56 @@ public sealed partial class AppHost : IDisposable
     internal static bool UsesNonBlockingPresent(bool isDetachedChild, bool hasParentRenderThread, bool switchOn)
         => isDetachedChild && hasParentRenderThread && switchOn;
 
+    private Func<int, bool>? _isImageResident;
+
+    /// <summary>Render thread (the UI thread inline): the ONE place a present is held or released. Called for a frame that was
+    /// recorded and submitted and is about to be presented. A publication that carries <c>PresentHeld</c> is held (and latches the
+    /// render side). Otherwise, while latched, this frame is the release candidate: it is presented only if it is FAITHFUL - the
+    /// glyph atlas is whole and every image the user had seen before the hide that this frame names has a resident texture. Judged
+    /// here, on the frame actually about to be shown, so it holds for uploads still queued behind the staging cap, a decode that
+    /// landed after the UI half released, and a stale pre-hide publication that was adopted first; and it never needs the UI to
+    /// say anything twice. A frame that fails keeps holding and is retried every turn (<see cref="HasOwnRenderMotion"/>), bounded by
+    /// <see cref="HoldGuardMs"/> so a gate that can never open (a rejected upload) cannot freeze the window.</summary>
+    private bool DecideHold(in Threading.RenderFrame rf, int imageGaps)
+    {
+        if (rf.PresentHeld)
+        {
+            // The UI is still holding: the guard's clock starts at the first release CANDIDATE, never earlier. A motion re-present
+            // of the pre-hide frame that failed the gate before the first held publication arrived must not have eaten the guard
+            // (it would then release the real release candidate the moment it missed one upload).
+            _renderHeld = true;
+            _holdGateSinceQpc = 0;
+            _holdRetryOwed = false;
+            return true;
+        }
+        if (!_renderHeld) return false;
+        long now = Stopwatch.GetTimestamp();
+        if (_holdGateSinceQpc == 0) _holdGateSinceQpc = now;
+        bool faithful = !_swapchain.TextRepaintPending && imageGaps == 0;
+        if (!faithful && (now - _holdGateSinceQpc) * 1000.0 / Stopwatch.Frequency < HoldGuardMs)
+        {
+            _holdRetryOwed = true;
+            return true;
+        }
+        if (!faithful)
+        {
+            Interlocked.Increment(ref _holdGuardReleases);
+            Diag.Line($"[hidden] hold guard released an unfaithful frame after {(now - _holdGateSinceQpc) * 1000.0 / Stopwatch.Frequency:0}ms");
+        }
+        _renderHeld = false;
+        _holdRetryOwed = false;
+        _holdGateSinceQpc = 0;
+        return false;
+    }
+
     /// <summary>Render thread: present this host's swapchain, non-blocking when <see cref="UsesNonBlockingPresent"/>. True when the
     /// frame is on its way to the glass; false when DXGI refused it (<see cref="ISwapchain.PresentNoWait"/>), in which case the
     /// frame is OWED: it stays in the back buffer, the latency credit stays held (nothing was queued for it to be spent on), and
     /// <see cref="DrainChildRenderSources"/> re-presents it on a later turn or a fresh publication supersedes it. A refused
     /// present is neither counted as a present nor acknowledged (<see cref="NotePresented"/>).</summary>
-    private bool PresentFrame(in Threading.RenderFrame rf, bool composited)
+    private bool PresentFrame(in Threading.RenderFrame rf, bool composited, bool hold = false)
     {
+        if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
         {
             if (!_swapchain.PresentNoWait())
@@ -2027,6 +2414,13 @@ public sealed partial class AppHost : IDisposable
         }
         else _swapchain.Present();
         _presentOwed = false;
+        if (hold && _swapchain.LastPresentHeld)
+        {
+            // Held: recorded, submitted and drained - and not shown. Not a present (no count, no acknowledgement of the publication:
+            // the frame that releases the hold is the one the UI is told about), not a stand-down (see ISwapchain.HoldNextPresent).
+            Interlocked.Increment(ref _framesHeld);
+            return true;
+        }
         _renderPresentCount++;
         NotePresented(rf.PublishSeq);
         // Per target: this host's own GPU sample feeds this host's own depth policy, applied to this host's own
@@ -2114,6 +2508,7 @@ public sealed partial class AppHost : IDisposable
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
         Volatile.Write(ref _renderHiddenApplied, 0);   // the rebuilt device holds none of the release: a still-hidden stage re-applies on the next turn
+        _holdRetryOwed = false;
         // Popup create / retire work queued before (or during) the loss runs now, in order, against the rebuilt device: a Create
         // attempted on the lost one would have thrown, and nothing else will drain until the next publication.
         DrainPopupRenderActions();
@@ -2140,6 +2535,7 @@ public sealed partial class AppHost : IDisposable
         _presentOwed = false;
         _slotDeferred = false;
         _deferredSinceQpc = 0;
+        _holdRetryOwed = false;
     }
 
     /// <summary>UI thread, posted by the parent's recovery (<see cref="RecoverDeviceAfterDump"/>): the rebuilt target holds
@@ -2238,7 +2634,7 @@ public sealed partial class AppHost : IDisposable
         // glass, so nothing is placed or destroyed against its holes. ContentOnly still adopts the snapshot (handle, release flag and
         // geometry with its newer Seq); the retry's Full drain places it against that frame's holes when it lands.
         var scope = _presentOwed ? FluentGpu.Media.VideoApplyScope.ContentOnly
-            : _swapchain.LastPresentStoodDown ? FluentGpu.Media.VideoApplyScope.ReleasesOnly : FluentGpu.Media.VideoApplyScope.Full;
+            : (_swapchain.LastPresentStoodDown || _swapchain.LastPresentHeld) ? FluentGpu.Media.VideoApplyScope.ReleasesOnly : FluentGpu.Media.VideoApplyScope.Full;
         bool edge = VideoApplier.ApplyTurn(vp, scratch.AsSpan(0, count), VideoPosedHoles(in _activeRenderFrame),
             _activeRenderFrame.Submit.Scale, scope, deferCommit: true);
         _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
@@ -2929,6 +3325,9 @@ public sealed partial class AppHost : IDisposable
         child._micaWindow = _micaWindow;
         child._parentHost = this;
         _detachedHosts.Add(child);
+        // A pop-out opened while this window is hidden shares the cache: what it requests must land and stay, not be parked for a
+        // restore of a window it is not part of.
+        if (_images.HiddenStage != HiddenStage.Visible && ReferenceEquals(child._images, _images)) _images.HiddenKeepLandings = true;
     }
 
     /// <summary>The frame clear colour (test seam for the host-local Mica backdrop).</summary>
@@ -3580,6 +3979,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToOcclusionProbe(w, _lastWaitKind);   // an occluded (not parked) window still wakes to re-probe its target
         w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked detached child wakes when its park debounce ends
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
+        w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -5108,7 +5508,9 @@ public sealed partial class AppHost : IDisposable
         // Sampled after the relay, like the cloak.
         UpdateCoverPark();
         bool minimized = (windowStatus.Parked && !_revealPending) || _cloakParked || _coverParked;   // "minimized" below means PARKED: minimized, hidden OR cloaked (E2 — identical cost)
-        AdvanceHiddenMemory();   // park timer -> Shallow release, restore edge -> lift + full repaint (parked frames included)
+        AdvanceHiddenMemory();   // park timer -> Shallow / Deep release, restore edge -> restart + hold + lift + full repaint (parked frames included)
+        TickRestoreHold();       // an armed restore hold whose end is due makes this frame publish (the release publication)
+        UpdateImageBudget();     // window-relative image budget; the device's measured per-bucket commit
         // InputHooks.WindowOccluded — HERE, above the park and idle gates, so it is published on EVERY frame and not only
         // the ones that reach Paint (an occlusion edge on an idle host would otherwise never be heard). A change schedules
         // its readers, which is RuntimePending: the idle gate below falls through to Paint (or the park branch flushes).
@@ -5153,6 +5555,7 @@ public sealed partial class AppHost : IDisposable
             // UseActivation fires. On the minimize-ENTERING edge the gate below returns BEFORE Paint's reactive flush,
             // so flush ONCE here (one-shot, on the edge only — not per idle frame) so onDeactivated runs while invisible.
             // The restore edge forced _frameNeeded above, so its onActivated rides Paint's normal flush.
+            if (!minimized && _isDetachedChild) RestoreChildUnderDeepPrimary();   // BEFORE the first frame re-pins this pop-out's images
             UpdateWindowVisible();
             Volatile.Write(ref _renderVisible, minimized ? 0 : 1);
             OwningRenderThread?.WakeAsync();
@@ -6150,7 +6553,13 @@ public sealed partial class AppHost : IDisposable
             // keep-alive, no interleaving popup windows). A playback playhead quantized to whole pixels (SeekBar) lands
             // on the same stream most frames, so this fires during play. Active image reveals resolve at replay time —
             // defeat skip-submit while fades are live.
+            // The restore hold rides this publication. Decided HERE, after this frame's image pump, so a landing that completed the
+            // restore releases it in the very publication that shows it. A frame whose hold bit differs from the last published one
+            // is owed a publication even when nothing else changed (the release is exactly that frame).
+            bool presentHeld = EvaluateRestoreHold(resized);
+            bool holdOwesPublication = presentHeld || _lastPublishedHeld;
             bool maybeUnchanged = !recordOnRender && _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
+                && !holdOwesPublication
                 && !reconciled && !layoutNeeded && !transformWrote
                 && !imageContentChanged
                 && !_device.HasPendingUploads
@@ -6181,6 +6590,7 @@ public sealed partial class AppHost : IDisposable
                 publishFrameSize = FrameSizePx(keepAlive);
                 publicationKey = BuildPublicationKey(in recordOptions, publishFrameSize);
                 var block = NoopPublicationCandidate(resized, keepAlive, reconciled, layoutNeeded, transformWrote, imageContentChanged);
+                if (block == NoopPublicationBlock.None && holdOwesPublication) block = NoopPublicationBlock.Target;
                 if (block == NoopPublicationBlock.None && !_noopPublications.Matches(in publicationKey, _uiCoverage))
                     block = NoopPublicationBlock.Key;
                 if (block == NoopPublicationBlock.None && !VerifyNoopPublication()) block = NoopPublicationBlock.Parity;
@@ -6257,6 +6667,9 @@ public sealed partial class AppHost : IDisposable
                 if (dlHash == 0UL) dlHash = InlineStreamHash();
                 subHashMs = ElapsedMs(tHash0);
                 var submitInfo = new FrameInfo(recordOnRender ? publishFrameSize : FrameSizePx(keepAlive), _window.Scale, Clear, _images.ClockMs, repaint);
+                _lastPublishedHeld = presentHeld;
+                _lastPublishedFrameSize = _window.ClientSizePx;   // what a restore into another size would stretch (the hold is then not armed)
+                _lastPublishedScale = _window.Scale;
                 // F101: a settle frame (resized && keepAlive) carries its hint IN the publication (settlePresent below); it
                 // used to be a UI-thread poke at the render-owned swapchain state, which a render turn presenting an
                 // earlier publication could consume and a stand-down could drop.
@@ -6269,7 +6682,7 @@ public sealed partial class AppHost : IDisposable
                     _framePublishSeq = _renderSeam.PublishScene(_scene, _images, _strings, recordOptions,
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
                         CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
-                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces);
+                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld);
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;
@@ -6300,7 +6713,7 @@ public sealed partial class AppHost : IDisposable
                     _scene.ClearCaptureLedger(oldestSlotSeq);
                 }
                 else _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
-                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces);
+                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld);
                 if (_renderThread is not null)
                 {
                     if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
@@ -6325,6 +6738,7 @@ public sealed partial class AppHost : IDisposable
                     try
                     {
                         bool composited = false;
+                        bool heldInline = false;
                         if (_renderSeam.TryAcquire(out var rf))
                         {
                             if (rf.SuppressVsync) { _swapchain.SuppressVsyncOnce(); _swapchain.SuppressLatencyWaitOnce(); }
@@ -6337,13 +6751,19 @@ public sealed partial class AppHost : IDisposable
                                 composited = true;
                             }
                             else _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
+                            heldInline = DecideHold(in rf, 0);   // the UI thread is the render thread here: the UI half decides, the gate checks the atlas
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
+                        if (heldInline) _swapchain.HoldNextPresent();
                         _swapchain.Present();                       // 11 present (UI thread)
-                        // rf is definitely-assigned on both TryAcquire outcomes; a false acquire leaves PublishSeq 0,
-                        // which NotePresented treats as "no new content" and does not let move the ack.
-                        NotePresented(rf.PublishSeq);
-                        if (composited) CompleteFrameCapture(_uiSlices, rf.PublishSeq);   // an armed evidence capture (§A.6)
+                        if (heldInline && _swapchain.LastPresentHeld) _framesHeld++;
+                        else
+                        {
+                            // rf is definitely-assigned on both TryAcquire outcomes; a false acquire leaves PublishSeq 0,
+                            // which NotePresented treats as "no new content" and does not let move the ack.
+                            NotePresented(rf.PublishSeq);
+                            if (composited) CompleteFrameCapture(_uiSlices, rf.PublishSeq);   // an armed evidence capture (§A.6)
+                        }
                     }
                     catch (Exception ex)
                     {

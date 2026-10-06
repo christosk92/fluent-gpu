@@ -116,7 +116,8 @@ public sealed class SceneFramePublisher
 
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
-                         bool suppressVsync = false, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null)
+                         bool suppressVsync = false, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null,
+                         bool presentHeld = false)
     {
         if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -151,6 +152,7 @@ public sealed class SceneFramePublisher
             Submit = submit with { RepaintDamage = region, PublishSequence = seq, CarriedFromSeq = carriedFrom },
             SuppressVsync = suppressVsync,
             SettlePresent = settlePresent,
+            PresentHeld = presentHeld,
             VideoIntentCount = videoCount,
         };
         Volatile.Write(ref _slotStates[free], ((long)seq << 2) | Published);
@@ -250,7 +252,7 @@ public sealed class SceneFramePublisher
     internal ulong PublishScene(SceneStore scene, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
-        bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null)
+        bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null, bool presentHeld = false)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -308,6 +310,7 @@ public sealed class SceneFramePublisher
             Submit = submit with { PublishSequence = seq, CarriedFromSeq = carriedFrom, RepaintDamage = repaint },
             SuppressVsync = suppressVsync,
             SettlePresent = settlePresent,
+            PresentHeld = presentHeld,
             VideoIntentCount = videoCount,
         };
         _publishSeq = seq;
