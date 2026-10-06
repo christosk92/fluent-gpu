@@ -737,6 +737,9 @@ public sealed partial class AppHost : IDisposable
     private int _renderHiddenApplied;            // the stage the render side (or the UI inline in SingleThread) has applied; only its applier touches it
     private readonly HashSet<int> _hiddenChildHeld = new();
 
+    /// <summary>The hidden-window memory stage the policy has reached (<see cref="HiddenStage"/> as an int), for the census.
+    /// UI-thread read.</summary>
+    internal int HiddenStageCensus => (int)_hidden.Stage;
     /// <summary>Test-only: the hidden-window stage the policy has reached.</summary>
     internal HiddenStage HiddenStageForTest => _hidden.Stage;
     /// <summary>Test-only: the stage the render side (or the inline path) has applied.</summary>
@@ -841,10 +844,15 @@ public sealed partial class AppHost : IDisposable
     /// backlog is gone. Returns the ms until another pass is needed, or -1.</summary>
     private int TrimHiddenOnRenderThread()
     {
+        bool had = _device.HasHiddenReleaseBacklog;
         DrainImageJobsOffFrame();
-        if (!_device.HasHiddenReleaseBacklog) return -1;
-        _device.ReleaseHiddenResources(HiddenStage.Shallow);
-        return 500;
+        if (_device.HasHiddenReleaseBacklog)
+        {
+            _device.ReleaseHiddenResources(HiddenStage.Shallow);
+            return 500;
+        }
+        if (had) _device.ReleaseHiddenResources(HiddenStage.Shallow);   // the backlog just drained: one last pass refreshes the census
+        return -1;
     }
 
     /// <summary>Render-thread housekeeping between turns, on wall clock (never a turn count: an idle app runs no turns). Evicts
