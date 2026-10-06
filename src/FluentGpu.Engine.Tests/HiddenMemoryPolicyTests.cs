@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using FluentGpu.Hosting;
 using FluentGpu.Hosting.Threading;
@@ -67,7 +67,53 @@ public sealed class HiddenMemoryPolicyTests : System.IDisposable
         Assert.Equal(500, p.NextDueInMs(HiddenPark.Os, 1_600));
         Assert.Equal(0, p.NextDueInMs(HiddenPark.Os, 9_000));
         p.Advance(HiddenPark.Os, 2_100);
-        Assert.Equal(-1, p.NextDueInMs(HiddenPark.Os, 2_100));   // reached: the parked loop blocks again
+        Assert.Equal(300_000 - 2_000, p.NextDueInMs(HiddenPark.Os, 2_100));   // Shallow reached: the next stage is Deep
+        HiddenMemoryBudget.DeepDelayMs = long.MaxValue;
+        Assert.Equal(-1, p.NextDueInMs(HiddenPark.Os, 2_100));   // Deep disabled: the parked loop blocks again
+    }
+
+    [Fact]
+    public void DeepIsReachedAfterFiveMinutesHiddenAndNeverByACoverPark()
+    {
+        var p = new HiddenMemoryPolicy();
+        p.Advance(HiddenPark.Os, 0);
+        Assert.Equal(HiddenStage.Shallow, p.Advance(HiddenPark.Os, 2_000));
+        Assert.Null(p.Advance(HiddenPark.Os, 299_999));
+        Assert.Equal(HiddenStage.Deep, p.Advance(HiddenPark.Os, 300_000));
+        Assert.Null(p.Advance(HiddenPark.Os, 9_000_000));
+        Assert.Equal(-1, p.NextDueInMs(HiddenPark.Os, 9_000_000));
+        Assert.Equal(HiddenStage.Visible, p.Advance(HiddenPark.None, 9_000_001));
+
+        var cover = new HiddenMemoryPolicy();
+        cover.Advance(HiddenPark.Cover, 0);
+        Assert.Equal(HiddenStage.Shallow, cover.Advance(HiddenPark.Cover, 30_000));
+        Assert.Null(cover.Advance(HiddenPark.Cover, 90_000_000));   // an hour covered is still only Shallow
+        Assert.Equal(-1, cover.NextDueInMs(HiddenPark.Cover, 90_000_000));
+    }
+
+    [Fact]
+    public void DeepCountsFromTheMomentTheWindowWasMinimizedAndSurvivesBeingCoveredLater()
+    {
+        var p = new HiddenMemoryPolicy();
+        p.Advance(HiddenPark.Cover, 0);
+        Assert.Equal(HiddenStage.Shallow, p.Advance(HiddenPark.Cover, 40_000));
+        Assert.Null(p.Advance(HiddenPark.Os, 3_600_000));                  // covered for an hour, THEN minimized: not Deep yet
+        Assert.Equal(299_000, p.NextDueInMs(HiddenPark.Os, 3_601_000));
+        Assert.Equal(HiddenStage.Deep, p.Advance(HiddenPark.Os, 3_900_000));
+        Assert.Null(p.Advance(HiddenPark.Cover, 3_900_100));               // Deep, then covered under a maximized window: stays Deep
+        Assert.Equal(HiddenStage.Deep, p.Stage);
+    }
+
+    [Fact]
+    public void ADeepDelayOfZeroGoesStraightToDeepAndShallowMaxSuppressesIt()
+    {
+        HiddenMemoryBudget.DeepDelayMs = 0;
+        var p = new HiddenMemoryPolicy();
+        Assert.Equal(HiddenStage.Deep, p.Advance(HiddenPark.Os, 10));
+
+        HiddenMemoryBudget.ShallowDelayMs = long.MaxValue;   // nothing releases: Deep is part of releasing
+        var q = new HiddenMemoryPolicy();
+        Assert.Null(q.Advance(HiddenPark.Os, 10));
     }
 
     [Fact]
@@ -91,13 +137,33 @@ public sealed class HiddenMemoryPolicyTests : System.IDisposable
         Assert.Equal(1_500, HiddenMemoryBudget.ShallowDelayMs);
         Assert.Equal(45_000, HiddenMemoryBudget.CoverShallowDelayMs);
         Assert.False(HiddenMemoryBudget.TryApply("soon"));
-        Assert.False(HiddenMemoryBudget.TryApply("1:2:3"));
+        Assert.False(HiddenMemoryBudget.TryApply("1:2:3:4:5"));
+        Assert.False(HiddenMemoryBudget.TryApply("1:2:3:4:"));
+        Assert.False(HiddenMemoryBudget.TryApply("deep=soon"));
+        Assert.False(HiddenMemoryBudget.TryApply("1:other=5"));
         Assert.False(HiddenMemoryBudget.TryApply("100:never"));
         Assert.Equal(1_500, HiddenMemoryBudget.ShallowDelayMs);
         Assert.Equal(45_000, HiddenMemoryBudget.CoverShallowDelayMs);
         EngineSwitches.ApplyList("hidden=max:max");
         Assert.Equal(long.MaxValue, HiddenMemoryBudget.ShallowDelayMs);
         Assert.Equal(long.MaxValue, HiddenMemoryBudget.CoverShallowDelayMs);
+    }
+
+    [Fact]
+    public void TheSwitchParsesDeepAndHoldPositionallyAndByName()
+    {
+        Assert.True(HiddenMemoryBudget.TryApply("1000:20000:60000:150"));
+        Assert.Equal(60_000, HiddenMemoryBudget.DeepDelayMs);
+        Assert.Equal(150, HiddenMemoryBudget.RestoreHoldMaxMs);
+        Assert.True(HiddenMemoryBudget.TryApply("deep=max"));          // named: tune one term, keep the rest
+        Assert.Equal(long.MaxValue, HiddenMemoryBudget.DeepDelayMs);
+        Assert.Equal(1_000, HiddenMemoryBudget.ShallowDelayMs);
+        Assert.True(HiddenMemoryBudget.TryApply("hold=0:deep=5000"));  // hold=0: no hold; named terms in any order
+        Assert.Equal(0, HiddenMemoryBudget.RestoreHoldMaxMs);
+        Assert.Equal(5_000, HiddenMemoryBudget.DeepDelayMs);
+        HiddenMemoryBudget.Reset();
+        Assert.Equal(300_000, HiddenMemoryBudget.DeepDelayMs);
+        Assert.Equal(200, HiddenMemoryBudget.RestoreHoldMaxMs);
     }
 
     // ── ImageCache.ReleaseUnpinnedGpu ───────────────────────────────────────────────────────────────────────

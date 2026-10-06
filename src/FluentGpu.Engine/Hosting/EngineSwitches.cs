@@ -38,8 +38,8 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>d3d-mem</c> — per-resource D3D12 allocation lines. <c>nc</c> — the non-client hit-test trace.</item>
 /// <item><c>dump=MODE</c> — the one-shot scene dump.</item>
 /// <item><c>shelf</c>, <c>morph</c> — the paged-shelf / connected-animation traces.</item>
-/// <item><c>hidden=SHALLOW[:COVER]</c> — park time in ms (or <c>max</c> = never) before a hidden window releases its memory:
-/// SHALLOW for a minimized / tray-hidden window (default 2000), COVER for one only covered by another window (default 30000); see <see cref="HiddenMemoryBudget"/>.</item>
+/// <item><c>hidden=SHALLOW[:COVER[:DEEP[:HOLD]]]</c> (terms positional or named <c>shallow= cover= deep= hold=</c>) — park time in ms (or <c>max</c> = never) before a hidden window releases its memory:
+/// SHALLOW for a minimized / tray-hidden window (default 2000), COVER for one only covered by another window (default 30000), DEEP for how long a minimized / tray-hidden one waits before the image textures go too (default 300000; never for a covered window), HOLD the longest ms a Deep restore holds its first frame (default 200, 0 = none); see <see cref="HiddenMemoryBudget"/>.</item>
 /// <item><c>img-atlas=gpucopy|gpucopy256|rowmajor-probe</c>, <c>img-placed=256</c> — default-off re-validation arms for the UMA small-image
 /// atlas (see <see cref="ImageAtlas"/> and <see cref="ImagePlaced256Query"/>).</item>
 /// <item><c>no-guards</c> — the default-on DEBUG guards (BindContract, BackwardsWriteGuard, one-surface-per-player)
