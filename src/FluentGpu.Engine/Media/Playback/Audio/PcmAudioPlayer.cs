@@ -3133,18 +3133,27 @@ public sealed partial class PcmAudioSession : IMediaSession
                 static s => { try { s.h(s.f); } catch { /* a soft-reload subscriber never faults the device switch */ } },
                 (h: onFormatChanged, f: newFormat), preferLocal: false);
 
+        // A same-rate swap while playing resumes at once: the graph, voices and position are all still valid, and the 30 ms
+        // fade-in above covers the seam. DeviceRebuilt is a NOTIFICATION, never a hand-off: holding the transport until a
+        // subscriber released it left Wavee "Playing" in silence after every same-rate switch (Bluetooth headphones at
+        // 48 kHz). A rate change still holds, because the graph cannot render at the new rate until the host's reload
+        // replaces it; a paused session stays held as it was.
+        bool resume = !rateChanged && (_state == PlaybackState.Playing || _playRequested);
         var onRebuilt = DeviceRebuilt;
         if (onRebuilt is not null)
         {
-            _transportHoldRequested = true;
-            _transport = new TransportRamp(0);
-            SetPhase(3);
+            if (!resume)
+            {
+                _transportHoldRequested = true;
+                _transport = new TransportRamp(0);
+                SetPhase(3);
+            }
             ThreadPool.QueueUserWorkItem(static state =>
             {
                 try { state.Callback(state.Format, state.Position); } catch { }
             }, (Callback: onRebuilt, Format: newFormat, Position: (long)Math.Round(sourcePosition * (double)newFormat.SampleRate / previousRate)), preferLocal: false);
         }
-        else if (!rateChanged && (_state == PlaybackState.Playing || _playRequested)) EnsureStarted();
+        if (resume) EnsureStarted();
         return true;
     }
 
