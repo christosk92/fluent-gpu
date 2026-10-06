@@ -1699,15 +1699,21 @@ public sealed class ImageCache
     /// <paramref name="onScreen"/> (null = all) restart on the Visible lane and are TRACKED - their landing skips the reveal and
     /// counts down <see cref="RestorePendingCount"/>, which the held first frame waits for; the rest restart on the Overscan lane
     /// untracked (nothing visible waits for them, and a refusal there is retried at Visible by the leftover sweep). Size is kept
-    /// across the restart. The host sets <see cref="HiddenStage"/> to Visible first. Returns the count restarted.</summary>
-    public int RestartParked(HashSet<int>? onScreen = null)
+    /// across the restart. An entry that is only HELD (a row cell, a parked page's node: <c>Refs == 0</c>) and is not on screen
+    /// stays parked: nothing is waiting for it, and the request that realizes its row (or the page coming back) restarts it
+    /// through the ordinary path. <paramref name="only"/> limits the restart to those ids (a pop-out restoring under a Deep
+    /// primary). The host sets <see cref="HiddenStage"/> to Visible first (or lists the ids in <see cref="HiddenChildHeld"/>).
+    /// Returns the count restarted.</summary>
+    public int RestartParked(HashSet<int>? onScreen = null, HashSet<int>? only = null)
     {
         if (_parkedCount == 0) return 0;
         int n = 0;
         foreach (var (id, e) in _byId)
         {
             if (!e.Parked) continue;
+            if (only is not null && !only.Contains(id)) continue;
             bool now = onScreen is null || onScreen.Contains(id);
+            if (!now && e.Refs <= 0) continue;
             int w = e.W, h = e.H;
             RestartDecode(id, e, now ? ImagePriority.Visible : ImagePriority.Overscan);   // clears Parked on the way out of None
             if (e.State == ImageState.Pending)
