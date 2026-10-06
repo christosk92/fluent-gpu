@@ -25,6 +25,8 @@ namespace FluentGpu.Hosting;
 /// <item><c>d3d-mem</c> — per-resource D3D12 allocation lines. <c>nc</c> — the non-client hit-test trace.</item>
 /// <item><c>dump=MODE</c> — the one-shot scene dump.</item>
 /// <item><c>shelf</c>, <c>morph</c> — the paged-shelf / connected-animation traces.</item>
+/// <item><c>hidden=SHALLOW[:COVER]</c> — park time in ms (or <c>max</c> = never) before a hidden window releases its memory:
+/// SHALLOW for a minimized / tray-hidden window (default 2000), COVER for one only covered by another window (default 30000); see <see cref="HiddenMemoryBudget"/>.</item>
 /// <item><c>no-guards</c> — the default-on DEBUG guards (BindContract, BackwardsWriteGuard, one-surface-per-player)
 /// off, for a measurement that must not pay their per-write scans. <c>guards-throw</c> — every guard throws.</item>
 /// <item><c>device-lost=N</c> — inject a device loss at frame N (the recovery path's test arm).</item>
@@ -223,6 +225,7 @@ public static class EngineSwitches
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
             case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
             case "warp": ForceWarp = true; return true;
+            case "hidden": return HiddenMemoryBudget.TryApply(value);
             default: return false;
         }
     }

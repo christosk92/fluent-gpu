@@ -292,6 +292,23 @@ public sealed partial class SliceTable
         return n;
     }
 
+    /// <summary>Evict EVERY resident tile, the last turn's set included (render thread - or the UI thread in SingleThread mode -
+    /// BETWEEN turns; the hidden-window Shallow stage). Unlike <see cref="EvictStale"/> it ignores recency: while the window is
+    /// hidden nothing is visible, so no tile is protected. Each tile becomes <see cref="InvalidationReason.Evicted"/>, so the first
+    /// composite after the restore schedules it and rasters it in the SAME submission before anything samples it - there is no
+    /// "blank tile" state to present. Follow with <see cref="TrimFreeSlotsNow"/> to hand the textures back. Returns the tiles evicted.</summary>
+    public int EvictAll()
+    {
+        int n = 0;
+        for (int t = 0; t < _tiles.Length; t++)
+        {
+            if (!_used[t] || _tiles[t].Surface < 0) continue;
+            Evict(t);
+            n++;
+        }
+        return n;
+    }
+
     /// <summary>Milliseconds until the first resident tile outside the last turn's set turns stale (<see cref="EvictStale"/>):
     /// 0 when one already is, -1 when there is none (nothing for the idle trim to wait for).</summary>
     public long NextStaleInMs(long nowMs, long staleMs = StaleTileMs)
