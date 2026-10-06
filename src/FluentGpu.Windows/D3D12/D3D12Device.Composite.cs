@@ -381,8 +381,9 @@ public sealed unsafe partial class D3D12Device
             bool faithful = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped && _frameImagesInFlight == inFlight;
             if (i < frame.RasterDone.Length) frame.RasterDone[i] = faithful ? (byte)1 : (byte)0;
             // every faithful partial raster is checked — an EMPTY damage too (the claim "nothing changed" is the strongest)
-            if (TileDamage.Validate && partial && faithful) QueueDamageCheck(in frame, in row, in tr, damage, tileX, tileY);
+            // honesty first: the shadow replay below runs the same glyph-halo / stencil bookkeeping
             if (TileDamage.Validate && partial) NoteReplayHonesty(in tr, halo0, stencilFb0);
+            if (TileDamage.Validate && partial && faithful) QueueDamageCheck(in frame, in row, in tr, damage, tileX, tileY);
             // evidence (§A.3): an inline group inside this tile asked for a scratch and was refused — it drew nothing
             if (i < frame.RasterFlags.Length && _surfaces.ScratchRefused != refused0)
                 frame.RasterFlags[i] |= CompositeFrameFlags.RasterScratchRefused;

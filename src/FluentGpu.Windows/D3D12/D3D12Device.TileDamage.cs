@@ -21,7 +21,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// older — buffer age). <see cref="FullFrames"/> = composites that took the whole-frame route, <see cref="Validated"/> /
 /// <see cref="Mismatches"/> = <c>--fg damage-validate</c> checks done / failed.</summary>
 public readonly record struct DamageCensus(long Frames, long PartialRasters, long WholeRasters, long RasterPx, long RasterWholePx,
-    long CompositePx, long PresentPx, long DirtyPx, long FullFrames, long Validated, long Mismatches);
+    long CompositePx, long PresentPx, long DirtyPx, long FullFrames, long Validated, long Mismatches, long HonestyBreaches = 0);
 
 // SUB-TILE DAMAGE, the backend's half (gpu-renderer.md §13.1l): a TileRaster the table planned PARTIAL keeps its surface
 // (PRESERVE) and re-rasters only its damage — the rect is cleared to transparent (what a whole raster's CLEAR load
@@ -127,7 +127,9 @@ public sealed unsafe partial class D3D12Device
     public DamageCensus LastDamageCensus => new(Volatile.Read(ref _dcFrames), Volatile.Read(ref _dcPartial), Volatile.Read(ref _dcWhole),
         Volatile.Read(ref _dcRasterPx), Volatile.Read(ref _dcRasterWholePx), Volatile.Read(ref _dcCompositePx),
         Volatile.Read(ref _dcPresentPx), Volatile.Read(ref _dcDirtyPx), Volatile.Read(ref _dcFull),
-        Volatile.Read(ref _dcValidated), Volatile.Read(ref _dcMismatches));
+        Volatile.Read(ref _dcValidated), Volatile.Read(ref _dcMismatches), Volatile.Read(ref _dcHonesty));
+
+    private long _dcHonesty;   // partial rasters whose replay breached the glyph halo or fell back from a stencil clip
 
     private static long AreaOf(in PixelRect r) => r.IsEmpty ? 0L : (long)(r.Right - r.Left) * (r.Bottom - r.Top);
 
@@ -158,6 +160,17 @@ public sealed unsafe partial class D3D12Device
             : (tr.Partial && fresh ? "whole (fresh texture)" : tr.Partial ? "whole (images)" : "whole");
         Console.Error.WriteLine(string.Create(ci,
             $"[damage] turn={_compositeTurn} slice={tr.Key.SliceId} {row.Kind} node={row.NodeIndex} tile=({tr.Key.Tx},{tr.Key.Ty}) {tr.W}x{tr.H} reason={tr.Reason} order={tr.Order} origin=({row.Frame.OriginX},{row.Frame.OriginY}) res=({row.Frame.ResidualX:0.###},{row.Frame.ResidualY:0.###}) {dmg}"));
+    }
+
+    /// <summary>RecoverDevice: release both validators' device objects and reset their in-flight state (see the caller).
+    /// True when a validator was armed (the recovery logs one line).</summary>
+    private bool ReleaseValidatorsForRecovery()
+    {
+        ReleaseDamageChecks();
+        ReleasePresentChecks();
+        bool armed = TileDamage.Validate || TileDamage.PresentValidate;
+        if (armed) Console.Error.WriteLine("[damage-validate] device recovered: validator checks released and restarted");
+        return armed;
     }
 
     // ── --fg damage-validate ──
@@ -193,11 +206,7 @@ public sealed unsafe partial class D3D12Device
         EndPassIfOpen();
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var srtv = _surfaces.ScratchRtv(scratch);
-        // an explicit clear, then a PRESERVE pass: the same pattern as the present validator's shadow (a CLEAR-load pass
-        // followed by a copy lost draws on the Adreno driver now and then)
-        float* zero = stackalloc float[4];
-        _cmdList->ClearRenderTargetView(srtv, zero, 0, null);
-        BeginPass(srtv, tr.W, tr.H, PassLoad.Preserve);
+        BeginPass(srtv, tr.W, tr.H, PassLoad.Clear);   // exactly the whole raster's pass (RasterTiles)
         ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, srtv,
             new RectF(tr.Key.Tx * (float)TileGrid.W, tr.Key.Ty * (float)TileGrid.H, tr.W, tr.H));
         EndPassIfOpen();
@@ -272,11 +281,12 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>The validate arm's replay-honesty asserts for a partial raster: the glyph cull halo held (no glyph quad
     /// outside it — DEBUG / FLUENTGPU_DIAG measure it) and no stencil scope degraded to its scissor during the replay
-    /// (either would make a partial raster's cull or clamp disagree with the whole raster's). A breach is a mismatch.</summary>
+    /// (either would make a partial raster's cull or clamp disagree with the whole raster's). A breach is counted on its
+    /// own (h&lt;n&gt; on the [fps] line).</summary>
     private void NoteReplayHonesty(in TileRaster tr, long halo0, int stencilFb0)
     {
         if (_glyphHaloBreaches == halo0 && _frameStencilFallback == stencilFb0) return;
-        Volatile.Write(ref _dcMismatches, _dcMismatches + 1);
+        Volatile.Write(ref _dcHonesty, _dcHonesty + 1);
         Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"[damage-validate] HONESTY turn={_compositeTurn} slice={tr.Key.SliceId} tile=({tr.Key.Tx},{tr.Key.Ty}) glyphHaloBreaches+={_glyphHaloBreaches - halo0} stencilFallback+={_frameStencilFallback - stencilFb0}"));
     }
@@ -372,6 +382,7 @@ public sealed unsafe partial class D3D12Device
     /// <summary>Device teardown (the GPU is drained): release the validation readbacks.</summary>
     private void ReleaseDamageChecks()
     {
-        for (int i = 0; i < _dmgChecks.Length; i++) ReleaseCheck(ref _dmgChecks[i]);
+        for (int i = 0; i < _dmgChecks.Length; i++) ReleaseCheck(ref _dmgChecks[i]);   // Busy = false: no check waits on a dead fence
+        Array.Clear(_tileImgN);   // the surfaces and the image store went with the device
     }
 }

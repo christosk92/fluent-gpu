@@ -21,8 +21,8 @@ public static class SliceOpBounds
         switch (op)
         {
             case DrawOp.FillRoundRect: { var c = Read<FillRoundRectCmd>(payload); return Box(c.Rect, c.Transform, RepaintCull.AaHaloDip, out bounds); }
-            case DrawOp.DrawGlyphRun: { var c = Read<DrawGlyphRunCmd>(payload); return Box(c.Bounds, c.Transform, RepaintCull.GlyphHalo(c.FontSize), out bounds); }
-            case DrawOp.DrawGlyphRunGradient: { var c = Read<DrawGlyphRunGradientCmd>(payload); return Box(c.Bounds, c.Transform, RepaintCull.GlyphHalo(c.FontSize, c.Lift), out bounds); }
+            case DrawOp.DrawGlyphRun: { var c = Read<DrawGlyphRunCmd>(payload); return Box(c.InkRect, c.Transform, RepaintCull.GlyphHalo(c.FontSize), out bounds); }
+            case DrawOp.DrawGlyphRunGradient: { var c = Read<DrawGlyphRunGradientCmd>(payload); return Box(c.InkRect, c.Transform, RepaintCull.GlyphHalo(c.FontSize, c.Lift), out bounds); }
             case DrawOp.DrawImage: { var c = Read<DrawImageCmd>(payload); return Box(c.Rect, c.Transform, RepaintCull.AaHaloDip, out bounds); }
             case DrawOp.DrawRoundRectStroke: { var c = Read<DrawRoundRectStrokeCmd>(payload); return Box(c.Rect, c.Transform, RepaintCull.StrokeHalo(c.StrokeWidth), out bounds); }
             case DrawOp.DrawShadow:

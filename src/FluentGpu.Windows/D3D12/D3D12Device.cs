@@ -1054,7 +1054,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // device init; a runtime switch sets it and calls InjectDeviceLost so THIS re-run applies it via recovery).
         // 0 = auto. A stale/failed preference (adapter gone, driver refused) falls through to the auto walk below.
         long preferredLuid = GpuAdapterInfo.PreferredAdapterLuid;
-        if (preferredLuid != 0)
+        if (FluentGpu.Hosting.EngineSwitches.ForceWarp)
+        {
+            // `--fg warp`: the software adapter, explicitly (a validator run off the hardware driver)
+            IDXGIAdapter* warp;
+            if ((int)_factory->EnumWarpAdapter(__uuidof<IDXGIAdapter>(), (void**)&warp) >= 0 && warp != null)
+            {
+                if ((int)D3D12CreateDevice((IUnknown*)warp, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device) >= 0)
+                    selectionMode = "warp";
+                warp->Release();
+            }
+        }
+        if (device == null && preferredLuid != 0)
         {
             LUID pl = default;
             pl.LowPart = unchecked((uint)preferredLuid);
@@ -2010,7 +2021,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
-                    if (CullGlyphs(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    RectF ink = g.InkRect;   // the painted extent (the box + measured overflow), not the layout box
+                    if (Cull(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2024,9 +2036,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
-                        NoteGlyphHaloCoverage(before, g.Bounds, RepaintCull.GlyphHalo(g.FontSize));
+                        NoteGlyphHaloCoverage(before, ink, RepaintCull.GlyphHalo(g.FontSize));
                         if (_glyphInsts.Count > before)
-                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                            NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                                 g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize));
                     }
                     break;
@@ -2035,7 +2047,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
-                    if (CullGlyphs(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    RectF ink = g.InkRect;
+                    if (Cull(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize, g.Lift))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2051,9 +2064,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             _gradGlyphInsts, _glyphInsts,
                             g.SpanRunId, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += (_gradGlyphInsts.Count - beforeGrad) + (_glyphInsts.Count - beforePlain);
-                        NoteGlyphHaloCoverage(beforePlain, g.Bounds, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
+                        NoteGlyphHaloCoverage(beforePlain, ink, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                         if (_gradGlyphInsts.Count > beforeGrad || _glyphInsts.Count > beforePlain)
-                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                            NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                                 g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                     }
                     break;
@@ -2640,20 +2653,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (!_cullActive) return false;
         RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
-    }
-
-    /// <summary><see cref="Cull"/> for a glyph run. A run's declared bounds are its NODE box: shaped text can run past it
-    /// along the line (no wrap / trim), so a PARTIAL raster (its damage cut anywhere inside a tile) keeps every run whose
-    /// row reaches the damage, whatever its x — the damage diff widens a changed run to its row band the same way
-    /// (<c>TileDamage</c>).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool CullGlyphs(float x, float y, float w, float h,
-        float m11, float m12, float m21, float m22, float dx, float dy, float halo)
-    {
-        if (!_cullActive) return false;
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        if (_replayClampOn) { l = -1e9f; r = 1e9f; }
         return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
     }
 
@@ -4990,6 +4989,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // The retained-tile surfaces died with the device: the host's target-epoch bump invalidates every tile, and the
         // next composite recreates what it rasters.
         _surfaces?.Dispose(); _surfaces = null;
+        // The validators' readbacks / shadow target belong to the dead device, and their in-flight checks wait on fence
+        // values the new fence (restarting at 0) would not reach for a long time: drop them, restart their sequences.
+        ReleaseValidatorsForRecovery();
         _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
         _compositor?.Dispose(); _compositor = null;
         _imageTextures?.Dispose(); _imageTextures = null;

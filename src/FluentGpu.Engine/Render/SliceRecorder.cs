@@ -1105,8 +1105,7 @@ public sealed partial class SliceRecorder
                         if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && OpaqueFill(op, p, in top, out RectF o)
                             && o.W * o.H > segOpaque.W * segOpaque.H)
                             segOpaque = o;
-                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread,
-                            glyph: op is DrawOp.DrawGlyphRun or DrawOp.DrawGlyphRunGradient);
+                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread);
                         // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
                         // own DrawVideo is added below, after this, and never counts against itself).
                         if (!b.IsEmpty)

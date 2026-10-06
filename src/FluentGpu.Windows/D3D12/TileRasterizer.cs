@@ -176,9 +176,6 @@ public sealed unsafe partial class D3D12Device
         // first column).
         float aa = RepaintCull.AaHaloDip * s;
         var spanCull = new RectF(cullRelOrigin.X - aa, cullRelOrigin.Y - aa, cullRelOrigin.W + 2f * aa, cullRelOrigin.H + 2f * aa);
-        // a partial raster keeps every span whose ROWS reach the damage: a glyph run inside may run past its box along
-        // the line (CullGlyphs)
-        if (clamp) spanCull = new RectF(-1e9f, spanCull.Y, 2e9f, spanCull.H);
         ReplayStream(frame.StreamOf(in row), sx, sy, spans, in spanCull);
         FlushSegment(_streamLw, _streamLh);
         while (_inlineGroups.Count > baseGroups) CloseInlineLayer();

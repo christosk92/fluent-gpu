@@ -2402,6 +2402,20 @@ internal sealed class SceneRecordingContext
                 // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
                 // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
                 bool paintsText = !p.Text.IsEmpty && b.W > 0f && b.H > 0f;
+                // The run's INK: the box grown by what the measured text overflows it (a no-wrap / no-trim run wider than
+                // its box, more lines than its height). The overflow side depends on alignment, so it is taken on BOTH
+                // sides. Every cull, slice bound, content hash and sub-tile damage reads it; the replay still shapes into
+                // the box. Empty when the text fits (the box is the footprint).
+                RectF ink = default;
+                if (paintsText && mc.Valid)
+                {
+                    float ow = MathF.Max(0f, mc.Size.Width - local.W), oh = MathF.Max(0f, mc.Size.Height - local.H);
+                    if (ow > 0f || oh > 0f)
+                    {
+                        ink = new RectF(local.X - ow, local.Y - oh, local.W + 2f * ow, local.H + 2f * oh);
+                        result.Include(world.TransformBounds(ink));   // the span bounds a clean-subtree cull reads
+                    }
+                }
                 if (paintsText)
                 {
                     // No longer counted on motion: with the glyph renderer's sub-pixel phase atlas a moving run is drawn
@@ -2411,12 +2425,12 @@ internal sealed class SceneRecordingContext
                         dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId);
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink);
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, key, spanRunId);
+                            world, opacity, key, spanRunId, ink: in ink);
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the

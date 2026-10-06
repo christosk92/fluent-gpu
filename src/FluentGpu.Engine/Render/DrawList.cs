@@ -314,9 +314,16 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // #2 — SceneRecorder.TextMotionSoftness, which used to derive this from the enclosing viewport's live scroll speed,
 // no longer exists): every call site now leaves this at its default, 0, so every run records crisp regardless of
 // scroll speed. The field/slot stays (renderer + GPU upload still read it) so the payload layout is unchanged.
+// Ink = the run's PAINTED extent in the same local space (the node box grown by what the measured text overflows it: a
+// run with no wrap / trim wider than its box, more lines than its height) — the footprint every cull, slice bound and
+// sub-tile damage reads (SliceOpBounds, InkRect). Bounds stays the LAYOUT box the replay shapes into. Empty = the box.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
-    int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
+    int SpanRunId = 0, int ForceColor = 0, int InMotion = 0, RectF Ink = default)
+{
+    /// <summary>The painted extent (<see cref="Ink"/>, or the layout box when none was recorded).</summary>
+    public RectF InkRect => Ink.W > 0f && Ink.H > 0f ? Ink : Bounds;
+}
 // A glyph run filled by a left->right WIPE (the GlyphWipe primitive): Split (0..1) is a fraction of the run's content in
 // READING ORDER — the replay lays a wrapped run's visual lines END-TO-END over glyph EDGES, so a glyph before Split in
 // reading order is painted Before and one after it After, with a Softness-wide soft blend the replay remaps so Split==1
@@ -325,7 +332,11 @@ public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, String
 // cache key is identical to the plain run (no reshape as the split advances). General text-reveal; the lyrics karaoke uses it.
 public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
-    ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0);
+    ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0, RectF Ink = default)
+{
+    /// <summary>The painted extent (<see cref="Ink"/>, or the layout box when none was recorded) — see DrawGlyphRunCmd.</summary>
+    public RectF InkRect => Ink.W > 0f && Ink.H > 0f ? Ink : Bounds;
+}
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -430,9 +441,10 @@ public readonly record struct DrawVideoCmd(RectF Dst, CornerRadius4 Radii, int S
 // no surface identity, no registry. The scrim band uses it INSIDE an opacity group to cut spotlight windows.
 public readonly record struct EraseRoundRectCmd(RectF Rect, CornerRadius4 Radii, float Strength, Affine2D Transform, float Opacity);
 
-// A tessellated path FILL (see DrawOp.FillPath, gpu-renderer.md §5). Rect is the node-local box (metadata, like every
-// other cmd's Rect — the actual triangle-soup positions are PathRealizationCache.Shared's PathVertex.X/Y, in the
-// path's own authored coordinate space; Transform maps that space to device). VtxStart/VtxCount/IdxStart/IdxCount
+// A tessellated path FILL (see DrawOp.FillPath, gpu-renderer.md §5). Rect is the REALIZATION's bounds in the path's own
+// authored coordinate space (+ the ½-device-px AA fringe; a stroke's includes its width) — the painted extent every cull
+// and footprint reads (SliceOpBounds); the actual triangle-soup positions are PathRealizationCache.Shared's
+// PathVertex.X/Y in that same space, and Transform maps it to device. VtxStart/VtxCount/IdxStart/IdxCount
 // index PathRealizationCache.Shared's retained slab (a cache HIT reuses them across every frame the geometry/style/
 // scale key doesn't change — zero re-tessellation). RealizationId is reserved for a future GPU-resident realization
 // handle (§1.5's PathPipeline residency); unpopulated (0) until that lands — the CPU-side offsets already fully
@@ -578,11 +590,12 @@ public sealed class DrawList
 
     public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0,
-        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f)
+        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f, in RectF ink = default)
     {
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, QuantizeMotionSoft(motionSoft)));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, QuantizeMotionSoft(motionSoft),
+            ink.W > 0f && ink.H > 0f ? ink : default));
         PushSort(sortKey);
     }
 
@@ -593,11 +606,13 @@ public sealed class DrawList
     /// just-passed glyph up. Reuses the glyph pipeline (per-instance color/offset computed at replay) — no new shader.</summary>
     public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
-        in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, float motionSoft = 0f)
+        in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, float motionSoft = 0f,
+        in RectF ink = default)
     {
         WriteOp(DrawOp.DrawGlyphRunGradient);
         WritePayload(new DrawGlyphRunGradientCmd(bounds, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, QuantizeMotionSoft(motionSoft)));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, QuantizeMotionSoft(motionSoft),
+            ink.W > 0f && ink.H > 0f ? ink : default));
         PushSort(sortKey);
     }
 

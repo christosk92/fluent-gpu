@@ -13,7 +13,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// back buffers that differed from a whole shadow composite, presents whose dirty rects missed a changed pixel, presents
 /// after which the modelled screen differed from the back buffer, and composites not checked.</summary>
 public readonly record struct PresentCensus(long Checked, long CompositeMismatches, long UnderReports, long StaleScreens, long Skipped,
-    long ShadowDiverged = 0);
+    long ShadowDiverged = 0, long ModelChecked = 0);
 
 // PRESENT VALIDATION (`--fg present-validate`, gpu-renderer.md §13.1h). After every primary composite the device
 //   1. re-composites the WHOLE frame (CLEAR + every item, no repaint rects) into a window-sized shadow scratch and copies it
@@ -113,7 +113,9 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>The cumulative present-validation census.</summary>
     public PresentCensus LastPresentCensus => new(Volatile.Read(ref _pvChecked), Volatile.Read(ref _pvCompositeBad),
-        Volatile.Read(ref _pvUnder), Volatile.Read(ref _pvStale), Volatile.Read(ref _pvSkipped), Volatile.Read(ref _pvShadowDiverged));
+        Volatile.Read(ref _pvUnder), Volatile.Read(ref _pvStale), Volatile.Read(ref _pvSkipped), Volatile.Read(ref _pvShadowDiverged), Volatile.Read(ref _pvModelChecked));
+
+    private long _pvModelChecked;   // Present1 (dirty-rect) presents actually compared against a valid screen model
 
     private long _pvShadowDiverged;
 
@@ -160,9 +162,8 @@ public sealed unsafe partial class D3D12Device
         CopyToReadback(backBuffer, c.Back, fp, w, h);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        float* clear = stackalloc float[4] { frame.Info.Clear.R, frame.Info.Clear.G, frame.Info.Clear.B, frame.Info.Clear.A };
-        _cmdList->ClearRenderTargetView(_pvShadowRtv, clear, 0, null);
-        BeginPass(_pvShadowRtv, w, h, PassLoad.Preserve);
+        // the shadow pass is the real whole-route pass: a CLEAR load-op with the frame's clear colour, then every item
+        BeginPass(_pvShadowRtv, w, h, PassLoad.Clear, frame.Info.Clear);
         BindCompositor(w, h);
         bool clipOn = _frameClipOn;
         _frameClipOn = false;
@@ -304,7 +305,13 @@ public sealed unsafe partial class D3D12Device
         Volatile.Write(ref _pvChecked, _pvChecked + 1);
 
         // 1. the back buffer against a whole composite of the same frame
-        long bad = 0; int x0 = int.MaxValue, y0 = int.MaxValue, x1 = -1, y1 = -1, maxDelta = 0;
+        // The REPAINT region of this composite (the whole window on the whole route): there the back buffer was drawn just
+        // now by the same code as the shadow, so a difference inside it means the two composites of one frame disagree —
+        // the frame cannot be checked (a validator / driver divergence). A damage bug can only show OUTSIDE it, where the
+        // back buffer kept pixels of an earlier frame.
+        PvMeta meta = _pvMeta[c.Seq % _pvMeta.Length];
+        bool metaOk = meta.Seq == c.Seq;
+        long bad = 0, badIn = 0; int x0 = int.MaxValue, y0 = int.MaxValue, x1 = -1, y1 = -1, maxDelta = 0;
         for (int y = 0; y < h; y++)
         {
             uint* ra = (uint*)((byte*)pa + (ulong)y * c.Pitch), rb = (uint*)((byte*)pb + (ulong)y * c.Pitch);
@@ -313,20 +320,24 @@ public sealed unsafe partial class D3D12Device
                 uint va = ra[x], vb = rb[x];
                 if (va == vb) continue;
                 bad++;
+                bool inRepaint = !c.Partial || !metaOk;
+                if (!inRepaint) for (int k = 0; k < meta.RepaintN; k++) if (PvIn(meta.Repaint[k], x, y)) { inRepaint = true; break; }
+                if (inRepaint) badIn++;
                 x0 = Math.Min(x0, x); y0 = Math.Min(y0, y); x1 = Math.Max(x1, x); y1 = Math.Max(y1, y);
                 for (int k = 0; k < 32; k += 8) maxDelta = Math.Max(maxDelta, Math.Abs((int)((va >> k) & 0xFF) - (int)((vb >> k) & 0xFF)));
             }
         }
-        if (bad > 0 && !c.Partial)
+        if (badIn > 0)
         {
-            // A WHOLE-route frame: the back buffer and the shadow were drawn by the same code (CLEAR + every item), and no
-            // pixel was preserved, so no damage decision is under test. On the Adreno driver the SECOND whole composite of a
-            // frame (the shadow, into its own target) now and then comes back incomplete — empty or cut off after some item
-            // — while the back buffer is whole (the dumps; no under-report or stale screen ever follows). Counted apart.
+            // The two composites of this frame disagree INSIDE its repaint region (all of it on the whole route), where the
+            // back buffer was drawn by the very same code: the frame cannot be checked. On the Adreno driver the shadow (the
+            // second composite of the frame, into its own target) now and then comes back incomplete — empty or cut off
+            // after some item — while the back buffer is whole (the dumps; no under-report or stale screen follows; none
+            // on WARP). Counted apart as UNVERIFIED, never as a pass.
             Volatile.Write(ref _pvShadowDiverged, _pvShadowDiverged + 1);
             Console.Error.WriteLine(string.Create(ci,
-                $"[present-validate] SHADOW-DIVERGED (whole route, validator) turn={c.Turn} px={bad} bbox=[{x0},{y0} → {x1 + 1},{y1 + 1}) maxDelta={maxDelta} shadowDraws={c.ShadowDraws} items={c.Items}"));
-            if (_pvShadowDiverged <= 2) PvDump(c.Turn, pa, pb, c.Pitch, w, h);
+                $"[present-validate] SHADOW-DIVERGED (unverified frame) turn={c.Turn} route={(c.Partial ? "preserve" : "whole")} px={bad} inRepaint={badIn} bbox=[{x0},{y0} → {x1 + 1},{y1 + 1}) maxDelta={maxDelta} shadowDraws={c.ShadowDraws} passes={c.ShadowPasses} onShadow={c.StillOnShadow} items={c.Items}"));
+            if (_pvShadowDiverged <= 40) PvDump(c.Turn, pa, pb, c.Pitch, w, h);   // every one (bounded only to protect the disk)
         }
         else if (bad > 0)
         {
@@ -352,6 +363,7 @@ public sealed unsafe partial class D3D12Device
             }
             else if (_pvModelOk)
             {
+                Volatile.Write(ref _pvModelChecked, _pvModelChecked + 1);
                 long under = 0, stale = 0;
                 int ux0 = int.MaxValue, uy0 = int.MaxValue, ux1 = -1, uy1 = -1;
                 fixed (byte* model = _pvModel)
@@ -431,5 +443,9 @@ public sealed unsafe partial class D3D12Device
             if (c.Shadow != null) { D3D12MemoryDiagnostics.Release(c.Shadow, "PresentValidate.Readback"); c.Shadow->Release(); }
             c = default;
         }
+        // the sequence restarts: no in-flight check may wait on a fence value the next device never signals
+        _pvSeq = 0; _pvNextToProcess = 0; _pvPendingSlot = -1;
+        _pvModelOk = false; _pvShadowW = _pvShadowH = 0;
+        foreach (PvMeta m in _pvMeta) m.Seq = -1;
     }
 }

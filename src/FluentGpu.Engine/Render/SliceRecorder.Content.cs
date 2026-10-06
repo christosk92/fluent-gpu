@@ -58,7 +58,7 @@ public sealed partial class SliceRecorder
     /// <summary>ScanSlot: one op at byte <paramref name="pos"/> with its effective footprint (slice-space DIP) and hash;
     /// <paramref name="scope"/> = it opens a clip / stencil clip / layer the following ops are drawn inside.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false, bool glyph = false)
+    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false)
     {
         // An op drawn under the ADDITIVE paint blend paints differently with the same bytes: the blend is part of its
         // content hash — of every want that folds it and of the sub-tile damage diff (a moved SetBlend re-rasters what
@@ -67,7 +67,7 @@ public sealed partial class SliceRecorder
         int n = _cOpCount[s];
         ref TileOp[] ops = ref _cOps[s];
         if (n == ops.Length) Array.Resize(ref ops, n * 2);
-        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, Glyph = glyph, ScopeSig = _cScopeSig[_cScopeDepth] };
+        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, ScopeSig = _cScopeSig[_cScopeDepth] };
         _cOpCount[s] = n + 1;
         if (!scope) return;
         if (_cScopeDepth == _cScope.Length) { Array.Resize(ref _cScope, _cScope.Length * 2); Array.Resize(ref _cScopeSig, _cScope.Length + 1); }

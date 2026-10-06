@@ -52,7 +52,8 @@ namespace FluentGpu.Hosting;
 /// re-rastered tile's whole placement and takes the whole frame on an item-structure change (the pre-damage behaviour,
 /// the A/B arm). <c>present-validate</c> — every primary composite is shadow-composited whole and compared with the back
 /// buffer, and every Present1's dirty rects are checked against what changed since the last presented frame.
-/// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).</item>
+/// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).
+/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -115,6 +116,10 @@ public static class EngineSwitches
     /// otherwise the runtime falls back to SL2000 - and the negotiated level is logged once per runtime. Read once, when the native runtime
     /// is created: set it (the command line) before the first protected open.</summary>
     public static bool ForcePlayReadySl2000;
+
+    /// <summary>Create the D3D12 device on the WARP software adapter (<c>--fg warp</c>): a validator run off the hardware
+    /// driver (is a difference the driver's or ours?). Read once, at device init. Default off.</summary>
+    public static bool ForceWarp;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -197,6 +202,7 @@ public static class EngineSwitches
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
             case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
+            case "warp": ForceWarp = true; return true;
             default: return false;
         }
     }

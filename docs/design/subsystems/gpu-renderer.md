@@ -1845,8 +1845,17 @@ check then fails on later frames, not only the present check). Hence the validat
 shadow target and both are read back; once the GPU passed the frame the device compares them (a PRESERVE-route
 difference is a damage bug), and keeps a CPU model of what DWM shows (a whole present replaces it, a `Present1` only
 inside its rects) — a changed pixel outside the rects is an UNDER-REPORT, a model that differs from the back buffer a
-STALE SCREEN. A whole-route frame's shadow is a second identical composite: a difference there is counted apart
-(`shadowDiverged`; the Adreno driver now and then returns that second composite incomplete). `--fg no-precise-present`
+STALE SCREEN. Inside a composite's own repaint region (all of it on the whole route) the back buffer was drawn by the
+same code as the shadow, so a difference THERE means the frame's two composites disagree and the frame cannot be checked:
+it is counted apart (`shadowDiverged` — unverified, never a pass; every one dumped as a PNG pair). On the Adreno driver
+the shadow now and then comes back incomplete (empty, or cut off after some item) while the back buffer is whole; `--fg
+warp` runs the same check off the hardware driver. A damage bug can only show OUTSIDE the repaint region.
+**Blind spot:** the shadow composite samples the frame's own prepared inputs — its tiles and its group / blur / backdrop
+surfaces — so the check validates the repaint set and the Present1 rects only. A retained surface reused under a wrong
+key, a table decision that a tile needs no raster, or a descriptor fault inside the frame reaches the shadow too and is
+NOT caught here (`--fg damage-validate` covers partial tile rasters; the `[fps]` `pv…/m…` token counts the composites
+checked and the Present1 presents actually compared against the screen model). Both validators release and restart
+their checks across a device recovery. `--fg no-precise-present`
 is the A/B arm (whole placements, whole frames on any structure change), `--fg present-structure-diff` diffs structure
 changes too (investigation only). `PresentParams` from `BuildComposite` stay the seam's census (the headless model
 records them).
@@ -2008,9 +2017,10 @@ replay both ways and compares bytes; `--fg damage-validate` re-rasters every par
 device and compares the readbacks (a mismatch logs its extent). `--fg no-partial-raster` is the A/B arm,
 `--fg damage-log` names every raster and every dirty entry, and the `[fps]` line's `dpx` token reports raster /
 composite / present pixels per composite. Further rules the validator taught: an op drawn under the ADDITIVE paint blend
-folds the blend into its content hash (a moved `SetBlend` is a content change); a glyph run's footprint is its node box,
-and shaped text can run past it along the line, so an unmatched run damages its whole row band and a partial replay keeps
-every glyph run (and span) whose rows reach the damage, whatever its x; a path's `Rect` is its realization's bounds (stroke
+folds the blend into its content hash (a moved `SetBlend` is a content change); a glyph run records its INK
+(`DrawGlyphRunCmd.Ink`: the layout box grown by the measured overflow — a no-wrap run wider than its box — on both sides,
+also unioned into the span bounds) and every cull, footprint and tile hit reads it, so text that runs past its box into
+another tile or past a damage edge is seen there; a path's `Rect` is its realization's bounds (stroke
 width and viewbox fit included). The validate arm also asserts the replay's honesty: no glyph-halo breach and no stencil
 fallback during a partial raster.
 

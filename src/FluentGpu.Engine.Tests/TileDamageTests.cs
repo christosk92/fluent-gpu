@@ -70,13 +70,20 @@ public sealed class TileDamageTests
     }
 
     [Fact]
-    public void AnUnmatchedGlyphRun_DamagesItsWholeRowBand()
+    public void AGlyphRunsFootprint_IsItsInk_NotItsLayoutBox()
     {
-        // a run's footprint is its node box; the shaped line may run past it, so the damage spans the surface's width
-        TileOpRec[] a = [Op(1, 0, 0, 100, 100), Op(2, 30, 40, 20, 10, flags: TileOpRec.FlagGlyph)];
-        TileOpRec[] b = [Op(1, 0, 0, 100, 100), Op(3, 30, 40, 20, 10, flags: TileOpRec.FlagGlyph)];
-        Assert.True(TileDamage.Diff(a, b, 100, 100, out PixelRect d));
-        Assert.Equal(new PixelRect(0, 40, 100, 50), d);
+        // a no-wrap run 60 DIP wider than its 100-DIP box (the measured overflow recorded as Ink, both sides)
+        var box = new RectF(10f, 10f, 100f, 20f);
+        var ink = new RectF(-50f, 10f, 220f, 20f);
+        var cmd = new FluentGpu.Render.DrawGlyphRunCmd(box, default, default, default, 12f, 400, 0, 0, 1, 0f, float.NaN, 0, 0,
+            Affine2D.Identity, 1f, Ink: ink);
+        Span<byte> bytes = stackalloc byte[System.Runtime.CompilerServices.Unsafe.SizeOf<FluentGpu.Render.DrawGlyphRunCmd>()];
+        System.Runtime.InteropServices.MemoryMarshal.Write(bytes, in cmd);
+        Assert.True(SliceOpBounds.TryGet(FluentGpu.Render.DrawOp.DrawGlyphRun, bytes, out RectF b));
+        Assert.True(b.X <= ink.X && b.Right >= ink.Right);   // the overflow is in every cull / footprint
+        Assert.Equal(box, cmd.Bounds);                        // the replay still shapes into the box
+        var plain = cmd with { Ink = default };
+        Assert.Equal(box, plain.InkRect);
     }
 
     [Fact]
