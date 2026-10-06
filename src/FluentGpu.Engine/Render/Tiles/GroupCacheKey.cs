@@ -90,6 +90,7 @@ public static class GroupCacheKey
             {
                 case CompositeKind.Direct:
                 case CompositeKind.Backdrop:
+                case CompositeKind.Image:   // a posed image draws straight from its texture: nothing the key can see changes with it
                     cacheable = false;
                     return 0;
                 case CompositeKind.Group:

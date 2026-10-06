@@ -122,7 +122,9 @@ public sealed partial class SliceRecorder
     private static long s_bufGen;
     private static ulong NewGen() => (ulong)Interlocked.Increment(ref s_bufGen);
 
-    internal enum PoseKind : byte { None, Content, Effect, Thumb }
+    /// <summary><c>Posed</c> = a BoxEl.CompositePose image layer: recorded pose-free, composited as one bilinear Image item at
+    /// the node's current axis-aligned scale + translate (no tiles).</summary>
+    internal enum PoseKind : byte { None, Content, Effect, Thumb, Posed }
 
     private struct Rec
     {
@@ -141,6 +143,13 @@ public sealed partial class SliceRecorder
         public float Ox, Oy;
         public Affine2D FreeLocal;
         public float OwnDx, OwnDy;
+        // posed image layer (PoseKind.Posed): this turn's window-DIP affine (posed world ∘ free world⁻¹), the one the last
+        // placement damaged for, and the cached eligibility of the stream (exactly one plain image)
+        public Affine2D PosedM, LastPosedM;
+        public ulong PosedScanGen;
+        public byte PosedScan;      // 0 = not scanned for this buffer, 1 = a plain single image, 2 = anything else
+        public DrawImageCmd PosedImage;
+        public RectF PosedClip;     // the rectangular clips open at the image (free window DIP; Infinite = none)
         // scroll content
         public int VpNode;
         public uint VpGen;
@@ -772,6 +781,15 @@ public sealed partial class SliceRecorder
                     if (dx != r.OwnDx || dy != r.OwnDy) { _mustRewalk.Add(h); continue; }
                 }
             }
+            if (r.Pose == PoseKind.Posed)
+            {
+                // a pose the composite cannot honour: not axis-aligned any more, or the stream proved ineligible at placement
+                // (more than one image, a rounded clip…) — the node re-records through the ordinary boundary route
+                var h = scene.HandleAt(r.NodeIndex);
+                if (h.IsNull || h.Raw.Gen != r.Gen || !scene.IsLive(h)) continue;
+                Affine2D l = scene.Paint(h).LocalTransform;
+                if (l.M12 != 0f || l.M21 != 0f || PoseFallback(r.NodeIndex, r.Gen)) { _mustRewalk.Add(h); continue; }
+            }
             if (r.Pose == PoseKind.Content && r.HasChrome)
             {
                 var vp = scene.HandleAt(r.VpNode);
@@ -937,6 +955,116 @@ public sealed partial class SliceRecorder
             default:
                 return true;
         }
+    }
+
+    // ── posed image layers (BoxEl.CompositePose) ──────────────────────────────────────────────────────────────────────
+
+    // Nodes whose posed stream proved ineligible at placement (node-indexed, gen-stamped like the baked-clip table): the next
+    // pass cuts them through the ordinary boundary route (pose baked, tiles) — identical pixels, counted.
+    private uint[] _poseFallbackGen = [];
+    private int _poseFallbacks;
+
+    /// <summary>Posed slices that fell back to the ordinary tiled boundary route since this recorder was created (a gate).</summary>
+    public int PoseFallbacks => _poseFallbacks;
+    /// <summary>The Image composite items of the last <see cref="BuildComposite"/> (posed layers drawn without tiles).</summary>
+    public int LastPosedImages { get; private set; }
+
+    /// <summary>Did this node's posed stream prove ineligible (so the recorder cuts it as a plain boundary)?</summary>
+    internal bool PoseFallback(int nodeIndex, uint gen)
+        => (uint)nodeIndex < (uint)_poseFallbackGen.Length && _poseFallbackGen[nodeIndex] == BakedGen(gen);
+
+    private void NotePoseFallback(int nodeIndex, uint gen)
+    {
+        if (nodeIndex >= _poseFallbackGen.Length) Array.Resize(ref _poseFallbackGen, Math.Max(nodeIndex + 1, Math.Max(64, _poseFallbackGen.Length * 2)));
+        if (_poseFallbackGen[nodeIndex] == BakedGen(gen)) return;
+        _poseFallbackGen[nodeIndex] = BakedGen(gen);
+        _poseFallbacks++;
+    }
+
+    /// <summary>The window-DIP affine a posed slice composites with this turn: <c>posed world ∘ free world⁻¹</c> (the stream is
+    /// recorded at the free world). False when the pose or the base world is not axis-aligned (the slice must re-record
+    /// through the ordinary route); <paramref name="m"/> is then identity.</summary>
+    private bool PosedAffine(int slot, SceneRecordingSnapshot scene, out Affine2D m)
+    {
+        m = Affine2D.Identity;
+        ref Rec r = ref _recs[slot];
+        var h = scene.HandleAt(r.NodeIndex);
+        if (h.IsNull || h.Raw.Gen != r.Gen || !scene.IsLive(h)) { m = r.PosedM; return false; }
+        Affine2D l = scene.Paint(h).LocalTransform;
+        Affine2D free = r.BaseWorld;
+        if (l.M12 != 0f || l.M21 != 0f || free.M12 != 0f || free.M21 != 0f || free.M11 == 0f || free.M22 == 0f) return false;
+        Affine2D posed = Conjugate(in r.BaseWorld, in l, r.Ox, r.Oy);
+        // free⁻¹ for an axis-aligned matrix
+        float i11 = 1f / free.M11, i22 = 1f / free.M22;
+        var inv = new Affine2D(i11, 0f, 0f, i22, -free.Dx * i11, -free.Dy * i22);
+        m = posed.Multiply(in inv);
+        return float.IsFinite(m.M11) && float.IsFinite(m.M22) && float.IsFinite(m.Dx) && float.IsFinite(m.Dy);
+    }
+
+    /// <summary>Is the posed slice's stream exactly one plain image — optionally under rectangular clips — that the composite
+    /// can draw as ONE bilinear quad? No corner radii, no overlay / mask / saturation, no layers, no second paint op, no child
+    /// slice. Cached per arena buffer.</summary>
+    private bool AnalyzePosedImage(int slot, out DrawImageCmd image, out RectF clip)
+    {
+        ref Rec r = ref _recs[slot];
+        if (r.PosedScanGen != _curGen[slot] || r.PosedScan == 0)
+        {
+            r.PosedScanGen = _curGen[slot];
+            r.PosedScan = ScanPosedImage(slot, out r.PosedImage, out r.PosedClip) ? (byte)1 : (byte)2;
+        }
+        image = r.PosedImage;
+        clip = r.PosedClip;
+        return r.PosedScan == 1;
+    }
+
+    private bool ScanPosedImage(int slot, out DrawImageCmd image, out RectF clipAtImage)
+    {
+        image = default;
+        clipAtImage = RectF.Infinite;
+        if (_arenas[slot] is not { } dl) return false;
+        ReadOnlySpan<byte> bytes = dl.Bytes;
+        int pos = 0, images = 0;
+        RectF top = RectF.Infinite;
+        Span<RectF> stack = stackalloc RectF[8];
+        int depth = 0;
+        while (pos + sizeof(int) <= bytes.Length)
+        {
+            var op = (DrawOp)MemoryMarshal.Read<int>(bytes[pos..]);
+            int payload = pos + sizeof(int);
+            if (!RepaintStreamSafety.TryBodySize(op, out int body) || payload + body > bytes.Length) return false;
+            ReadOnlySpan<byte> p = bytes.Slice(payload, body);
+            switch (op)
+            {
+                case DrawOp.PushClip:
+                {
+                    var c = MemoryMarshal.Read<ClipCmd>(p);
+                    if (c.CornerRadius > 0f || depth == stack.Length) return false;
+                    top = top.IsInfinite ? c.DeviceRect : c.DeviceRect.Intersect(top);
+                    stack[depth++] = top;
+                    break;
+                }
+                case DrawOp.PopClip:
+                    if (depth == 0) return false;
+                    depth--;
+                    top = depth > 0 ? stack[depth - 1] : RectF.Infinite;
+                    break;
+                case DrawOp.DrawImage:
+                {
+                    var im = MemoryMarshal.Read<DrawImageCmd>(p);
+                    if (++images > 1) return false;
+                    if (im.Radii.TopLeft > 0f || im.Radii.TopRight > 0f || im.Radii.BottomRight > 0f || im.Radii.BottomLeft > 0f
+                        || im.Overlay.A > 0f || im.MaskEdges != 0 || im.Saturation != 1f
+                        || im.Transform.M12 != 0f || im.Transform.M21 != 0f) return false;
+                    image = im;
+                    clipAtImage = top;
+                    break;
+                }
+                default:
+                    return false;   // any other paint, a layer, a stencil clip, a child slice marker, a blend change…
+            }
+            pos = payload + body;
+        }
+        return images == 1 && depth == 0;
     }
 
     // ── the per-slot scan (rebuilt only when the slot's arena buffer changes) ─────────────────────────────────────────
@@ -1628,11 +1756,24 @@ public sealed partial class SliceRecorder
         }
         c.EffClip = childClip;
 
+        // A posed image layer composites through its own affine (scale + translate about its transform origin): its footprint
+        // is the free bounds mapped through it, and a change of that pose is the composite damage.
+        Affine2D pm = Affine2D.Identity;
+        bool poseMoved = false;
+        if (c.Pose == PoseKind.Posed)
+        {
+            PosedAffine(child, scene, out pm);
+            poseMoved = c.HasLast && c.LastPosedM != pm;
+            c.PosedM = pm;
+            c.LastPosedM = pm;
+            Mix(ref _compositeHash, pm.M11); Mix(ref _compositeHash, pm.M22); Mix(ref _compositeHash, pm.Dx); Mix(ref _compositeHash, pm.Dy);
+        }
+
         // Composite damage: the slice's footprint moved, or its sticky line did.
-        RectF placed = Offset(c.Bounds, cdx, cdy);
+        RectF placed = Offset(c.Pose == PoseKind.Posed ? pm.TransformBounds(c.Bounds) : c.Bounds, cdx, cdy);
         RectF footprint = clip.IsInfinite ? placed : placed.Intersect(clip);
         bool stickyMoved = sticky != c.HasLastSticky || (sticky && c.LastStickyWc != stickyWc);
-        if (c.HasLast && (c.LastAccDx != cdx || c.LastAccDy != cdy || stickyMoved))
+        if (c.HasLast && (c.LastAccDx != cdx || c.LastAccDy != cdy || stickyMoved || poseMoved))
         {
             repaint.Add(Pad(c.LastFootprint));
             repaint.Add(Pad(footprint));
@@ -1966,6 +2107,7 @@ public sealed partial class SliceRecorder
         EvBeginFrame(in info, scale);
         table.BeginFrame(++_turn);
         _rowCount = _itemCount = _rasterCount = _placementCount = _frameSpanCount = _streamLen = _dirtyCount = 0;
+        int posedImages = 0;
         if (withStreams) ConcatStreams();
         _coverageClamps = 0;
         // A theme / window-background change — or a repaint the host could not describe (first frame, resize, device
@@ -2050,6 +2192,17 @@ public sealed partial class SliceRecorder
             // ── a segment ──
             ref Rec r = ref _recs[e.Slot];
             if (!r.Live) continue;
+            // A posed image layer (BoxEl.CompositePose) whose stream is exactly one plain image composites as ONE bilinear
+            // Image item at its current pose and holds no tiles; anything else falls back to the tiled route (and re-records).
+            bool posedImage = false;
+            DrawImageCmd posedCmd = default;
+            RectF posedStreamClip = RectF.Infinite;
+            if (r.Pose == PoseKind.Posed && e.Segment == 0 && _scanMarkCount[e.Slot] == 0)
+            {
+                posedImage = AnalyzePosedImage(e.Slot, out posedCmd, out posedStreamClip);
+                if (!posedImage) NotePoseFallback(r.NodeIndex, r.Gen);
+            }
+            else if (r.Pose == PoseKind.Posed) NotePoseFallback(r.NodeIndex, r.Gen);
             ref ScanSeg sg = ref _scanSegs[e.Slot][e.Segment];
             RectF bDip = sg.Bounds;
             bool effect = r.Kind == SliceKind.Effect;
@@ -2101,7 +2254,7 @@ public sealed partial class SliceRecorder
             // A low-resolution boundary holds none (the backend replays it into one downscaled surface instead).
             byte lowRes = r.LowRes > 1 && r.Kind == SliceKind.Effect ? r.LowRes : (byte)0;
             if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed): no tiles
-            if (!contentPx.IsEmpty && lowRes == 0)
+            if (!contentPx.IsEmpty && lowRes == 0 && !posedImage)
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
                 // A self-blurred leaf samples its whole blur SOURCE (the visible output grown by the kernel's reach),
@@ -2162,17 +2315,35 @@ public sealed partial class SliceRecorder
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
+            if (r.Pose == PoseKind.Posed)
+            {
+                Affine2D pmx = r.PosedM;
+                if (posedImage)
+                {
+                    // window DIP (the stream's space, at the free pose) → device px through the pose and the accumulated offset
+                    transform = new Affine2D(pmx.M11 * scale, 0f, 0f, pmx.M22 * scale, (pmx.Dx + e.AccDx) * scale, (pmx.Dy + e.AccDy) * scale);
+                    if (!posedStreamClip.IsInfinite)
+                    {
+                        RectF sc = Offset(pmx.TransformBounds(posedStreamClip), e.AccDx, e.AccDy);
+                        RectF cut = ClipAnd(e.Clip, sc);
+                        clipPx = StickyClipPx(ClipPx(cut, scale), in e, scale, winW, winH);
+                    }
+                    posedImages++;
+                }
+                else transform = Affine2D.Translation(ox + MathF.Round((e.AccDx + pmx.Dx) * scale), oy + MathF.Round((e.AccDy + pmx.Dy) * scale));
+            }
             // A Screen-blended or feedback item never hides what is under it: its result depends on the destination.
             bool claimsCover = !r.Screen && !r.HasFeedback;
-            AddItem(new CompositeItem(id, lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
+            AddItem(new CompositeItem(id, posedImage ? CompositeKind.Image : lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 clipPx,
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,
-                claimsCover ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
+                claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
                 r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }
+        LastPosedImages = posedImages;
 
         LastBudgetBytes = TileBudget.Current((int)info.SizePx.Width, (int)info.SizePx.Height);
         table.Resolve(LastBudgetBytes, _rasters, out _rasterCount);

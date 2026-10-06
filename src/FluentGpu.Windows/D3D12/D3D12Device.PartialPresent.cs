@@ -132,6 +132,7 @@ public sealed unsafe partial class D3D12Device
     {
         ulong h = 0x51A7_0000_0000_0001UL;
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Transform.Dx) << 32 | BitConverter.SingleToUInt32Bits(it.Transform.Dy));
+        if (it.Kind == CompositeKind.Image) Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Transform.M11) << 32 | BitConverter.SingleToUInt32Bits(it.Transform.M22));   // a posed image: scale is part of the pose
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
         PpMixRect(ref h, it.Clip); PpMixRect(ref h, it.RoundClip); PpMixRect(ref h, it.SourceClip);
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.ClipRadii.TopLeft) << 32 | (uint)it.BlendCopy << 16 | (uint)it.HasLayer << 8 | it.LowResDown);
@@ -293,6 +294,22 @@ public sealed unsafe partial class D3D12Device
                     foot = PpIntersect(PpPx(it.Clip), in sci);
                     PpAdd(id, sig, in foot);
                     break;
+                case CompositeKind.Image:
+                {
+                    // A posed image layer: its quad (the op rect through the pose) is its footprint; the signature adds what the
+                    // pixels depend on beyond the item's parameters - which image content is drawable and the cross-fade in flight.
+                    ulong s = sig;
+                    if (TryPosedImage(in frame, in it, out DrawImageCmd pim, out RectF pq))
+                    {
+                        foot = PpIntersect(PpPx(pq), in sci);
+                        Mix(ref s, (ulong)(uint)pim.ImageId << 32 | _imageTextures!.ContentSerial(pim.ImageId));
+                        Mix(ref s, BitConverter.SingleToUInt32Bits(FluentGpu.Scene.ImageCache.ResolveFade(frame.Info.ImageClockMs, pim.FadeStartMs, pim.FadeDurationMs, pim.FadeEasing)));
+                        Mix(ref s, BitConverter.SingleToUInt32Bits(pim.Opacity));
+                    }
+                    else Mix(ref s, fresh);
+                    PpAdd(id, s, in foot);
+                    break;
+                }
                 default:
                 {
                     // a prepared surface (group, self-blur, degraded / low-resolution segment): its region or its chunks

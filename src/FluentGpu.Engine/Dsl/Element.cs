@@ -210,6 +210,14 @@ public sealed record BoxEl : Element
     /// look survives the upsample (large radial gradients, drifting colour fields, heavily blurred art); text and crisp
     /// edges soften. Ignored without <see cref="RepaintBoundary"/>.</summary>
     public float RasterScale { get => (_cPaint ?? BoxColdPaint.Default).RasterScale; init { if (!EqualityComparer<float>.Default.Equals((_cPaint ?? BoxColdPaint.Default).RasterScale, value)) CPaint.RasterScale = value; } }
+    /// <summary>A POSED IMAGE LAYER: the box's own ScaleX/ScaleY/TranslateX/TranslateY (static, bound or render-owned
+    /// rows) are applied at COMPOSITE time instead of being baked into the slice's tiles, so a slow pan/zoom of one
+    /// full-bleed photo costs one bilinear quad per step and no tile raster. Implies <see cref="RepaintBoundary"/>.
+    /// Contract: the subtree paints exactly ONE image (optionally under rectangular clips, with no corner radii, overlay,
+    /// mask or saturation) and the pose is axis-aligned (scale + translate). Anything else falls back to the ordinary
+    /// boundary route — identical pixels, tile raster per change — and the recorder counts the fallback. The box's own
+    /// opacity stays an ordinary image opacity (it multiplies the quad's alpha).</summary>
+    public bool CompositePose { get => (_cPaint ?? BoxColdPaint.Default).CompositePose; init { if (!EqualityComparer<bool>.Default.Equals((_cPaint ?? BoxColdPaint.Default).CompositePose, value)) CPaint.CompositePose = value; } }
     public bool TabShape { get => (_cPaint ?? BoxColdPaint.Default).TabShape; init { if (!EqualityComparer<bool>.Default.Equals((_cPaint ?? BoxColdPaint.Default).TabShape, value)) CPaint.TabShape = value; } } // selected TabView header: rounded top + bottom flares
     public float TabFlareRadius { get => (_cPaint ?? BoxColdPaint.Default).TabFlareRadius; init { if (!EqualityComparer<float>.Default.Equals((_cPaint ?? BoxColdPaint.Default).TabFlareRadius, value)) CPaint.TabFlareRadius = value; } }
     /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels

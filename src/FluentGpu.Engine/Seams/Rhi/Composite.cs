@@ -30,8 +30,12 @@ namespace FluentGpu.Rhi;
 /// <see cref="CompositeItem.Acrylic"/>. Zero back-buffer reads.</item>
 /// <item><see cref="Direct"/> — a DEGRADED segment (its visible tiles did not fit the budget this frame): its stream is
 /// replayed straight into the target at the item's transform instead — today's cost, never blank.</item>
+/// <item><see cref="Image"/> — a POSED IMAGE LAYER (BoxEl.CompositePose): the slice's stream is exactly one plain image, which
+/// the backend draws as ONE bilinear quad straight from the image texture. It holds no tiles; its
+/// <see cref="CompositeItem.Transform"/> maps the stream's window-DIP space (the image's free pose) to device px — scale,
+/// translate and the accumulated offset in one affine — so a slow pan / zoom changes one matrix and rasters nothing.</item>
 /// </list></summary>
-public enum CompositeKind : byte { Tiles, Region, EraseVideoHole, Group, Backdrop, Direct }
+public enum CompositeKind : byte { Tiles, Region, EraseVideoHole, Group, Backdrop, Direct, Image }
 
 /// <summary>An in-app acrylic recipe applied at composite time (§A.5): the source is a mini-composite of the slices
 /// beneath the item's clip, blurred by <see cref="BlurSigma"/> (device px) then tinted, luminosity-washed and noised —

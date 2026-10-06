@@ -1812,6 +1812,12 @@ internal sealed class SceneRecordingContext
             if (slot >= 0 && HasWalkStackHeadroom(ref stats))
             {
                 sl.SetBudget(slot, SliceRecorder.BudgetClass.Effect);
+                // BoxEl.CompositePose: a posed image layer records POSE-FREE (its own scale / translate becomes a composite
+                // parameter, not bytes) when its pose and base world are axis-aligned and its stream has not proved
+                // ineligible; otherwise it is the ordinary boundary (pose baked into its tiles).
+                bool posed = !stickyCut && scene.IsCompositePose(node) && !sl.PoseFallback(nodeIdx, node.Raw.Gen)
+                    && p.LocalTransform.M12 == 0f && p.LocalTransform.M21 == 0f
+                    && parentWorld.M12 == 0f && parentWorld.M21 == 0f && parentWorld.M11 != 0f && parentWorld.M22 != 0f;
                 if (!stickyCut) sl.SetLowRes(slot, scene.RepaintBoundaryDown(node));
                 sl.SetScreen(slot, !stickyCut && scene.LayerBlendOf(node) == LayerBlend.Screen);
                 if (!stickyCut && scene.TryGetFeedback(node, out var feedbackState)) sl.SetFeedback(slot, in feedbackState);
@@ -1820,23 +1826,25 @@ internal sealed class SceneRecordingContext
                     default, default, default, deviceBounds, key, key);
                 dl.CompositeSlice(in cmd, key);
                 sl.AddChild(stats.CurSlot, slot);
-                sl.SetPose(slot, SliceRecorder.PoseKind.None, Affine2D.Identity, 0f, 0f, Affine2D.Identity, 0f, 0f);
+                if (posed) sl.SetPose(slot, SliceRecorder.PoseKind.Posed, parentWorld.Translate(b.X, b.Y), ox, oy, Affine2D.Identity, 0f, 0f);
+                else sl.SetPose(slot, SliceRecorder.PoseKind.None, Affine2D.Identity, 0f, 0f, Affine2D.Identity, 0f, 0f);
                 sl.SetMarker(slot, in clip, sflags, default, default);
                 sl.SetSticky(slot, stickyCut, in world);
                 if (stickyCut) sl.UnbakeClip(nodeIdx);
                 var saved = SaveSlice(ref stats);
                 stats.SelfNode = node;
                 stats.SelfSlot = slot;
-                stats.SelfHasLocal = false;
+                stats.SelfHasLocal = posed;
+                stats.SelfLocal = Affine2D.Identity;
                 stats.SelfOmitLayer = false;
-                stats.SelfPose = SliceRecorder.PoseKind.None;
+                stats.SelfPose = posed ? SliceRecorder.PoseKind.Posed : SliceRecorder.PoseKind.None;
                 stats.SelfAcrylic = false;
                 stats.SelfStickyClip = stickyCut;
                 EnterSlice(ref stats, sl, slot, 0f, 0f);
                 SpanRecordResult res;
                 try
                 {
-                    res = WalkCore(scene, sl.Arena(slot), images, node, parentWorld, parentOpacity, depth, clip, in focus, in textEdit,
+                    res = WalkCore(scene, sl.Arena(slot), images, node, parentWorld, parentOpacity, depth, posed ? RectF.Infinite : clip, in focus, in textEdit,
                         scrollThumb, scrollTrack, parentScaleX, parentScaleY, parentInMotion, parentScrollInMotion, inherited, skipRoots,
                         spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 }

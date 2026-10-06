@@ -560,7 +560,7 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetBlend(node, out byte blend)) _blend.Set(index) = blend;
             if (source.TryGetFeedback(node, out var feedback)) _feedback.Set(index) = feedback;
             if (source.TryGetAcrylic(node, out AcrylicSpec acrylic)) _acrylic.Set(index) = acrylic;
-            if (source.IsRepaintBoundary(node)) _repaintBoundary.Set(index) = source.RepaintBoundaryDown(node);
+            if (source.IsRepaintBoundary(node)) _repaintBoundary.Set(index) = source.RepaintBoundaryBits(node);
             if (source.TryGetEdgeFade(node, out EdgeFadeSpec edgeFade)) _edgeFade.Set(index) = edgeFade;
             if (source.TryGetImageEffects(node, out ImageVisualEffects imageEffects)) _imageEffects.Set(index) = imageEffects;
             if (source.TryGetBrushAnim(node, out BrushAnim brushAnim)) _brushAnim.Set(index) = brushAnim;
@@ -906,7 +906,9 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetAcrylic(NodeHandle node, out AcrylicSpec value) => _acrylic.TryGet((int)node.Raw.Index, out value);
     public bool IsRepaintBoundary(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out _);
     /// <summary>The boundary's raster downscale (1 = full resolution); 0 when the node is not a repaint boundary.</summary>
-    public byte RepaintBoundaryDown(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out byte d) ? d : (byte)0;
+    public byte RepaintBoundaryDown(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out byte d) ? (byte)(d & SceneStore.DownMask) : (byte)0;
+    /// <summary>BoxEl.CompositePose: the boundary is a posed image layer (the recorder cuts it pose-free).</summary>
+    public bool IsCompositePose(NodeHandle node) => _repaintBoundary.TryGet((int)node.Raw.Index, out byte d) && (d & SceneStore.CompositePoseBit) != 0;
     public bool TryGetEdgeFade(NodeHandle node, out EdgeFadeSpec value) => _edgeFade.TryGet((int)node.Raw.Index, out value);
     public bool TryGetImageEffects(NodeHandle node, out ImageVisualEffects value) => _imageEffects.TryGet((int)node.Raw.Index, out value);
     public bool TryGetBrushAnim(NodeHandle node, out BrushAnim value)
