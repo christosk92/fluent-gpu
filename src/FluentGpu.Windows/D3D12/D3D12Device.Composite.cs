@@ -561,15 +561,25 @@ public sealed unsafe partial class D3D12Device
             ReplaySegment(in frame, in row, -x0, -y0, w, h, rtv, new RectF(-1e7f, -1e7f, 2e7f, 2e7f));
         }
         finally { _frameScale = full; }
-        // The full-resolution route clears everything outside the blur's source; texels wholly outside it are cleared here
-        // (a texel straddling its edge keeps its content — the edge is the clip's reach or the layer's own bound).
-        int sl = (src.Left - l) / d, st = (src.Top - t) / d;
-        int sr = Math.Min(w, (src.Right - l + d - 1) / d), sb = Math.Min(h, (src.Bottom - t + d - 1) / d);
+        // The full-resolution route blurs nothing outside the blur's source: texels wholly outside it are cleared, and a texel
+        // STRADDLING its edge (the clip's reach, the layer's bound — any edge not on the d grid) keeps only the share of its
+        // block the source covers, as the full route's box average of that block would (SelfBlurRegion.LowResEdge).
+        SelfBlurRegion.LowResEdge(src.Left - l, d, far: false, out int sl, out float fl);
+        SelfBlurRegion.LowResEdge(src.Top - t, d, far: false, out int st, out float ft);
+        SelfBlurRegion.LowResEdge(src.Right - l, d, far: true, out int sr, out float fr);
+        SelfBlurRegion.LowResEdge(src.Bottom - t, d, far: true, out int sb, out float fb);
         BindCompositor(_surfaces.ScratchW(s), _surfaces.ScratchH(s));
+        int il = fl < 1f ? sl : -1, it0 = ft < 1f ? st : -1, ir = fr < 1f ? sr - 1 : -1, ib = fb < 1f ? sb - 1 : -1;
         ClearLowRes(0, 0, w, st);
-        ClearLowRes(0, sb, w, h);
-        ClearLowRes(0, st, sl, sb);
-        ClearLowRes(sr, st, w, sb);
+        ClearLowRes(0, Math.Min(sb, h), w, h);
+        ClearLowRes(0, st, sl, Math.Min(sb, h));
+        ClearLowRes(Math.Min(sr, w), st, w, Math.Min(sb, h));
+        if (il >= 0) ScaleLowRes(il, st, il + 1, sb, fl);
+        if (ir >= 0 && ir != il) ScaleLowRes(ir, st, ir + 1, sb, fr);
+        else if (ir >= 0) ScaleLowRes(ir, st, ir + 1, sb, (fl + fr - 1f) / fl);   // one texel straddles both: its covered share
+        if (it0 >= 0) ScaleLowRes(sl, it0, sr, it0 + 1, ft);
+        if (ib >= 0 && ib != it0) ScaleLowRes(sl, ib, sr, ib + 1, fb);
+        else if (ib >= 0) ScaleLowRes(sl, ib, sr, ib + 1, (ft + fb - 1f) / ft);
         EndPassIfOpen();
         ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         InvalidateCmdState();
@@ -583,11 +593,24 @@ public sealed unsafe partial class D3D12Device
 
         void ClearLowRes(int cl, int ct, int cr, int cb)
         {
+            cr = Math.Min(cr, w); cb = Math.Min(cb, h);
             if (cr <= cl || cb <= ct) return;
             _compositor!.Scissor(_cmdList, cl, ct, cr, cb);
             _compositor.Begin(cl, ct, cr, cb);
             _compositor.Color(new ColorF(0f, 0f, 0f, 0f));
             _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
+        }
+
+        // multiply the texels of a rect by f (premultiplied, so colour and alpha together): a DestOut fill of alpha 1 − f
+        void ScaleLowRes(int cl, int ct, int cr, int cb, float f)
+        {
+            cr = Math.Min(cr, w); cb = Math.Min(cb, h);
+            if (cr <= cl || cb <= ct || f >= 1f) return;
+            _compositor!.Scissor(_cmdList, cl, ct, cr, cb);
+            _compositor.Begin(cl, ct, cr, cb);
+            _compositor.Color(new ColorF(0f, 0f, 0f, 1f));
+            _compositor.Alpha(1f - MathF.Max(0f, f));
+            _compositor.Draw(_cmdList, SliceCompositor.Pso.Erase, default);
         }
     }
 
@@ -902,6 +925,7 @@ public sealed unsafe partial class D3D12Device
         }
         for (int p = 0; p < placed.Length; p++)
         {
+            if (!GroupCacheKey.PlacementReaches(in it, in placed[p], in src)) continue;   // scissored away: draws nothing
             if (!_surfaces.TouchTile(placed[p].Surface, fence)) { _frameLostPlacements++; continue; }
             float x0 = tx + placed[p].Key.Tx * TileGrid.W - region.Left, y0 = ty + placed[p].Key.Ty * TileGrid.H - region.Top;
             _compositor.Begin(x0, y0, x0 + placed[p].W, y0 + placed[p].H);

@@ -197,10 +197,21 @@ public static class GroupCacheKey
         Mix(ref h, (ulong)(uint)(region.Left - tx) << 32 | (uint)(region.Top - ty)); Mix(ref h, (ulong)(uint)(region.Right - tx) << 32 | (uint)(region.Bottom - ty));
         for (int p = 0; p < placed.Length; p++)
         {
+            // only the tiles the blur reads: one wholly outside its source draws nothing into it (a long scroll row's
+            // re-rastered tile far below the viewport must not re-blur the visible part)
+            if (!PlacementReaches(in it, in placed[p], in src)) continue;
             Mix(ref h, (ulong)(ushort)placed[p].Key.Tx << 48 | (ulong)(ushort)placed[p].Key.Ty << 32 | (uint)placed[p].Surface);
             Mix(ref h, serials.Serial(placed[p].Surface));
         }
         return h;
+    }
+
+    /// <summary>Does placed tile <paramref name="p"/> of item <paramref name="it"/> (its surface extent at the item's whole-px
+    /// placement) overlap window-px rect <paramref name="src"/>?</summary>
+    public static bool PlacementReaches(in CompositeItem it, in TilePlacement p, in PixelRect src)
+    {
+        int x0 = (int)it.Transform.Dx + p.Key.Tx * TileGrid.W, y0 = (int)it.Transform.Dy + p.Key.Ty * TileGrid.H;
+        return x0 < src.Right && x0 + p.W > src.Left && y0 < src.Bottom && y0 + p.H > src.Top;
     }
 
     /// <summary>An item's device-px scissor (empty = unbounded) cut to the surface region — what of it can matter.</summary>

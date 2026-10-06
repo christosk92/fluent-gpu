@@ -48,6 +48,17 @@ public static class SelfBlurRegion
     public static int SupportRadius(float blurSigma)
         => TapRadius(blurSigma) + 2 * AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f) + 1;
 
+    /// <summary>The window-DIP rect whose tiles a self-blurred leaf must have rastered: its recorded blur source
+    /// (<paramref name="sourceDip"/>) cut to its composite clip (<paramref name="clipDip"/>; infinite = none) grown by the
+    /// pipeline's reach plus one device px of rounding — a superset of what the composite cuts the source to
+    /// (<see cref="Tiles.GroupCacheKey.BlurRegions"/>), so every texel the blur reads is rastered.</summary>
+    public static RectF SourceRequest(in RectF sourceDip, in RectF clipDip, float blurSigma, float scale)
+    {
+        if (clipDip.IsInfinite || !(scale > 0f)) return sourceDip;
+        float reach = (SupportRadius(blurSigma) + 1) / scale;
+        return sourceDip.Intersect(new RectF(clipDip.X - reach, clipDip.Y - reach, clipDip.W + 2f * reach, clipDip.H + 2f * reach));
+    }
+
     /// <summary>Does a blur of <paramref name="blurSigma"/> run on the SAME texel grid with the same kernel when its source is
     /// rastered at 1/<paramref name="down"/> (a low-resolution repaint boundary) and blurred there at σ/down? True when the
     /// low-res blur's own downsample lands where the full-resolution schedule's does (down · factor(σ/down) = factor(σ)):
@@ -55,6 +66,22 @@ public static class SelfBlurRegion
     public static bool LowResBlurOnSameGrid(float blurSigma, int down)
         => down >= 1 && blurSigma > 0f
            && down * AcrylicBackdropMath.DownsampleFactor(blurSigma / down, 1f) == AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f);
+
+    /// <summary>A blur source edge at <paramref name="rel"/> px from a low-resolution surface's origin (scale 1/<paramref name="down"/>):
+    /// <paramref name="texel"/> = the first texel inside the source for a near (left/top) edge, or one past the last texel
+    /// it touches for a <paramref name="far"/> (right/bottom) edge; <paramref name="coverage"/> = the share of the
+    /// straddling texel's down×down block on the source side of the edge (1 when the edge lies on the grid). The full-
+    /// resolution route box-averages that block with transparent beyond the edge, so scaling the straddling texel by the
+    /// share is its low-resolution equivalent.</summary>
+    public static void LowResEdge(int rel, int down, bool far, out int texel, out float coverage)
+    {
+        int q = FloorDiv(rel, down), r = rel - q * down;
+        if (r == 0) { texel = q; coverage = 1f; return; }
+        if (far) { texel = q + 1; coverage = r / (float)down; }
+        else { texel = q; coverage = (down - r) / (float)down; }
+    }
+
+    private static int FloorDiv(int a, int b) => a >= 0 ? a / b : -((-a + b - 1) / b);
 
     /// <summary>
     /// Compute the recorder's DIP-space visibility/source geometry from the same physical-pixel tap support used by

@@ -2089,14 +2089,7 @@ public sealed partial class SliceRecorder
                 // pipeline reaches from the clip (GroupCacheKey.BlurRegions cuts the source there): a blurred row
                 // scrolled out of its viewport requests no tiles at all.
                 if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Blur && !e.InnerClip.IsEmpty)
-                {
-                    vp = e.InnerClip;
-                    if (!e.Clip.IsInfinite)
-                    {
-                        float reach = (SelfBlurRegion.SupportRadius(e.Layer.BlurSigma) + 1) / scale;
-                        vp = vp.Intersect(new RectF(e.Clip.X - reach, e.Clip.Y - reach, e.Clip.W + 2f * reach, e.Clip.H + 2f * reach));
-                    }
-                }
+                    vp = SelfBlurRegion.SourceRequest(e.InnerClip, e.Clip, e.Layer.BlurSigma, scale);
                 RectF vpDip = Offset(vp, -e.AccDx, -e.AccDy);
                 RectF vpPx = new(vpDip.X * scale - ox, vpDip.Y * scale - oy, vpDip.W * scale, vpDip.H * scale);
                 bool horizontal = false;
