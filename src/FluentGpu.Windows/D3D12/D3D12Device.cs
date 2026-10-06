@@ -2010,7 +2010,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
-                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    if (CullGlyphs(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2035,7 +2035,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
-                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    if (CullGlyphs(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize, g.Lift))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2640,6 +2640,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (!_cullActive) return false;
         RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
+        return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
+    }
+
+    /// <summary><see cref="Cull"/> for a glyph run. A run's declared bounds are its NODE box: shaped text can run past it
+    /// along the line (no wrap / trim), so a PARTIAL raster (its damage cut anywhere inside a tile) keeps every run whose
+    /// row reaches the damage, whatever its x — the damage diff widens a changed run to its row band the same way
+    /// (<c>TileDamage</c>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool CullGlyphs(float x, float y, float w, float h,
+        float m11, float m12, float m21, float m22, float dx, float dy, float halo)
+    {
+        if (!_cullActive) return false;
+        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
+        if (_replayClampOn) { l = -1e9f; r = 1e9f; }
         return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
     }
 
@@ -3476,6 +3490,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
         HRESULT pr;
+        byte pvMode = target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent ? (byte)2 : (byte)1;
         if (target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent)
         {
             // Partial: the staged dirty rects of the frame just composited (relative to the last presented frame — a
@@ -3504,6 +3519,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             EndTargetFrame();
             return;
         }
+        if (FluentGpu.Render.Tiles.TileDamage.PresentValidate) NotePresentForValidation(target, pvMode);   // what DWM was told (--fg present-validate)
         target.PpPresentCount = 0;
         target.PpNeedFullPresent = false;
         // The Present is what SPENDS the latency credit a wait took (the waitable is a semaphore: it is re-signaled when
@@ -5055,6 +5071,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _bakedBlur?.Dispose();
         _surfaces?.Dispose();
         ReleaseDamageChecks();
+        ReleasePresentChecks();
         _compositor?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();

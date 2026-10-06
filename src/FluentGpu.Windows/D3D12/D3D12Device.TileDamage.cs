@@ -170,16 +170,18 @@ public sealed unsafe partial class D3D12Device
         public TileKey Key;
         public PixelRect Damage;
         public bool Busy;
+        public (DrawOp Op, PixelRect R, float A, float B)[] Ops;   // forensics: the segment's ops reaching the tile
+        public int OpN;
     }
-    private readonly DamageCheck[] _dmgChecks = new DamageCheck[6];
+    private readonly DamageCheck[] _dmgChecks = new DamageCheck[16];
     private long _dcSkipped;
 
     /// <summary>Re-raster <paramref name="tr"/> (just partially rastered into its surface, which is still RENDER_TARGET) whole
     /// into a shadow scratch and queue a byte compare of the two. No pass is left open.</summary>
     private void QueueDamageCheck(in CompositeFrame frame, in SliceRow row, in TileRaster tr, PixelRect damage, int tileX, int tileY)
     {
-        int slot = -1;
-        for (int i = 0; i < _dmgChecks.Length; i++) if (!_dmgChecks[i].Busy) { slot = i; break; }
+        int slot = FreeCheckSlot();
+        if (slot < 0) { PollDamageChecks(); slot = FreeCheckSlot(); }   // compare what the GPU has finished, then retry
         if (slot < 0) { _dcSkipped++; return; }
         ulong fence = _fenceValue + 1;
         int scratch = _surfaces!.AcquireScratch(tr.W, tr.H, fence);
@@ -191,7 +193,11 @@ public sealed unsafe partial class D3D12Device
         EndPassIfOpen();
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var srtv = _surfaces.ScratchRtv(scratch);
-        BeginPass(srtv, tr.W, tr.H, PassLoad.Clear);
+        // an explicit clear, then a PRESERVE pass: the same pattern as the present validator's shadow (a CLEAR-load pass
+        // followed by a copy lost draws on the Adreno driver now and then)
+        float* zero = stackalloc float[4];
+        _cmdList->ClearRenderTargetView(srtv, zero, 0, null);
+        BeginPass(srtv, tr.W, tr.H, PassLoad.Preserve);
         ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, srtv,
             new RectF(tr.Key.Tx * (float)TileGrid.W, tr.Key.Ty * (float)TileGrid.H, tr.W, tr.H));
         EndPassIfOpen();
@@ -224,10 +230,58 @@ public sealed unsafe partial class D3D12Device
         c.W = tr.W; c.H = tr.H; c.Turn = _compositeTurn; c.Key = tr.Key; c.Damage = damage;
         c.Fence = fence;
         c.Busy = true;
+        DvCaptureOps(ref c, in frame, in row, in tr);
         InvalidateCmdState();
     }
 
-    private ID3D12Resource* CreateReadback(ulong bytes)
+    /// <summary>Forensics: the ops of the segment whose footprint reaches the tile (tile px), kept with the check.</summary>
+    private void DvCaptureOps(ref DamageCheck c, in CompositeFrame frame, in SliceRow row, in TileRaster tr)
+    {
+        c.Ops ??= new (DrawOp, PixelRect, float, float)[256];
+        c.OpN = 0;
+        ReadOnlySpan<byte> stream = frame.StreamOf(in row);
+        float sc = _frameScale <= 0f ? 1f : _frameScale;
+        float ox = tr.Key.Tx * (float)TileGrid.W + row.Frame.OriginX, oy = tr.Key.Ty * (float)TileGrid.H + row.Frame.OriginY;
+        int pos = 0;
+        while (pos + sizeof(int) <= stream.Length)
+        {
+            var op = (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(stream[pos..]);
+            if (!RepaintStreamSafety.TryBodySize(op, out int body) || pos + sizeof(int) + body > stream.Length) break;
+            ReadOnlySpan<byte> payload = stream.Slice(pos + sizeof(int), body);
+            if (SliceOpBounds.TryGet(op, payload, out RectF b))
+            {
+                var r = new PixelRect((int)MathF.Floor(b.X * sc - ox), (int)MathF.Floor(b.Y * sc - oy), (int)MathF.Ceiling(b.Right * sc - ox), (int)MathF.Ceiling(b.Bottom * sc - oy));
+                if (r.Right > 0 && r.Bottom > 0 && r.Left < tr.W && r.Top < tr.H)
+                {
+                    float a = 0f, bb = 0f;
+                    if (op == DrawOp.DrawGlyphRunGradient) { var g = System.Runtime.InteropServices.MemoryMarshal.Read<DrawGlyphRunGradientCmd>(payload); a = g.Split; bb = g.Lift; }
+                    else if (op == DrawOp.DrawGlyphRun) { var g = System.Runtime.InteropServices.MemoryMarshal.Read<DrawGlyphRunCmd>(payload); a = g.FontSize; }
+                    if (c.OpN == c.Ops.Length) Array.Resize(ref c.Ops, c.OpN * 2);
+                    c.Ops[c.OpN++] = (op, r, a, bb);
+                }
+            }
+            pos += sizeof(int) + body;
+        }
+    }
+
+    private int FreeCheckSlot()
+    {
+        for (int i = 0; i < _dmgChecks.Length; i++) if (!_dmgChecks[i].Busy) return i;
+        return -1;
+    }
+
+    /// <summary>The validate arm's replay-honesty asserts for a partial raster: the glyph cull halo held (no glyph quad
+    /// outside it — DEBUG / FLUENTGPU_DIAG measure it) and no stencil scope degraded to its scissor during the replay
+    /// (either would make a partial raster's cull or clamp disagree with the whole raster's). A breach is a mismatch.</summary>
+    private void NoteReplayHonesty(in TileRaster tr, long halo0, int stencilFb0)
+    {
+        if (_glyphHaloBreaches == halo0 && _frameStencilFallback == stencilFb0) return;
+        Volatile.Write(ref _dcMismatches, _dcMismatches + 1);
+        Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"[damage-validate] HONESTY turn={_compositeTurn} slice={tr.Key.SliceId} tile=({tr.Key.Tx},{tr.Key.Ty}) glyphHaloBreaches+={_glyphHaloBreaches - halo0} stencilFallback+={_frameStencilFallback - stencilFb0}"));
+    }
+
+    private ID3D12Resource* CreateReadback(ulong bytes, string name = "DamageValidate.Readback")
     {
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC bd = default;
@@ -237,8 +291,8 @@ public sealed unsafe partial class D3D12Device
         bd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         ID3D12Resource* rb;
         Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &bd,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&rb), "DamageValidate.Readback");
-        D3D12MemoryDiagnostics.Track(rb, "DamageValidate.Readback", bytes);
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&rb), name);
+        D3D12MemoryDiagnostics.Track(rb, name, bytes);
         return rb;
     }
 
@@ -301,6 +355,13 @@ public sealed unsafe partial class D3D12Device
                 Volatile.Write(ref _dcMismatches, _dcMismatches + 1);
                 Console.Error.WriteLine(string.Create(ci,
                     $"[damage-validate] MISMATCH turn={c.Turn} slice={c.Key.SliceId} tile=({c.Key.Tx},{c.Key.Ty}) {c.W}x{c.H} damage=[{c.Damage.Left},{c.Damage.Top} → {c.Damage.Right},{c.Damage.Bottom}) px={bad} outsideDamage={outside} bbox=[{x0},{y0} → {x1 + 1},{y1 + 1}) maxDelta={maxDelta}"));
+                if (_dcMismatches <= 6)
+                    for (int k = 0; k < c.OpN; k++)
+                    {
+                        var (op, r, fa, fb) = c.Ops[k];
+                        if (r.Right < x0 - 24 || r.Left > x1 + 24 || r.Bottom < y0 - 24 || r.Top > y1 + 24) continue;
+                        Console.Error.WriteLine(string.Create(ci, $"[damage-validate]   op#{k} {op} [{r.Left},{r.Top} → {r.Right},{r.Bottom}) a={fa:0.###} b={fb:0.###}"));
+                    }
             }
             else if (_dcValidated % 100 == 1)
                 Console.Error.WriteLine(string.Create(ci,

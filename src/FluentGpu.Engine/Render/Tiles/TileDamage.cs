@@ -10,7 +10,7 @@ namespace FluentGpu.Render.Tiles;
 /// the tile) and its flags. 24 bytes: the table keeps one per op per resident tile.</summary>
 public struct TileOpRec
 {
-    public const byte FlagInfinite = 1, FlagSpread = 2;
+    public const byte FlagInfinite = 1, FlagSpread = 2, FlagGlyph = 4;
     private const int Margin = 64;
 
     public ulong Hash;
@@ -65,6 +65,15 @@ public static class TileDamage
     /// wrote, and an item STRUCTURE change dirties only the items that moved. <c>--fg no-precise-present</c> restores the
     /// whole-placement / whole-frame behaviour (the A/B arm).</summary>
     public static bool PrecisePresent = true;
+
+    /// <summary><c>--fg present-structure-diff</c> (an investigation arm, default off): an item-structure change (a
+    /// navigation, a flyout) is diffed entry by entry like any other turn instead of taking the whole frame.</summary>
+    public static bool PresentStructureDiff;
+
+    /// <summary><c>--fg present-validate</c>: every primary composite is re-composited whole into a shadow target and
+    /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
+    /// the last presented frame (a model of what DWM shows is kept and compared).</summary>
+    public static bool PresentValidate;
 
     /// <summary><c>--fg damage-validate</c>: the backend re-rasters every partially rastered tile whole into a shadow
     /// surface and compares the two byte for byte (a mismatch is logged with its extent).</summary>
@@ -168,11 +177,14 @@ public static class TileDamage
 
         public readonly PixelRect Rect => _x1 > _x0 && _y1 > _y0 ? new PixelRect(_x0, _y0, _x1, _y1) : default;
 
-        /// <summary>Grow by an unmatched op's footprint (cut to the surface); false = unbounded.</summary>
+        /// <summary>Grow by an unmatched op's footprint (cut to the surface); false = unbounded. A glyph run's footprint is
+        /// its NODE box plus a halo, and shaped text can run past the box along its line (a run wider than its box, no wrap
+        /// or trim): an unmatched glyph run damages its whole row band across the surface.</summary>
         public bool Add(in TileOpRec op)
         {
             if ((op.Flags & TileOpRec.FlagInfinite) != 0) return false;
             int x0 = Math.Max((int)op.X0, 0), y0 = Math.Max((int)op.Y0, 0), x1 = Math.Min((int)op.X1, _w), y1 = Math.Min((int)op.Y1, _h);
+            if ((op.Flags & TileOpRec.FlagGlyph) != 0 && y1 > y0) { x0 = 0; x1 = _w; }
             if (x1 <= x0 || y1 <= y0) return true;   // its footprint misses the surface: it paints nothing here
             _x0 = Math.Min(_x0, x0); _y0 = Math.Min(_y0, y0); _x1 = Math.Max(_x1, x1); _y1 = Math.Max(_y1, y1);
             return true;

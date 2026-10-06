@@ -70,6 +70,16 @@ public sealed class TileDamageTests
     }
 
     [Fact]
+    public void AnUnmatchedGlyphRun_DamagesItsWholeRowBand()
+    {
+        // a run's footprint is its node box; the shaped line may run past it, so the damage spans the surface's width
+        TileOpRec[] a = [Op(1, 0, 0, 100, 100), Op(2, 30, 40, 20, 10, flags: TileOpRec.FlagGlyph)];
+        TileOpRec[] b = [Op(1, 0, 0, 100, 100), Op(3, 30, 40, 20, 10, flags: TileOpRec.FlagGlyph)];
+        Assert.True(TileDamage.Diff(a, b, 100, 100, out PixelRect d));
+        Assert.Equal(new PixelRect(0, 40, 100, 50), d);
+    }
+
+    [Fact]
     public void Round_GrowsByASlackPixel_SnapsToTheQuadGrid_AndCutsToTheSurface()
     {
         Assert.Equal(new PixelRect(8, 2, 16, 8), TileDamage.Round(new RectF(9.5f, 3.2f, 4f, 2f), 100, 100));

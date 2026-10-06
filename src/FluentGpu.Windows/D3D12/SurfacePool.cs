@@ -271,10 +271,14 @@ internal sealed unsafe class SurfacePool : IDisposable
             for (int i = 0; i < _scratch.Length && best < 0; i++) if (_scratch[i].Res == null) best = i;
             if (best < 0)
             {
-                // Every slot holds a texture: replace the least recently used idle one.
+                // Every slot holds a texture: replace the least recently used idle one — never one used THIS turn. Its SRV
+                // lives in this turn's descriptor bank, and draws recorded earlier in the same command list (a blur level, a
+                // group source released after use) read that descriptor when the GPU executes them: re-creating the texture
+                // rewrote it under them and they sampled the new, uninitialised surface (a blank or garbage group / blur for
+                // that frame, kept by the partial-present PRESERVE route until something dirtied it again).
                 int lru = int.MaxValue;
                 for (int i = 0; i < _scratch.Length; i++)
-                    if (!_scratch[i].InUse && _scratch[i].LastTurn < lru) { lru = _scratch[i].LastTurn; best = i; }
+                    if (!_scratch[i].InUse && _scratch[i].LastTurn < _turn && _scratch[i].LastTurn < lru) { lru = _scratch[i].LastTurn; best = i; }
                 if (best >= 0) _scratch[best].Retained = false;
                 if (best < 0) { ScratchRefused++; return -1; }
             }

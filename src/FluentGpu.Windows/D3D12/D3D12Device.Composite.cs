@@ -46,6 +46,9 @@ public sealed unsafe partial class D3D12Device
     private int[] _itemSurface = new int[64];
     private int[] _itemDown = new int[64];
     private ulong[] _itemKey = new ulong[64];   // a prepared group's content key (GroupCacheKey; 0 = not cacheable)
+    // the item's prepared surface was RENDERED this turn (not a retained hit): a re-render under the same key can differ by
+    // an LSB (a sampled blur / upsample through a pooled scratch of another size), so the partial-present diff dirties it
+    private bool[] _itemRendered = new bool[64];
     private PixelRect[] _itemRegion = new PixelRect[64];
     private int[] _itemChunkStart = new int[64], _itemChunkCount = new int[64];
     private readonly record struct DirectChunk(int Surface, PixelRect Rect);
@@ -134,6 +137,7 @@ public sealed unsafe partial class D3D12Device
         _imageClockMs = frame.Info.ImageClockMs;
         _glyphs!.BeginFrame(slot);
         if (TileDamage.Validate) PollDamageChecks();
+        if (TileDamage.PresentValidate) PollPresentChecks();
         int maxSurface = 0;
         for (int i = 0; i < frame.Rasters.Length; i++) maxSurface = Math.Max(maxSurface, frame.Rasters[i].Surface + 1);
         for (int i = 0; i < frame.Placements.Length; i++) maxSurface = Math.Max(maxSurface, frame.Placements[i].Surface + 1);
@@ -190,6 +194,7 @@ public sealed unsafe partial class D3D12Device
         }
         EndPassIfOpen();
         PpEndFrame(sc, f);
+        if (TileDamage.PresentValidate) QueuePresentCheck(in frame, backBuffer);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
 
         _surfaces.EndFrame();
@@ -257,8 +262,9 @@ public sealed unsafe partial class D3D12Device
         {
             int c = Math.Max(n, _itemSurface.Length * 2);
             _itemSurface = new int[c]; _itemDown = new int[c]; _itemRegion = new PixelRect[c];
-            _itemChunkStart = new int[c]; _itemChunkCount = new int[c]; _itemKey = new ulong[c];
+            _itemChunkStart = new int[c]; _itemChunkCount = new int[c]; _itemKey = new ulong[c]; _itemRendered = new bool[c];
         }
+        Array.Clear(_itemRendered, 0, n);
         Array.Fill(_itemSurface, -1, 0, n);
         Array.Clear(_itemKey, 0, n);
         Array.Clear(_itemChunkCount, 0, n);
@@ -326,6 +332,8 @@ public sealed unsafe partial class D3D12Device
             int glyphDropped = _glyphs!.DroppedInstances;
             int inFlight = _frameImagesInFlight;
             int refused0 = _surfaces!.ScratchRefused;
+            long halo0 = _glyphHaloBreaches;
+            int stencilFb0 = _frameStencilFallback;
             var rtv = _surfaces!.TileRtv(tr.Surface);
             // Sub-tile damage (D3D12Device.TileDamage.cs): a PARTIAL raster keeps the surface and repaints only its damage —
             // unless the texture is new this turn (nothing to keep).
@@ -372,7 +380,9 @@ public sealed unsafe partial class D3D12Device
             // rasters again (the host keeps turning while uploads are in flight).
             bool faithful = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped && _frameImagesInFlight == inFlight;
             if (i < frame.RasterDone.Length) frame.RasterDone[i] = faithful ? (byte)1 : (byte)0;
-            if (TileDamage.Validate && partial && faithful && !damage.IsEmpty) QueueDamageCheck(in frame, in row, in tr, damage, tileX, tileY);
+            // every faithful partial raster is checked — an EMPTY damage too (the claim "nothing changed" is the strongest)
+            if (TileDamage.Validate && partial && faithful) QueueDamageCheck(in frame, in row, in tr, damage, tileX, tileY);
+            if (TileDamage.Validate && partial) NoteReplayHonesty(in tr, halo0, stencilFb0);
             // evidence (§A.3): an inline group inside this tile asked for a scratch and was refused — it drew nothing
             if (i < frame.RasterFlags.Length && _surfaces.ScratchRefused != refused0)
                 frame.RasterFlags[i] |= CompositeFrameFlags.RasterScratchRefused;
@@ -435,15 +445,18 @@ public sealed unsafe partial class D3D12Device
                         frame.ItemFlags[i] |= _offGroupHits != hits0 ? CompositeFrameFlags.ItemGroupHit
                                              : _groupRenders != renders0 ? CompositeFrameFlags.ItemGroupRendered : (byte)0;
                     _offGroupN += pool.ScratchLeases - n0; _offGroupPx += pool.ScratchPx - px0;
+                    _itemRendered[i] = pool.ScratchLeases != n0;
                     i = end - 1;
                     break;
                 }
                 case CompositeKind.Backdrop:
                     PrepareBackdrop(in frame, i);
+                    _itemRendered[i] = pool.ScratchLeases != n0;
                     _offBackdropN += pool.ScratchLeases - n0; _offBackdropPx += pool.ScratchPx - px0;
                     break;
                 case CompositeKind.Direct:
                     PrepareDirect(in frame, i);
+                    _itemRendered[i] = pool.ScratchLeases != n0;
                     _offDirectN += pool.ScratchLeases - n0; _offDirectPx += pool.ScratchPx - px0;
                     break;
                 case CompositeKind.Tiles:
@@ -456,6 +469,7 @@ public sealed unsafe partial class D3D12Device
                     else if (it.BlurSigma > 0f)
                     {
                         PrepareLeafBlur(in frame, i);
+                        _itemRendered[i] = pool.ScratchLeases != n0;
                         _offBlurN += pool.ScratchLeases - n0; _offBlurPx += pool.ScratchPx - px0;
                     }
                     break;

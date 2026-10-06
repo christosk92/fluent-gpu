@@ -50,7 +50,9 @@ namespace FluentGpu.Hosting;
 /// rastered tile whole into a shadow surface and compares the bytes (a mismatch is logged). <c>damage-log</c> — one line
 /// per scheduled tile raster (slice, extent, reason, damage). <c>no-precise-present</c> — the partial-present diff dirties a
 /// re-rastered tile's whole placement and takes the whole frame on an item-structure change (the pre-damage behaviour,
-/// the A/B arm).</item>
+/// the A/B arm). <c>present-validate</c> — every primary composite is shadow-composited whole and compared with the back
+/// buffer, and every Present1's dirty rects are checked against what changed since the last presented frame.
+/// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -193,6 +195,8 @@ public static class EngineSwitches
             case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
+            case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
+            case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
             default: return false;
         }
     }

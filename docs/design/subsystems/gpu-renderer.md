@@ -1824,14 +1824,31 @@ in a separate region-pin pool) is deleted; `backdrop-effects-animation.md` §FA-
 
 **The primary swapchain is `FLIP_SEQUENTIAL` and presents PARTIALLY** (`D3D12Device.PartialPresent.cs`). Each composite
 diffs its entries (one per tile placement / offscreen surface, keyed by item identity and signed by everything that
-decides its pixels) against the previous frame's in PAINTER order (a monotone matching: an item that appeared, vanished
-or moved in the order dirties only its own rects — no whole frame on a structure change), repaints into the back buffer
+decides its pixels) against the previous frame's in PAINTER order (a monotone matching), repaints into the back buffer
 the union of the dirty sets since that buffer was last rendered (buffer age), and hands `Present1` this frame's dirty
 set. A re-rastered tile dirties only what its raster wrote (a partial raster's damage, §13.1l); an unblurred group
-dirties only what its members dirty; a frame whose trusted diff is empty presents a one-pixel dirty rect instead of the
-whole window. Whole-frame route: the first frame, a resize / DPI / clear-colour / knockout change, a stood-down present,
-a forced-full repaint, or a repaint ≥ 45 % of the window. `--fg no-precise-present` restores the whole-placement /
-whole-frame behaviour (the A/B arm). `PresentParams` from `BuildComposite` stay the seam's census (the headless model
+dirties only what its members dirty; an offscreen surface RENDERED this turn (not a retained hit) is dirty whatever its
+key — a re-render under the same key can differ by an LSB (a sampled blur through a pooled scratch of another size); a
+frame composited through the PRESERVE route whose trusted diff is empty presents a one-pixel dirty rect.
+
+Whole-frame route (CLEAR + every item, presented WHOLE): the first frame, a resize / DPI / clear-colour / knockout
+change, a different item STRUCTURE (a navigation, a flyout — the guard against any entry the diff could under-report
+there), a stood-down present, a forced-full repaint, a repaint ≥ 45 % of the window or a back buffer of unknown age.
+A whole-route composite never presents dirty rects: DWM keeps a pixel of an earlier frame only on a PRESERVE frame's word.
+
+**Why an under-report is never transient.** DXGI keeps a `FLIP_SEQUENTIAL` chain's buffers in step from the dirty rects
+it is given: a dirty set that misses a changed pixel leaves the earlier pixel in the back buffers, and the PRESERVE route
+keeps it until something dirties it again (`--fg present-validate` measured it with an injected fault: the composite
+check then fails on later frames, not only the present check). Hence the validator below, and the structure guard.
+
+`--fg present-validate`: after every primary composite the frame is re-composited whole into the validator's own
+shadow target and both are read back; once the GPU passed the frame the device compares them (a PRESERVE-route
+difference is a damage bug), and keeps a CPU model of what DWM shows (a whole present replaces it, a `Present1` only
+inside its rects) — a changed pixel outside the rects is an UNDER-REPORT, a model that differs from the back buffer a
+STALE SCREEN. A whole-route frame's shadow is a second identical composite: a difference there is counted apart
+(`shadowDiverged`; the Adreno driver now and then returns that second composite incomplete). `--fg no-precise-present`
+is the A/B arm (whole placements, whole frames on any structure change), `--fg present-structure-diff` diffs structure
+changes too (investigation only). `PresentParams` from `BuildComposite` stay the seam's census (the headless model
 records them).
 
 #### 13.1i The repaint set, carry and culling contracts (still owned here)
@@ -1990,7 +2007,12 @@ paints that edge pixel. Pixel identity: `TileDamageTests` rasters thousands of r
 replay both ways and compares bytes; `--fg damage-validate` re-rasters every partial tile whole into a shadow scratch on
 device and compares the readbacks (a mismatch logs its extent). `--fg no-partial-raster` is the A/B arm,
 `--fg damage-log` names every raster and every dirty entry, and the `[fps]` line's `dpx` token reports raster /
-composite / present pixels per composite.
+composite / present pixels per composite. Further rules the validator taught: an op drawn under the ADDITIVE paint blend
+folds the blend into its content hash (a moved `SetBlend` is a content change); a glyph run's footprint is its node box,
+and shaped text can run past it along the line, so an unmatched run damages its whole row band and a partial replay keeps
+every glyph run (and span) whose rows reach the damage, whatever its x; a path's `Rect` is its realization's bounds (stroke
+width and viewbox fit included). The validate arm also asserts the replay's honesty: no glyph-halo breach and no stencil
+fallback during a partial raster.
 
 ## 14. Shaders — HLSL → DXC → DXIL `byte[]`
 

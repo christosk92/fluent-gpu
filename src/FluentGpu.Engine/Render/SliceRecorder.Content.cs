@@ -24,6 +24,8 @@ public sealed partial class SliceRecorder
     private int[] _cScope = new int[32];
     private ulong[] _cScopeSig = new ulong[33];   // [d] = the fold of the hashes of the d innermost-open scopes' chain
     private int _cScopeDepth;
+    private bool _cBlendAdditive;   // the paint blend the arena's last SetBlend left set (ContentScanBlend)
+    private const ulong AdditiveBlendMark = 0xB1E2_0ADD_0000_0001UL;
 
     private void EnsureContentStorage(int n)
     {
@@ -47,6 +49,7 @@ public sealed partial class SliceRecorder
         _cOpCount[s] = 0;
         _cSegScopeLen[s] = 0;
         _cScopeDepth = 0;
+        _cBlendAdditive = false;
         _cScopeSig[0] = TileContentHash.Empty;
         _cSegScopeStart[s][0] = 0;
         _cSegScopeCount[s][0] = 0;
@@ -55,18 +58,26 @@ public sealed partial class SliceRecorder
     /// <summary>ScanSlot: one op at byte <paramref name="pos"/> with its effective footprint (slice-space DIP) and hash;
     /// <paramref name="scope"/> = it opens a clip / stencil clip / layer the following ops are drawn inside.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false)
+    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false, bool glyph = false)
     {
+        // An op drawn under the ADDITIVE paint blend paints differently with the same bytes: the blend is part of its
+        // content hash — of every want that folds it and of the sub-tile damage diff (a moved SetBlend re-rasters what
+        // it now covers or no longer covers).
+        if (_cBlendAdditive) hash = TileContentHash.Fold(hash, AdditiveBlendMark);
         int n = _cOpCount[s];
         ref TileOp[] ops = ref _cOps[s];
         if (n == ops.Length) Array.Resize(ref ops, n * 2);
-        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, ScopeSig = _cScopeSig[_cScopeDepth] };
+        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, Glyph = glyph, ScopeSig = _cScopeSig[_cScopeDepth] };
         _cOpCount[s] = n + 1;
         if (!scope) return;
         if (_cScopeDepth == _cScope.Length) { Array.Resize(ref _cScope, _cScope.Length * 2); Array.Resize(ref _cScopeSig, _cScope.Length + 1); }
         _cScopeSig[_cScopeDepth + 1] = TileContentHash.Fold(_cScopeSig[_cScopeDepth], hash);
         _cScope[_cScopeDepth++] = n;
     }
+
+    /// <summary>ScanSlot: a SetBlend — the paint blend of every op after it (until the next one).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ContentScanBlend(bool additive) => _cBlendAdditive = additive;
 
     /// <summary>ScanSlot: a scope closed (PopClip / PopStencilClip / PopLayer).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

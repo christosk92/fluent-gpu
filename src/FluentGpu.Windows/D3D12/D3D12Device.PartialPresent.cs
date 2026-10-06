@@ -23,11 +23,10 @@ namespace FluentGpu.Rhi.D3D12;
 //   3. composites with a PRESERVE load: per repaint rect, a clear of the rect, then only the items that touch it, each
 //      scissored to it (ItemScissor / DrawRange read _frameClip).
 //   4. presents with Present1 dirty rects = this frame's dirty set (relative to the last PRESENTED frame).
-// The entries are matched in PAINTER order (PpMatch: a monotone matching, any one of which is sound), so an item that
-// appeared, vanished or moved in the order dirties only its own rects; a re-rastered tile dirties only what its raster
-// wrote (a partial raster's damage — D3D12Device.TileDamage.cs). Anything that makes the history untrustworthy — the
-// first frame, a resize / DPI / clear-colour / knockout change, a forced-full repaint reason, a non-composite submit, a
-// device rebuild — takes
+// The entries are matched in PAINTER order (PpMatch: a monotone matching, any one of which is sound); a re-rastered tile
+// dirties only what its raster wrote (a partial raster's damage — D3D12Device.TileDamage.cs). Anything that makes the
+// history untrustworthy — the first frame, a resize / DPI / clear-colour / knockout change, a different item STRUCTURE
+// (order or set), a forced-full repaint reason, a non-composite submit, a device rebuild — takes
 // the whole-frame route (CLEAR load + full present), exactly the route every frame took before. So does a repaint larger
 // than PpFullCoverage of the window (the clear load is cheaper than preserving most of it). A stood-down present makes
 // the next present whole (DWM never saw the stood-down frame's changes).
@@ -286,7 +285,7 @@ public sealed unsafe partial class D3D12Device
                 case CompositeKind.Backdrop:
                 {
                     foot = PpIntersect(PpPx(it.RoundClip), in sci);
-                    ulong s = sig; Mix(ref s, _itemKey[i] != 0 ? _itemKey[i] : fresh);
+                    ulong s = sig; Mix(ref s, _itemKey[i] != 0 && !_itemRendered[i] ? _itemKey[i] : fresh);
                     PpAdd(id, s, in foot);
                     break;
                 }
@@ -308,7 +307,8 @@ public sealed unsafe partial class D3D12Device
                         // signature is its composite parameters and region alone — a member's sub-tile re-raster repaints
                         // that much of the group, not the whole group.
                     }
-                    else if (_itemKey[i] != 0 && (it.Kind != CompositeKind.Direct || it.LowResDown > 1)) Mix(ref s, _itemKey[i]);
+                    else if (_itemKey[i] != 0 && (it.Kind != CompositeKind.Direct || it.LowResDown > 1))
+                        Mix(ref s, _itemRendered[i] ? fresh : _itemKey[i]);   // a re-render under the same key may differ by an LSB
                     else if (it.Kind == CompositeKind.Direct && it.BlurSigma <= 0f && !PpDamaged(in frame, in foot) && RowOf(it.SliceId) is int row and >= 0)
                     {
                         // A DEGRADED segment re-rasters every turn, but from its bytes alone: the same stream (+ prefix) at the
@@ -326,9 +326,11 @@ public sealed unsafe partial class D3D12Device
         }
 
         _ppDirty = default;
-        // A different item STRUCTURE no longer forces the whole frame: the painter-order match (PpMatch) dirties exactly
-        // where the items that appeared, vanished or moved in the order were and are.
-        _ppDirtyFull = !_ppPrevValid || (!TileDamage.PrecisePresent && structure != _ppPrevStructure) || _w != _ppPrevW || _h != _ppPrevH
+        // A different item STRUCTURE (set or order of kind/slice pairs — a navigation, a flyout) takes the whole frame:
+        // navigations are rare, and a whole frame is the guard against any entry the diff could under-report there. The
+        // painter-order match (PpMatch) still serves every steady-state turn; `--fg present-structure-diff` lets it serve
+        // structure changes too (the investigation arm, off by default).
+        _ppDirtyFull = !_ppPrevValid || (structure != _ppPrevStructure && !TileDamage.PresentStructureDiff) || _w != _ppPrevW || _h != _ppPrevH
             || _frameScale != _ppPrevScale || !frame.Info.Clear.Equals(_ppPrevClear) || _frameKnockouts != _ppPrevKnockouts
             || sc.PpEpoch != _ppPrevEpoch || frame.Info.RepaintDamage.FullReason == RepaintFullReason.TargetInvalidated;
         if (!_ppDirtyFull) PpMatch();
@@ -396,7 +398,10 @@ public sealed unsafe partial class D3D12Device
         if ((uint)idx < (uint)_ppBufTurn.Length) { _ppBufTurn[idx] = _compositeTurn; _ppBufEpoch[idx] = sc.PpEpoch; }
 
         sc.PpPresentCount = 0;
-        bool partialPresent = sc.SequentialFlip && !_ppDirtyFull && (_frameKnockouts & GpuKnockouts.FullPresent) == 0 && _ppDirty.Count > 0;
+        // Present1 dirty rects only for a frame composited through the PRESERVE route: a whole-route composite (a repaint
+        // over PpFullCoverage, a back buffer of unknown age) presents the whole window — the frame was recomposited whole
+        // anyway, and DWM then never keeps a pixel of an earlier frame on its word alone.
+        bool partialPresent = sc.SequentialFlip && !_ppDirtyFull && _ppPartial && (_frameKnockouts & GpuKnockouts.FullPresent) == 0 && _ppDirty.Count > 0;
         if (partialPresent)
         {
             ReadOnlySpan<RectF> rects = _ppDirty.AsSpan();
@@ -410,7 +415,7 @@ public sealed unsafe partial class D3D12Device
         // Nothing changed since the last presented frame (the diff is trusted and empty): the back buffer holds exactly the
         // pixels on screen, so a one-pixel dirty rect is a true description — DWM then recomposes one pixel instead of the
         // whole window, as a Present without rects asks it to.
-        if (sc.PpPresentCount == 0 && TileDamage.PrecisePresent && sc.SequentialFlip && !_ppDirtyFull
+        if (sc.PpPresentCount == 0 && TileDamage.PrecisePresent && sc.SequentialFlip && !_ppDirtyFull && _ppPartial
             && (_frameKnockouts & GpuKnockouts.FullPresent) == 0 && _w > 0 && _h > 0)
         {
             sc.PpPresentRects[0] = new RECT { left = 0, top = 0, right = 1, bottom = 1 };

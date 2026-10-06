@@ -579,7 +579,9 @@ public static class FluentApp
                         double per = dn > 0 ? 1.0 / (dn * 1000.0) : 0.0;
                         damageTok = System.FormattableString.Invariant(
                             $" dpx r{(dc.RasterPx - prevDamage.RasterPx) * per:0.0}/{(dc.RasterWholePx - prevDamage.RasterWholePx) * per:0.0}k({dc.PartialRasters - prevDamage.PartialRasters}p/{dc.WholeRasters - prevDamage.WholeRasters}w) c{(dc.CompositePx - prevDamage.CompositePx) * per:0.0}k p{(dc.PresentPx - prevDamage.PresentPx) * per:0.0}k d{(dc.DirtyPx - prevDamage.DirtyPx) * per:0.0}k full{dc.FullFrames - prevDamage.FullFrames}/{dn}")
-                            + (FluentGpu.Render.Tiles.TileDamage.Validate ? $" v{dc.Validated}/{dc.Mismatches}" : "");
+                            + (FluentGpu.Render.Tiles.TileDamage.Validate ? $" v{dc.Validated}/{dc.Mismatches}" : "")
+                            + (FluentGpu.Render.Tiles.TileDamage.PresentValidate && gpuDev.LastPresentCensus is var pc
+                                ? $" pv{pc.Checked}/c{pc.CompositeMismatches}/u{pc.UnderReports}/s{pc.StaleScreens}/k{pc.Skipped}/w{pc.ShadowDiverged}" : "");
                         prevDamage = dc;
                     }
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):

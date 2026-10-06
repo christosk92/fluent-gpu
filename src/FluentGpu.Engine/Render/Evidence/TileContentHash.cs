@@ -22,6 +22,9 @@ public struct TileOp
     /// (the Gaussian's reach), so a sub-tile repaint cannot bound its effect — a tile holding one re-rasters whole
     /// (<see cref="TileDamage"/>).</summary>
     public bool Spread;
+    /// <summary>A glyph run: its footprint is the node box (+ halo), and the shaped line can run past the box along its
+    /// axis — the damage diff widens an unmatched run to its row band (<see cref="TileOpRec.FlagGlyph"/>).</summary>
+    public bool Glyph;
     /// <summary>The fold of the hashes of every scope open around the op (outermost first; the arena's own scopes, not
     /// the op itself): moving an op into or out of a clip or a layer keeps its bytes and footprint but not this. Not part
     /// of any want — the sub-tile damage diff pairs ops by it (folded into <see cref="TileOpRec.Hash"/>).</summary>
@@ -164,7 +167,7 @@ public static class TileContentHash
     private static void Put(ref TileOpRec[] dst, ref int n, in TileOp op, in RectF tilePx, float scale, float ox, float oy)
     {
         if (n == dst.Length) Array.Resize(ref dst, Math.Max(16, n * 2));
-        byte flags = op.Spread ? TileOpRec.FlagSpread : (byte)0;
+        byte flags = (byte)((op.Spread ? TileOpRec.FlagSpread : 0) | (op.Glyph ? TileOpRec.FlagGlyph : 0));
         RectF px = default;
         if (op.Bounds.IsInfinite) flags |= TileOpRec.FlagInfinite;
         else
