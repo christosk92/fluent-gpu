@@ -739,7 +739,7 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>The hidden-window memory stage the policy has reached (<see cref="HiddenStage"/> as an int), for the census.
     /// UI-thread read.</summary>
-    internal int HiddenStageCensus => (int)_hidden.Stage;
+    public int HiddenStageCensus => (int)_hidden.Stage;
     /// <summary>Test-only: the hidden-window stage the policy has reached.</summary>
     internal HiddenStage HiddenStageForTest => _hidden.Stage;
     /// <summary>Test-only: the stage the render side (or the inline path) has applied.</summary>
