@@ -162,6 +162,14 @@ public sealed class AudioDeviceController : IDisposable
         }
     }
 
+    /// <summary>The listener asked to play while no endpoint is live (<c>Faulted</c> or between ladder steps): treat it like a
+    /// device event: reset the ladder and rebuild now. Pressing Play used to do nothing once the ladder was exhausted.</summary>
+    public void Rearm()
+    {
+        if (_disposed) return;
+        if (_state.Peek() is AudioDeviceState.Faulted or AudioDeviceState.Retrying) RequestRebuild();
+    }
+
     /// <summary>Force the <c>Faulted</c> state (an unrecoverable device error). Idempotent. The next device event re-arms.</summary>
     public void Fault() { if (!_disposed) _state.Value = AudioDeviceState.Faulted; }
 
@@ -218,12 +226,18 @@ public sealed class AudioDeviceController : IDisposable
 
     // Schedule the next ladder step (→ Retrying) or declare exhaustion (→ Faulted; the next device event resets the ladder
     // and re-enters the machine). Wakes the cold loop so it recomputes its wait.
+    // Past the ladder, a session that still wants to play keeps trying every SlowRetryMs: a Bluetooth endpoint can stay
+    // "Active" but refuse Initialize (AUDCLNT_E_DEVICE_INVALIDATED) for longer than the 4 s ladder and then recover
+    // WITHOUT a default-device event, which left Wavee silent until restart. A paused or idle session goes Faulted as before.
+    private const int SlowRetryMs = 5000;
+
     private void ScheduleRetry()
     {
         int? delay;
         lock (_gate)
         {
             delay = _policy.NextRetryDelayMs();
+            if (delay is null && _session.WantsOutput) delay = SlowRetryMs;
             _nextRetryAt = delay is int d ? Environment.TickCount64 + d : long.MinValue;
         }
         _state.Value = delay is null ? AudioDeviceState.Faulted : AudioDeviceState.Retrying;

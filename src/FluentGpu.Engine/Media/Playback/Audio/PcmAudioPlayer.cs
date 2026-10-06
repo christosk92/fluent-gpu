@@ -1889,6 +1889,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         _playRequested = true;
         _sink?.PlayRequested(true);
         if (!_fadeInSpecified || _transportHoldRequested) FadeIn(TimeSpan.FromMilliseconds(20));
+        _deviceController?.Rearm();   // no live endpoint (the retry ladder ran out): Play tries the device again now
         _feed?.WakeOutput();
         return ValueTask.CompletedTask;
     }
@@ -2426,6 +2427,10 @@ public sealed partial class PcmAudioSession : IMediaSession
     /// (<see cref="AudioFeedThread.WakeOutput"/>) instead of ticking every 15 ms; every command that matters wakes it.</summary>
     internal bool ControlIdle => !_playRequested && !_started && !_seekRebufferActive
         && _state is PlaybackState.Paused or PlaybackState.Ended or PlaybackState.Ready;
+
+    /// <summary>The listener wants sound: play was requested or the session is playing. The device controller keeps a slow
+    /// retry going past its ladder while this holds.</summary>
+    internal bool WantsOutput => _playRequested || _state == PlaybackState.Playing;
 
     /// <summary>M4 RT feed callback (spec §7.9): if Playing, render+present exactly one block through the published graph
     /// (lock-free consume + quarantine) reading pre-decoded PCM from the voice rings — copy+mix ONLY, alloc/lock/syscall-free
