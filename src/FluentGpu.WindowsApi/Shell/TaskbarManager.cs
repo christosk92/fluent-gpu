@@ -50,10 +50,14 @@ public readonly record struct ThumbButton(
 /// an app should fail to launch without.
 /// </para>
 /// <para>
-/// <b>Overlay icons.</b> <see cref="SetOverlayIcon"/> loads an <c>.ico</c> from disk with
-/// <c>LoadImageW(LR_LOADFROMFILE)</c>, hands the <c>HICON</c> to <c>ITaskbarList3::SetOverlayIcon</c>, then destroys it
-/// with <c>DestroyIcon</c> — the shell copies what it needs during the call, so the icon is freed immediately after.
-/// Passing a <see langword="null"/> path clears any existing overlay (and skips the load entirely).
+/// <b>Overlay and thumb-button icons.</b> An <c>.ico</c> path is loaded with <c>LoadImageW(LR_LOADFROMFILE |
+/// LR_DEFAULTSIZE)</c> ONCE per (path, <c>SM_CXICON</c> x <c>SM_CYICON</c>) and the <c>HICON</c> is kept in a small
+/// process-wide cache (<see cref="IconHandleCache"/>, 16 handles, LRU), so a badge or a glyph applied on every
+/// play/pause is not re-read from disk each time. The shell copies the icon during <c>SetOverlayIcon</c> /
+/// <c>ThumbBarAddButtons</c> / <c>ThumbBarUpdateButtons</c>, so the cache may destroy a handle the shell has already
+/// seen (LRU eviction, a change of the system icon size). <see cref="ReleaseIcons"/> destroys them all (shutdown).
+/// Passing a <see langword="null"/> overlay path clears any existing overlay (and skips the load entirely). An icon
+/// file replaced on disk while the process runs keeps its cached image until <see cref="ReleaseIcons"/>.
 /// </para>
 /// <para>
 /// <b>Thumbnail toolbar.</b> <see cref="SetThumbButtons"/> adds up to 7 buttons (<c>ThumbBarAddButtons</c>) the first
@@ -89,13 +93,15 @@ public static unsafe class TaskbarManager
     private const uint IMAGE_ICON = 1;
     private const uint LR_LOADFROMFILE = 0x00000010;
     private const uint LR_DEFAULTSIZE = 0x00000040;
+    private const int SM_CXICON = 11, SM_CYICON = 12;   // winuser.h: the size LR_DEFAULTSIZE resolves an icon to.
 
     private const int MaxThumbButtons = 7;    // ITaskbarList3 contract (ThumbBarAddButtons cButtons cap).
 
     private static readonly object _gate = new();
     private static ITaskbarList3* _taskbar;   // process-cached, AddRef-owned; created+HrInit'd once.
     private static bool _initFailed;          // once true, all methods no-op (shell unavailable).
-    private static readonly Dictionary<nint, ThumbBarState> _thumbBars = new(); // per-HWND add-once + HICON lifetime.
+    private static readonly Dictionary<nint, ThumbBarState> _thumbBars = new(); // per-HWND add-once latch + button ids.
+    private static readonly IconHandleCache _icons = new(LoadIcon, static h => DestroyIcon((HICON)h)); // owns every HICON.
 
     /// <summary>
     /// Set the determinate progress fraction on <paramref name="hwnd"/>'s taskbar button. Combine with
@@ -169,22 +175,21 @@ public static unsafe class TaskbarManager
                 return;
             }
 
-            HICON icon = LoadIconFromFile(iconPath);
-            if (icon == HICON.NULL)
-                throw new InvalidOperationException(
-                    $"LoadImageW failed to load overlay icon '{iconPath}' " +
-                    $"(GetLastError=0x{(uint)System.Runtime.InteropServices.Marshal.GetLastPInvokeError():X8}).");
-            try
-            {
-                fixed (char* pDesc = description ?? string.Empty)
-                    tb->SetOverlayIcon((HWND)hwnd, icon, pDesc);
-            }
-            finally
-            {
-                // The shell copies the icon during SetOverlayIcon; destroy our copy immediately after the call.
-                DestroyIcon(icon);
-            }
+            // Cached and cache-owned: the shell copies the icon during SetOverlayIcon, and the next badge from the same
+            // file reuses this handle instead of reading the .ico from disk again.
+            HICON icon = CachedIcon(iconPath, "overlay");
+            fixed (char* pDesc = description ?? string.Empty)
+                tb->SetOverlayIcon((HWND)hwnd, icon, pDesc);
         }
+    }
+
+    /// <summary>
+    /// Destroy every cached overlay / thumb-button <c>HICON</c>. Call on shutdown (after the last taskbar call), or after
+    /// replacing an icon file on disk. Safe at any time: the shell holds its own copies, and the next call reloads.
+    /// </summary>
+    public static void ReleaseIcons()
+    {
+        lock (_gate) _icons.Clear();
     }
 
     /// <summary>
@@ -246,22 +251,14 @@ public static unsafe class TaskbarManager
             int slot = FindSlot(state, button.Id);
             if (slot < 0) return;
 
-            HICON icon = LoadThumbIcon(button.IconPath);
             THUMBBUTTON native = default;
-            FillNative(&native, in button, icon, hidden: false);
-            HRESULT hr = tb->ThumbBarUpdateButtons((HWND)hwnd, 1, &native);
-            if (hr.FAILED)
-            {
-                if (icon != HICON.NULL) DestroyIcon(icon);
-                return;
-            }
-
-            if (icon != HICON.NULL) ReplaceIcon(state, slot, icon);
+            FillNative(&native, in button, LoadThumbIcon(button.IconPath), hidden: false);
+            tb->ThumbBarUpdateButtons((HWND)hwnd, 1, &native);
         }
     }
 
     /// <summary>
-    /// Drop the add-once latch and destroy cached <c>HICON</c>s for <paramref name="hwnd"/> so the next
+    /// Drop the add-once latch for <paramref name="hwnd"/> so the next
     /// <see cref="SetThumbButtons"/> uses <c>ThumbBarAddButtons</c> again. Call from
     /// <c>FluentApp.TaskbarButtonCreated</c> after an explorer restart (the shell discards the previous toolbar).
     /// </summary>
@@ -270,7 +267,6 @@ public static unsafe class TaskbarManager
         lock (_gate)
         {
             if (!_thumbBars.TryGetValue(hwnd, out ThumbBarState? state)) return;
-            DestroyStateIcons(state);
             state.Added = false;
             state.Count = 0;
         }
@@ -278,31 +274,36 @@ public static unsafe class TaskbarManager
 
     // ── internals ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-    private static HICON LoadIconFromFile(string path)
+    /// <summary>The cache's loader. <c>LR_DEFAULTSIZE</c> resolves to <c>SM_CXICON</c> x <c>SM_CYICON</c>, the size
+    /// <see cref="CachedIcon"/> keys on, so the cached image is exactly what an uncached load would return.</summary>
+    private static nint LoadIcon(string path, int cx, int cy)
     {
-        // LoadImageW returns a HANDLE; convert through void* to HICON (the TerraFX handle structs interconvert via void*,
+        // LoadImageW returns a HANDLE; convert through void* (the TerraFX handle structs interconvert via void*,
         // cf. FluentGpu.Windows/Pal/Win32TextServices.cs:32 `(HANDLE)(void*)h`).
         fixed (char* p = path)
-            return (HICON)(void*)LoadImageW(HINSTANCE.NULL, p, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+            return (nint)(void*)LoadImageW(HINSTANCE.NULL, p, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+    }
+
+    /// <summary>The cache-owned icon for <paramref name="path"/> at the current system icon size. Caller holds
+    /// <see cref="_gate"/> and must NOT destroy the result. Throws when the file cannot be loaded.</summary>
+    private static HICON CachedIcon(string path, string what)
+    {
+        nint h = _icons.Get(path, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+        if (h == 0)
+            throw new InvalidOperationException(
+                $"LoadImageW failed to load {what} icon '{path}' " +
+                $"(GetLastError=0x{(uint)System.Runtime.InteropServices.Marshal.GetLastPInvokeError():X8}).");
+        return (HICON)(void*)h;
     }
 
     private static HICON LoadThumbIcon(string? iconPath)
-    {
-        if (string.IsNullOrEmpty(iconPath)) return HICON.NULL;
-        HICON icon = LoadIconFromFile(iconPath);
-        if (icon == HICON.NULL)
-            throw new InvalidOperationException(
-                $"LoadImageW failed to load thumb-button icon '{iconPath}' " +
-                $"(GetLastError=0x{(uint)System.Runtime.InteropServices.Marshal.GetLastPInvokeError():X8}).");
-        return icon;
-    }
+        => string.IsNullOrEmpty(iconPath) ? HICON.NULL : CachedIcon(iconPath, "thumb-button");
 
     private sealed class ThumbBarState
     {
         public bool Added;
         public int Count;
         public readonly int[] Ids = new int[MaxThumbButtons];
-        public readonly nint[] Icons = new nint[MaxThumbButtons]; // HICON; 0 = none
     }
 
     private static int FindSlot(ThumbBarState state, int id)
@@ -310,23 +311,6 @@ public static unsafe class TaskbarManager
         for (int i = 0; i < state.Count; i++)
             if (state.Ids[i] == id) return i;
         return -1;
-    }
-
-    private static void DestroyStateIcons(ThumbBarState state)
-    {
-        for (int i = 0; i < state.Count; i++)
-        {
-            if (state.Icons[i] == 0) continue;
-            DestroyIcon((HICON)state.Icons[i]);
-            state.Icons[i] = 0;
-        }
-    }
-
-    private static void ReplaceIcon(ThumbBarState state, int slot, HICON icon)
-    {
-        nint old = state.Icons[slot];
-        if (old != 0 && old != (nint)(void*)icon) DestroyIcon((HICON)old);
-        state.Icons[slot] = (nint)(void*)icon;
     }
 
     private static void FillNative(THUMBBUTTON* native, in ThumbButton button, HICON icon, bool hidden)
@@ -372,39 +356,15 @@ public static unsafe class TaskbarManager
         if (n == 0) return;
 
         THUMBBUTTON* natives = stackalloc THUMBBUTTON[MaxThumbButtons];
-        HICON* icons = stackalloc HICON[MaxThumbButtons];
-        int loaded = 0;
-        try
-        {
-            for (int i = 0; i < n; i++)
-            {
-                icons[i] = LoadThumbIcon(buttons[i].IconPath);
-                loaded = i + 1;
-                FillNative(&natives[i], in buttons[i], icons[i], hidden: false);
-            }
-        }
-        catch
-        {
-            for (int i = 0; i < loaded; i++)
-                if (icons[i] != HICON.NULL) DestroyIcon(icons[i]);
-            throw;
-        }
+        for (int i = 0; i < n; i++)
+            FillNative(&natives[i], in buttons[i], LoadThumbIcon(buttons[i].IconPath), hidden: false);
 
         HRESULT hr = tb->ThumbBarAddButtons((HWND)hwnd, (uint)n, natives);
-        if (hr.FAILED)
-        {
-            for (int i = 0; i < n; i++)
-                if (icons[i] != HICON.NULL) DestroyIcon(icons[i]);
-            return;
-        }
+        if (hr.FAILED) return;
 
-        DestroyStateIcons(state);
         state.Count = n;
         for (int i = 0; i < n; i++)
-        {
             state.Ids[i] = buttons[i].Id;
-            state.Icons[i] = (nint)(void*)icons[i];
-        }
         state.Added = true;
     }
 
@@ -415,47 +375,23 @@ public static unsafe class TaskbarManager
         if (n == 0) return true;
 
         THUMBBUTTON* natives = stackalloc THUMBBUTTON[MaxThumbButtons];
-        HICON* newIcons = stackalloc HICON[MaxThumbButtons];
-        bool* hasNew = stackalloc bool[MaxThumbButtons];
-        for (int i = 0; i < MaxThumbButtons; i++) hasNew[i] = false;
-        try
-        {
-            for (int i = 0; i < n; i++)
-            {
-                int id = state.Ids[i];
-                int found = -1;
-                for (int j = 0; j < buttons.Length; j++)
-                    if (buttons[j].Id == id) { found = j; break; }
-
-                if (found < 0)
-                {
-                    FillHidden(&natives[i], id);
-                    continue;
-                }
-
-                newIcons[i] = LoadThumbIcon(buttons[found].IconPath);
-                hasNew[i] = newIcons[i] != HICON.NULL;
-                FillNative(&natives[i], in buttons[found], newIcons[i], hidden: false);
-            }
-        }
-        catch
-        {
-            for (int i = 0; i < n; i++)
-                if (hasNew[i]) DestroyIcon(newIcons[i]);
-            throw;
-        }
-
-        HRESULT hr = tb->ThumbBarUpdateButtons((HWND)hwnd, (uint)n, natives);
-        if (hr.FAILED)
-        {
-            for (int i = 0; i < n; i++)
-                if (hasNew[i]) DestroyIcon(newIcons[i]);
-            return false;
-        }
-
         for (int i = 0; i < n; i++)
-            if (hasNew[i]) ReplaceIcon(state, i, newIcons[i]);
-        return true;
+        {
+            int id = state.Ids[i];
+            int found = -1;
+            for (int j = 0; j < buttons.Length; j++)
+                if (buttons[j].Id == id) { found = j; break; }
+
+            if (found < 0)
+            {
+                FillHidden(&natives[i], id);
+                continue;
+            }
+
+            FillNative(&natives[i], in buttons[found], LoadThumbIcon(buttons[found].IconPath), hidden: false);
+        }
+
+        return tb->ThumbBarUpdateButtons((HWND)hwnd, (uint)n, natives).SUCCEEDED;
     }
 
     private static TBPFLAG ToTbpFlag(TaskbarProgressState state) => state switch
