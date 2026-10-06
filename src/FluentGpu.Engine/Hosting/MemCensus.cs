@@ -54,6 +54,9 @@ public readonly struct CensusSnapshot
     public readonly long PixelPoolRetainedBytes;
     public readonly long PixelPoolPeakBytes;
     public readonly long PixelPoolCapBytes;
+    // hidden-window memory stage (HiddenMemoryPolicy): 0 = Visible, 1 = Shallow released; and whether the host is parked now
+    public readonly byte HiddenStage;
+    public readonly bool HostParked;
 
     internal CensusSnapshot(AppHost host)
     {
@@ -105,6 +108,9 @@ public readonly struct CensusSnapshot
         PixelPoolRetainedBytes = pixpool.RetainedBytes;
         PixelPoolPeakBytes = pixpool.PeakRetainedBytes;
         PixelPoolCapBytes = pixpool.RetainedCapBytes;
+
+        HiddenStage = (byte)host.HiddenStageCensus;
+        HostParked = host.IsParked;
     }
 
     /// <summary>Capture the engine census now. Deterministic and side-effect-free (passive reads only); the next

@@ -381,14 +381,30 @@ and the census byte line becomes O(pages).
 | | Discrete (`GpuCopy`) | UMA (`CpuWrite`) |
 |---|---|---|
 | Heap / layout | `DEFAULT`, `LAYOUT_UNKNOWN` | `CUSTOM` (L0 + `WRITE_BACK`), `LAYOUT_ROW_MAJOR` |
-| Created in | `COPY_DEST` | `COMMON`, and it stays `COMMON` for life |
-| Write | staging buffer → `CopyTextureRegion` at flush | row-by-row memcpy through a **persistent map** taken at page create |
-| Barriers | `… → COPY_DEST → PIXEL_SHADER_RESOURCE` per flush | **none, ever** |
-| Sampled via | explicit transition | implicit `COMMON → PIXEL_SHADER_RESOURCE` promotion |
+| Created in | `COMMON` (`ALLOW_SIMULTANEOUS_ACCESS`), and it stays `COMMON` for life | `COMMON`, and it stays `COMMON` for life |
+| Write | staging buffer → `CopyTextureRegion` on the COPY queue | row-by-row memcpy through a **persistent map** taken at page create |
+| Barriers | **none, ever**: the copy queue promotes `COMMON → COPY_DEST` for its write and the resource decays back (the per-flush `… → COPY_DEST → PIXEL_SHADER_RESOURCE` pair was the pre-§C path and is gone) | **none, ever** |
+| Sampled via | implicit `COMMON → PIXEL_SHADER_RESOURCE` promotion, once the copy batch's fence passed | implicit `COMMON → PIXEL_SHADER_RESOURCE` promotion |
 
 The `CpuWrite` flavour exists because the Qualcomm Adreno UMD mishandles exactly the `COPY_DEST → PSR` transition
 (`docs/plans/adreno-hang-fixes.md` M1 → `DEVICE_HUNG`). A page that is only ever GPU-**read** never needs that
 transition, so the hang path is removed **by construction** rather than avoided by policy.
+
+**Re-validation (2026-10-06): what the evidence does and does not say.** The recorded cause is "a vendor-acknowledged UMD defect in
+the UBWC / layout-transition path, triggered by the texture-upload-then-sample cadence", amplified by a (since disproved, F251) 128 MB
+budget premise. So the risk to re-test is any UBWC layout transition on a compressed texture, implicit (copy-queue promotion and decay)
+or explicit, not "any barrier": the UMA build already records explicit barriers on the COMPUTE queue for baked blurs
+(`BakedBlurCompositor`, `LevelBarrier`) and the DIRECT queue samples the COMMON-decayed derivatives, daily, on the Adreno. The
+discrete `GpuCopy` **pages** are `ALLOW_SIMULTANEOUS_ACCESS`, which on most drivers precludes compressed layouts; that, not an absence of
+barriers, is the argument for why `GpuCopy` might be safe on UMA. The discrete **pool** textures are not simultaneous-access, so the
+256 px experiment uses pages only. The copy-queue path has never run on the Adreno (UMA never constructs the COPY queue), which makes
+"it would bring the barrier back" unestablished in both directions. `--fg img-atlas=gpucopy|gpucopy256` runs it; soak it with
+`--fake --frame-bench=home-scroll,playlist-scroll,nav-burst --bench-sec 60 --fg img-atlas=gpucopy,present-validate` three times and
+read `imgatlas=pages:>0 cpuWrite:0`, no `[d3d12.stall]`, no `device-lost recorded=`. A 256-bucket atlas saves descriptors and resources
+(131 SRVs to 3), not bytes: 49 cells per 16 MiB page against the measured 320 KiB per private 256 px texture.
+`--fg img-atlas=rowmajor-probe` logs `CrossAdapterRowMajorTextureSupported` and `StandardSwizzle64KBSupported` first (a ROW_MAJOR
+TEXTURE2D is only required to exist cross-adapter, so the earlier `0x80070057` was the spec's answer, not a driver bug) and then tries
+the create variants; `--fg img-placed=256` logs whether the driver's 64 KiB per-256 px padding is per resource or per heap.
 
 **The four invariants that make a SHARED CPU-written page safe** (a private per-image texture got this for free by
 never being shared; a page has to earn it):

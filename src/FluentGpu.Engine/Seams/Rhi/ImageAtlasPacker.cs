@@ -6,8 +6,11 @@ namespace FluentGpu.Rhi;
 /// <c>COPY_DEST</c> resource transition, and therefore whether it can ride the UMA (Adreno) path at all.</summary>
 public enum ImageAtlasUpload : byte
 {
-    /// <summary>Discrete/non-UMA: decoded pixels land in an <c>UPLOAD</c> staging buffer and reach the page through a
-    /// <c>CopyTextureRegion</c>, so the page is barriered <c>… → COPY_DEST → PIXEL_SHADER_RESOURCE</c> per flush.</summary>
+    /// <summary>Discrete/non-UMA (and the <c>--fg img-atlas=gpucopy</c> UMA experiment): decoded pixels land in an <c>UPLOAD</c>
+    /// staging buffer and reach the page through a <c>CopyTextureRegion</c> on a COPY queue. The page is a simultaneous-access
+    /// texture, <c>COMMON</c> for life: the copy queue promotes it to <c>COPY_DEST</c> for its write and it decays back, so no
+    /// explicit <c>ResourceBarrier</c> is ever recorded for it (the per-flush <c>COPY_DEST → PIXEL_SHADER_RESOURCE</c> pair was
+    /// the pre-retained-tiles path). It has never run on the Adreno.</summary>
     GpuCopy = 0,
     /// <summary>UMA: the page is a CPU-writable <c>ROW_MAJOR</c> texture on a <c>CUSTOM</c>(L0/WRITE_BACK) heap, written
     /// with a plain row-by-row memcpy through a persistent map and sampled straight out of <c>COMMON</c> by implicit
@@ -102,11 +105,15 @@ public sealed class ImageAtlasPacker
     /// If unavailable, the store must disable admission; a positive placeholder may initialize an unused packer.</param>
     /// <param name="upload">Fixes the barrier posture for every page this packer hands out.</param>
     /// <param name="gutter">Texels of separation between cells and between a cell and the page edge (see the remarks).</param>
-    public ImageAtlasPacker(int pageSide, long pageBytes, ImageAtlasUpload upload, int gutter = 1)
+    /// <param name="maxPackedBucket">Largest bucket (px) that packs; <see cref="MaxPackedBucket"/> unless an experiment widens it
+    /// (<c>--fg img-atlas=gpucopy256</c>: 256 on 2048 px pages, 7x7 cells).</param>
+    public ImageAtlasPacker(int pageSide, long pageBytes, ImageAtlasUpload upload, int gutter = 1, int maxPackedBucket = MaxPackedBucket)
     {
         if (pageSide <= 0) throw new ArgumentOutOfRangeException(nameof(pageSide));
         if (pageBytes <= 0) throw new ArgumentOutOfRangeException(nameof(pageBytes));
         if (gutter < 0) throw new ArgumentOutOfRangeException(nameof(gutter));
+        if (maxPackedBucket <= 0) throw new ArgumentOutOfRangeException(nameof(maxPackedBucket));
+        MaxBucket = maxPackedBucket;
         PageSide = pageSide;
         PageBytes = pageBytes;
         Upload = upload;
@@ -114,6 +121,8 @@ public sealed class ImageAtlasPacker
         _slots = new PageSlot[4];
     }
 
+    /// <summary>Largest bucket this packer packs (<see cref="MaxPackedBucket"/> by default).</summary>
+    public int MaxBucket { get; }
     public int PageSide { get; }
     /// <summary>Committed bytes of ONE page — the census unit. Cells are not resources and have no byte line of their own.</summary>
     public long PageBytes { get; }
@@ -139,7 +148,7 @@ public sealed class ImageAtlasPacker
     public int SlotCount => _slotCount;
 
     /// <summary>True when <paramref name="bucket"/> is a packable thumbnail bucket that fits at least one cell.</summary>
-    public bool CanPack(int bucket) => bucket > 0 && bucket <= MaxPackedBucket && CellsPerAxis(bucket) > 0;
+    public bool CanPack(int bucket) => bucket > 0 && bucket <= MaxBucket && CellsPerAxis(bucket) > 0;
 
     /// <summary>Cells per axis for <paramref name="bucket"/> — the grid the gutter leaves room for.</summary>
     public int CellsPerAxis(int bucket)

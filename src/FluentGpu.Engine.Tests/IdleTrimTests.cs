@@ -49,6 +49,27 @@ public sealed class IdleTrimTests
     }
 
     [Fact]
+    public void EvictAllTakesEveryTileIncludingTheLastTurnsAndNamesEachSlotOnce()
+    {
+        var t = new SliceTable(4, 8, 8);
+        Turn(t, 1, (0, 0), (1, 0));
+        Turn(t, 2, (0, 0), (1, 0));               // both tiles are in the LAST turn's set: EvictStale would spare them
+        Assert.Equal(0, t.EvictStale(Environment.TickCount64 + 1_000_000));
+        Assert.Equal(2, t.EvictAll());
+        Assert.Equal(0, t.ResidentTiles);
+        Assert.Equal(0L, t.ResidentBytes);
+        long trimmedBefore = t.TrimmedTotal;
+        Assert.Equal(2, t.TrimFreeSlotsNow().Length);
+        Assert.True(t.TrimFreeSlotsNow().IsEmpty);
+        Assert.Equal(trimmedBefore + 2, t.TrimmedTotal);
+        Assert.Equal(0, t.EvictAll());            // idempotent
+        // The next turn re-requests, schedules and rasters every visible tile: nothing is exposed without a surface.
+        Turn(t, 3, (0, 0), (1, 0));
+        Assert.Equal(2, t.ResidentTiles);
+        Assert.Equal(0, t.CountExposedMissing());
+    }
+
+    [Fact]
     public void NotYetStaleTilesAreKeptAndTheNextDueTimeIsReported()
     {
         var t = new SliceTable(4, 8, 8);

@@ -54,6 +54,7 @@ public static class SuiteRegistry
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
         new("budgets", "budgets", BudgetsSuite.Run),
+        new("hidden", "hidden", FluentGpu.VerticalSlice.Suites.HiddenSuite.Run),   // hidden-window Shallow stage: tiles + unpinned images released after the park delay, rebuilt on restore
         new("tiles", "tiles", FluentGpu.VerticalSlice.Suites.TileSuite.Run),   // scroll-GPU plan P0: retained-tile needed set, slice table, budget, feather, composite seam
         new("slices", "tiles", FluentGpu.VerticalSlice.Suites.SliceSuite.Run),   // scroll-GPU plan P1: the recorder partition — paint order, zero-byte scroll tick, tile invalidation reasons
         new("evidence", "tiles", FluentGpu.VerticalSlice.Suites.EvidenceSuite.Run),   // evidence ledgers: #1 failing-first (open), ledger alloc-zero, capture alignment, item record == model

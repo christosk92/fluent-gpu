@@ -1305,6 +1305,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _ => IDC_ARROW,
     };
 
+    /// <summary>Minimized or hidden: no contact can start on a window nobody can touch, so the DirectManipulation idle drain has nothing
+    /// to drain and its 250 ms beat would only wake a parked loop four times a second for nothing.</summary>
+    private bool IsParkedForScroll() => IsIconic(_hwnd) || !IsWindowVisible(_hwnd);
+
     public int PumpInto(InputEventRing ring)
     {
         MSG msg;
@@ -1313,7 +1317,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // Idle drain (scroll-v3-plan-2026-08-17.md §5.2): DirectManipulation's manual-update queue must never sit
         // forever. PumpScroll only runs from Paint while ScrollProducerLive (a contact engaged/pending or RUNNING), so
         // an Enabled-but-idle producer needs its own periodic beat here — every wake, not every produced frame.
-        if (_dm is { Enabled: true } dm && !dm.Live && Environment.TickCount64 - dm.LastUpdateMs >= 250)
+        if (_dm is { Enabled: true } dm && !dm.Live && Environment.TickCount64 - dm.LastUpdateMs >= 250 && !IsParkedForScroll())
             dm.UpdateIdle();
         TryEmitFallbackLift();   // touchpad-fallback silence lift (also fires off the LiftTimer when the loop is idle — see below)
         return _queue.MoveTo(ring);
@@ -1547,7 +1551,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // An Enabled-but-idle DirectManipulation producer owes PumpInto's idle-drain beat every 250 ms (see PumpInto) —
         // clamp so no host wait (however long/indefinite) starves it. A live gesture instead wakes every produced
         // frame via ScrollProducerLive, so no clamp is needed there.
-        if (_dm is { Enabled: true } dm && !dm.Live && (timeoutMs < 0 || timeoutMs > 250))
+        if (_dm is { Enabled: true } dm && !dm.Live && (timeoutMs < 0 || timeoutMs > 250) && !IsParkedForScroll())
             timeoutMs = 250;
 
         if (request.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion && timeoutMs > 0)

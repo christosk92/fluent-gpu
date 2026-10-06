@@ -55,9 +55,11 @@ static class OrphanWakeChecks
         Check("gate.anim.orphan-render-owned-wait-alloc-zero checking a pending orphan and its deadline allocates nothing",
             allocated == 0, $"allocated={allocated}");
 
+        HiddenMemoryBudget.ShallowDelayMs = long.MaxValue;   // this gate measures the orphan's wait; the hidden-memory stage owns one more (one-shot) deadline
         window.Minimize();
         host.RunFrame(); // consume the park edge; the following wait measures steady minimized state
         int minimizedWait = host.RecommendedWaitMs();
+        HiddenMemoryBudget.Reset();
         Check("gate.anim.orphan-render-owned-minimized an unfinished exit does not poll a minimized host",
             minimizedWait == -1, $"wait={minimizedWait}");
         window.State = WindowState.Normal;

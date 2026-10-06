@@ -82,6 +82,26 @@ public sealed class ColdMaintenanceTests
     }
 
     [Fact]
+    public void AParkedLoopWakesForTheEarlierOfTheHiddenStageAndTheColdDeadlineThenSleeps()
+    {
+        using var f = new Fixture(true, hiddenStage: true);
+        f.Host.PixelPool.Return(new byte[PixelBufferPool.MinBucketBytes]);
+        f.Host.PixelPool.Return(new byte[PixelBufferPool.MinBucketBytes]);
+        int first = f.Host.RecommendedWaitMs();
+        Assert.InRange(first, 1, (int)HiddenMemoryBudget.DefaultShallowDelayMs);   // the hidden stage (2 s) is due before the 30 s pixel deadline
+
+        f.Host.AdvanceFrameClockForTest(HiddenMemoryBudget.DefaultShallowDelayMs);
+        Assert.False(f.Host.RunFrame().Rendered);
+        Assert.Equal(HiddenStage.Shallow, f.Host.HiddenStageForTest);
+        int second = f.Host.RecommendedWaitMs();
+        Assert.True(second == -1 || second > 2_000, $"after the stage the wait returns to the cold deadline, not another stage wake (got {second})");
+
+        f.Now = 30_000;
+        Assert.False(f.Host.RunFrame().Rendered);
+        Assert.Equal(-1, f.Host.RecommendedWaitMs());   // and once both ran, the loop blocks
+    }
+
+    [Fact]
     public void WorkerReturnAfterDrainRearmsWithoutPostingReactiveWork()
     {
         using var f = new Fixture(true);
@@ -276,16 +296,19 @@ public sealed class ColdMaintenanceTests
         internal readonly HeadlessWindow Window = new(new WindowDesc("cold-maintenance", new Size2(320, 240), 1));
         internal readonly HeadlessGpuDevice Device = new();
         internal readonly AppHost Host;
-        internal Fixture(bool minimized)
+        internal Fixture(bool minimized, bool hiddenStage = false)
         {
+            // These tests pin the cold-maintenance deadlines of a parked loop; the hidden-memory stage's own one-shot wake
+            // (HiddenStageHostTests) would only add a second deadline to what they measure - except the one test that pins both.
+            if (!hiddenStage) HiddenMemoryBudget.ShallowDelayMs = long.MaxValue;
             var strings = new StringTable();
             Window.Show();
             Host = new AppHost(App, Window, Device, new HeadlessFontSystem(strings), strings, new EmptyRoot());
             Host.ColdMaintenanceClock = () => Interlocked.Read(ref Now);
             for (int i = 0; i < 8; i++) Host.RunFrame();
             if (minimized) { Window.State = WindowState.Minimized; Host.RunFrame(); }
-            Assert.Equal(-1, Host.RecommendedWaitMs());
+            if (!hiddenStage) Assert.Equal(-1, Host.RecommendedWaitMs());
         }
-        public void Dispose() { Host.Dispose(); App.Dispose(); }
+        public void Dispose() { Host.Dispose(); App.Dispose(); HiddenMemoryBudget.Reset(); }
     }
 }

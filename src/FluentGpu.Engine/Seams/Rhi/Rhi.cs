@@ -135,6 +135,21 @@ public partial interface IGpuDevice : IDisposable
     /// pending). Default: nothing to do.</summary>
     int TrimIdleResources(long nowMs) => -1;
 
+    /// <summary>The hidden-window memory stage the host reached (render thread, or the UI thread in SingleThread mode, BETWEEN
+    /// turns): <see cref="Hosting.HiddenStage.Shallow"/> drops every device resource no visible frame needs - the scratch / retained /
+    /// group / blur surfaces, the stencil target of the primary swapchain, the free image-texture pools, the staging ring and the
+    /// placed-heap warm pages - behind their fences, and keeps image textures from refilling the free pools while the stage holds;
+    /// <see cref="Hosting.HiddenStage.Visible"/> lifts that. Idempotent. The tiles are released by the host first
+    /// (<c>SliceTable.EvictAll</c> + <see cref="TrimTileSurfaces"/>). Default: nothing to release.</summary>
+    /// <param name="stage">The stage to apply.</param>
+    /// <param name="otherWindowVisible">Another window (a pop-out) shares this device and is on screen: skip the device-wide parts
+    /// (scratch surfaces, blur pyramids, image pooling) and release only what is the hidden window's own.</param>
+    void ReleaseHiddenResources(Hosting.HiddenStage stage, bool otherWindowVisible = false) { }
+
+    /// <summary>True while a hidden-stage release still waits on a fence (retired surfaces or image textures not yet destroyed), so the
+    /// host keeps its idle-trim pass armed until the backlog drains. Default false.</summary>
+    bool HasHiddenReleaseBacklog => false;
+
     /// <summary>Liveness-bounded present-slot takes of the PRIMARY swapchain that timed out so far (CUMULATIVE; render thread writes,
     /// any thread reads): the take proceeded without the slot ever opening. A secondary swapchain's are
     /// <see cref="NonPrimaryLatencyTimeouts"/>. Surfaced as <c>slotTimeouts=</c> in the <c>[render.pace]</c> line.

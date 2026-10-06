@@ -119,6 +119,32 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
         // The scratch pyramids are created LAZILY (EnsureBank): an app that never bakes an image blur never holds them.
     }
 
+    /// <summary>True while any bank's scratch pyramid exists.</summary>
+    internal bool HasLevels
+    {
+        get
+        {
+            for (int i = 0; i < _levels.Length; i++) if (_levels[i] != null) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Hidden-window stage: destroy the scratch pyramids (they are recreated lazily by the next bake - <c>EnsureBank</c>)
+    /// once the compute queue has nothing in flight. Returns false and leaves them alone while a bake may still read or write one.
+    /// Render thread, between turns.</summary>
+    internal bool ReleaseLevels()
+    {
+        if (_compute.HasInFlightAnyThread) return false;
+        for (int i = 0; i < _levels.Length; i++)
+            if (_levels[i] != null)
+            {
+                D3D12MemoryDiagnostics.Release(_levels[i], "BakedBlur.Level");
+                _levels[i]->Release();
+                _levels[i] = null;
+            }
+        return true;
+    }
+
     /// <summary>Bytes the scratch pyramids hold (in use once created; nothing before the first bake).</summary>
     public LayerTargetCensus TargetCensus
     {

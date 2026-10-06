@@ -1566,6 +1566,43 @@ public sealed class ImageCache
     /// screen. Cheap when there is nothing to do: the loop's first predicate is two long compares.</para></summary>
     public void TrimToBudget() { EvictToBudget(); ReclaimTombstonesIfDue(); }
 
+    private readonly HashSet<int> _releaseHeld = new();
+    private readonly List<int> _releaseVictims = new();
+
+    /// <summary>Hidden-window Shallow stage: evict every unpinned (<c>Refs == 0</c>) Ready entry - both LRU lists - regardless of
+    /// budget or <see cref="ReadyGraceMs"/>, so their GPU textures go back to the device (each through the normal evict sink).
+    /// <para><b>Never an id something still HOLDS.</b> An unpinned image can be on screen: a list row's image cell is requested
+    /// but not pinned, and a swap's outgoing image or a hold-last-good target is kept by id. The host's held-id enumeration
+    /// (<see cref="SetHeldImageSource"/>, plus <paramref name="alsoHeld"/> for other windows sharing this cache) names them, and
+    /// they - together with the source of any held derived entry - are skipped, because nothing would re-request them after the
+    /// restore and they would show a placeholder. With no held-id source the call evicts nothing (it cannot prove anything is
+    /// unreferenced). Returns the entries evicted.</para></summary>
+    public int ReleaseUnpinnedGpu(HashSet<int>? alsoHeld = null)
+    {
+        if (_collectHeld is null) return 0;
+        _releaseHeld.Clear();
+        _collectHeld(_releaseHeld);
+        if (alsoHeld is not null) _releaseHeld.UnionWith(alsoHeld);
+        foreach (var (id, e) in _byId)
+            if (e.Derived && (e.Refs > 0 || e.State == ImageState.Pending || _releaseHeld.Contains(id)))
+                _releaseHeld.Add(e.SourceId);
+        _releaseVictims.Clear();
+        for (int list = 2; list >= 1; list--)
+            for (int id = _lruHead[list]; id != 0; id = _byId[id].LruNext)
+                if (!_releaseHeld.Contains(id)) _releaseVictims.Add(id);
+        int n = 0;
+        for (int i = 0; i < _releaseVictims.Count; i++)
+        {
+            int id = _releaseVictims[i];
+            if (!_byId.TryGetValue(id, out var e) || e.State != ImageState.Ready || e.Refs != 0 || e.LruList == 0) continue;   // a status callback re-pinned / restarted / reclaimed it
+            EvictVictim(id);
+            n++;
+        }
+        _releaseVictims.Clear();
+        _releaseHeld.Clear();
+        return n;
+    }
+
     private void EvictToBudget()
     {
         while (UsedBytes > _budgetBytes || DerivedUsedBytes > DerivedSoftBudgetBytes)
@@ -1596,6 +1633,13 @@ public sealed class ImageCache
             }
             LastEvictVisited = visited;
             if (victim == 0) return 0;   // everything left is pinned (on screen) / too fresh to shed — never evict it
+            return EvictVictim(victim);
+    }
+
+    /// <summary>Evict the Ready, unpinned entry <paramref name="victim"/> (a member of an eviction list): the shared body of
+    /// <see cref="EvictOneLru"/> and <see cref="ReleaseUnpinnedGpu"/>. Returns the bytes it freed.</summary>
+    private long EvictVictim(int victim)
+    {
             var e2 = _byId[victim];
             long freed = e2.Bytes;
             _readyCount--;   // E8: leaving Ready

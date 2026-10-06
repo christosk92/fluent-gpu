@@ -6,6 +6,19 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Hosting;
 
+/// <summary>The small-image atlas re-validation arms (<see cref="EngineSwitches.ImageAtlas"/>).</summary>
+public enum ImageAtlasExperiment : byte
+{
+    /// <summary>Today's behaviour.</summary>
+    Default = 0,
+    /// <summary>UMA: pack thumbnails of up to 128 px into GPU-copied simultaneous-access pages.</summary>
+    GpuCopy = 1,
+    /// <summary>UMA: as <see cref="GpuCopy"/>, with the 256 px bucket packed too on 2048 px pages.</summary>
+    GpuCopy256 = 2,
+    /// <summary>Log the ROW_MAJOR / standard-swizzle capability bits and create variants once.</summary>
+    RowMajorProbe = 3,
+}
+
 /// <summary>
 /// The engine's runtime diagnostic toggles — plain static state, set in code (a host, a probe, a Diagnostics page) or
 /// from the hosting process's command line through <see cref="Apply(ReadOnlySpan{string})"/>. There are NO environment
@@ -25,6 +38,10 @@ namespace FluentGpu.Hosting;
 /// <item><c>d3d-mem</c> — per-resource D3D12 allocation lines. <c>nc</c> — the non-client hit-test trace.</item>
 /// <item><c>dump=MODE</c> — the one-shot scene dump.</item>
 /// <item><c>shelf</c>, <c>morph</c> — the paged-shelf / connected-animation traces.</item>
+/// <item><c>hidden=SHALLOW[:COVER]</c> — park time in ms (or <c>max</c> = never) before a hidden window releases its memory:
+/// SHALLOW for a minimized / tray-hidden window (default 2000), COVER for one only covered by another window (default 30000); see <see cref="HiddenMemoryBudget"/>.</item>
+/// <item><c>img-atlas=gpucopy|gpucopy256|rowmajor-probe</c>, <c>img-placed=256</c> — default-off re-validation arms for the UMA small-image
+/// atlas (see <see cref="ImageAtlas"/> and <see cref="ImagePlaced256Query"/>).</item>
 /// <item><c>no-guards</c> — the default-on DEBUG guards (BindContract, BackwardsWriteGuard, one-surface-per-player)
 /// off, for a measurement that must not pay their per-write scans. <c>guards-throw</c> — every guard throws.</item>
 /// <item><c>device-lost=N</c> — inject a device loss at frame N (the recovery path's test arm).</item>
@@ -126,6 +143,29 @@ public static class EngineSwitches
     /// is created: set it (the command line) before the first protected open.</summary>
     public static bool ForcePlayReadySl2000;
 
+    /// <summary>Re-validation arms for the small-image atlas on a unified-memory (Adreno) adapter (<c>--fg img-atlas=VALUE</c>), all
+    /// default off and read once when the image store is created: set them (the command line) before the window exists.
+    /// <list type="bullet">
+    /// <item><c>gpucopy</c> - thumbnails of up to 128 px pack into DEFAULT-heap simultaneous-access pages written by
+    /// <c>CopyTextureRegion</c> on a COPY queue (the discrete path) instead of private CPU-written textures. The page is COMMON for
+    /// life, promoted and decayed by the copy queue, never explicitly barriered. It has never run on the Adreno: the recorded hang
+    /// (adreno-hang-fixes.md M1) was a vendor-acknowledged UMD defect in the UBWC / layout-transition path under a
+    /// texture-upload-then-sample cadence, and this is the test of whether a simultaneous-access page (which most drivers
+    /// keep uncompressed) avoids it. Soak it before believing anything.</item>
+    /// <item><c>gpucopy256</c> - as <c>gpucopy</c> with the 256 px bucket packed too, on 2048 px pages (7x7 cells of 256). Pages only,
+    /// never pool textures (those are not simultaneous-access). Every packed bucket then lives on 2048 px pages, so 64/128 px numbers
+    /// are not comparable with <c>gpucopy</c>'s. Saves descriptors and resources, NOT bytes: 49 cells per 16 MiB page
+    /// against 320 KiB per private texture.</item>
+    /// <item><c>rowmajor-probe</c> - log the ROW_MAJOR capability bits (<c>CrossAdapterRowMajorTextureSupported</c>,
+    /// <c>StandardSwizzle64KBSupported</c>) and the outcome of a few ROW_MAJOR / standard-swizzle create variants once at device creation.</item>
+    /// </list></summary>
+    public static ImageAtlasExperiment ImageAtlas;
+
+    /// <summary><c>--fg img-placed=256</c>: log (once, at device creation) the <c>GetResourceAllocationInfo</c> sizes of a 256 px
+    /// BGRA texture at alignments 0 / 4 KiB / 64 KiB and of 1, 8 and 16 of them in one call - whether the driver's per-texture
+    /// padding is per resource or per heap, i.e whether a placed-heap bucket for 256 px could save bytes. Query only, no behaviour.</summary>
+    public static bool ImagePlaced256Query;
+
     /// <summary>The frame ledger from the first frame (<c>--fg ledger[=PATH]</c>); the path, when given, is <see cref="FrameLedger.DumpPath"/>.</summary>
     public static bool Ledger;
     /// <summary>Validate every in-place group-surface repair against a whole render of the same group (<c>--fg
@@ -223,6 +263,16 @@ public static class EngineSwitches
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
             case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
             case "warp": ForceWarp = true; return true;
+            case "hidden": return HiddenMemoryBudget.TryApply(value);
+            case "img-atlas":
+                switch (value)
+                {
+                    case "gpucopy": ImageAtlas = ImageAtlasExperiment.GpuCopy; return true;
+                    case "gpucopy256": ImageAtlas = ImageAtlasExperiment.GpuCopy256; return true;
+                    case "rowmajor-probe": ImageAtlas = ImageAtlasExperiment.RowMajorProbe; return true;
+                    default: return false;
+                }
+            case "img-placed": ImagePlaced256Query = value == "256"; return ImagePlaced256Query;
             default: return false;
         }
     }

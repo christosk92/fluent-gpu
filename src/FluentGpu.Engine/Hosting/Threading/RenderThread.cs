@@ -309,6 +309,11 @@ public sealed class RenderThread : IDisposable
 
     private long _idleTrimDueMs;
     private bool _idleTrimStarted;
+    private int _idleTrimForce;
+
+    /// <summary>Render thread: run the idle trim after THIS turn even though its timed wait is not yet due (a hidden-window release
+    /// that still waits on a fence asks for its own follow-up pass instead of waiting out a longer timer already armed).</summary>
+    internal void RequestIdleTrimThisTurn() => Volatile.Write(ref _idleTrimForce, 1);
     private int RunIdleTrim()
     {
         _idleTrimStarted = true;
@@ -414,7 +419,8 @@ public sealed class RenderThread : IDisposable
             _postTurn?.Invoke();   // the turn's one composition commit: the children's and the parent's placements, one DWM frame (F080)
             if (FrameLedger.Enabled && LedgerSink is { } ledger) HandLedgerTurn(ledger, waitStart, turnStart);
             ReportPace(turnStart, motionLive);
-            if (_idleTrim is not null && (!_idleTrimStarted || _idleTrimWaitMs < 0 || Environment.TickCount64 >= _idleTrimDueMs)) _idleTrimWaitMs = RunIdleTrim();
+            bool forceIdleTrim = Interlocked.Exchange(ref _idleTrimForce, 0) != 0;
+            if (_idleTrim is not null && (forceIdleTrim || !_idleTrimStarted || _idleTrimWaitMs < 0 || Environment.TickCount64 >= _idleTrimDueMs)) _idleTrimWaitMs = RunIdleTrim();
             if (requestedDrain > Volatile.Read(ref _completedDrains))
             {
                 Volatile.Write(ref _completedDrains, requestedDrain);
