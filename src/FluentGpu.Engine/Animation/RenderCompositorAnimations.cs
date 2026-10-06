@@ -140,6 +140,14 @@ public sealed class RenderCompositorAnimations
                     // Adopt fresh key storage before the previous snapshot lease is released, retaining generator
                     // coefficients rebased on a render-side spring retarget rather than the UI's older pose.
                     var generator = state.Desired.Row.Gen;
+                    // A PAUSED row resumed (AnimEngine.SetPaused): its clock stood still with its value, so it continues
+                    // from the phase it stopped at, re-anchored here, never from where the wall clock has run since.
+                    if (state.Desired.Row.Has(AnimFlags.Paused) && !entry.Row.Has(AnimFlags.Paused))
+                    {
+                        state.AnchorElapsedMs = state.ElapsedMs;
+                        state.AnchorNowMs = nowMs;
+                        state.LastAdvanceMs = 0;
+                    }
                     state.Desired = entry;
                     state.Desired.Row.Gen = generator;
                     bool parked = entry.Row.Has(AnimFlags.Parked);
@@ -341,7 +349,7 @@ public sealed class RenderCompositorAnimations
     {
         if (state.Parked || state.Done) return;
         // HELD (AnimFlags.Hold): the value stays the one last posed; the anchor is untouched, so the release samples the
-        // phase the clock has reached since.
+        // phase the clock has reached since (a PAUSED row re-anchors at its release in Adopt, so it resumes where it stood).
         if (state.Desired.Row.Has(AnimFlags.Hold)) return;
         // PENDING START (AnimFlags.StartPending — a structural enter/exit the UI just seeded): the first render frame to
         // pose it holds t=0, and that presentation is where its start time resolves (the UI's seed-frame hold, render

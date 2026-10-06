@@ -128,7 +128,7 @@ public sealed partial class AnimEngine
                 // The SEED frame renders the initial value (ElapsedMs stays 0); the advance begins next frame — matches
                 // the old engine's first-frame hold (which the gates encode). Absolute-time sampling keeps it deterministic.
                 if (justSeeded) r.Flags &= ~AnimFlags.JustSeeded;
-                else r.ElapsedMs += stepMs;
+                else if (!r.Has(AnimFlags.Paused)) r.ElapsedMs += stepMs;   // PAUSED (SetPaused): its clock stands still too
                 // HELD (AnimEngine.SetHeld): the time runs on, the value stays where it stands — released, the row resumes
                 // at the phase the clock has reached, like the render thread's hold.
                 if (r.Has(AnimFlags.Hold)) continue;
@@ -460,6 +460,23 @@ public sealed partial class AnimEngine
         _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
     }
 
+    /// <summary>Pause (or resume) the row on <paramref name="node"/>/<paramref name="channel"/> IN PLACE: a
+    /// <see cref="SetHeld"/> whose CLOCK stops too (<see cref="AnimFlags.Paused"/>). While paused its value stays the pixel on
+    /// screen and it asks for no frames; resumed, it continues from the exact phase it stopped at, so an ambient loop (a
+    /// drift, a Ken Burns pan) paused for minutes picks up where it stood instead of jumping to wherever its clock would
+    /// have run. No-op without a live row. Re-seeding the channel clears the pause. Resuming releases only a pause, never a
+    /// plain <see cref="SetHeld"/> hold.</summary>
+    public void SetPaused(NodeHandle node, AnimChannel channel, bool paused)
+    {
+        int s = Find(node, channel);
+        if (s < 0) return;
+        ref AnimValue r = ref _slab.At(s);
+        if (r.Has(AnimFlags.Paused) == paused) return;
+        if (paused) r.Flags |= AnimFlags.Hold | AnimFlags.Paused;
+        else r.Flags &= ~(AnimFlags.Hold | AnimFlags.Paused);
+        _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
+    }
+
     /// <summary>The live value of an in-flight row (so an interrupting tween departs from where it is, not a recomputed
     /// endpoint). False = no live row → caller uses its resting value.</summary>
     public bool TryGetTrackValue(NodeHandle node, AnimChannel channel, out float value)
@@ -486,7 +503,7 @@ public sealed partial class AnimEngine
                 {
                     ClearKeys(s);
                     ResetCadence(s);   // a re-seed inherits nothing: display rate unless this seed asks for a cadence
-                    _slab.At(s).Flags &= ~(AnimFlags.SnapDevicePx | AnimFlags.Hold);   // …nor a pixel snap or a hold
+                    _slab.At(s).Flags &= ~(AnimFlags.SnapDevicePx | AnimFlags.Hold | AnimFlags.Paused);   // …nor a pixel snap, a hold or a pause
                     StampCompositorSeed(s, newInstance: false, explicitFrom: true);
                     return s;
                 }
