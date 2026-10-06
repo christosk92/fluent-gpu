@@ -124,7 +124,9 @@ internal static unsafe class ShaderCompiler
         }
     }
 
-    /// <summary>Returns a blob holding the cached DXBC, or <c>null</c> for miss/corrupt/unreadable (⇒ fresh compile).</summary>
+    /// <summary>Returns a blob holding the cached DXBC, or <c>null</c> for miss/corrupt/unreadable (⇒ fresh compile).
+    /// The blob is the engine's own <see cref="CachedBlob"/>, not <c>D3DCreateBlob</c>: a warm start then never loads
+    /// d3dcompiler_47.dll at all (only a cache miss does, for <c>D3DCompile</c>).</summary>
     private static ID3DBlob* TryLoad(string path)
     {
         byte[] bytes;
@@ -134,11 +136,72 @@ internal static unsafe class ShaderCompiler
         if (bytes.Length < 4 || bytes[0] != (byte)'D' || bytes[1] != (byte)'X' || bytes[2] != (byte)'B' || bytes[3] != (byte)'C')
             return null;
 
-        ID3DBlob* blob = null;
-        if ((int)D3DCreateBlob((nuint)bytes.Length, &blob) < 0 || blob == null) return null;
-        fixed (byte* p = bytes)
-            Buffer.MemoryCopy(p, blob->GetBufferPointer(), bytes.Length, bytes.Length);
-        return blob;
+        return CachedBlob.Create(bytes);
+    }
+
+    /// <summary>A minimal native <c>ID3DBlob</c> (IUnknown + GetBufferPointer/GetBufferSize) over one unmanaged block:
+    /// vtable pointer, reference count, size, then the bytes. Callers use it exactly like a D3DCompile blob (read the
+    /// bytecode, <c>Release</c> once); the last Release frees the block.</summary>
+    internal static class CachedBlob
+    {
+        private static readonly void** s_vtbl = CreateVtbl();
+
+        private static void** CreateVtbl()
+        {
+            void** v = (void**)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)(5 * sizeof(void*)));
+            v[0] = (delegate* unmanaged<void*, Guid*, void**, int>)&QueryInterface;
+            v[1] = (delegate* unmanaged<void*, uint>)&AddRef;
+            v[2] = (delegate* unmanaged<void*, uint>)&Release;
+            v[3] = (delegate* unmanaged<void*, void*>)&GetBufferPointer;
+            v[4] = (delegate* unmanaged<void*, nuint>)&GetBufferSize;
+            return v;
+        }
+
+        // [0] vtbl  [1] refcount (low 32 bits)  [2] size  [3..] bytes — 8-byte aligned, so the bytecode is too.
+        private const int HeaderBytes = 3 * 8;
+
+        public static ID3DBlob* Create(byte[] bytes)
+        {
+            byte* block = (byte*)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)(HeaderBytes + bytes.Length));
+            ((void***)block)[0] = s_vtbl;
+            ((long*)block)[1] = 1;
+            ((ulong*)block)[2] = (ulong)bytes.Length;
+            fixed (byte* p = bytes) Buffer.MemoryCopy(p, block + HeaderBytes, bytes.Length, bytes.Length);
+            return (ID3DBlob*)block;
+        }
+
+        [System.Runtime.InteropServices.UnmanagedCallersOnly]
+        private static int QueryInterface(void* self, Guid* riid, void** ppv)
+        {
+            if (ppv == null) return unchecked((int)0x80004003);   // E_POINTER
+            // IUnknown and ID3D10Blob (= ID3DBlob, 8BA5FB08-5195-40E2-AC58-0D989C3A0102) only.
+            if (*riid == new Guid(0x00000000, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+                || *riid == new Guid(0x8BA5FB08, 0x5195, 0x40E2, 0xAC, 0x58, 0x0D, 0x98, 0x9C, 0x3A, 0x01, 0x02))
+            {
+                Interlocked.Increment(ref ((long*)self)[1]);
+                *ppv = self;
+                return 0;
+            }
+            *ppv = null;
+            return unchecked((int)0x80004002);                     // E_NOINTERFACE
+        }
+
+        [System.Runtime.InteropServices.UnmanagedCallersOnly]
+        private static uint AddRef(void* self) => (uint)Interlocked.Increment(ref ((long*)self)[1]);
+
+        [System.Runtime.InteropServices.UnmanagedCallersOnly]
+        private static uint Release(void* self)
+        {
+            long n = Interlocked.Decrement(ref ((long*)self)[1]);
+            if (n == 0) System.Runtime.InteropServices.NativeMemory.Free(self);
+            return (uint)n;
+        }
+
+        [System.Runtime.InteropServices.UnmanagedCallersOnly]
+        private static void* GetBufferPointer(void* self) => (byte*)self + HeaderBytes;
+
+        [System.Runtime.InteropServices.UnmanagedCallersOnly]
+        private static nuint GetBufferSize(void* self) => (nuint)((ulong*)self)[2];
     }
 
     /// <summary>Best-effort atomic publish (unique temp + overwrite move). A move race loser throws IOException and is
