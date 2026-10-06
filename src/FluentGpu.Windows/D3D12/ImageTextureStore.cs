@@ -853,7 +853,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             }
             _retired.RemoveAt(i);
         }
-        _smallImages?.Reclaim(completedFence);
+        _smallImages?.Reclaim(completedFence, keepWarm: !_noPooling);
         AdvanceSlotQuarantine();
     }
 
@@ -961,8 +961,67 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return true;
     }
 
+    // Hidden-window Shallow stage: while set, nothing returns to a free pool, the staging ring or a warm placed-heap page - every
+    // freed texture / heap is released instead. Without it the evictions the host enqueues for the unpinned images land AFTER the
+    // one-shot ReleaseIdle (UI enqueue, render drain, fence-gated reclaim) and refill up to MaxFreePooledTexturesPerBucket per bucket.
+    private bool _noPooling;
+    internal bool NoPooling => _noPooling;
+
+    /// <summary>Hidden-window stage on/off (the owning thread: the render thread, or the UI thread in SingleThread mode).
+    /// Turning it on does not release what is already pooled - <see cref="ReleaseIdle"/> does.</summary>
+    internal void SetNoPooling(bool on)
+    {
+        AssertRenderThread();
+        _noPooling = on;
+    }
+
+    /// <summary>Hidden-window Shallow stage: release every FREE pooled texture (full and derived buckets), every free staging-ring
+    /// heap and every warm placed-heap page. Pooled textures go through the fence-deferred standalone retire (Kind 0), so any frame
+    /// still sampling one finishes first; ring heaps are free by construction (nothing records into a heap in the ring). Resident
+    /// images, atlas pages with live cells and occupied placed pages are untouched. Returns the textures retired.</summary>
+    internal int ReleaseIdle(ulong completedFence)
+    {
+        AssertRenderThread();
+        int n = 0;
+        foreach (var stk in _pool.Values)
+            while (stk.Count > 0)
+            {
+                var pt = stk.Pop();
+                System.Threading.Interlocked.Decrement(ref _pooledFreeMirror);
+                _retired.Add(new Retire { Fence = _retireFence, Kind = 0, Resource = pt.Resource, Slot = pt.Slot });
+                n++;
+            }
+        foreach (var stk in _derivedPool.Values)
+            while (stk.Count > 0)
+            {
+                var pt = stk.Pop();
+                _retired.Add(new Retire { Fence = _retireFence, Kind = 0, Resource = pt.Resource, Slot = pt.Slot });
+                n++;
+            }
+        for (int i = 0; i < _uploadRing.Length; i++)
+        {
+            var ring = _uploadRing[i];
+            if (ring is null) continue;
+            while (ring.Count > 0)
+            {
+                var heap = (ID3D12Resource*)ring.Pop();
+                D3D12MemoryDiagnostics.Release(heap, "Image.Upload");
+                heap->Release();
+            }
+            _uploadRing[i] = null;
+        }
+        _uploadRingBytes = 0;
+        _smallImages?.Reclaim(completedFence, keepWarm: false);
+        return n;
+    }
+
     private void ReleaseDerived(int bucket, Pooled pt)
     {
+        if (_noPooling)
+        {
+            _retired.Add(new Retire { Fence = _retireFence, Kind = 0, Resource = pt.Resource, Slot = pt.Slot });
+            return;
+        }
         if (!_derivedPool.TryGetValue(bucket, out var stk)) { stk = new Stack<Pooled>(); _derivedPool[bucket] = stk; }
         if (stk.Count >= MaxFreeDerivedPerBucket)
         {
@@ -991,6 +1050,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     private void ReleasePooled(int bucket, Pooled pt)
     {
+        if (_noPooling)
+        {
+            _retired.Add(new Retire { Fence = _retireFence, Kind = 0, Resource = pt.Resource, Slot = pt.Slot });
+            return;
+        }
         if (!_pool.TryGetValue(bucket, out var stk)) { stk = new Stack<Pooled>(); _pool[bucket] = stk; }
         if (stk.Count >= MaxFreePooledTexturesPerBucket)
         {
@@ -1316,7 +1380,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// was created at its bucket size), so the range test alone tells a ring heap from a one-off.</summary>
     private void RecycleUpload(ID3D12Resource* upload, long capacity)
     {
-        if (capacity >= MinUploadBucket && capacity <= MaxUploadBucket && _uploadRingBytes + capacity <= MaxPooledUploadBytes)
+        if (!_noPooling && capacity >= MinUploadBucket && capacity <= MaxUploadBucket && _uploadRingBytes + capacity <= MaxPooledUploadBytes)
         {
             int idx = UploadBucketIndex((int)capacity);
             (_uploadRing[idx] ??= new Stack<nint>(4)).Push((nint)upload);

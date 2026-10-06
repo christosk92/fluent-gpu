@@ -231,6 +231,14 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public int ReclaimCalls { get; private set; }
     public void ReclaimCompletedUploads() => ReclaimCalls++;
 
+    private readonly List<FluentGpu.Hosting.HiddenStage> _hiddenReleases = new();
+    /// <summary>Every <see cref="IGpuDevice.ReleaseHiddenResources"/> call, in order (the hidden-stage tests' evidence).</summary>
+    public IReadOnlyList<FluentGpu.Hosting.HiddenStage> HiddenReleases => _hiddenReleases;
+    /// <summary>Tile surface slots handed to <see cref="IGpuDevice.TrimTileSurfaces"/> in total.</summary>
+    public int TrimmedTileSlots { get; private set; }
+    public void TrimTileSurfaces(ReadOnlySpan<int> slots) => TrimmedTileSlots += slots.Length;
+    public void ReleaseHiddenResources(FluentGpu.Hosting.HiddenStage stage) => _hiddenReleases.Add(stage);
+
     /// <summary>Phase 1: <c>HintSettlePresent</c> moved to <see cref="ISwapchain"/> (per-target seam), so the counter
     /// itself now lives on <see cref="HeadlessSwapchain"/>. Reads the PRIMARY target's counter — every existing
     /// headless gate (LayoutShellSuite.cs RZ-SETTLE) creates exactly one swapchain, so this keeps them passing

@@ -731,6 +731,122 @@ public sealed partial class AppHost : IDisposable
 
     private bool _idleTrimDormant;   // the last pass found nothing trimmable; any composite turn clears it (SubmitSlices)
 
+    // ── Hidden-window memory (HiddenMemoryPolicy) ─────────────────────────────────────────────────────────────────
+    private HiddenMemoryPolicy _hidden;          // UI thread, primary host only (a detached child owns no tiles and no pools)
+    private int _renderHiddenStage;              // the stage the UI wants the render side to be in (HiddenStage); UI writes, render reads
+    private int _renderHiddenApplied;            // the stage the render side (or the UI inline in SingleThread) has applied; only its applier touches it
+    private readonly HashSet<int> _hiddenChildHeld = new();
+
+    /// <summary>Test-only: the hidden-window stage the policy has reached.</summary>
+    internal HiddenStage HiddenStageForTest => _hidden.Stage;
+    /// <summary>Test-only: the stage the render side (or the inline path) has applied.</summary>
+    internal HiddenStage HiddenAppliedForTest => (HiddenStage)Volatile.Read(ref _renderHiddenApplied);
+    /// <summary>Test-only: resident tiles of the render thread's table (the one a threaded host composites into).</summary>
+    internal int RenderTilesResidentForTest => _renderTiles?.ResidentTiles ?? 0;
+    /// <summary>Test-only: advance the headless timer clock (it only moves on a painted frame, and a parked host paints none).</summary>
+    internal void AdvanceFrameClockForTest(double ms) => _frameClockMs += ms;
+
+    /// <summary>Why this host is parked, for the hidden-memory delay: an OS minimize / hide (the DWM restore animation covers a
+    /// re-raster) versus only being covered by another window (back the instant it moves, so a longer delay).</summary>
+    private HiddenPark CurrentHiddenPark()
+        => IsOsParked ? HiddenPark.Os : (_coverParked ? HiddenPark.Cover : HiddenPark.None);
+
+    /// <summary>UI thread, once per <see cref="RunFrame"/> (parked frames included): feed the stage machine and run the UI half of a
+    /// stage change. Shallow evicts the unpinned image textures through the cache (their evict jobs reach the device on the render
+    /// thread) and trims the CPU pixel pool, then asks the render side to release tiles, scratch, stencil and pools; a restore lifts
+    /// the stage and forces one full repaint, so the first frame back re-rasters everything the release dropped.</summary>
+    private void AdvanceHiddenMemory()
+    {
+        if (_isDetachedChild) return;
+        if (_hidden.Advance(CurrentHiddenPark(), (long)_timers.NowMs) is not { } stage) return;
+        if (stage == HiddenStage.Shallow)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            _hiddenChildHeld.Clear();
+            for (int i = 0; i < _detachedHosts.Count; i++)
+            {
+                var child = _detachedHosts[i];
+                if (!child._window.IsClosed) child.CollectHeldImageIds(_hiddenChildHeld);   // a pop-out sharing the cache keeps what it holds
+            }
+            int evicted = _images.ReleaseUnpinnedGpu(_hiddenChildHeld);
+            _hiddenChildHeld.Clear();
+            _pixelPool.Trim();
+            RequestHiddenStage(HiddenStage.Shallow);
+            FluentGpu.Foundation.Diag.Line($"[hidden] shallow park={CurrentHiddenPark()} unpinnedReleased={evicted} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
+        }
+        else
+        {
+            RequestHiddenStage(HiddenStage.Visible);
+            RequestFullRepaintOnce();   // every tile the release dropped re-rasters in the first frame back; never elide it as unchanged
+            FluentGpu.Foundation.Diag.Line($"[hidden] restore ready={_images.ReadyCount}");
+        }
+    }
+
+    /// <summary>UI thread: hand a stage to whoever owns the device. A render-thread host publishes it (the render thread applies it
+    /// before its next turn); SingleThread applies it inline - this thread IS the device owner, and its tiles are <c>_uiTiles</c>.</summary>
+    private void RequestHiddenStage(HiddenStage stage)
+    {
+        if (OwningRenderThread is { } rt)
+        {
+            Volatile.Write(ref _renderHiddenStage, (int)stage);
+            rt.WakeAsync();
+        }
+        else ApplyHiddenStage(stage, _uiTiles);
+    }
+
+    /// <summary>The device half of a stage change, on the thread that owns the device and between turns. Shallow: every retained
+    /// tile goes (visible ones too - nothing is visible, and the first composite after the restore schedules and rasters each in its own
+    /// submission before anything samples it), then the device drops scratch / stencil / pools behind their fences and the image
+    /// queue is drained so the evicted textures are freed now, not on the first frame back. Visible lifts the no-pooling latch.</summary>
+    private void ApplyHiddenStage(HiddenStage stage, FluentGpu.Render.Tiles.SliceTable tiles)
+    {
+        Volatile.Write(ref _renderHiddenApplied, (int)stage);
+        if (stage == HiddenStage.Shallow)
+        {
+            _idleTrimDormant = false;   // the idle trim pass must run its hidden branch
+            tiles.EvictAll();
+            for (int guard = 0; guard < 8; guard++)
+            {
+                var freed = tiles.TrimFreeSlotsNow();
+                if (freed.IsEmpty) break;
+                _device.TrimTileSurfaces(freed);
+            }
+            _device.ReleaseHiddenResources(HiddenStage.Shallow);
+            DrainImageJobsOffFrame();
+            _device.ReleaseHiddenResources(HiddenStage.Shallow);   // the drain freed textures: the pools / levels they emptied go too
+        }
+        else _device.ReleaseHiddenResources(HiddenStage.Visible);
+    }
+
+    /// <summary>Render thread, between turns: stage the evict (and any upload) jobs the UI queued - legal outside a submit, it
+    /// only changes WHEN evictions free - and reclaim what the fence has passed.</summary>
+    private void DrainImageJobsOffFrame()
+    {
+        if (_imageQueue is { } q) _device.DrainImageJobs(q);
+        _device.ReclaimCompletedUploads();
+    }
+
+    /// <summary>Render thread, top of every turn (before the present decision, so a restore's first frame already sees it): apply
+    /// the stage the UI requested. A failure must never kill the loop; the stage is then treated as applied.</summary>
+    private void ApplyRequestedHiddenStageOnRenderThread()
+    {
+        int want = Volatile.Read(ref _renderHiddenStage);
+        if (want == _renderHiddenApplied || _renderTiles is null) return;
+        try { ApplyHiddenStage((HiddenStage)want, _renderTiles); }
+        catch (Exception ex) { Console.Error.WriteLine($"[hidden] stage {want} THREW: {ex}"); }
+        if ((HiddenStage)want != HiddenStage.Visible && _device.HasHiddenReleaseBacklog) _renderThread?.RequestIdleTrimThisTurn();
+    }
+
+    /// <summary>Render thread, from the idle trim while a hidden stage holds: keep draining evictions and releasing until the fence
+    /// backlog is gone. Returns the ms until another pass is needed, or -1.</summary>
+    private int TrimHiddenOnRenderThread()
+    {
+        DrainImageJobsOffFrame();
+        if (!_device.HasHiddenReleaseBacklog) return -1;
+        _device.ReleaseHiddenResources(HiddenStage.Shallow);
+        return 500;
+    }
+
     /// <summary>Render-thread housekeeping between turns, on wall clock (never a turn count: an idle app runs no turns). Evicts
     /// retained tiles nothing has requested for <see cref="FluentGpu.Render.Tiles.SliceTable.StaleTileMs"/> (never the last turn's
     /// own set) and hands their textures back, then lets the device drain its retired queues and drop idle scratch / stencil /
@@ -738,7 +854,10 @@ public sealed partial class AppHost : IDisposable
     /// thread then blocks indefinitely until a turn re-arms it): a clean-idle app takes no periodic wake.</summary>
     private int TrimIdleOnRenderThread(long nowMs)
     {
-        if (_idleTrimDormant) return -1;
+        // Above the dormant latch: a hidden window's fence backlog must drain even when the tile / device passes found nothing.
+        int hiddenNext = (HiddenStage)Volatile.Read(ref _renderHiddenStage) != HiddenStage.Visible && Volatile.Read(ref _renderHiddenApplied) != 0
+            ? TrimHiddenOnRenderThread() : -1;
+        if (_idleTrimDormant) return hiddenNext;
         long next = long.MaxValue;
         if (_renderTiles is { } tiles)
         {
@@ -750,6 +869,7 @@ public sealed partial class AppHost : IDisposable
         }
         int dev = _device.TrimIdleResources(nowMs);
         if (dev >= 0 && dev < next) next = dev;
+        if (hiddenNext >= 0 && hiddenNext < next) next = hiddenNext;
         if (next == long.MaxValue) { _idleTrimDormant = true; return -1; }
         return (int)Math.Min(next, int.MaxValue);
     }
@@ -1974,6 +2094,7 @@ public sealed partial class AppHost : IDisposable
         DumpDeviceLostFrames(null, "async-render");
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
+        Volatile.Write(ref _renderHiddenApplied, 0);   // the rebuilt device holds none of the release: a still-hidden stage re-applies on the next turn
         // Popup create / retire work queued before (or during) the loss runs now, in order, against the rebuilt device: a Create
         // attempted on the lost one would have thrown, and nothing else will drain until the next publication.
         DrainPopupRenderActions();
@@ -2030,6 +2151,7 @@ public sealed partial class AppHost : IDisposable
     private void DrainVideoStructuralPreTurn()
     {
         Threading.ThreadGuard.AssertRender();
+        ApplyRequestedHiddenStageOnRenderThread();
         var list = Volatile.Read(ref _childRenderSources);
         bool any = HasEarlyVideoWork;
         for (int i = 0; !any && i < list.Length; i++) any = !list[i]._renderFailed && list[i].HasEarlyVideoWork;
@@ -2185,6 +2307,7 @@ public sealed partial class AppHost : IDisposable
         DumpDeviceLostFrames(ex, "foreground");
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
+        if (OwningRenderThread is null && _hidden.Stage != HiddenStage.Visible) ApplyHiddenStage(_hidden.Stage, _uiTiles);   // inline: re-apply onto the rebuilt device
         ResetAdaptiveGpuGovernor();
         _scene.MarkAllPaintDirty();
         _repaintTargetValid = false;   // the rebuilt target holds nothing — the next frame repaints in full (§13.1)
@@ -3622,7 +3745,16 @@ public sealed partial class AppHost : IDisposable
         bool parked = IsParked;
         bool recovering = _deviceLost is { RecoverRequest: not 0, RecoverDone: 0 } && _asyncActive;
         if (parked != _wasParked && !recovering) { _lastWaitKind = HostWaitKind.Idle; return 0; }
-        if (parked) { _lastWaitKind = HostWaitKind.Idle; return (_cloakParked || _coverParked) && !IsOsParked ? CloakPollMs : -1; }
+        if (parked)
+        {
+            _lastWaitKind = HostWaitKind.Idle;
+            int parkedWait = (_cloakParked || _coverParked) && !IsOsParked ? CloakPollMs : -1;
+            // A hidden window wakes exactly once more for its release stage, then blocks again.
+            long hiddenDue = _isDetachedChild ? -1 : _hidden.NextDueInMs(CurrentHiddenPark(), (long)_timers.NowMs);
+            if (hiddenDue < 0) return parkedWait;
+            int dueMs = (int)Math.Clamp(hiddenDue, 1, int.MaxValue);
+            return parkedWait < 0 ? dueMs : Math.Min(parkedWait, dueMs);
+        }
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
@@ -4957,6 +5089,7 @@ public sealed partial class AppHost : IDisposable
         // Sampled after the relay, like the cloak.
         UpdateCoverPark();
         bool minimized = (windowStatus.Parked && !_revealPending) || _cloakParked || _coverParked;   // "minimized" below means PARKED: minimized, hidden OR cloaked (E2 — identical cost)
+        AdvanceHiddenMemory();   // park timer -> Shallow release, restore edge -> lift + full repaint (parked frames included)
         // InputHooks.WindowOccluded — HERE, above the park and idle gates, so it is published on EVERY frame and not only
         // the ones that reach Paint (an occlusion edge on an idle host would otherwise never be heard). A change schedules
         // its readers, which is RuntimePending: the idle gate below falls through to Paint (or the park branch flushes).

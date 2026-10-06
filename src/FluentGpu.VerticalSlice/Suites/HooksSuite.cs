@@ -1383,9 +1383,11 @@ static class HooksSuite
                 ? wDue >= 0        // display-rate: THIS iteration's frame paints and drains — one frame, not a poll
                 : wDue >= 1;       // any throttled/idle branch must floor at 1 ms
 
+            HiddenMemoryBudget.ShallowDelayMs = long.MaxValue;   // this gate measures the timer clamp; the hidden-memory stage owns one more (one-shot) deadline
             window.State = WindowState.Minimized;
             host.RunFrame();                                  // consume the park edge before measuring steady blocking
             int wMin = host.RecommendedWaitMs();
+            HiddenMemoryBudget.Reset();
             bool minimizedBlocks = wMin == -1 && host.LastWaitKind == HostWaitKind.Idle;
 
             window.State = WindowState.Normal;

@@ -278,6 +278,9 @@ public sealed class ColdMaintenanceTests
         internal readonly AppHost Host;
         internal Fixture(bool minimized)
         {
+            // These tests pin the cold-maintenance deadlines of a parked loop; the hidden-memory stage's own one-shot wake
+            // (HiddenStageHostTests) would only add a second deadline to what they measure.
+            HiddenMemoryBudget.ShallowDelayMs = long.MaxValue;
             var strings = new StringTable();
             Window.Show();
             Host = new AppHost(App, Window, Device, new HeadlessFontSystem(strings), strings, new EmptyRoot());
@@ -286,6 +289,6 @@ public sealed class ColdMaintenanceTests
             if (minimized) { Window.State = WindowState.Minimized; Host.RunFrame(); }
             Assert.Equal(-1, Host.RecommendedWaitMs());
         }
-        public void Dispose() { Host.Dispose(); App.Dispose(); }
+        public void Dispose() { Host.Dispose(); App.Dispose(); HiddenMemoryBudget.Reset(); }
     }
 }

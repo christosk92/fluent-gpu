@@ -191,7 +191,7 @@ internal sealed unsafe class SmallImageHeapPool : IDisposable
     }
 
     /// <summary>CPU-only maintenance: no command recording and no wait. Submitted activation alone never requests frames.</summary>
-    internal void Reclaim(ulong completedFence)
+    internal void Reclaim(ulong completedFence, bool keepWarm = true)
     {
         if (completedFence == ulong.MaxValue) return; // device removal is NOT completion
         foreach (var page in _pages) page.State.Complete(completedFence);
@@ -201,7 +201,7 @@ internal sealed unsafe class SmallImageHeapPool : IDisposable
             var page = _pages[i];
             if (!page.State.Ready || page.State.LiveCount != 0) continue;
             int b = page.Bucket == 64 ? 0 : 1;
-            bool keep = !_disabled[b] && !(b == 0 ? warm64 : warm128);
+            bool keep = keepWarm && !_disabled[b] && !(b == 0 ? warm64 : warm128);
             if (keep) { if (b == 0) warm64 = true; else warm128 = true; continue; }
             Destroy(page); _heapBytes -= page.Bytes; _pages.RemoveAt(i--);
         }
