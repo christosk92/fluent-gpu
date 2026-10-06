@@ -225,6 +225,10 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public void EvictImage(int imageId) { _resident.Remove(imageId); _evictions.Add(imageId); }
     public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
     public bool HasPendingUploads => false;
+    public bool IsImageResident(int imageId) => _resident.ContainsKey(imageId);
+    /// <summary>Test seam: the last <see cref="IGpuDevice.SetUploadCapLifted"/> value.</summary>
+    public bool UploadCapLifted { get; private set; }
+    public void SetUploadCapLifted(bool lifted) => UploadCapLifted = lifted;
 
     /// <summary>E5 (design-engine-images.md): census of fence-only-maintenance calls — how many times AppHost reclaimed
     /// on an elided/skipped frame instead of forcing a submit. `gate.repaint.elided-frame-reclaims` reads this.</summary>
@@ -569,9 +573,26 @@ public sealed class HeadlessSwapchain : ISwapchain
 
     public void Present()
     {
+        LastPresentHeld = false;
+        if (_holdOnce)
+        {
+            // A held present (the restore hold): recorded, not shown. Never a stand-down - PresentStandDown / IsOccluded stay put.
+            _holdOnce = false;
+            LastPresentHeld = true;
+            HeldPresentCount++;
+            return;
+        }
         if (PresentStandDown) return;
         PresentCount++;
     }
+
+    private bool _holdOnce;
+    /// <inheritdoc/>
+    public void HoldNextPresent() => _holdOnce = true;
+    /// <inheritdoc/>
+    public bool LastPresentHeld { get; private set; }
+    /// <summary>Presents this target held back (<see cref="HoldNextPresent"/>) - they are not in <see cref="PresentCount"/>.</summary>
+    public int HeldPresentCount { get; private set; }
 
     /// <summary>Test seam: model a full present queue - while set, <see cref="PresentNoWait"/> is REFUSED (nothing presented)
     /// and counted in <see cref="RefusedPresents"/>, as the real backend does on DXGI_ERROR_WAS_STILL_DRAWING.</summary>

@@ -1,4 +1,4 @@
-using FluentGpu.Rhi;
+﻿using FluentGpu.Rhi;
 
 namespace FluentGpu.Hosting.Threading;
 
@@ -39,6 +39,12 @@ public struct RenderFrame
     /// render turn presenting an earlier publication can never consume it, and a frame the render side elides never leaves
     /// it standing for an unrelated later present.</summary>
     public bool SettlePresent;
+
+    /// <summary>The restore hold rides the publication (never a side flag): this frame is to be recorded and submitted but NOT
+    /// presented, because the restore it belongs to is still waiting for the images its first frame needs. The render thread decides
+    /// per ADOPTED frame (and keeps its own latch, see <c>AppHost.DecideHold</c>), so a release can never race the publication it
+    /// governs: the release is simply the first publication without this bit.</summary>
+    public bool PresentHeld;
 
     /// <summary>How many entries of the slot's video-intent block this publication carries (F070): the snapshot of the UI-owned
     /// <c>VideoSurfaceRegistry</c> taken at publish, read through <see cref="SceneFramePublisher.VideoIntents"/>. The render thread
