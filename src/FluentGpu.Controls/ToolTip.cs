@@ -244,6 +244,285 @@ public sealed class ToolTip : Component
     public static Element WrapStable(Func<Element> target, string text, float grow = 0f, float showDelayMs = float.NaN)
         => Embed.Comp(new ToolTipStableSlots(target, text, grow, showDelayMs), () => new ToolTip());
 
+    // ── Per-mount state. Instance fields, not hook cells: the component instance IS the mount, so these live exactly as
+    // long as the cells did, and the handlers are built once per mount instead of once per render. A handler handed to the
+    // wrapper box every render was a fresh delegate each time (a dozen allocations per ToolTip render) and made the diff
+    // see "changed" handlers and rewrite the node's columns.
+    IOverlayService _svc = NullOverlayService.Instance;      // re-read from context each render; the handlers use the latest
+    InputHooks _hooks = InputHooks.Current.Default;
+    readonly Ref<NodeHandle> _anchor = new(default);
+    readonly Ref<OverlayHandle?> _h = new(null);
+    readonly Ref<bool> _autoOpened = new(false);
+    readonly Ref<Point2> _lastPointerLocal = new(default);   // last hover position (wrapper-local) → Mouse placement
+    readonly Ref<bool> _dismissedUntilLeave = new(false);    // press- or timeout-dismissed: no re-open until leave + re-enter
+    readonly Ref<NodeHandle> _bubbleNode = new(default);     // the open bubble's realized node → its rect joins the safe zone
+    // The text the bubble shows, written each render. The bubble's content thunk is captured by the overlay ENTRY at open
+    // time and re-invoked by OverlayHost every render (OverlayHost.cs:1251). Capturing the `text` LOCAL froze the bubble at
+    // the text of whichever render opened it: a recycled owner (ToolTip.Wrap re-pushes props, so the component is reused,
+    // not remounted) kept showing the previous entity's tooltip. A Ref written each render is not reactive — no
+    // subscription, no backwards write — and the thunk reads the CURRENT value.
+    readonly Ref<string> _textRef = new("");
+    // The text the OPEN bubble was opened WITH — the owner's identity, as far as a bubble can observe it. Wrap
+    // re-pushes props, so a rail/list row whose identity changes IN PLACE reuses this component instead of
+    // remounting it, and both live thunks then quietly re-point: the content thunk reads _textRef, the anchor thunk
+    // reads _anchor.Value, so an open bubble survives onto a DIFFERENT owner and re-anchors there, describing the
+    // item that used to be under the pointer. A Ref (no subscription, no per-frame allocation) records what was
+    // opened so the stranded-bubble guard below can close it the moment the two disagree. Text is the only identity
+    // the wrapper actually has — the target Element is a new instance on every parent render and the wrapper's own
+    // node handle is reused across the swap — so a live-updating bound text on ONE owner also closes the bubble;
+    // that is the safe direction (a tooltip re-opens on the next hover; a wrong-row tooltip lies for 5s).
+    readonly Ref<string> _openedText = new("");
+    // TRANSIENT posture — set by the same per-element override that makes the bubble open immediately (see Wrap).
+    // Instant show and instant hide are one decision, not two: a bubble that appears the moment the pointer lands
+    // is a DATA TIP (a sparkline bar's week, a blend slice's share) rather than a delayed reminder about a button.
+    // A data tip is never travelled into, so it must not keep the safe-zone's 1s grace on the way out — with the
+    // 800ms delay gone, that grace is what leaves four or five bubbles stacked behind a fast sweep. Held in a Ref
+    // because the leave handler must read the CURRENT posture, not whichever render happened to install it.
+    readonly Ref<bool> _transient = new(false);
+    readonly Ref<long> _openedAtMs = new(0);                 // monotonic ms at open → the 5s dwell survives 2↔3 phase flips
+    readonly Signal<int> _safePoll = new(0);                 // bumped per in-zone safe-zone elapse → remounts the 1s poll clock
+    // Timer phase: 0 = idle, 1 = show-delay counting down (open after it), 2 = bubble open (auto-dismiss counting
+    // down), 3 = bubble open + pointer outside owner ∪ bubble (the 1s safe-zone grace counting down).
+    readonly Signal<int> _phase = new(0);
+    // 3-state input mode of the pending/open tooltip (WinUI AutomaticToolTipInputMode): 0 = mouse, 1 = keyboard.
+    readonly Ref<bool> _keyboardMode = new(false);
+    // GetTickCount()-style monotonic ms at the last close → re-show detection (BETWEEN_SHOW_DELAY_MS window).
+    // WinUI names this s_lastToolTipOpenedTime, but assigns it in CloseAutomaticToolTip at the close start.
+    readonly Ref<long> _lastClosedAtMs = new(long.MinValue / 2);
+
+    // The handlers, thunks and effect bodies the wrapper box and the effects hold, created once per mount.
+    readonly Func<Element> _bubbleContent;
+    readonly Action<NodeHandle> _onBubbleRealized, _onAnchorRealized;
+    readonly Action<Point2> _onEnter;
+    readonly Action _onLeave, _openOnMountFx, _strandedGuardFx, _openNow, _autoDismiss, _safeZoneCheck;
+    readonly Action<PointerEventArgs> _onPressed;
+    readonly Action<bool> _onFocus;
+    readonly Func<Action?> _teardownFx;
+
+    public ToolTip()
+    {
+        _onBubbleRealized = x => _bubbleNode.Value = x;
+        _onAnchorRealized = x => _anchor.Value = x;
+        _bubbleContent = () => BubbleContent(_textRef.Value, _onBubbleRealized);
+        _onEnter = OnEnter;
+        _onLeave = OnLeave;
+        _onPressed = OnPressed;
+        _onFocus = OnFocus;
+        _openNow = OpenNow;
+        _autoDismiss = AutoDismiss;
+        _safeZoneCheck = SafeZoneCheck;
+        _openOnMountFx = OpenOnMountEffect;
+        _strandedGuardFx = StrandedGuardEffect;
+        _teardownFx = TeardownEffect;
+    }
+
+    void OpenNow()
+    {
+        _phase.Value = 2;   // bubble open → arm the auto-dismiss countdown
+        if (_h.Value is { IsOpen: true }) return;
+        // One bubble at a time: whoever owns the screen loses it here, before this one is placed (see s_openOwner).
+        if (!ReferenceEquals(s_openOwner, this)) s_openCloser?.Invoke();
+        s_openOwner = this;
+        s_openCloser = CloseNow;
+        _openedAtMs.Value = Environment.TickCount64;   // dwell epoch (m_tpCloseTimer is armed once per open)
+        _openedText.Value = _textRef.Value;             // identity epoch — see _openedText (a re-pushed owner closes it)
+        // A tooltip never traps focus and never light-dismisses on outside click — it is transient and dismissal
+        // is driven by hover/focus-leave + press + the auto-dismiss timer (ToolTipService owns close, not the user).
+        //
+        // Chrome: the fade (Raw) for a normal tooltip; NONE (Static) for a transient one. A 167ms fade-out is a
+        // ghost the next bubble's fade-in overlaps, which is precisely what "instant" must not look like — a data
+        // tip that re-anchors as the pointer crosses a strip has to be exactly one bubble on every frame.
+        var options = new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None,
+                                       Chrome: _transient.Value ? PopupChrome.Static : PopupChrome.Raw);
+        if (Placement == ToolTipPlacementMode.Mouse && !_keyboardMode.Value)
+        {
+            // PlacementMode.Mouse: top-left at the pointer, 11px below it (ToolTip_Partial.cpp:976-977
+            // "align ToolTip with the bottom left corner of mouse bounding rectangle"; .h:56 offset = 11). The
+            // positioner adds FlyoutMargin (4) below a Bottom-placed _anchor, so the synthetic point-rect carries
+            // the remaining 7; collisions flip it above the pointer.
+            var local = _lastPointerLocal.Value;
+            _h.Value = _svc.OpenAt(
+                () =>
+                {
+                    var scene = Context.Scene;
+                    var node = _anchor.Value;   // LIVE: a re-keyed/remounted target changes the node; a capture
+                                               // would strand the bubble on a dead handle and clamp it to origin
+                    RectF abs = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
+                    return new RectF(abs.X + local.X, abs.Y + local.Y + (MousePlacementVerticalOffset - FlyoutPositioner.FlyoutMargin), 0f, 0f);
+                },
+                _bubbleContent,
+                FlyoutPlacement.BottomEdgeAlignedLeft,
+                options,
+                owner: () => _anchor.Value);
+        }
+        else
+        {
+            // WinUI default PlacementMode.Top: CENTERED above the target (ToolTip_Partial.cpp:1119-1122 default),
+            // against the target rect INFLATED by the input-mode offset — DEFAULT_MOUSE_OFFSET 20 /
+            // DEFAULT_KEYBOARD_OFFSET 12 on both axes (ToolTip_Partial.h:10-11; cpp:1224-1258
+            // InflateRect(&rcDockTo, horizontalOffset, verticalOffset) feeds QueryRelativePosition at :1275).
+            // The positioner adds FlyoutMargin (4) in the major direction, so the synthetic rect carries the rest;
+            // FlyoutPositioner flips below on a collision.
+            bool keyboard = _keyboardMode.Value;
+            _h.Value = _svc.OpenAt(
+                () =>
+                {
+                    var scene = Context.Scene;
+                    var node = _anchor.Value;   // LIVE: a re-keyed/remounted target changes the node; a capture
+                                               // would strand the bubble on a dead handle and clamp it to origin
+                    RectF abs = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
+                    float inflate = (keyboard ? KeyboardPlacementOffset : MousePlacementOffset) - FlyoutPositioner.FlyoutMargin;
+                    return new RectF(abs.X - inflate, abs.Y - inflate, abs.W + inflate * 2f, abs.H + inflate * 2f);
+                },
+                _bubbleContent,
+                FlyoutPlacement.Top,
+                options,
+                owner: () => _anchor.Value);
+        }
+    }
+
+    void CloseNow()
+    {
+        bool wasOpen = _phase.Peek() is 2 or 3;
+        if (_h.Value is { IsOpen: true } o) o.Close();
+        _h.Value = null;
+        if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
+        _bubbleNode.Value = default;   // the bubble unmounts — its rect leaves the safe zone
+        if (wasOpen) _lastClosedAtMs.Value = Environment.TickCount64;   // mark close start for the re-show window
+        _keyboardMode.Value = false;
+        _phase.Value = 0;
+    }
+
+    // The SPI_GETMESSAGEDURATION dwell elapsed: close AND latch until leave + re-enter — WinUI's only show trigger
+    // is PointerEntered (ToolTipService_Partial.cpp:1395-1418 OnOwnerPointerEntered), so in-place hover moves can
+    // never re-open a timed-out tooltip (the owner re-enters the show path via a real exit + enter only).
+    void AutoDismiss() { _dismissedUntilLeave.Value = true; CloseNow(); }
+
+    // Pointer-enter (OnHoverMove fires on any move while hovering): begin the initial-show-delay countdown if idle.
+    // ToolTipService.OnOwnerEnterInternal — Mouse mode, reshow if the previous tooltip closed < 200ms ago.
+    void OnEnter(Point2 local)
+    {
+        _lastPointerLocal.Value = local;   // tracked even while open — WinUI re-reads the current point at placement
+        if (_phase.Peek() == 3) { _phase.Value = 2; return; }   // back inside the safe zone → cancel the 1s grace
+        if (_dismissedUntilLeave.Value) return;   // dismissed: moves while still hovering must NOT re-arm (the WinUI
+                                                 // owner stays out of m_nestedOwners until a real leave + re-enter)
+        if (_phase.Peek() != 0 || (_h.Value is { IsOpen: true })) return;
+        _keyboardMode.Value = false;
+        _phase.Value = 1;   // show-delay counting down
+    }
+
+    // Pointer-leave: cancel a PENDING open (ToolTipService_Partial.cpp:1435-1442 — "Cancel the ToolTip if it had
+    // not been opened yet"), but KEEP an open bubble: WinUI's owner-exit only records the owner and lets the
+    // safe-zone monitor close it once the pointer is outside owner ∪ tooltip (cpp:1443-1453; the 1s check timer,
+    // cpp:349-381 + .h:22). A leave also lifts the press/timeout dismiss latch (the next enter may show again).
+    void OnLeave()
+    {
+        _dismissedUntilLeave.Value = false;
+        // A transient (instant-show) bubble is hit-test-invisible chrome over a data surface: there is nothing in
+        // it to travel INTO, which is the only thing the safe zone protects. It closes on the leave edge, full stop.
+        if (_transient.Value) { CloseNow(); return; }
+        if (_phase.Peek() == 2) { _phase.Value = 3; return; }   // arm the 1s safe-zone poll (the bubble rect keeps it open via geometry)
+        if (_phase.Peek() != 3) CloseNow();   // pending open → cancel
+    }
+
+    // The 1s safe-zone poll elapsed (phase 3): WinUI OnSafeZoneCheck / IsToolTipInSafeZone against the GLOBAL
+    // pointer — the bubble is hit-test-invisible (a real tooltip never intercepts input), so bubble-hover is
+    // detected by geometry, never by events. Owner re-entry is event-driven (OnEnter flips 3→2) but the owner
+    // rect is tested too (WinUI tests owner ∪ tooltip). The 5s dwell stays authoritative while parked in-zone.
+    void SafeZoneCheck()
+    {
+        if (Environment.TickCount64 - _openedAtMs.Value >= (long)ShowDurationMs) { AutoDismiss(); return; }
+        var scene = Context.Scene;
+        var on = _anchor.Value;
+        // The owner DIED under the bubble (its subtree was relaid out or removed while the pointer sat on it, or a
+        // drag holds capture), so the leave edge that would have closed this is never coming. The rect thunk now
+        // resolves to `default` and the placement pass walks the bubble to the viewport origin — a dead anchor is a
+        // close, not another poll interval.
+        if (scene is not null && !on.IsNull && !scene.IsLive(on)) { CloseNow(); return; }
+        if (scene is not null && _hooks.GetPointerPosition?.Invoke() is { } pt)
+        {
+            var bn = _bubbleNode.Value;
+            bool inside = (!on.IsNull && scene.IsLive(on) && InRect(scene.AbsoluteRect(on), pt))
+                       || (!bn.IsNull && scene.IsLive(bn) && InRect(scene.AbsoluteRect(bn), pt));
+            if (inside) { _safePoll.Value = _safePoll.Peek() + 1; return; }   // stay open — remount the poll clock (keyed by _safePoll)
+        }
+        CloseNow();   // outside owner ∪ bubble for one full interval (or no trustworthy pointer) → close
+    }
+
+    // Keyboard focus entering the target subtree (the dispatcher routes focus-changed to ancestors on subtree
+    // boundary crossings): WinUI OnOwnerGotFocus (ToolTipService_Partial.cpp:1635-1668) — show ONLY for
+    // FocusState::Keyboard (cpp:1652-1656: GetRealFocusStateForFocusedElement() == Keyboard; pointer-driven focus
+    // never opens a tooltip). Keyboard delay = ×2 (800ms), reshow included (cpp:1777-1779). Focus leaving = leave.
+    void OnFocus(bool got)
+    {
+        if (!got) { CloseNow(); return; }
+        if (_phase.Peek() != 0 || _h.Value is { IsOpen: true }) return;
+        var scene = Context.Scene;
+        var focused = _hooks.GetFocus?.Invoke() ?? NodeHandle.Null;
+        bool keyboardFocus = scene is not null && !focused.IsNull && scene.IsLive(focused)
+                             && (scene.Flags(focused) & NodeFlags.FocusVisual) != 0;
+        if (!keyboardFocus) return;
+        _keyboardMode.Value = true;
+        _phase.Value = 1;
+    }
+
+    // Pointer press over the target: dismiss an open bubble (and a pending one), latched until leave + re-enter.
+    // Press-dismiss is classic Win32/WPF tooltip behavior we keep deliberately — WinUI 3's ToolTipService registers
+    // no PointerPressed handler (ToolTipService_Partial.cpp:176-220; it closes via safe-zone exit, cpp:1437-1453)
+    // but equally cannot re-open a dismissed owner until a real leave + re-enter (cpp:725-737). There is no
+    // click-to-toggle — the wrapper adds NO OnClick, so it never becomes a tab stop or intercepts activation.
+    void OnPressed(PointerEventArgs _)
+    {
+        if (_phase.Peek() == 0 && _h.Value is not { IsOpen: true }) return;
+        _dismissedUntilLeave.Value = true;
+        CloseNow();
+    }
+
+
+    void OpenOnMountEffect()
+    {
+        if (!OpenOnMount || _autoOpened.Value) return;
+        _autoOpened.Value = true;
+        OpenNow();
+    }
+
+    // STRANDED-BUBBLE GUARD. Two ways an open bubble outlives the thing it describes, both ending with a tip
+    // anchored to the wrong item (or to the viewport origin) until the 5s dwell finally fires:
+    //   • the owner's IDENTITY changed in place — Wrap re-pushes props, so a recycled rail/list row REUSES this
+    //     component and the live thunks re-point the already-open bubble at the new item (see _openedText);
+    //   • the anchor node DIED with no leave edge — the target was relaid out or destroyed under a still pointer, or
+    //     a drag holds capture, so OnLeave never runs and the phase never leaves 2 (the safe-zone poll, which has
+    //     the same test, only runs in phase 3).
+    // Deps-gated on the text, so a plain re-render costs one DepKey compare; an EFFECT rather than an inline render
+    // check because CloseNow writes signals (phase/bubbleNode), which a render body must not do.
+    void StrandedGuardEffect()
+    {
+        if (_phase.Peek() is not (2 or 3) && _h.Value is not { IsOpen: true }) return;
+        if (!string.Equals(_openedText.Value, _textRef.Value, StringComparison.Ordinal)) { CloseNow(); return; }
+        var scene = Context.Scene;
+        var on = _anchor.Value;
+        if (scene is not null && !on.IsNull && !scene.IsLive(on)) CloseNow();
+    }
+
+    // Owner unmount must not orphan the bubble. The component's OverlayHandle is the ONLY thing an unmounting
+    // ToolTip still owns that the host does not: the entry lives in OverlayServiceImpl.Entries and leaves only via
+    // Closing → AfterAnimations → Finalize, so a wrapper that disappears while open leaves a live entry whose rect
+    // thunk now resolves against a DEAD node (scene.IsLive false ⇒ abs = default ⇒ the synthetic point at the
+    // viewport origin) — and the placement pass re-places rect-anchored entries on EVERY OverlayHost render
+    // (OverlayHost.cs:835-839), so the bubble walks to the viewport's top-left corner and stays.
+    //
+    // Handle-only teardown ON PURPOSE: CloseNow() also writes phase / bubbleNode / lastClosedAtMs / keyboardMode,
+    // cells being torn down in this very pass (RunAllCleanups). Those writes cannot throw (a SignalCell is not
+    // disposed) but they are useless — no subscriber survives — and they re-enter a dying reactive graph.
+    Action? TeardownEffect() => () =>
+    {
+        if (_h.Value is { IsOpen: true } o) o.Close();
+        _h.Value = null;
+        // Release the single-bubble latch too: a torn-down owner's closer writes into cells that no longer have
+        // a subscriber, and worse, would leave the NEXT tooltip believing something else still owns the screen.
+        if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
+    };
+
     public override Element Render()
     {
         // The deferred form wins when present: it is the one the parent chose, and resolving it FIRST is what puts the
@@ -263,282 +542,34 @@ public sealed class ToolTip : Component
         // render — hooks must never be skipped conditionally) to short-circuit the actual wiring/wrap. The component
         // stays mounted; re-pushed props re-render it, so a later non-empty value wires up with no remount.
         bool hasTooltip = !(bound is not null && string.IsNullOrEmpty(boundText));
-        var svc = UseContext(Overlay.Service);
-        var hooks = UseContext(InputHooks.Current);
-        var anchor = UseRef<NodeHandle>(default);
-        var h = UseRef<OverlayHandle?>(null);
-        var autoOpened = UseRef(false);
-        var lastPointerLocal = UseRef<Point2>(default);   // last hover position (wrapper-local) → Mouse placement
-        var dismissedUntilLeave = UseRef(false);          // press- or timeout-dismissed: no re-open until leave + re-enter
-        var bubbleNode = UseRef<NodeHandle>(default);     // the open bubble's realized node → its rect joins the safe zone
-        // The bubble's content thunk is captured by the overlay ENTRY at open time and re-invoked by OverlayHost every
-        // render (OverlayHost.cs:1251). Capturing the `text` LOCAL froze the bubble at the text of whichever render
-        // opened it: a recycled owner (ToolTip.Wrap re-pushes props, so the component is reused, not remounted) kept
-        // showing the previous entity's tooltip. A Ref written each render is not reactive — no subscription, no
-        // backwards write — and the thunk reads the CURRENT value.
-        var textRef = UseRef("");
-        textRef.Value = text;
-        // The text the OPEN bubble was opened WITH — the owner's identity, as far as a bubble can observe it. Wrap
-        // re-pushes props, so a rail/list row whose identity changes IN PLACE reuses this component instead of
-        // remounting it, and both live thunks then quietly re-point: the content thunk reads textRef, the anchor thunk
-        // reads anchor.Value, so an open bubble survives onto a DIFFERENT owner and re-anchors there, describing the
-        // item that used to be under the pointer. A Ref (no subscription, no per-frame allocation) records what was
-        // opened so the stranded-bubble guard below can close it the moment the two disagree. Text is the only identity
-        // the wrapper actually has — the target Element is a new instance on every parent render and the wrapper's own
-        // node handle is reused across the swap — so a live-updating bound text on ONE owner also closes the bubble;
-        // that is the safe direction (a tooltip re-opens on the next hover; a wrong-row tooltip lies for 5s).
-        var openedText = UseRef("");
-        // TRANSIENT posture — set by the same per-element override that makes the bubble open immediately (see Wrap).
-        // Instant show and instant hide are one decision, not two: a bubble that appears the moment the pointer lands
-        // is a DATA TIP (a sparkline bar's week, a blend slice's share) rather than a delayed reminder about a button.
-        // A data tip is never travelled into, so it must not keep the safe-zone's 1s grace on the way out — with the
-        // 800ms delay gone, that grace is what leaves four or five bubbles stacked behind a fast sweep. Held in a Ref
-        // because the leave handler must read the CURRENT posture, not whichever render happened to install it.
-        var transient = UseRef(false);
-        transient.Value = !float.IsNaN(showDelayOverride);
-        var openedAtMs = UseRef<long>(0);                 // monotonic ms at open → the 5s dwell survives 2↔3 phase flips
-        var safePoll = UseSignal(0);                      // bumped per in-zone safe-zone elapse → remounts the 1s poll clock
+        _svc = UseContext(Overlay.Service);
+        _hooks = UseContext(InputHooks.Current);
+        _textRef.Value = text;
+        _transient.Value = !float.IsNaN(showDelayOverride);
 
-        // Timer phase: 0 = idle, 1 = show-delay counting down (open after it), 2 = bubble open (auto-dismiss counting
-        // down), 3 = bubble open + pointer outside owner ∪ bubble (the 1s safe-zone grace counting down).
-        var phase = UseSignal(0);
-        // 3-state input mode of the pending/open tooltip (WinUI AutomaticToolTipInputMode): 0 = mouse, 1 = keyboard.
-        var keyboardMode = UseRef(false);
-        // GetTickCount()-style monotonic ms at the last close → re-show detection (BETWEEN_SHOW_DELAY_MS window).
-        // WinUI names this s_lastToolTipOpenedTime, but assigns it in CloseAutomaticToolTip at the close start.
-        var lastClosedAtMs = UseRef<long>(long.MinValue / 2);
-        var placementMode = Placement;
+        UseEffect(_openOnMountFx, OpenOnMount);
+        UseEffect(_strandedGuardFx, text);
+        UseEffect(_teardownFx, DepKey.Empty);
 
-        Func<Element> bubbleContent = () => BubbleContent(textRef.Value, x => bubbleNode.Value = x);
-
-        void OpenNow()
-        {
-            phase.Value = 2;   // bubble open → arm the auto-dismiss countdown
-            if (h.Value is { IsOpen: true }) return;
-            // One bubble at a time: whoever owns the screen loses it here, before this one is placed (see s_openOwner).
-            if (!ReferenceEquals(s_openOwner, this)) s_openCloser?.Invoke();
-            s_openOwner = this;
-            s_openCloser = CloseNow;
-            openedAtMs.Value = Environment.TickCount64;   // dwell epoch (m_tpCloseTimer is armed once per open)
-            openedText.Value = textRef.Value;             // identity epoch — see openedText (a re-pushed owner closes it)
-            // A tooltip never traps focus and never light-dismisses on outside click — it is transient and dismissal
-            // is driven by hover/focus-leave + press + the auto-dismiss timer (ToolTipService owns close, not the user).
-            //
-            // Chrome: the fade (Raw) for a normal tooltip; NONE (Static) for a transient one. A 167ms fade-out is a
-            // ghost the next bubble's fade-in overlaps, which is precisely what "instant" must not look like — a data
-            // tip that re-anchors as the pointer crosses a strip has to be exactly one bubble on every frame.
-            var options = new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None,
-                                           Chrome: transient.Value ? PopupChrome.Static : PopupChrome.Raw);
-            if (placementMode == ToolTipPlacementMode.Mouse && !keyboardMode.Value)
-            {
-                // PlacementMode.Mouse: top-left at the pointer, 11px below it (ToolTip_Partial.cpp:976-977
-                // "align ToolTip with the bottom left corner of mouse bounding rectangle"; .h:56 offset = 11). The
-                // positioner adds FlyoutMargin (4) below a Bottom-placed anchor, so the synthetic point-rect carries
-                // the remaining 7; collisions flip it above the pointer.
-                var local = lastPointerLocal.Value;
-                h.Value = svc.OpenAt(
-                    () =>
-                    {
-                        var scene = Context.Scene;
-                        var node = anchor.Value;   // LIVE: a re-keyed/remounted target changes the node; a capture
-                                                   // would strand the bubble on a dead handle and clamp it to origin
-                        RectF abs = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
-                        return new RectF(abs.X + local.X, abs.Y + local.Y + (MousePlacementVerticalOffset - FlyoutPositioner.FlyoutMargin), 0f, 0f);
-                    },
-                    bubbleContent,
-                    FlyoutPlacement.BottomEdgeAlignedLeft,
-                    options,
-                    owner: () => anchor.Value);
-            }
-            else
-            {
-                // WinUI default PlacementMode.Top: CENTERED above the target (ToolTip_Partial.cpp:1119-1122 default),
-                // against the target rect INFLATED by the input-mode offset — DEFAULT_MOUSE_OFFSET 20 /
-                // DEFAULT_KEYBOARD_OFFSET 12 on both axes (ToolTip_Partial.h:10-11; cpp:1224-1258
-                // InflateRect(&rcDockTo, horizontalOffset, verticalOffset) feeds QueryRelativePosition at :1275).
-                // The positioner adds FlyoutMargin (4) in the major direction, so the synthetic rect carries the rest;
-                // FlyoutPositioner flips below on a collision.
-                bool keyboard = keyboardMode.Value;
-                h.Value = svc.OpenAt(
-                    () =>
-                    {
-                        var scene = Context.Scene;
-                        var node = anchor.Value;   // LIVE: a re-keyed/remounted target changes the node; a capture
-                                                   // would strand the bubble on a dead handle and clamp it to origin
-                        RectF abs = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
-                        float inflate = (keyboard ? KeyboardPlacementOffset : MousePlacementOffset) - FlyoutPositioner.FlyoutMargin;
-                        return new RectF(abs.X - inflate, abs.Y - inflate, abs.W + inflate * 2f, abs.H + inflate * 2f);
-                    },
-                    bubbleContent,
-                    FlyoutPlacement.Top,
-                    options,
-                    owner: () => anchor.Value);
-            }
-        }
-
-        void CloseNow()
-        {
-            bool wasOpen = phase.Peek() is 2 or 3;
-            if (h.Value is { IsOpen: true } o) o.Close();
-            h.Value = null;
-            if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
-            bubbleNode.Value = default;   // the bubble unmounts — its rect leaves the safe zone
-            if (wasOpen) lastClosedAtMs.Value = Environment.TickCount64;   // mark close start for the re-show window
-            keyboardMode.Value = false;
-            phase.Value = 0;
-        }
-
-        // The SPI_GETMESSAGEDURATION dwell elapsed: close AND latch until leave + re-enter — WinUI's only show trigger
-        // is PointerEntered (ToolTipService_Partial.cpp:1395-1418 OnOwnerPointerEntered), so in-place hover moves can
-        // never re-open a timed-out tooltip (the owner re-enters the show path via a real exit + enter only).
-        void AutoDismiss() { dismissedUntilLeave.Value = true; CloseNow(); }
-
-        // Pointer-enter (OnHoverMove fires on any move while hovering): begin the initial-show-delay countdown if idle.
-        // ToolTipService.OnOwnerEnterInternal — Mouse mode, reshow if the previous tooltip closed < 200ms ago.
-        void OnEnter(Point2 local)
-        {
-            lastPointerLocal.Value = local;   // tracked even while open — WinUI re-reads the current point at placement
-            if (phase.Peek() == 3) { phase.Value = 2; return; }   // back inside the safe zone → cancel the 1s grace
-            if (dismissedUntilLeave.Value) return;   // dismissed: moves while still hovering must NOT re-arm (the WinUI
-                                                     // owner stays out of m_nestedOwners until a real leave + re-enter)
-            if (phase.Peek() != 0 || (h.Value is { IsOpen: true })) return;
-            keyboardMode.Value = false;
-            phase.Value = 1;   // show-delay counting down
-        }
-
-        // Pointer-leave: cancel a PENDING open (ToolTipService_Partial.cpp:1435-1442 — "Cancel the ToolTip if it had
-        // not been opened yet"), but KEEP an open bubble: WinUI's owner-exit only records the owner and lets the
-        // safe-zone monitor close it once the pointer is outside owner ∪ tooltip (cpp:1443-1453; the 1s check timer,
-        // cpp:349-381 + .h:22). A leave also lifts the press/timeout dismiss latch (the next enter may show again).
-        void OnLeave()
-        {
-            dismissedUntilLeave.Value = false;
-            // A transient (instant-show) bubble is hit-test-invisible chrome over a data surface: there is nothing in
-            // it to travel INTO, which is the only thing the safe zone protects. It closes on the leave edge, full stop.
-            if (transient.Value) { CloseNow(); return; }
-            if (phase.Peek() == 2) { phase.Value = 3; return; }   // arm the 1s safe-zone poll (the bubble rect keeps it open via geometry)
-            if (phase.Peek() != 3) CloseNow();   // pending open → cancel
-        }
-
-        // The 1s safe-zone poll elapsed (phase 3): WinUI OnSafeZoneCheck / IsToolTipInSafeZone against the GLOBAL
-        // pointer — the bubble is hit-test-invisible (a real tooltip never intercepts input), so bubble-hover is
-        // detected by geometry, never by events. Owner re-entry is event-driven (OnEnter flips 3→2) but the owner
-        // rect is tested too (WinUI tests owner ∪ tooltip). The 5s dwell stays authoritative while parked in-zone.
-        void SafeZoneCheck()
-        {
-            if (Environment.TickCount64 - openedAtMs.Value >= (long)ShowDurationMs) { AutoDismiss(); return; }
-            var scene = Context.Scene;
-            var on = anchor.Value;
-            // The owner DIED under the bubble (its subtree was relaid out or removed while the pointer sat on it, or a
-            // drag holds capture), so the leave edge that would have closed this is never coming. The rect thunk now
-            // resolves to `default` and the placement pass walks the bubble to the viewport origin — a dead anchor is a
-            // close, not another poll interval.
-            if (scene is not null && !on.IsNull && !scene.IsLive(on)) { CloseNow(); return; }
-            if (scene is not null && hooks.GetPointerPosition?.Invoke() is { } pt)
-            {
-                var bn = bubbleNode.Value;
-                bool inside = (!on.IsNull && scene.IsLive(on) && InRect(scene.AbsoluteRect(on), pt))
-                           || (!bn.IsNull && scene.IsLive(bn) && InRect(scene.AbsoluteRect(bn), pt));
-                if (inside) { safePoll.Value = safePoll.Peek() + 1; return; }   // stay open — remount the poll clock (keyed by safePoll)
-            }
-            CloseNow();   // outside owner ∪ bubble for one full interval (or no trustworthy pointer) → close
-        }
-
-        // Keyboard focus entering the target subtree (the dispatcher routes focus-changed to ancestors on subtree
-        // boundary crossings): WinUI OnOwnerGotFocus (ToolTipService_Partial.cpp:1635-1668) — show ONLY for
-        // FocusState::Keyboard (cpp:1652-1656: GetRealFocusStateForFocusedElement() == Keyboard; pointer-driven focus
-        // never opens a tooltip). Keyboard delay = ×2 (800ms), reshow included (cpp:1777-1779). Focus leaving = leave.
-        void OnFocus(bool got)
-        {
-            if (!got) { CloseNow(); return; }
-            if (phase.Peek() != 0 || h.Value is { IsOpen: true }) return;
-            var scene = Context.Scene;
-            var focused = hooks.GetFocus?.Invoke() ?? NodeHandle.Null;
-            bool keyboardFocus = scene is not null && !focused.IsNull && scene.IsLive(focused)
-                                 && (scene.Flags(focused) & NodeFlags.FocusVisual) != 0;
-            if (!keyboardFocus) return;
-            keyboardMode.Value = true;
-            phase.Value = 1;
-        }
-
-        // Pointer press over the target: dismiss an open bubble (and a pending one), latched until leave + re-enter.
-        // Press-dismiss is classic Win32/WPF tooltip behavior we keep deliberately — WinUI 3's ToolTipService registers
-        // no PointerPressed handler (ToolTipService_Partial.cpp:176-220; it closes via safe-zone exit, cpp:1437-1453)
-        // but equally cannot re-open a dismissed owner until a real leave + re-enter (cpp:725-737). There is no
-        // click-to-toggle — the wrapper adds NO OnClick, so it never becomes a tab stop or intercepts activation.
-        void OnPressed(PointerEventArgs _)
-        {
-            if (phase.Peek() == 0 && h.Value is not { IsOpen: true }) return;
-            dismissedUntilLeave.Value = true;
-            CloseNow();
-        }
-
-        UseEffect(() =>
-        {
-            if (!OpenOnMount || autoOpened.Value) return;
-            autoOpened.Value = true;
-            OpenNow();
-        }, OpenOnMount);
-
-        // STRANDED-BUBBLE GUARD. Two ways an open bubble outlives the thing it describes, both ending with a tip
-        // anchored to the wrong item (or to the viewport origin) until the 5s dwell finally fires:
-        //   • the owner's IDENTITY changed in place — Wrap re-pushes props, so a recycled rail/list row REUSES this
-        //     component and the live thunks re-point the already-open bubble at the new item (see openedText);
-        //   • the anchor node DIED with no leave edge — the target was relaid out or destroyed under a still pointer, or
-        //     a drag holds capture, so OnLeave never runs and the phase never leaves 2 (the safe-zone poll, which has
-        //     the same test, only runs in phase 3).
-        // Deps-gated on the text, so a plain re-render costs one DepKey compare; an EFFECT rather than an inline render
-        // check because CloseNow writes signals (phase/bubbleNode), which a render body must not do.
-        UseEffect(() =>
-        {
-            if (phase.Peek() is not (2 or 3) && h.Value is not { IsOpen: true }) return;
-            if (!string.Equals(openedText.Value, textRef.Value, StringComparison.Ordinal)) { CloseNow(); return; }
-            var scene = Context.Scene;
-            var on = anchor.Value;
-            if (scene is not null && !on.IsNull && !scene.IsLive(on)) CloseNow();
-        }, text);
-
-        // Owner unmount must not orphan the bubble. The component's OverlayHandle is the ONLY thing an unmounting
-        // ToolTip still owns that the host does not: the entry lives in OverlayServiceImpl.Entries and leaves only via
-        // Closing → AfterAnimations → Finalize, so a wrapper that disappears while open leaves a live entry whose rect
-        // thunk now resolves against a DEAD node (scene.IsLive false ⇒ abs = default ⇒ the synthetic point at the
-        // viewport origin) — and the placement pass re-places rect-anchored entries on EVERY OverlayHost render
-        // (OverlayHost.cs:835-839), so the bubble walks to the viewport's top-left corner and stays.
-        //
-        // Handle-only teardown ON PURPOSE: CloseNow() also writes phase / bubbleNode / lastClosedAtMs / keyboardMode,
-        // cells being torn down in this very pass (RunAllCleanups). Those writes cannot throw (a SignalCell is not
-        // disposed) but they are useless — no subscriber survives — and they re-enter a dying reactive graph.
-        UseEffect(() =>
-        {
-            return () =>
-            {
-                if (h.Value is { IsOpen: true } o) o.Close();
-                h.Value = null;
-                // Release the single-bubble latch too: a torn-down owner's closer writes into cells that no longer have
-                // a subscriber, and worse, would leave the NEXT tooltip believing something else still owns the screen.
-                if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
-            };
-        }, DepKey.Empty);
-
-        int ph = phase.Value;   // subscribe → re-render when the timer phase changes (mount/unmount the clock)
-        int poll = safePoll.Value;   // subscribe → an in-zone safe-zone elapse remounts a fresh 1s poll clock
+        int ph = _phase.Value;   // subscribe → re-render when the timer phase changes (mount/unmount the clock)
+        int poll = _safePoll.Value;   // subscribe → an in-zone safe-zone elapse remounts a fresh 1s poll clock
         // GetInitialShowDelay: Mouse ×2 normal / ×1 reshow (truncated 1.5 — see MouseReshowDelayMs); Keyboard ×2 always.
-        bool isReshow = Environment.TickCount64 - lastClosedAtMs.Value < (long)BetweenShowDelayMs;
+        bool isReshow = Environment.TickCount64 - _lastClosedAtMs.Value < (long)BetweenShowDelayMs;
         // The per-element override (see Wrap) replaces both MOUSE legs and leaves the keyboard leg alone. Clamped at 0
         // rather than passed raw: the value reaches the host timer queue as a deadline offset, and a negative span is
         // not a shorter delay, it is a deadline in the past. (0 itself is safe and means "the next frame's drain".)
-        float delay = keyboardMode.Value ? KeyboardShowDelayMs
+        float delay = _keyboardMode.Value ? KeyboardShowDelayMs
                     : !float.IsNaN(showDelayOverride) ? MathF.Max(0f, showDelayOverride)
                     : (isReshow ? MouseReshowDelayMs : MouseShowDelayMs);
         // The REMAINING show-duration dwell: WinUI's m_tpCloseTimer is armed once per open and keeps running while the
         // safe-zone monitor watches (ToolTipService_Partial.h:54; OpenAutomaticToolTip arms it, cpp:429-459), so the
         // 2↔3 phase flips must not restart the 5s — the remount re-arms with whatever dwell is left.
-        float dwellLeft = MathF.Max(1f, ShowDurationMs - (Environment.TickCount64 - openedAtMs.Value));
+        float dwellLeft = MathF.Max(1f, ShowDurationMs - (Environment.TickCount64 - _openedAtMs.Value));
 
         // Mount the one-shot countdown ONLY while a phase is live (1 = show-delay, 2 = auto-dismiss, 3 = safe-zone
         // grace). When idle it is absent — and while it IS mounted it costs nothing per frame either: ToolTipClock arms
         // one HostTimerQueue entry at mount and never re-renders, so a pending tooltip lets the host loop idle to the
-        // deadline instead of pinning it at panel rate. The clock is KEYED by phase: the reconciler reuses a same-type
+        // deadline instead of pinning it at panel rate. The clock is KEYED by _phase: the reconciler reuses a same-type
         // component without re-running its factory (constructor props are mount-time only), so a phase flip must REMOUNT a fresh clock
         // or the open bubble keeps the already-fired show-delay clock and the auto-dismiss never arms. WinUI keeps
         // these as separate DispatcherTimers — m_tpOpenTimer (show delay) vs m_tpCloseTimer (SPI_GETMESSAGEDURATION
@@ -546,7 +577,7 @@ public sealed class ToolTip : Component
         Element? clock = ph == 0 ? null : Embed.Comp(() => new ToolTipClock
         {
             DurationMs = ph == 1 ? delay : ph == 2 ? dwellLeft : SafeZoneCheckMs,
-            OnElapsed = ph == 1 ? OpenNow : ph == 2 ? AutoDismiss : SafeZoneCheck,
+            OnElapsed = ph == 1 ? _openNow : ph == 2 ? _autoDismiss : _safeZoneCheck,
         }) with
         { Key = ph == 1 ? "tt-open-timer" : ph == 2 ? "tt-close-timer" : "tt-safezone-timer:" + poll };
 
@@ -570,15 +601,15 @@ public sealed class ToolTip : Component
             // A pointer LISTENER, not an interaction scope: the four handlers below give it PointerBit, which would
             // otherwise make it a hover-cascade boundary and hide a wrapped card FAB's reveal from the card's hover.
             HoverScopeTransparent = true,
-            OnRealized = x => anchor.Value = x,
+            OnRealized = _onAnchorRealized,
             // P3 bound-text form: hasTooltip is false exactly when a bound Prop<string?> resolved null/empty THIS
             // render — no new open/dismiss/focus trigger is wired (the clock above is likewise forced absent via `ph`
             // reading `dismissedUntilLeave`/pending state that a !hasTooltip render never arms), so the wrapper is
             // functionally inert until a later render's text is non-empty again.
-            OnHoverMove = hasTooltip ? OnEnter : null,         // mouse-enter trigger (makes the target hit-testable for hover)
-            OnPointerExit = hasTooltip ? OnLeave : null,       // mouse-leave → cancel pending / close open
-            OnPointerPressed = hasTooltip ? OnPressed : null,  // press over the target → dismiss (never survives an interaction)
-            OnFocusChanged = hasTooltip ? OnFocus : null,      // keyboard focus in/out of the target subtree (a11y trigger)
+            OnHoverMove = hasTooltip ? _onEnter : null,         // mouse-enter trigger (makes the target hit-testable for hover)
+            OnPointerExit = hasTooltip ? _onLeave : null,       // mouse-leave → cancel pending / close open
+            OnPointerPressed = hasTooltip ? _onPressed : null,  // press over the target → dismiss (never survives an interaction)
+            OnFocusChanged = hasTooltip ? _onFocus : null,      // keyboard focus in/out of the target subtree (a11y trigger)
             Children = clock is null || !hasTooltip ? [target] : [target, clock],
         };
     }

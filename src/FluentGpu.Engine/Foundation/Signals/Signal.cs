@@ -40,7 +40,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 {
     private T _value;
     private readonly IEqualityComparer<T> _cmp;
-    private readonly List<Computation> _subs = new();
+    private RefList<Computation> _subs;
 
     public Signal(T initial, IEqualityComparer<T>? comparer = null)
     {
@@ -60,7 +60,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     public bool SetIfChanged(T value)
     {
         if (BackwardsWriteGuard.CompiledIn && BackwardsWriteGuard.Enabled)
-            BackwardsWriteGuard.CheckWrite(Tracking.Current, _subs, typeof(T));
+            BackwardsWriteGuard.CheckWrite(Tracking.Current, in _subs, typeof(T));
         if (_cmp.Equals(_value, value)) return false;
         _value = value;
         NotifySubscribers();
@@ -129,7 +129,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 public sealed class FloatSignal : ISignalSource, IReadSignal<float>
 {
     private float _value;
-    private readonly List<Computation> _subs = new();
+    private RefList<Computation> _subs;
 
     public FloatSignal(float initial = 0f) => _value = initial;
 
@@ -148,7 +148,7 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
     public bool SetIfChanged(float value)
     {
         if (BackwardsWriteGuard.CompiledIn && BackwardsWriteGuard.Enabled)
-            BackwardsWriteGuard.CheckWriteFloat(Tracking.Current, _subs);
+            BackwardsWriteGuard.CheckWriteFloat(Tracking.Current, in _subs);
         if (_value == value) return false;
         _value = value;
         // DIRTY (see Signal<T>.NotifySubscribers): the value demonstrably moved, so direct subscribers must run.

@@ -146,6 +146,6 @@ public static partial class HyperlinkButton
             Children = [label],
         };
         // Parts: restyle anything (fills, padding, even the Hand cursor); the Click→OpenUri order and the label slot win.
-        return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Hyperlink, Children = root.Children };
+        return parts is null ? root : parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Hyperlink, Children = root.Children };
     }
 }

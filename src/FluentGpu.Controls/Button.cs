@@ -353,6 +353,6 @@ public static partial class Button
             Children = children,
         };
         // Parts: restyle anything (fills, corners, padding…); the click mechanics and the icon+label slots always win.
-        return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
+        return parts is null ? root : parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
     }
 }
