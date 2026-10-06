@@ -788,6 +788,8 @@ public sealed partial class AppHost : IDisposable
     private readonly HashSet<int> _deepChildHeld = new();      // ids a VISIBLE pop-out holds while this (primary) host is Deep
     private readonly HashSet<int> _onScreenImageIds = new();   // scratch of the restore edge
     private long _restoreHoldReleases;
+    private bool _restoreHoldReparked;               // UI: re-parked while armed; the next un-park restarts the deadline
+    private long _restoreTrackingClearAtMs;          // UI: after an expired hold, when stragglers go back to the warm reveal (0 = none)
     /// <summary>Test / census: restore holds armed so far.</summary>
     internal long RestoreHoldsArmedForTest { get; private set; }
     /// <summary>Test: a restore is currently waiting for its images.</summary>
@@ -822,6 +824,8 @@ public sealed partial class AppHost : IDisposable
             if (stage == HiddenStage.Shallow)
             {
                 _images.HiddenStage = HiddenStage.Shallow;   // a device loss while hidden parks what is held instead of re-decoding it for nobody
+                // ...unless a pop-out sharing the cache is on screen: its images must re-decode at once, not wait for this window's restore.
+                _images.HiddenKeepLandings = AnyVisibleDetachedChild();
                 RequestHiddenStage(HiddenStage.Shallow);
                 FluentGpu.Foundation.Diag.Line($"[hidden] shallow park={CurrentHiddenPark()} unpinnedReleased={evicted} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
             }
@@ -880,6 +884,8 @@ public sealed partial class AppHost : IDisposable
             {
                 hold = true;
                 _restoreHoldArmed = true;
+                _restoreHoldReparked = false;
+                _restoreTrackingClearAtMs = 0;
                 _restoreHoldStartMs = (long)_timers.NowMs;
                 _restoreHoldDeadlineMs = _restoreHoldStartMs + maxMs;
                 RestoreHoldsArmedForTest++;
@@ -897,12 +903,22 @@ public sealed partial class AppHost : IDisposable
 
     private readonly HashSet<int> _childOnScreenScratch = new();
 
+    /// <summary>UI thread: whether any detached pop-out of this (primary) host is open and not parked.</summary>
+    private bool AnyVisibleDetachedChild()
+    {
+        for (int i = 0; i < _detachedHosts.Count; i++)
+            if (!_detachedHosts[i]._window.IsClosed && !_detachedHosts[i].IsParked) return true;
+        return false;
+    }
+
     /// <summary>UI thread, a detached pop-out's un-park edge while its primary is Deep (they share the cache): the primary parked this
     /// pop-out's images with its own (a warm-parked pop-out keeps nothing), so list its held ids as child-held - which lets its
     /// pins restart them - restart the on-screen ones now (tracked) and hold its first frame for them, exactly like the primary's
     /// restore. A visible pop-out was never parked, so this runs only for one that was hidden through the Deep edge.</summary>
     private void RestoreChildUnderDeepPrimary()
     {
+        // Any hidden stage: a pop-out on screen means a device loss must not park what it shows (see ImageCache.HiddenKeepLandings).
+        if (_images.HiddenStage != HiddenStage.Visible && _parentHost is { } p0 && ReferenceEquals(p0._images, _images)) _images.HiddenKeepLandings = true;
         if (_images.HiddenStage != HiddenStage.Deep || _parentHost is not { } parent || !ReferenceEquals(parent._images, _images)) return;
         var mine = parent._deepChildHeld;
         CollectHeldImageIds(mine);
@@ -914,12 +930,27 @@ public sealed partial class AppHost : IDisposable
         if (restarted > 0 && _images.RestorePendingCount > 0 && maxMs > 0)
         {
             _restoreHoldArmed = true;
+            _restoreHoldReparked = false;
+            _restoreTrackingClearAtMs = 0;
             _restoreHoldStartMs = (long)_timers.NowMs;
             _restoreHoldDeadlineMs = _restoreHoldStartMs + maxMs;   // inside DetachedRevealGate.TimeoutMs, so the reveal never fires with placeholders
             RestoreHoldsArmedForTest++;
         }
         else _images.ClearRestoreTracking();
         FluentGpu.Foundation.Diag.Line($"[hidden] popout restore restarted={restarted} pending={_images.RestorePendingCount} hold={(_restoreHoldArmed ? "armed" : "none")}");
+    }
+
+    /// <summary>Live, <see cref="NodeFlags.Visible"/> on its whole chain, and linked to the scene root (a KeepAlive-parked page or an
+    /// exit orphan is not). Opacity is deliberately not consulted: a node faded to zero may fade back in right after the restore.</summary>
+    private bool IsInShownTree(NodeHandle node)
+    {
+        var last = NodeHandle.Null;
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Visible) == 0) return false;
+            last = n;
+        }
+        return last == _scene.Root;
     }
 
     /// <summary>UI thread: every image id a node of this host shows inside the client rect (a node that cannot be placed as a plain
@@ -942,6 +973,9 @@ public sealed partial class AppHost : IDisposable
             bool hasEffects = _scene.TryGetImageEffects(node, out var fx) && (fx.DerivedImageId != 0 || fx.SwapOutgoingId != 0);
             bool hasCells = _scene.TryGetRowCells(node, out var cells, out _, out _);
             if (!hasImage && !hasEffects && !hasCells) continue;
+            // A KeepAlive-parked page or a collapsed pane is not on screen whatever its stale rect says: the hold must not wait
+            // for its images (they restart off the critical path and its re-pin finds them landed).
+            if (!IsInShownTree(node)) continue;
             bool visible = true;
             if (_scene.TryAbsoluteRectTranslationOnly(node, out var r))
                 visible = r.X < cw && r.Y < ch && r.X + r.W > 0 && r.Y + r.H > 0;
@@ -953,10 +987,6 @@ public sealed partial class AppHost : IDisposable
         _reconciler.CollectHeldImageIds(ids);   // pending hold-last-good / swap targets: no geometry to test, so they count
     }
 
-    /// <summary>UI thread, at the top of every <see cref="RunFrame"/> that is not parked: when the hold is armed and its end is due
-    /// (everything it waits for landed, it expired, or the window changed size) make sure this frame publishes, so the release
-    /// publication exists even when nothing else would have woken Paint. The decision itself is taken where the publication is
-    /// built (<see cref="EvaluateRestoreHold"/>), after this frame's image pump.</summary>
     // ── Window-relative image budget + measured committed bytes (UI thread, primary host only) ───────────────────────
     private Size2 _budgetWindowSize;
     private int _committedPollTick;
@@ -984,17 +1014,35 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
+    /// <summary>UI thread, every <see cref="RunFrame"/>: when the hold is armed and its end is due (everything it waits for landed,
+    /// or it expired) make sure this frame publishes, so the release publication exists even when nothing else would have woken
+    /// Paint. The decision itself is taken where the publication is built (<see cref="EvaluateRestoreHold"/>), after this frame's
+    /// image pump. A re-park mid-hold (a quick minimize / restore flap) keeps the hold and its tracking: nothing is shown while
+    /// parked, and the next un-park restarts the deadline, so the images the first frame back still waits for are still waited
+    /// for (clearing them there would let that un-park present their placeholders).</summary>
     private void TickRestoreHold()
     {
-        if (!_restoreHoldArmed) return;
-        if (IsParked)
+        long now = (long)_timers.NowMs;
+        if (!_restoreHoldArmed)
         {
-            // Re-parked mid-hold (a flap): nothing is shown, nothing to wait for. The next un-park re-arms if parked images remain.
-            _restoreHoldArmed = false;
-            _images.ClearRestoreTracking();
+            // A hold that expired left its late landings tracked, so the render side's faithful-frame gate keeps the old frame on the
+            // glass until they land (see EvaluateRestoreHold). Once that gate's own guard is long past, hand any straggler back to
+            // the ordinary warm reveal.
+            if (_restoreTrackingClearAtMs != 0 && now >= _restoreTrackingClearAtMs)
+            {
+                _restoreTrackingClearAtMs = 0;
+                _images.ClearRestoreTracking();
+            }
             return;
         }
-        if (_images.RestorePendingCount == 0 || (long)_timers.NowMs >= _restoreHoldDeadlineMs) _frameNeeded = true;
+        if (IsParked) { _restoreHoldReparked = true; return; }
+        if (_restoreHoldReparked)
+        {
+            _restoreHoldReparked = false;
+            _restoreHoldStartMs = now;
+            _restoreHoldDeadlineMs = now + HiddenMemoryBudget.RestoreHoldMaxMs;
+        }
+        if (_images.RestorePendingCount == 0 || now >= _restoreHoldDeadlineMs) _frameNeeded = true;
     }
 
     /// <summary>UI thread, where a publication is built: whether the frame about to be published must be HELD (recorded and
@@ -1010,10 +1058,18 @@ public sealed partial class AppHost : IDisposable
         _restoreHoldArmed = false;
         _restoreHoldReleases++;
         bool timedOut = !done && expired;
+        if (timedOut) _images.RestoreHoldTimeouts++;
         if (!done)
         {
-            if (timedOut) _images.RestoreHoldTimeouts++;
-            _images.ClearRestoreTracking();   // late landings take the ordinary warm reveal
+            if (timedOut && OwningRenderThread is not null)
+            {
+                // The UI stops holding, but the images the first frame needs stay TRACKED: the render side's faithful-frame gate
+                // (DecideHold) then keeps the last frame shown before the hide on the glass, frame after frame, until they are
+                // resident, bounded by its own guard. Releasing them here presented their placeholders (and then faded the late
+                // landings in) - a restore must show the old frame, then the right one, never a placeholder in between.
+                _restoreTrackingClearAtMs = now + (long)HoldGuardMs + 1_000;
+            }
+            else _images.ClearRestoreTracking();   // a resize, or no render thread to keep holding: late landings take the warm reveal
         }
         FluentGpu.Foundation.Diag.Line($"[hidden] hold release ms={now - _restoreHoldStartMs} pending={_images.RestorePendingCount} timeout={(timedOut ? 1 : 0)} resized={(resized && !done && !expired ? 1 : 0)} timeouts={_images.RestoreHoldTimeouts}");
         return false;
@@ -1076,7 +1132,17 @@ public sealed partial class AppHost : IDisposable
         _imageQueue?.RemoveSceneReader(this);
         var children = Volatile.Read(ref _childRenderSources);
         for (int i = 0; i < children.Length; i++)
-            if (Volatile.Read(ref children[i]._renderVisible) == 0) children[i]._imageQueue?.RemoveSceneReader(children[i]);
+        {
+            var child = children[i];
+            if (Volatile.Read(ref child._renderVisible) != 0) continue;
+            child._imageQueue?.RemoveSceneReader(child);
+            // Its images park with the primary's, so its retained frame now names textures that are gone: latch it HELD too, or
+            // the motion loop's first re-present of that frame after the pop-out comes back (a marquee, a progress bar) would put
+            // their placeholders on the glass ahead of its held restore publication. Same render thread, same gate.
+            child._renderHeld = true;
+            child._holdRetryOwed = false;
+            child._holdGateSinceQpc = 0;
+        }
         _renderHeld = true;
         _holdRetryOwed = false;
         _holdGateSinceQpc = 0;
@@ -2021,7 +2087,7 @@ public sealed partial class AppHost : IDisposable
             int settledPoses = 0;
             bool presented = true;
             bool composited = false;
-            ImageRecordingSnapshot? gateImages = null;   // this frame's image snapshot, for the faithful-frame gate (scene frames only)
+            int gateImageGaps = 0;   // the faithful-frame gate's image half, judged BEFORE the record (scene frames only; see DecideHold)
             // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
             // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
             // INSIDE the try (deliberately): the staging path touches the device exactly like submit/present does, so a
@@ -2059,7 +2125,11 @@ public sealed partial class AppHost : IDisposable
                 bool scrollNeedsRecord = _renderSink.RecordRequired;
                 _activeRenderFrame = rf;
                 _hasActiveRenderFrame = true;
-                gateImages = sceneFrame.Images;
+                // The release candidate's image test runs HERE, after this turn's staging and BEFORE the record: residency only ever
+                // grows between this point and the record (nothing evicts in between), so an id found resident now is drawn, while a
+                // side-queue copy whose fence passes during the record would read resident afterwards although the frame drew its
+                // placeholder. Conservative by construction: at worst one more held turn.
+                if (_renderHeld && !rf.PresentHeld) gateImageGaps = sceneFrame.Images.CountRestoreGaps(_isImageResident ??= _device.IsImageResident);
                 // §13.1: a clock-driven turn whose poses did not move records a byte-identical stream and an empty
                 // repaint region, so there is nothing for the rest of this block to do. Elide the RECORD, not just the
                 // submit — HasOwnRenderMotion keeps re-entering here for as long as any row is live, so a Cadence.At(60)
@@ -2223,9 +2293,9 @@ public sealed partial class AppHost : IDisposable
             // the UI frame that reaches the glass, so they ride the owed frame's retry (or the superseding publication).
             long splitBeforePresent = Stopwatch.GetTimestamp();
             // The restore hold: this recorded and submitted frame is presented only when the UI is no longer holding AND the frame is
-            // faithful (no placeholder for an image the user had seen before the hide), judged here, after the record, against the
-            // frame actually about to be shown.
-            bool hold = presented && DecideHold(in rf, gateImages);
+            // faithful (no placeholder for an image the user had seen before the hide - judged on this frame's own snapshot just before
+            // its record - and a whole glyph atlas, judged after it).
+            bool hold = presented && DecideHold(in rf, gateImageGaps);
             if (presented && !hold) ArmGeometryMotionPresent(in rf);
             bool landed = !presented || PresentFrame(in rf, composited, hold);
             long splitPresented = Stopwatch.GetTimestamp();
@@ -2291,19 +2361,22 @@ public sealed partial class AppHost : IDisposable
     /// landed after the UI half released, and a stale pre-hide publication that was adopted first; and it never needs the UI to
     /// say anything twice. A frame that fails keeps holding and is retried every turn (<see cref="HasOwnRenderMotion"/>), bounded by
     /// <see cref="HoldGuardMs"/> so a gate that can never open (a rejected upload) cannot freeze the window.</summary>
-    private bool DecideHold(in Threading.RenderFrame rf, ImageRecordingSnapshot? images)
+    private bool DecideHold(in Threading.RenderFrame rf, int imageGaps)
     {
         if (rf.PresentHeld)
         {
-            if (!_renderHeld) { _renderHeld = true; _holdGateSinceQpc = 0; }
+            // The UI is still holding: the guard's clock starts at the first release CANDIDATE, never earlier. A motion re-present
+            // of the pre-hide frame that failed the gate before the first held publication arrived must not have eaten the guard
+            // (it would then release the real release candidate the moment it missed one upload).
+            _renderHeld = true;
+            _holdGateSinceQpc = 0;
             _holdRetryOwed = false;
             return true;
         }
         if (!_renderHeld) return false;
         long now = Stopwatch.GetTimestamp();
         if (_holdGateSinceQpc == 0) _holdGateSinceQpc = now;
-        bool faithful = !_swapchain.TextRepaintPending
-            && (images is null || images.CountRestoreGaps(_isImageResident ??= _device.IsImageResident) == 0);
+        bool faithful = !_swapchain.TextRepaintPending && imageGaps == 0;
         if (!faithful && (now - _holdGateSinceQpc) * 1000.0 / Stopwatch.Frequency < HoldGuardMs)
         {
             _holdRetryOwed = true;
@@ -3252,6 +3325,9 @@ public sealed partial class AppHost : IDisposable
         child._micaWindow = _micaWindow;
         child._parentHost = this;
         _detachedHosts.Add(child);
+        // A pop-out opened while this window is hidden shares the cache: what it requests must land and stay, not be parked for a
+        // restore of a window it is not part of.
+        if (_images.HiddenStage != HiddenStage.Visible && ReferenceEquals(child._images, _images)) _images.HiddenKeepLandings = true;
     }
 
     /// <summary>The frame clear colour (test seam for the host-local Mica backdrop).</summary>
@@ -6675,7 +6751,7 @@ public sealed partial class AppHost : IDisposable
                                 composited = true;
                             }
                             else _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
-                            heldInline = DecideHold(in rf, null);   // the UI thread is the render thread here: the UI half decides, the gate checks the atlas
+                            heldInline = DecideHold(in rf, 0);   // the UI thread is the render thread here: the UI half decides, the gate checks the atlas
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         if (heldInline) _swapchain.HoldNextPresent();

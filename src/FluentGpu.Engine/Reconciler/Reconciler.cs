@@ -4329,6 +4329,7 @@ public sealed partial class TreeReconciler
             if (_pendingImageId.Remove(idx, out int pendingId)) UnpinImageNode(node, pendingId);
             // A swap crossfade in flight holds its OUTGOING texture pinned — release it with the node.
             if (_imageSwaps.Remove(idx, out var swap)) UnpinImageNode(node, swap.OutgoingId);
+            _keepWhileHiddenNodes.Remove(idx);   // the slot may be reused by a node that never asked to be kept
         }
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);

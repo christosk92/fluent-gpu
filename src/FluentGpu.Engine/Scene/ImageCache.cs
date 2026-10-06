@@ -288,7 +288,7 @@ public sealed class ImageCache
     private long _budgetBytes;        // the cap in force: (window-relative budget) x (measured-bytes scale); see SetWindowBudget / SetMeasuredCommittedBytes
     private readonly long _baseBudgetBytes, _baseDerivedBudgetBytes;   // what the host built the cache with (today's budgets)
     private long _windowBudgetBytes;  // max(base, window-relative); before any window size is known, the base
-    private double _bytesScale = 1.0; // measured / formula charge of the 256 bucket: budgets scale by it so a corrected charge never shrinks capacity
+    private double _bytesScale = 1.0; // largest measured / formula charge ratio (>= 1): budgets scale by it so a corrected charge never shrinks capacity
     // Soft cap on derived/blur bytes, so blur-hash previews retire faster on a weak tier instead of padding the small
     // LOCAL segment (adreno-hang-fixes.md M5). PASSED IN, never read from GpuProfile here: this is a field initializer,
     // so it ran at construction — and the claim that used to sit on this line, that "the backend has published
@@ -784,20 +784,25 @@ public sealed class ImageCache
     private static int BucketIndex(int bucket) => bucket <= 64 ? 0 : bucket <= 128 ? 1 : bucket <= 256 ? 2 : 3;
 
     /// <summary>The device measured what one texture of the square <paramref name="bucket"/> (64/128/256/512) really commits. From
-    /// now on that is the charge for that bucket, AND both byte budgets scale by the measured / formula ratio of the 256 bucket
-    /// (the one a cover costs) in the same call - so the number of 256 x 256 images the cache holds, today's effective capacity,
-    /// does not shrink because the accounting became honest. Idempotent for an unchanged value.</summary>
+    /// now on that is the charge for that bucket, AND both byte budgets scale in the same call by the largest measured / formula
+    /// ratio of any measured bucket (never below 1) - so the number of images of ANY bucket the cache holds, today's effective
+    /// capacity, does not shrink because the accounting became honest. Idempotent for an unchanged value.</summary>
     public void SetMeasuredCommittedBytes(int bucket, long bytes)
     {
         if (bytes <= 0 || bucket < 64 || bucket > 512) return;
         int i = BucketIndex(bucket);
         if (Volatile.Read(ref _measuredBucketBytes[i]) == bytes) return;
         Volatile.Write(ref _measuredBucketBytes[i], bytes);
-        if (i == 2)
+        // Never shrink what any bucket holds today: the budgets scale by the LARGEST measured / formula ratio (a bucket the device
+        // charges less than the formula keeps the formula's scale, 1). Images above 512 px keep the formula charge and so only gain.
+        double scale = 1.0;
+        for (int b = 0, edge = 64; b < 4; b++, edge <<= 1)
         {
-            _bytesScale = Math.Clamp((double)bytes / CommittedBytesFor(256, 256), 0.5, 2.0);
-            ApplyBudgets();
+            long m = Volatile.Read(ref _measuredBucketBytes[b]);
+            if (m > 0) scale = Math.Max(scale, (double)m / CommittedBytesFor(edge, edge));
         }
+        scale = Math.Min(scale, 2.0);
+        if (scale != _bytesScale) { _bytesScale = scale; ApplyBudgets(); }
     }
 
     /// <summary>Size the cap to the window: <see cref="ImageBudget.Current"/> (never below the budget the cache was built with).
@@ -1244,7 +1249,7 @@ public sealed class ImageCache
     {
         // Deep: a parked image stays parked however it is asked for (a pin, a request, a promote) until the restore edge,
         // unless a visible pop-out sharing this cache needs it or the owner asked it to stay resident.
-        if (e.Parked && HiddenStage == FluentGpu.Hosting.HiddenStage.Deep && e.KeepRefs == 0
+        if (e.Parked && HiddenStage == FluentGpu.Hosting.HiddenStage.Deep && e.KeepRefs == 0 && !HiddenKeepLandings
             && !(HiddenChildHeld?.Contains(id) ?? false)) return;
         bool trace = Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source);
         if (e.State == ImageState.Pending)
@@ -1673,16 +1678,18 @@ public sealed class ImageCache
     /// never parked and may be (re)requested while Deep.</summary>
     public HashSet<int>? HiddenChildHeld { get; set; }
 
-    /// <summary>True while any detached pop-out is visible: the host cannot tell which landing belongs to whom, so Deep leaves
-    /// decodes that land meanwhile alone (and a device-loss recovery restarts normally).</summary>
+    /// <summary>True while any detached pop-out is visible: the host cannot tell which landing or request belongs to whom, so Deep
+    /// leaves decodes that land meanwhile alone, lets a request or pin restart a parked entry (a pop-out may show the same image),
+    /// and a device-loss recovery restarts normally instead of parking.</summary>
     public bool HiddenKeepLandings { get; set; }
 
     /// <summary>Entries parked at Deep (texture released, something still holds the id). O(1); 0 after every restore.</summary>
     public int ParkedCount => _parkedCount;
     /// <summary>Entries a restore restarted whose landing the held first frame still waits for. O(1).</summary>
     public int RestorePendingCount => _restorePending;
-    /// <summary>Restores whose hold expired with images still decoding (the first frame then showed their placeholders and the
-    /// late landings faded in). Cumulative; the host increments it.</summary>
+    /// <summary>Restores whose UI-side hold expired with images still decoding. Under a render thread the images stay tracked and
+    /// the render side's faithful-frame gate keeps holding the old frame for them (bounded by its own guard); without one the first
+    /// frame showed their placeholders. Cumulative; the host increments it.</summary>
     public long RestoreHoldTimeouts { get; internal set; }
 
     /// <summary>One more (+1) or one fewer (-1) node asking <paramref name="h"/> to stay resident while the window is hidden
@@ -1754,22 +1761,31 @@ public sealed class ImageCache
     /// <summary>The restore edge: restart every parked entry through the ordinary decode path. Those named in
     /// <paramref name="onScreen"/> (null = all) restart on the Visible lane and are TRACKED - their landing skips the reveal and
     /// counts down <see cref="RestorePendingCount"/>, which the held first frame waits for; the rest restart on the Overscan lane
-    /// untracked (nothing visible waits for them, and a refusal there is retried at Visible by the leftover sweep). Size is kept
-    /// across the restart. An entry that is only HELD (a row cell, a parked page's node: <c>Refs == 0</c>) and is not on screen
-    /// stays parked: nothing is waiting for it, and the request that realizes its row (or the page coming back) restarts it
-    /// through the ordinary path. <paramref name="only"/> limits the restart to those ids (a pop-out restoring under a Deep
-    /// primary). The host sets <see cref="HiddenStage"/> to Visible first (or lists the ids in <see cref="HiddenChildHeld"/>).
-    /// Returns the count restarted.</summary>
+    /// untracked (nothing visible waits for them). Size is kept across the restart. An entry that is only HELD and off screen
+    /// (<c>Refs == 0</c>: a list row's image cell in overscan or on a KeepAlive-parked page) restarts too: a row cell is requested
+    /// but never pinned, and its row re-requests nothing when it scrolls into view or its page comes back, so a parked cell would
+    /// paint its placeholder for good. An on-screen entry that is already decoding again (a pop-out's request while this window
+    /// was hidden) and had been seen is tracked as well, so the held frame waits for it too. <paramref name="only"/> limits the
+    /// restart to those ids (a pop-out restoring under a Deep primary). The host sets <see cref="HiddenStage"/> to Visible first
+    /// (or lists the ids in <see cref="HiddenChildHeld"/>). Returns the count restarted.</summary>
     public int RestartParked(HashSet<int>? onScreen = null, HashSet<int>? only = null)
     {
         if (_parkedCount == 0) return 0;
         int n = 0;
         foreach (var (id, e) in _byId)
         {
-            if (!e.Parked) continue;
             if (only is not null && !only.Contains(id)) continue;
             bool now = onScreen is null || onScreen.Contains(id);
-            if (!now && e.Refs <= 0) continue;
+            if (!e.Parked)
+            {
+                if (now && onScreen is not null && !e.Derived && e.State == ImageState.Pending && e.WasReady && !e.RestoreTracked)
+                {
+                    e.RestoreTracked = true;
+                    _restorePending++;
+                    NoteRecordingInputChanged();   // the snapshot carries RestoreTracked: a reused one must not miss it
+                }
+                continue;
+            }
             int w = e.W, h = e.H;
             RestartDecode(id, e, now ? ImagePriority.Visible : ImagePriority.Overscan);   // clears Parked on the way out of None
             if (e.State == ImageState.Pending)
@@ -1782,13 +1798,14 @@ public sealed class ImageCache
         return n;
     }
 
-    /// <summary>The hold expired with entries still decoding: stop waiting for them. Their late landings take the ordinary warm
-    /// reveal instead of snapping in.</summary>
+    /// <summary>Stop waiting for the entries a restore still tracks (the hold was abandoned: a resize, a host with no render thread,
+    /// or long after an expired hold's render-side guard). Their late landings take the ordinary warm reveal instead of snapping in.</summary>
     public void ClearRestoreTracking()
     {
         if (_restorePending == 0) return;
         foreach (var e in _byId.Values) e.RestoreTracked = false;
         _restorePending = 0;
+        NoteRecordingInputChanged();   // the snapshot carries RestoreTracked: a reused one would keep the held frame waiting
     }
 
     private readonly HashSet<int> _releaseHeld = new();
