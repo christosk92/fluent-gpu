@@ -679,6 +679,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _seriesPipe = seriesPipe;
         _spritePipe = spritePipe;
         _imageTextures!.AttachComputeQueue(bakedBlur!.ComputeQueue);   // baked derivatives are gated by its fences
+        if (FluentGpu.Hosting.EngineSwitches.ImageAtlas == FluentGpu.Hosting.ImageAtlasExperiment.RowMajorProbe || FluentGpu.Hosting.EngineSwitches.ImagePlaced256Query)
+            RunAtlasRevalidationProbes();   // log-only, default off
 
         // Per-stage bring-up cost, folded into ONE always-on suffix the caller appends to its [d3d12.boot] line (the
         // stages run concurrently, so these do NOT sum to the pipelines total — the MAX is the critical path, and the

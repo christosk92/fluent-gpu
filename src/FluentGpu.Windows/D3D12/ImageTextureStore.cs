@@ -55,7 +55,8 @@ namespace FluentGpu.Rhi.D3D12;
 internal sealed unsafe class ImageTextureStore : IDisposable
 {
     private const int MaxSrv = 4096;    // SRV heap depth (pool textures + atlas pages share it)
-    private const int PageSize = 1024;  // atlas page side
+    private int _pageSize = 1024;       // atlas page side (2048 under --fg img-atlas=gpucopy256, whose 256 px cells need the room)
+    private bool _atlasGpuCopy;         // UMA experiment (--fg img-atlas=gpucopy): thumbnail pages are copy-queue written, as on a discrete adapter
     private bool _atlasAllocationKnown;
 
     private struct Tex
@@ -314,11 +315,16 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         _device = device;
         _uma = unifiedMemory;
-        if (!_uma)
+        var experiment = FluentGpu.Hosting.EngineSwitches.ImageAtlas;
+        _atlasGpuCopy = _uma && experiment is FluentGpu.Hosting.ImageAtlasExperiment.GpuCopy or FluentGpu.Hosting.ImageAtlasExperiment.GpuCopy256;
+        if (_atlasGpuCopy && experiment == FluentGpu.Hosting.ImageAtlasExperiment.GpuCopy256) _pageSize = 2048;
+        if (!_uma || _atlasGpuCopy)
         {
             _copyQueue = new UploadQueue(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_COPY, "Image.CopyQueue");
             _copyQueue.Init(device);
         }
+        if (_atlasGpuCopy)
+            Diag.Line($"[d3d12] UMA image atlas EXPERIMENT {experiment}: copy-queue written simultaneous-access pages, page={_pageSize}px");
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.NumDescriptors = MaxSrv;
@@ -334,11 +340,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         // Query the texture allocation, not its upload footprint. Optional ROW_MAJOR descriptors may be rejected
         // here before CreateCommittedResource. In that case no pages are admitted; the packer's positive placeholder
         // is unreachable bookkeeping, never a measured allocation or a live census contribution.
-        var pageDesc = DescribeTexture(PageSize, PageSize, _uma, simultaneous: !_uma);
+        bool cpuWrittenPages = _uma && !_atlasGpuCopy;
+        var pageDesc = DescribeTexture(_pageSize, _pageSize, cpuWrittenPages, simultaneous: !cpuWrittenPages);
         ulong pageBytes = AllocationBytes(&pageDesc);
         _atlasAllocationKnown = pageBytes != 0;
-        _packer = new ImageAtlasPacker(PageSize, _atlasAllocationKnown ? (long)pageBytes : 1,
-            _uma ? ImageAtlasUpload.CpuWrite : ImageAtlasUpload.GpuCopy);
+        _packer = new ImageAtlasPacker(_pageSize, _atlasAllocationKnown ? (long)pageBytes : 1,
+            cpuWrittenPages ? ImageAtlasUpload.CpuWrite : ImageAtlasUpload.GpuCopy,
+            maxPackedBucket: experiment == FluentGpu.Hosting.ImageAtlasExperiment.GpuCopy256 && _atlasGpuCopy ? 256 : ImageAtlasPacker.MaxPackedBucket);
     }
 
     /// <summary>The compute queue baked derivatives are written on (its fences gate their readiness).</summary>
@@ -376,7 +384,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>True when a ≤128px thumbnail should be packed into a shared page rather than owning a texture. On UMA
     /// this also requires the ROW_MAJOR CPU-writable page probe to have succeeded (<see cref="_umaPagesDisabled"/>).</summary>
     private bool WantAtlas(int bucket)
-        => _atlasAllocationKnown && bucket <= ImageAtlasPacker.MaxPackedBucket && _packer.CanPack(bucket) && !(_uma && _umaPagesDisabled);
+        => _atlasAllocationKnown && bucket <= _packer.MaxBucket && _packer.CanPack(bucket) && !(_uma && _umaPagesDisabled);
 
     /// <summary>True when the frame can sample pixels for <paramref name="id"/> now (<see cref="TryGet"/> succeeds).</summary>
     public bool IsResident(int id) => TryDrawable(id, out _);
@@ -550,7 +558,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             {
                 t.Atlas = true; t.Page = cell.Page; t.Cell = cell.Index; t.PageGen = cell.Generation;
                 t.Slot = -1; t.Bucket = bucket;
-                t.Srv = _pages[cell.Page].Srv; t.TexSize = PageSize; t.Ox = cell.X; t.Oy = cell.Y;
+                t.Srv = _pages[cell.Page].Srv; t.TexSize = _pageSize; t.Ox = cell.X; t.Oy = cell.Y;
                 _atlasCount++;
             }
             else if (bucket <= 512)
@@ -573,7 +581,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             }
         }
 
-        if (_uma)
+        if (_uma && !(t.Atlas && _atlasGpuCopy))   // the gpucopy experiment's atlas cells take the staged copy-queue path below
         {
             // UMA fast path (adreno-hang-fixes.md M1): write the decoded pixels STRAIGHT into the CPU-visible texture.
             // No UPLOAD staging buffer, no CopyTextureRegion, and no COPY_DEST→PIXEL_SHADER_RESOURCE barrier — the texture
@@ -1268,7 +1276,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private ID3D12Resource* CreatePageTexture(bool cpuWritten, out byte* mapped, out int rowPitch, out ulong bytes)
     {
         mapped = null; rowPitch = 0; bytes = 0;
-        D3D12_RESOURCE_DESC td = DescribeTexture(PageSize, PageSize, rowMajor: cpuWritten, simultaneous: !cpuWritten);
+        D3D12_RESOURCE_DESC td = DescribeTexture(_pageSize, _pageSize, rowMajor: cpuWritten, simultaneous: !cpuWritten);
         ID3D12Resource* tex = null;
 
         if (!cpuWritten)
@@ -1277,7 +1285,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
                 D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
             { NoteResourceFault("Image.CreateAtlasPage"); return null; }
-            bytes = TrackTexture(tex, $"Image.AtlasPage {PageSize}x{PageSize} BGRA8", &td);
+            bytes = TrackTexture(tex, $"Image.AtlasPage {_pageSize}x{_pageSize} BGRA8", &td);
             return tex;
         }
 
@@ -1311,10 +1319,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         }
 
         rowPitch = (int)fp.Footprint.RowPitch;
-        if (rowPitch <= 0) rowPitch = PageSize * 4;
+        if (rowPitch <= 0) rowPitch = _pageSize * 4;
         mapped = (byte*)p;
-        new Span<byte>(mapped, (int)Math.Min((ulong)int.MaxValue, (ulong)rowPitch * PageSize)).Clear();
-        bytes = TrackTexture(tex, $"Image.AtlasPage.Uma {PageSize}x{PageSize} BGRA8", &td);
+        new Span<byte>(mapped, (int)Math.Min((ulong)int.MaxValue, (ulong)rowPitch * (ulong)_pageSize)).Clear();
+        bytes = TrackTexture(tex, $"Image.AtlasPage.Uma {_pageSize}x{_pageSize} BGRA8", &td);
         return tex;
     }
 
