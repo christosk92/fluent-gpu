@@ -21,6 +21,7 @@ public sealed unsafe partial class D3D12Device
         if (stage == HiddenStage.Visible)
         {
             _imageTextures?.SetNoPooling(false);
+            _videoMemorySampleCountdown = 1;   // the first present after the restore re-reads the memory census (it is otherwise sampled every N presents; an idle app has few)
             return;
         }
         if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return;   // the recovery rebuilds all of it
