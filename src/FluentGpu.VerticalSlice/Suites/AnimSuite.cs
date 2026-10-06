@@ -4135,7 +4135,10 @@ static class AnimSuite
         float tx = 0f;
         int depth = 0;
         for (var c = host.Scene.FirstChild(n); !c.IsNull && depth < EdgeFadeSpec.OverflowChainDepth; c = host.Scene.FirstChild(c), depth++)
-            tx += host.Animation.TryGetTrackValue(c, AnimChannel.TranslateX, out float v) ? v : host.Scene.Paint(c).LocalTransform.Dx;
+        {
+            tx = host.Animation.TryGetTrackValue(c, AnimChannel.TranslateX, out float v) ? v : host.Scene.Paint(c).LocalTransform.Dx;
+            if (tx != 0f) break;   // the first translated node is the content (EdgeFadeSpec.OverflowTail)
+        }
         ef = ef.ResolveOverflow(tx);
         return true;
     }

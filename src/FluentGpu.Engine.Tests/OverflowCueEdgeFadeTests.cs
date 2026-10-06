@@ -124,6 +124,55 @@ public sealed class OverflowCueEdgeFadeTests
         snapshot.ReleaseResources();
     }
 
+    /// <summary>A fade node with a chain of <paramref name="chainDx"/>.Length first children, each translated by its entry
+    /// (NaN = scaled 2x instead), plus a translated SECOND child of the fade node.</summary>
+    private static float ChainDx(float[] chainDx, float siblingDx = -77f)
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var scene = new SceneStore();
+        var root = scene.CreateNode(1);
+        scene.Root = root;
+        scene.Bounds(root) = new(0, 0, 400, 100);
+        var fade = scene.CreateNode(2);
+        scene.AppendChild(root, fade);
+        scene.Bounds(fade) = new(0, 0, 100, 20);
+        scene.SetEdgeFade(fade, Cue);
+        var parent = fade;
+        ushort id = 3;
+        foreach (float dx in chainDx)
+        {
+            var n = scene.CreateNode(id++);
+            scene.AppendChild(parent, n);
+            scene.Bounds(n) = new(0, 0, 300, 20);
+            scene.Paint(n).LocalTransform = float.IsNaN(dx) ? new Affine2D(2f, 0f, 0f, 2f, 0f, 0f) : Affine2D.Translation(dx, 0f);
+            parent = n;
+        }
+        var sibling = scene.CreateNode(id);
+        scene.AppendChild(fade, sibling);
+        scene.Paint(sibling).LocalTransform = Affine2D.Translation(siblingDx, 0f);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        float tx = SceneRecordingContext.OverflowContentDx(snapshot, fade);
+        snapshot.ReleaseResources();
+        return tx;
+    }
+
+    [Fact]
+    public void TheCueReadsTheFirstTranslatedNodeDownTheFirstChildChain()
+    {
+        Assert.Equal(-40f, ChainDx([0f, -40f, 0f]));          // an anchor, then the moving root
+        Assert.Equal(-40f, ChainDx([0f, -40f, -9f]));         // a translated node INSIDE the content is not the content
+        Assert.Equal(0f, ChainDx([0f, 0f, 0f]));              // at rest: nothing translated, and a second child never counts
+    }
+
+    [Fact]
+    public void TheCueStopsAtAScaledNodeAndAtItsDepth()
+    {
+        Assert.Equal(0f, ChainDx([0f, float.NaN, -40f]));     // more than a translation: the walk stops there
+        Assert.Equal(-40f, ChainDx([0f, 0f, 0f, -40f]));      // the 4th node is still read
+        Assert.Equal(0f, ChainDx([0f, 0f, 0f, 0f, -40f]));    // the 5th is past EdgeFadeSpec.OverflowChainDepth
+    }
+
     private static PushLayerCmd RecordedFade(SceneRecordingSnapshot snapshot)
     {
         var draw = new DrawList();

@@ -207,7 +207,23 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
 /// (<see cref="Split"/> ≤ 0 or ≥ 1) is a constant fill and the backend replays it through the plain single-color glyph
 /// path instead, pixel-identically — so only the run actually mid-wipe pays gradient cost. Advancing
 /// <see cref="Split"/> per frame is reshape-free.</summary>
-public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f);
+public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f)
+{
+    /// <summary>The length (DIP) of the run the split sweeps, in reading order: what a split ANIMATED on the render thread
+    /// (<c>AnimChannel.GlyphWipeSplit</c>) steps along in whole DIPs (<see cref="QuantizeSplit"/>). 0 = the text node's own
+    /// width, which is the run of a single line. A WRAPPED run is longer (its lines laid end to end): an author that steps
+    /// its own writes along the measured run sets it here, and the render thread then steps exactly as it would.</summary>
+    public float Run { get; init; }
+
+    /// <summary><paramref name="split"/> rounded to whole DIPs of a <paramref name="run"/>-DIP run, the settled ends (at or
+    /// past 0 and 1) exact; a run of 1 DIP or less leaves it as is.</summary>
+    public static float Quantize(float split, float run)
+        => run > 1f && split > 0f && split < 1f ? MathF.Round(split * run) / run : split;
+
+    /// <summary><paramref name="split"/> stepped along this wipe's <see cref="Run"/>, or along <paramref name="nodeWidth"/>
+    /// (DIP) when it names none: the step the render thread poses.</summary>
+    public float QuantizeSplit(float split, float nodeWidth) => Quantize(split, Run > 0f ? Run : nodeWidth);
+}
 
 /// <summary>
 /// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
@@ -366,15 +382,16 @@ public readonly record struct EdgeFadeSpec(
     /// <summary>An OVERFLOW CUE over horizontally translated content (a marquee's moving line): &gt; 0 = how far (DIP) the
     /// content runs past this element's right edge at translate 0. The left/right bands then feather only an edge with
     /// content hidden past it, ramped by how much is hidden there — <see cref="ResolveOverflow"/> of the content's POSED
-    /// <c>TranslateX</c>, resolved by the recorder on the turn that poses it. The content's translate is the sum down this
-    /// element's FIRST-CHILD chain (at most <see cref="OverflowChainDepth"/> nodes, so a component anchor between the
-    /// element and its moving root is transparent). A translate animated on the render thread therefore moves the fade
+    /// <c>TranslateX</c>, resolved by the recorder on the turn that poses it. The content is the first TRANSLATED node down
+    /// this element's FIRST-CHILD chain (at most <see cref="OverflowChainDepth"/> nodes, so a component anchor between the
+    /// element and its moving root is transparent; the walk stops at a scaled or rotated node, and only first children
+    /// count). A translate animated on the render thread therefore moves the fade
     /// with it on the same frame, with no UI render and no lag; the alternative (mirroring the translate into a signal
     /// and re-rendering a new spec) re-rendered the element at the UI's frame rate and drew the fade a frame or more
     /// behind the text. 0 = off (the authored bands as they are).</summary>
     public float OverflowTail { get; init; }
 
-    /// <summary>How many nodes down the first-child chain an <see cref="OverflowTail"/> cue sums the content's translate.</summary>
+    /// <summary>How many nodes down the first-child chain an <see cref="OverflowTail"/> cue looks for the translated content.</summary>
     public const int OverflowChainDepth = 4;
 
     /// <summary>The distance (DIP) over which an <see cref="OverflowTail"/> band ramps from nothing to its authored depth —

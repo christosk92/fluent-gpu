@@ -2034,7 +2034,7 @@ public sealed partial class SliceRecorder
             ref ScanSeg sg = ref _scanSegs[e.Slot][e.Segment];
             RectF bDip = sg.Bounds;
             bool effect = r.Kind == SliceKind.Effect;
-            if (effect) bDip = ExtentWithinMarkerClip(in r, in bDip, scale);
+            if (effect && !ForceUncutExtents) bDip = ExtentWithinMarkerClip(in r, in bDip, scale);
             int covSlot = CoverageSlot(e.Slot);
             // Only a VIRTUAL list's content grows along its main axis as rows realize (and parks at both ends): its
             // segments keep the main-axis origin at content 0 and charge whole cells there. Any other scroll segment is
@@ -2369,18 +2369,33 @@ public sealed partial class SliceRecorder
     /// under the clip no longer moves the slice's origin (a geometry invalidation per frame). Pixel-identical: the
     /// origin stays on the grid, so every op rasters at the same device position. Not for a slice that samples outside
     /// its clip (a self-blur, a blurred fade, acrylic) or that has no tiles (a low-resolution or feedback boundary).</summary>
+    /// <summary>A probe-only IDENTITY control (<c>extent-cut-identity</c>, like <see cref="ForceGroupFades"/>): every effect
+    /// slice keeps its whole painted bounds instead of the extent cut to its marker clip. Process-wide; the probe flips it
+    /// between two captures of the same scene. Never set by the engine.</summary>
+    public static bool ForceUncutExtents { get => Volatile.Read(ref s_forceUncutExtents); set => Volatile.Write(ref s_forceUncutExtents, value); }
+    private static bool s_forceUncutExtents;
+
     private static RectF ExtentWithinMarkerClip(in Rec r, in RectF bounds, float scale)
+        => ExtentWithinMarkerClip(in bounds, scale, new ExtentFacts(r.MarkerClip, r.Pose, r.Sticky, r.Role, r.LowRes,
+            r.HasFeedback, !r.Acrylic.IsNone, r.MarkerFlags, r.Layer));
+
+    /// <summary>What <see cref="ExtentWithinMarkerClip(in RectF, float, in ExtentFacts)"/> reads of a slice (pure, so the
+    /// eligibility rules are testable without a recorder).</summary>
+    internal readonly record struct ExtentFacts(RectF MarkerClip, PoseKind Pose, bool Sticky, int Role, byte LowRes,
+        bool Feedback, bool Acrylic, int MarkerFlags, PushLayerCmd Layer);
+
+    internal static RectF ExtentWithinMarkerClip(in RectF bounds, float scale, in ExtentFacts f)
     {
-        if (bounds.IsEmpty || r.MarkerClip.IsInfinite || r.MarkerClip.IsEmpty || r.Pose != PoseKind.None || r.Sticky
-            || r.Role is not ((int)SliceRole.Main or (int)SliceRole.Layer)
-            || r.LowRes > 1 || r.HasFeedback || !r.Acrylic.IsNone
-            || (r.MarkerFlags & (int)(CompositeSliceFlags.InnerClip | CompositeSliceFlags.ParamsUp)) != 0)
+        if (bounds.IsEmpty || f.MarkerClip.IsInfinite || f.MarkerClip.IsEmpty || f.Pose != PoseKind.None || f.Sticky
+            || f.Role is not ((int)SliceRole.Main or (int)SliceRole.Layer)
+            || f.LowRes > 1 || f.Feedback || f.Acrylic
+            || (f.MarkerFlags & (int)(CompositeSliceFlags.InnerClip | CompositeSliceFlags.ParamsUp)) != 0)
             return bounds;
-        if ((r.MarkerFlags & (int)CompositeSliceFlags.Layer) != 0
-            && (r.Layer.Kind is (int)LayerKind.Blur or (int)LayerKind.Acrylic || r.Layer.BlurSigma > 0f))
+        if ((f.MarkerFlags & (int)CompositeSliceFlags.Layer) != 0
+            && (f.Layer.Kind is (int)LayerKind.Blur or (int)LayerKind.Acrylic || f.Layer.BlurSigma > 0f))
             return bounds;
         float slack = 1f / MathF.Max(scale, 0.01f);
-        RectF clip = new(r.MarkerClip.X - slack, r.MarkerClip.Y - slack, r.MarkerClip.W + 2f * slack, r.MarkerClip.H + 2f * slack);
+        RectF clip = new(f.MarkerClip.X - slack, f.MarkerClip.Y - slack, f.MarkerClip.W + 2f * slack, f.MarkerClip.H + 2f * slack);
         RectF cut = bounds.Intersect(clip);
         return cut.IsEmpty ? default : cut;
     }

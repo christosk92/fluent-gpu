@@ -4008,21 +4008,32 @@ internal sealed class SceneRecordingContext
         return maybeSparsePaint && scene.TryGetShadow(node, out var sh) && !sh.IsNone;
     }
 
+    /// <summary>The translate an <see cref="EdgeFadeSpec.OverflowTail"/> cue reads (see its remarks): that of the FIRST
+    /// translated node down <paramref name="node"/>'s first-child chain, at most <see cref="EdgeFadeSpec.OverflowChainDepth"/>
+    /// deep; the walk stops at a node whose transform is more than a translation. 0 = nothing translated.</summary>
+    internal static float OverflowContentDx(SceneRecordingSnapshot scene, NodeHandle node)
+    {
+        int depth = 0;
+        for (var c = scene.FirstChild(node); !c.IsNull && scene.IsLive(c) && depth < EdgeFadeSpec.OverflowChainDepth;
+             c = scene.FirstChild(c), depth++)
+        {
+            Affine2D t = scene.Paint(c).LocalTransform;
+            if (t.M11 != 1f || t.M12 != 0f || t.M21 != 0f || t.M22 != 1f) return 0f;
+            if (t.Dx != 0f) return t.Dx;
+        }
+        return 0f;
+    }
+
     private bool TryResolveEdgeFade(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, bool maybeSparsePaint, out EdgeFadeSpec ef)
     {
         if (maybeSparsePaint && scene.TryGetEdgeFade(node, out ef) && !ef.IsNone)                      // explicit, any element
         {
-            // An overflow cue reads its content's POSED translate (summed down the first-child chain): on the render thread
-            // that is this tick's compositor pose, so the fade moves on the same frame as the content it cues (the content's
-            // pose change re-walks this node through the ancestor trail).
+            // An overflow cue reads its content's POSED translate (OverflowContentDx): on the render thread that is this
+            // tick's compositor pose, so the fade moves on the same frame as the content it cues (the content's pose change
+            // re-walks this node through the ancestor trail).
             if (ef.OverflowTail > 0f)
             {
-                float tx = 0f;
-                int depth = 0;
-                for (var c = scene.FirstChild(node); !c.IsNull && scene.IsLive(c) && depth < EdgeFadeSpec.OverflowChainDepth;
-                     c = scene.FirstChild(c), depth++)
-                    tx += scene.Paint(c).LocalTransform.Dx;
-                ef = ef.ResolveOverflow(tx);
+                ef = ef.ResolveOverflow(OverflowContentDx(scene, node));
                 return !ef.IsNone;
             }
             return true;
