@@ -16,5 +16,48 @@
     <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
     <_PlayReadyNativeDir>$(MSBuildThisFileDirectory.TrimEnd('\'))</_PlayReadyNativeDir>
     <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
+    <!-- Machine-wide cache of built DLLs, keyed by a hash of the helper's sources: a fresh checkout or worktree copies
+         the DLL instead of spending ~32 s in MSVC before the C# build can start (measured 2026-10-06). -->
+    <_PlayReadyNativeCacheRoot Condition="'$(_PlayReadyNativeCacheRoot)' == ''">$(LOCALAPPDATA)\FluentGpu\playready-native</_PlayReadyNativeCacheRoot>
   </PropertyGroup>
+
+  <ItemGroup>
+    <_PlayReadyNativeCacheInputs Include="$(_PlayReadyNativeDir)\*.cpp;$(_PlayReadyNativeDir)\*.h;$(_PlayReadyNativeDir)\build.cmd;$(_PlayReadyNativeDir)\tests\*.cpp;$(_PlayReadyNativeDir)\tests\*.h" />
+  </ItemGroup>
+
+  <!-- The cache key: SHA-256 over "name hash" lines of every source (names, not paths, so every worktree agrees). -->
+  <Target Name="_PlayReadyNativeCacheKey" Condition="'$(DesignTimeBuild)' != 'true' and '$(LOCALAPPDATA)' != ''">
+    <GetFileHash Files="@(_PlayReadyNativeCacheInputs)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="_PlayReadyNativeHashed" />
+    </GetFileHash>
+    <PropertyGroup>
+      <_PlayReadyNativeKeyFile>$(IntermediateOutputPath)playready-native.$(_PlayReadyNativeArch).key</_PlayReadyNativeKeyFile>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_PlayReadyNativeKeyFile)" Lines="@(_PlayReadyNativeHashed->'%(Filename)%(Extension) %(FileHash)')"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <GetFileHash Files="$(_PlayReadyNativeKeyFile)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Hash" PropertyName="_PlayReadyNativeCacheKey" />
+    </GetFileHash>
+    <PropertyGroup>
+      <_PlayReadyNativeCached>$(_PlayReadyNativeCacheRoot)\$(_PlayReadyNativeArch)\$(_PlayReadyNativeCacheKey)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeCached>
+      <_PlayReadyNativeBuildStart>$([System.DateTime]::Now.Ticks)</_PlayReadyNativeBuildStart>
+    </PropertyGroup>
+  </Target>
+
+  <!-- A cached DLL for these exact sources: copy it in and touch it, so BuildDesktopPlayReadyNative's Inputs/Outputs
+       check sees it up to date and MSVC never runs. -->
+  <Target Name="RestorePlayReadyNativeFromCache" BeforeTargets="BuildDesktopPlayReadyNative" DependsOnTargets="_PlayReadyNativeCacheKey"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(LOCALAPPDATA)' != ''">
+    <Copy SourceFiles="$(_PlayReadyNativeCached)" DestinationFiles="$(_PlayReadyNativeDll)" Retries="3" ContinueOnError="true"
+          Condition="Exists('$(_PlayReadyNativeCached)')" />
+    <Touch Files="$(_PlayReadyNativeDll)" ContinueOnError="true" Condition="Exists('$(_PlayReadyNativeCached)') and Exists('$(_PlayReadyNativeDll)')" />
+  </Target>
+
+  <!-- Store a DLL that THIS build produced (written after the build started, so a stale DLL left by a failed MSVC run is
+       never cached under the new sources' key). Best effort: a cache write never fails the build. -->
+  <Target Name="SavePlayReadyNativeToCache" AfterTargets="BuildDesktopPlayReadyNative" DependsOnTargets="_PlayReadyNativeCacheKey"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(LOCALAPPDATA)' != '' and Exists('$(_PlayReadyNativeDll)')">
+    <Copy SourceFiles="$(_PlayReadyNativeDll)" DestinationFiles="$(_PlayReadyNativeCached)" ContinueOnError="true"
+          Condition="!Exists('$(_PlayReadyNativeCached)') and $([System.IO.File]::GetLastWriteTime('$(_PlayReadyNativeDll)').Ticks) &gt; $(_PlayReadyNativeBuildStart)" />
+  </Target>
 </Project>

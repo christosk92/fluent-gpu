@@ -62,4 +62,14 @@
     <DefineConstants>$(DefineConstants);FLUENTGPU_DIAG</DefineConstants>
   </PropertyGroup>
 
+  <!-- Debug skips the trim/AOT/single-file Roslyn analyzers that PublishAot / IsAotCompatible switch on: ILLink's
+       DynamicallyAccessedMembersAnalyzer dominates analyzer time and roughly halved an edit-build in Wavee
+       (24 s -> 13 s, 2026-10-06). Release keeps them (the canonical Release build still fails on any IL2xxx/IL3xxx),
+       and an AOT publish's ILC checks everything again. Mirrored in WaveeMusic's root Directory.Build.props. -->
+  <PropertyGroup Condition="'$(Configuration)' != 'Release'">
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
 </Project>
