@@ -22,7 +22,10 @@ public sealed partial class SliceRecorder
     private int[][] _cSegScopeIdx = new int[32][];
     private int[] _cSegScopeLen = new int[32];
     private int[] _cScope = new int[32];
+    private ulong[] _cScopeSig = new ulong[33];   // [d] = the fold of the hashes of the d innermost-open scopes' chain
     private int _cScopeDepth;
+    private bool _cBlendAdditive;   // the paint blend the arena's last SetBlend left set (ContentScanBlend)
+    private const ulong AdditiveBlendMark = 0xB1E2_0ADD_0000_0001UL;
 
     private void EnsureContentStorage(int n)
     {
@@ -46,6 +49,8 @@ public sealed partial class SliceRecorder
         _cOpCount[s] = 0;
         _cSegScopeLen[s] = 0;
         _cScopeDepth = 0;
+        _cBlendAdditive = false;
+        _cScopeSig[0] = TileContentHash.Empty;
         _cSegScopeStart[s][0] = 0;
         _cSegScopeCount[s][0] = 0;
     }
@@ -53,17 +58,26 @@ public sealed partial class SliceRecorder
     /// <summary>ScanSlot: one op at byte <paramref name="pos"/> with its effective footprint (slice-space DIP) and hash;
     /// <paramref name="scope"/> = it opens a clip / stencil clip / layer the following ops are drawn inside.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false)
+    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false)
     {
+        // An op drawn under the ADDITIVE paint blend paints differently with the same bytes: the blend is part of its
+        // content hash — of every want that folds it and of the sub-tile damage diff (a moved SetBlend re-rasters what
+        // it now covers or no longer covers).
+        if (_cBlendAdditive) hash = TileContentHash.Fold(hash, AdditiveBlendMark);
         int n = _cOpCount[s];
         ref TileOp[] ops = ref _cOps[s];
         if (n == ops.Length) Array.Resize(ref ops, n * 2);
-        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip };
+        ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, ScopeSig = _cScopeSig[_cScopeDepth] };
         _cOpCount[s] = n + 1;
         if (!scope) return;
-        if (_cScopeDepth == _cScope.Length) Array.Resize(ref _cScope, _cScope.Length * 2);
+        if (_cScopeDepth == _cScope.Length) { Array.Resize(ref _cScope, _cScope.Length * 2); Array.Resize(ref _cScopeSig, _cScope.Length + 1); }
+        _cScopeSig[_cScopeDepth + 1] = TileContentHash.Fold(_cScopeSig[_cScopeDepth], hash);
         _cScope[_cScopeDepth++] = n;
     }
+
+    /// <summary>ScanSlot: a SetBlend — the paint blend of every op after it (until the next one).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ContentScanBlend(bool additive) => _cBlendAdditive = additive;
 
     /// <summary>ScanSlot: a scope closed (PopClip / PopStencilClip / PopLayer).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -107,6 +121,35 @@ public sealed partial class SliceRecorder
         ReadOnlySpan<int> open = seg < _cSegScopeStart[slot].Length
             ? _cSegScopeIdx[slot].AsSpan(_cSegScopeStart[slot][seg], _cSegScopeCount[slot][seg]) : default;
         return TileContentHash.TileWant(ops, open, seg, sg.ByteStart, sg.ByteEnd, in tilePx, scale, ox, oy, out _, out hits, out paint);
+    }
+
+    private TileOpRec[] _damageOps = new TileOpRec[1024];
+    private int[] _rowOfSliceId = new int[16];
+
+    /// <summary>BuildComposite, after Resolve: plan every scheduled raster's sub-tile damage (<see cref="SliceTable.PlanDamage"/>)
+    /// from the ops its replay will draw — a raster whose row or content table is unknown stays whole.</summary>
+    private void PlanRasterDamage(SliceTable table, float scale)
+    {
+        if (_rasterCount == 0) return;
+        if (_rowOfSliceId.Length < table.SliceCap) _rowOfSliceId = new int[table.SliceCap];
+        Array.Fill(_rowOfSliceId, -1);
+        for (int i = 0; i < _rowCount; i++)
+            if ((uint)_rows[i].Id < (uint)_rowOfSliceId.Length && _rowOfSliceId[_rows[i].Id] < 0) _rowOfSliceId[_rows[i].Id] = i;
+        for (int i = 0; i < _rasterCount; i++)
+        {
+            ref TileRaster tr = ref _rasters[i];
+            int row = (uint)tr.Key.SliceId < (uint)_rowOfSliceId.Length ? _rowOfSliceId[tr.Key.SliceId] : -1;
+            if (row < 0 || row >= _rowSlot.Length) { tr = table.PlanDamage(in tr, default, default, known: false); continue; }
+            int slot = _rowSlot[row], seg = _rowSeg[row];
+            float ox = _rowOx[row], oy = _rowOy[row];
+            if (ContentKey(slot, seg, ox, oy, scale) == 0) { tr = table.PlanDamage(in tr, _rows[row].Frame, default, known: false); continue; }
+            ref ScanSeg sg = ref _scanSegs[slot][seg];
+            ReadOnlySpan<TileOp> ops = _cOps[slot].AsSpan(0, _cOpCount[slot]);
+            ReadOnlySpan<int> open = seg < _cSegScopeStart[slot].Length
+                ? _cSegScopeIdx[slot].AsSpan(_cSegScopeStart[slot][seg], _cSegScopeCount[slot][seg]) : default;
+            int n = TileContentHash.CollectTileOps(ops, open, sg.ByteStart, sg.ByteEnd, TileGrid.TileRect(tr.Key), scale, ox, oy, ref _damageOps);
+            tr = table.PlanDamage(in tr, _rows[row].Frame, _damageOps.AsSpan(0, n), known: true);
+        }
     }
 
     // Per composite row (BuildComposite): which slot / segment it is and the device grid it is cut on.

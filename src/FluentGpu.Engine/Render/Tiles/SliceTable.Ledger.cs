@@ -22,6 +22,7 @@ public sealed partial class SliceTable
     private void InitLedger()
     {
         InitContent();
+        InitDamage();
         _surfRasterFrame = new int[SurfaceCap];
         _surfTile = new int[SurfaceCap];
         Array.Fill(_surfTile, -1);
@@ -42,6 +43,7 @@ public sealed partial class SliceTable
     private void LedgerReleased(int surface)
     {
         if ((uint)surface < (uint)_surfTile.Length) _surfTile[surface] = -1;
+        DamageForget(surface);
     }
 
     /// <summary>The backend completed a raster into <paramref name="surface"/>: its pixels now hold the current want.</summary>

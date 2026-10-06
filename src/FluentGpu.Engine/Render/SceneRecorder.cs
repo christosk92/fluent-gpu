@@ -2407,6 +2407,20 @@ internal sealed class SceneRecordingContext
                 // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
                 // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
                 bool paintsText = !p.Text.IsEmpty && b.W > 0f && b.H > 0f;
+                // The run's INK: the box grown by what the measured text overflows it (a no-wrap / no-trim run wider than
+                // its box, more lines than its height). The overflow side depends on alignment, so it is taken on BOTH
+                // sides. Every cull, slice bound, content hash and sub-tile damage reads it; the replay still shapes into
+                // the box. Empty when the text fits (the box is the footprint).
+                RectF ink = default;
+                if (paintsText && mc.Valid)
+                {
+                    float ow = MathF.Max(0f, mc.Size.Width - local.W), oh = MathF.Max(0f, mc.Size.Height - local.H);
+                    if (ow > 0f || oh > 0f)
+                    {
+                        ink = new RectF(local.X - ow, local.Y - oh, local.W + 2f * ow, local.H + 2f * oh);
+                        result.Include(world.TransformBounds(ink));   // the span bounds a clean-subtree cull reads
+                    }
+                }
                 if (paintsText)
                 {
                     // No longer counted on motion: with the glyph renderer's sub-pixel phase atlas a moving run is drawn
@@ -2416,12 +2430,12 @@ internal sealed class SceneRecordingContext
                         dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId);
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink);
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, key, spanRunId);
+                            world, opacity, key, spanRunId, ink: in ink);
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
@@ -2700,13 +2714,16 @@ internal sealed class SceneRecordingContext
 
                 if (ps.Fill.A > 0f && PathRealizationCache.Shared.TryRealizeFill(geometry, ps.Rule, scaleQ, out var fr))
                 {
-                    dl.FillPath(local, ps.Fill, fr, (byte)ps.Rule, pathWorld, opacity, key);
-                    // Union the fill's device bounds — inflated by the ½-device-px AA fringe — the same shape as the
-                    // shadow-halo union above, so damage/off-screen-cull/opacity-extent see the true painted extent.
+                    // The command's Rect is the realization's own bounds (path space — the space pathWorld maps, a viewbox
+                    // fit included) inflated by the ½-device-px AA fringe: the painted extent every cull, slice bound and
+                    // sub-tile damage reads (SliceOpBounds). The node box was neither (a viewbox-scaled icon, a stroke
+                    // straddling the box edge).
                     float fillFringe = 0.5f / scaleQ;
-                    result.Include(pathWorld.TransformBounds(new RectF(
-                        fr.Bounds.X - fillFringe, fr.Bounds.Y - fillFringe,
-                        fr.Bounds.W + 2f * fillFringe, fr.Bounds.H + 2f * fillFringe)));
+                    var fillRect = new RectF(fr.Bounds.X - fillFringe, fr.Bounds.Y - fillFringe, fr.Bounds.W + 2f * fillFringe, fr.Bounds.H + 2f * fillFringe);
+                    dl.FillPath(fr.Bounds.W > 0f && fr.Bounds.H > 0f ? fillRect : local, ps.Fill, fr, (byte)ps.Rule, pathWorld, opacity, key);
+                    // Union the fill's device bounds — the same shape as the shadow-halo union above, so
+                    // damage/off-screen-cull/opacity-extent see the true painted extent.
+                    result.Include(pathWorld.TransformBounds(fillRect));
                 }
                 // Trim values reach the PAYLOAD, never the realization key (TryRealizeStroke's key folds geometry +
                 // style + scale only) — so a 60 Hz stroke-trim draw-on (the same StrokeTrim channels arc/polyline
@@ -2720,11 +2737,13 @@ internal sealed class SceneRecordingContext
                     t1 = Math.Clamp(t1, 0f, 1f);
                     if (t1 > t0 && PathRealizationCache.Shared.TryRealizeStroke(geometry, ps.Stroke, scaleQ, out var sr))
                     {
-                        dl.StrokePath(local, ps.StrokeColor, sr, t0, t1, ps.Stroke.DashOn, ps.Stroke.DashOff, ps.TrimMode, pathWorld, opacity, key | 0x1);
+                        // Rect = the stroke realization's bounds (its width included) + the AA fringe, as for the fill.
                         float strokeFringe = 0.5f / scaleQ;
-                        result.Include(pathWorld.TransformBounds(new RectF(
-                            sr.Bounds.X - strokeFringe, sr.Bounds.Y - strokeFringe,
-                            sr.Bounds.W + 2f * strokeFringe, sr.Bounds.H + 2f * strokeFringe)));
+                        var strokeRect = new RectF(sr.Bounds.X - strokeFringe, sr.Bounds.Y - strokeFringe,
+                            sr.Bounds.W + 2f * strokeFringe, sr.Bounds.H + 2f * strokeFringe);
+                        dl.StrokePath(sr.Bounds.W > 0f && sr.Bounds.H > 0f ? strokeRect : local, ps.StrokeColor, sr, t0, t1,
+                            ps.Stroke.DashOn, ps.Stroke.DashOff, ps.TrimMode, pathWorld, opacity, key | 0x1);
+                        result.Include(pathWorld.TransformBounds(strokeRect));
                     }
                 }
                 break;

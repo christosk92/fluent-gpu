@@ -129,21 +129,34 @@ public sealed unsafe partial class D3D12Device
         float s = _frameScale <= 0f ? 1f : _frameScale;
         // The target in the replay's DIP space, padded by the scissor's round-out slack.
         _cullRect = new RectF(-tlx / s - CullSafetyDip, -tly / s - CullSafetyDip, w / s + 2f * CullSafetyDip, h / s + 2f * CullSafetyDip);
+        if (_replayClampOn)   // a partial raster: nothing outside its damage (replay px) is drawn, so nothing outside it is decoded
+        {
+            var c = new RectF(_replayClamp.left / s - CullSafetyDip, _replayClamp.top / s - CullSafetyDip,
+                (_replayClamp.right - _replayClamp.left) / s + 2f * CullSafetyDip, (_replayClamp.bottom - _replayClamp.top) / s + 2f * CullSafetyDip);
+            RectF k = _cullRect.Intersect(c);
+            _cullRect = k.IsEmpty ? new RectF(c.X, c.Y, 0f, 0f) : k;
+        }
     }
 
     /// <summary>
     /// Replay slice segment <paramref name="row"/> into the target bound by the OPEN render pass on
     /// <paramref name="rtv"/> (<paramref name="w"/>×<paramref name="h"/>, target px = slice px + (<paramref name="dx"/>,
     /// <paramref name="dy"/>)). <paramref name="cullRelOrigin"/> = the target in the slice's px relative to its origin (the
-    /// span index's space). Leaves the pass open or suspended; the caller ends it.
+    /// span index's space). <paramref name="clamp"/> = a PARTIAL raster: every scissor (the decoder's, an inline group's
+    /// composite) is cut to <paramref name="damage"/> (target px) and the decode-time cull to it, so only the damage is
+    /// written. Leaves the pass open or suspended; the caller ends it.
     /// </summary>
     private void ReplaySegment(in CompositeFrame frame, in SliceRow row, int dx, int dy, int w, int h,
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv, in RectF cullRelOrigin)
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv, in RectF cullRelOrigin, bool clamp = false, PixelRect damage = default)
     {
         float s = _frameScale <= 0f ? 1f : _frameScale;
         ChooseShift(dx, w, out int spx, out int tlx);
         ChooseShift(dy, h, out int spy, out int tly);
         float sx = -spx / s, sy = -spy / s;
+        // target px = replay px + tlx (SetScissorRect's arithmetic): the clamp lives in replay px, the one space a tile
+        // and the inline-group scratches it opens share.
+        _replayClampOn = clamp;
+        if (clamp) _replayClamp = new RECT { left = damage.Left - tlx, top = damage.Top - tly, right = damage.Right - tlx, bottom = damage.Bottom - tly };
         _replayRtv = rtv;
         _streamLw = _streamLh = CanonicalViewport / s;
         ClearInsts();
@@ -170,6 +183,7 @@ public sealed unsafe partial class D3D12Device
         _clipStack.Clear();
         _roundedClipStack.Clear();
         _cullActive = false;
+        _replayClampOn = false;
     }
 
     /// <summary>Re-open the scopes the segment's arena left open before its first byte (in stream order), and the paint
@@ -387,7 +401,7 @@ public sealed unsafe partial class D3D12Device
         BindCompositor(g.ParentW, g.ParentH);
         // the group's composite clip (its drawn extent / inherited clip), in parent target px
         float s = _frameScale <= 0f ? 1f : _frameScale;
-        RECT sc = CurrentScissorRect();
+        RECT sc = ClampToReplay(CurrentScissorRect());
         int l = sc.left + g.ParentTlx, t = sc.top + g.ParentTly, r = sc.right + g.ParentTlx, b = sc.bottom + g.ParentTly;
         if (!g.L.CompositeClip.IsEmpty && !g.L.CompositeClip.IsInfinite)
         {

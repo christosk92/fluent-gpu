@@ -1070,7 +1070,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // device init; a runtime switch sets it and calls InjectDeviceLost so THIS re-run applies it via recovery).
         // 0 = auto. A stale/failed preference (adapter gone, driver refused) falls through to the auto walk below.
         long preferredLuid = GpuAdapterInfo.PreferredAdapterLuid;
-        if (preferredLuid != 0)
+        if (FluentGpu.Hosting.EngineSwitches.ForceWarp)
+        {
+            // `--fg warp`: the software adapter, explicitly (a validator run off the hardware driver)
+            IDXGIAdapter* warp;
+            if ((int)_factory->EnumWarpAdapter(__uuidof<IDXGIAdapter>(), (void**)&warp) >= 0 && warp != null)
+            {
+                if ((int)D3D12CreateDevice((IUnknown*)warp, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device) >= 0)
+                    selectionMode = "warp";
+                warp->Release();
+            }
+        }
+        if (device == null && preferredLuid != 0)
         {
             LUID pl = default;
             pl.LowPart = unchecked((uint)preferredLuid);
@@ -2028,7 +2039,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
-                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    RectF ink = g.InkRect;   // the painted extent (the box + measured overflow), not the layout box
+                    if (Cull(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2042,9 +2054,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
-                        NoteGlyphHaloCoverage(before, g.Bounds, RepaintCull.GlyphHalo(g.FontSize));
+                        NoteGlyphHaloCoverage(before, ink, RepaintCull.GlyphHalo(g.FontSize));
                         if (_glyphInsts.Count > before)
-                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                            NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                                 g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize));
                     }
                     break;
@@ -2053,7 +2065,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
-                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    RectF ink = g.InkRect;
+                    if (Cull(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize, g.Lift))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2069,9 +2082,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             _gradGlyphInsts, _glyphInsts,
                             g.SpanRunId, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += (_gradGlyphInsts.Count - beforeGrad) + (_glyphInsts.Count - beforePlain);
-                        NoteGlyphHaloCoverage(beforePlain, g.Bounds, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
+                        NoteGlyphHaloCoverage(beforePlain, ink, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                         if (_gradGlyphInsts.Count > beforeGrad || _glyphInsts.Count > beforePlain)
-                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                            NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                                 g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                     }
                     break;
@@ -2102,6 +2115,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(im.Rect.X, im.Rect.Y, im.Rect.W, im.Rect.H, im.Transform.M11, im.Transform.M12,
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip);
+                    if (_imgRecSlot >= 0) NoteRasterImage(im.ImageId);   // a tile raster records which pixels of the id it drew
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
                     if (_imageTextures!.IsResident(im.ImageId)) AddReadyImage(in im);
@@ -2570,6 +2584,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // command-list state — only invalidated when a compositor pass sets its own scissor, via InvalidateCmdState).
     private void SetScissorRect(RECT sc)
     {
+        sc = ClampToReplay(sc);
         int tw = _targetWidth > 0 ? _targetWidth : (int)_w;
         int th = _targetHeight > 0 ? _targetHeight : (int)_h;
         RECT targetScissor = new()
@@ -3541,6 +3556,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
         HRESULT pr;
+        byte pvMode = target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent ? (byte)2 : (byte)1;
         if (target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent)
         {
             // Partial: the staged dirty rects of the frame just composited (relative to the last presented frame — a
@@ -3569,6 +3585,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             EndTargetFrame();
             return;
         }
+        if (FluentGpu.Render.Tiles.TileDamage.PresentValidate) NotePresentForValidation(target, pvMode);   // what DWM was told (--fg present-validate)
         target.PpPresentCount = 0;
         target.PpNeedFullPresent = false;
         // The Present is what SPENDS the latency credit a wait took (the waitable is a semaphore: it is re-signaled when
@@ -5063,6 +5080,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // The retained-tile surfaces died with the device: the host's target-epoch bump invalidates every tile, and the
         // next composite recreates what it rasters.
         _surfaces?.Dispose(); _surfaces = null;
+        // The validators' readbacks / shadow target belong to the dead device, and their in-flight checks wait on fence
+        // values the new fence (restarting at 0) would not reach for a long time: drop them, restart their sequences.
+        ReleaseValidatorsForRecovery();
         _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
         _groupMemos.Clear();   // the surfaces they describe went with the pool
         ReleaseGroupRepairValidation();
@@ -5146,6 +5166,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _bakedBlur?.Dispose();
         _surfaces?.Dispose();
         ReleaseGroupRepairValidation();
+        ReleaseDamageChecks();
+        ReleasePresentChecks();
         _compositor?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
