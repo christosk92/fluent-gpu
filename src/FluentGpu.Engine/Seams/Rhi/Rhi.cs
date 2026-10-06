@@ -308,6 +308,12 @@ public partial interface IGpuDevice : IDisposable
     /// asks it on the render thread, after the frame was recorded. Default true (a backend with no deferred residency).</summary>
     bool IsImageResident(int imageId) => true;
 
+    /// <summary>What one image texture of the square <paramref name="bucket"/> (64 / 128 / 256 / 512 px) really commits on this
+    /// device, measured from the driver's own allocation requirement the first time such a texture was created (0 = not measured
+    /// yet or not supported). The image cache charges its budget in these units instead of the 64 KiB-aligned formula, which the
+    /// Adreno beats by 25 % for 256 x 256 (320 KiB against 256 KiB). Any thread; default 0.</summary>
+    long ImageCommittedBytes(int bucket) => 0;
+
     /// <summary>A Deep restore's held frames are not presented, so the missed-vblank reason for the per-turn upload cap does not
     /// apply to them: while true the render-thread image drain stages every queued upload instead of
     /// <c>UploadBytesPerTurn</c> of them, and the held first frame lands in the fewest turns. Render thread; default no-op.</summary>

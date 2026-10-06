@@ -4762,6 +4762,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <inheritdoc/>
     public bool IsImageResident(int imageId) => _imageTextures?.IsResident(imageId) ?? false;
 
+    /// <inheritdoc/>
+    public long ImageCommittedBytes(int bucket) => _imageTextures?.MeasuredCommittedBytes(bucket) ?? 0;
+
     private int _uploadCapLifted;
     /// <inheritdoc/>
     public void SetUploadCapLifted(bool lifted) => System.Threading.Volatile.Write(ref _uploadCapLifted, lifted ? 1 : 0);

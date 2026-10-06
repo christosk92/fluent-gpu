@@ -285,7 +285,10 @@ public sealed class ImageCache
     private readonly Dictionary<int, Entry> _byId = new();
     private readonly Dictionary<int, List<int>> _derivedBySource = new();
     private readonly IImageDecoder _decoder;
-    private readonly long _budgetBytes;
+    private long _budgetBytes;        // the cap in force: (window-relative budget) x (measured-bytes scale); see SetWindowBudget / SetMeasuredCommittedBytes
+    private readonly long _baseBudgetBytes, _baseDerivedBudgetBytes;   // what the host built the cache with (today's budgets)
+    private long _windowBudgetBytes;  // max(base, window-relative); before any window size is known, the base
+    private double _bytesScale = 1.0; // measured / formula charge of the 256 bucket: budgets scale by it so a corrected charge never shrinks capacity
     // Soft cap on derived/blur bytes, so blur-hash previews retire faster on a weak tier instead of padding the small
     // LOCAL segment (adreno-hang-fixes.md M5). PASSED IN, never read from GpuProfile here: this is a field initializer,
     // so it ran at construction — and the claim that used to sit on this line, that "the backend has published
@@ -293,7 +296,7 @@ public sealed class ImageCache
     // first CreateSwapchain, which the AppHost constructor makes AFTER the host has built this cache, so Tier was still
     // Unknown (= not weak) and every UMA machine silently got the 16MB discrete cap. The host now decides the tier
     // once, through GpuMemoryBudgets.For, and hands the answer down.
-    private readonly long DerivedSoftBudgetBytes;
+    private long DerivedSoftBudgetBytes;
     private readonly ImageCompleteHandler _onComplete;   // cached → Pump allocates nothing
     private readonly ImageReadyHandler _onPixels;         // cached admission bridge → Pump allocates nothing
     private static readonly ImageReadyHandler _noPixels = static (int id, System.ReadOnlySpan<byte> p, int w, int h) => { };
@@ -395,8 +398,8 @@ public sealed class ImageCache
     public ImageCache(IImageDecoder decoder, long budgetBytes = 96L * 1024 * 1024, long derivedSoftBudgetBytes = 0, bool weak = false)
     {
         _decoder = decoder;
-        _budgetBytes = budgetBytes;
-        DerivedSoftBudgetBytes = derivedSoftBudgetBytes > 0 ? derivedSoftBudgetBytes : GpuMemoryBudgets.DerivedDefault;
+        _budgetBytes = _baseBudgetBytes = _windowBudgetBytes = budgetBytes;
+        DerivedSoftBudgetBytes = _baseDerivedBudgetBytes = derivedSoftBudgetBytes > 0 ? derivedSoftBudgetBytes : GpuMemoryBudgets.DerivedDefault;
         _onComplete = OnDecodeComplete;
         _onPixels = OnPixels;
         _pixelSink = _noPixels;
@@ -760,6 +763,59 @@ public sealed class ImageCache
         const long Placement = 64L * 1024;
         return (pixels + Placement - 1) / Placement * Placement;
     }
+
+    // ── Window-relative budget and measured committed bytes ────────────────────────────────────────────────────────
+    private readonly long[] _measuredBucketBytes = new long[4];   // 64, 128, 256, 512; 0 = not measured (use the formula)
+
+    /// <summary>What a decoded image costs on THIS device: <see cref="CommittedBytesFor"/>'s formula, replaced for a square bucket by
+    /// the device's own measurement once it has published one (<see cref="SetMeasuredCommittedBytes"/>) - the Adreno charges 320 KiB
+    /// for a 256 x 256 texture where the formula says 256 KiB.</summary>
+    public long CommittedBytesOf(int w, int h)
+    {
+        int edge = Math.Max(w, h);
+        if (edge <= 512)
+        {
+            long measured = Volatile.Read(ref _measuredBucketBytes[BucketIndex(BucketFor(edge))]);
+            if (measured > 0) return measured;
+        }
+        return CommittedBytesFor(w, h);
+    }
+
+    private static int BucketIndex(int bucket) => bucket <= 64 ? 0 : bucket <= 128 ? 1 : bucket <= 256 ? 2 : 3;
+
+    /// <summary>The device measured what one texture of the square <paramref name="bucket"/> (64/128/256/512) really commits. From
+    /// now on that is the charge for that bucket, AND both byte budgets scale by the measured / formula ratio of the 256 bucket
+    /// (the one a cover costs) in the same call - so the number of 256 x 256 images the cache holds, today's effective capacity,
+    /// does not shrink because the accounting became honest. Idempotent for an unchanged value.</summary>
+    public void SetMeasuredCommittedBytes(int bucket, long bytes)
+    {
+        if (bytes <= 0 || bucket < 64 || bucket > 512) return;
+        int i = BucketIndex(bucket);
+        if (Volatile.Read(ref _measuredBucketBytes[i]) == bytes) return;
+        Volatile.Write(ref _measuredBucketBytes[i], bytes);
+        if (i == 2)
+        {
+            _bytesScale = Math.Clamp((double)bytes / CommittedBytesFor(256, 256), 0.5, 2.0);
+            ApplyBudgets();
+        }
+    }
+
+    /// <summary>Size the cap to the window: <see cref="ImageBudget.Current"/> (never below the budget the cache was built with).
+    /// Called by the host when the client size changes; a bigger window holds more covers before the LRU sheds unpinned ones.</summary>
+    public void SetWindowBudget(int widthPx, int heightPx)
+    {
+        _windowBudgetBytes = ImageBudget.Current(_baseBudgetBytes, widthPx, heightPx, IsWeakTier);
+        ApplyBudgets();
+    }
+
+    private void ApplyBudgets()
+    {
+        _budgetBytes = (long)Math.Round(_windowBudgetBytes * _bytesScale);
+        DerivedSoftBudgetBytes = (long)Math.Round(_baseDerivedBudgetBytes * _bytesScale);
+    }
+
+    /// <summary>The image-cache cap in force (diagnostics / gates).</summary>
+    public long BudgetBytes => _budgetBytes;
 
     /// <summary>Advance the cross-fade clock by <paramref name="dtMs"/> (call once per painted frame, before record).</summary>
     public void Tick(float dtMs) => _clockMs += dtMs;
@@ -1410,7 +1466,7 @@ public sealed class ImageCache
                 long priorBytes = e.Bytes;
                 e.W = result.W;
                 e.H = result.H;
-                e.Bytes = CommittedBytesFor(result.W, result.H);
+                e.Bytes = CommittedBytesOf(result.W, result.H);
                 e.BakeQuality = result.Quality;
                 e.BakeUpgradeAttempts = 0;
                 UsedBytes += e.Bytes - priorBytes;
@@ -1437,7 +1493,7 @@ public sealed class ImageCache
             {
                 e.W = result.W;
                 e.H = result.H;
-                e.Bytes = CommittedBytesFor(result.W, result.H);
+                e.Bytes = CommittedBytesOf(result.W, result.H);
                 e.BakeQuality = result.Quality;
                 UsedBytes += e.Bytes;
                 DerivedUsedBytes += e.Bytes;
@@ -1567,7 +1623,7 @@ public sealed class ImageCache
         e.W = w; e.H = h;
         // COMMITTED bytes, not decoded pixels — see CommittedBytesFor. Budgeting against the decoded figure let the
         // cache believe it was holding its cap while the GPU held roughly 3.5x that.
-        e.Bytes = ok ? CommittedBytesFor(w, h) : 0;
+        e.Bytes = ok ? CommittedBytesOf(w, h) : 0;
         UsedBytes += e.Bytes;
         SyncLru(id, e);
         _pumpCompleted++;

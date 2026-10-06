@@ -226,6 +226,9 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
     public bool HasPendingUploads => false;
     public bool IsImageResident(int imageId) => _resident.ContainsKey(imageId);
+    /// <summary>Test seam: per-bucket measured commit this device reports (default none).</summary>
+    public System.Collections.Generic.Dictionary<int, long> ImageCommittedBytesForTest { get; } = new();
+    public long ImageCommittedBytes(int bucket) => ImageCommittedBytesForTest.TryGetValue(bucket, out long b) ? b : 0;
     /// <summary>Test seam: the last <see cref="IGpuDevice.SetUploadCapLifted"/> value.</summary>
     public bool UploadCapLifted { get; private set; }
     public void SetUploadCapLifted(bool lifted) => UploadCapLifted = lifted;

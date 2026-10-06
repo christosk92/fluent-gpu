@@ -957,6 +957,33 @@ public sealed partial class AppHost : IDisposable
     /// (everything it waits for landed, it expired, or the window changed size) make sure this frame publishes, so the release
     /// publication exists even when nothing else would have woken Paint. The decision itself is taken where the publication is
     /// built (<see cref="EvaluateRestoreHold"/>), after this frame's image pump.</summary>
+    // ── Window-relative image budget + measured committed bytes (UI thread, primary host only) ───────────────────────
+    private Size2 _budgetWindowSize;
+    private int _committedPollTick;
+    private int _committedBucketsKnown;   // bit per 64/128/256/512
+
+    /// <summary>Once per <see cref="RunFrame"/>: size the image budget to the window when its size changed, and (about twice a
+    /// second until every bucket is known) hand the cache what the device measured one texture of each bucket to commit.</summary>
+    private void UpdateImageBudget()
+    {
+        if (_isDetachedChild || !PumpsSharedImages || IsParked) return;
+        var size = _window.ClientSizePx;
+        if (size != _budgetWindowSize && size.Width > 0 && size.Height > 0)
+        {
+            _budgetWindowSize = size;
+            _images.SetWindowBudget((int)size.Width, (int)size.Height);
+        }
+        if (_committedBucketsKnown == 0xF || (++_committedPollTick & 31) != 1) return;
+        for (int i = 0, bucket = 64; i < 4; i++, bucket <<= 1)
+        {
+            if ((_committedBucketsKnown & (1 << i)) != 0) continue;
+            long bytes = _device.ImageCommittedBytes(bucket);
+            if (bytes <= 0) continue;
+            _committedBucketsKnown |= 1 << i;
+            _images.SetMeasuredCommittedBytes(bucket, bytes);
+        }
+    }
+
     private void TickRestoreHold()
     {
         if (!_restoreHoldArmed) return;
@@ -5407,6 +5434,7 @@ public sealed partial class AppHost : IDisposable
         bool minimized = (windowStatus.Parked && !_revealPending) || _cloakParked || _coverParked;   // "minimized" below means PARKED: minimized, hidden OR cloaked (E2 — identical cost)
         AdvanceHiddenMemory();   // park timer -> Shallow / Deep release, restore edge -> restart + hold + lift + full repaint (parked frames included)
         TickRestoreHold();       // an armed restore hold whose end is due makes this frame publish (the release publication)
+        UpdateImageBudget();     // window-relative image budget; the device's measured per-bucket commit
         // InputHooks.WindowOccluded — HERE, above the park and idle gates, so it is published on EVERY frame and not only
         // the ones that reach Paint (an occlusion edge on an idle host would otherwise never be heard). A change schedules
         // its readers, which is RuntimePending: the idle gate below falls through to Paint (or the park branch flushes).
