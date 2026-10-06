@@ -148,4 +148,58 @@ public sealed class ColdBlockTests
         Assert.Equal(3, runs);
         Assert.Equal(3, sig.SubscriberCount);
     }
+
+    [Fact]
+    public void With_resetting_a_cold_channel_reads_like_a_fresh_element()
+    {
+        var a = new BoxEl { HoverScale = 1.2f };
+        var reset = a with { HoverScale = 1f };
+        Assert.Equal(new BoxEl().HoverScale, reset.HoverScale);
+        Assert.False(reset.Equals(new BoxEl()));   // documented: a cloned all-default block is not null, so records compare unequal (conservative)
+    }
+
+    [Fact]
+    public void Chain_mutating_a_block_owned_by_an_earlier_link_leaves_it_alone()
+    {
+        var a = new BoxEl { HoverScale = 1.1f };
+        var b = a with { PressScale = 0.8f };
+        var c = b with { HoverScale = 1.5f };
+        Assert.Equal(1.1f, a.HoverScale); Assert.Equal(1f, a.PressScale);
+        Assert.Equal(1.1f, b.HoverScale); Assert.Equal(0.8f, b.PressScale);
+        Assert.Equal(1.5f, c.HoverScale); Assert.Equal(0.8f, c.PressScale);
+    }
+
+    [Fact]
+    public void Diff_sees_a_changed_cold_channel()
+    {
+        var a = new BoxEl(); Action<KeyEventArgs> k = _ => { };
+        Assert.True(BoxElDiff.AnyChanged(a, a with { HoverScale = 1.3f }));
+        Assert.True(BoxElDiff.AnyChanged(a, a with { OnKeyDown = k }));
+        Assert.True(BoxElDiff.AnyChanged(a, a with { MorphId = "m" }));
+        Assert.False(BoxElDiff.AnyChanged(a, a with { HoverScale = 1f }));
+    }
+
+    [Fact]
+    public void RefList_spills_shrinks_and_regrows()
+    {
+        var l = new RefList<object>(); var o = new object[4];
+        for (int i = 0; i < 4; i++) { o[i] = new object(); l.Add(o[i]); }
+        Assert.True(l.Remove(o[3])); Assert.True(l.Remove(o[2]));
+        Assert.True(l.Remove(o[0]));
+        Assert.Equal(1, l.Count); Assert.Same(o[1], l[0]);
+        l.Add(o[2]); l.Add(o[3]);
+        Assert.Equal(3, l.Count); Assert.Same(o[3], l[2]);
+    }
+
+    [Fact]
+    public void Effect_disposing_itself_during_a_reverse_notify_is_safe()
+    {
+        var rt = new ReactiveRuntime(); var sig = new Signal<int>(0); int runs = 0; Effect? self = null;
+        self = new Effect(rt, () => { if (sig.Value > 0) self!.Dispose(); runs++; });
+        var other = new Effect(rt, () => { _ = sig.Value; runs++; });
+        sig.Value = 1; rt.Flush();
+        sig.Value = 2; rt.Flush();
+        Assert.Equal(1, sig.SubscriberCount);
+        other.Dispose();
+    }
 }

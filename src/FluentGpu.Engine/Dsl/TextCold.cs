@@ -6,7 +6,7 @@ namespace FluentGpu.Dsl;
 // The rarely-set TextEl channels, split out so a label that sets none costs one null reference. Copy-on-write like BoxCold:
 // TextEl's `with` copies share the instance until a setter that changes a value runs on the copy, which clones it first
 // (Owner tells a clone made for that element from a shared one). Defaults mirror the former inline initializers exactly;
-// Owner is excluded from equality.
+// Owner is excluded from equality. Owner keeps the element it was cloned for alive; that is bounded (one per with-chain link that mutated the block) and dies with the block.
 internal sealed class TextCold : IEquatable<TextCold>
 {
     public static readonly TextCold Default = new();

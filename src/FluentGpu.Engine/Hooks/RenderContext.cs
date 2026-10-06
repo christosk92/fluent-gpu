@@ -419,6 +419,7 @@ public sealed partial class RenderContext
     // looped hooks are therefore LEGAL — see docs/guide/reactivity.md.
     private readonly List<HookCell> _cells = new();
     private Dictionary<HookKey, int>? _keyed;                                     // call-site key → index into _cells (null until the first hook)
+    private ulong _lastFh; private int _lastLine, _nextOrd; private bool _haveLast;   // cursor: the previous lookup's call site and the ordinal after it (this render only)
     private int _renderEpoch;                                                      // bumped per render: a cell already resolved at this epoch was hit earlier in the SAME render
     private int _cleanupCellCount;
 
@@ -473,7 +474,7 @@ public sealed partial class RenderContext
     /// write — no allocation and no name resolution (that happens at report cadence, if ever).</summary>
     private T Own<T>(T c) where T : Computation { c.DiagOwner = Owner; return c; }
 
-    internal void BeginRender() => _renderEpoch++;   // a new render: every cell is unresolved again (loop ordinals restart); cells persist by key
+    internal void BeginRender() { _renderEpoch++; _haveLast = false; }   // a new render: every cell is unresolved again (loop ordinals restart); cells persist by key
     internal void EndRender()
     {
         // The "form under construction" thread-local (set by UseForm so same-component UseField calls auto-join) lives
@@ -493,16 +494,22 @@ public sealed partial class RenderContext
     private int LookupCell(string? file, int line, out HookKey key)
     {
         ulong fh = FileHash(file);
-        for (int ord = 0; ; ord++)
+        // A hook in a loop repeats one call site back to back: resume after the ordinal the previous call took (every lower
+        // ordinal is already resolved this render), so the k-th iteration is one probe, not k+1.
+        int ord = _haveLast && _lastFh == fh && _lastLine == line ? _nextOrd : 0;
+        for (; ; ord++)
         {
             key = new HookKey(fh, line, ord);
-            if (_keyed is null || !_keyed.TryGetValue(key, out int idx)) return -1;
+            if (_keyed is null || !_keyed.TryGetValue(key, out int idx)) { Remember(fh, line, ord); return -1; }
             var cell = _cells[idx];
             if (cell.RenderEpoch == _renderEpoch) continue;   // an earlier iteration of this render already took ordinal `ord`
             cell.RenderEpoch = _renderEpoch;
+            Remember(fh, line, ord);
             return idx;
         }
     }
+
+    private void Remember(ulong fh, int line, int ord) { _lastFh = fh; _lastLine = line; _nextOrd = ord + 1; _haveLast = true; }
 
     /// <summary>Append a freshly-created cell and bind it to its call-site <paramref name="key"/>.</summary>
     private void RegisterCell(in HookKey key, HookCell cell, bool cleanupCapable = false)
@@ -696,7 +703,7 @@ public sealed partial class RenderContext
     private void EnqueueEffect(List<Action> target, Action action)
     {
         if (target.Count == 0)
-            RegisterPendingEffectContext?.Invoke(this, ReferenceEquals(target, PendingLayoutEffects));
+            RegisterPendingEffectContext?.Invoke(this, ReferenceEquals(target, _pendingLayoutEffects));
         target.Add(action);
     }
 

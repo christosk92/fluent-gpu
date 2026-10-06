@@ -7,7 +7,7 @@ namespace FluentGpu.Dsl;
 // that sets a few clones only the block it touches. Copy-on-write: BoxEl's `with` copies share a block until a setter that
 // changes a value runs on the copy, which clones it first (Owner tells a clone made for that element from a shared one). A
 // setter that writes the value a channel already holds (the default included) does not clone. Defaults mirror the former
-// inline initializers exactly; Owner is excluded from equality.
+// inline initializers exactly; Owner is excluded from equality. Owner keeps the element it was cloned for alive; that is bounded (one per with-chain link that mutated the block) and dies with the block.
 
 /// <summary>BoxEl's common rich paint (gradient, border brush, shadow, border and clip extras).</summary>
 internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
