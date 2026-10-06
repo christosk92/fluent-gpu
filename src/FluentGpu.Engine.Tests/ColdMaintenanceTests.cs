@@ -186,6 +186,55 @@ public sealed class ColdMaintenanceTests
     }
 
     [Fact]
+    public void AllocatingServiceWaitsForQuietButNeverPastTheDeferCap()
+    {
+        Assert.Equal(long.MaxValue, ColdMaintenanceDeadline.Deferred(long.MaxValue, 50_000));   // nothing armed stays unarmed
+        Assert.Equal(30_000, ColdMaintenanceDeadline.Deferred(30_000, 29_000));                // quiet before the deadline
+        Assert.Equal(31_500, ColdMaintenanceDeadline.Deferred(30_000, 31_500));                // an interaction holds it back
+        Assert.Equal(30_000 + ColdMaintenanceDeadline.MaxDeferMs,
+            ColdMaintenanceDeadline.Deferred(30_000, 30_000 + 10 * ColdMaintenanceDeadline.MaxDeferMs));   // ...never forever
+
+        var policy = new ColdMaintenanceDeadline();
+        Assert.True(policy.Arm(0));
+        Assert.False(policy.TryConsume(30_000, quietFromMs: 31_000));
+        Assert.Equal(16, policy.ClampWaitQuiet(16, 30_000, 31_000));    // a display-rate wait is untouched: no 1 ms poll
+        Assert.Equal(1_000, policy.ClampWaitQuiet(-1, 30_000, 31_000)); // an idle loop wakes at the quiet point
+        Assert.True(policy.TryConsume(31_000, quietFromMs: 31_000));
+        Assert.Equal(-1, policy.ClampWaitQuiet(-1, 31_000, 31_000));
+    }
+
+    [Fact]
+    public void SceneTrimDueDuringInteractionWaitsUntilTheHostIsQuiet()
+    {
+        // 2026-10-06 real-data bench: the 30 s scene deadline fell due two seconds into a Liked Songs scroll and the trim
+        // (every SoA column reallocated, 6.65 MB of large-object arrays) ran inside a scroll frame.
+        using var f = new Fixture(minimized: false);
+        var nodes = new NodeHandle[1024];
+        for (int i = 0; i < nodes.Length; i++) nodes[i] = f.Host.Scene.CreateNode(1);
+        foreach (var node in nodes) f.Host.Scene.FreeSubtree(node);
+        int high = f.Host.Scene.Capacity;
+        Assert.True(high > 256);
+        Assert.Equal(30_000, f.Host.RecommendedWaitMs());
+
+        f.Now = 30_000;
+        f.Window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(10f, 10f), 0, 0));
+        f.Host.RunFrame();                                   // due, but the person is interacting
+        Assert.Equal(high, f.Host.Scene.Capacity);
+        Assert.Equal(0, f.Host.ColdMaintenanceRuns);
+
+        f.Now = 30_000 + ColdMaintenanceDeadline.QuietMs - 1;
+        f.Host.RunFrame();
+        Assert.Equal(high, f.Host.Scene.Capacity);
+        Assert.Equal(1, f.Host.RecommendedWaitMs());         // the idle loop wakes for it at the quiet point, not before
+
+        f.Now = 30_000 + ColdMaintenanceDeadline.QuietMs;
+        f.Host.RunFrame();
+        Assert.Equal(256, f.Host.Scene.Capacity);
+        Assert.Equal(1, f.Host.ColdMaintenanceRuns);
+        Assert.Equal(-1, f.Host.RecommendedWaitMs());
+    }
+
+    [Fact]
     public void SceneRevisionTracksEqualCountReplacementButNotPaint()
     {
         var scene = new SceneStore();

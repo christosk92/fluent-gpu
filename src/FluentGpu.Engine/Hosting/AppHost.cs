@@ -3780,6 +3780,19 @@ public sealed partial class AppHost : IDisposable
     private bool CanMaintainSnapshots => _anim.RenderOwnsCompositor && !_runtime.HasPending
         && !_needFullLayout && !_window.InModalLoop;
 
+    // The allocating cold services (the scene slab trim, the snapshot capacity reclaim) wait for the host to be quiet: until
+    // this instant an interaction (input, a scroll or drag in motion, the post-input warm hold) counts as live
+    // (ColdMaintenanceDeadline.QuietMs past the last one). The pixel-pool trim only releases, so it never waits.
+    private long _coldQuietFromMs = long.MinValue;
+
+    /// <summary>The wake bits that mean a person is interacting right now (a frame that allocates megabytes here is a hitch
+    /// they see): a scroll in motion or a frame-aligned scroll producer, a drag, a held or pressed touch, and the post-input
+    /// warm hold. Steady non-interactive motion (a visualizer, a playhead) is not in it: the services run beside it.</summary>
+    internal const WakeReasons ColdInteractiveWake = WakeReasons.ScrollAnim | WakeReasons.ScrollProducer | WakeReasons.DragDropWork
+        | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress | WakeReasons.WarmCadence;
+
+    private void NoteColdInteraction() => _coldQuietFromMs = ColdMaintenanceNowMs + ColdMaintenanceDeadline.QuietMs;
+
     private int ClampWaitToColdMaintenance(int wait)
     {
         // Service is intentionally below the recovery rendezvous. Do not turn its excluded drain into a 1 ms poll.
@@ -3787,9 +3800,10 @@ public sealed partial class AppHost : IDisposable
         long now = ColdMaintenanceNowMs;
         ObserveSceneCapacity(now);
         wait = _pixelMaintenance.ClampWait(wait, now);
-        wait = _sceneMaintenance.ClampWait(wait, now);
+        wait = _sceneMaintenance.ClampWaitQuiet(wait, now, _coldQuietFromMs);
         return CanMaintainSnapshots
-            ? ColdMaintenanceDeadline.ClampWait(wait, now, _renderSeam.NextCapacityMaintenanceMs) : wait;
+            ? ColdMaintenanceDeadline.ClampWait(wait, now,
+                ColdMaintenanceDeadline.Deferred(_renderSeam.NextCapacityMaintenanceMs, _coldQuietFromMs)) : wait;
     }
 
     private void RunColdMaintenance()
@@ -3799,13 +3813,13 @@ public sealed partial class AppHost : IDisposable
         bool serviced = false;
         // Disarm BEFORE releasing buffers: a Return that races the trim can arm the next finite episode.
         if (_pixelMaintenance.TryConsume(now)) { _pixelPool.Trim(); serviced = true; }
-        if (_sceneMaintenance.TryConsume(now))
+        if (_sceneMaintenance.TryConsume(now, _coldQuietFromMs))
         {
             _scene.TrimExcessCapacity();
             _seenSceneCapacityRevision = _scene.CapacityRevision; // Our own shrink must not schedule another attempt.
             serviced = true;
         }
-        if (CanMaintainSnapshots && _renderSeam.NextCapacityMaintenanceMs <= now)
+        if (CanMaintainSnapshots && ColdMaintenanceDeadline.Deferred(_renderSeam.NextCapacityMaintenanceMs, _coldQuietFromMs) <= now)
         {
             // Three slots bound the cold work. Failed attempts consume their policy too; never poll a Reading slot.
             for (int i = 0; i < 3; i++)
@@ -4828,6 +4842,8 @@ public sealed partial class AppHost : IDisposable
         if (_warmCadenceEnabled && WarmCadenceHoldMs > 0f
             && (clicks > 0 || (inputKindMask & WarmCadenceInputMask) != 0))
             _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
+        // Input of any kind (hover included: it repaints) holds the allocating cold services back (RunColdMaintenance below).
+        if (inputKindMask != 0 || clicks > 0) NoteColdInteraction();
 
         // Step 4 fault injection (--fg device-lost=N=<frameN>): force a controlled DEVICE_REMOVED so the next submit
         // fails and the recovery rendezvous below is exercised on real hardware.
@@ -5031,6 +5047,7 @@ public sealed partial class AppHost : IDisposable
         // Computed ONCE per frame: the idle gate below, the census, and Paint's own reads (_paintWake) all use this mask.
         WakeReasons wake = ComputeWakeReasons();   // always-on census input; allocation-free field reads
         _ledgerWake = (uint)wake;                  // the frame ledger's wake census (a plain store)
+        if ((wake & ColdInteractiveWake) != 0) NoteColdInteraction();   // a scroll/drag in motion holds the allocating cold services back
 
         // Warm cadence ALONE is not work: the hold only keeps the loop waking on the display tick for a second after the
         // last interaction, so the next one pays no cold-start ramp. A frame woken by nothing else (no input this turn, no
