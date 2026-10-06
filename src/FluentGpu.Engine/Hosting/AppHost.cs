@@ -814,9 +814,10 @@ public sealed partial class AppHost : IDisposable
                 if (freed.IsEmpty) break;
                 _device.TrimTileSurfaces(freed);
             }
-            _device.ReleaseHiddenResources(HiddenStage.Shallow);
+            bool shared = OtherWindowVisibleOnRenderThread();
+            _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);
             DrainImageJobsOffFrame();
-            _device.ReleaseHiddenResources(HiddenStage.Shallow);   // the drain freed textures: the pools / levels they emptied go too
+            _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
         }
         else _device.ReleaseHiddenResources(HiddenStage.Visible);
     }
@@ -848,11 +849,21 @@ public sealed partial class AppHost : IDisposable
         DrainImageJobsOffFrame();
         if (_device.HasHiddenReleaseBacklog)
         {
-            _device.ReleaseHiddenResources(HiddenStage.Shallow);
+            _device.ReleaseHiddenResources(HiddenStage.Shallow, OtherWindowVisibleOnRenderThread());
             return 500;
         }
-        if (had) _device.ReleaseHiddenResources(HiddenStage.Shallow);   // the backlog just drained: one last pass refreshes the census
+        if (had) _device.ReleaseHiddenResources(HiddenStage.Shallow, OtherWindowVisibleOnRenderThread());   // the backlog just drained: one last pass refreshes the census
         return -1;
+    }
+
+    /// <summary>Render thread: a detached pop-out (its own swapchain on this render thread) is on screen. The device-wide parts of the
+    /// release (scratch, blur pyramids, image pooling) are shared with it, so they are skipped while it is.</summary>
+    private bool OtherWindowVisibleOnRenderThread()
+    {
+        var list = Volatile.Read(ref _childRenderSources);
+        for (int i = 0; i < list.Length; i++)
+            if (!list[i]._renderFailed && Volatile.Read(ref list[i]._renderVisible) != 0) return true;
+        return false;
     }
 
     /// <summary>Render-thread housekeeping between turns, on wall clock (never a turn count: an idle app runs no turns). Evicts
@@ -5499,6 +5510,9 @@ public sealed partial class AppHost : IDisposable
         // Idempotent for the same role; erased from Release with ThreadGuard.
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         if (_inPaint) { _frameAfterPaint = true; NoteNoPresentTurn(); return LastStats; }
+        // A restore can paint BEFORE RunFrame sees the un-park (WM_SIZE / WM_PAINT arrive synchronously inside ShowWindow): lift a
+        // hidden stage here too, or this frame composites under a latched Shallow and the render thread re-releases a visible window.
+        if (_hidden.Stage != HiddenStage.Visible && !_isDetachedChild) AdvanceHiddenMemory();
         _inPaint = true;
         _anim.RenderOwnsCompositor = OwningRenderThread is not null;
         Volatile.Write(ref _renderPeriodTicks, RefreshPeriodQpcOrDefault());

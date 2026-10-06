@@ -1594,8 +1594,7 @@ public sealed class ImageCache
         for (int i = 0; i < _releaseVictims.Count; i++)
         {
             int id = _releaseVictims[i];
-            var e = _byId[id];
-            if (e.State != ImageState.Ready || e.Refs != 0 || e.LruList == 0) continue;   // a status callback re-pinned / restarted it
+            if (!_byId.TryGetValue(id, out var e) || e.State != ImageState.Ready || e.Refs != 0 || e.LruList == 0) continue;   // a status callback re-pinned / restarted / reclaimed it
             EvictVictim(id);
             n++;
         }

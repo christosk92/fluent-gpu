@@ -141,7 +141,10 @@ public partial interface IGpuDevice : IDisposable
     /// placed-heap warm pages - behind their fences, and keeps image textures from refilling the free pools while the stage holds;
     /// <see cref="Hosting.HiddenStage.Visible"/> lifts that. Idempotent. The tiles are released by the host first
     /// (<c>SliceTable.EvictAll</c> + <see cref="TrimTileSurfaces"/>). Default: nothing to release.</summary>
-    void ReleaseHiddenResources(Hosting.HiddenStage stage) { }
+    /// <param name="stage">The stage to apply.</param>
+    /// <param name="otherWindowVisible">Another window (a pop-out) shares this device and is on screen: skip the device-wide parts
+    /// (scratch surfaces, blur pyramids, image pooling) and release only what is the hidden window's own.</param>
+    void ReleaseHiddenResources(Hosting.HiddenStage stage, bool otherWindowVisible = false) { }
 
     /// <summary>True while a hidden-stage release still waits on a fence (retired surfaces or image textures not yet destroyed), so the
     /// host keeps its idle-trim pass armed until the backlog drains. Default false.</summary>

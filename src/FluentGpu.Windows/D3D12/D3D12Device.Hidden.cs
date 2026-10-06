@@ -14,7 +14,7 @@ namespace FluentGpu.Rhi.D3D12;
 public sealed unsafe partial class D3D12Device
 {
     /// <inheritdoc/>
-    public void ReleaseHiddenResources(HiddenStage stage)
+    public void ReleaseHiddenResources(HiddenStage stage, bool otherWindowVisible = false)
     {
         if (_device == null || _fence == null) return;
         AssertSubmitThread();
@@ -26,27 +26,35 @@ public sealed unsafe partial class D3D12Device
         }
         if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return;   // the recovery rebuilds all of it
         ulong completed = _fence->GetCompletedValue();
-        _imageTextures?.SetNoPooling(true);   // an eviction still on its way must not refill the pools this call empties
+        _hiddenOtherWindowVisible = otherWindowVisible;
+        // An eviction still on its way must not refill the pools this call empties - unless a visible pop-out is pooling through them.
+        _imageTextures?.SetNoPooling(!otherWindowVisible);
         // Scratch: groups, self-blurs, acrylic backdrops and every RETAINED derived result (each recomputed from its content key
-        // on the first composite back). Each retires behind its own last-use fence.
-        _surfaces?.DropScratch();
+        // on the first composite back). Each retires behind its own last-use fence. Shared with a visible pop-out: skipped then.
+        if (!otherWindowVisible) _surfaces?.DropScratch();
         // The stencil target of the primary window (a visible pop-out's own swapchain keeps its own: it is presenting).
         if (_primarySwapchain is { Disposed: false } primary)
         {
             var f = primary.Frame;
             if (f.StencilDsv != null && f.LastSubmitFence <= completed) ReleaseStencilDsv(f);
         }
-        _bakedBlur?.ReleaseLevels();
-        _imageTextures?.ReleaseIdle(completed);
+        if (!otherWindowVisible) { _bakedBlur?.ReleaseLevels(); _imageTextures?.ReleaseIdle(completed); }
         _surfaces?.DrainRetired(completed);
         _imageTextures?.ReclaimCompleted(completed);
         PublishVideoMemorySnapshot(force: true);   // the census line right after the release reads fresh numbers
     }
 
+    private bool _hiddenOtherWindowVisible;
+
+    /// <summary>Re-read DXGI's video-memory usage now and publish it (diagnostics: a bench sampling a hidden window, which presents
+    /// nothing and so never refreshes the cadence-driven snapshot). Any thread: <c>QueryVideoMemoryInfo</c> is free-threaded and the
+    /// published census is a plain snapshot.</summary>
+    public void RefreshVideoMemorySnapshot() => PublishVideoMemorySnapshot(force: true);
+
     /// <inheritdoc/>
     public bool HasHiddenReleaseBacklog
         => (_surfaces?.RetiredCount ?? 0) > 0
         || (_imageTextures?.HasRetireBacklog ?? false)
-        || (_bakedBlur?.HasLevels ?? false)
+        || (!_hiddenOtherWindowVisible && (_bakedBlur?.HasLevels ?? false))
         || (_primarySwapchain is { Disposed: false } p && p.Frame.StencilDsv != null);
 }

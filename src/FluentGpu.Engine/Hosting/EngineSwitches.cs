@@ -6,6 +6,19 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Hosting;
 
+/// <summary>The small-image atlas re-validation arms (<see cref="EngineSwitches.ImageAtlas"/>).</summary>
+public enum ImageAtlasExperiment : byte
+{
+    /// <summary>Today's behaviour.</summary>
+    Default = 0,
+    /// <summary>UMA: pack thumbnails of up to 128 px into GPU-copied simultaneous-access pages.</summary>
+    GpuCopy = 1,
+    /// <summary>UMA: as <see cref="GpuCopy"/>, with the 256 px bucket packed too on 2048 px pages.</summary>
+    GpuCopy256 = 2,
+    /// <summary>Log the ROW_MAJOR / standard-swizzle capability bits and create variants once.</summary>
+    RowMajorProbe = 3,
+}
+
 /// <summary>
 /// The engine's runtime diagnostic toggles — plain static state, set in code (a host, a probe, a Diagnostics page) or
 /// from the hosting process's command line through <see cref="Apply(ReadOnlySpan{string})"/>. There are NO environment
@@ -67,19 +80,6 @@ namespace FluentGpu.Hosting;
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
-/// <summary>The small-image atlas re-validation arms (<see cref="EngineSwitches.ImageAtlas"/>).</summary>
-public enum ImageAtlasExperiment : byte
-{
-    /// <summary>Today's behaviour.</summary>
-    Default = 0,
-    /// <summary>UMA: pack thumbnails of up to 128 px into GPU-copied simultaneous-access pages.</summary>
-    GpuCopy = 1,
-    /// <summary>UMA: as <see cref="GpuCopy"/>, with the 256 px bucket packed too on 2048 px pages.</summary>
-    GpuCopy256 = 2,
-    /// <summary>Log the ROW_MAJOR / standard-swizzle capability bits and create variants once.</summary>
-    RowMajorProbe = 3,
-}
-
 public static class EngineSwitches
 {
     public static bool DiagConsole;
@@ -153,7 +153,8 @@ public static class EngineSwitches
     /// texture-upload-then-sample cadence, and this is the test of whether a simultaneous-access page (which most drivers
     /// keep uncompressed) avoids it. Soak it before believing anything.</item>
     /// <item><c>gpucopy256</c> - as <c>gpucopy</c> with the 256 px bucket packed too, on 2048 px pages (7x7 cells of 256). Pages only,
-    /// never pool textures (those are not simultaneous-access). Saves descriptors and resources, NOT bytes: 49 cells per 16 MiB page
+    /// never pool textures (those are not simultaneous-access). Every packed bucket then lives on 2048 px pages, so 64/128 px numbers
+    /// are not comparable with <c>gpucopy</c>'s. Saves descriptors and resources, NOT bytes: 49 cells per 16 MiB page
     /// against 320 KiB per private texture.</item>
     /// <item><c>rowmajor-probe</c> - log the ROW_MAJOR capability bits (<c>CrossAdapterRowMajorTextureSupported</c>,
     /// <c>StandardSwizzle64KBSupported</c>) and the outcome of a few ROW_MAJOR / standard-swizzle create variants once at device creation.</item>

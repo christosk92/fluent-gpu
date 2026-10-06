@@ -237,7 +237,13 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     /// <summary>Tile surface slots handed to <see cref="IGpuDevice.TrimTileSurfaces"/> in total.</summary>
     public int TrimmedTileSlots { get; private set; }
     public void TrimTileSurfaces(ReadOnlySpan<int> slots) => TrimmedTileSlots += slots.Length;
-    public void ReleaseHiddenResources(FluentGpu.Hosting.HiddenStage stage) => _hiddenReleases.Add(stage);
+    /// <summary>The <c>otherWindowVisible</c> argument of every release call, in order.</summary>
+    public List<bool> HiddenReleaseSharedScope { get; } = new();
+    public void ReleaseHiddenResources(FluentGpu.Hosting.HiddenStage stage, bool otherWindowVisible = false)
+    {
+        _hiddenReleases.Add(stage);
+        HiddenReleaseSharedScope.Add(otherWindowVisible);
+    }
 
     /// <summary>Phase 1: <c>HintSettlePresent</c> moved to <see cref="ISwapchain"/> (per-target seam), so the counter
     /// itself now lives on <see cref="HeadlessSwapchain"/>. Reads the PRIMARY target's counter — every existing

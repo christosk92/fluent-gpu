@@ -196,6 +196,59 @@ public sealed class HiddenStageHostTests : IDisposable
     }
 
     [Fact]
+    public void ARestoreThatPaintsThroughPaintRequestedLiftsTheStageBeforeThePaint()
+    {
+        using var rig = new Rig();
+        Minimize(rig);
+        rig.Host.AdvanceFrameClockForTest(2_500);
+        rig.Host.RunFrame();
+        Assert.Equal(HiddenStage.Shallow, rig.Host.HiddenStageForTest);
+        int releasesBefore = rig.Device.HiddenReleases.Count;
+
+        rig.Window.State = WindowState.Normal;   // WM_SIZE(SIZE_RESTORED) paints synchronously, before any RunFrame sees the un-park
+        rig.Host.Paint(0, keepAlive: true);
+
+        Assert.Equal(HiddenStage.Visible, rig.Host.HiddenStageForTest);
+        Assert.Equal(HiddenStage.Visible, rig.Device.HiddenReleases[^1]);
+        Assert.Equal(releasesBefore + 1, rig.Device.HiddenReleases.Count);   // exactly the lift, no Shallow release after the paint
+        rig.Host.RunFrame();
+        Assert.Equal(releasesBefore + 1, rig.Device.HiddenReleases.Count);
+    }
+
+    private sealed class EmptyRoot : Component
+    {
+        public override Element Render() => Ui.VStack(0);
+    }
+
+    [Fact]
+    public void AVisiblePopOutKeepsTheDeviceWideSharedResourcesWhileTheMainWindowIsHidden()
+    {
+        var strings = new StringTable();
+        using var app = new HeadlessPlatformApp();
+        var device = new HeadlessGpuDevice();
+        var window = new HeadlessWindow(new WindowDesc("main", new Size2(320, 240), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, device, new HeadlessFontSystem(strings), strings, new PinnedArt());
+        var rt = host.InstallRenderThreadForTest();
+        for (int i = 0; i < 8; i++) host.RunFrame();
+        var cw = new HeadlessWindow(new WindowDesc("pop-out", new Size2(320, 180), 1f, Composited: true, CustomFrame: true));
+        cw.Show();
+        var child = new AppHost(app, cw, device, new HeadlessFontSystem(strings), strings, new EmptyRoot(),
+            images: null, frameTime: null, compositeSwapchain: true, isDetachedChild: true, parentRenderThread: rt);
+        host.AdoptDetachedChild(child);
+        host.AttachChildRenderSourceForTest(child);
+        child.RunFrame();
+
+        window.State = WindowState.Minimized;
+        host.RunFrame();
+        host.AdvanceFrameClockForTest(2_500);
+        host.RunFrame();
+        Assert.True(SpinWait.SpinUntil(() => host.HiddenAppliedForTest == HiddenStage.Shallow, 5_000));
+        Assert.NotEmpty(device.HiddenReleaseSharedScope);
+        Assert.All(device.HiddenReleaseSharedScope, shared => Assert.True(shared, "scratch / blur pyramids / pooling are shared with the visible pop-out"));
+    }
+
+    [Fact]
     public void MaxDisablesTheStage()
     {
         HiddenMemoryBudget.TryApply("max:max");

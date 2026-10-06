@@ -60,7 +60,7 @@ public sealed unsafe partial class D3D12Device
         {
             ("row-major BGRA 1024 (today's refusal)", AtlasProbeDesc(1024, Bgra, Row), D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, crossAdapterRowMajor),
             ("row-major BGRA 1024 + CROSS_ADAPTER", AtlasProbeDesc(1024, Bgra, Row, 0, D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER),
-                D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED | D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, crossAdapterRowMajor),
+                D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED | D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER, crossAdapterRowMajor),   // note: the CUSTOM/WRITE_BACK heap may be what a refusal here blames, not the layout
             ("row-major BGRA 1024 alignment 64K", AtlasProbeDesc(1024, Bgra, Row, 65536), D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, crossAdapterRowMajor),
             ("row-major RGBA 1024", AtlasProbeDesc(1024, Rgba, Row), D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, crossAdapterRowMajor),
             ("row-major BGRA 512", AtlasProbeDesc(512, Bgra, Row), D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, crossAdapterRowMajor),
@@ -98,7 +98,8 @@ public sealed unsafe partial class D3D12Device
         {
             var desc = AtlasProbeDesc(256, Bgra, Unknown, alignment);
             var one = _device->GetResourceAllocationInfo(0, 1, &desc);
-            Diag.Line($"[d3d12] placed-256 probe alignment={alignment}: size={one.SizeInBytes} alignment={one.Alignment}");
+            string size = one.SizeInBytes == ulong.MaxValue ? "rejected (alignment below 64 KiB is invalid for a 256 KiB texture)" : one.SizeInBytes.ToString();
+            Diag.Line($"[d3d12] placed-256 probe alignment={alignment}: size={size} alignment={one.Alignment}");
         }
         var descs = stackalloc D3D12_RESOURCE_DESC[16];
         for (int i = 0; i < 16; i++) descs[i] = AtlasProbeDesc(256, Bgra, Unknown, 0);
