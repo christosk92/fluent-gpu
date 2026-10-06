@@ -2085,8 +2085,11 @@ public sealed partial class SliceRecorder
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
                 // A self-blurred leaf samples its whole blur SOURCE (the visible output grown by the kernel's reach),
-                // which can extend past its composite clip: its tiles must cover that.
-                if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Blur && !e.InnerClip.IsEmpty) vp = e.InnerClip;
+                // which can extend past its composite clip: its tiles must cover that — but only as far as the blur
+                // pipeline reaches from the clip (GroupCacheKey.BlurRegions cuts the source there): a blurred row
+                // scrolled out of its viewport requests no tiles at all.
+                if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Blur && !e.InnerClip.IsEmpty)
+                    vp = SelfBlurRegion.SourceRequest(e.InnerClip, e.Clip, e.Layer.BlurSigma, scale);
                 RectF vpDip = Offset(vp, -e.AccDx, -e.AccDy);
                 RectF vpPx = new(vpDip.X * scale - ox, vpDip.Y * scale - oy, vpDip.W * scale, vpDip.H * scale);
                 bool horizontal = false;

@@ -44,6 +44,10 @@ namespace FluentGpu.Hosting;
 /// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
 /// <item><c>ledger</c> or <c>ledger=PATH</c> — the per-frame <see cref="FrameLedger"/> on from the first frame (CPU, memory and GPU
 /// for every frame); with a PATH, FluentApp writes the binary dump there and one CSV per stream beside it when the window closes.</item>
+/// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
+/// changed redrawn) is also rendered whole into a second surface and the two are read back and compared at the next composite:
+/// a <c>[group-repair]</c> line (<see cref="Diag.Line"/>: stderr with <c>diag</c>, else the host's sink) on every mismatch and a
+/// running census every 600 checks (a validation arm: a GPU readback and a wait per checked repair).</item>
 /// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
@@ -115,6 +119,9 @@ public static class EngineSwitches
 
     /// <summary>The frame ledger from the first frame (<c>--fg ledger[=PATH]</c>); the path, when given, is <see cref="FrameLedger.DumpPath"/>.</summary>
     public static bool Ledger;
+    /// <summary>Validate every in-place group-surface repair against a whole render of the same group (<c>--fg
+    /// group-repair-validate</c>; the D3D12 backend's readback comparison).</summary>
+    public static bool GroupRepairValidate;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -196,6 +203,7 @@ public static class EngineSwitches
                 Ledger = true;
                 if (!string.IsNullOrEmpty(value)) FrameLedger.DumpPath = value;
                 return true;
+            case "group-repair-validate": GroupRepairValidate = true; return true;
             default: return false;
         }
     }

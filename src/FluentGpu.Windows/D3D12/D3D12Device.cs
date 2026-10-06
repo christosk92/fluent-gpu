@@ -5064,6 +5064,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // next composite recreates what it rasters.
         _surfaces?.Dispose(); _surfaces = null;
         _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
+        _groupMemos.Clear();   // the surfaces they describe went with the pool
+        ReleaseGroupRepairValidation();
         _compositor?.Dispose(); _compositor = null;
         _imageTextures?.Dispose(); _imageTextures = null;
         _shadowPipe?.Dispose(); _shadowPipe = null;
@@ -5143,6 +5145,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imagePipe?.Dispose();
         _bakedBlur?.Dispose();
         _surfaces?.Dispose();
+        ReleaseGroupRepairValidation();
         _compositor?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
