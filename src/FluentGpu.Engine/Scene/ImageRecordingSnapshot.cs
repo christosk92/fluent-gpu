@@ -8,7 +8,8 @@ public sealed class ImageRecordingSnapshot
     private readonly Dictionary<int, Entry> _entries = new();
     private float _fadeDeadline;
     internal double ClockCapturedAtMs { get; private set; } = double.NaN;
-    private readonly record struct Entry(ImageState State, int Width, int Height, float Start, float Duration, int Easing);
+    private readonly record struct Entry(ImageState State, int Width, int Height, float Start, float Duration, int Easing,
+        bool WasReady, bool RestoreTracked);
 
     /// <summary>UI producer only; the owning scene slot must not be leased by the renderer. Full copy of every cache
     /// entry — kept for callers with no narrower referenced-id set (see the <c>ReadOnlySpan&lt;int&gt;</c> overload,
@@ -51,11 +52,11 @@ public sealed class ImageRecordingSnapshot
     }
 
     internal void Add(int id, ImageState state, int width, int height, float start, float duration, int easing,
-                      float swapHoldUntilMs = float.NegativeInfinity)
+                      float swapHoldUntilMs = float.NegativeInfinity, bool wasReady = false, bool restoreTracked = false)
     {
         // Idempotent by design: a re-add (AddReferenced folding in an id the main capture already carried, or a
         // caller re-adding the same id) simply refreshes the entry rather than throwing on a duplicate key.
-        _entries[id] = new(state, width, height, start, duration, easing);
+        _entries[id] = new(state, width, height, start, duration, easing, wasReady, restoreTracked);
         if (state == ImageState.Ready && !float.IsNaN(start) && duration > 0)
             _fadeDeadline = MathF.Max(_fadeDeadline, start + duration);
         // A node's swap crossfade (ImageCache.BeginSwap) draws this entry as the OUTGOING texture until the deadline:
@@ -64,6 +65,25 @@ public sealed class ImageRecordingSnapshot
     }
 
     internal bool HasCrossfades(float clockMs) => clockMs < _fadeDeadline;
+
+    /// <summary>The faithful-frame test of a held restore (render thread, on the frame it just recorded): how many ids this
+    /// publication names that the user had SEEN before the hide (<c>WasReady</c>) and that are either Ready or still owed to the
+    /// restore, but have no resident texture on the device - each would have drawn as a placeholder. Counting stops at the first
+    /// when <paramref name="stopAtFirst"/>. Reads the device's residency, so a texture staged on THIS turn (after the cap lifted
+    /// for the hold) counts as present and one still queued behind the staging cap does not.</summary>
+    internal int CountRestoreGaps(System.Func<int, bool> isResident, bool stopAtFirst = true)
+    {
+        int gaps = 0;
+        foreach (var pair in _entries)
+        {
+            var e = pair.Value;
+            if (!e.WasReady || (e.State != ImageState.Ready && !e.RestoreTracked)) continue;
+            if (isResident(pair.Key)) continue;
+            gaps++;
+            if (stopAtFirst) break;
+        }
+        return gaps;
+    }
     /// <summary>Entries currently held — diagnostics/gates only (perf plan item 1: proves a narrowed capture holds
     /// exactly the referenced set, not every image the source cache has ever seen).</summary>
     internal int Count => _entries.Count;

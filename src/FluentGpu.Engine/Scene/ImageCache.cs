@@ -214,6 +214,15 @@ public sealed class ImageCache
         public DerivedKey DKey;
         // True while this id sits in _leftovers (the pinned canceled-leftover retry list) — dedups NoteCanceledLeftover.
         public bool LeftoverListed;
+        // Deep hidden stage: the texture was released although something still holds this id (State None, W/H and WasReady kept),
+        // and the restore edge restarts it. Cleared by every exit from None (RestartDecode, a landing) and by reclaim.
+        public bool Parked;
+        // A restore restarted this entry and the held first frame waits for it: its landing skips the reveal (the frame it
+        // lands in is the first one anybody sees) and counts down RestorePendingCount.
+        public bool RestoreTracked;
+        // Nodes that asked for this image to stay resident while the window is hidden (ImageEl.KeepWhileHidden: the player bar's
+        // now-playing artwork). Never parked or released by a hidden stage while > 0.
+        public int KeepRefs;
     }
 
     // Process-wide (every cache, every entry): bumped on any write to a field ImageRecordingSnapshot copies, and on an entry's
@@ -666,7 +675,7 @@ public sealed class ImageCache
         {
             var entry = pair.Value;
             target.Add(pair.Key, entry.State, entry.W, entry.H, entry.TextureMs,
-                entry.RevealMs, (int)entry.Transition.Easing, entry.SwapHoldUntilMs);
+                entry.RevealMs, (int)entry.Transition.Easing, entry.SwapHoldUntilMs, entry.WasReady, entry.RestoreTracked);
         }
     }
 
@@ -680,7 +689,7 @@ public sealed class ImageCache
         {
             if (_byId.TryGetValue(id, out var entry))
                 target.Add(id, entry.State, entry.W, entry.H, entry.TextureMs, entry.RevealMs, (int)entry.Transition.Easing,
-                    entry.SwapHoldUntilMs);
+                    entry.SwapHoldUntilMs, entry.WasReady, entry.RestoreTracked);
         }
     }
     /// <summary>Per-handle status epoch used by <c>UseImage</c>. Lazily allocated on first observation; null for an
@@ -1063,13 +1072,24 @@ public sealed class ImageCache
     /// true. Their Bytes are already 0, so the byte-accounting undo is a no-op for them.</para></summary>
     public void ReRealizeAllResident()
     {
+        // A window that is hidden when its device is lost has nobody looking at what would re-decode: the entries something
+        // still holds are PARKED (the restore edge restarts them inside its held first frame) and the rest become plain
+        // tombstones, instead of a burst of decodes and uploads for a window nobody sees.
+        bool parkInstead = HiddenStage != FluentGpu.Hosting.HiddenStage.Visible && !HiddenKeepLandings && _collectHeld is not null;
+        if (parkInstead) { _releaseHeld.Clear(); _collectHeld!(_releaseHeld); }
         foreach (var (id, e) in _byId)
             if (!e.Derived && (e.State == ImageState.Ready || IsGpuExhausted(e)))
             {
+                if (parkInstead && e.State == ImageState.Ready && e.KeepRefs == 0)
+                {
+                    DropToNone(id, e, park: e.Refs > 0 || _releaseHeld.Contains(id), evict: false);   // the store is gone: nothing to free
+                    continue;
+                }
                 UsedBytes -= e.Bytes;   // the texture is gone; RestartDecode re-adds the bytes when the fresh decode completes
                 RestartDecode(id, e, e.Refs > 0 ? ImagePriority.Visible : ImagePriority.Prefetch);
                 NotifyStatus(e);
             }
+        if (parkInstead) _releaseHeld.Clear();
         foreach (var (id, e) in _byId)
             if (e.Derived && (e.State == ImageState.Ready || IsGpuExhausted(e)))
             {
@@ -1166,6 +1186,10 @@ public sealed class ImageCache
 
     private void RestartDecode(int id, Entry e, ImagePriority priority)
     {
+        // Deep: a parked image stays parked however it is asked for (a pin, a request, a promote) until the restore edge,
+        // unless a visible pop-out sharing this cache needs it or the owner asked it to stay resident.
+        if (e.Parked && HiddenStage == FluentGpu.Hosting.HiddenStage.Deep && e.KeepRefs == 0
+            && !(HiddenChildHeld?.Contains(id) ?? false)) return;
         bool trace = Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source);
         if (e.State == ImageState.Pending)
         {
@@ -1191,6 +1215,7 @@ public sealed class ImageCache
         // E8: this can restart an entry that is currently Ready (ReRealizeAllResident's device-lost pass) — leaving
         // Ready is a ReadyCount decrement wherever it happens, this restart included.
         if (e.State == ImageState.Ready) _readyCount--;
+        if (e.Parked) { e.Parked = false; _parkedCount--; }   // every exit from None clears it
         e.LastRestartMs = _clockMs;
         e.RequestedMs = _clockMs;
         e.RequestedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1486,6 +1511,9 @@ public sealed class ImageCache
     private void OnDecodeComplete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts)
     {
         if (!_byId.TryGetValue(id, out var e)) return;
+        if (e.Parked) { e.Parked = false; _parkedCount--; }   // a decode that was already running when it was parked: it lands and is judged below
+        bool tracked = e.RestoreTracked;
+        if (tracked) { e.RestoreTracked = false; _restorePending--; }
         bool uploadRejected = false;
         if (ok && _uploadResultId == id && _uploadResult != ImageUploadResult.Accepted)
         {
@@ -1516,7 +1544,13 @@ public sealed class ImageCache
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
-        if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e, id, "decode");
+        if (ok && tracked)
+        {
+            // A restore's landing: the held first frame is the first anybody sees of it, so there is no fade to run (the
+            // snap an image already on screen before the hide had).
+            if (e.RequestedTicks != 0) { Latency.NoteFetched(e.RequestedTicks); e.RequestedTicks = 0; }
+        }
+        else if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e, id, "decode");
         if (ok)
         {
             e.WasReady = true;   // AFTER BeginReveal: a first-ever decode must still see WasReady==false there
@@ -1548,6 +1582,7 @@ public sealed class ImageCache
         if (restartVisibleCancel)
         {
             RestartDecode(id, e, ImagePriority.Visible);
+            if (tracked && e.State == ImageState.Pending) { e.RestoreTracked = true; _restorePending++; }   // still owed to the held frame
             Diag.Set("media", "pending", PendingCount);
         }
         else
@@ -1556,6 +1591,11 @@ public sealed class ImageCache
             ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
         }
         QueueSourceDependents(id, ok);
+        // A decode the hidden window requested that lands while Deep (a pop-out's pump, a prefetch): accept it, then release it
+        // at once - nothing shows it, and the restore re-requests whatever something holds.
+        if (ok && HiddenStage == FluentGpu.Hosting.HiddenStage.Deep && !HiddenKeepLandings && !e.Derived && e.KeepRefs == 0
+            && e.State == ImageState.Ready && !HasPendingDependent(id))
+            DropToNone(id, e, park: true, evict: true);
     }
 
     /// <summary>Shed down to budget NOW, rather than waiting for the next completed decode.
@@ -1565,6 +1605,129 @@ public sealed class ImageCache
     /// unpins everything in it, which is exactly the moment the LRU has new candidates and none of them are on
     /// screen. Cheap when there is nothing to do: the loop's first predicate is two long compares.</para></summary>
     public void TrimToBudget() { EvictToBudget(); ReclaimTombstonesIfDue(); }
+
+    // ── Deep hidden stage ──────────────────────────────────────────────────────────────────────────────────────────
+    private int _parkedCount, _restorePending;
+
+    /// <summary>The hidden-window stage the host is in. Written by the host (UI thread) once per stage change; only Deep changes
+    /// what this cache does (and a device loss while any stage is in force).</summary>
+    public FluentGpu.Hosting.HiddenStage HiddenStage { get; set; }
+
+    /// <summary>Ids a VISIBLE detached pop-out sharing this cache holds, refreshed by the host at the Deep edge: such an image is
+    /// never parked and may be (re)requested while Deep.</summary>
+    public HashSet<int>? HiddenChildHeld { get; set; }
+
+    /// <summary>True while any detached pop-out is visible: the host cannot tell which landing belongs to whom, so Deep leaves
+    /// decodes that land meanwhile alone (and a device-loss recovery restarts normally).</summary>
+    public bool HiddenKeepLandings { get; set; }
+
+    /// <summary>Entries parked at Deep (texture released, something still holds the id). O(1); 0 after every restore.</summary>
+    public int ParkedCount => _parkedCount;
+    /// <summary>Entries a restore restarted whose landing the held first frame still waits for. O(1).</summary>
+    public int RestorePendingCount => _restorePending;
+    /// <summary>Restores whose hold expired with images still decoding (the first frame then showed their placeholders and the
+    /// late landings faded in). Cumulative; the host increments it.</summary>
+    public long RestoreHoldTimeouts { get; internal set; }
+
+    /// <summary>One more (+1) or one fewer (-1) node asking <paramref name="h"/> to stay resident while the window is hidden
+    /// (<c>ImageEl.KeepWhileHidden</c>). The count is per handle, so a re-pin or a second node cannot unprotect it early.</summary>
+    public void AddKeepWhileHidden(ImageHandle h, int delta)
+    {
+        if (_byId.TryGetValue(h.Id, out var e)) e.KeepRefs = Math.Max(0, e.KeepRefs + delta);
+    }
+
+    /// <summary>Whether <paramref name="h"/> is currently kept resident while hidden (diagnostics / gates).</summary>
+    public bool IsKeptWhileHidden(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) && e.KeepRefs > 0;
+    /// <summary>Whether <paramref name="h"/> is parked (diagnostics / gates).</summary>
+    public bool IsParked(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) && e.Parked;
+
+    private bool HasPendingDependent(int sourceId)
+    {
+        if (!_derivedBySource.TryGetValue(sourceId, out var dependents)) return false;
+        for (int i = 0; i < dependents.Count; i++)
+            if (_byId.TryGetValue(dependents[i], out var d) && d.Derived && d.State == ImageState.Pending) return true;
+        return false;
+    }
+
+    /// <summary>Take a Ready non-derived entry to None without notifying anyone (nothing is on screen). <paramref name="park"/>
+    /// keeps its identity for the restore (Parked, W/H and WasReady kept); otherwise it is an ordinary tombstone.
+    /// <paramref name="evict"/> frees the texture through the evict sink (false after a device loss: the store is gone).</summary>
+    private void DropToNone(int id, Entry e, bool park, bool evict)
+    {
+        _readyCount--;
+        UsedBytes -= e.Bytes;
+        bool activeDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs) && e.TextureMs + e.RevealMs >= _clockMs;
+        LruUnlink(id, e);
+        e.State = ImageState.None;
+        e.Failure = ImageFailureKind.None;
+        e.Attempts = 0;
+        e.Bytes = 0;
+        e.TextureMs = float.NaN;
+        if (park) { if (!e.Parked) { e.Parked = true; _parkedCount++; } }
+        else e.W = e.H = 0;
+        if (activeDeadline) RecomputeCrossfadeDeadline();
+        if (evict) _evictSink(id);
+    }
+
+    /// <summary>Deep: release the texture of every Ready non-derived entry something still holds - a pin, or an id the host's
+    /// held-id enumeration names (a list row's image cell, a hold-last-good target) - except the ones a node asked to keep
+    /// (<see cref="AddKeepWhileHidden"/>), the ones in <paramref name="alsoHeld"/> (a visible pop-out's), and a source whose
+    /// derived (blurred) entry is still baking from it. Derived entries stay resident: they are bounded by their own soft cap
+    /// and re-baking them on the restore costs more than keeping them. No status events and no repaint: nothing is on screen,
+    /// and the restore frame repaints everything. Each entry keeps its size and <c>WasReady</c> so layout does not move and the
+    /// restore knows what the user had seen. Returns the count parked. O(entries), once per Deep edge.</summary>
+    public int ParkPinnedGpu(HashSet<int>? alsoHeld = null)
+    {
+        if (_collectHeld is null) return 0;
+        _releaseHeld.Clear();
+        _collectHeld(_releaseHeld);
+        int n = 0;
+        foreach (var (id, e) in _byId)
+        {
+            if (e.Derived || e.State != ImageState.Ready || e.KeepRefs > 0) continue;
+            if (alsoHeld is not null && alsoHeld.Contains(id)) continue;
+            if (e.Refs <= 0 && !_releaseHeld.Contains(id)) continue;   // unpinned and unheld: Shallow's release, not a parked identity
+            if (HasPendingDependent(id)) continue;
+            DropToNone(id, e, park: true, evict: true);
+            n++;
+        }
+        _releaseHeld.Clear();
+        return n;
+    }
+
+    /// <summary>The restore edge: restart every parked entry through the ordinary decode path. Those named in
+    /// <paramref name="onScreen"/> (null = all) restart on the Visible lane and are TRACKED - their landing skips the reveal and
+    /// counts down <see cref="RestorePendingCount"/>, which the held first frame waits for; the rest restart on the Overscan lane
+    /// untracked (nothing visible waits for them, and a refusal there is retried at Visible by the leftover sweep). Size is kept
+    /// across the restart. The host sets <see cref="HiddenStage"/> to Visible first. Returns the count restarted.</summary>
+    public int RestartParked(HashSet<int>? onScreen = null)
+    {
+        if (_parkedCount == 0) return 0;
+        int n = 0;
+        foreach (var (id, e) in _byId)
+        {
+            if (!e.Parked) continue;
+            bool now = onScreen is null || onScreen.Contains(id);
+            int w = e.W, h = e.H;
+            RestartDecode(id, e, now ? ImagePriority.Visible : ImagePriority.Overscan);   // clears Parked on the way out of None
+            if (e.State == ImageState.Pending)
+            {
+                e.W = w; e.H = h;   // the node's layout never saw the image leave
+                if (now && !e.RestoreTracked) { e.RestoreTracked = true; _restorePending++; }
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /// <summary>The hold expired with entries still decoding: stop waiting for them. Their late landings take the ordinary warm
+    /// reveal instead of snapping in.</summary>
+    public void ClearRestoreTracking()
+    {
+        if (_restorePending == 0) return;
+        foreach (var e in _byId.Values) e.RestoreTracked = false;
+        _restorePending = 0;
+    }
 
     private readonly HashSet<int> _releaseHeld = new();
     private readonly List<int> _releaseVictims = new();
@@ -1799,6 +1962,8 @@ public sealed class ImageCache
             }
             _derivedBySource.Remove(id);   // only ever empty here: a kept dependent would have held this source
         }
+        if (e.Parked) { e.Parked = false; _parkedCount--; }
+        if (e.RestoreTracked) { e.RestoreTracked = false; _restorePending--; }
         _byId.Remove(id);
         NoteRecordingInputChanged();   // a snapshot that held this id must not be reused as-is
     }
