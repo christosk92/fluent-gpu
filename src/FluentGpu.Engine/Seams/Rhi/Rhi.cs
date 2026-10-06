@@ -24,7 +24,15 @@ public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear,
 /// is monotonic within that target; <paramref name="SubmitAge"/> is how many submissions to the SAME target have happened
 /// since the measured submit (the double-buffered D3D path normally publishes at age 2); <paramref name="PublishedQpc"/>
 /// is the CPU QPC instant at which fence retirement made the timestamp pair readable.</summary>
-public readonly record struct GpuRenderSample(double ExecutionMs, ulong Sequence, ulong SubmitAge, long PublishedQpc);
+public readonly record struct GpuRenderSample(double ExecutionMs, ulong Sequence, ulong SubmitAge, long PublishedQpc)
+{
+    /// <summary>The target-local submit the sample measured (0 = unknown); the current submit is this plus <see cref="SubmitAge"/>.</summary>
+    public ulong SubmitSequence { get; init; }
+    /// <summary>The GPU's begin / end timestamps mapped onto QPC through the queue's clock calibration (0 = unknown).</summary>
+    public long GpuStartQpc { get; init; }
+    /// <inheritdoc cref="GpuStartQpc"/>
+    public long GpuEndQpc { get; init; }
+}
 
 [Flags]
 public enum RectSubmittedAreaFlags : byte
@@ -115,6 +123,17 @@ public partial interface IGpuDevice : IDisposable
     /// presents never retire no longer costs a second per turn). A backend counts and reports the liveness timeouts
     /// (<see cref="SlotLivenessTimeouts"/>).</para></summary>
     bool TryTakePresentSlot(int timeoutMs) => true;
+
+    /// <summary>Release the textures behind the tile surface slots the table freed on the IDLE path
+    /// (<c>SliceTable.TrimFreeSlotsNow</c>) — the same retire-behind-the-fence release a composite turn's
+    /// <c>CompositeFrame.TrimSurfaces</c> performs, for an app that is not compositing. Render thread, between turns. Default: none.</summary>
+    void TrimTileSurfaces(ReadOnlySpan<int> slots) { }
+
+    /// <summary>Periodic render-thread housekeeping between turns: drain the retired-resource queues the fence has passed and
+    /// release idle, fully-rebuildable resources (free scratch surfaces, the stencil surface, staging banks) — all on wall
+    /// clock, because an idle app runs no turns to age them. Returns the milliseconds until it wants to run again (-1 = nothing
+    /// pending). Default: nothing to do.</summary>
+    int TrimIdleResources(long nowMs) => -1;
 
     /// <summary>Liveness-bounded present-slot takes of the PRIMARY swapchain that timed out so far (CUMULATIVE; render thread writes,
     /// any thread reads): the take proceeded without the slot ever opening. A secondary swapchain's are

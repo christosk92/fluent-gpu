@@ -39,6 +39,50 @@ public static class SelfBlurRegion
         return AcrylicBackdropMath.KernelRadiusTexels(texelSigma) * down;
     }
 
+    /// <summary>The reach of the WHOLE retained-blur pipeline in physical px: how far from an output pixel a source pixel
+    /// can still change it. <see cref="TapRadius"/> is the Gaussian's support; the box-downsample chain and the bilinear
+    /// upsample add their own footprint — a pixel x reads texels [⌊u⌋ − R, ⌊u⌋ + 1 + R] with u = (x + ½)/down − ½,
+    /// i.e. source px within <c>R·down + 1.5·down + ½</c> of it — so this is <c>TapRadius + 2·down + 1</c>. Source
+    /// farther than this from every pixel the blur DRAWS cannot change a drawn pixel: the composite cuts a retained blur's
+    /// source to its composite clip grown by this (<see cref="Tiles.GroupCacheKey.BlurRegions"/>).</summary>
+    public static int SupportRadius(float blurSigma)
+        => TapRadius(blurSigma) + 2 * AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f) + 1;
+
+    /// <summary>The window-DIP rect whose tiles a self-blurred leaf must have rastered: its recorded blur source
+    /// (<paramref name="sourceDip"/>) cut to its composite clip (<paramref name="clipDip"/>; infinite = none) grown by the
+    /// pipeline's reach plus one device px of rounding — a superset of what the composite cuts the source to
+    /// (<see cref="Tiles.GroupCacheKey.BlurRegions"/>), so every texel the blur reads is rastered.</summary>
+    public static RectF SourceRequest(in RectF sourceDip, in RectF clipDip, float blurSigma, float scale)
+    {
+        if (clipDip.IsInfinite || !(scale > 0f)) return sourceDip;
+        float reach = (SupportRadius(blurSigma) + 1) / scale;
+        return sourceDip.Intersect(new RectF(clipDip.X - reach, clipDip.Y - reach, clipDip.W + 2f * reach, clipDip.H + 2f * reach));
+    }
+
+    /// <summary>Does a blur of <paramref name="blurSigma"/> run on the SAME texel grid with the same kernel when its source is
+    /// rastered at 1/<paramref name="down"/> (a low-resolution repaint boundary) and blurred there at σ/down? True when the
+    /// low-res blur's own downsample lands where the full-resolution schedule's does (down · factor(σ/down) = factor(σ)):
+    /// the two routes then differ only in how each texel's first down×down block is formed.</summary>
+    public static bool LowResBlurOnSameGrid(float blurSigma, int down)
+        => down >= 1 && blurSigma > 0f
+           && down * AcrylicBackdropMath.DownsampleFactor(blurSigma / down, 1f) == AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f);
+
+    /// <summary>A blur source edge at <paramref name="rel"/> px from a low-resolution surface's origin (scale 1/<paramref name="down"/>):
+    /// <paramref name="texel"/> = the first texel inside the source for a near (left/top) edge, or one past the last texel
+    /// it touches for a <paramref name="far"/> (right/bottom) edge; <paramref name="coverage"/> = the share of the
+    /// straddling texel's down×down block on the source side of the edge (1 when the edge lies on the grid). The full-
+    /// resolution route box-averages that block with transparent beyond the edge, so scaling the straddling texel by the
+    /// share is its low-resolution equivalent.</summary>
+    public static void LowResEdge(int rel, int down, bool far, out int texel, out float coverage)
+    {
+        int q = FloorDiv(rel, down), r = rel - q * down;
+        if (r == 0) { texel = q; coverage = 1f; return; }
+        if (far) { texel = q + 1; coverage = r / (float)down; }
+        else { texel = q; coverage = (down - r) / (float)down; }
+    }
+
+    private static int FloorDiv(int a, int b) => a >= 0 ? a / b : -((-a + b - 1) / b);
+
     /// <summary>
     /// Compute the recorder's DIP-space visibility/source geometry from the same physical-pixel tap support used by
     /// <see cref="TapRadius"/>. Pixel boxes convert back OUTWARD by a tiny fraction of one device pixel so a

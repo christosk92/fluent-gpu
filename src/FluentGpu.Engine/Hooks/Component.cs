@@ -177,7 +177,8 @@ public abstract class Component
     protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source) => Context.UseVideo(source);
     /// <summary>Seed a keyframe track on this component's node. <paramref name="cadence"/> is the row's own frame
     /// rate (<c>AnimEngine.Keyframes</c>): <c>null</c> = display rate, one-shot or loop.</summary>
-    protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null) => Context.UseKeyframes(channel, keys, durationMs, loop, deps, cadence);
+    protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null,
+                                bool snapToDevicePixels = false) => Context.UseKeyframes(channel, keys, durationMs, loop, deps, cadence, snapToDevicePixels);
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a
     /// gesture-arena member and routes the winner's Tap/Hold/Pan event to <paramref name="handler"/>. No re-render.</summary>

@@ -231,6 +231,10 @@ public static class CompositeFrameFlags
     /// <summary>A raster: an inline scratch lease (a folded opacity / blur / fade group inside the tile) was refused — that
     /// group drew nothing into the tile.</summary>
     public const byte RasterScratchRefused = 2;
+    /// <summary>A raster: the backend wrote MORE than the planned partial damage (it rastered the tile whole — a texture new
+    /// this turn — or grew the damage over an image whose pixels changed under the same id). An unfaithful such raster
+    /// leaves no pixel the table's snapshot can vouch for.</summary>
+    public const byte RasterBeyondPlan = 4;
     /// <summary>A <see cref="CompositeKind.Group"/> item re-drawn from its retained surface (a group-cache hit).</summary>
     public const byte ItemGroupHit = 1;
     /// <summary>A <see cref="CompositeKind.Group"/> item whose surface was rendered this turn (a group-cache miss).</summary>

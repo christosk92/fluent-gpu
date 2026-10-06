@@ -1026,7 +1026,7 @@ public sealed partial class SliceRecorder
             ReadOnlySpan<byte> p = bytes.Slice(payload, body);
             ulong oh = FluentGpu.Render.Evidence.TileContentHash.OpHash(bytes.Slice(pos, sizeof(int) + body));
             whole = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, oh);
-            bool layerPush = false;
+            bool layerPush = false, layerSpread = false;
             switch (op)
             {
                 case DrawOp.PushClip:
@@ -1036,15 +1036,18 @@ public sealed partial class SliceRecorder
                     if (c.CornerRadius > 0f) { round = c.RoundedRect; roundR = c.CornerRadius; }
                     _scanClip.Add((r, round, roundR));
                     top = r;
-                    ContentScanOp(s, pos, in r, oh, scope: true, clip: true);
+                    ContentScanOp(s, pos, ClipSlack(in r), oh, scope: true, clip: true);
                     break;
                 }
                 case DrawOp.PushLayer:
                 {
-                    int kind = MemoryMarshal.Read<PushLayerCmd>(p).Kind;
+                    var lc = MemoryMarshal.Read<PushLayerCmd>(p);
+                    int kind = lc.Kind;
                     if (kind != (int)LayerKind.Acrylic) inline++;
                     layers.Push(kind);
                     layerPush = true;
+                    // a blurred group composites each pixel from its content AROUND it: no sub-tile repaint bounds it
+                    layerSpread = (kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && lc.BlurSigma > 0f;
                     goto default;
                 }
                 case DrawOp.PushStencilClip:
@@ -1054,7 +1057,7 @@ public sealed partial class SliceRecorder
                     stencils++;
                     _scanClip.Add((r, round, roundR));
                     top = r;
-                    ContentScanOp(s, pos, in r, oh, scope: true, clip: true);
+                    ContentScanOp(s, pos, ClipSlack(in r), oh, scope: true, clip: true);
                     break;
                 }
                 case DrawOp.PopClip:
@@ -1068,6 +1071,10 @@ public sealed partial class SliceRecorder
                 case DrawOp.PopLayer:
                     layers.Pop();
                     ContentScanPop();
+                    break;
+                case DrawOp.SetBlend:
+                    // the blend every following op is drawn with: part of their content (ContentScanOp folds it in)
+                    ContentScanBlend(MemoryMarshal.Read<SetBlendCmd>(p).Mode == (int)PaintBlend.Additive);
                     break;
                 case DrawOp.CompositeSlice:
                 {
@@ -1088,7 +1095,8 @@ public sealed partial class SliceRecorder
                 default:
                     if (SliceOpBounds.TryGet(op, p, out RectF b))
                     {
-                        if (!top.IsInfinite) b = b.Intersect(top);
+                        // cut by the clip as the backend's scissor draws it: rounded OUT to whole device px (ClipSlack)
+                        if (!top.IsInfinite) b = b.Intersect(ClipSlack(in top));
                         // An INVISIBLE fill (opacity 0, or a solid colour of alpha 0 — a dimming plate parked at rest, a
                         // transparent hit plate) paints nothing: it must not stretch the segment's painted bounds, or a
                         // full-window plate makes its segment hold a window of empty tiles. Its bytes stay in the stream and
@@ -1097,7 +1105,7 @@ public sealed partial class SliceRecorder
                         if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && OpaqueFill(op, p, in top, out RectF o)
                             && o.W * o.H > segOpaque.W * segOpaque.H)
                             segOpaque = o;
-                        ContentScanOp(s, pos, in b, oh, layerPush);
+                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread);
                         // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
                         // own DrawVideo is added below, after this, and never counts against itself).
                         if (!b.IsEmpty)
@@ -1136,7 +1144,7 @@ public sealed partial class SliceRecorder
                             }
                         }
                     }
-                    else if (layerPush) ContentScanOp(s, pos, in top, oh, scope: true);   // an extent-unknown layer: all it encloses
+                    else if (layerPush) ContentScanOp(s, pos, in top, oh, scope: true, spread: layerSpread);   // an extent-unknown layer: all it encloses
                     break;
             }
             cmds++;
@@ -1151,6 +1159,17 @@ public sealed partial class SliceRecorder
         _scanFadeCount[s] = fades;
         _scanInline[s] = inline;
     }
+
+    /// <summary>How far past a clip's DIP rect the backend's scissor can reach: it rounds the clip OUT to whole device px
+    /// (ToScissor), so a primitive just outside the rect can still paint the scissor's partial edge pixel. One DIP covers
+    /// that at any scale ≥ 1 (the decode-time cull's CullSafetyDip makes the same assumption).</summary>
+    private const float ClipSlackDip = 1f;
+
+    /// <summary><paramref name="clip"/> grown by <see cref="ClipSlackDip"/>: what an op's footprint is cut by, so the per-op
+    /// content table (wants, sub-tile damage) never drops a pixel the rounded-out scissor lets an op paint.</summary>
+    private static RectF ClipSlack(in RectF clip)
+        => clip.IsInfinite || clip.IsEmpty ? clip
+            : new RectF(clip.X - ClipSlackDip, clip.Y - ClipSlackDip, clip.W + 2f * ClipSlackDip, clip.H + 2f * ClipSlackDip);
 
     private static int s_fadedVideoWarned;
 
@@ -2034,6 +2053,7 @@ public sealed partial class SliceRecorder
             ref ScanSeg sg = ref _scanSegs[e.Slot][e.Segment];
             RectF bDip = sg.Bounds;
             bool effect = r.Kind == SliceKind.Effect;
+            if (effect && !ForceUncutExtents) bDip = ExtentWithinMarkerClip(in r, in bDip, scale);
             int covSlot = CoverageSlot(e.Slot);
             // Only a VIRTUAL list's content grows along its main axis as rows realize (and parks at both ends): its
             // segments keep the main-axis origin at content 0 and charge whole cells there. Any other scroll segment is
@@ -2085,8 +2105,11 @@ public sealed partial class SliceRecorder
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
                 // A self-blurred leaf samples its whole blur SOURCE (the visible output grown by the kernel's reach),
-                // which can extend past its composite clip: its tiles must cover that.
-                if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Blur && !e.InnerClip.IsEmpty) vp = e.InnerClip;
+                // which can extend past its composite clip: its tiles must cover that — but only as far as the blur
+                // pipeline reaches from the clip (GroupCacheKey.BlurRegions cuts the source there): a blurred row
+                // scrolled out of its viewport requests no tiles at all.
+                if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Blur && !e.InnerClip.IsEmpty)
+                    vp = SelfBlurRegion.SourceRequest(e.InnerClip, e.Clip, e.Layer.BlurSigma, scale);
                 RectF vpDip = Offset(vp, -e.AccDx, -e.AccDy);
                 RectF vpPx = new(vpDip.X * scale - ox, vpDip.Y * scale - oy, vpDip.W * scale, vpDip.H * scale);
                 bool horizontal = false;
@@ -2169,6 +2192,7 @@ public sealed partial class SliceRecorder
             ComputeWants(table, i, p0, _placementCount, scale);   // the want of each surface acquired this turn (content validity)
         }
         _exposedMissing = table.CountExposedMissing();
+        PlanRasterDamage(table, scale);   // sub-tile damage: a content re-raster of a trusted surface repaints only what changed
 
         // Present1 parameters: the repaint set (window DIP) ∪ the visible re-rastered tiles' destinations → device px.
         var dirty = repaint;
@@ -2179,8 +2203,10 @@ public sealed partial class SliceRecorder
                 ref readonly TileRaster tr = ref _rasters[i];
                 if (tr.Order != TileGrid.OrderVisible) continue;
                 if (!TryItemOf(tr.Key.SliceId, out CompositeItem it)) continue;
-                RectF dst = new((it.Transform.Dx + tr.Key.Tx * (float)TileGrid.W) / scale, (it.Transform.Dy + tr.Key.Ty * (float)TileGrid.H) / scale,
-                    tr.W / scale, tr.H / scale);
+                PixelRect wr = tr.Written;
+                if (wr.IsEmpty) continue;
+                RectF dst = new((it.Transform.Dx + tr.Key.Tx * (float)TileGrid.W + wr.Left) / scale, (it.Transform.Dy + tr.Key.Ty * (float)TileGrid.H + wr.Top) / scale,
+                    (wr.Right - wr.Left) / scale, (wr.Bottom - wr.Top) / scale);
                 if (!it.Clip.IsEmpty) dst = dst.Intersect(new RectF(it.Clip.X / scale, it.Clip.Y / scale, it.Clip.W / scale, it.Clip.H / scale));
                 if (!dst.IsEmpty) dirty.Add(in dst);
             }
@@ -2360,6 +2386,45 @@ public sealed partial class SliceRecorder
     private static RectF RoundPx(in RectF round, float r, float scale) => r > 0f ? ScalePx(round, scale) : default;
     private static CornerRadius4 RadiiPx(float r, float scale) => r > 0f ? CornerRadius4.All(r * scale) : default;
 
+    /// <summary>An effect segment's painted bounds cut to its MARKER clip (slot-space DIP, one device px of slack so the
+    /// snapped-out composite clip's edge pixels stay inside): what the slice can ever show. A slice placed with its
+    /// containing slice (its own role, no pose, no sticky clip, its params in that slice's space) composites under that
+    /// clip, so a tile never needs content past it: a marquee's line, a clipped node's overflow, is rastered only where
+    /// it can be seen (a 144-DIP player-bar title held a 960x128 surface for its 616-DIP line), and content sliding
+    /// under the clip no longer moves the slice's origin (a geometry invalidation per frame). Pixel-identical: the
+    /// origin stays on the grid, so every op rasters at the same device position. Not for a slice that samples outside
+    /// its clip (a self-blur, a blurred fade, acrylic) or that has no tiles (a low-resolution or feedback boundary).</summary>
+    /// <summary>A probe-only IDENTITY control (<c>extent-cut-identity</c>, like <see cref="ForceGroupFades"/>): every effect
+    /// slice keeps its whole painted bounds instead of the extent cut to its marker clip. Process-wide; the probe flips it
+    /// between two captures of the same scene. Never set by the engine.</summary>
+    public static bool ForceUncutExtents { get => Volatile.Read(ref s_forceUncutExtents); set => Volatile.Write(ref s_forceUncutExtents, value); }
+    private static bool s_forceUncutExtents;
+
+    private static RectF ExtentWithinMarkerClip(in Rec r, in RectF bounds, float scale)
+        => ExtentWithinMarkerClip(in bounds, scale, new ExtentFacts(r.MarkerClip, r.Pose, r.Sticky, r.Role, r.LowRes,
+            r.HasFeedback, !r.Acrylic.IsNone, r.MarkerFlags, r.Layer));
+
+    /// <summary>What <see cref="ExtentWithinMarkerClip(in RectF, float, in ExtentFacts)"/> reads of a slice (pure, so the
+    /// eligibility rules are testable without a recorder).</summary>
+    internal readonly record struct ExtentFacts(RectF MarkerClip, PoseKind Pose, bool Sticky, int Role, byte LowRes,
+        bool Feedback, bool Acrylic, int MarkerFlags, PushLayerCmd Layer);
+
+    internal static RectF ExtentWithinMarkerClip(in RectF bounds, float scale, in ExtentFacts f)
+    {
+        if (bounds.IsEmpty || f.MarkerClip.IsInfinite || f.MarkerClip.IsEmpty || f.Pose != PoseKind.None || f.Sticky
+            || f.Role is not ((int)SliceRole.Main or (int)SliceRole.Layer)
+            || f.LowRes > 1 || f.Feedback || f.Acrylic
+            || (f.MarkerFlags & (int)(CompositeSliceFlags.InnerClip | CompositeSliceFlags.ParamsUp)) != 0)
+            return bounds;
+        if ((f.MarkerFlags & (int)CompositeSliceFlags.Layer) != 0
+            && (f.Layer.Kind is (int)LayerKind.Blur or (int)LayerKind.Acrylic || f.Layer.BlurSigma > 0f))
+            return bounds;
+        float slack = 1f / MathF.Max(scale, 0.01f);
+        RectF clip = new(f.MarkerClip.X - slack, f.MarkerClip.Y - slack, f.MarkerClip.W + 2f * slack, f.MarkerClip.H + 2f * slack);
+        RectF cut = bounds.Intersect(clip);
+        return cut.IsEmpty ? default : cut;
+    }
+
     /// <summary>The slot whose realized coverage drives a segment's needed tiles: a scroll content slice itself, or the
     /// content slice an item band / pinned band rides; −1 for everything else.</summary>
     /// <summary>A segment's device-px tile origin, always on <see cref="TileGrid.OriginGrid"/>: an EFFECT or STATIC segment's
@@ -2437,11 +2502,15 @@ public sealed partial class SliceRecorder
         int done = 0;
         long bytes = 0;
         for (int i = 0; i < _rasterCount; i++)
+        {
             if (i < rasterDone.Length && rasterDone[i] != 0 && table.MarkRastered(_rasters[i].Key))
             {
                 done++;
                 bytes += LayerTargetBucket.Bytes(_rasters[i].W, _rasters[i].H);
             }
+            else table.MarkRasterFailed(_rasters[i].Key,   // its pixels may now differ from the surface's snapshot
+                beyondPlan: i < rasterFlags.Length && (rasterFlags[i] & CompositeFrameFlags.RasterBeyondPlan) != 0);
+        }
         LastRasteredTiles = done;
         LastRasteredBytes = bytes;
         EvLedgerRasters(table, rasterDone, rasterFlags);   // every scheduled raster: faithful?, scratch refused?, the content it drew

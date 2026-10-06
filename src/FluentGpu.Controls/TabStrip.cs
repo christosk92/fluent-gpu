@@ -710,7 +710,7 @@ public sealed class TabStrip : Component
                 ? [scrollStack, TextAddButton(add, addRevealed, hoveredSig)]
                 : [scrollStack],
         };
-        return Parts.Apply(PartRoot, root) with { Children = root.Children };
+        return Parts is null ? root : Parts.Apply(PartRoot, root) with { Children = root.Children };
     }
 
     void ScrollPage(bool back)

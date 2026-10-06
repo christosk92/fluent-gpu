@@ -118,7 +118,9 @@ public sealed class RenderCompositorAnimations
                     state.Done = state.Desired.Row.Has(AnimFlags.Done);
                     Evaluate(ref state, capturedAtMs, _tickIntervalMs);
                 }
-                else Evaluate(ref state, nowMs, _tickIntervalMs);
+                // A row this publication HOLDS stays at the value it last posed — the pixel on screen — so it is not
+                // advanced to `now` with its previous desired state first (that would move it one more step past it).
+                else if (!entry.Row.Has(AnimFlags.Hold) || state.Desired.Revision != entry.Revision) Evaluate(ref state, nowMs, _tickIntervalMs);
                 if (state.Desired.Revision != entry.Revision)
                 {
                     float current = state.Value, velocity = state.Velocity;
@@ -220,7 +222,7 @@ public sealed class RenderCompositorAnimations
             {
                 ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
                 if (!exists) accumulator.Acc = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
-                accumulator.Acc.Fold(row.Channel, state.Value, replace: true);
+                accumulator.Acc.Fold(row.Channel, AnimEngine.Posed(in row, state.Value, in scene.Bounds(row.Node), scene.DeviceScale), replace: true);
                 accumulator.OpacityMoving |= row.Channel == AnimChannel.Opacity && !state.Done;
                 accumulator.OpacityPosed |= row.Channel == AnimChannel.Opacity;
             }
@@ -246,7 +248,13 @@ public sealed class RenderCompositorAnimations
                 if (!IsSideTable(row.Channel))
                     CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Hidden = true;
                 // A finite row still ticks to its Done (its lifecycle needs the edge); a loop never ends, so it waits.
-                HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Loop);
+                HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Loop) && !row.Has(AnimFlags.Hold);
+                // Its FEEDBACK is marked Hidden: the UI imports its timing but composes nothing into its own scene. An
+                // advancing value composed there dirtied a node nobody can see on every presented frame, and its slice
+                // re-recorded and re-rastered each time (Wavee's Home busy bar, parked at opacity 0, re-rastered the facet
+                // band at the display rate while a meter played). A Done edge still reports its final value: that
+                // settles a UI lifecycle.
+                if (!state.Done) _feedback[i] = _feedback[i] with { Hidden = true };
                 continue;
             }
             // Bitwise compare, deliberately no tolerance: a held or Done row re-poses the IDENTICAL float, and a live
@@ -254,7 +262,9 @@ public sealed class RenderCompositorAnimations
             // that can be re-sent unchanged; our Value is recomputed, not re-sent.) A row that was hidden posed nothing
             // since: it re-poses as a change.
             // A wipe split poses at whole-DIP steps of its run (QuantizeWipe): only a step that crosses one is a change.
-            float posed = row.Channel == AnimChannel.GlyphWipeSplit ? QuantizeWipe(scene, row.Node, state.Value) : state.Value;
+            // A SnapDevicePx row poses whole device pixels of its node (AnimEngine.Posed): only a step that crosses one is a change.
+            float posed = row.Channel == AnimChannel.GlyphWipeSplit ? QuantizeWipe(scene, row.Node, state.Value)
+                : AnimEngine.Posed(in row, state.Value, in scene.Bounds(row.Node), scene.DeviceScale);
             bool changed = !state.HasPosed || posed != state.PosedValue || state.Hidden;
             state.PosedValue = posed;
             state.HasPosed = true;
@@ -265,7 +275,7 @@ public sealed class RenderCompositorAnimations
             else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value, changed);
             else if (row.Channel == AnimChannel.GlyphWipeSplit) scene.SetCompositorGlyphWipe(row.Node, posed, changed);
             else CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Changed |= changed;   // any channel moving damages the node once
-            HasActive |= !_paused && !state.Done;
+            HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Hold);   // a held row asks for no frames
         }
         foreach (var entry in _accumulators) if (!entry.Value.Hidden) Compose(scene, entry.Key, entry.Value.Acc, entry.Value.Changed);
         // Drain the reverts LAST, so a node that both lost a row and kept another is damaged by whichever ran first
@@ -304,12 +314,13 @@ public sealed class RenderCompositorAnimations
     private static bool IsSideTable(AnimChannel channel)
         => channel is AnimChannel.HoverFade or AnimChannel.PressFade or AnimChannel.BrushFade or AnimChannel.GlyphWipeSplit;
 
-    /// <summary>A wipe split rounded to whole DIPs of the run it sweeps (the node's width), the settled ends exact: the
-    /// boundary moves in pixel steps, so a tick that stays inside one changes nothing and re-records nothing.</summary>
+    /// <summary>A wipe split rounded to whole DIPs of the run it sweeps (the authored <see cref="GlyphWipe.Run"/>, else the
+    /// node's width), the settled ends exact: the boundary moves in pixel steps, so a tick that stays inside one changes
+    /// nothing and re-records nothing.</summary>
     internal static float QuantizeWipe(SceneRecordingSnapshot scene, NodeHandle node, float split)
     {
         float w = scene.Bounds(node).W;
-        return w > 1f && split > 0f && split < 1f ? MathF.Round(split * w) / w : split;
+        return scene.TryGetGlyphWipe(node, out GlyphWipe authored) ? authored.QuantizeSplit(split, w) : GlyphWipe.Quantize(split, w);
     }
 
     private static State Seed(in CompositorAnimationSnapshot.Entry entry, double capturedAtMs) => new()
@@ -329,6 +340,9 @@ public sealed class RenderCompositorAnimations
     private void Evaluate(ref State state, double nowMs, float refIntervalMs)
     {
         if (state.Parked || state.Done) return;
+        // HELD (AnimFlags.Hold): the value stays the one last posed; the anchor is untouched, so the release samples the
+        // phase the clock has reached since.
+        if (state.Desired.Row.Has(AnimFlags.Hold)) return;
         // PENDING START (AnimFlags.StartPending — a structural enter/exit the UI just seeded): the first render frame to
         // pose it holds t=0, and that presentation is where its start time resolves (the UI's seed-frame hold, render
         // side). The next frame then advances by the time since it — capped to one steady interval when the held frame

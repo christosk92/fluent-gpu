@@ -285,7 +285,7 @@ public static partial class ToggleButton
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Children = [glyphEl],
             };
-            iconEl = parts.Apply(PartIcon, iconEl) with { Children = iconEl.Children };
+            if (parts is not null) iconEl = parts.Apply(PartIcon, iconEl) with { Children = iconEl.Children };
             children = [iconEl, labelEl];
         }
         else
@@ -324,7 +324,7 @@ public static partial class ToggleButton
             Children = children,
         };
         // Parts: restyle anything (fills, corners, padding…); the cycle mechanics and the label/icon slots always win.
-        return parts.Apply(PartRoot, root) with { OnClick = click, Role = AutomationRole.ToggleButton, Children = root.Children };
+        return parts is null ? root : parts.Apply(PartRoot, root) with { OnClick = click, Role = AutomationRole.ToggleButton, Children = root.Children };
     }
 }
 

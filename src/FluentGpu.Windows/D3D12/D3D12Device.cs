@@ -385,6 +385,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>Process-global copy of <see cref="VideoMemorySnapshot"/> (one GPU device per process).</summary>
     public static GpuVideoMemorySnapshot LastVideoMemory => D3D12MemoryDiagnostics.LastVideoMemory;
 
+    /// <summary>The glyph atlas's bytes (its CPU mirror, the size of the GPU texture it uploads into); 0 before init. Any thread
+    /// (a plain read of the render thread's atlas edge) — the frame ledger's memory sample.</summary>
+    internal long DiagGlyphAtlasBytes => _glyphs?.AtlasCpuBytes ?? 0;
+
     /// <summary>QPC timestamp of the first successful Present (0 = none yet). Startup probes subtract process start.</summary>
     public static long FirstPresentQpc => s_firstPresentQpc;
 
@@ -828,6 +832,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // (threading-render-seam.md §9) arms even if no Present happens soon — a minimized/idle window can drain image
         // jobs for many turns without presenting, and the whole recovery hangs off that one recorded reason.
         if (_imageTextures.ResourceFaults != faultsBefore) NoteIfDeviceLost();
+        // The turn's image bake runs HERE, at the top of every render turn — not only inside a frame that records. A turn
+        // whose frame elides (nothing on screen changed: the usual case while the bake is all that is left) never reached
+        // BeginRecording, so the job stayed queued and the host kept waking at the bake cadence (bakedBlurPending) to
+        // publish frames that elided again: a 30 Hz loop that never made progress. The bake is its own compute batch,
+        // so it needs no frame; its result posts a completion wake, and the frame that shows it is the one that changed.
+        // Never on a lost device: the recovery gate rebuilds the queue's targets, and a compute submit would only fail.
+        if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return;
+        if (_bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && baker.DrainOne(_imageTextures, bakedQueue))
+        {
+            Diag.Count("d3d12", "bakedBlurJobs");
+            _turnBakedBlurJobs++;
+        }
     }
 
     // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──
@@ -1054,7 +1070,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // device init; a runtime switch sets it and calls InjectDeviceLost so THIS re-run applies it via recovery).
         // 0 = auto. A stale/failed preference (adapter gone, driver refused) falls through to the auto walk below.
         long preferredLuid = GpuAdapterInfo.PreferredAdapterLuid;
-        if (preferredLuid != 0)
+        if (FluentGpu.Hosting.EngineSwitches.ForceWarp)
+        {
+            // `--fg warp`: the software adapter, explicitly (a validator run off the hardware driver)
+            IDXGIAdapter* warp;
+            if ((int)_factory->EnumWarpAdapter(__uuidof<IDXGIAdapter>(), (void**)&warp) >= 0 && warp != null)
+            {
+                if ((int)D3D12CreateDevice((IUnknown*)warp, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device) >= 0)
+                    selectionMode = "warp";
+                warp->Release();
+            }
+        }
+        if (device == null && preferredLuid != 0)
         {
             LUID pl = default;
             pl.LowPart = unchecked((uint)preferredLuid);
@@ -1787,7 +1814,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameKnockouts = isPrimaryTarget ? (GpuKnockouts)_knockouts : GpuKnockouts.None;
         GpuDrawCount.Frame = 0;
         _framePassBreaks = 0; _frameBackBufferTransitions = 0;
-        _frameImageUploads = 0; _frameUploadBytes = 0; _frameBakedBlurJobs = 0;
+        _frameImageUploads = 0; _frameUploadBytes = 0; _frameBakedBlurJobs = _turnBakedBlurJobs; _turnBakedBlurJobs = 0;
         _frameBackBuffer = sc.BackBuffers[f.FrameIndex];
         ID3D12CommandAllocator* allocator = _ring.Allocators[slot];
         Check(allocator->Reset(), "allocator.Reset");
@@ -1814,7 +1841,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _frameUploadBytes += _glyphs.LastUploadBytes;
         }
         // One image bake per turn, on its own COMPUTE queue (never this list): recorded, submitted and published behind
-        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands.
+        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands. A host with
+        // an image upload queue already ran the turn's bake in DrainImageJobs (the queue's 33 ms cadence makes this one a
+        // no-op then); this site stays for a SingleThread host, which has no upload queue and never calls DrainImageJobs.
         if (isPrimaryTarget &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures
             && baker.DrainOne(textures, bakedQueue))
@@ -2010,7 +2039,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
-                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    RectF ink = g.InkRect;   // the painted extent (the box + measured overflow), not the layout box
+                    if (Cull(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2024,9 +2054,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
-                        NoteGlyphHaloCoverage(before, g.Bounds, RepaintCull.GlyphHalo(g.FontSize));
+                        NoteGlyphHaloCoverage(before, ink, RepaintCull.GlyphHalo(g.FontSize));
                         if (_glyphInsts.Count > before)
-                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                            NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                                 g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize));
                     }
                     break;
@@ -2035,7 +2065,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
-                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                    RectF ink = g.InkRect;
+                    if (Cull(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize, g.Lift))) break;
                     string s = _strings.Resolve(g.Text);
@@ -2051,9 +2082,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             _gradGlyphInsts, _glyphInsts,
                             g.SpanRunId, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += (_gradGlyphInsts.Count - beforeGrad) + (_glyphInsts.Count - beforePlain);
-                        NoteGlyphHaloCoverage(beforePlain, g.Bounds, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
+                        NoteGlyphHaloCoverage(beforePlain, ink, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                         if (_gradGlyphInsts.Count > beforeGrad || _glyphInsts.Count > beforePlain)
-                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                            NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
                                 g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                     }
                     break;
@@ -2084,6 +2115,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(im.Rect.X, im.Rect.Y, im.Rect.W, im.Rect.H, im.Transform.M11, im.Transform.M12,
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip);
+                    if (_imgRecSlot >= 0) NoteRasterImage(im.ImageId);   // a tile raster records which pixels of the id it drew
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
                     if (_imageTextures!.IsResident(im.ImageId)) AddReadyImage(in im);
@@ -2552,6 +2584,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // command-list state — only invalidated when a compositor pass sets its own scissor, via InvalidateCmdState).
     private void SetScissorRect(RECT sc)
     {
+        sc = ClampToReplay(sc);
         int tw = _targetWidth > 0 ? _targetWidth : (int)_w;
         int th = _targetHeight > 0 ? _targetHeight : (int)_h;
         RECT targetScissor = new()
@@ -2770,7 +2803,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         D3D12MemoryDiagnostics.Track(res, dsvBytes != 0 ? "StencilClip.Dsv" : "StencilClip.AllocationUnknown.Dsv",
             dsvBytes != 0 ? dsvBytes : (uint)(cw * ch * 4));
         _f!.StencilDsv = res;
-        _f!.StencilW = cw; _f!.StencilH = ch;
+        _f!.StencilW = cw; _f!.StencilH = ch; _f!.StencilLastUseMs = Environment.TickCount64;
         Rec(RecordedOp.StencilDsvCreated, (uint)cw, (uint)ch);
         return true;
     }
@@ -2794,6 +2827,54 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         f.StencilDepth = 0; f.StencilScopeMasked.Clear(); f.StencilDsvBound = false;
     }
 
+    /// <summary>The stencil surface (D24S8 at the window's size: ~16 MiB at 2560x1600, pinned host memory on a UMA adapter) is
+    /// released once no stencil scope has bound it for this long. It is rebuildable on demand (the first path clip after
+    /// that creates it lazily, inside <see cref="EnsureStencilDsv"/>), and most pages never clip to a path at all.</summary>
+    internal const long StencilIdleReleaseMs = 15_000;
+
+    /// <summary>Pure decision: release a stencil surface that exists, was last bound <paramref name="idleMs"/> ago, and whose
+    /// target's last submit the GPU has completed (a fence not yet passed means a submit may still use it).</summary>
+    internal static bool ShouldReleaseStencil(bool exists, long nowMs, long lastUseMs, ulong lastSubmitFence, ulong completedFence)
+        => exists && nowMs - lastUseMs >= StencilIdleReleaseMs && lastSubmitFence <= completedFence;
+
+    /// <summary>Between-turns housekeeping on the render thread (<see cref="IGpuDevice.TrimIdleResources"/>): drain the tile
+    /// pool's retired queue, retire idle free scratch, release an idle stencil surface. Everything it frees is rebuilt on demand
+    /// and only touches resources nothing has used for seconds, so nothing visible changes. Never waits on the GPU: a resource
+    /// whose fence has not passed is simply looked at again soon (the returned delay).</summary>
+    public int TrimIdleResources(long nowMs)
+    {
+        if (_device == null) return -1;
+        AssertSubmitThread();
+        ulong completed = _fence->GetCompletedValue();
+        long next = long.MaxValue;
+        if (_surfaces is { } sp)
+        {
+            int n = sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
+            if (n >= 0) next = n;
+        }
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            var sc = _swapchains[i];
+            if (sc.Disposed) continue;
+            var f = sc.Frame;
+            if (f.StencilDsv == null) continue;
+            if (ShouldReleaseStencil(true, nowMs, f.StencilLastUseMs, f.LastSubmitFence, completed)) { ReleaseStencilDsv(f); continue; }
+            long left = StencilIdleReleaseMs - (nowMs - f.StencilLastUseMs);
+            next = Math.Min(next, left > 0 ? left : 500);   // idle long enough: only the fence is outstanding
+        }
+        return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
+    }
+
+    /// <summary>Idle-path tile texture release: the same fence-gated retire a composite turn's trim list performs
+    /// (<see cref="SurfacePool.TrimTiles"/>), for slots the table freed while the app was not compositing.</summary>
+    public void TrimTileSurfaces(ReadOnlySpan<int> slots)
+    {
+        if (_surfaces is null || slots.IsEmpty) return;
+        AssertSubmitThread();
+        _surfaces.TrimTiles(slots);
+        _surfaces.DrainRetired(_fence->GetCompletedValue());
+    }
+
     /// <summary>Re-attach (or drop) the stencil DSV on the CURRENT scene render target. OMSetRenderTargets disturbs
     /// neither viewport, scissor, PSO nor root bindings, so this is safe to issue mid-segment.</summary>
     private void RebindCurrentTarget(bool withDsv, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
@@ -2813,6 +2894,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // the DSV size; the target size is the preceding Viewport/ListReset entry.
             Rec(RecordedOp.SetRenderTargetWithDsv, (uint)rtv.ptr, (uint)_f!.StencilW << 16 | ((uint)_f!.StencilH & 0xFFFF));
             _f!.StencilDsvBound = true;
+            _f!.StencilLastUseMs = Environment.TickCount64;
             return;
         }
         _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
@@ -3474,6 +3556,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
         HRESULT pr;
+        byte pvMode = target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent ? (byte)2 : (byte)1;
         if (target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent)
         {
             // Partial: the staged dirty rects of the frame just composited (relative to the last presented frame — a
@@ -3502,6 +3585,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             EndTargetFrame();
             return;
         }
+        if (FluentGpu.Render.Tiles.TileDamage.PresentValidate) NotePresentForValidation(target, pvMode);   // what DWM was told (--fg present-validate)
         target.PpPresentCount = 0;
         target.PpNeedFullPresent = false;
         // The Present is what SPENDS the latency credit a wait took (the waitable is a semaphore: it is re-signaled when
@@ -4353,6 +4437,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _frameImageUploads;
     private long _frameUploadBytes;
     private int _frameBakedBlurJobs;
+    private int _turnBakedBlurJobs;   // bakes DrainImageJobs ran at the top of this render turn (folded into the frame's count)
 
     /// <inheritdoc/>
     /// <remarks>Latched by the render thread once per submit; settable from any thread. The first submit with it on
@@ -4578,7 +4663,29 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (end <= begin) return;
         double ms = (end - begin) * 1000.0 / _gpuExecutionTsFreq;
         if (!double.IsFinite(ms) || ms <= 0.0) return;
-        owner.PublishGpuRenderSample(ms, ownerSubmit, System.Diagnostics.Stopwatch.GetTimestamp());
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        owner.PublishGpuRenderSample(ms, ownerSubmit, now, GpuTicksToQpc(begin, now), GpuTicksToQpc(end, now));
+    }
+
+    // GPU timestamp → QPC (the frame ledger's GPU stream): ID3D12CommandQueue::GetClockCalibration pairs a GPU timestamp with the
+    // QPC read at the same instant; refreshed at most once a second (the two clocks drift apart slowly), on the render thread.
+    private ulong _gpuClockGpuTs;
+    private long _gpuClockQpc, _gpuClockSampledQpc;
+
+    private long GpuTicksToQpc(ulong gpuTicks, long nowQpc)
+    {
+        if (_queue == null || _gpuExecutionTsFreq == 0) return 0;
+        if (_gpuClockSampledQpc == 0 || nowQpc - _gpuClockSampledQpc > System.Diagnostics.Stopwatch.Frequency)
+        {
+            ulong gpuTs, cpuTs;
+            if (_queue->GetClockCalibration(&gpuTs, &cpuTs) < 0) { _gpuClockSampledQpc = nowQpc; _gpuClockQpc = 0; return 0; }
+            _gpuClockGpuTs = gpuTs;
+            _gpuClockQpc = unchecked((long)cpuTs);
+            _gpuClockSampledQpc = nowQpc;
+        }
+        if (_gpuClockQpc == 0) return 0;
+        double deltaGpu = gpuTicks >= _gpuClockGpuTs ? (double)(gpuTicks - _gpuClockGpuTs) : -(double)(_gpuClockGpuTs - gpuTicks);
+        return _gpuClockQpc + (long)(deltaGpu * System.Diagnostics.Stopwatch.Frequency / _gpuExecutionTsFreq);
     }
 
     private void ReleaseGpuTimingResources()
@@ -4607,6 +4714,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Array.Clear(_ring.PassPending, 0, _ring.PassPending.Length);
         Array.Clear(_ring.PassOwner, 0, _ring.PassOwner.Length);
         _gpuExecutionTsFreq = 0; _passTsFreq = 0;
+        _gpuClockSampledQpc = 0; _gpuClockQpc = 0;   // a rebuilt queue recalibrates
         _gpuExecutionTimingInitTried = false; _passInitTried = false;
         _passOn = false;
         for (int i = 0; i < _swapchains.Count; i++)
@@ -4972,7 +5080,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // The retained-tile surfaces died with the device: the host's target-epoch bump invalidates every tile, and the
         // next composite recreates what it rasters.
         _surfaces?.Dispose(); _surfaces = null;
+        // The validators' readbacks / shadow target belong to the dead device, and their in-flight checks wait on fence
+        // values the new fence (restarting at 0) would not reach for a long time: drop them, restart their sequences.
+        ReleaseValidatorsForRecovery();
         _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
+        _groupMemos.Clear();   // the surfaces they describe went with the pool
+        ReleaseGroupRepairValidation();
         _compositor?.Dispose(); _compositor = null;
         _imageTextures?.Dispose(); _imageTextures = null;
         _shadowPipe?.Dispose(); _shadowPipe = null;
@@ -5052,6 +5165,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imagePipe?.Dispose();
         _bakedBlur?.Dispose();
         _surfaces?.Dispose();
+        ReleaseGroupRepairValidation();
+        ReleaseDamageChecks();
+        ReleasePresentChecks();
         _compositor?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
@@ -5156,6 +5272,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     private long _gpuSampleSequence;
     private long _gpuSampleSubmitSequence;
     private long _gpuSamplePublishedQpc;
+    private long _gpuSampleStartQpc, _gpuSampleEndQpc;   // the pair on QPC (clock calibration; 0 = unknown) — same seqlock
     private double _gpuSampleExecutionMs;
     // Pass-granular GPU timeline of this target's most recently RETIRED instrumented frame (seqlock: odd version =
     // write in flight). Written by the render thread one submission after the frame, read by any thread.
@@ -5211,12 +5328,14 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         return unchecked((ulong)submit);
     }
 
-    internal void PublishGpuRenderSample(double executionMs, ulong submitSequence, long publishedQpc)
+    internal void PublishGpuRenderSample(double executionMs, ulong submitSequence, long publishedQpc, long startQpc = 0, long endQpc = 0)
     {
         System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
         System.Threading.Volatile.Write(ref _gpuSampleExecutionMs, executionMs);
         System.Threading.Interlocked.Exchange(ref _gpuSampleSubmitSequence, unchecked((long)submitSequence));
         System.Threading.Interlocked.Exchange(ref _gpuSamplePublishedQpc, publishedQpc);
+        System.Threading.Interlocked.Exchange(ref _gpuSampleStartQpc, startQpc);
+        System.Threading.Interlocked.Exchange(ref _gpuSampleEndQpc, endQpc);
         System.Threading.Interlocked.Increment(ref _gpuSampleSequence);
         System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
     }
@@ -5240,6 +5359,8 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             long sequence = System.Threading.Interlocked.Read(ref _gpuSampleSequence);
             long sampleSubmit = System.Threading.Interlocked.Read(ref _gpuSampleSubmitSequence);
             long publishedQpc = System.Threading.Interlocked.Read(ref _gpuSamplePublishedQpc);
+            long startQpc = System.Threading.Interlocked.Read(ref _gpuSampleStartQpc);
+            long endQpc = System.Threading.Interlocked.Read(ref _gpuSampleEndQpc);
             long currentSubmit = System.Threading.Interlocked.Read(ref _gpuSubmitSequence);
             long after = System.Threading.Volatile.Read(ref _gpuSampleVersion);
             if (before != after || (after & 1L) != 0) continue;
@@ -5247,7 +5368,10 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             ulong submitAge = currentSubmit >= sampleSubmit
                 ? unchecked((ulong)(currentSubmit - sampleSubmit))
                 : ulong.MaxValue;
-            sample = new GpuRenderSample(ms, unchecked((ulong)sequence), submitAge, publishedQpc);
+            sample = new GpuRenderSample(ms, unchecked((ulong)sequence), submitAge, publishedQpc)
+            {
+                SubmitSequence = unchecked((ulong)sampleSubmit), GpuStartQpc = startQpc, GpuEndQpc = endQpc,
+            };
             return true;
         }
         sample = default;

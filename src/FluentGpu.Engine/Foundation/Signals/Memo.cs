@@ -25,7 +25,7 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
 {
     private readonly Func<T> _fn;
     private readonly IEqualityComparer<T> _cmp;
-    private readonly List<Computation> _subs = new();
+    private RefList<Computation> _subs;
     private readonly Action _compute;   // stable delegate (`_next = _fn()`) — no closure allocated per recompute
     private T _value = default!;
     private T _next = default!;

@@ -143,6 +143,12 @@ public static class GroupCacheKey
         {
             src = new PixelRect((int)MathF.Floor(it.SourceClip.X), (int)MathF.Floor(it.SourceClip.Y),
                 (int)MathF.Ceiling(it.SourceClip.Right), (int)MathF.Ceiling(it.SourceClip.Bottom));
+            // The recorded source clip was cut against the clip active at RECORD time — unbounded inside a scroll slice, so
+            // a blurred row scrolled out of its viewport still names its whole source. The composite draws the blur only
+            // inside the item's clip, and source farther than the pipeline's reach (SelfBlurRegion.SupportRadius) from
+            // that clip changes no drawn pixel: it is neither assembled nor blurred, and a row wholly outside its viewport
+            // blurs nothing (src empty). The region keeps its slice-grid top-left, so the downsample phase is unchanged.
+            src = CutToReach(in it, src);
             region = src;
         }
         else
@@ -160,10 +166,24 @@ public static class GroupCacheKey
         region = OnSliceGrid(in it, region);
     }
 
+    /// <summary><paramref name="src"/> ∩ the item's clip grown by the blur pipeline's reach (unchanged when the clip is
+    /// unbounded); empty when they miss.</summary>
+    private static PixelRect CutToReach(in CompositeItem it, PixelRect src)
+    {
+        if (IsUnbounded(it.Clip) || src.IsEmpty) return src;
+        int reach = SelfBlurRegion.SupportRadius(it.BlurSigma);
+        int l = Math.Max(src.Left, (int)MathF.Floor(it.Clip.X) - reach), t = Math.Max(src.Top, (int)MathF.Floor(it.Clip.Y) - reach);
+        int r = Math.Min(src.Right, (int)MathF.Ceiling(it.Clip.Right) + reach), b = Math.Min(src.Bottom, (int)MathF.Ceiling(it.Clip.Bottom) + reach);
+        return r > l && b > t ? new PixelRect(l, t, r, b) : default;
+    }
+
     /// <summary>
     /// The content key of a LEAF self-blur's retained result (gpu-renderer.md §13.1e "Retained self-blur"): σ, the source
     /// and blur regions (<see cref="BlurRegions"/>), the item's whole-px placement and every placed tile (column, row,
-    /// surface, content serial). A turn that changed none of it re-draws the retained blur and samples NONE of the tiles —
+    /// surface, content serial). The rects are keyed RELATIVE to the item's whole-px placement: the blurred surface is a
+    /// function of what lies inside it, so a blurred leaf moved rigidly by whole pixels — a scroll pose, an ancestor's
+    /// whole-px translation — re-draws its retained result at the new place instead of re-blurring identical pixels.
+    /// A turn that changed none of it re-draws the retained blur and samples NONE of the tiles —
     /// which is why a backend must never age a tile texture out on "last sampled": the table owns tile texture lifetime
     /// (<see cref="CompositeFrame.TrimSurfaces"/>). Zero allocation.
     /// </summary>
@@ -171,16 +191,27 @@ public static class GroupCacheKey
         ref TSerials serials) where TSerials : struct, ITileSerials
     {
         ulong h = 0xB1B1_0000_0000_0001UL;
+        int tx = (int)it.Transform.Dx, ty = (int)it.Transform.Dy;
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.BlurSigma));
-        Mix(ref h, (ulong)(uint)src.Left << 32 | (uint)src.Top); Mix(ref h, (ulong)(uint)src.Right << 32 | (uint)src.Bottom);
-        Mix(ref h, (ulong)(uint)region.Left << 32 | (uint)region.Top); Mix(ref h, (ulong)(uint)region.Right << 32 | (uint)region.Bottom);
-        Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
+        Mix(ref h, (ulong)(uint)(src.Left - tx) << 32 | (uint)(src.Top - ty)); Mix(ref h, (ulong)(uint)(src.Right - tx) << 32 | (uint)(src.Bottom - ty));
+        Mix(ref h, (ulong)(uint)(region.Left - tx) << 32 | (uint)(region.Top - ty)); Mix(ref h, (ulong)(uint)(region.Right - tx) << 32 | (uint)(region.Bottom - ty));
         for (int p = 0; p < placed.Length; p++)
         {
+            // only the tiles the blur reads: one wholly outside its source draws nothing into it (a long scroll row's
+            // re-rastered tile far below the viewport must not re-blur the visible part)
+            if (!PlacementReaches(in it, in placed[p], in src)) continue;
             Mix(ref h, (ulong)(ushort)placed[p].Key.Tx << 48 | (ulong)(ushort)placed[p].Key.Ty << 32 | (uint)placed[p].Surface);
             Mix(ref h, serials.Serial(placed[p].Surface));
         }
         return h;
+    }
+
+    /// <summary>Does placed tile <paramref name="p"/> of item <paramref name="it"/> (its surface extent at the item's whole-px
+    /// placement) overlap window-px rect <paramref name="src"/>?</summary>
+    public static bool PlacementReaches(in CompositeItem it, in TilePlacement p, in PixelRect src)
+    {
+        int x0 = (int)it.Transform.Dx + p.Key.Tx * TileGrid.W, y0 = (int)it.Transform.Dy + p.Key.Ty * TileGrid.H;
+        return x0 < src.Right && x0 + p.W > src.Left && y0 < src.Bottom && y0 + p.H > src.Top;
     }
 
     /// <summary>An item's device-px scissor (empty = unbounded) cut to the surface region — what of it can matter.</summary>

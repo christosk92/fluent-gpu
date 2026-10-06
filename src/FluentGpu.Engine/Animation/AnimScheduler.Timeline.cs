@@ -29,10 +29,13 @@ public sealed partial class AnimEngine
     /// <paramref name="cadence"/> is the row's own frame rate (<see cref="Cadence"/>, AnimClock.cs) — the DATA that
     /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means <see cref="Cadence.Display"/>,
     /// one-shot or loop alike. Pass <c>Cadence.At(hz)</c> only for a source with a native rate (a Lottie composition's
-    /// frame rate) or one that genuinely wants fewer frames — it is opt-in, never inferred.</summary>
+    /// frame rate) or one that genuinely wants fewer frames — it is opt-in, never inferred.
+    /// <paramref name="snapToDevicePixels"/> (ScaleX/ScaleY): pose whole device pixels of the node's own extent
+    /// (<see cref="AnimFlags.SnapDevicePx"/>) — a meter whose bars step a pixel at a time at the display rate, on the
+    /// render thread, and whose frames in which no bar crosses a pixel record nothing.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
                           bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
-                          Cadence? cadence = null)
+                          Cadence? cadence = null, bool snapToDevicePixels = false)
     {
         int s = Get(node, channel, composite != CompositeOp.Replace);
         SetCadence(s, cadence ?? Cadence.Display);
@@ -46,6 +49,7 @@ public sealed partial class AnimEngine
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven);
         if (loop) r.Flags |= AnimFlags.Loop; else r.Flags &= ~AnimFlags.Loop;
+        if (snapToDevicePixels) r.Flags |= AnimFlags.SnapDevicePx; else r.Flags &= ~AnimFlags.SnapDevicePx;
         r.Flags |= AnimFlags.JustSeeded;   // seed frame holds the initial value (advance begins next frame)
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;
@@ -113,6 +117,28 @@ public sealed partial class AnimEngine
         if (done) r.Flags |= AnimFlags.Done;
         return val;
     }
+
+    /// <summary>The value a <see cref="AnimFlags.SnapDevicePx"/> row poses: a ScaleX/ScaleY <paramref name="value"/> rounded
+    /// so the node's scaled extent (<paramref name="extentDip"/> x <paramref name="deviceScale"/>) is a whole number of
+    /// device pixels; any other channel, or an extent of a pixel or less, unchanged. Pure, so the UI tick, the
+    /// compositor feedback and the render thread pose the identical float.</summary>
+    public static float SnapToDevicePixels(AnimChannel channel, float value, float extentDip, float deviceScale)
+    {
+        if (channel is not (AnimChannel.ScaleX or AnimChannel.ScaleY)) return value;
+        float px = extentDip * (deviceScale > 0f ? deviceScale : 1f);
+        return px > 1f ? MathF.Round(value * px) / px : value;
+    }
+
+    /// <summary>The value <paramref name="r"/> poses at <paramref name="value"/> on a node laid out at
+    /// <paramref name="bounds"/>: unchanged, or snapped when the row carries <see cref="AnimFlags.SnapDevicePx"/>.</summary>
+    internal static float Posed(in AnimValue r, float value, in RectF bounds, float deviceScale)
+        => r.Has(AnimFlags.SnapDevicePx)
+            ? SnapToDevicePixels(r.Channel, value, r.Channel == AnimChannel.ScaleX ? bounds.W : bounds.H, deviceScale)
+            : value;
+
+    /// <summary>A keyframe track's value at progress <paramref name="u"/> (0..1), per-segment easing — exactly what the UI
+    /// tick and the render thread sample (an app pins its own motion function against it).</summary>
+    public static float SampleKeyframes(ReadOnlySpan<Keyframe> keys, float u) => Sample(keys, u);
 
     // sample a multi-keyframe track at progress u (0..1), per-segment easing (ported from AnimEngine.Sample)
     internal static float Sample(ReadOnlySpan<Keyframe> keys, float u)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Scroll.Effects;
 
 namespace FluentGpu.Scroll.Runtime;
@@ -116,6 +116,19 @@ public sealed class ScrollCoverageTable
         for (int i = 0; i < _rowCount; i++)
             if (_rows[i].Vp == vp.Node && _rows[i].Gen == vp.Gen) return i;
         return -1;
+    }
+
+    /// <summary>True when <paramref name="other"/> holds exactly this table's rows and effect pool (value equality, in
+    /// order). O(rows + effects), no allocation — the host's no-op publication skip compares the coverage it would publish
+    /// against the coverage it last published.</summary>
+    public bool ContentEquals(ScrollCoverageTable other)
+    {
+        if (_rowCount != other._rowCount || _effectCount != other._effectCount) return false;
+        for (int i = 0; i < _rowCount; i++)
+            if (_rows[i] != other._rows[i]) return false;
+        for (int i = 0; i < _effectCount; i++)
+            if (_effects[i] != other._effects[i]) return false;
+        return true;
     }
 
     /// <summary>Copies <paramref name="other"/>'s rows and effect pool into this instance without allocating.</summary>

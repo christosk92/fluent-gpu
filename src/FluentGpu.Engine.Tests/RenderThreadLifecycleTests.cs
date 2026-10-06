@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Threading;
 using FluentGpu.Hosting;
@@ -16,6 +16,9 @@ namespace FluentGpu.Engine.Tests;
 /// the machinery Change 1 (deterministic stop+join on close) and Change 2 (parent-thread child drain) are built on.
 /// Live verification of an actual pop-out under async is separate (needs a real GPU/DRM runtime).
 /// </summary>
+// Serial: these tests time real render-thread turns and run hosts with process-static seams; beside the parallel suite they
+// flaked under load.
+[Collection(SerialTestCollection.Name)]
 public sealed class RenderThreadLifecycleTests
 {
     // Change 1 (shutdown) + Change 2 (child drain via extraDrain) + the TryAcquire dedup the child-wake routing needs.

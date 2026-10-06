@@ -417,6 +417,10 @@ public static class FluentApp
             host.GpuDetail = () => gpu.DiagGpuDetail;
             s_gpuDevice = gpu;
         }
+        // The frame ledger's platform seams (process cycles, process memory, VRAM, glyph atlas) — installed always, read only while
+        // it records; `--fg ledger[=PATH]` turns it on from the first frame (FrameLedger.cs).
+        Win32LedgerSampler.Install(gpuDev);
+        if (EngineSwitches.Ledger) FrameLedger.Enable();
 
         // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
         // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
@@ -446,6 +450,7 @@ public static class FluentApp
         var gpuPasses = new FluentGpu.Rhi.GpuPassTiming[FluentGpu.Rhi.GpuPassTimeline.MaxPasses];   // once; the per-line copy is zero-alloc
         long prevSkipped = 0, prevDeclined = 0, prevStoodDown = 0;
         long prevFpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        FluentGpu.Rhi.D3D12.DamageCensus prevDamage = gpuDev?.LastDamageCensus ?? default;
         var prevInputPacing = window.InputPacingSnapshot;
         static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
         {
@@ -566,6 +571,28 @@ public static class FluentApp
                         ? $" dmg F:{s.RepaintFullReason}"
                         : (s.RepaintRectCount > 0 ? $" dmg {s.RepaintCoverage * 100f:0.0}%/{s.RepaintRectCount}" : "");
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
+                    // dpx — the damage census since the previous line, per composite (kpx): r<tile px rastered>/<whole-tile
+                    // equivalent> (partial/whole raster counts), c<back-buffer px recomposited>, p<Present1 dirty px>,
+                    // d<this turn's own dirty px> (c − d is the buffer-age union), full<whole-frame composites>/<composites>,
+                    // and with --fg damage-validate v<checked>/<mismatched>/h<honesty breaches> (cumulative); with --fg
+                    // present-validate pv<composites checked>/m<Present1 presents checked against the screen model>/c<composite
+                    // mismatches outside the repaint region>/u<under-reports>/s<stale screens>/k<skipped>/w<unverified frames:
+                    // the shadow disagreed inside the repaint region>. The composite check shares the frame's prepared inputs (tiles, group / blur / backdrop surfaces): it validates the
+                    // repaint set and the Present1 rects, not a wrong retained-surface key hit, a "no raster needed" table
+                    // decision or a same-frame descriptor fault.
+                    string damageTok = "";
+                    if (gpuDev is not null)
+                    {
+                        var dc = gpuDev.LastDamageCensus;
+                        long dn = dc.Frames - prevDamage.Frames;
+                        double per = dn > 0 ? 1.0 / (dn * 1000.0) : 0.0;
+                        damageTok = System.FormattableString.Invariant(
+                            $" dpx r{(dc.RasterPx - prevDamage.RasterPx) * per:0.0}/{(dc.RasterWholePx - prevDamage.RasterWholePx) * per:0.0}k({dc.PartialRasters - prevDamage.PartialRasters}p/{dc.WholeRasters - prevDamage.WholeRasters}w) c{(dc.CompositePx - prevDamage.CompositePx) * per:0.0}k p{(dc.PresentPx - prevDamage.PresentPx) * per:0.0}k d{(dc.DirtyPx - prevDamage.DirtyPx) * per:0.0}k full{dc.FullFrames - prevDamage.FullFrames}/{dn}")
+                            + (FluentGpu.Render.Tiles.TileDamage.Validate ? $" v{dc.Validated}/{dc.Mismatches}/h{dc.HonestyBreaches}" : "")
+                            + (FluentGpu.Render.Tiles.TileDamage.PresentValidate && gpuDev.LastPresentCensus is var pc
+                                ? $" pv{pc.Checked}/m{pc.ModelChecked}/c{pc.CompositeMismatches}/u{pc.UnderReports}/s{pc.StaleScreens}/k{pc.Skipped}/w{pc.ShadowDiverged}" : "");
+                        prevDamage = dc;
+                    }
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
                     // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit
                     // reflow seeding. Printed only when the bucket is worth splitting (≥0.1 ms), so quiet frames stay short.
@@ -622,7 +649,7 @@ public static class FluentApp
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuExecutionTok}{gpuRenderTok}{rectSubmitTok}{tilesTok}{dmgTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuExecutionTok}{gpuRenderTok}{rectSubmitTok}{tilesTok}{dmgTok}{damageTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{inputPaceTok}");
                 }
             }
@@ -646,6 +673,8 @@ public static class FluentApp
         }
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
+        if (EngineSwitches.Ledger) FrameLedger.DumpIfRequested();   // `--fg ledger=PATH`: the binary + one CSV per stream
+        Win32LedgerSampler.Uninstall(gpuDev);
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (h.Screenshot is { } shotPath && device is D3D12Device d3d)

@@ -252,6 +252,7 @@ internal abstract class PipsPagerCoreBase : Component
             };
             // Parts: restyle each pip (the modifier sees the per-dot selected sizing); the select/keyboard mechanics
             // always win.
+            if (parts is null) return dot;   // no parts: the mechanics below are already on the dot, skip the copy
             return parts.Apply(PipsPager.PartDot, dot) with
             {
                 OnClick = select, Role = AutomationRole.Pager, OnKeyDown = onKey, OnRealized = capture,
@@ -365,7 +366,7 @@ internal abstract class PipsPagerCoreBase : Component
             OnPointerExit = needsReveal ? () => { if (pointerOver.Peek()) pointerOver.Value = false; } : null,
             Children = children,
         };
-        return parts.Apply(PipsPager.PartRoot, root) with { Children = children, Role = AutomationRole.Pager };
+        return parts is null ? root : parts.Apply(PipsPager.PartRoot, root) with { Children = children, Role = AutomationRole.Pager };
     }
 }
 

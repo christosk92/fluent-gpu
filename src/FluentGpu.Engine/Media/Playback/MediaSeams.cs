@@ -345,6 +345,10 @@ public interface IBufferedAudioSink : IAudioSink
     void Reset();
     /// <summary>Wait for either device capacity or an application control wake.</summary>
     void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs);
+    /// <summary>Times the DEVICE ran dry while the stream was running: its queue was empty when the feed came to write, so the
+    /// hardware played silence whatever the app's own xrun counter says (a late RT callback, an audiodg stall). 0 for a sink that
+    /// cannot tell. Cumulative since the sink was built; any thread may read it.</summary>
+    long DeviceUnderruns => 0;
 }
 
 /// <summary>The played-frames master clock (spec §7.6) — WASAPI <c>IAudioClock</c> / CoreAudio timestamp. Position is

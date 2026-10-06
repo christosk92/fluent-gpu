@@ -233,3 +233,15 @@ public sealed class ImageFetchBufferPolicyTests
         f.ReturnBuffer(r.Buffer!);   // Shared.Return of a Shared rental: no throw is the contract
     }
 }
+
+public sealed class ImageFetchPoolTrimPolicyTests
+{
+    [Fact]
+    public void TrimsOnlyAnUsedPoolAfterTheIdleWindow()
+    {
+        const long idle = DefaultImageFetcher.PoolIdleTrimMs;
+        Assert.False(DefaultImageFetcher.ShouldTrimPool(1_000 + idle - 1, 1_000, dirty: true));
+        Assert.True(DefaultImageFetcher.ShouldTrimPool(1_000 + idle, 1_000, dirty: true));
+        Assert.False(DefaultImageFetcher.ShouldTrimPool(1_000 + 10 * idle, 1_000, dirty: false));
+    }
+}

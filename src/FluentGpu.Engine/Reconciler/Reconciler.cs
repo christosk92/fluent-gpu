@@ -755,6 +755,14 @@ public sealed partial class TreeReconciler
         }
     }
 
+    // The seams every component's context is handed. A method-group conversion allocates a delegate each time it is evaluated,
+    // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
+    private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
+    private Func<NodeHandle, int, int, bool, bool>? _beginVirtualDisclosureSeam;
+    private Action<NodeHandle, bool>? _completeVirtualDisclosureSeam;
+    private Action<NodeHandle>? _clearVirtualDisclosureSeam;
+    private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
+
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
     {
         ctx.Runtime = Runtime;
@@ -762,12 +770,12 @@ public sealed partial class TreeReconciler
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
-        ctx.BeginVirtualRemoval = BeginVirtualRemoval;
-        ctx.BeginVirtualDisclosure = BeginVirtualDisclosure;
-        ctx.CompleteVirtualDisclosure = CompleteVirtualDisclosure;
-        ctx.ClearVirtualDisclosure = ClearVirtualDisclosure;
+        ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
+        ctx.BeginVirtualDisclosure = _beginVirtualDisclosureSeam ??= BeginVirtualDisclosure;
+        ctx.CompleteVirtualDisclosure = _completeVirtualDisclosureSeam ??= CompleteVirtualDisclosure;
+        ctx.ClearVirtualDisclosure = _clearVirtualDisclosureSeam ??= ClearVirtualDisclosure;
         ctx.AnchorNode = anchor;
-        ctx.ResolveContextSignal = ResolveContext;
+        ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
     }
 
@@ -2773,7 +2781,7 @@ public sealed partial class TreeReconciler
                     // by a re-wire and every later fire alike, and a re-wire's re-run never re-applies stale mount values
                     // over what WriteColumns just wrote. The decode target is recomputed per fire (pure, allocation-free).
                     var im = (ImageEl)fx.El;
-                    (int dW, int dH) = ImageDecodeTarget(in im);
+                    (int dW, int dH) = ImageDecodeTarget(in im, _scene.DeviceScale);
                     if (Images is not null && !ReferenceEquals(src, lastSrc))
                     {
                         if (src.Length == 0) { if (emptySince == 0) emptySince = System.Diagnostics.Stopwatch.GetTimestamp(); }
@@ -2857,17 +2865,59 @@ public sealed partial class TreeReconciler
         }
     }
 
-    // Decode-target px for an image: explicit Width/Height drive it; otherwise the DecodePx hint (a fluid/aspect image's
-    // real box size isn't known until layout), deriving the missing cross extent from AspectRatio. 0 ⇒ source resolution.
-    private static (int W, int H) ImageDecodeTarget(in ImageEl im)
+    // Decode-target PHYSICAL px for an image: explicit Width/Height (DIPs) × the device scale — decoding at the DIP extent
+    // under-decodes by 1/scale at 125-200 % and the cover is then upscaled on the GPU (soft), so the target is exactly the
+    // pixels the box paints (ceil, never smaller); otherwise the DecodePx hint (already physical px — a fluid/aspect image's
+    // real box size isn't known until layout, so the caller scales it), deriving the missing cross extent from AspectRatio.
+    // 0 ⇒ source resolution.
+    internal static (int W, int H) ImageDecodeTarget(in ImageEl im, float scale = 1f)
     {
+        if (!(scale > 0f) || !float.IsFinite(scale)) scale = 1f;
         int hint = !float.IsNaN(im.DecodePx) ? (int)im.DecodePx : 0;
-        int w = !float.IsNaN(im.Width) ? (int)im.Width : hint;
+        int w = !float.IsNaN(im.Width) ? (int)MathF.Ceiling(im.Width * scale - 0.001f) : hint;
         int h;
-        if (!float.IsNaN(im.Height)) h = (int)im.Height;
+        if (!float.IsNaN(im.Height)) h = (int)MathF.Ceiling(im.Height * scale - 0.001f);
         else if (!float.IsNaN(im.AspectRatio) && im.AspectRatio > 0f && w > 0) h = (int)MathF.Round(w / im.AspectRatio);
         else h = hint;
         return (w, h);
+    }
+
+    /// <summary>Pure re-target of an explicit-extent image for a new device scale: Width (DIPs) x scale, Height likewise or
+    /// derived from the aspect ratio, else the height it already had (a hint-driven height cannot be re-derived here).
+    /// A fluid image (<paramref name="width"/> NaN) is the caller's physical-px hint: never re-targeted (returns false).</summary>
+    internal static bool TryRetargetDecode(float width, float height, float aspect, int oldH, float scale, out int w, out int h)
+    {
+        w = h = 0;
+        if (float.IsNaN(width) || !(scale > 0f) || !float.IsFinite(scale)) return false;
+        w = (int)MathF.Ceiling(width * scale - 0.001f);
+        if (!float.IsNaN(height)) h = (int)MathF.Ceiling(height * scale - 0.001f);
+        else if (aspect > 0f && w > 0) h = (int)MathF.Round(w / aspect);
+        else h = oldH;
+        return true;
+    }
+
+    /// <summary>The device scale changed (monitor move, OS scale change): re-request every live explicit-extent image at its new
+    /// physical decode size. A reused node whose props did not change never re-runs its column write (the RecordChanged gate), so
+    /// nothing else would: moving to a denser display kept the 1x handles (soft covers), moving back kept 4x bytes. A node with a
+    /// baked-blur derivative keeps its decode (the derivative is keyed on it). UI thread; rare event, O(nodes).</summary>
+    internal void RetargetImagesForScale(float scale)
+    {
+        if (Images is null) return;
+        int count = _scene.RecordingNodeCount;
+        for (int i = 0; i < count; i++)
+        {
+            var node = _scene.HandleAt(i);
+            if (node.IsNull || !_scene.IsLive(node)) continue;
+            ref NodePaint paint = ref _scene.Paint(node);
+            if (paint.VisualKind != VisualKind.Image || paint.ImageId == 0) continue;
+            if (_scene.TryGetImageEffects(node, out var fx) && fx.DerivedImageId != 0) continue;
+            if (!Images.TryGetTarget(new ImageHandle(paint.ImageId), out string src, out _, out int oldH)) continue;
+            ref LayoutInput li = ref _scene.Layout(node);
+            if (!TryRetargetDecode(li.Width, li.Height, li.AspectRatio, oldH, scale, out int w, out int h)) continue;
+            ImagePriority prio = ImageRequestPriority(node);
+            int newId = Images.Request(src, w, h, prio).Id;
+            SwapImageId(node, ref paint, newId, prio);
+        }
     }
 
     private int RequestBakedImage(in ImageEl im, int sourceId, int decodeW, int decodeH)
@@ -5548,7 +5598,7 @@ public sealed partial class TreeReconciler
 
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
                 // real box size isn't known until layout), deriving the cross dimension from AspectRatio when possible.
-                (int decodeW, int decodeH) = ImageDecodeTarget(in im);
+                (int decodeW, int decodeH) = ImageDecodeTarget(in im, _scene.DeviceScale);
 
                 // ── image-pipeline trace (DIAGNOSTIC ONLY, --fg diag + optional --fg img=FILTER=<substring>) ──────────
                 // Distinguishes the three ways a cover can visibly re-load: it MOUNTED fresh, its SOURCE url changed
@@ -5562,7 +5612,7 @@ public sealed partial class TreeReconciler
                             $"decode={decodeW}x{decodeH}");
                     else if (old is ImageEl oldIm && !oldIm.Source.IsBound)
                     {
-                        (int oldW, int oldH) = ImageDecodeTarget(in oldIm);
+                        (int oldW, int oldH) = ImageDecodeTarget(in oldIm, _scene.DeviceScale);
                         bool srcChanged = !string.Equals(oldIm.Source.Value, im.Source.Value, StringComparison.Ordinal);
                         if (srcChanged)
                             Diag.Event("img", $"src-change node={node.Raw.Index} " +

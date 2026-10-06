@@ -16,6 +16,7 @@ namespace FluentGpu.Hosting;
 /// <list type="bullet">
 /// <item><c>diag</c> — engine <see cref="Diag"/> on (compiled-in builds) with its sink on stderr, plus the boot trace.</item>
 /// <item><c>fps</c> — the periodic <c>[fps]</c> line.</item>
+/// <item><c>pace</c> — every 1 Hz <c>[render.pace]</c> window, not only the anomalous ones.</item>
 /// <item><c>alloc</c> / <c>alloc-types</c> — per-segment allocation probes / the process-global allocation-type listener.</item>
 /// <item><c>mem</c> or <c>mem=N</c> — interval memory census every N seconds (default 5).</item>
 /// <item><c>resize</c>, <c>motion</c>, <c>layout</c>, <c>layout-overflow</c>, <c>layout-verify</c> — their printouts.</item>
@@ -41,16 +42,33 @@ namespace FluentGpu.Hosting;
 /// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
 /// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
 /// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
+/// <item><c>ledger</c> or <c>ledger=PATH</c> — the per-frame <see cref="FrameLedger"/> on from the first frame (CPU, memory and GPU
+/// for every frame); with a PATH, FluentApp writes the binary dump there and one CSV per stream beside it when the window closes.</item>
+/// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
+/// changed redrawn) is also rendered whole into a second surface and the two are read back and compared at the next composite:
+/// a <c>[group-repair]</c> line (<see cref="Diag.Line"/>: stderr with <c>diag</c>, else the host's sink) on every mismatch and a
+/// running census every 600 checks (a validation arm: a GPU readback and a wait per checked repair).</item>
 /// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
 /// </list>
+/// <item><c>no-partial-raster</c> — every invalid retained tile re-rasters whole (the sub-tile damage A/B arm,
+/// <see cref="FluentGpu.Render.Tiles.TileDamage"/>). <c>damage-validate</c> — the backend re-rasters every partially
+/// rastered tile whole into a shadow surface and compares the bytes (a mismatch is logged). <c>damage-log</c> — one line
+/// per scheduled tile raster (slice, extent, reason, damage). <c>no-precise-present</c> — the partial-present diff dirties a
+/// re-rastered tile's whole placement and takes the whole frame on an item-structure change (the pre-damage behaviour,
+/// the A/B arm). <c>present-validate</c> — every primary composite is shadow-composited whole and compared with the back
+/// buffer, and every Present1's dirty rects are checked against what changed since the last presented frame.
+/// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).
+/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
 {
     public static bool DiagConsole;
     public static bool FpsLog;
+    /// <summary>Print every <c>[render.pace]</c> window (<c>--fg pace</c>); by default only anomalous ones are printed.</summary>
+    public static bool PaceLog;
     public static bool AllocDiag;
     public static bool AllocTypes;
     /// <summary>Interval memory census period in seconds; 0 = off.</summary>
@@ -108,6 +126,15 @@ public static class EngineSwitches
     /// is created: set it (the command line) before the first protected open.</summary>
     public static bool ForcePlayReadySl2000;
 
+    /// <summary>The frame ledger from the first frame (<c>--fg ledger[=PATH]</c>); the path, when given, is <see cref="FrameLedger.DumpPath"/>.</summary>
+    public static bool Ledger;
+    /// <summary>Validate every in-place group-surface repair against a whole render of the same group (<c>--fg
+    /// group-repair-validate</c>; the D3D12 backend's readback comparison).</summary>
+    public static bool GroupRepairValidate;
+    /// <summary>Create the D3D12 device on the WARP software adapter (<c>--fg warp</c>): a validator run off the hardware
+    /// driver (is a difference the driver's or ours?). Read once, at device init. Default off.</summary>
+    public static bool ForceWarp;
+
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
     {
@@ -140,6 +167,7 @@ public static class EngineSwitches
                 Diag.Enabled = Diag.CompiledIn;
                 return true;
             case "fps": FpsLog = true; return true;
+            case "pace": PaceLog = true; return true;
             case "alloc": AllocDiag = true; return true;
             case "alloc-types": AllocTypes = true; return true;
             case "mem":
@@ -183,6 +211,18 @@ public static class EngineSwitches
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "ledger":
+                Ledger = true;
+                if (!string.IsNullOrEmpty(value)) FrameLedger.DumpPath = value;
+                return true;
+            case "group-repair-validate": GroupRepairValidate = true; return true;
+            case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
+            case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
+            case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
+            case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
+            case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
+            case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
+            case "warp": ForceWarp = true; return true;
             default: return false;
         }
     }

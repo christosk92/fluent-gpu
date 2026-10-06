@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using FluentGpu.Foundation;
+using FluentGpu.Hosting;
 using FluentGpu.Render;
 using FluentGpu.Render.Tiles;
 using TerraFX.Interop.DirectX;
@@ -46,6 +47,9 @@ public sealed unsafe partial class D3D12Device
     private int[] _itemSurface = new int[64];
     private int[] _itemDown = new int[64];
     private ulong[] _itemKey = new ulong[64];   // a prepared group's content key (GroupCacheKey; 0 = not cacheable)
+    // the item's prepared surface was RENDERED this turn (not a retained hit): a re-render under the same key can differ by
+    // an LSB (a sampled blur / upsample through a pooled scratch of another size), so the partial-present diff dirties it
+    private bool[] _itemRendered = new bool[64];
     private PixelRect[] _itemRegion = new PixelRect[64];
     private int[] _itemChunkStart = new int[64], _itemChunkCount = new int[64];
     private readonly record struct DirectChunk(int Surface, PixelRect Rect);
@@ -85,6 +89,7 @@ public sealed unsafe partial class D3D12Device
     private void ResetOffscreenSplit()
     {
         _offGroupN = _offGroupHits = _offBlurN = _offBlurHits = _offBackdropN = _offBackdropHits = _offDirectN = _offInlineN = _groupRenders = 0;
+        _groupRepairs = 0;
         _offGroupPx = _offBlurPx = _offBackdropPx = _offDirectPx = _offInlinePx = 0L;
     }
 
@@ -125,6 +130,7 @@ public sealed unsafe partial class D3D12Device
             throw new InvalidOperationException("SubmitComposite composites into the PRIMARY swapchain only; a secondary target (detached pop-out / popup) must use SubmitDrawList.");
         if (sc.Disposed) throw new InvalidOperationException("The primary swapchain is disposed.");
         AssertSubmitThread();
+        if (EngineSwitches.GroupRepairValidate) GroupRepairValidateBegin();
         CheckCompositeOwner(frame.OwnerToken);
         TargetFrameState f = sc.Frame;
         // Tiles and region scratches can exceed a small window: the stencil DSV covers max(window, tile).
@@ -133,6 +139,8 @@ public sealed unsafe partial class D3D12Device
         _frameScale = frame.Info.Scale <= 0f ? 1f : frame.Info.Scale;
         _imageClockMs = frame.Info.ImageClockMs;
         _glyphs!.BeginFrame(slot);
+        if (TileDamage.Validate) PollDamageChecks();
+        if (TileDamage.PresentValidate) PollPresentChecks();
         int maxSurface = 0;
         for (int i = 0; i < frame.Rasters.Length; i++) maxSurface = Math.Max(maxSurface, frame.Rasters[i].Surface + 1);
         for (int i = 0; i < frame.Placements.Length; i++) maxSurface = Math.Max(maxSurface, frame.Placements[i].Surface + 1);
@@ -189,6 +197,7 @@ public sealed unsafe partial class D3D12Device
         }
         EndPassIfOpen();
         PpEndFrame(sc, f);
+        if (TileDamage.PresentValidate) QueuePresentCheck(in frame, backBuffer);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
 
         _surfaces.EndFrame();
@@ -256,8 +265,9 @@ public sealed unsafe partial class D3D12Device
         {
             int c = Math.Max(n, _itemSurface.Length * 2);
             _itemSurface = new int[c]; _itemDown = new int[c]; _itemRegion = new PixelRect[c];
-            _itemChunkStart = new int[c]; _itemChunkCount = new int[c]; _itemKey = new ulong[c];
+            _itemChunkStart = new int[c]; _itemChunkCount = new int[c]; _itemKey = new ulong[c]; _itemRendered = new bool[c];
         }
+        Array.Clear(_itemRendered, 0, n);
         Array.Fill(_itemSurface, -1, 0, n);
         Array.Clear(_itemKey, 0, n);
         Array.Clear(_itemChunkCount, 0, n);
@@ -313,6 +323,7 @@ public sealed unsafe partial class D3D12Device
         }
         FlushBarriers(nb);
 
+        float* zero = stackalloc float[4] { 0f, 0f, 0f, 0f };   // a partial raster's damage clear (transparent, as the CLEAR load)
         for (int i = 0; i < rasters.Length; i++)
         {
             ref readonly TileRaster tr = ref rasters[i];
@@ -324,18 +335,58 @@ public sealed unsafe partial class D3D12Device
             int glyphDropped = _glyphs!.DroppedInstances;
             int inFlight = _frameImagesInFlight;
             int refused0 = _surfaces!.ScratchRefused;
+            long halo0 = _glyphHaloBreaches;
+            int stencilFb0 = _frameStencilFallback;
             var rtv = _surfaces!.TileRtv(tr.Surface);
-            BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
-            ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, rtv,
-                new RectF(tr.Key.Tx * (float)TileGrid.W, tr.Key.Ty * (float)TileGrid.H, tr.W, tr.H));
-            EndPassIfOpen();
+            // Sub-tile damage (D3D12Device.TileDamage.cs): a PARTIAL raster keeps the surface and repaints only its damage —
+            // unless the texture is new this turn (nothing to keep).
+            bool fresh = tr.Partial && _surfaces.TileFresh(tr.Surface);
+            bool partial = tr.Partial && !fresh;
+            PixelRect damage = tr.Damage;
+            if (partial)
+            {
+                // an image of the tile whose pixels changed under the same id re-draws whole (ImageDamage)
+                damage = ImageDamage(in frame, in row, in tr, damage);
+                if (TileDamage.Area(in damage) >= (long)(TileDamage.MaxPartialShare * tr.W * tr.H)) partial = false;
+            }
+            bool beyondPlan = tr.Partial && (!partial || !damage.Equals(tr.Damage));
+            if (TileDamage.Log) LogRaster(in tr, in row, partial, fresh, in damage);
+            BeginImageRecord(tr.Surface, whole: !partial);
+            if (!partial)
+            {
+                BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
+                ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, rtv,
+                    new RectF(tr.Key.Tx * (float)TileGrid.W, tr.Key.Ty * (float)TileGrid.H, tr.W, tr.H));
+                EndPassIfOpen();
+            }
+            else if (!damage.IsEmpty)
+            {
+                // the damage reads as a whole raster's CLEAR load wrote it, then only what reaches it replays, scissored to it
+                EndPassIfOpen();
+                RECT rc = new() { left = damage.Left, top = damage.Top, right = damage.Right, bottom = damage.Bottom };
+                _cmdList->ClearRenderTargetView(rtv, zero, 1, &rc);
+                Rec(RecordedOp.ClearRtv, (uint)rtv.ptr, (uint)(rc.right - rc.left) << 16 | (uint)(rc.bottom - rc.top));
+                BeginPass(rtv, tr.W, tr.H, PassLoad.Preserve);
+                ReplaySegment(in frame, in row, -tileX, -tileY, tr.W, tr.H, rtv,
+                    new RectF(tr.Key.Tx * (float)TileGrid.W + damage.Left, tr.Key.Ty * (float)TileGrid.H + damage.Top,
+                        damage.Right - damage.Left, damage.Bottom - damage.Top),
+                    clamp: true, damage: damage);
+                EndPassIfOpen();
+            }
+            EndImageRecord();
+            _surfaces.NoteTileWrite(tr.Surface, partial, damage);
+            NoteRasterCensus(partial, damage, tr.W, tr.H);
+            if (beyondPlan && i < frame.RasterFlags.Length) frame.RasterFlags[i] |= CompositeFrameFlags.RasterBeyondPlan;
             _frameTilesRastered++;
             // Faithful only when nothing was dropped and every image it drew was resident: an overflowed bank grows at
             // the next BeginFrame, an image lands when its side-queue fence passes — either way the tile, left invalid,
             // rasters again (the host keeps turning while uploads are in flight).
-            if (i < frame.RasterDone.Length)
-                frame.RasterDone[i] = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped
-                    && _frameImagesInFlight == inFlight ? (byte)1 : (byte)0;
+            bool faithful = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped && _frameImagesInFlight == inFlight;
+            if (i < frame.RasterDone.Length) frame.RasterDone[i] = faithful ? (byte)1 : (byte)0;
+            // every faithful partial raster is checked — an EMPTY damage too (the claim "nothing changed" is the strongest)
+            // honesty first: the shadow replay below runs the same glyph-halo / stencil bookkeeping
+            if (TileDamage.Validate && partial) NoteReplayHonesty(in tr, halo0, stencilFb0);
+            if (TileDamage.Validate && partial && faithful) QueueDamageCheck(in frame, in row, in tr, damage, tileX, tileY);
             // evidence (§A.3): an inline group inside this tile asked for a scratch and was refused — it drew nothing
             if (i < frame.RasterFlags.Length && _surfaces.ScratchRefused != refused0)
                 frame.RasterFlags[i] |= CompositeFrameFlags.RasterScratchRefused;
@@ -398,15 +449,18 @@ public sealed unsafe partial class D3D12Device
                         frame.ItemFlags[i] |= _offGroupHits != hits0 ? CompositeFrameFlags.ItemGroupHit
                                              : _groupRenders != renders0 ? CompositeFrameFlags.ItemGroupRendered : (byte)0;
                     _offGroupN += pool.ScratchLeases - n0; _offGroupPx += pool.ScratchPx - px0;
+                    _itemRendered[i] = pool.ScratchLeases != n0;
                     i = end - 1;
                     break;
                 }
                 case CompositeKind.Backdrop:
                     PrepareBackdrop(in frame, i);
+                    _itemRendered[i] = pool.ScratchLeases != n0;
                     _offBackdropN += pool.ScratchLeases - n0; _offBackdropPx += pool.ScratchPx - px0;
                     break;
                 case CompositeKind.Direct:
                     PrepareDirect(in frame, i);
+                    _itemRendered[i] = pool.ScratchLeases != n0;
                     _offDirectN += pool.ScratchLeases - n0; _offDirectPx += pool.ScratchPx - px0;
                     break;
                 case CompositeKind.Tiles:
@@ -419,6 +473,7 @@ public sealed unsafe partial class D3D12Device
                     else if (it.BlurSigma > 0f)
                     {
                         PrepareLeafBlur(in frame, i);
+                        _itemRendered[i] = pool.ScratchLeases != n0;
                         _offBlurN += pool.ScratchLeases - n0; _offBlurPx += pool.ScratchPx - px0;
                     }
                     break;
@@ -491,6 +546,126 @@ public sealed unsafe partial class D3D12Device
         // the backdrops above see must change with it, or they would re-use a blur of the old pixels.
         _itemSurface[i] = s; _itemDown[i] = d; _itemRegion[i] = region; _itemKey[i] = damaged ? key ^ (fence * 0x9E3779B97F4A7C15UL) | 1UL : key;
         _surfaces.Retain(s, key, d, RetainedCap());
+    }
+
+    /// <summary>A self-blurred LOW-RESOLUTION repaint boundary (BoxEl.RasterScale + Blur — the visualizer's cloud layer, a
+    /// blurred backdrop field): its blur source replayed ONCE at 1/d into one scratch and blurred there at σ/d, instead of
+    /// rastered at full resolution into tile-sized chunks, assembled into a full-resolution scratch and box-downsampled
+    /// back down. The blur's own schedule is a 2× box chain to 1/<c>DownsampleFactor(σ)</c> before its Gaussian, so for
+    /// d ≤ that factor both routes blur on the SAME texel grid (the region's top-left sits on the slice grid, a multiple of
+    /// every d) with the same kernel (σ/d at 1/(d·down′) is σ at 1/down); they differ only in how a texel's first d×d
+    /// block is formed — rasterized at the block's centre instead of averaged from d×d full-resolution samples — which is
+    /// exactly what RasterScale asks for ("only for SOFT content whose look survives the upsample"). Measured on the
+    /// visualizer's clouds (σ 40, d 4), readback against the full-resolution route: ≤ 1/255 per blurred texel; a texel
+    /// straddling the source's cut edge (beyond the clip's reach, or the layer's bound) can differ more, as it holds that
+    /// d×d block's content whole. A d past the blur's own factor (or one whose grids would not meet) takes the
+    /// full-resolution route. Retained under a content key like <see cref="PrepareLowRes"/>, so a still blurred field costs
+    /// one upsample quad.</summary>
+    private void PrepareLowResBlur(in CompositeFrame frame, int i, in SliceRow row)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        int d = it.LowResDown;
+        if (!SelfBlurRegion.LowResBlurOnSameGrid(it.BlurSigma, d))
+        {
+            PrepareDirectBlur(in frame, i, in row);
+            return;
+        }
+        BlurRegions(in it, out PixelRect src, out PixelRect region);
+        if (src.IsEmpty || region.IsEmpty) return;
+        int tx = (int)it.Transform.Dx, ty = (int)it.Transform.Dy;
+        int x0 = FloorDiv(region.Left - tx + row.Frame.OriginX, d), y0 = FloorDiv(region.Top - ty + row.Frame.OriginY, d);
+        int l = x0 * d - row.Frame.OriginX + tx, t = y0 * d - row.Frame.OriginY + ty;
+        // the low-res texel grid must be the blur's own: the region's top-left on it (always, for a slice origin and a
+        // region on the 64-px slice grid — else the full-resolution route keeps the blur's phase)
+        if (l != region.Left || t != region.Top) { PrepareDirectBlur(in frame, i, in row); return; }
+        int w = (region.Right - l + d - 1) / d, h = (region.Bottom - t + d - 1) / d;
+        if (w <= 0 || h <= 0) return;
+        _frameDirectRegions++;
+
+        ulong key = 0xB10D_0000_0000_0001UL;
+        Mix(ref key, (ulong)(uint)l << 32 | (uint)t); Mix(ref key, (ulong)(uint)w << 32 | (uint)h);
+        Mix(ref key, (ulong)(uint)(src.Left - l) << 32 | (uint)(src.Top - t)); Mix(ref key, (ulong)(uint)(src.Right - l) << 32 | (uint)(src.Bottom - t));
+        Mix(ref key, (ulong)(uint)d << 32 | BitConverter.SingleToUInt32Bits(_frameScale));
+        Mix(ref key, (ulong)BitConverter.SingleToUInt32Bits(it.BlurSigma));
+        Mix(ref key, (ulong)BitConverter.SingleToUInt32Bits(row.Frame.ResidualX) << 32 | BitConverter.SingleToUInt32Bits(row.Frame.ResidualY));
+        MixBytes(ref key, frame.PrefixOf(in row));
+        MixBytes(ref key, frame.StreamOf(in row));
+        ulong fence = _fenceValue + 1;
+        var damage = frame.Info.RepaintDamage;
+        bool damaged = DamageReaches(in damage, in region);
+        if (!damaged)
+        {
+            int hit = _surfaces!.FindRetained(key, fence, out int hitDown);
+            if (hit >= 0)
+            {
+                _frameBlurCacheHits++;
+                _itemSurface[i] = hit; _itemDown[i] = hitDown; _itemRegion[i] = region; _itemKey[i] = key;
+                return;
+            }
+        }
+        int s = _surfaces!.AcquireScratch(w, h, fence);
+        if (s < 0) return;
+        ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var rtv = _surfaces.ScratchRtv(s);
+        BeginPass(rtv, w, h, PassLoad.Clear);
+        float full = _frameScale;
+        _frameScale = full / d;   // the replay maps stream DIPs at the reduced scale (restored below)
+        try
+        {
+            ReplaySegment(in frame, in row, -x0, -y0, w, h, rtv, new RectF(-1e7f, -1e7f, 2e7f, 2e7f));
+        }
+        finally { _frameScale = full; }
+        // The full-resolution route blurs nothing outside the blur's source: texels wholly outside it are cleared, and a texel
+        // STRADDLING its edge (the clip's reach, the layer's bound — any edge not on the d grid) keeps only the share of its
+        // block the source covers, as the full route's box average of that block would (SelfBlurRegion.LowResEdge).
+        SelfBlurRegion.LowResEdge(src.Left - l, d, far: false, out int sl, out float fl);
+        SelfBlurRegion.LowResEdge(src.Top - t, d, far: false, out int st, out float ft);
+        SelfBlurRegion.LowResEdge(src.Right - l, d, far: true, out int sr, out float fr);
+        SelfBlurRegion.LowResEdge(src.Bottom - t, d, far: true, out int sb, out float fb);
+        BindCompositor(_surfaces.ScratchW(s), _surfaces.ScratchH(s));
+        int il = fl < 1f ? sl : -1, it0 = ft < 1f ? st : -1, ir = fr < 1f ? sr - 1 : -1, ib = fb < 1f ? sb - 1 : -1;
+        ClearLowRes(0, 0, w, st);
+        ClearLowRes(0, Math.Min(sb, h), w, h);
+        ClearLowRes(0, st, sl, Math.Min(sb, h));
+        ClearLowRes(Math.Min(sr, w), st, w, Math.Min(sb, h));
+        if (il >= 0) ScaleLowRes(il, st, il + 1, sb, fl);
+        if (ir >= 0 && ir != il) ScaleLowRes(ir, st, ir + 1, sb, fr);
+        else if (ir >= 0) ScaleLowRes(ir, st, ir + 1, sb, (fl + fr - 1f) / fl);   // one texel straddles both: its covered share
+        if (it0 >= 0) ScaleLowRes(sl, it0, sr, it0 + 1, ft);
+        if (ib >= 0 && ib != it0) ScaleLowRes(sl, ib, sr, ib + 1, fb);
+        else if (ib >= 0) ScaleLowRes(sl, ib, sr, ib + 1, (ft + fb - 1f) / ft);
+        EndPassIfOpen();
+        ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        InvalidateCmdState();
+        int result = BlurSurface(s, w, h, it.BlurSigma / d, out int down);
+        if (result != s) _surfaces.ReleaseScratch(s);
+        // a damage-forced re-render may have new pixels under byte-identical commands: the key the backdrops above see must
+        // change with it (PrepareLowRes)
+        _itemSurface[i] = result; _itemDown[i] = d * down; _itemRegion[i] = region;
+        _itemKey[i] = damaged ? key ^ (fence * 0x9E3779B97F4A7C15UL) | 1UL : key;
+        if (result >= 0) _surfaces.Retain(result, key, d * down, RetainedCap());
+
+        void ClearLowRes(int cl, int ct, int cr, int cb)
+        {
+            cr = Math.Min(cr, w); cb = Math.Min(cb, h);
+            if (cr <= cl || cb <= ct) return;
+            _compositor!.Scissor(_cmdList, cl, ct, cr, cb);
+            _compositor.Begin(cl, ct, cr, cb);
+            _compositor.Color(new ColorF(0f, 0f, 0f, 0f));
+            _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
+        }
+
+        // multiply the texels of a rect by f (premultiplied, so colour and alpha together): a DestOut fill of alpha 1 − f
+        void ScaleLowRes(int cl, int ct, int cr, int cb, float f)
+        {
+            cr = Math.Min(cr, w); cb = Math.Min(cb, h);
+            if (cr <= cl || cb <= ct || f >= 1f) return;
+            _compositor!.Scissor(_cmdList, cl, ct, cr, cb);
+            _compositor.Begin(cl, ct, cr, cb);
+            _compositor.Color(new ColorF(0f, 0f, 0f, 1f));
+            _compositor.Alpha(1f - MathF.Max(0f, f));
+            _compositor.Draw(_cmdList, SliceCompositor.Pso.Erase, default);
+        }
     }
 
     // ── F6 feedback trails ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -672,7 +847,21 @@ public sealed unsafe partial class D3D12Device
         ref readonly SliceRow row = ref frame.Slices[r];
         bool blur = it.BlurSigma > 0f;
         if (it.IsFeedback && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareFeedback(in frame, i, in row); return; }
-        if (it.LowResDown > 1 && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareLowRes(in frame, i, in row); return; }
+        if (it.LowResDown > 1 && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+        {
+            if (blur) PrepareLowResBlur(in frame, i, in row);
+            else PrepareLowRes(in frame, i, in row);
+            return;
+        }
+        PrepareDirectBlur(in frame, i, in row);
+    }
+
+    /// <summary>The degraded route proper (see <see cref="PrepareDirect"/>): the segment replayed into transient tile-grid
+    /// chunks at full resolution, assembled and blurred when it self-blurs.</summary>
+    private void PrepareDirectBlur(in CompositeFrame frame, int i, in SliceRow row)
+    {
+        ref readonly CompositeItem it = ref frame.Items[i];
+        bool blur = it.BlurSigma > 0f;
         PixelRect src = default, region = default;
         if (blur) BlurRegions(in it, out src, out region);
         PixelRect area = blur ? src : ItemRegion(in it, 0);
@@ -790,6 +979,7 @@ public sealed unsafe partial class D3D12Device
         }
         for (int p = 0; p < placed.Length; p++)
         {
+            if (!GroupCacheKey.PlacementReaches(in it, in placed[p], in src)) continue;   // scissored away: draws nothing
             if (!_surfaces.TouchTile(placed[p].Surface, fence)) { _frameLostPlacements++; continue; }
             float x0 = tx + placed[p].Key.Tx * TileGrid.W - region.Left, y0 = ty + placed[p].Key.Ty * TileGrid.H - region.Top;
             _compositor.Begin(x0, y0, x0 + placed[p].W, y0 + placed[p].H);
@@ -857,6 +1047,19 @@ public sealed unsafe partial class D3D12Device
                 return;
             }
         }
+        // An unblurred group whose key missed only because something inside it changed is REPAIRED in place over the
+        // pixels that changed (GroupDelta) — bit-identical to the full render below, at the cost of the changed area.
+        GroupMemo? memo = null;
+        ulong shape = 0;
+        int entryCount = 0;
+        bool repairable = cacheable && it.BlurSigma <= 0f;
+        if (repairable)
+        {
+            ulong fresh = 0xF2E5_0000_0000_0000UL ^ (ulong)(uint)_compositeTurn * 0x9E3779B97F4A7C15UL;
+            shape = GroupDelta.Build(in frame, i, in region, ref serials, _itemKey, _itemRegion, _itemSurface, fresh, ref _groupEntries, out entryCount);
+            memo = FindGroupMemo(shape);
+            if (memo is not null && RepairGroup(in frame, i, in region, key, memo, entryCount)) return;
+        }
         int s = _surfaces!.AcquireScratch(w, h, fence);
         if (s < 0) return;
         _groupRenders++;
@@ -875,6 +1078,111 @@ public sealed unsafe partial class D3D12Device
         }
         _itemSurface[i] = result; _itemDown[i] = down; _itemRegion[i] = region;
         if (cacheable && result >= 0) _surfaces.Retain(result, key, down, RetainedCap());
+        if (repairable && result >= 0) RememberGroup(memo ?? NewGroupMemo(shape), key, entryCount);
+    }
+
+    // ── the group repair (GroupDelta) ─────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>What a retained unblurred group surface was last rendered from: its shape, the content key it is retained
+    /// under, and its entries.</summary>
+    private sealed class GroupMemo
+    {
+        public ulong Shape, Key;
+        public GroupEntry[] Entries = new GroupEntry[16];
+        public int Count;
+        public int Turn;
+    }
+
+    private readonly List<GroupMemo> _groupMemos = new(MaxGroupMemos);
+    private GroupEntry[] _groupEntries = new GroupEntry[16];
+    private readonly PixelRect[] _groupDirty = new PixelRect[GroupDelta.MaxDirtyRects];
+    private PixelRect _drawClip;
+    private bool _drawClipOn;
+    private int _groupRepairs;
+
+    /// <summary>Unblurred group surfaces the last composite repaired in place (counted in the renders too).</summary>
+    public int LastGroupRepairs => _groupRepairs;
+
+    private GroupMemo? FindGroupMemo(ulong shape)
+    {
+        for (int k = 0; k < _groupMemos.Count; k++) if (_groupMemos[k].Shape == shape) return _groupMemos[k];
+        return null;
+    }
+
+    /// <summary>At most this many group memos are kept; a new shape recycles the least recently used one (a hand-off whose
+    /// lines move mints a new shape every turn — recycling keeps that allocation-free).</summary>
+    private const int MaxGroupMemos = 8;
+
+    /// <summary>A memo for a shape seen for the first time: a fresh one while fewer than <see cref="MaxGroupMemos"/> exist,
+    /// else the least recently used one, recycled.</summary>
+    private GroupMemo NewGroupMemo(ulong shape)
+    {
+        GroupMemo? memo = null;
+        if (_groupMemos.Count >= MaxGroupMemos)
+        {
+            memo = _groupMemos[0];
+            for (int k = 1; k < _groupMemos.Count; k++) if (_groupMemos[k].Turn < memo.Turn) memo = _groupMemos[k];
+        }
+        else _groupMemos.Add(memo = new GroupMemo());
+        memo.Shape = shape;
+        memo.Count = 0;
+        return memo;
+    }
+
+    /// <summary><paramref name="memo"/> now describes the surface retained under <paramref name="key"/>: this turn's
+    /// <paramref name="count"/> entries (in <see cref="_groupEntries"/>; the buffers swap, so neither allocates).</summary>
+    private void RememberGroup(GroupMemo memo, ulong key, int count)
+    {
+        memo.Key = key;
+        memo.Turn = _compositeTurn;
+        (memo.Entries, _groupEntries) = (_groupEntries, memo.Entries);
+        memo.Count = count;
+    }
+
+    /// <summary>Repair the surface <paramref name="memo"/> describes into this turn's content (<paramref name="key"/>): clear
+    /// each rect whose entries changed and redraw every enclosed item scissored to it. False (nothing touched) when the
+    /// entries cannot be compared, too much changed, or the surface is gone or already drawn this turn.</summary>
+    private bool RepairGroup(in CompositeFrame frame, int i, in PixelRect region, ulong key, GroupMemo memo, int count)
+    {
+        int w = region.Right - region.Left, h = region.Bottom - region.Top;
+        int n = GroupDelta.Diff(memo.Entries.AsSpan(0, memo.Count), _groupEntries.AsSpan(0, count), (long)w * h, _groupDirty);
+        if (n < 0) return false;
+        // Nothing changed means everything the content key is made of is unchanged: the key matched, and the retained
+        // surface was found before the repair was ever considered. A zero diff with a different key would re-key pixels
+        // that are not this content.
+        Debug.Assert(n > 0 || key == memo.Key, "GroupDelta found no change but the group's content key moved");
+        if (n == 0 && key != memo.Key) return false;
+        int s = _surfaces!.FindRetainedForRepair(memo.Key, _fenceValue + 1);
+        if (s < 0) return false;
+        _groupRenders++;
+        _groupRepairs++;
+        if (n > 0)
+        {
+            ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+            BeginPass(_surfaces.ScratchRtv(s), w, h, PassLoad.Preserve);
+            BindCompositor(_surfaces.ScratchW(s), _surfaces.ScratchH(s));
+            int end = Math.Min(frame.Items.Length, i + 1 + frame.Items[i].GroupCount);
+            for (int k = 0; k < n; k++)
+            {
+                PixelRect d = _groupDirty[k];
+                // what the full render's CLEAR load op writes, inside this rect only
+                _compositor!.Scissor(_cmdList, d.Left, d.Top, d.Right, d.Bottom);
+                _compositor.Begin(d.Left, d.Top, d.Right, d.Bottom);
+                _compositor.Color(new ColorF(0f, 0f, 0f, 0f));
+                _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
+                _drawClip = new PixelRect(d.Left + region.Left, d.Top + region.Top, d.Right + region.Left, d.Bottom + region.Top);
+                _drawClipOn = true;
+                DrawRange(in frame, i + 1, end, region.Left, region.Top, w, h, -1);
+                _drawClipOn = false;
+            }
+            EndPassIfOpen();
+            ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            GroupRepairValidate(in frame, i, in region, s);   // --fg group-repair-validate
+        }
+        _itemSurface[i] = s; _itemDown[i] = 1; _itemRegion[i] = region;
+        _surfaces.Retain(s, key, 1, RetainedCap());
+        RememberGroup(memo, key, count);
+        return true;
     }
 
     /// <summary>An in-app ACRYLIC backdrop (§A.5): a mini-composite of everything painted before the surface — the clear
@@ -1322,6 +1630,13 @@ public sealed unsafe partial class D3D12Device
             // a partial composite: nothing outside the current repaint rect may be touched (that pixel is the previous frame)
             l = Math.Max(l, _frameClip.Left - ox); t = Math.Max(t, _frameClip.Top - oy);
             r = Math.Min(r, _frameClip.Right - ox); b = Math.Min(b, _frameClip.Bottom - oy);
+            if (r <= l || b <= t) { l = t = r = b = 0; }
+        }
+        if (_drawClipOn)
+        {
+            // a group repair: nothing outside the rect being repaired may be touched (that pixel is already current)
+            l = Math.Max(l, _drawClip.Left - ox); t = Math.Max(t, _drawClip.Top - oy);
+            r = Math.Min(r, _drawClip.Right - ox); b = Math.Min(b, _drawClip.Bottom - oy);
             if (r <= l || b <= t) { l = t = r = b = 0; }
         }
         _compositor.Scissor(_cmdList, l, t, r, b);

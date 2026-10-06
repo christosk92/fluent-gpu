@@ -112,7 +112,11 @@ public static class Marquee
 /// component; dynamic state crosses the component boundary through reactive channels, NOT constructor args (a parent
 /// re-render does NOT push new args into an already-mounted child - it is autonomous). The measurement/hover state
 /// crosses as shared Signals (containerW/textW/hovered); the <see cref="Text"/> and foreground cross as <see cref="Prop{T}"/>
-/// binds forwarded down to the leaf <c>TextEl</c>, whose own bind re-measures (text) / repaints (colour) on change.</summary>
+/// binds forwarded down to the leaf <c>TextEl</c>, whose own bind re-measures (text) / repaints (colour) on change.
+/// <para>The fade never follows the scroll through a re-render: a ping-pong / single-pass fade is an
+/// <see cref="EdgeFadeSpec.OverflowTail"/> cue the recorder resolves from the scroller's POSED translate on the frame that
+/// poses it (on the render thread, with the scroll itself), and a loop's fade is constant. A steady marquee therefore
+/// costs no UI frame at all; this host re-renders only when the measured widths or the hover gate change.</para></summary>
 internal sealed class MarqueeHost : Component
 {
     public Prop<string> Text = string.Empty;
@@ -125,7 +129,6 @@ internal sealed class MarqueeHost : Component
     {
         var containerW = UseSignal(0f);     // set from this node's bounds
         var textW = UseSignal(0f);          // set by the child after it measures one copy
-        var scrollX = UseSignal(0f);        // live TranslateX of the scroller (drives per-edge fade)
         var hovered = UseSignal(false);     // scroll gate: self-hover (Trigger.Hover), or mirrored from External below
 
         // An external gate (a group's shared hover) drives the SAME `hovered` signal both this host and the scroller
@@ -136,7 +139,7 @@ internal sealed class MarqueeHost : Component
         bool overflow = tw > cw + 1f && cw > 0f;
         float fadeBand = overflow ? MathF.Min(Sty.FadeBand, MathF.Max(0f, cw * MaxFadeViewportFraction)) : 0f;
         EdgeFadeSpec? fade = overflow && fadeBand > 0f
-            ? MarqueeScroller.ResolveEdgeFade(Sty, scrollX.Value, cw, tw, fadeBand)
+            ? MarqueeScroller.EdgeFadeFor(Sty, cw, tw, fadeBand)
             : null;
 
         bool selfHover = External is null && Sty.Trigger is Marquee.TriggerMode.Hover or Marquee.TriggerMode.PauseOnHover;
@@ -153,10 +156,10 @@ internal sealed class MarqueeHost : Component
             OnPointerExit = selfHover ? () => { if (hovered.Value) hovered.Value = false; } : null,
             Children =
             [
+                // The scroller (its anchor, then its moving root) is this box's first-child chain: where the OverflowTail cue reads the translate.
                 Embed.Comp(() => new MarqueeScroller
                 {
-                    Text = Text, Content = Content, Sty = Sty, ContainerW = containerW, TextW = textW,
-                    ScrollX = scrollX, Hovered = hovered,
+                    Text = Text, Content = Content, Sty = Sty, ContainerW = containerW, TextW = textW, Hovered = hovered,
                 }),
             ],
         };
@@ -173,7 +176,6 @@ internal sealed class MarqueeScroller : Component
     public Marquee.Style Sty = Marquee.Default;
     public Signal<float> ContainerW = null!;
     public Signal<float> TextW = null!;
-    public Signal<float> ScrollX = null!;
     public Signal<bool> Hovered = null!;
 
     public override Element Render()
@@ -210,10 +212,11 @@ internal sealed class MarqueeScroller : Component
 
         // The trigger deactivating (`paused`) glides the content HOME from wherever the live translate is. Never park
         // the track in place — a park at -tailDist left the title's head off-screen, a partial glyph at x=0 and the
-        // edge fade frozen — and never re-seed a "0,0" idle track (that snapped back to start). ScrollX is the ticker's
-        // mirror of the TranslateX composed at the end of the previous frame, i.e. exactly what is on screen when this
-        // render runs; Keyframes seeds from keys[0] (not the live row), so the departure point must be explicit.
-        float homeFrom = paused ? ScrollX.Peek() : 0f;
+        // edge fade frozen — and never re-seed a "0,0" idle track (that snapped back to start). The live translate is
+        // the scroller's track value as the last frame composed it (a render-owned row's feedback pose), i.e. what is on
+        // screen when this render runs; Keyframes seeds from keys[0] (not the live row), so the departure point must be
+        // explicit. Read once, on the edge: nothing mirrors the translate per frame.
+        float homeFrom = paused ? LiveTranslateX(scrollerHost.Value) : 0f;
 
         // One animation hook per Mode (Mode is fixed for an instance, so the hook order is stable across renders).
         // `paused` is part of every DepKey so the track re-seeds exactly on the trigger edge (a same-key re-render
@@ -240,10 +243,6 @@ internal sealed class MarqueeScroller : Component
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };
         if (seamless) copies.Add(Copy());
-        copies.Add(Embed.Comp(() => new MarqueeScrollTicker
-        {
-            ContainerW = ContainerW, TextW = TextW, ScrollX = ScrollX, ScrollerHost = scrollerHost,
-        }));
 
         return new BoxEl
         {
@@ -342,67 +341,30 @@ internal sealed class MarqueeScroller : Component
         return ([new Keyframe(0f, fromX, Easing.Linear), new Keyframe(1f, 0f, Easing.SmoothOut)], durMs, false);
     }
 
-    // Feather only edges with hidden overflow (scroll-cue parity): at translateX=0 fade right only; at the tail fade left only.
-    internal static EdgeFadeSpec? ResolveEdgeFade(Marquee.Style sty, float translateX, float viewportW, float contentW, float maxBand)
+    /// <summary>The host's fade for an overflowing line: a <see cref="Marquee.ScrollMode.Loop"/> feathers both edges at
+    /// all times (the seam is always somewhere inside); every other mode is an <see cref="EdgeFadeSpec.OverflowTail"/> cue
+    /// that feathers only an edge with content hidden past it (scroll-cue parity: right only at rest, left only at the
+    /// tail), resolved by the recorder from the scroller's posed translate, frame by frame.</summary>
+    internal static EdgeFadeSpec? EdgeFadeFor(Marquee.Style sty, float viewportW, float contentW, float maxBand)
     {
         float tail = MathF.Max(0f, contentW - viewportW);
         if (tail <= 0.5f) return null;
-
-        if (sty.Mode == Marquee.ScrollMode.Loop)
-            return new EdgeFadeSpec(EdgeMask.Horizontal, maxBand, FadeFalloff.Smoothstep, sty.FadeStrength);
-
-        float scrolled = MathF.Max(0f, -translateX);
-        float pastL = scrolled;
-        float pastR = MathF.Max(0f, tail - scrolled);
-        const float runway = 24f;
-        EdgeMask edges = EdgeMask.None;
-        float bl = 0f, br = 0f;
-        if (pastL > 0.5f) { edges |= EdgeMask.Left; bl = maxBand * MathF.Min(1f, pastL / runway); }
-        if (pastR > 0.5f) { edges |= EdgeMask.Right; br = maxBand * MathF.Min(1f, pastR / runway); }
-        return edges == EdgeMask.None ? null : new EdgeFadeSpec(edges, bl, 0f, br, 0f, FadeFalloff.Smoothstep, sty.FadeStrength);
-    }
-}
-
-/// <summary>After <c>_anim.Tick</c>, mirrors the scroller host's live <see cref="AnimChannel.TranslateX"/> into the
-/// shared <see cref="MarqueeScroller.ScrollX"/> signal so <see cref="MarqueeHost"/> can derive per-edge fade bands.
-/// A run-once <see cref="Component"/> (its render reads only a stable ambient context, so the render-effect never
-/// re-fires) + <see cref="InputHooks.SetAfterAnimations"/> avoids the stale-closure trap of wiring this inside
-/// <see cref="MarqueeScroller.Render"/> (where <c>UseSignalEffect</c> freezes <c>canScroll</c> from the first mount).</summary>
-internal sealed class MarqueeScrollTicker : Component
-{
-    public Signal<float> ContainerW = null!;
-    public Signal<float> TextW = null!;
-    public Signal<float> ScrollX = null!;
-    public Ref<NodeHandle> ScrollerHost = null!;
-
-    public override Element Render()
-    {
-        var hooks = UseContext(InputHooks.Current);
-        UseEffect(() => hooks.SetAfterAnimations(this, Sample), DepKey.Empty);   // mount-once (no signal reads)
-        return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
+        var spec = new EdgeFadeSpec(EdgeMask.Horizontal, maxBand, FadeFalloff.Smoothstep, sty.FadeStrength);
+        return sty.Mode == Marquee.ScrollMode.Loop ? spec : spec with { OverflowTail = tail };
     }
 
-    void Sample()
+    /// <summary>The fade as the recorder draws it with the scroller posed at <paramref name="translateX"/>.</summary>
+    internal static EdgeFadeSpec? ResolveEdgeFade(Marquee.Style sty, float translateX, float viewportW, float contentW, float maxBand)
     {
-        float cw = ContainerW.Peek(), tw = TextW.Peek();
-        if (tw <= cw + 1f || cw <= 0f)
-        {
-            if (ScrollX.Peek() != 0f) ScrollX.Value = 0f;
-            return;
-        }
-        var host = ScrollerHost.Value;
-        if (host.IsNull) return;
-        if (Context.Scene is { } scene && !scene.IsLive(host))
-        {
-            UseContext(InputHooks.Current).SetAfterAnimations(this, null);
-            return;
-        }
-        float tx = ReadTranslateX(host);
-        if (ScrollX.Peek() != tx) ScrollX.Value = tx;
+        if (EdgeFadeFor(sty, viewportW, contentW, maxBand) is not { } spec) return null;
+        var resolved = spec.ResolveOverflow(translateX);
+        return resolved.Edges == EdgeMask.None ? null : resolved;
     }
 
-    float ReadTranslateX(NodeHandle host)
+    /// <summary>The scroller's live TranslateX: its track value (the last composed pose), else the node's painted one.</summary>
+    float LiveTranslateX(NodeHandle host)
     {
+        if (host.IsNull) return 0f;
         if (Context.Anim?.TryGetTrackValue(host, AnimChannel.TranslateX, out float tx) == true)
             return tx;
         if (Context.Scene is { } scene && scene.IsLive(host))

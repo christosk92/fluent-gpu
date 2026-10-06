@@ -743,6 +743,11 @@ public sealed partial class PcmAudioSession : IMediaSession
     /// <summary>RT-feed ring underruns (silence written) since this session opened. 0 on the single-thread pull path.</summary>
     public long XrunCount => _feed?.XrunCount ?? 0;
 
+    /// <summary>Times the output DEVICE itself ran dry while streaming (<see cref="IBufferedAudioSink.DeviceUnderruns"/>) — the
+    /// glitches <see cref="XrunCount"/> cannot see, because the app's ring was full and the stall was downstream of it.</summary>
+    public long DeviceUnderrunCount => Interlocked.Read(ref _retiredDeviceUnderruns) + ((_out as IBufferedAudioSink)?.DeviceUnderruns ?? 0);
+    private long _retiredDeviceUnderruns;   // underruns of sinks this session has already swapped out (RebuildSink)
+
     /// <summary>Approximate independent work totals for off-RT diagnostics; not a coherent audio-state snapshot.</summary>
     public (long Gain, long GainSkipped, long Channel, long ChannelSkipped, long Transport, long TransportSkipped,
         long Meter, long ManagerWakes, long ManagerPasses) ReadWorkCounters()
@@ -2416,6 +2421,12 @@ public sealed partial class PcmAudioSession : IMediaSession
     /// Runs off the RT thread. On the single-thread path use <see cref="PumpAudio"/> instead.</summary>
     public PlaybackState TickControl(int frames) => Advance(frames, renderInline: false);
 
+    /// <summary>True when a control tick can change nothing until a transport command arrives: nothing is playing or requested, the
+    /// device is stopped and no seek-rebuffer window is open. The clock thread then blocks on its wake event
+    /// (<see cref="AudioFeedThread.WakeOutput"/>) instead of ticking every 15 ms; every command that matters wakes it.</summary>
+    internal bool ControlIdle => !_playRequested && !_started && !_seekRebufferActive
+        && _state is PlaybackState.Paused or PlaybackState.Ended or PlaybackState.Ready;
+
     /// <summary>M4 RT feed callback (spec §7.9): if Playing, render+present exactly one block through the published graph
     /// (lock-free consume + quarantine) reading pre-decoded PCM from the voice rings — copy+mix ONLY, alloc/lock/syscall-free
     /// (the <see cref="AudioTripwire"/> around <see cref="RenderBlock"/> enforces it). Returns frames presented (0 if not
@@ -3072,6 +3083,8 @@ public sealed partial class PcmAudioSession : IMediaSession
         var oldSink = _out;
         var oldEndpoint = _endpoint;
         try { oldSink.Stop(); } catch { /* teardown never throws */ }
+        // The device-underrun count lives on the sink: fold the old sink's into the session's so the total stays monotonic across a swap.
+        if (oldSink is IBufferedAudioSink oldBuffered) Interlocked.Add(ref _retiredDeviceUnderruns, oldBuffered.DeviceUnderruns);
 
         _out = newEndpoint.Sink;
         _clock = newEndpoint.Clock;

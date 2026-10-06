@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 
 namespace FluentGpu.Scene;
 
@@ -34,6 +34,12 @@ public sealed class ImageRecordingSnapshot
         _fadeDeadline = float.NegativeInfinity;
         source?.CopyRecordingInputs(this, referencedIds);
     }
+
+    /// <summary>Keep every entry and refresh only the presentation-clock stamp: the caller has proven that neither the
+    /// referenced id set nor any cache entry's recording inputs changed since this snapshot's last full
+    /// <see cref="Capture(ImageCache?, ReadOnlySpan{int})"/> (<see cref="ImageCache.RecordingInputSerial"/>), so a re-copy would
+    /// rebuild the identical dictionary. The clock stamp moves every publication and is still taken.</summary>
+    internal void RefreshClock(ImageCache? source) => ClockCapturedAtMs = source?.ClockCapturedAtMs ?? double.NaN;
 
     /// <summary>Merge extra entries into an already-captured snapshot without clearing it (perf plan item 5: a
     /// detached-fly slab's own image ids, folded in by the caller of a reused inline capture instead of re-walking the

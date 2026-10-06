@@ -40,6 +40,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     private ulong _clockFreq;
     private long _latencyFrames;
     private long _written;
+    private long _writtenSinceStart;   // frames written since the last Start()/Reset(): the underrun rule's "a full buffer has gone through"
+    private long _deviceUnderruns;   // RT-incremented, read from any thread (Volatile): see DeviceUnderruns
     private bool _ready;
     private bool _started;
     private bool _disposed;
@@ -134,6 +136,9 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     // ── IAudioClockSource ────────────────────────────────────────────────────────────────────────────────────────────
     /// <inheritdoc/>
     public long WrittenFrames => _written;
+
+    /// <inheritdoc/>
+    public long DeviceUnderruns => Volatile.Read(ref _deviceUnderruns);
     /// <inheritdoc/>
     public long StreamLatencyFrames => _latencyFrames;
     /// <inheritdoc/>
@@ -166,6 +171,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             MarkLost(hr);
             throw new AudioDeviceLostException(hr);
         }
+        _writtenSinceStart = 0;   // a resume's first writes refill a queue that legitimately drained while stopped
         _started = true;
     }
 
@@ -214,6 +220,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(hr);
         }
         Interlocked.Exchange(ref _written, 0);
+        _writtenSinceStart = 0;
     }
     /// <inheritdoc/>
     /// <remarks>A NEGATIVE <paramref name="timeoutMs"/> means INFINITE (R-3): the session passes -1 while a pause fade has finished
@@ -241,6 +248,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
         int devCh = _deviceChannels;
         int written = 0;
+        bool firstPadding = true;
         // Submit only immediately writable capacity. The caller retains a partial remainder and performs
         // interruptible device/control waiting outside the DSP scope.
         while (written < frames && _ready && !_disposed)
@@ -252,6 +260,18 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 if (IsDeviceLostHr(hr)) MarkLost(hr);
                 break;
             }
+            // Device-side glitch signal: a RUNNING stream whose queue is empty when we come to write has already played silence,
+            // which no app-side counter can see. Only after a full device buffer has gone through since the last Reset, so
+            // a start-up or post-seek prefill (legitimately empty) never counts. One compare + one add: RT-legal.
+            // The frame ledger's audio stream (AudioHealth) mirrors this ONE decision (no detector of its own) and takes the
+            // write's padding for its windowed minimum.
+            if (firstPadding)
+            {
+                bool underrun = DeviceUnderrunRule.IsUnderrun(padding, _started, _writtenSinceStart, _bufferFrames);
+                if (underrun) _deviceUnderruns++;
+                AudioHealth.NoteDeviceWrite((int)padding, (int)_bufferFrames, Format.SampleRate, underrun);
+            }
+            firstPadding = false;
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
             {
@@ -302,6 +322,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 break;
             }
             _written += toWrite;
+            _writtenSinceStart += toWrite;
             written += toWrite;
         }
 

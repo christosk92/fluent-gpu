@@ -49,6 +49,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         public int W, H;
         public D3D12_RESOURCE_STATES State;
         public int LastTurn;
+        public long LastUseMs;       // scratch: wall clock of the latest lease (the idle path's clock: no turns advance when idle)
         public ulong LastUseFence;
         public uint Serial;          // bumped on every raster into the slot (content identity for derived caches)
         public bool InUse;           // scratch: leased this frame
@@ -56,6 +57,9 @@ internal sealed unsafe class SurfacePool : IDisposable
         public bool Retained;        // scratch: holds a content-keyed result across turns
         public ulong RetainKey;
         public int RetainAux;        // what the result needs to be drawn again (e.g. its downsample factor)
+        public int CreatedTurn;      // tile: the turn its texture was (re)created — it holds no pixels a partial raster may keep
+        public bool LastPartial;     // tile: its last raster wrote only LastDamage (tile px); the serial after it is Serial
+        public PixelRect LastDamage;
     }
 
     private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; }
@@ -121,6 +125,21 @@ internal sealed unsafe class SurfacePool : IDisposable
         _bank = bank;
         _turn = turn;
         ScratchLeases = 0; ScratchPx = 0L; ScratchRefused = 0;
+        DrainRetired(completedFence);
+        for (int i = 0; i < _scratch.Length; i++)
+        {
+            ref Entry e = ref _scratch[i];
+            if (e.Retained && turn - e.LastTurn > RetainTurns) e.Retained = false;   // stale result: back to the pool
+            if (e.Res == null || e.InUse || e.Retained) continue;
+            if (LayerTargetTrim.Classify(false, turn - e.LastTurn, weak) == LayerTrimVerdict.Retire) Retire(ref e);
+        }
+        EnforceFreeCap(turn, weak);
+    }
+
+    /// <summary>Release every retired texture whose last use the GPU has passed. Also the idle path's drain (a retire made
+    /// between turns would otherwise wait for the next composite, which an idle app never runs).</summary>
+    public void DrainRetired(ulong completedFence)
+    {
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
             if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
@@ -130,13 +149,49 @@ internal sealed unsafe class SurfacePool : IDisposable
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
         }
+    }
+
+    /// <summary>Retired textures still waiting on the fence (the idle path asks whether to look again soon).</summary>
+    public int RetiredCount => Volatile.Read(ref _retiredCount);
+
+    // The FREE scratch (unleased, unretained) a pool keeps warm is byte-capped (LayerTargetTrim.FreeScratchCapBytes): the
+    // oldest-used go first, and only slots unused for 2+ turns count, so a surface a repeating animation re-leases every
+    // turn is never a victim and the cap cannot thrash a live effect.
+    private void EnforceFreeCap(int turn, bool weak)
+    {
+        long cap = LayerTargetTrim.FreeScratchCapBytes(weak);
+        while (true)
+        {
+            long free = 0; int victim = -1, oldest = int.MaxValue;
+            for (int i = 0; i < _scratch.Length; i++)
+            {
+                ref Entry e = ref _scratch[i];
+                if (e.Res == null || e.InUse || e.Retained || turn - e.LastTurn < 2) continue;
+                free += LayerTargetBucket.Bytes(e.W, e.H);
+                if (e.LastTurn < oldest) { oldest = e.LastTurn; victim = i; }
+            }
+            if (free <= cap || victim < 0) return;
+            Retire(ref _scratch[victim]);
+        }
+    }
+
+    /// <summary>Idle-path housekeeping on the wall clock (render thread, between turns): drain what the fence has passed and
+    /// retire FREE scratch nothing has leased for <see cref="LayerTargetTrim.IdleMs"/>: an idle app runs no composite turn to
+    /// age them. A retained derived result is left alone (re-drawing it is the point of keeping it). Returns the ms until it next
+    /// has something to do (-1 = nothing pending).</summary>
+    public int TrimIdle(long nowMs, ulong completedFence, bool weak)
+    {
+        DrainRetired(completedFence);
+        long next = long.MaxValue;
         for (int i = 0; i < _scratch.Length; i++)
         {
             ref Entry e = ref _scratch[i];
-            if (e.Retained && turn - e.LastTurn > RetainTurns) e.Retained = false;   // stale result: back to the pool
             if (e.Res == null || e.InUse || e.Retained) continue;
-            if (LayerTargetTrim.Classify(false, turn - e.LastTurn, weak) == LayerTrimVerdict.Retire) Retire(ref e);
+            if (LayerTargetTrim.IsIdleFor(nowMs, e.LastUseMs, weak)) Retire(ref e);
+            else next = Math.Min(next, LayerTargetTrim.IdleMs(weak) - (nowMs - e.LastUseMs));
         }
+        if (RetiredCount > 0) next = Math.Min(next, 500);   // waiting on the fence
+        return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
     }
 
     /// <summary>Retire (behind its last-use fence) the texture of every tile slot the <see cref="SliceTable"/> released this
@@ -195,6 +250,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             e.W = w; e.H = h;
             e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             _device->CreateRenderTargetView(e.Res, null, Rtv(slot));
+            e.CreatedTurn = _turn;
         }
         e.LastTurn = _turn;
         e.LastUseFence = frameFence;
@@ -216,6 +272,29 @@ internal sealed unsafe class SurfacePool : IDisposable
     }
 
     public uint TileSerial(int slot) => (uint)slot < (uint)_tiles.Length ? _tiles[slot].Serial : 0u;
+
+    /// <summary>The tile slot's texture was created THIS turn (by <see cref="EnsureTile"/>): it holds no previous pixels, so
+    /// a partial raster into it must raster whole.</summary>
+    public bool TileFresh(int slot) => (uint)slot < (uint)_tiles.Length && _tiles[slot].Res != null && _tiles[slot].CreatedTurn == _turn;
+
+    /// <summary>Record what the raster that produced the slot's current serial wrote: only <paramref name="damage"/> (tile
+    /// px) when <paramref name="partial"/>, else the whole surface. The partial-present diff repaints just that part of the
+    /// tile's placement when its serial moved by exactly this raster.</summary>
+    public void NoteTileWrite(int slot, bool partial, in PixelRect damage)
+    {
+        if ((uint)slot >= (uint)_tiles.Length) return;
+        _tiles[slot].LastPartial = partial;
+        _tiles[slot].LastDamage = partial ? damage : default;
+    }
+
+    /// <summary>What the slot's last raster wrote (see <see cref="NoteTileWrite"/>); false = the whole surface.</summary>
+    public bool TileLastWrite(int slot, out PixelRect damage)
+    {
+        damage = default;
+        if ((uint)slot >= (uint)_tiles.Length || !_tiles[slot].LastPartial) return false;
+        damage = _tiles[slot].LastDamage;
+        return true;
+    }
     public ID3D12Resource* TileResource(int slot) => _tiles[slot].Res;
     public D3D12_CPU_DESCRIPTOR_HANDLE TileRtv(int slot) => Rtv(slot);
     public D3D12_GPU_DESCRIPTOR_HANDLE TileSrv(int slot) => Srv(ref _tiles[slot], slot);
@@ -244,10 +323,14 @@ internal sealed unsafe class SurfacePool : IDisposable
             for (int i = 0; i < _scratch.Length && best < 0; i++) if (_scratch[i].Res == null) best = i;
             if (best < 0)
             {
-                // Every slot holds a texture: replace the least recently used idle one.
+                // Every slot holds a texture: replace the least recently used idle one — never one used THIS turn. Its SRV
+                // lives in this turn's descriptor bank, and draws recorded earlier in the same command list (a blur level, a
+                // group source released after use) read that descriptor when the GPU executes them: re-creating the texture
+                // rewrote it under them and they sampled the new, uninitialised surface (a blank or garbage group / blur for
+                // that frame, kept by the partial-present PRESERVE route until something dirtied it again).
                 int lru = int.MaxValue;
                 for (int i = 0; i < _scratch.Length; i++)
-                    if (!_scratch[i].InUse && _scratch[i].LastTurn < lru) { lru = _scratch[i].LastTurn; best = i; }
+                    if (!_scratch[i].InUse && _scratch[i].LastTurn < _turn && _scratch[i].LastTurn < lru) { lru = _scratch[i].LastTurn; best = i; }
                 if (best >= 0) _scratch[best].Retained = false;
                 if (best < 0) { ScratchRefused++; return -1; }
             }
@@ -263,6 +346,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         s.Retained = false;   // an evicted retained result (every slot held a texture): its key no longer resolves
         s.InUse = true;
         s.LastTurn = _turn;
+        s.LastUseMs = Environment.TickCount64;
         s.LastUseFence = frameFence;
         return best;
     }
@@ -296,11 +380,31 @@ internal sealed unsafe class SurfacePool : IDisposable
             if (!e.Retained || e.RetainKey != key || e.Res == null) continue;
             e.InUse = true;
             e.LastTurn = _turn;
+            e.LastUseMs = Environment.TickCount64;
             e.LastUseFence = frameFence;
             aux = e.RetainAux;
             return i;
         }
         aux = 0;
+        return -1;
+    }
+
+    /// <summary><see cref="FindRetained"/> for a result about to be REPAIRED in place (an unblurred group surface patched over
+    /// the pixels that changed — <c>GroupDelta</c>): −1 unless a result is retained under <paramref name="key"/> AND nothing
+    /// has drawn it this turn yet (it is about to stop being that content). Earlier turns' reads of it precede this turn's
+    /// writes on the one queue.</summary>
+    public int FindRetainedForRepair(ulong key, ulong frameFence)
+    {
+        for (int i = 0; i < _scratch.Length; i++)
+        {
+            ref Entry e = ref _scratch[i];
+            if (!e.Retained || e.RetainKey != key || e.Res == null) continue;
+            if (e.LastTurn == _turn) return -1;
+            e.InUse = true;
+            e.LastTurn = _turn;
+            e.LastUseFence = frameFence;
+            return i;
+        }
         return -1;
     }
 

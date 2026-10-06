@@ -1,4 +1,5 @@
-﻿using FluentGpu.Foundation;
+﻿using System.Threading;
+using FluentGpu.Foundation;
 using FluentGpu.Hosting.Threading;
 using FluentGpu.Media;
 using FluentGpu.Signals;
@@ -142,18 +143,30 @@ public sealed class ImageCache
     private sealed class Entry
     {
         public SourceKey Key;
-        public ImageState State;
-        public int W, H;
+        // The fields ImageRecordingSnapshot copies (State, W, H, TextureMs, RevealMs, SwapHoldUntilMs, Transition) are properties
+        // so EVERY write bumps RecordingInputSerial: a publication whose snapshot inputs did not move can then be proven
+        // unchanged in O(1) instead of re-copying every referenced entry (SceneRenderFrame.Capture) or publishing at all
+        // (the host's no-op publication skip). The setters are the only write path; nothing takes a ref to these.
+        public ImageState State { get => _state; set { _state = value; NoteRecordingInputChanged(); } }
+        public int W { get => _w; set { _w = value; NoteRecordingInputChanged(); } }
+        public int H { get => _h; set { _h = value; NoteRecordingInputChanged(); } }
+        private ImageState _state;
+        private int _w, _h;
         public int Refs;        // liveness: >0 ⇒ on screen ⇒ never evicted
         public long LastUsed;
         public long Bytes;
         public ImageFailureKind Failure;   // why it Failed (None while Pending/Ready)
         public int Attempts;               // fetch attempts the decoder made (>1 ⇒ transient retries occurred)
-        public float TextureMs = float.NaN;   // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
-        public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
+        // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
+        public float TextureMs { get => _textureMs; set { _textureMs = value; NoteRecordingInputChanged(); } }
+        private float _textureMs = float.NaN;
+        // the placeholder→image reveal (duration + easing); set at request. Its easing is a recording input (see State).
+        public ImageTransition Transition { get => _transition; set { _transition = value; NoteRecordingInputChanged(); } }
+        private ImageTransition _transition;
         // Duration of the CURRENT reveal. Normally Transition.DurationMs; shortened to ShortRevealMs for a warm re-landing
         // (BeginReveal). Every deadline/progress read uses THIS, so a shortened reveal keeps the wake bookkeeping exact.
-        public float RevealMs;
+        public float RevealMs { get => _revealMs; set { _revealMs = value; NoteRecordingInputChanged(); } }
+        private float _revealMs;
         public float RequestedMs = float.NegativeInfinity;   // clock (ms) when the current decode was requested → the cache-adjacent test
         public long RequestedTicks;   // Stopwatch ticks of that request; ImageLatencyCensus.Fetch at the first texture (0 = noted)
         public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
@@ -190,7 +203,8 @@ public sealed class ImageCache
         // Image-swap crossfade (BeginSwap): this entry is some node's OUTGOING texture, drawn opaque under the incoming
         // image until this reveal-clock deadline. Folded into the crossfade deadline so both the UI wake and the render
         // thread's clock-driven presents keep going for the whole swap window.
-        public float SwapHoldUntilMs = float.NegativeInfinity;
+        public float SwapHoldUntilMs { get => _swapHoldUntilMs; set { _swapHoldUntilMs = value; NoteRecordingInputChanged(); } }
+        private float _swapHoldUntilMs = float.NegativeInfinity;
         // Indexed LRU (EvictOneLru): an entry is LINKED into one of the two eviction lists exactly while it is evictable
         // (Ready and unpinned) — LruList 1 = full images, 2 = derived — ordered by when it became evictable or was last
         // used (LastUsed is re-stamped on every link/touch). 0 ids end the list (ids start at 1).
@@ -201,6 +215,17 @@ public sealed class ImageCache
         // True while this id sits in _leftovers (the pinned canceled-leftover retry list) — dedups NoteCanceledLeftover.
         public bool LeftoverListed;
     }
+
+    // Process-wide (every cache, every entry): bumped on any write to a field ImageRecordingSnapshot copies, and on an entry's
+    // removal. A change detector, not a count — readers only compare it for equality, so a racing increment can never make
+    // two different states read equal. Interlocked because a write is rare and the reader may sit on another host.
+    private static long s_recordingInputSerial;
+    private static void NoteRecordingInputChanged() => Interlocked.Increment(ref s_recordingInputSerial);
+
+    /// <summary>Moves whenever any entry's recording inputs (state, size, reveal/fade parameters, swap hold) change or an entry
+    /// is dropped, in ANY cache. Equal values bracket a span in which every <see cref="ImageRecordingSnapshot"/> input is
+    /// unchanged. O(1).</summary>
+    internal static long RecordingInputSerial => Interlocked.Read(ref s_recordingInputSerial);
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
     /// <summary>How long a PINNED canceled leftover (None/Canceled or Failed/Canceled — a dropped or canceled decode, not
@@ -676,6 +701,14 @@ public sealed class ImageCache
         if (e.StatusEpoch is { } epoch)
             epoch.Value = epoch.Peek() + 1;
     }
+    /// <summary>The (source, decode W, decode H) a non-derived handle was requested at; false for a derived / unknown handle.</summary>
+    public bool TryGetTarget(ImageHandle h, out string source, out int w, out int hgt)
+    {
+        if (_byId.TryGetValue(h.Id, out var e) && !e.Derived) { source = e.Key.Source; w = e.Key.W; hgt = e.Key.H; return true; }
+        source = ""; w = hgt = 0;
+        return false;
+    }
+
     /// <summary>The source URL bound to a handle (null when unknown).</summary>
     public string? SourceOf(ImageHandle h)
     {
@@ -1723,6 +1756,7 @@ public sealed class ImageCache
             _derivedBySource.Remove(id);   // only ever empty here: a kept dependent would have held this source
         }
         _byId.Remove(id);
+        NoteRecordingInputChanged();   // a snapshot that held this id must not be reused as-is
     }
 
     /// <summary>

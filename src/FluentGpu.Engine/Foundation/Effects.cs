@@ -207,7 +207,23 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
 /// (<see cref="Split"/> ≤ 0 or ≥ 1) is a constant fill and the backend replays it through the plain single-color glyph
 /// path instead, pixel-identically — so only the run actually mid-wipe pays gradient cost. Advancing
 /// <see cref="Split"/> per frame is reshape-free.</summary>
-public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f);
+public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f)
+{
+    /// <summary>The length (DIP) of the run the split sweeps, in reading order: what a split ANIMATED on the render thread
+    /// (<c>AnimChannel.GlyphWipeSplit</c>) steps along in whole DIPs (<see cref="QuantizeSplit"/>). 0 = the text node's own
+    /// width, which is the run of a single line. A WRAPPED run is longer (its lines laid end to end): an author that steps
+    /// its own writes along the measured run sets it here, and the render thread then steps exactly as it would.</summary>
+    public float Run { get; init; }
+
+    /// <summary><paramref name="split"/> rounded to whole DIPs of a <paramref name="run"/>-DIP run, the settled ends (at or
+    /// past 0 and 1) exact; a run of 1 DIP or less leaves it as is.</summary>
+    public static float Quantize(float split, float run)
+        => run > 1f && split > 0f && split < 1f ? MathF.Round(split * run) / run : split;
+
+    /// <summary><paramref name="split"/> stepped along this wipe's <see cref="Run"/>, or along <paramref name="nodeWidth"/>
+    /// (DIP) when it names none: the step the render thread poses.</summary>
+    public float QuantizeSplit(float split, float nodeWidth) => Quantize(split, Run > 0f ? Run : nodeWidth);
+}
 
 /// <summary>
 /// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
@@ -362,6 +378,49 @@ public readonly record struct EdgeFadeSpec(
     /// 2026-09-25 F(ii): <c>[scroll.engaged.present] ticksAfterCross=2</c>). Meaningful only on a <c>.StickyClip</c>
     /// element; anywhere else the fade never applies.</summary>
     public bool WhileStuck { get; init; }
+
+    /// <summary>An OVERFLOW CUE over horizontally translated content (a marquee's moving line): &gt; 0 = how far (DIP) the
+    /// content runs past this element's right edge at translate 0. The left/right bands then feather only an edge with
+    /// content hidden past it, ramped by how much is hidden there — <see cref="ResolveOverflow"/> of the content's POSED
+    /// <c>TranslateX</c>, resolved by the recorder on the turn that poses it. The content is the first TRANSLATED node down
+    /// this element's FIRST-CHILD chain (at most <see cref="OverflowChainDepth"/> nodes, so a component anchor between the
+    /// element and its moving root is transparent; the walk stops at a scaled or rotated node, and only first children
+    /// count). A translate animated on the render thread therefore moves the fade
+    /// with it on the same frame, with no UI render and no lag; the alternative (mirroring the translate into a signal
+    /// and re-rendering a new spec) re-rendered the element at the UI's frame rate and drew the fade a frame or more
+    /// behind the text. 0 = off (the authored bands as they are).</summary>
+    public float OverflowTail { get; init; }
+
+    /// <summary>How many nodes down the first-child chain an <see cref="OverflowTail"/> cue looks for the translated content.</summary>
+    public const int OverflowChainDepth = 4;
+
+    /// <summary>The distance (DIP) over which an <see cref="OverflowTail"/> band ramps from nothing to its authored depth —
+    /// the same runway a scroll viewport's automatic edge fade uses.</summary>
+    public const float OverflowRunway = 24f;
+
+    /// <summary>This spec with its left/right bands resolved for a first child posed at <paramref name="childTranslateX"/>
+    /// (DIP; negative = scrolled toward the tail): an edge feathers only while more than ½ DIP of content is hidden past it,
+    /// at its authored band times min(1, hidden / <see cref="OverflowRunway"/>). Top/bottom pass through as authored. A spec
+    /// without <see cref="OverflowTail"/> is returned unchanged. Pure, so the recorder and the tests agree on it.</summary>
+    public EdgeFadeSpec ResolveOverflow(float childTranslateX)
+    {
+        if (OverflowTail <= 0f) return this;
+        float hiddenLeft = MathF.Max(0f, -childTranslateX);
+        float hiddenRight = MathF.Max(0f, OverflowTail - hiddenLeft);
+        EdgeMask edges = Edges & EdgeMask.Vertical;
+        float left = 0f, right = 0f;
+        if ((Edges & EdgeMask.Left) != 0 && hiddenLeft > 0.5f)
+        {
+            edges |= EdgeMask.Left;
+            left = BandLeft * MathF.Min(1f, hiddenLeft / OverflowRunway);
+        }
+        if ((Edges & EdgeMask.Right) != 0 && hiddenRight > 0.5f)
+        {
+            edges |= EdgeMask.Right;
+            right = BandRight * MathF.Min(1f, hiddenRight / OverflowRunway);
+        }
+        return this with { Edges = edges, BandLeft = left, BandRight = right, OverflowTail = 0f };
+    }
 
     public static EdgeFadeSpec Horizontal(float band = 24f) => new(EdgeMask.Horizontal, band);
     public static EdgeFadeSpec Vertical(float band = 24f) => new(EdgeMask.Vertical, band);

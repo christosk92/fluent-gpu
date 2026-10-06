@@ -44,6 +44,47 @@ public sealed class WakeCensusTests
     }
 
     [Fact]
+    public void EveryWakeBit_PrintsUnderItsOwnName()
+    {
+        // A stale or missing name made a playing meter (FrameClockPaceable, bit 25) read as "budgetDeferredVirtuals".
+        foreach (WakeReasons bit in Enum.GetValues<WakeReasons>())
+        {
+            if (bit == WakeReasons.None) continue;
+            string name = bit.ToString();
+            Assert.Equal(char.ToLowerInvariant(name[0]) + name[1..], WakeDiagnostics.ReasonName(bit));
+        }
+    }
+
+    private sealed class TickOwner { }
+    private sealed class PaceableOwner { }
+
+    [Fact]
+    public void APollerFrame_IsChargedOnlyToTheSubscribersOfTheClockWhoseBitItCarried()
+    {
+        FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Ui);
+        var scene = new FluentGpu.Scene.SceneStore();
+        var runtime = new FluentGpu.Signals.ReactiveRuntime();
+        var tick = new FluentGpu.Signals.Signal<object?>(0L);
+        var paceable = new FluentGpu.Signals.Signal<object?>(0L);
+        using var onTick = new FluentGpu.Signals.Effect(runtime, () => _ = tick.Value) { DiagOwner = new TickOwner() };
+        using var onPaceable = new FluentGpu.Signals.Effect(runtime, () => _ = paceable.Value) { DiagOwner = new PaceableOwner() };
+        var diag = new WakeDiagnostics(tick, new FluentGpu.Animation.AnimEngine(scene), scene, static _ => { }, () => true,
+            paceableSig: paceable);
+
+        diag.Record(WakeReasons.FrameClockPoller, awake: true, rendered: true, reconciled: false, laidOut: false, minimized: false);
+        diag.Record(WakeReasons.FrameClockPoller, awake: true, rendered: true, reconciled: false, laidOut: false, minimized: false);
+        diag.Record(WakeReasons.FrameClockPaceable, awake: true, rendered: true, reconciled: false, laidOut: false, minimized: false);
+        var sb = new StringBuilder();
+        diag.AppendPollersSeen(sb);
+        Assert.Equal(" | pollersSeen=2:TickOwner×2,PaceableOwner×1", sb.ToString());
+    }
+
+    [Fact]
+    public void APaceableClockFrame_IsAPollerPresent()
+        => Assert.Equal(WakeDiagnostics.UiPresentCause.Poller,
+            WakeDiagnostics.ClassifyUiPresent(WakeReasons.FrameClockPaceable, reconciled: false, laidOut: false));
+
+    [Fact]
     public void ACallbackWithATarget_IsAttributedToThatTargetsType_WhenNoOwnerIsPassed()
     {
         double now = 0;

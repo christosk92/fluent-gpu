@@ -45,10 +45,10 @@ static class LayerPoolSuite
             if (d < px) covers = false;
             if (d < LayerTargetBucket.MinDim) floor64 = false;
             if (px <= LayerTargetBucket.LinearCeiling && d % LayerTargetBucket.LinearStep != 0) linear = false;
-            if (px > LayerTargetBucket.LinearCeiling && (d & (d - 1)) != 0) po2 = false;
+            if (px > LayerTargetBucket.LinearCeiling && (d % LayerTargetBucket.HighStep != 0 || d - px >= LayerTargetBucket.HighStep)) po2 = false;
             prev = d;
         }
-        Check("gate.layerpool.bucket-ladder is monotone, always covers the request, floors at 64, steps by 64 up to the linear ceiling and is power-of-two above it",
+        Check("gate.layerpool.bucket-ladder is monotone, always covers the request, floors at 64, steps by 64 up to the linear ceiling and by 128 (never a power of two) above it",
             monotone && covers && floor64 && linear && po2,
             $"monotone={monotone} covers={covers} floor64={floor64} linear64={linear} po2={po2} ceiling={LayerTargetBucket.LinearCeiling}");
 

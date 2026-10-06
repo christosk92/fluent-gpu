@@ -10,7 +10,12 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Hooks;
 
-internal abstract class HookCell { }
+internal abstract class HookCell
+{
+    /// <summary>The render (<see cref="RenderContext"/>.s render epoch) that last resolved this cell — how a hook in a loop finds the
+    /// ordinal of its call without a per-render counter table.</summary>
+    internal int RenderEpoch;
+}
 
 /// <summary>The call-site identity of a hook cell (the WS1 keyed-substrate key): the hashed <c>[CallerFilePath]</c>,
 /// the <c>[CallerLineNumber]</c>, and a per-render ORDINAL (the Nth time this exact source line is hit in one render —
@@ -413,8 +418,9 @@ public sealed partial class RenderContext
     // re-entered, and every cell's cleanup still runs at unmount (RunAllCleanups walks all of _cells). Conditional /
     // looped hooks are therefore LEGAL — see docs/guide/reactivity.md.
     private readonly List<HookCell> _cells = new();
-    private readonly Dictionary<HookKey, int> _keyed = new();                     // call-site key → index into _cells
-    private readonly Dictionary<(ulong File, int Line), int> _ordinals = new();   // per-render loop-ordinal counter (reset each render)
+    private Dictionary<HookKey, int>? _keyed;                                     // call-site key → index into _cells (null until the first hook)
+    private ulong _lastFh; private int _lastLine, _nextOrd; private bool _haveLast;   // cursor: the previous lookup's call site and the ordinal after it (this render only)
+    private int _renderEpoch;                                                      // bumped per render: a cell already resolved at this epoch was hit earlier in the SAME render
     private int _cleanupCellCount;
 
     // [CallerFilePath] yields the SAME interned string reference for every call site in a file, so the file path is
@@ -422,8 +428,9 @@ public sealed partial class RenderContext
     // nothing. Static + UI-thread-confined (the engine's single render/reconcile thread), so no lock is needed.
     private static readonly Dictionary<string, ulong> _fileHashes = new(ReferenceEqualityComparer.Instance);
 
-    public readonly List<Action> PendingEffects = new();        // UseEffect — after present (phase 12)
-    public readonly List<Action> PendingLayoutEffects = new();  // UseLayoutEffect — after layout, before paint (phase 6.5)
+    private List<Action>? _pendingEffects, _pendingLayoutEffects;   // created on the first effect: most components have none
+    public List<Action> PendingEffects => _pendingEffects ??= new();               // UseEffect — after present (phase 12)
+    public List<Action> PendingLayoutEffects => _pendingLayoutEffects ??= new();   // UseLayoutEffect — after layout, before paint (phase 6.5)
     internal Action<RenderContext, bool>? RegisterPendingEffectContext;
 
     // Injected by the reconciler/host at mount.
@@ -467,7 +474,7 @@ public sealed partial class RenderContext
     /// write — no allocation and no name resolution (that happens at report cadence, if ever).</summary>
     private T Own<T>(T c) where T : Computation { c.DiagOwner = Owner; return c; }
 
-    internal void BeginRender() => _ordinals.Clear();   // reset the per-render loop ordinals; cells persist by key
+    internal void BeginRender() { _renderEpoch++; _haveLast = false; }   // a new render: every cell is unresolved again (loop ordinals restart); cells persist by key
     internal void EndRender()
     {
         // The "form under construction" thread-local (set by UseForm so same-component UseField calls auto-join) lives
@@ -479,23 +486,36 @@ public sealed partial class RenderContext
     // Every positional hook resolves its cell through these two helpers. LookupCell advances the per-(file,line) loop
     // ordinal, computes the call-site key, and returns the existing cell index (or -1 for a fresh call site/ordinal —
     // the hook then creates its cell and calls RegisterCell with the SAME key). No closures ⇒ zero allocation on the
-    // steady (reuse) path; the ordinal/keyed dictionary probes are value-typed (no boxing).
+    // steady (reuse) path; the keyed dictionary probe is value-typed (no boxing). The loop ordinal is the first ordinal
+    // of this (file, line) whose cell has not been resolved yet in THIS render (cell.RenderEpoch), so a hook outside a loop costs
+    // one probe and no per-render counter table.
 
     /// <summary>Resolve the current call site to its existing cell index (or -1 if fresh), yielding the key to register with.</summary>
     private int LookupCell(string? file, int line, out HookKey key)
     {
         ulong fh = FileHash(file);
-        var fl = (fh, line);
-        _ordinals.TryGetValue(fl, out int ord);
-        _ordinals[fl] = ord + 1;
-        key = new HookKey(fh, line, ord);
-        return _keyed.TryGetValue(key, out int idx) ? idx : -1;
+        // A hook in a loop repeats one call site back to back: resume after the ordinal the previous call took (every lower
+        // ordinal is already resolved this render), so the k-th iteration is one probe, not k+1.
+        int ord = _haveLast && _lastFh == fh && _lastLine == line ? _nextOrd : 0;
+        for (; ; ord++)
+        {
+            key = new HookKey(fh, line, ord);
+            if (_keyed is null || !_keyed.TryGetValue(key, out int idx)) { Remember(fh, line, ord); return -1; }
+            var cell = _cells[idx];
+            if (cell.RenderEpoch == _renderEpoch) continue;   // an earlier iteration of this render already took ordinal `ord`
+            cell.RenderEpoch = _renderEpoch;
+            Remember(fh, line, ord);
+            return idx;
+        }
     }
+
+    private void Remember(ulong fh, int line, int ord) { _lastFh = fh; _lastLine = line; _nextOrd = ord + 1; _haveLast = true; }
 
     /// <summary>Append a freshly-created cell and bind it to its call-site <paramref name="key"/>.</summary>
     private void RegisterCell(in HookKey key, HookCell cell, bool cleanupCapable = false)
     {
-        _keyed[key] = _cells.Count;
+        (_keyed ??= new())[key] = _cells.Count;
+        cell.RenderEpoch = _renderEpoch;
         _cells.Add(cell);
         if (cleanupCapable) _cleanupCellCount++;
     }
@@ -512,8 +532,8 @@ public sealed partial class RenderContext
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
     public void RunAllCleanups()
     {
-        PendingEffects.Clear();
-        PendingLayoutEffects.Clear();
+        _pendingEffects?.Clear();
+        _pendingLayoutEffects?.Clear();
         if (_cleanupCellCount == 0) return;
         foreach (var cell in _cells)
         {
@@ -683,7 +703,7 @@ public sealed partial class RenderContext
     private void EnqueueEffect(List<Action> target, Action action)
     {
         if (target.Count == 0)
-            RegisterPendingEffectContext?.Invoke(this, ReferenceEquals(target, PendingLayoutEffects));
+            RegisterPendingEffectContext?.Invoke(this, ReferenceEquals(target, _pendingLayoutEffects));
         target.Add(action);
     }
 
@@ -969,9 +989,11 @@ public sealed partial class RenderContext
     public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
     /// <summary><paramref name="cadence"/> is the row's own frame rate (see <c>AnimEngine.Keyframes</c>): <c>null</c>
-    /// = display rate, one-shot or <paramref name="loop"/>.</summary>
-    public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence); }, deps);
+    /// = display rate, one-shot or <paramref name="loop"/>. <paramref name="snapToDevicePixels"/>: a ScaleX/ScaleY track poses
+    /// whole device pixels of the host node's extent (<c>AnimFlags.SnapDevicePx</c>).</summary>
+    public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null,
+                             bool snapToDevicePixels = false)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, snapToDevicePixels: snapToDevicePixels); }, deps);
     public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
 

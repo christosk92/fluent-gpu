@@ -8497,7 +8497,7 @@ static partial class ControlsSuite
     // already pin that the toggle animates; this adds the steady-resize case it never distinguished from a toggle.
     static void D3ExpanderAnimateContentResizeChecks(StringTable strings)
     {
-        (HeadlessPlatformApp app, AppHost host, HeadlessWindow window, NodeHandle clip, Signal<float> hSig) Mount(
+        (HeadlessPlatformApp app, AppHost host, HeadlessWindow window, NodeHandle clip, Signal<float> hSig, int maxPollers) Mount(
             bool animateResize, bool initiallyExpanded, string tag)
         {
             var app = new HeadlessPlatformApp();
@@ -8524,18 +8524,21 @@ static partial class ControlsSuite
                 },
             };
             var host = new AppHost(app, window, device, fonts, strings, root);
-            for (int i = 0; i < 5; i++) host.RunFrame();
+            int maxPollers = 0;
+            for (int i = 0; i < 5; i++) { host.RunFrame(); maxPollers = Math.Max(maxPollers, host.FrameClockPollerCount); }
             var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
             var clip = Child(host.Scene, card, 1);
-            return (app, host, window, clip, hSig);
+            return (app, host, window, clip, hSig, maxPollers);
         }
 
-        // (a) steady-open resize, AnimateContentResize=false: a resting mount never FLIP-captures (cp3.c), so the
-        // ExpanderResizeWatcher clears `transitioning` within the first few frames; past that, flipping the content
-        // height must land the clip at the new height in the very next frame — no tween.
+        // (a) steady-open resize, AnimateContentResize=false: a resting mount is not a toggle, so `transitioning` never
+        // rises; flipping the content height must land the clip at the new height in the very next frame — no tween.
         {
-            var (app, host, _, clip, hSig) = Mount(animateResize: false, initiallyExpanded: true, tag: "steady-off");
-            for (int i = 0; i < 5; i++) host.RunFrame();           // clear the resting-mount `transitioning` window
+            var (app, host, _, clip, hSig, maxPollers) = Mount(animateResize: false, initiallyExpanded: true, tag: "steady-off");
+            // A resting open mount is not a toggle: it raises no `transitioning` window, so no per-frame watcher is mounted.
+            Check("cp3.acr0 — Expander: a resting open mount holds no frame-clock poller (only a toggle mounts the resize watcher)",
+                maxPollers == 0, $"max pollers over the mount frames={maxPollers}");
+            for (int i = 0; i < 5; i++) host.RunFrame();
             float before = host.Scene.AbsoluteRect(clip).H;        // 60 + 2×16 padding − 1 margin = 91
             hSig.Value = 160f;
             host.RunFrame();                                       // ONE frame after the resize
@@ -8549,7 +8552,7 @@ static partial class ControlsSuite
         // (b) same scenario with the DEFAULT (Options omitted / AnimateContentResize=true): the resize still replays
         // the disclosure tween — one frame in, the clip is nowhere near the new target; it settles there later.
         {
-            var (app, host, _, clip, hSig) = Mount(animateResize: true, initiallyExpanded: true, tag: "steady-on");
+            var (app, host, _, clip, hSig, _) = Mount(animateResize: true, initiallyExpanded: true, tag: "steady-on");
             for (int i = 0; i < 5; i++) host.RunFrame();
             float before = host.Scene.AbsoluteRect(clip).H;
             hSig.Value = 160f;
@@ -8567,11 +8570,14 @@ static partial class ControlsSuite
         // still eases over the full ~333ms (ExpanderResizeWatcher keeps `transitioning` up the whole time), one frame
         // in it is nowhere near the open height, and it settles there.
         {
-            var (app, host, window, clip, _) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
+            var (app, host, window, clip, _, collapsedPollers) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
             var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
             var header = Child(host.Scene, card, 0);
             ClickNode(host, window, header);
             host.RunFrame();
+            int openingPollers = host.FrameClockPollerCount;
+            Check("cp3.acr0b — Expander: a collapsed mount holds no frame-clock poller; the open toggle mounts the resize watcher",
+                collapsedPollers == 0 && openingPollers > 0, $"collapsed={collapsedPollers} opening={openingPollers}");
             float after1 = host.Scene.AbsoluteRect(clip).H;
             for (int i = 0; i < 25; i++) host.RunFrame();
             float open = host.Scene.AbsoluteRect(clip).H;

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
@@ -144,6 +144,33 @@ public sealed partial class AnimEngine
         target.EndCapture();
     }
 
+    /// <summary>A fingerprint of exactly what <see cref="CaptureCompositorAnimations"/> would hand the renderer, as far as the
+    /// renderer's adoption can tell rows apart (<c>RenderCompositorAnimations.Adopt</c>): which rows are captured (live,
+    /// compositor-owned), and for each its identity (instance), its seed revision (every retarget re-stamps it), its node,
+    /// its cadence and its Parked/Done flags. Two equal fingerprints mean a re-capture would adopt to the identical render
+    /// state — the renderer advances these rows itself, so their positions are not an input. Same walk as the capture
+    /// (O(compositor-candidate rows)), no allocation. The host compares it across frames for its no-op publication skip.</summary>
+    internal ulong CompositorCaptureFingerprint()
+    {
+        RefreshCompositorCandidates();
+        ulong h = 14695981039346656037UL;
+        int n = 0;
+        foreach (int slot in _compositorCandidateSlots)
+        {
+            ref var row = ref _slab.At(slot);
+            if (!_scene.IsLive(row.Node) || !IsCompositorRow(in row)) continue;
+            var identity = _compositorSeeds[slot];
+            h = Mix(h, identity.Instance);
+            h = Mix(h, identity.Revision);
+            h = Mix(h, ((ulong)row.Node.Raw.Index << 32) | row.Node.Raw.Gen);
+            h = Mix(h, ((ulong)(uint)PeriodMsOf(slot) << 16) | (ulong)(row.Flags & (AnimFlags.Parked | AnimFlags.Done)));
+            n++;
+        }
+        return Mix(h, (ulong)n);
+
+        static ulong Mix(ulong h, ulong v) => (h ^ v) * 1099511628211UL;
+    }
+
     /// <summary>
     /// UI-only import before input/FLIP. Generation + instance + revision reject old completion and slot reuse.
     /// Completion applies the terminal pose before normal UI-owned settle/cleanup releases the desired row.
@@ -161,6 +188,14 @@ public sealed partial class AnimEngine
                 ref var row = ref _slab.At(slot);
                 if (row.Has(AnimFlags.Parked) || row.Channel != pose.Channel || !_compositorSeeds.TryGetValue(slot, out var seed)
                     || seed.Instance != pose.InstanceId || seed.Revision != pose.Revision || !IsCompositorRow(in row)) continue;
+                if (pose.Hidden && !pose.Done)
+                {
+                    // Nothing of it is on screen: keep the timing, leave the scene (and the row's shown value) untouched.
+                    row.ElapsedMs = pose.ElapsedMs;
+                    row.DelayRemainingMs = pose.DelayRemainingMs;
+                    row.Flags &= ~(AnimFlags.JustSeeded | AnimFlags.StartPending);
+                    break;
+                }
                 row.Position = pose.Value;
                 row.Velocity = pose.Velocity;
                 row.ElapsedMs = pose.ElapsedMs;
@@ -172,7 +207,7 @@ public sealed partial class AnimEngine
                 {
                     ref var accumulation = ref CollectionsMarshal.GetValueRefOrAddDefault(_compositorFeedbackAccumulators, row.Node, out bool exists);
                     if (!exists) accumulation = Accum.FromPaint(in _scene.Paint(row.Node));
-                    accumulation.Fold(row.Channel, row.Position, replace: true);
+                    accumulation.Fold(row.Channel, Posed(in row, row.Position, in _scene.Bounds(row.Node), _scene.DeviceScale), replace: true);
                 }
                 if (pose.Done)
                 {
@@ -238,6 +273,8 @@ public sealed class CompositorAnimationSnapshot
     }
 }
 
-/// <summary>Latest render pose; settled entries persist until a later desired set omits their instance.</summary>
+/// <summary>Latest render pose; settled entries persist until a later desired set omits their instance. One render-owned
+/// row's pose fed back to the UI. <paramref name="Hidden"/>: its node could not reach a pixel on
+/// the tick that produced it — the UI imports the timing only and composes nothing into its scene.</summary>
 public readonly record struct CompositorAnimationPose(NodeHandle Node, AnimChannel Channel, ulong InstanceId, ulong Revision,
-    float Value, float Velocity, float ElapsedMs, float DelayRemainingMs, bool Done);
+    float Value, float Velocity, float ElapsedMs, float DelayRemainingMs, bool Done, bool Hidden = false);
