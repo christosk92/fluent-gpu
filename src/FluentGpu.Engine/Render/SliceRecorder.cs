@@ -2034,6 +2034,7 @@ public sealed partial class SliceRecorder
             ref ScanSeg sg = ref _scanSegs[e.Slot][e.Segment];
             RectF bDip = sg.Bounds;
             bool effect = r.Kind == SliceKind.Effect;
+            if (effect && !ForceUncutExtents) bDip = ExtentWithinMarkerClip(in r, in bDip, scale);
             int covSlot = CoverageSlot(e.Slot);
             // Only a VIRTUAL list's content grows along its main axis as rows realize (and parks at both ends): its
             // segments keep the main-axis origin at content 0 and charge whole cells there. Any other scroll segment is
@@ -2362,6 +2363,45 @@ public sealed partial class SliceRecorder
 
     private static RectF RoundPx(in RectF round, float r, float scale) => r > 0f ? ScalePx(round, scale) : default;
     private static CornerRadius4 RadiiPx(float r, float scale) => r > 0f ? CornerRadius4.All(r * scale) : default;
+
+    /// <summary>An effect segment's painted bounds cut to its MARKER clip (slot-space DIP, one device px of slack so the
+    /// snapped-out composite clip's edge pixels stay inside): what the slice can ever show. A slice placed with its
+    /// containing slice (its own role, no pose, no sticky clip, its params in that slice's space) composites under that
+    /// clip, so a tile never needs content past it: a marquee's line, a clipped node's overflow, is rastered only where
+    /// it can be seen (a 144-DIP player-bar title held a 960x128 surface for its 616-DIP line), and content sliding
+    /// under the clip no longer moves the slice's origin (a geometry invalidation per frame). Pixel-identical: the
+    /// origin stays on the grid, so every op rasters at the same device position. Not for a slice that samples outside
+    /// its clip (a self-blur, a blurred fade, acrylic) or that has no tiles (a low-resolution or feedback boundary).</summary>
+    /// <summary>A probe-only IDENTITY control (<c>extent-cut-identity</c>, like <see cref="ForceGroupFades"/>): every effect
+    /// slice keeps its whole painted bounds instead of the extent cut to its marker clip. Process-wide; the probe flips it
+    /// between two captures of the same scene. Never set by the engine.</summary>
+    public static bool ForceUncutExtents { get => Volatile.Read(ref s_forceUncutExtents); set => Volatile.Write(ref s_forceUncutExtents, value); }
+    private static bool s_forceUncutExtents;
+
+    private static RectF ExtentWithinMarkerClip(in Rec r, in RectF bounds, float scale)
+        => ExtentWithinMarkerClip(in bounds, scale, new ExtentFacts(r.MarkerClip, r.Pose, r.Sticky, r.Role, r.LowRes,
+            r.HasFeedback, !r.Acrylic.IsNone, r.MarkerFlags, r.Layer));
+
+    /// <summary>What <see cref="ExtentWithinMarkerClip(in RectF, float, in ExtentFacts)"/> reads of a slice (pure, so the
+    /// eligibility rules are testable without a recorder).</summary>
+    internal readonly record struct ExtentFacts(RectF MarkerClip, PoseKind Pose, bool Sticky, int Role, byte LowRes,
+        bool Feedback, bool Acrylic, int MarkerFlags, PushLayerCmd Layer);
+
+    internal static RectF ExtentWithinMarkerClip(in RectF bounds, float scale, in ExtentFacts f)
+    {
+        if (bounds.IsEmpty || f.MarkerClip.IsInfinite || f.MarkerClip.IsEmpty || f.Pose != PoseKind.None || f.Sticky
+            || f.Role is not ((int)SliceRole.Main or (int)SliceRole.Layer)
+            || f.LowRes > 1 || f.Feedback || f.Acrylic
+            || (f.MarkerFlags & (int)(CompositeSliceFlags.InnerClip | CompositeSliceFlags.ParamsUp)) != 0)
+            return bounds;
+        if ((f.MarkerFlags & (int)CompositeSliceFlags.Layer) != 0
+            && (f.Layer.Kind is (int)LayerKind.Blur or (int)LayerKind.Acrylic || f.Layer.BlurSigma > 0f))
+            return bounds;
+        float slack = 1f / MathF.Max(scale, 0.01f);
+        RectF clip = new(f.MarkerClip.X - slack, f.MarkerClip.Y - slack, f.MarkerClip.W + 2f * slack, f.MarkerClip.H + 2f * slack);
+        RectF cut = bounds.Intersect(clip);
+        return cut.IsEmpty ? default : cut;
+    }
 
     /// <summary>The slot whose realized coverage drives a segment's needed tiles: a scroll content slice itself, or the
     /// content slice an item band / pinned band rides; −1 for everything else.</summary>

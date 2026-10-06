@@ -454,6 +454,34 @@ internal static class RepaintIdentityProbe
                 ScrollAll(host, vertical: 0.0, horizontal: 0.0);
             }
 
+            // ── extent-cut-identity: a clipped line in its own effect slice (a repaint boundary, or an edge fade) with its tiles
+            //    cut to the marker clip vs the same slice uncut (SliceRecorder.ForceUncutExtents), at a fractional position with
+            //    a fractional content translate and an odd-DIP clip; the second pass widens the clip on the RETAINED cut slice
+            //    (no full repaint), so the strip it exposes must raster: 0 px every time ──
+            for (int v = 0; v < 4 && Want("extent-cut-identity"); v++)
+            {
+                total++;
+                bool fade = v >= 2, widen = (v & 1) != 0;
+                string name = $"extent-cut-identity/{(fade ? "edge-fade" : "boundary")}{(widen ? "-resized" : "")}@{scale:0.00}";
+                RepaintIdentityScene.ResetAll();
+                RepaintIdentityScene.Scenario.Value = 27;
+                RepaintIdentityScene.ExtentFade.Value = fade;
+                FluentGpu.Render.SliceRecorder.ForceUncutExtents = false;
+                host.GpuKnockouts = GpuKnockouts.None;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                if (widen) { RepaintIdentityScene.ExtentClipW.Value = 263f; Settle(host, w, 8); }
+                byte[] cut = Capture(host, gpu, out int aw, out int ah);
+                FluentGpu.Render.SliceRecorder.ForceUncutExtents = true;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 8);
+                byte[] uncut = Capture(host, gpu, out int bw, out int bh);
+                FluentGpu.Render.SliceRecorder.ForceUncutExtents = false;
+                host.RequestFullRepaintOnce();
+                Settle(host, w, 4);
+                if (Judge(name, cut, uncut, aw, ah, bw, bh, 0, outDir)) passed++; else failed++;
+            }
+
             // ── group-cache-identity: a group re-drawn from its retained surface (hit) vs re-rendered (miss) ──
             if (Want("group-cache-identity"))
             {

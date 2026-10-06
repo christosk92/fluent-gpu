@@ -314,12 +314,13 @@ public sealed class RenderCompositorAnimations
     private static bool IsSideTable(AnimChannel channel)
         => channel is AnimChannel.HoverFade or AnimChannel.PressFade or AnimChannel.BrushFade or AnimChannel.GlyphWipeSplit;
 
-    /// <summary>A wipe split rounded to whole DIPs of the run it sweeps (the node's width), the settled ends exact: the
-    /// boundary moves in pixel steps, so a tick that stays inside one changes nothing and re-records nothing.</summary>
+    /// <summary>A wipe split rounded to whole DIPs of the run it sweeps (the authored <see cref="GlyphWipe.Run"/>, else the
+    /// node's width), the settled ends exact: the boundary moves in pixel steps, so a tick that stays inside one changes
+    /// nothing and re-records nothing.</summary>
     internal static float QuantizeWipe(SceneRecordingSnapshot scene, NodeHandle node, float split)
     {
         float w = scene.Bounds(node).W;
-        return w > 1f && split > 0f && split < 1f ? MathF.Round(split * w) / w : split;
+        return scene.TryGetGlyphWipe(node, out GlyphWipe authored) ? authored.QuantizeSplit(split, w) : GlyphWipe.Quantize(split, w);
     }
 
     private static State Seed(in CompositorAnimationSnapshot.Entry entry, double capturedAtMs) => new()

@@ -47,6 +47,11 @@ sealed class RepaintIdentityScene : Component
     public static readonly Signal<bool> EdgeCueOff = new(false);
     /// <summary>Scenario 19: the scroller's content is invisible (opacity 0) — the ground the cue must dissolve into.</summary>
     public static readonly Signal<bool> ContentHidden = new(false);
+    /// <summary>Scenario 27: the clipped line's own slice: false = a RepaintBoundary, true = a horizontal edge fade (the
+    /// marquee's shape). Either is an effect slice whose extent is cut to its marker clip.</summary>
+    public static readonly Signal<bool> ExtentFade = new(false);
+    /// <summary>Scenario 27: the clip's width (odd DIP; a resize widens it and exposes a strip the cut slice never rastered).</summary>
+    public static readonly Signal<float> ExtentClipW = new(151f);
 
     public static void ResetAll()
     {
@@ -54,6 +59,7 @@ sealed class RepaintIdentityScene : Component
         ScrollY.Value = 0f; RowX.Value = 0f;
         AcrylicEffects.Value = 0; AcrylicPlate.Value = true;
         EdgeCueOff.Value = false; ContentHidden.Value = false;
+        ExtentFade.Value = false; ExtentClipW.Value = 151f;
     }
 
     static readonly ColorF PageBg = ColorF.FromRgba(0x1A, 0x1C, 0x22);
@@ -101,6 +107,7 @@ sealed class RepaintIdentityScene : Component
             24 => OpaqueOverlay(inset: true, rasterScale: 1f),
             25 => OpaqueOverlay(inset: false, rasterScale: 0.25f),
             26 => OpaqueOverlay(inset: true, rasterScale: 0.25f),
+            27 => ExtentCut(),
             _ => FeatherPanel(),
         };
         return new BoxEl
@@ -940,6 +947,47 @@ sealed class RepaintIdentityScene : Component
                                 AutoEdgeFade = false, EdgeCues = ScrollEdgeCues.None,
                             },
                         }),
+                ],
+            },
+        ],
+    };
+
+    // ── 27 — extent-cut-identity: a long line (text + a fill, ~700 DIP) inside an odd-DIP clip at a fractional position,
+    //    its content translated by a fractional amount, in its own effect slice (a repaint boundary, or an edge fade). The
+    //    probe compares the slice cut to its marker clip (SliceRecorder.ExtentWithinMarkerClip) with the same slice uncut
+    //    (SliceRecorder.ForceUncutExtents): 0 px at every scale, before and after a resize widens the clip.
+    static Element ExtentCut() => new BoxEl
+    {
+        Grow = 1f, ZStack = true,
+        Children =
+        [
+            Coat(30f, 30f, 560f, 200f, 0x28, 0x30, 0x40, 0x90),
+            new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(57.3f, 81.7f, 0f, 0f), Width = ExtentClipW.Value, Height = 23f,
+                ClipToBounds = true,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        RepaintBoundary = !ExtentFade.Value, Width = ExtentClipW.Value, Height = 23f,
+                        EdgeFade = ExtentFade.Value ? new EdgeFadeSpec(EdgeMask.Horizontal, 24f) { OverflowTail = 500f } : null,
+                        ClipToBounds = true,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Direction = 0, Shrink = 0f, Gap = 6f, AlignItems = FlexAlign.Center,
+                                Transform = Affine2D.Translation(-23.4f, 0.35f),
+                                Children =
+                                [
+                                    new TextEl("A considerably longer line that runs well past its clip jgpqy") { Size = 15f, Wrap = TextWrap.NoWrap, Color = ColorF.FromRgba(0xEE, 0xEE, 0xF2) },
+                                    new BoxEl { Width = 133.3f, Height = 11.5f, Shrink = 0f, Corners = CornerRadius4.All(3f), Fill = ColorF.FromRgba(0x60, 0xA0, 0xE0, 0xC0) },
+                                ],
+                            },
+                        ],
+                    },
                 ],
             },
         ],

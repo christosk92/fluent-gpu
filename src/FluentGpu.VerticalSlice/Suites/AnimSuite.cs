@@ -3930,16 +3930,32 @@ static class AnimSuite
 
         var probe3 = new MarqueePingPongProbe();
         var window3 = new HeadlessWindow(new WindowDesc("marquee-edge", new Size2(220, 120), 1f)); window3.Show();
-        using var host3 = new AppHost(app, window3, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe3);
-        float maxTrack3 = 0f, maxLeftBand = 0f;
+        var device3 = new HeadlessGpuDevice();
+        using var host3 = new AppHost(app, window3, device3, new HeadlessFontSystem(strings), strings, probe3);
+        float maxTrack3 = 0f, maxLeftBand = 0f, drawnLeftBand = 0f;
         for (int i = 0; i < 60; i++)
         {
             host3.RunFrame();
             maxTrack3 = MathF.Max(maxTrack3, MaxAbsTrackX(host3, host3.Scene.Root));
-            maxLeftBand = MathF.Max(maxLeftBand, MaxEdgeFadeLeftBand(host3.Scene, host3.Scene.Root));
+            maxLeftBand = MathF.Max(maxLeftBand, MaxEdgeFadeLeftBand(host3, host3.Scene.Root));
+            drawnLeftBand = MathF.Max(drawnLeftBand, DrawnFadeBand(device3, EdgeMask.Left));
         }
-        Check("M3b. marquee edge-fade left band appears after scroll (scrollX ticker wired)",
-              maxTrack3 > 10f && maxLeftBand > 0.5f, $"maxAbsTrackX={maxTrack3:0.##} maxLeftBand={maxLeftBand:0.##}");
+        Check("M3b. marquee edge-fade left band appears after scroll (the OverflowTail cue follows the posed translate, and is drawn)",
+              maxTrack3 > 10f && maxLeftBand > 0.5f && drawnLeftBand > 0.5f,
+              $"maxAbsTrackX={maxTrack3:0.##} maxLeftBand={maxLeftBand:0.##} drawnLeftBand={drawnLeftBand:0.##}");
+        // M3c: the moving line is an effect slice (its fade's layer) whose content runs ~485 DIP past a 150-DIP clip; its
+        // tiles hold only what the clip can show, so the surface does not grow with the line and sliding the line under
+        // the clip does not move the slice's origin.
+        float widestEffect = 0f;
+        int effectSlices = 0;
+        foreach (var row in device3.LastCompositeSlices)
+        {
+            if (row.Kind != FluentGpu.Render.Tiles.SliceKind.Effect || row.ContentBounds.IsEmpty) continue;
+            effectSlices++;
+            widestEffect = MathF.Max(widestEffect, row.ContentBounds.W);
+        }
+        Check("M3c. a marquee's effect slice holds only what its clip shows (not the whole overflowing line)",
+              effectSlices > 0 && widestEffect <= 153f, $"effectSlices={effectSlices} widest={widestEffect:0.#}px");
 
         // M4a: the trigger-deactivated return is a ONE-SHOT from the LIVE translate back to 0 — the pure shape. The
         // engine seeds Keyframes from keys[0] (not the live row), so the departure value must be the first key; the
@@ -3957,17 +3973,19 @@ static class AnimSuite
         // M4b: behavioural — a HOVER-triggered ping-pong marquee (external gate, the player-bar shape) scrolls out while
         // hovered; on hover-leave it must GLIDE home (|translate| strictly non-increasing, through intermediate frames —
         // not a park at -tailDist and not a 0→0 snap) and land at 0, where the host's fade is the right-edge cue only
-        // (the left band the mid-scroll frames raised has cleared — the ticker keeps mirroring the live translate).
+        // (the left band the mid-scroll frames raised has cleared — the cue resolves from the live translate).
         var probe4 = new MarqueeHoverHomeProbe();
         var window4 = new HeadlessWindow(new WindowDesc("marquee-home", new Size2(220, 120), 1f)); window4.Show();
-        using var host4 = new AppHost(app, window4, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe4);
+        var device4 = new HeadlessGpuDevice();
+        using var host4 = new AppHost(app, window4, device4, new HeadlessFontSystem(strings), strings, probe4);
         for (int i = 0; i < 8; i++) host4.RunFrame();                        // mount at rest, not hovered: translate stays 0
         float restBefore = MaxAbsTrackX(host4, host4.Scene.Root);
         probe4.Hovered.Value = true;                                          // hover enters: the ping-pong track seeds and runs
         float peak = 0f;
         int outFrames = 0;
         while (outFrames++ < 120 && peak <= 20f) { host4.RunFrame(); peak = MaxAbsTrackX(host4, host4.Scene.Root); }
-        float leftBandWhileOut = MaxEdgeFadeLeftBand(host4.Scene, host4.Scene.Root);
+        float leftBandWhileOut = MaxEdgeFadeLeftBand(host4, host4.Scene.Root);
+        float drawnLeftWhileOut = DrawnFadeBand(device4, EdgeMask.Left);
         probe4.Hovered.Value = false;                                         // hover leaves: glide HOME from the live translate
         float prev = float.MaxValue, last = peak;
         bool monotone = true, glided = false;
@@ -3979,12 +3997,13 @@ static class AnimSuite
             if (cur > 0.5f && cur < peak - 0.5f) glided = true;               // an intermediate frame: a glide, not a snap
             prev = cur; last = cur;
         }
-        float leftBandEnd = MaxEdgeFadeLeftBand(host4.Scene, host4.Scene.Root);
-        float rightBandEnd = MaxEdgeFadeRightBand(host4.Scene, host4.Scene.Root);
+        float leftBandEnd = MaxEdgeFadeLeftBand(host4, host4.Scene.Root);
+        float rightBandEnd = MaxEdgeFadeRightBand(host4, host4.Scene.Root);
+        float drawnLeftEnd = DrawnFadeBand(device4, EdgeMask.Left), drawnRightEnd = DrawnFadeBand(device4, EdgeMask.Right);
         Check("M4b. marquee hover-leave glides home and the left fade clears",
-              restBefore < 0.5f && peak > 20f && leftBandWhileOut > 0.5f && monotone && glided && last < 0.5f
-              && leftBandEnd <= 0.001f && rightBandEnd > 0.5f,
-              $"rest={restBefore:0.##} peak={peak:0.##} outFrames={outFrames - 1} leftOut={leftBandWhileOut:0.##} monotone={monotone} glided={glided} last={last:0.###} leftEnd={leftBandEnd:0.##} rightEnd={rightBandEnd:0.##}");
+              restBefore < 0.5f && peak > 20f && leftBandWhileOut > 0.5f && drawnLeftWhileOut > 0.5f && monotone && glided && last < 0.5f
+              && leftBandEnd <= 0.001f && rightBandEnd > 0.5f && drawnLeftEnd <= 0.001f && drawnRightEnd > 0.5f,
+              $"rest={restBefore:0.##} peak={peak:0.##} outFrames={outFrames - 1} leftOut={leftBandWhileOut:0.##} drawnLeftOut={drawnLeftWhileOut:0.##} monotone={monotone} glided={glided} last={last:0.###} leftEnd={leftBandEnd:0.##} rightEnd={rightBandEnd:0.##} drawn={drawnLeftEnd:0.##}/{drawnRightEnd:0.##}");
 
         MarqueeQuantiseChecks(app, strings);
     }
@@ -4108,21 +4127,49 @@ static class AnimSuite
               noParkPeak > 10f, $"peak={noParkPeak:0.##}");
     }
 
-    static float MaxEdgeFadeLeftBand(SceneStore s, NodeHandle n)
+    /// <summary>A node's edge fade as the recorder draws it: an OverflowTail cue resolved from its first child's live
+    /// translate down its first-child chain (each node's track value as the compositor poses it; the scene's paint when no track runs).</summary>
+    static bool TryDrawnEdgeFade(AppHost host, NodeHandle n, out EdgeFadeSpec ef)
+    {
+        if (!host.Scene.TryGetEdgeFade(n, out ef)) return false;
+        float tx = 0f;
+        int depth = 0;
+        for (var c = host.Scene.FirstChild(n); !c.IsNull && depth < EdgeFadeSpec.OverflowChainDepth; c = host.Scene.FirstChild(c), depth++)
+        {
+            tx = host.Animation.TryGetTrackValue(c, AnimChannel.TranslateX, out float v) ? v : host.Scene.Paint(c).LocalTransform.Dx;
+            if (tx != 0f) break;   // the first translated node is the content (EdgeFadeSpec.OverflowTail)
+        }
+        ef = ef.ResolveOverflow(tx);
+        return true;
+    }
+
+    /// <summary>The widest band the last composite drew for <paramref name="edge"/> over every edge-fade layer.</summary>
+    static float DrawnFadeBand(HeadlessGpuDevice device, EdgeMask edge)
     {
         float best = 0f;
-        if (s.TryGetEdgeFade(n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Left));
-        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
-            best = MathF.Max(best, MaxEdgeFadeLeftBand(s, c));
+        foreach (var l in device.LastLayers)
+        {
+            if (l.Kind != (int)LayerKind.EdgeFade || (l.FadeEdges & (int)edge) == 0) continue;
+            best = MathF.Max(best, edge == EdgeMask.Left ? l.FadeBandL : l.FadeBandR);
+        }
         return best;
     }
 
-    static float MaxEdgeFadeRightBand(SceneStore s, NodeHandle n)
+    static float MaxEdgeFadeLeftBand(AppHost host, NodeHandle n)
     {
         float best = 0f;
-        if (s.TryGetEdgeFade(n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Right));
-        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
-            best = MathF.Max(best, MaxEdgeFadeRightBand(s, c));
+        if (TryDrawnEdgeFade(host, n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Left));
+        for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c))
+            best = MathF.Max(best, MaxEdgeFadeLeftBand(host, c));
+        return best;
+    }
+
+    static float MaxEdgeFadeRightBand(AppHost host, NodeHandle n)
+    {
+        float best = 0f;
+        if (TryDrawnEdgeFade(host, n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Right));
+        for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c))
+            best = MathF.Max(best, MaxEdgeFadeRightBand(host, c));
         return best;
     }
 
