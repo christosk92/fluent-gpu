@@ -3943,6 +3943,19 @@ static class AnimSuite
         Check("M3b. marquee edge-fade left band appears after scroll (the OverflowTail cue follows the posed translate, and is drawn)",
               maxTrack3 > 10f && maxLeftBand > 0.5f && drawnLeftBand > 0.5f,
               $"maxAbsTrackX={maxTrack3:0.##} maxLeftBand={maxLeftBand:0.##} drawnLeftBand={drawnLeftBand:0.##}");
+        // M3c: the moving line is an effect slice (its fade's layer) whose content runs ~485 DIP past a 150-DIP clip; its
+        // tiles hold only what the clip can show, so the surface does not grow with the line and sliding the line under
+        // the clip does not move the slice's origin.
+        float widestEffect = 0f;
+        int effectSlices = 0;
+        foreach (var row in device3.LastCompositeSlices)
+        {
+            if (row.Kind != FluentGpu.Render.Tiles.SliceKind.Effect || row.ContentBounds.IsEmpty) continue;
+            effectSlices++;
+            widestEffect = MathF.Max(widestEffect, row.ContentBounds.W);
+        }
+        Check("M3c. a marquee's effect slice holds only what its clip shows (not the whole overflowing line)",
+              effectSlices > 0 && widestEffect <= 153f, $"effectSlices={effectSlices} widest={widestEffect:0.#}px");
 
         // M4a: the trigger-deactivated return is a ONE-SHOT from the LIVE translate back to 0 — the pure shape. The
         // engine seeds Keyframes from keys[0] (not the live row), so the departure value must be the first key; the

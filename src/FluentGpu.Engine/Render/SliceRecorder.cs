@@ -2034,6 +2034,7 @@ public sealed partial class SliceRecorder
             ref ScanSeg sg = ref _scanSegs[e.Slot][e.Segment];
             RectF bDip = sg.Bounds;
             bool effect = r.Kind == SliceKind.Effect;
+            if (effect) bDip = ExtentWithinMarkerClip(in r, in bDip, scale);
             int covSlot = CoverageSlot(e.Slot);
             // Only a VIRTUAL list's content grows along its main axis as rows realize (and parks at both ends): its
             // segments keep the main-axis origin at content 0 and charge whole cells there. Any other scroll segment is
@@ -2359,6 +2360,30 @@ public sealed partial class SliceRecorder
 
     private static RectF RoundPx(in RectF round, float r, float scale) => r > 0f ? ScalePx(round, scale) : default;
     private static CornerRadius4 RadiiPx(float r, float scale) => r > 0f ? CornerRadius4.All(r * scale) : default;
+
+    /// <summary>An effect segment's painted bounds cut to its MARKER clip (slot-space DIP, one device px of slack so the
+    /// snapped-out composite clip's edge pixels stay inside): what the slice can ever show. A slice placed with its
+    /// containing slice (its own role, no pose, no sticky clip, its params in that slice's space) composites under that
+    /// clip, so a tile never needs content past it: a marquee's line, a clipped node's overflow, is rastered only where
+    /// it can be seen (a 144-DIP player-bar title held a 960x128 surface for its 616-DIP line), and content sliding
+    /// under the clip no longer moves the slice's origin (a geometry invalidation per frame). Pixel-identical: the
+    /// origin stays on the grid, so every op rasters at the same device position. Not for a slice that samples outside
+    /// its clip (a self-blur, a blurred fade, acrylic) or that has no tiles (a low-resolution or feedback boundary).</summary>
+    private static RectF ExtentWithinMarkerClip(in Rec r, in RectF bounds, float scale)
+    {
+        if (bounds.IsEmpty || r.MarkerClip.IsInfinite || r.MarkerClip.IsEmpty || r.Pose != PoseKind.None || r.Sticky
+            || r.Role is not ((int)SliceRole.Main or (int)SliceRole.Layer)
+            || r.LowRes > 1 || r.HasFeedback || !r.Acrylic.IsNone
+            || (r.MarkerFlags & (int)(CompositeSliceFlags.InnerClip | CompositeSliceFlags.ParamsUp)) != 0)
+            return bounds;
+        if ((r.MarkerFlags & (int)CompositeSliceFlags.Layer) != 0
+            && (r.Layer.Kind is (int)LayerKind.Blur or (int)LayerKind.Acrylic || r.Layer.BlurSigma > 0f))
+            return bounds;
+        float slack = 1f / MathF.Max(scale, 0.01f);
+        RectF clip = new(r.MarkerClip.X - slack, r.MarkerClip.Y - slack, r.MarkerClip.W + 2f * slack, r.MarkerClip.H + 2f * slack);
+        RectF cut = bounds.Intersect(clip);
+        return cut.IsEmpty ? default : cut;
+    }
 
     /// <summary>The slot whose realized coverage drives a segment's needed tiles: a scroll content slice itself, or the
     /// content slice an item band / pinned band rides; −1 for everything else.</summary>
