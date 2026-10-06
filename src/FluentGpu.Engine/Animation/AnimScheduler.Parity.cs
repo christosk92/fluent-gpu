@@ -170,7 +170,8 @@ public sealed partial class AnimEngine
                 if (loop) loops++;
                 // Parked/Done/Driven rows are never TIMER-due: parked is quiesced, done retires this tick, driven is
                 // event-woken by its signal write (that was the whole point — a paused playhead costs zero frames).
-                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven)) != 0) continue;
+                // A PAUSED row (SetPaused) neither moves nor ages, so it owes no frame either.
+                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven | AnimFlags.Paused)) != 0) continue;
                 int period = PeriodMsOf(s);
                 if (period <= 0)
                 {
