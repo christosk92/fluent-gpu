@@ -41,6 +41,10 @@ namespace FluentGpu.Hosting;
 /// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
 /// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
 /// a hole-punched underlay, where the output's overlay probe reports support (F087, A/B arm, default off).</item>
+/// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
+/// changed redrawn) is also rendered whole into a second surface and the two are read back and compared at the next composite:
+/// a <c>[group-repair]</c> line (<see cref="Diag.Line"/>: stderr with <c>diag</c>, else the host's sink) on every mismatch and a
+/// running census every 600 checks (a validation arm: a GPU readback and a wait per checked repair).</item>
 /// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
@@ -107,6 +111,10 @@ public static class EngineSwitches
     /// otherwise the runtime falls back to SL2000 - and the negotiated level is logged once per runtime. Read once, when the native runtime
     /// is created: set it (the command line) before the first protected open.</summary>
     public static bool ForcePlayReadySl2000;
+
+    /// <summary>Validate every in-place group-surface repair against a whole render of the same group (<c>--fg
+    /// group-repair-validate</c>; the D3D12 backend's readback comparison).</summary>
+    public static bool GroupRepairValidate;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -183,6 +191,7 @@ public static class EngineSwitches
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "group-repair-validate": GroupRepairValidate = true; return true;
             default: return false;
         }
     }

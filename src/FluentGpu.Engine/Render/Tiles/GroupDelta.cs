@@ -62,6 +62,11 @@ public static class GroupDelta
         Mix(ref shape, (ulong)(uint)w << 32 | (uint)h);
         if ((uint)i >= (uint)items.Length) return shape;
         int end = Math.Min(items.Length, i + 1 + items[i].GroupCount);
+        // the group's IDENTITY: two groups with the same relative layout (made only of nested groups, whose own slice is −1)
+        // must not share a memo — each would evict the other's retained surface every turn
+        int first = -1;
+        for (int k = i + 1; k < end && first < 0; k++) first = items[k].SliceId;
+        Mix(ref shape, (ulong)(uint)items[i].GroupCount << 32 | (uint)first);
         var bounds = new PixelRect(0, 0, w, h);
         for (int k = i + 1; k < end; k++)
         {

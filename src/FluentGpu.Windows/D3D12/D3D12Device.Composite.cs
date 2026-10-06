@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using FluentGpu.Foundation;
+using FluentGpu.Hosting;
 using FluentGpu.Render;
 using FluentGpu.Render.Tiles;
 using TerraFX.Interop.DirectX;
@@ -126,6 +127,7 @@ public sealed unsafe partial class D3D12Device
             throw new InvalidOperationException("SubmitComposite composites into the PRIMARY swapchain only; a secondary target (detached pop-out / popup) must use SubmitDrawList.");
         if (sc.Disposed) throw new InvalidOperationException("The primary swapchain is disposed.");
         AssertSubmitThread();
+        if (EngineSwitches.GroupRepairValidate) GroupRepairValidateBegin();
         CheckCompositeOwner(frame.OwnerToken);
         TargetFrameState f = sc.Frame;
         // Tiles and region scratches can exceed a small window: the stencil DSV covers max(window, tile).
@@ -1093,6 +1095,11 @@ public sealed unsafe partial class D3D12Device
         int w = region.Right - region.Left, h = region.Bottom - region.Top;
         int n = GroupDelta.Diff(memo.Entries.AsSpan(0, memo.Count), _groupEntries.AsSpan(0, count), (long)w * h, _groupDirty);
         if (n < 0) return false;
+        // Nothing changed means everything the content key is made of is unchanged: the key matched, and the retained
+        // surface was found before the repair was ever considered. A zero diff with a different key would re-key pixels
+        // that are not this content.
+        Debug.Assert(n > 0 || key == memo.Key, "GroupDelta found no change but the group's content key moved");
+        if (n == 0 && key != memo.Key) return false;
         int s = _surfaces!.FindRetainedForRepair(memo.Key, _fenceValue + 1);
         if (s < 0) return false;
         _groupRenders++;
@@ -1118,6 +1125,7 @@ public sealed unsafe partial class D3D12Device
             }
             EndPassIfOpen();
             ScratchBarrier(s, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            GroupRepairValidate(in frame, i, in region, s);   // --fg group-repair-validate
         }
         _itemSurface[i] = s; _itemDown[i] = 1; _itemRegion[i] = region;
         _surfaces.Retain(s, key, 1, RetainedCap());
