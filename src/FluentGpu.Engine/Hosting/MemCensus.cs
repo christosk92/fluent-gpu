@@ -54,7 +54,7 @@ public readonly struct CensusSnapshot
     public readonly long PixelPoolRetainedBytes;
     public readonly long PixelPoolPeakBytes;
     public readonly long PixelPoolCapBytes;
-    // hidden-window memory stage (HiddenMemoryPolicy): 0 = Visible, 1 = Shallow released; and whether the host is parked now
+    // hidden-window memory stage (HiddenMemoryPolicy): 0 = Visible, 1 = Shallow, 2 = Deep released; and whether the host is parked now
     public readonly byte HiddenStage;
     public readonly bool HostParked;
 
