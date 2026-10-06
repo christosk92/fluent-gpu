@@ -1349,6 +1349,8 @@ public sealed unsafe partial class D3D12Device
                 return it.Footprint.W <= 0f || it.Footprint.H <= 0f || Overlaps(it.Footprint, in region);
             case CompositeKind.Backdrop:
                 return _itemSurface[k] < 0 || Overlaps(in _itemRegion[k], in region);
+            case CompositeKind.Image:
+                return !TryPosedImage(in frame, in it, out _, out RectF imgPx) || Overlaps(in imgPx, in region);
             default:
                 return true;
         }
@@ -1446,6 +1448,9 @@ public sealed unsafe partial class D3D12Device
                 case CompositeKind.Direct:
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
+                case CompositeKind.Image:
+                    DrawPosedImage(in frame, in it, ox, oy, tw, th, feathers);
+                    break;
                 case CompositeKind.Tiles:
                 case CompositeKind.Region:
                 {
@@ -1533,7 +1538,8 @@ public sealed unsafe partial class D3D12Device
     /// pixels), only the strips around it evaluate it.</summary>
     private void DrawItemQuad(in CompositeItem it, float x0, float y0, float x1, float y1, int ox, int oy, bool feathers,
         SliceCompositor.Pso pso, D3D12_GPU_DESCRIPTOR_HANDLE srv, bool sample = false, float sampleSx = 0f, float sampleSy = 0f,
-        float clampU = 0f, float clampV = 0f, int srcOx = 0, int srcOy = 0)
+        float clampU = 0f, float clampV = 0f, int srcOx = 0, int srcOy = 0, float mapX0 = float.NaN, float mapY0 = float.NaN,
+        bool hasFill = false, ColorF fill = default)
     {
         bool f1 = feathers && !it.Feather.IsNone, f2 = feathers && !it.Feather2.IsNone;
         Span<FeatherPiece> pieces = stackalloc FeatherPiece[FeatherQuadSplit.MaxPieces];
@@ -1562,9 +1568,10 @@ public sealed unsafe partial class D3D12Device
         {
             ref readonly FeatherPiece p = ref pieces[k];
             _compositor!.Begin(p.X0, p.Y0, p.X1, p.Y1);
-            if (sample) _compositor.SampleMap(x0, y0, sampleSx, sampleSy);
+            if (sample) _compositor.SampleMap(float.IsNaN(mapX0) ? x0 : mapX0, float.IsNaN(mapY0) ? y0 : mapY0, sampleSx, sampleSy);
             if (clampU > 0f) _compositor.SampleClamp(clampU, clampV);
             else _compositor.SourceOrigin(p.X0 - x0 + srcOx, p.Y0 - y0 + srcOy);
+            if (hasFill) _compositor.Color(in fill);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
             if (p.Feathered)
@@ -1574,6 +1581,58 @@ public sealed unsafe partial class D3D12Device
                 if (w > 0f && h > 0f) _frameFeatherPx += (long)(w * h);
             }
         }
+    }
+
+    /// <summary>A posed image layer (<see cref="CompositeKind.Image"/>, BoxEl.CompositePose): the slice's one image op drawn as ONE
+    /// bilinear quad straight from its texture. <c>it.Transform</c> maps the stream's window DIP to device px (pose + scale + accumulated
+    /// offset); composed with the op's own transform it places the image's rect. The source mapping is PSSample's axis-aligned
+    /// <c>uv = (pos - map0) * s</c> over the image's atlas/standalone cell and content-fit sub-rect: the same texels the tile
+    /// raster's image pipeline sampled, with no tile in between. An image whose texture has not landed draws its placeholder colour; a
+    /// reveal / swap cross-fade in flight draws placeholder * (1 - f) under the image * f (the pipeline's premultiplied lerp).</summary>
+    private void DrawPosedImage(in CompositeFrame frame, in CompositeItem it, int ox, int oy, int tw, int th, bool feathers)
+    {
+        if (!TryPosedImage(in frame, in it, out DrawImageCmd im, out RectF q)) return;
+        float x0 = q.X - ox, y0 = q.Y - oy, x1 = q.Right - ox, y1 = q.Bottom - oy;
+        if (x1 <= x0 || y1 <= y0 || x0 >= tw || y0 >= th || x1 <= 0f || y1 <= 0f) return;
+        float fade = FluentGpu.Scene.ImageCache.ResolveFade(frame.Info.ImageClockMs, im.FadeStartMs, im.FadeDurationMs, im.FadeEasing);
+        float baseAlpha = it.Alpha * Math.Clamp(im.Opacity, 0f, 1f);
+        ItemScissor(in it, ox, oy);
+        bool resident = _imageTextures!.TryGet(im.ImageId, out D3D12_GPU_DESCRIPTOR_HANDLE srv, out RectF cell);
+        ColorF ph = im.Placeholder;
+        if ((!resident || fade < 1f) && ph.A > 0f)
+        {
+            float pa = baseAlpha * (resident ? 1f - Math.Clamp(fade, 0f, 1f) : 1f);
+            CompositeItem phItem = it with { Alpha = pa };
+            DrawItemQuad(in phItem, x0, y0, x1, y1, ox, oy, feathers, SliceCompositor.Pso.Fill, default,
+                hasFill: true, fill: new ColorF(ph.R * ph.A, ph.G * ph.A, ph.B * ph.A, ph.A));
+        }
+        if (!resident) return;
+        float f = Math.Clamp(fade, 0f, 1f);
+        if (f <= 0f) return;
+        // The cell's uv (origin + size, half-texel inset) composed with the op's content-fit sub-rect, mapped through the quad.
+        float u0 = cell.X + im.UvRect.X * cell.W, v0 = cell.Y + im.UvRect.Y * cell.H;
+        float sx = cell.W * im.UvRect.W / (x1 - x0), sy = cell.H * im.UvRect.H / (y1 - y0);
+        if (!(sx > 0f) || !(sy > 0f)) return;
+        CompositeItem imItem = it with { Alpha = baseAlpha * f };
+        // The image's SRV lives in the image store's heap, not the compositor's surface heap: bind it for this draw, then restore.
+        ID3D12DescriptorHeap* imageHeap = _imageTextures.Heap;
+        ID3D12DescriptorHeap* surfaceHeap = _surfaces!.SrvHeap;
+        _cmdList->SetDescriptorHeaps(1, &imageHeap);
+        DrawItemQuad(in imItem, x0, y0, x1, y1, ox, oy, feathers, it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample,
+            srv, sample: true, sampleSx: sx, sampleSy: sy, mapX0: x0 - u0 / sx, mapY0: y0 - v0 / sy);
+        _cmdList->SetDescriptorHeaps(1, &surfaceHeap);
+    }
+
+    /// <summary>Read a posed Image item's op back from its slice stream and place it: <paramref name="quadPx"/> = the image rect's
+    /// device-px bounds (<c>item transform . op transform</c>, axis-aligned by the recorder's eligibility scan).</summary>
+    private bool TryPosedImage(in CompositeFrame frame, in CompositeItem it, out DrawImageCmd image, out RectF quadPx)
+    {
+        image = default; quadPx = default;
+        int r = RowOf(it.SliceId);
+        if (r < 0 || !FluentGpu.Render.PosedImage.Find(frame.StreamOf(in frame.Slices[r]), out image)) return false;
+        Affine2D opT = image.Transform;
+        quadPx = it.Transform.Multiply(in opT).TransformBounds(image.Rect);
+        return !quadPx.IsEmpty;
     }
 
     private void DrawBackdrop(in CompositeItem it, int i, int ox, int oy)

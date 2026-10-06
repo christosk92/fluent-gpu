@@ -28,6 +28,7 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
     public GradientSpec? BorderBrush;
     public bool RepaintBoundary;
     public float RasterScale = 1f;
+    public bool CompositePose;
     public bool TabShape;
     public float TabFlareRadius = 4f;
     public bool VideoHole;
@@ -62,6 +63,7 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
             && EqualityComparer<GradientSpec?>.Default.Equals(BorderBrush, o.BorderBrush)
             && EqualityComparer<bool>.Default.Equals(RepaintBoundary, o.RepaintBoundary)
             && EqualityComparer<float>.Default.Equals(RasterScale, o.RasterScale)
+            && EqualityComparer<bool>.Default.Equals(CompositePose, o.CompositePose)
             && EqualityComparer<bool>.Default.Equals(TabShape, o.TabShape)
             && EqualityComparer<float>.Default.Equals(TabFlareRadius, o.TabFlareRadius)
             && EqualityComparer<bool>.Default.Equals(VideoHole, o.VideoHole)

@@ -2095,11 +2095,12 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>BoxEl.RepaintBoundary: the subtree records into its own retained slice (SceneRecorder's isolation cut).
     /// Equality-gated so an identical re-render marks nothing.</summary>
     /// <param name="down">The boundary's raster DOWNSCALE (1 = full resolution, 2/4/8 = BoxEl.RasterScale 1/2, 1/4, 1/8).</param>
-    public void SetRepaintBoundary(NodeHandle h, bool on, byte down = 1)
+    public void SetRepaintBoundary(NodeHandle h, bool on, byte down = 1, bool compositePose = false)
     {
         int idx = (int)h.Raw.Index;
         bool had = _repaintBoundaries.TryGet(idx, out byte cur);
         if (down < 1) down = 1;
+        if (compositePose) down = (byte)(1 | CompositePoseBit);   // a posed image layer has no low-resolution route
         if (had == on && (!on || cur == down)) return;
         if (on) { _flags[idx] |= NodeFlags.SparsePaint; _repaintBoundaries.GetOrAdd(idx) = down; }
         else _repaintBoundaries.Remove(idx);
@@ -2107,7 +2108,13 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool IsRepaintBoundary(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out _);
     /// <summary>The boundary's raster downscale (1 = full); 0 when the node is not a repaint boundary.</summary>
-    public byte RepaintBoundaryDown(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out byte d) ? d : (byte)0;
+    public byte RepaintBoundaryDown(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out byte d) ? (byte)(d & DownMask) : (byte)0;
+    /// <summary>The boundary column's raw byte (downscale | <see cref="CompositePoseBit"/>) — what the recording snapshot copies.</summary>
+    public byte RepaintBoundaryBits(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out byte d) ? d : (byte)0;
+    /// <summary>BoxEl.CompositePose: the boundary is a posed image layer (its pose applies at composite time).</summary>
+    public bool IsCompositePose(NodeHandle h) => _repaintBoundaries.TryGet((int)h.Raw.Index, out byte d) && (d & CompositePoseBit) != 0;
+    /// <summary>The boundary column's flag bit for BoxEl.CompositePose (the low nibble is the raster downscale 1/2/4/8).</summary>
+    public const byte CompositePoseBit = 0x10, DownMask = 0x0F;
 
     /// <summary>BoxEl.RasterScale → the downscale factor the low-resolution slice route uses (snapped: 1, 2, 4, 8).</summary>
     public static byte RasterDown(float rasterScale)

@@ -54,6 +54,7 @@ static class TileSuite
         SegmentExtentChecks(strings, fonts);
         RenderAllocZeroChecks(strings, fonts);
         RepaintBoundaryChecks(strings, fonts);
+        CompositePoseChecks(strings, fonts);
         InvisibleBoundsChecks(strings, fonts);
         OpaqueCoverChecks(strings, fonts);
         TilePaintChecks(strings, fonts);
@@ -289,6 +290,65 @@ static class TileSuite
             && SceneStore.RasterDown(0.25f) == 4 && SceneStore.RasterDown(0.1f) == 8 && SceneStore.RasterDown(float.NaN) == 1,
             $"1→{SceneStore.RasterDown(1f)} 0.5→{SceneStore.RasterDown(0.5f)} 0.25→{SceneStore.RasterDown(0.25f)} 0.1→{SceneStore.RasterDown(0.1f)}");
         BoundaryProbe.Shift.Value = 0;
+    }
+
+    // ── gate.tiles.composite-pose ────────────────────────────────────────────────────────────────────────────────
+    /// <summary>BoxEl.CompositePose: ONE full-bleed photo whose scale + translate step every frame (the visualizer's hero pan).
+    /// Eligible, it composites as an Image item at the current pose and rasters no tile; with rounded corners the stream is
+    /// ineligible and the box falls back to the ordinary tiled boundary (counted).</summary>
+    sealed class PosedProbe(float corners) : Component
+    {
+        public static readonly Signal<int> Step = new(0);
+        public override Element Render() => new BoxEl
+        {
+            Grow = 1f, ZStack = true, Fill = ColorF.FromRgba(18, 18, 22),
+            Children =
+            [
+                new BoxEl
+                {
+                    AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start, Width = 800f, Height = 500f, ClipToBounds = true,
+                    CompositePose = true,
+                    Transform = Prop.Of(() => Affine2D.Scale(1f + Step.Value * 0.01f, 1f + Step.Value * 0.01f).Multiply(Affine2D.Translation(Step.Value * 0.5f, 0f))),
+                    Children = [Ui.Image("album/posed.jpg", ImageFit.Cover, float.NaN, 512f, corners) with { Width = 800f, Height = 500f }],
+                },
+            ],
+        };
+    }
+
+    static (int Rasters, int ImageItems, int Fallbacks, bool Moved) PosedRun(StringTable strings, HeadlessFontSystem fonts, float corners)
+    {
+        PosedProbe.Step.Value = 0;
+        var (app, window, dev, host) = Host(corners > 0f ? "tiles-posed-rounded" : "tiles-posed", strings, fonts, new PosedProbe(corners));
+        using var _a = app; using var _h = host;
+        Frames(host, 30);
+        int rasters = 0, imageItems = 0;
+        float firstM11 = float.NaN, lastM11 = float.NaN;
+        int seen = dev.CompositeFrameCount;
+        for (int step = 0; step < 60; step++)
+        {
+            PosedProbe.Step.Value++;
+            host.RunFrame();
+            if (dev.CompositeFrameCount == seen) continue;
+            seen = dev.CompositeFrameCount;
+            foreach (var op in dev.LastCompositeRecords)
+                if (op.Kind == CompositeRecordKind.RasterTile) rasters++;
+            foreach (var it in host.UiSlices.LastItems)
+                if (it.Kind == CompositeKind.Image) { imageItems++; if (float.IsNaN(firstM11)) firstM11 = it.Transform.M11; lastM11 = it.Transform.M11; }
+        }
+        return (rasters, imageItems, host.UiSlices.PoseFallbacks, !float.IsNaN(firstM11) && lastM11 > firstM11);
+    }
+
+    static void CompositePoseChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var posed = PosedRun(strings, fonts, corners: 0f);
+        Check("gate.tiles.composite-pose an eligible CompositePose photo composites as Image items whose scale grows step by step and rasters NO tile",
+            posed.ImageItems > 0 && posed.Moved && posed.Rasters == 0 && posed.Fallbacks == 0,
+            $"imageItems={posed.ImageItems} moved={posed.Moved} rasters={posed.Rasters} fallbacks={posed.Fallbacks}");
+        var rounded = PosedRun(strings, fonts, corners: 12f);
+        Check("gate.tiles.composite-pose rounded corners make the stream ineligible: no Image item, the tiled boundary route takes over and the fallback is counted",
+            rounded.ImageItems == 0 && rounded.Fallbacks > 0,
+            $"imageItems={rounded.ImageItems} rasters={rounded.Rasters} fallbacks={rounded.Fallbacks}");
+        PosedProbe.Step.Value = 0;
     }
 
     // ── gate.tiles.needed-order ─────────────────────────────────────────────────────────────────────────────────

@@ -4961,8 +4961,8 @@ public sealed partial class TreeReconciler
                 if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
                 // A feedback box IS a repaint boundary, at the feedback surface scale.
-                _scene.SetRepaintBoundary(node, b.RepaintBoundary || b.Feedback is not null,
-                    SceneStore.RasterDown(b.Feedback is { } fspec ? fspec.RasterScale : b.RasterScale));
+                _scene.SetRepaintBoundary(node, b.RepaintBoundary || b.Feedback is not null || b.CompositePose,
+                    SceneStore.RasterDown(b.Feedback is { } fspec ? fspec.RasterScale : b.RasterScale), b.CompositePose && b.Feedback is null);
                 _scene.SetBlend(node, b.Blend, b.LayerBlend);
                 if (b.Feedback is { } fb)
                 {

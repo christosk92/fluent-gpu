@@ -451,6 +451,7 @@ public sealed partial class HeadlessGpuDevice
                 case CompositeKind.Tiles:
                 case CompositeKind.Region:
                 case CompositeKind.Direct:
+                case CompositeKind.Image:
                 {
                     int r = frame.RowIndexOf(it.SliceId);
                     if (r < 0) break;

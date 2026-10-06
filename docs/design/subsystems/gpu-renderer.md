@@ -2339,3 +2339,30 @@ Amendments folded into this actualization (everything else preserved from the or
 - **Text shaping / glyph atlas / `GlyphRunTable` / `PackedGlyph`:** [subsystems/text.md](./text.md)
 - **Image decode/residency, video registry, lyrics:** [app-requirements-waveemusic.md §3.1, §3.4](../app-requirements-waveemusic.md) (`FluentGpu.Media`)
 - **.NET 10 / C# 14 zero-alloc + AOT patterns:** [dotnet10-csharp14-zero-alloc.md](../dotnet10-csharp14-zero-alloc.md)
+
+#### 13.1m Posed image layers — `BoxEl.CompositePose` (as built 2026-10)
+
+A `RepaintBoundary` is an isolation slice with no pose: a render-thread transform on it is baked into its stream, so every
+step of a keyframe pan re-rasters its tiles. `BoxEl.CompositePose` (implies `RepaintBoundary`) makes the box's OWN
+`ScaleX/ScaleY/TranslateX/TranslateY` (static, bound or render-owned rows) a COMPOSITE parameter for the one shape that
+needs it — a full-bleed photo with a slow Ken Burns:
+
+- **Record.** `SceneRecorder`'s boundary cut records the subtree pose-free (`SelfHasLocal`, identity local, an unbounded walk
+  clip) as `PoseKind.Posed`; the stream bytes stay constant while the pose moves, so nothing re-rasters. A pose or base world
+  that is not axis-aligned records through the ordinary boundary route (pose baked).
+- **Eligibility** (`SliceRecorder.AnalyzePosedImage`, from the slot's stream): exactly one `DrawImage` under rectangular clips
+  only, no corner radii, overlay, mask or saturation, no layer, no second paint op, no child slice. The box's own opacity is an
+  ordinary image opacity. A stream that fails marks the node (`PoseFallback`), the next pass cuts it as a plain boundary
+  (identical pixels, tile raster per change) and `SliceRecorder.PoseFallbacks` counts it.
+- **Place.** An eligible posed slot requests no tiles and emits a `CompositeKind.Image` item whose `Transform` maps the stream's
+  window DIP to device px (`posed world ∘ free world⁻¹`, scale, accumulated offset). A pose change is composite damage (old ∪ new
+  footprint) and part of the composite hash.
+- **Draw.** The backend reads the op back from the slice stream (`PosedImage.Find`), places `item.Transform ∘ op.Transform` over
+  the op rect and draws one bilinear `SliceCompositor.Pso.Sample` quad over the image's cell/UV (the same texels the tile raster
+  sampled), alpha = item × op opacity, under the item's clip/feather. A texture not yet resident draws the placeholder colour; a
+  reveal/swap cross-fade in flight draws placeholder·(1−f) under image·f. Partial present: one entry per Image item (footprint =
+  the quad; signature = transform, alpha, image content serial, fade). No occlusion claim.
+- **Cadence.** The pan keeps whatever cadence its rows have (`Cadence.At(hz)`); each step is still a record turn (a tiny
+  one-op stream) with one full-window composite quad and no tile raster. Composite-only turns for posed roots are a possible follow-up.
+- **Gates.** `gate.tiles.composite-pose` (TileSuite): an eligible photo rasters no tile over 60 steps and its Image item's
+  scale grows; rounded corners fall back and are counted.

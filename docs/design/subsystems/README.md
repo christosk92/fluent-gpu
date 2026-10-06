@@ -107,7 +107,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 |---------------|-----------|
 | Seam shapes: IGpuDevice/ISwapchain/ICommandEncoder, all POD descs, DeviceLostToken | pal-rhi.md |
 | SubmitDrawList (the opcode consume site — secondary swapchains; the same streaming decoder rasters tiles) | pal-rhi.md (driven by gpu-renderer.md) |
-| **IGpuDevice.SubmitComposite + SupportsComposite** (the primary window's submit, AS-BUILT 2026-09), `LastLostPlacements` (AS-BUILT 2026-10), and its POD frame types `CompositeFrame` / `CompositeItem` / `CompositeKind` / `AcrylicRecipe` / `PresentParams` (as-built `Seams/Rhi/Composite.cs`) | pal-rhi.md §2.3 (seam member + types) / gpu-renderer.md §13.1 (what a backend must DO: raster order, render-pass discipline, what each kind draws, the whole-frame present rule) |
+| **IGpuDevice.SubmitComposite + SupportsComposite** (the primary window's submit, AS-BUILT 2026-09), `LastLostPlacements` (AS-BUILT 2026-10), and its POD frame types `CompositeFrame` / `CompositeItem` / `CompositeKind` (incl. `Image`, the `BoxEl.CompositePose` posed image layer — gpu-renderer.md §13.1m) / `AcrylicRecipe` / `PresentParams` (as-built `Seams/Rhi/Composite.cs`) | pal-rhi.md §2.3 (seam member + types) / gpu-renderer.md §13.1 (what a backend must DO: raster order, render-pass discipline, what each kind draws, the whole-frame present rule) |
 | ICommandEncoder.CopyBufferToTexture (new) | pal-rhi.md (seam) / media-pipeline.md + text.md (drivers) |
 | ResolveTexture, Present, Resize, Create*/Destroy* | pal-rhi.md |
 | CreatePipeline / GraphicsPipelineDesc, root signature | pal-rhi.md (seam) / gpu-renderer.md (PSO set + shaders) |
