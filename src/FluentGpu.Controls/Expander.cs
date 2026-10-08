@@ -34,7 +34,7 @@ public sealed record ExpanderOptions
 ///
 /// MOTION — NOT WinUI's (Expander.xaml snaps the layout space and slides only the content). The content clip wrapper's
 /// declared Height toggles 0 ↔ NaN(auto): layout lands ONCE at the new size and <see cref="SizeMode.FlowReveal"/> springs
-/// the PRESENTED height under <c>MotionTok.Reveal</c> (critically damped, ~0.31 s, the same spring both ways) while every
+/// the PRESENTED height under <c>MotionTok.Reveal</c> (critically damped, ~0.26 s, the same spring both ways) while every
 /// sibling below rides the difference at paint time — no per-frame layout, no component render, interruptible from the
 /// live value with its velocity. <see cref="SizeAnchor.Parallax"/>: the panel trails the moving edge by a damped share of
 /// what is still hidden (≤ 24 DIP), so it reads as unfolding rather than wiped. The chevron rotates on the same spring.

@@ -167,10 +167,10 @@ static class RevealSuite
             float firstStep = ys.Count > 0 ? ys[0] - yCommit : -1f;
             float maxStep = MaxStep(yCommit, ys);
             bool holds = Near(yCommit, y0, 0.5f);
-            bool first = firstStep >= 0f && firstStep <= travel * (fast ? 0.02f : 0.05f);
+            bool first = firstStep >= 0f && firstStep <= travel * (fast ? 0.02f : 0.07f);
             bool step = maxStep <= travel * (fast ? 0.08f : 0.15f);
             bool lands = ys.Count > 0 && Near(ys[^1], rig.LayoutY(after), 0.5f) && Near(rig.LayoutY(after), y0 + travel, 0.5f);
-            Check($"rv.3 FlowReveal @{dt:0.##}ms: the commit frame shows the old geometry, the first advance moves ≤{(fast ? 2 : 5)}% of the travel, no frame steps >{(fast ? 8 : 15)}%, and it lands on layout",
+            Check($"rv.3 FlowReveal @{dt:0.##}ms: the commit frame shows the old geometry, the first advance moves ≤{(fast ? 2 : 7)}% of the travel, no frame steps >{(fast ? 8 : 15)}%, and it lands on layout",
                 holds && first && step && lands,
                 $"y0={y0:0.0} commit={yCommit:0.0} first={firstStep:0.00} maxStep={maxStep:0.00} end={(ys.Count > 0 ? ys[^1] : -1f):0.0} layout={rig.LayoutY(after):0.0}");
         }

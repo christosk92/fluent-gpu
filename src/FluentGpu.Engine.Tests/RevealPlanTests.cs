@@ -69,7 +69,7 @@ public sealed class RevealPlanTests
 
     [Theory]
     [InlineData(8.33f, 0.02f, 0.08f)]
-    [InlineData(16.67f, 0.05f, 0.15f)]
+    [InlineData(16.67f, 0.07f, 0.15f)]
     public void Spring_FirstFrameAndPerFrameStepAreBounded(float dtMs, float firstMax, float stepMax)
     {
         float first = RevealPlan.Progress(dtMs);

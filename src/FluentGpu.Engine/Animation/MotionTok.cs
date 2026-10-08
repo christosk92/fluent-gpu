@@ -160,10 +160,12 @@ public static class MotionTok
     /// <summary>Chrome reveal duration (ms): 150 ms Fluent decelerate (Fluent "fast" 167; Chromium 250; mpv instant) — a
     /// reveal answers a user action and must feel immediate. See <see cref="MotionTokenId.MediaChromeReveal"/>.</summary>
     public const float MediaChromeFadeInMs = 150f;
-    /// <summary>Response (s) of <see cref="MotionTokenId.Reveal"/>: ω = 2π/0.31 ≈ 20.3 rad/s, critically damped — 1.3 % of
-    /// the travel on the first 120 Hz frame, 95 % at ~235 ms, 99 % at ~330 ms, no overshoot, the same curve open and close
-    /// (docs/plans/smooth-reveal-implementation.md §1).</summary>
-    public const float RevealResponseSec = 0.31f;
+    /// <summary>Response (s) of <see cref="MotionTokenId.Reveal"/>: ω = 2π/0.26 ≈ 24.2 rad/s, critically damped — 1.8 % of
+    /// the travel on the first 120 Hz frame (6.3 % at 60 Hz), half way at ~69 ms, 95 % at ~196 ms, 99 % at ~275 ms, no
+    /// overshoot, the same curve open and close. 0.26 s is the quickest response whose steepest 60 Hz frame stays under 15 %
+    /// of the travel; the first cut (0.31 s, 95 % at ~235 ms) read as slow in the app, its last few pixels creeping for
+    /// ~200 ms (docs/plans/smooth-reveal-implementation.md §1).</summary>
+    public const float RevealResponseSec = 0.26f;
 
     public static MotionTokenDef Get(MotionTokenId id) => id switch
     {
