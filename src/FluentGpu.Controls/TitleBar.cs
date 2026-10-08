@@ -24,6 +24,10 @@ public sealed record TitleBarOptions
     public Action? OnBack { get; init; }
     public bool ShowPaneToggle { get; init; }
     public Action? OnPaneToggle { get; init; }
+    /// <summary>Live enabled state of the pane toggle (see <see cref="TitleBar.PaneToggleEnabledSignal"/>).</summary>
+    public IReadSignal<bool>? PaneToggleEnabledSignal { get; init; }
+    /// <summary>The pane toggle's tooltip, read per render (see <see cref="TitleBar.PaneToggleToolTip"/>).</summary>
+    public Func<string>? PaneToggleToolTip { get; init; }
     public Func<IReadSignal<float>, Element>? Content { get; init; }
     public Func<Element>? Tabs { get; init; }
     public Func<int>? TabsVersion { get; init; }
@@ -131,6 +135,13 @@ public sealed class TitleBar : Component
     /// <summary>WinUI IsPaneToggleButtonVisible.</summary>
     public bool ShowPaneToggle;
     public Action? OnPaneToggle;
+    /// <summary>Live enabled state of the pane toggle. Null ⇒ enabled. Reading it subscribes the bar, so the toggle
+    /// re-glyphs enabled↔disabled in place (the <see cref="BackEnabledSignal"/> pattern) — a shell that pins its pane
+    /// open (an edit mode) binds this instead of hiding the button.</summary>
+    public IReadSignal<bool>? PaneToggleEnabledSignal;
+    /// <summary>The pane toggle's tooltip text, invoked per render (WinUI's PaneToggleButton names its action:
+    /// "Collapse navigation" / "Expand navigation"). Null or "" ⇒ no tooltip. Its text is part of the memo key.</summary>
+    public Func<string>? PaneToggleToolTip;
     /// <summary>The centered content column (the gallery's AutoSuggestBox). Invoked per render with the column's
     /// AVAILABLE width (DIP) so fixed-width content can clamp itself (WinUI: the content area shrinks first; the
     /// caption buttons never move). Return a 0-sized element to collapse when too narrow.</summary>
@@ -210,6 +221,8 @@ public sealed class TitleBar : Component
                 ShowBackButton = options.ShowBackButton, BackEnabled = options.BackEnabled,
                 BackEnabledSignal = options.BackEnabledSignal, OnBack = options.OnBack,
                 ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
+                PaneToggleEnabledSignal = options.PaneToggleEnabledSignal,
+                PaneToggleToolTip = options.PaneToggleToolTip,
                 Tabs = options.Tabs, TabsVersion = options.TabsVersion, TabsElasticLane = options.TabsElasticLane,
                 Trailing = options.Trailing, CaptionLeading = options.CaptionLeading,
                 ContentVersion = options.ContentVersion,
@@ -254,6 +267,8 @@ public sealed class TitleBar : Component
         int tabsVer = TabsVersion?.Invoke() ?? 0;                 // subscribe: re-render + re-push regions on tab add/remove
         int contentVer = ContentVersion?.Invoke() ?? 0;           // subscribe: re-render + re-push regions on island resize/shape change
         bool backEnabled = BackEnabledSignal is { } bes ? bes.Value : BackEnabled;   // subscribe: re-glyph the back button live
+        bool paneEnabled = PaneToggleEnabledSignal is { } pes ? pes.Value : true;   // subscribe: re-glyph the toggle live
+        string paneTip = PaneToggleToolTip?.Invoke() ?? "";
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
@@ -261,14 +276,15 @@ public sealed class TitleBar : Component
         // ContentVersion rides BOTH keys: a merged island that resizes without moving any other dep (an expanding search
         // box) must re-render AND re-push its region in the same frame, or the stale rect leaves dead drag space.
         UseLayoutEffect(() => PushRegions(hooks),
-            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer)));
+            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled)));
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
         // Tok.Epoch is in the key so a live theme switch busts the cache — otherwise RethemeAll re-runs this effect but
         // the memo returns the OLD-theme tree (the caption glyphs/foregrounds would stay stale).
-        int key = unchecked(((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397))
-            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (TabsElasticLane ? 128 : 0)));
+        int key = unchecked(((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397
+                              ^ StringComparer.Ordinal.GetHashCode(paneTip)) * 397)
+            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (TabsElasticLane ? 128 : 0) | (paneEnabled ? 256 : 0)));
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
@@ -297,14 +313,15 @@ public sealed class TitleBar : Component
         }
         if (ShowPaneToggle)
         {
-            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle)
+            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle, isEnabled: paneEnabled)
                 with { Margin = navMargin };
             var applied = Parts.Apply(PartPaneToggle, pane);
-            kids.Add(applied with
+            Element paneEl = applied with
             {
                 OnClick = pane.OnClick, Role = AutomationRole.Button, Children = pane.Children,
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _pane = h, applied.OnRealized),
-            });
+            };
+            kids.Add(paneTip.Length > 0 ? ToolTip.Wrap(paneEl, paneTip) : paneEl);
         }
 
         kids.Add(new BoxEl { Width = LeftHeaderPad });

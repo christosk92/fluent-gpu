@@ -167,6 +167,7 @@ static partial class ControlsSuite
 
         BoundInvokePolicyChecks(strings);
         BoundSelectAllSelectableChecks(strings);
+        ItemsFocusApiChecks(strings);
     }
 
     // ── WP1: a Ctrl/Shift double-click is a selection gesture, never an invoke ──────────────────────────────────────

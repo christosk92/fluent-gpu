@@ -338,6 +338,10 @@ public enum Easing : byte
     /// └────────────────────────────
     /// </code></summary>
     Hold,
+    /// <summary><b>FluentPane</b> — WinUI SplitView pane open/close — cubic-bezier(0, 0.35, 0.15, 1)
+    /// (SplitView_themeresources.xaml:10-12, 313-316). Not <see cref="FluentDecelerate"/> (0.1, 0.9, 0.2, 1): the pane
+    /// leaves at a steeper slope and settles later.</summary>
+    FluentPane,
 }
 
 public readonly record struct EasingSpec
@@ -413,6 +417,7 @@ public static class Easings
         Easing.OvershootStrong => CubicBezier(t, 0.34f, 3.85f, 0.64f, 1.0f),
         Easing.Pop => CubicBezier(t, 0.34f, 1.45f, 0.64f, 1.0f),
         Easing.Hold => t >= 1f ? 1f : 0f,   // step-end: snap only at the segment's end
+        Easing.FluentPane => CubicBezier(t, 0.0f, 0.35f, 0.15f, 1.0f),
         _ => t,   // Linear
     };
 

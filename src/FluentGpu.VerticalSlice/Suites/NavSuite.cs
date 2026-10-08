@@ -1150,6 +1150,41 @@ static class NavSuite
                 Near(w1, 1200f) && Near(w2, 960f) && Near(w3, 640f) && Near(w4, 800f) && ladder,
                 $"w {w1:0}@1x·z1 → {w2:0}@1x·z1.25 → {w3:0}@1.5x·z1.25 → {w4:0}@1.5x·z1 ladder={ladder}");
         }
+
+        // gate.nav.metrics.parity — the 4,2 item margin (pitch 40), the 40-DIP header, and a 0-DIP header in compact.
+        {
+            // The two item rows' top edges, in a FORCED display mode (Left = Expanded, LeftCompact = the 48 rail). An item
+            // row is the NavigationItem-role box; its AbsoluteRect excludes the 2-DIP margins, so b.Y − a.Y = 36 + 2 + header + 2.
+            float GapAB(NavPaneDisplayMode mode)
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("nav-metrics", new Size2(1200, 700), 1f));
+                window.Show();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new NavMetricsProbe(mode));
+                for (int i = 0; i < 8; i++) host.RunFrame();   // past the first-mount reflow transitions
+                var ys = new List<float>();
+                void Visit(NodeHandle n)
+                {
+                    if (n.IsNull) return;
+                    if (host.Scene.Interaction(n).Role == AutomationRole.NavigationItem)
+                    {
+                        float y = MathF.Round(host.Scene.AbsoluteRect(n).Y, 1);
+                        if (!ys.Contains(y)) ys.Add(y);
+                    }
+                    for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Visit(c);
+                }
+                Visit(host.Scene.Root);
+                ys.Sort();
+                return ys.Count >= 2 ? ys[1] - ys[0] : -1f;   // a (first) and b (second): the probe has no footer items
+            }
+
+            float expandedGap = GapAB(NavPaneDisplayMode.Left);
+            float compactGap = GapAB(NavPaneDisplayMode.LeftCompact);
+            Check("gate.nav.metrics.parity expanded: b.Y − a.Y == 40 (item pitch) + 40 (header); compact: b.Y − a.Y == 40 (header 0)",
+                Near(expandedGap, 80f, 0.5f) && Near(compactGap, 40f, 0.5f),
+                $"expandedGap={expandedGap} compactGap={compactGap}");
+        }
     }
 
     static void NavigationViewAnimationChecks(StringTable strings)
@@ -1468,4 +1503,15 @@ sealed class UnparkDebtor : Component
         _log.Add(_index);
         return new BoxEl { Width = 8f, Height = 8f };
     }
+}
+
+/// <summary>gate.nav.metrics.parity: two leaf items around a header, in a forced display mode, no footer.</summary>
+sealed class NavMetricsProbe(NavPaneDisplayMode mode) : Component
+{
+    public override Element Render() => Embed.Comp(() => new NavigationView
+    {
+        Items = [new NavItem("a", "A", "Alpha"), new NavItem("h", "", "Group", IsHeader: true), new NavItem("b", "B", "Beta")],
+        PaneDisplayMode = mode,
+        Content = key => new BoxEl { Children = [new TextEl("PAGE:" + key)] },
+    });
 }

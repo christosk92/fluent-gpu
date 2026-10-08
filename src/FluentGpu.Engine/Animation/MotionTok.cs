@@ -35,6 +35,8 @@ public enum MotionTokenId : ushort
     DisclosureExpand, DisclosureCollapse, DisclosureChevron,
     // Media transport chrome — deliberately ASYMMETRIC (reveal must feel instant, conceal must not blink out).
     MediaChromeReveal, MediaChromeConceal,
+    // Navigation pane (WinUI SplitView: open 200 ms, close 100 ms, both on the FluentPane spline).
+    PaneOpen, PaneClose,
 }
 
 /// <summary>A resolved motion recipe: dynamics (eased OR spring) + the reduced-motion policy. 24B-ish POD.</summary>
@@ -186,6 +188,8 @@ public static class MotionTok
         // even a running conceal read as a pop — a value fade wants steady, perceptible change (Easing.cs's own warning).
         MotionTokenId.MediaChromeReveal => MotionTokenDef.Eased(MediaChromeFadeInMs, Easing.FluentDecelerate),
         MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.EaseOut),
+        MotionTokenId.PaneOpen => MotionTokenDef.Eased(200f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
+        MotionTokenId.PaneClose => MotionTokenDef.Eased(100f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
         _ => MotionTokenDef.SpringOf(SpringParams.Default),
     };
 
@@ -207,4 +211,6 @@ public static class MotionTok
     public static MotionTokenDef DisclosureChevron => Get(MotionTokenId.DisclosureChevron);
     public static MotionTokenDef MediaChromeReveal => Get(MotionTokenId.MediaChromeReveal);
     public static MotionTokenDef MediaChromeConceal => Get(MotionTokenId.MediaChromeConceal);
+    public static MotionTokenDef PaneOpen => Get(MotionTokenId.PaneOpen);
+    public static MotionTokenDef PaneClose => Get(MotionTokenId.PaneClose);
 }

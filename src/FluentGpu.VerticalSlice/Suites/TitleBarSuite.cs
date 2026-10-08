@@ -148,6 +148,45 @@ public static class TitleBarSuite
             $"clear={afterClear} last={after[^1].Hit} run={LongestInteriorCaptionRun(after, afterButtonsLeft):0.#} count={after.Length}");
 
         RailBaselineChecks(strings);
+
+        // ── (g) the pane toggle's live enabled state: a disabled toggle re-renders in place, and re-enables ────────────
+        {
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("titlebar-pane", new Size2((int)BarW, 300), 1f));
+            window2.Show();
+            var paneProbe = new PaneToggleProbe();
+            using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, paneProbe);
+            void Settle2(int n = 6) { for (int i = 0; i < n; i++) host2.RunFrame(); }
+            Settle2();
+            var toggle = FindPaneToggle(host2.Scene, host2.Scene.Root);
+            bool enabledAtStart = !toggle.IsNull && (host2.Scene.Flags(toggle) & NodeFlags.Disabled) == 0;
+            paneProbe.Enabled.Value = false;
+            Settle2();
+            var toggleOff = FindPaneToggle(host2.Scene, host2.Scene.Root);
+            bool disabled = !toggleOff.IsNull && (host2.Scene.Flags(toggleOff) & NodeFlags.Disabled) != 0;
+            paneProbe.Enabled.Value = true;
+            Settle2();
+            var toggleOn = FindPaneToggle(host2.Scene, host2.Scene.Root);
+            bool reenabled = !toggleOn.IsNull && (host2.Scene.Flags(toggleOn) & NodeFlags.Disabled) == 0;
+            Check("gate.titlebar.pane-toggle.enabled-signal PaneToggleEnabledSignal disables the pane toggle in place and re-enables it",
+                enabledAtStart && disabled && reenabled,
+                $"start={enabledAtStart} disabled={disabled} reenabled={reenabled}");
+        }
+    }
+
+    /// <summary>The pane toggle: the first Button-role node inside the bar's left 96 DIP that is 36-52 wide.</summary>
+    static NodeHandle FindPaneToggle(SceneStore scene, NodeHandle root)
+    {
+        NodeHandle found = NodeHandle.Null;
+        void Walk(NodeHandle n)
+        {
+            if (n.IsNull || !found.IsNull) return;
+            var r = scene.AbsoluteRect(n);
+            if (scene.Interaction(n).Role == AutomationRole.Button && r.X < 96f && r.W >= 36f && r.W <= 52f) { found = n; return; }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) Walk(c);
+        }
+        Walk(root);
+        return found;
     }
 
     /// <summary>ShowRailBaseline=false drops only the 1-DIP seam INK: the drag bands (and therefore the whole region
@@ -317,5 +356,25 @@ sealed class MergedCenterIsland : Component
         Width = Expanded is { } e && e.Value ? 420f : 180f,
         Height = 32f,
         Fill = Ink,
+    };
+}
+
+/// <summary>A bar with only the pane toggle, its enabled state bound to a signal.</summary>
+sealed class PaneToggleProbe : Component
+{
+    public readonly Signal<bool> Enabled = new(true);
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            Embed.Comp(() => new TitleBar
+            {
+                Title = "pane", ShowPaneToggle = true, PaneToggleEnabledSignal = Enabled,
+                PaneToggleToolTip = () => "Collapse navigation", ShowCaptionButtons = true,
+            }),
+            new BoxEl { Grow = 1f },
+        ],
     };
 }
