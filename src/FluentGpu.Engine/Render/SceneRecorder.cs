@@ -2913,13 +2913,21 @@ internal sealed class SceneRecordingContext
                 // top sat above it (the rows above a re-centred arrange origin: RCA 2026-09-25 G, the blank playlist).
                 RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClip : childClip;
                 Affine2D activeChildWorld = childWorld;
+                bool flowScissor = false;
                 if (flow.Active)
                 {
                     float flowShift = flow.Step(ordinal, scene.Bounds(c).Y, scene.Paint(c).FlowDelta, out float flowClipTop, out float flowClipBottom);
                     if (flowShift != 0f) activeChildWorld = activeChildWorld.Translate(0f, flowShift);
                     if (!float.IsNaN(flowClipTop))
+                    {
+                        RectF unclipped = activeChildClip;
                         activeChildClip = activeChildClip.Intersect(childWorld.TransformBounds(new RectF(0f, flowClipTop,
                             MathF.Max(1f, scene.Bounds(node).W), MathF.Max(0f, flowClipBottom - flowClipTop))));
+                        // The clip PARAMETER only culls whole nodes and bounds the ones that clip themselves (an image's
+                        // rounded box): a row's glyph runs draw under the active SCISSOR, so a reveal edge crossing a row
+                        // must be pushed as one, or its title stays fully drawn while its art is cut away.
+                        flowScissor = activeChildClip != unclipped && !activeChildClip.IsEmpty;
+                    }
                 }
                 NodeFlags cf = scene.Flags(c);
                 childOrdinal++;
@@ -2955,9 +2963,11 @@ internal sealed class SceneRecordingContext
                         // Lower progress than the deferred card → record it now in normal order (falls through).
                     }
                 }
+                if (flowScissor) childDl.PushClip(activeChildClip, key);
                 var childResult = Walk(scene, childDl, images, c, activeChildWorld, opacity, depth + 1,
                     activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                if (flowScissor) childDl.PopClip(key);
                 result.Include(childResult);
                 if (bandSlot >= 0) bandResult.Include(childResult);
             }
@@ -3024,9 +3034,11 @@ internal sealed class SceneRecordingContext
                         RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
                         Affine2D pinnedWorld = childWorld;
                         if (pinnedShift != 0f) pinnedWorld = pinnedWorld.Translate(0f, pinnedShift);
+                        RectF pinnedUnclipped = pinnedClip;
                         if (!float.IsNaN(pinnedClipTop))
                             pinnedClip = pinnedClip.Intersect(childWorld.TransformBounds(new RectF(0f, pinnedClipTop,
                                 MathF.Max(1f, scene.Bounds(node).W), MathF.Max(0f, pinnedClipBottom - pinnedClipTop))));
+                        bool pinnedScissor = pinnedClip != pinnedUnclipped && !pinnedClip.IsEmpty;   // as in the main loop: glyphs need the scissor
                         if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed && pinnedSlot < 0
                             && itemBandClipChanged && !itemBandClip.IsEmpty)
                         {
@@ -3054,9 +3066,11 @@ internal sealed class SceneRecordingContext
                             }
                         }
                         if (pinnedClip.IsEmpty) continue;
+                        if (pinnedScissor) childDl.PushClip(pinnedClip, key);
                         var childResult = Walk(scene, childDl, images, c, pinnedWorld, opacity, depth + 1,
                             pinnedClip, in focus, in textEdit, scrollThumb, scrollTrack,
                             childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                        if (pinnedScissor) childDl.PopClip(key);
                         result.Include(childResult);
                         if (pinnedSlot >= 0) pinnedResult.Include(childResult);
                     }
