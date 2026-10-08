@@ -442,7 +442,7 @@ internal sealed class SceneRecordingContext
         // this frame (content-dirty, transform-moved, or moved/resized by layout) - its descendants' own geometry
         // changes are inside that band. Reset at every slice entry (the band lives in the enclosing slice's space).
         public bool GeomCovered;
-        public bool HasActiveVirtualDisclosures;
+        public bool HasActiveRevealBands;
         // Vestigial (scroll-root-cause-2026-09-23 §5.2 Part B): the SpanMiss* counters below used to be gated on
         // this AND a Release-only compiled-out const; both gates are gone, so this field is written from the
         // `collectSpanReuseMisses` parameter but no longer read by anything. Kept only so existing callers of
@@ -637,7 +637,7 @@ internal sealed class SceneRecordingContext
         var stats = new RecordAccumulator
         {
             Owner = this,
-            HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures,
+            HasActiveRevealBands = scene.HasActiveRevealBands,
             CollectSpanMisses = collectSpanReuseMisses,
             Slices = slices,
             Slicing = !standalone,
@@ -1012,7 +1012,7 @@ internal sealed class SceneRecordingContext
             pax = pr.X;
             pay = pr.Y;
         }
-        var stats = new RecordAccumulator { Owner = this, HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
+        var stats = new RecordAccumulator { Owner = this, HasActiveRevealBands = scene.HasActiveRevealBands };
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
              in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
         return stats.ToStats();
@@ -2771,23 +2771,6 @@ internal sealed class SceneRecordingContext
             childState = childState.WithUnderElevateRoot();
         bool hasItemBand = scene.TryGetVirtualItemBand(
             node, out int itemBandPrefix, out float itemBandTopInset, out float itemBandTopFade);
-        int disclosureFirst = 0, disclosureCount = 0, disclosurePrefix = 0, disclosureFirstRealized = 0;
-        float disclosureTop = 0f, disclosureExtent = 0f, disclosureT = 0f;
-        bool hasDisclosure = stats.HasActiveVirtualDisclosures
-            && scene.TryGetVirtualDisclosure(node, out disclosureFirst, out disclosureCount,
-                out disclosureTop, out disclosureExtent, out disclosureT,
-                out disclosurePrefix, out disclosureFirstRealized);
-        int disclosureLast = 0;
-        float disclosureShift = 0f;
-        RectF disclosureClip = childClip;
-        if (hasDisclosure)
-        {
-            disclosureLast = disclosureFirst + disclosureCount;
-            disclosureShift = -disclosureExtent * (1f - disclosureT);
-            float contentW = MathF.Max(1f, scene.Bounds(node).W);
-            disclosureClip = childClip.Intersect(childWorld.TransformBounds(
-                new RectF(0f, disclosureTop, contentW, disclosureExtent * disclosureT)));
-        }
         RectF itemBandClip = childClip;
         bool itemBandClipChanged = false;
         if (hasItemBand)
@@ -2853,6 +2836,8 @@ internal sealed class SceneRecordingContext
             SliceCtx bandSaved = default;
             var bandResult = new SpanRecordResult();
             var flow = FlowCursor.For(in p);   // SizeMode.FlowReveal: children ride their earlier siblings' presented flow
+            if (stats.HasActiveRevealBands && scene.TryGetRevealBands(node, out RevealBands flowBands, out byte flowMask, out int flowPrefix, out int flowFirst))
+                flow.SetBands(in flowBands, flowMask, flowPrefix, flowFirst);
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
                 if (hasItemBand && !bandStarted && childOrdinal >= itemBandPrefix)
@@ -2928,16 +2913,6 @@ internal sealed class SceneRecordingContext
                 // top sat above it (the rows above a re-centred arrange origin: RCA 2026-09-25 G, the blank playlist).
                 RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClip : childClip;
                 Affine2D activeChildWorld = childWorld;
-                if (hasDisclosure)
-                {
-                    int logicalIndex = ordinal < disclosurePrefix
-                        ? ordinal
-                        : disclosureFirstRealized + (ordinal - disclosurePrefix);
-                    if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
-                        activeChildClip = activeChildClip.Intersect(disclosureClip);
-                    else if (logicalIndex >= disclosureLast)
-                        activeChildWorld = childWorld.Translate(0f, disclosureShift);
-                }
                 if (flow.Active)
                 {
                     float flowShift = flow.Step(ordinal, scene.Bounds(c).Y, scene.Paint(c).FlowDelta, out float flowClipTop, out float flowClipBottom);
@@ -3036,6 +3011,8 @@ internal sealed class SceneRecordingContext
                 SliceCtx pinnedSaved = default;
                 var pinnedResult = new SpanRecordResult();
                 var pinnedFlow = FlowCursor.For(in p);
+                if (stats.HasActiveRevealBands && scene.TryGetRevealBands(node, out RevealBands pinnedBands, out byte pinnedMask, out int pinnedPrefix, out int pinnedFirst))
+                    pinnedFlow.SetBands(in pinnedBands, pinnedMask, pinnedPrefix, pinnedFirst);
                 for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c), pinnedOrdinal++)
                 {
                     // Every child steps the flow cursor (pinned or not) so a pinned child sees its true presented offset.
@@ -3046,16 +3023,6 @@ internal sealed class SceneRecordingContext
                     {
                         RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
                         Affine2D pinnedWorld = childWorld;
-                        if (hasDisclosure)
-                        {
-                            int logicalIndex = pinnedOrdinal < disclosurePrefix
-                                ? pinnedOrdinal
-                                : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
-                            if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
-                                pinnedClip = pinnedClip.Intersect(disclosureClip);
-                            else if (logicalIndex >= disclosureLast)
-                                pinnedWorld = childWorld.Translate(0f, disclosureShift);
-                        }
                         if (pinnedShift != 0f) pinnedWorld = pinnedWorld.Translate(0f, pinnedShift);
                         if (!float.IsNaN(pinnedClipTop))
                             pinnedClip = pinnedClip.Intersect(childWorld.TransformBounds(new RectF(0f, pinnedClipTop,

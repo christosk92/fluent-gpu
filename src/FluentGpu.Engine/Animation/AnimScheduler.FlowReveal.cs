@@ -57,7 +57,7 @@ public sealed partial class AnimEngine
     /// orphaned this commit, a live reveal band. The host defers layout's scroll-offset clamp on these frames (6.3 clamps
     /// against the PRESENTED extent instead).</summary>
     public bool HasFlowRevealWork
-        => _revealRows > 0 || PendingEnterReveal.Count > 0 || RevealExitCarriers.Count > 0;
+        => _revealRows > 0 || PendingEnterReveal.Count > 0 || RevealExitCarriers.Count > 0 || _scene.HasActiveRevealBands;
 
     /// <summary>True while <paramref name="node"/> has a live reveal row (the Expander's always-fire check, gates).</summary>
     public bool IsRevealing(NodeHandle node) => _slab.NodeHasRows((int)node.Raw.Index) && Find(node, AnimChannel.RevealExtent) >= 0;
@@ -320,7 +320,7 @@ public sealed partial class AnimEngine
     public bool PropagateFlowReveals()
     {
         _overscanGrew = false;
-        if (_revealRows == 0 && _flowTouched.Count == 0 && _ovPrevViewports.Count == 0) return false;
+        if (_revealRows == 0 && _flowTouched.Count == 0 && _ovPrevViewports.Count == 0 && !_scene.HasActiveRevealBands) return false;
         ResetFlow();
         if (_revealRows > 0)
         {
@@ -332,8 +332,131 @@ public sealed partial class AnimEngine
             }
             _revealOrder.Clear();
         }
+        var bandViewports = _scene.RevealBandViewports;
+        for (int i = 0; i < bandViewports.Count; i++) AddBands(bandViewports[i]);
         FinishFlow();
         return true;
+    }
+
+    // ── virtual reveal bands ───────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The row channel of band <paramref name="slot"/> on its viewport node.</summary>
+    public static AnimChannel RevealBandChannel(int slot) => (AnimChannel)((int)AnimChannel.RevealBand0 + slot);
+
+    private static bool IsRevealBand(AnimChannel ch) => ch >= AnimChannel.RevealBand0 && ch <= AnimChannel.RevealBand3;
+
+    /// <summary>Arm (or REVERSE) band <paramref name="slot"/> of a vertical virtual viewport over the logical rows
+    /// [<paramref name="first"/>, +<paramref name="count"/>) — the model must already hold the rows laid out (an expand
+    /// inserts them first; a collapse keeps them until its commit). Springs the presented height toward the rows' extent
+    /// (<paramref name="opening"/>) or 0 under MotionTok.Reveal, from the live value with its velocity, clamped to the
+    /// visible span; snaps (and reports settled) under reduced motion or when nothing of it is visible. False when the
+    /// viewport cannot carry a band (not a vertical virtual list, or the range is out of its model).</summary>
+    public bool BeginRevealBand(NodeHandle viewport, int slot, int first, int count, bool opening)
+    {
+        if ((uint)slot >= RevealBands.Capacity || viewport.IsNull || !_scene.IsLive(viewport)
+            || !_scene.TryGetScroll(viewport, out var sc) || sc.Orientation != 0 || sc.Layout is null
+            || sc.ContentNode.IsNull || !_scene.IsLive(sc.ContentNode) || first < 0 || count <= 0 || first + count > sc.ItemCount)
+            return false;
+        float cross = MathF.Max(1f, _scene.Bounds(viewport).W);
+        RectF a = sc.Layout.ItemRect(first, cross), z = sc.Layout.ItemRect(first + count - 1, cross);
+        float top = a.Y, extent = z.Bottom - a.Y;
+        if (!float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f) return false;
+
+        AnimChannel ch = RevealBandChannel(slot);
+        int ex = Find(viewport, ch);
+        float cur = ex >= 0 ? _slab.At(ex).Position
+            : _scene.TryGetRevealBand(viewport, slot, out var old) && float.IsFinite(old.Presented) ? old.Presented
+            : opening ? 0f : extent;
+        float vel = ex >= 0 ? _slab.At(ex).Velocity : 0f;
+        float p1 = opening ? extent : 0f;
+        RectF view = _scene.AbsoluteRect(viewport);
+        float regionTop = _scene.AbsoluteRect(sc.ContentNode).Y + top;
+        float from = p1, to = p1;
+        bool animate = !FluentGpu.Dsl.Motion.ReducedMotion
+            && RevealPlan.TryClamp(cur, p1, regionTop, view.Y, view.Y + sc.ViewportH, out from, out to);
+        if (!animate)
+        {
+            if (ex >= 0) Cancel(viewport, ch);
+            if (opening) _scene.ClearRevealBand(viewport, slot);
+            else _scene.SetRevealBand(viewport, slot, first, count, top, extent, opening: false, presented: 0f);
+            // Wholly ABOVE the view: the snap moves every row below by (p1 − cur). Shift the scroll frame by the same
+            // amount so the rows the user reads stay put. A collapse's later commit removes rows already presented at 0
+            // (a zero-delta handoff), so it adds no second shift.
+            if (RevealPlan.IsAboveView(cur, p1, regionTop, view.Y) && MathF.Abs(p1 - cur) >= 0.5f)
+                _scene.ScrollHandleFor(viewport)?.ShiftFrame(p1 - cur);
+            QueueSettled(viewport, ch);
+            return true;
+        }
+        if (!_scene.SetRevealBand(viewport, slot, first, count, top, extent, opening, ex >= 0 ? cur : from)) return false;
+        var spring = MotionTok.Reveal.Spring;
+        if (ex >= 0 && MathF.Abs(from - cur) < 0.5f) Spring(viewport, ch, to, spring);   // reverse: live value + velocity
+        else
+        {
+            if (ex >= 0) Cancel(viewport, ch);
+            Spring(viewport, ch, to, spring, initial: from, initialVelocity: vel);
+        }
+        return true;
+    }
+
+    /// <summary>Move a live band to the rows it covers now (the owner's model moved under it).</summary>
+    public void SetRevealBandRange(NodeHandle viewport, int slot, int first, int count)
+        => _scene.SetRevealBandRange(viewport, slot, first, count);
+
+    /// <summary>Release a band (its row, if any, too). Repeated clears are harmless.</summary>
+    public void ClearRevealBand(NodeHandle viewport, int slot)
+    {
+        if ((uint)slot >= RevealBands.Capacity || viewport.IsNull) return;
+        Cancel(viewport, RevealBandChannel(slot));
+        _scene.ClearRevealBand(viewport, slot);
+    }
+
+    /// <summary>A closing band is at rest and its owner is about to remove its rows (ItemsViewController.BandSettled, frame
+    /// start, right BEFORE the collapse commit). The band stops presenting the flush its rows leave the model
+    /// (<see cref="RevealBand.Presents"/>), so the commit frame's 6.3 pass and scroll sync never subtract a phantom band.
+    /// Its row (if a stray one is left) goes too.</summary>
+    public void CommitRevealBand(NodeHandle viewport, int slot)
+    {
+        if ((uint)slot >= RevealBands.Capacity || viewport.IsNull) return;
+        Cancel(viewport, RevealBandChannel(slot));
+        _scene.CommitRevealBand(viewport, slot);
+    }
+
+    // A viewport's bands, folded into its content's flow: the laid-out geometry refreshed from the layout (rows above may
+    // have opened or closed, realized rows report measured extents), Σ(presented − extent) onto the content, the overscan.
+    // A committed band whose rows already left the model contributes nothing: this is the zero-delta handoff, made at 6.3
+    // of the commit frame (before the scroll sync), not at ItemsView's 6.5 clear.
+    private void AddBands(NodeHandle viewport)
+    {
+        if (!_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out var sc) || sc.BandMask == 0
+            || sc.ContentNode.IsNull || !_scene.IsLive(sc.ContentNode)) return;
+        float cross = MathF.Max(1f, _scene.Bounds(viewport).W);
+        float delta = 0f, overscan = 0f;
+        for (int slot = 0; slot < RevealBands.Capacity; slot++)
+        {
+            if ((sc.BandMask & (1 << slot)) == 0) continue;
+            RevealBand b = sc.Bands.Get(slot);
+            if (!b.Presents(sc.ItemCount)) continue;
+            if (sc.Layout is { } layout && b.Count > 0 && b.First + b.Count <= sc.ItemCount)
+            {
+                RectF a = layout.ItemRect(b.First, cross), z = layout.ItemRect(b.First + b.Count - 1, cross);
+                float top = a.Y, extent = z.Bottom - a.Y;
+                if (float.IsFinite(top) && float.IsFinite(extent) && extent > 0f)
+                {
+                    _scene.SetRevealBandGeometry(viewport, slot, top, extent);
+                    b.Top = top;
+                    b.Extent = extent;
+                }
+            }
+            float p = float.IsNaN(b.Presented) ? b.Extent : Math.Clamp(b.Presented, 0f, b.Extent);
+            delta += p - b.Extent;
+            int s = Find(viewport, RevealBandChannel(slot));
+            float target = s >= 0 ? _slab.At(s).To : p;
+            overscan += MathF.Max(0f, b.Extent - MathF.Min(p, target));
+        }
+        ref NodePaint cp = ref TouchFlow(sc.ContentNode);
+        cp.FlowDelta += delta;
+        cp.FlowBits |= NodePaint.FlowBoundaryBit;
+        AddOverscan(viewport, overscan);
     }
 
     // Undo the last pass: every column it wrote goes back to rest (the new pass rewrites what still reveals).

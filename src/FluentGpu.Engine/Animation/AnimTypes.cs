@@ -15,8 +15,10 @@ namespace FluentGpu.Animation;
 /// SizeW/SizeH → PaintDirty. LayoutW/LayoutH are the one deliberate exception to "animation never relays out": a
 /// SizeMode.Reflow track writes the interpolated size into LayoutInput each tick and the host re-solves the nearest
 /// layout boundary, so neighbours reflow smoothly. RevealExtent is the PRESENTED vertical extent of a SizeMode.FlowReveal
-/// node (DIP) — a side-table row read by AnimEngine.PropagateFlowReveals, never composed into NodePaint directly.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma, BrushFade, HoverFade, PressFade, DisclosureProgress, GlyphWipeSplit, RevealExtent }
+/// node (DIP) — a side-table row read by AnimEngine.PropagateFlowReveals, never composed into NodePaint directly.
+/// RevealBand0..3 = the presented height of virtual reveal band slot 0..3 on a viewport node — side-table rows written
+/// into ScrollState.Bands.</summary>
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma, BrushFade, HoverFade, PressFade, GlyphWipeSplit, RevealExtent, RevealBand0, RevealBand1, RevealBand2, RevealBand3 }
 
 public enum IntegrationMode : byte { Eased, Spring }
 

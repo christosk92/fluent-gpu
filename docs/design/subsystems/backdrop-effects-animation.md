@@ -1045,7 +1045,32 @@ the mode for anything that opens and closes. It is appended after `Auto`, so no 
 - **Zero-alloc.** The flow pass works in pre-sized scratch lists. The per-frame cost is the rows that are live, not the
   tree.
 
+- **Virtual reveal bands (AS-BUILT 2026-10).** A sidebar band is a range of virtual rows (separate item roots), so it
+  cannot be one FlowReveal node. It is up to `RevealBands.Capacity` (4) concurrent bands per vertical viewport: slot
+  `i` is one `AnimChannel.RevealBand0..3` row on the viewport node, springing the band's PRESENTED height (0 … Extent)
+  under the same `MotionTok.Reveal` spring. `ScrollState.Bands` holds the four named `RevealBand` fields and
+  `ScrollState.BandMask` the live slots (scene-memory §2.7a). `AddBands` folds every live band into the content's
+  FlowDelta in the same flow pass, and `FlowCursor.SetBands` walks them, so the recorder, hit-test and
+  `PresentedAbsoluteRect` place the rows below a band exactly as they place a FlowReveal child. The model stays
+  EXPANDED while a band closes and rests at 0; the owner's commit removes the rows at rest.
+  **Committed-band handoff (zero delta at 6.3).** `ItemsViewController.BandSettled` runs at frame start
+  (`DrainSettledCallbacks`): it marks the band committed (`AnimEngine.CommitRevealBand`, recording the viewport's
+  `ItemCount` as `RevealBand.CommitCount`) right BEFORE it invokes the owner's commit. A committed band keeps
+  presenting its rows at 0 while they are still modelled. From the flush that drops them (the `ItemCount` moves off
+  `CommitCount`) `RevealBand.Presents` is false: `AddBands`, `FlowCursor` and `PresentedAbsoluteRect` contribute NO
+  delta and NO clip, and `RevealBands.PresentingMask` drops the slot. So the commit frame's 6.3 flow pass and
+  `SyncScrollPlansMidFrame` already see the laid-out extent. The ItemsView layout effect (6.5) only releases the slot.
+  Clearing the band only at 6.5 is too late: 6.3 would subtract a phantom extent, and a list scrolled to its end would
+  re-hold one band short, a permanent offset jump in the commit frame (gate `rv.band.8`).
+  **Above-view snap.** A band move that lies wholly above the view snaps like any reveal (the visible-span clamp above),
+  and the scroll frame shifts by what the content below moved, so the rows the user reads do not move.
+  **Geometry.** `RevealBand.Top` and `Extent` are the content-local laid-out geometry, refreshed every flow pass from
+  the layout. `RevealBands` uses named fields with explicit NaN-safe equality, never an `[InlineArray]`, because
+  `ScrollState` is compared by default struct equality (the parity check) and the runtime throws from `Equals` on
+  InlineArray-holding structs.
+
 Gates: `rv.1`–`rv.16` (`RevealSuite`), `RevealPlanTests`, `FlowCursorTests`. Contract row: SPEC-INDEX.md §2.
+Band gates: `rv.band.1`–`rv.band.8` (`RevealSuite`), `RevealBandsTests`.
 
 ### 5.9 Reduced motion
 

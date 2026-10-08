@@ -15,6 +15,7 @@ public sealed partial class SceneStore
         for (NodeHandle n = h, parent = Parent(h); !parent.IsNull; n = parent, parent = Parent(parent))
         {
             var cursor = FlowCursor.For(in _paint[parent.Raw.Index]);
+            if (TryGetRevealBands(parent, out var bands, out byte mask, out int prefix, out int firstRealized)) cursor.SetBands(in bands, mask, prefix, firstRealized);
             if (!cursor.Active) continue;
             int ordinal = 0;
             for (var c = FirstChild(parent); !c.IsNull; c = NextSibling(c), ordinal++)

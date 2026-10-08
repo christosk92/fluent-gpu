@@ -385,13 +385,12 @@ public struct ScrollState
     // viewport present less than they lay out — the rows they pull up into view. Monotone over a reveal's flight, so the
     // rows realize once on its seed frame (AnimEngine.PropagateFlowReveals writes it; 0 at rest; UI-side only).
     public float RevealOverscan;
-    // One contiguous expand/collapse band over the flat virtual child ladder. Progress 0 = collapsed, 1 = expanded;
-    // NaN disables the presentation. The recorder and input dispatcher consume the same row-range geometry.
-    public int   DisclosureFirst;
-    public int   DisclosureCount;
-    public float DisclosureTop;
-    public float DisclosureExtent;
-    public float DisclosureT;
+    // Virtual reveal bands (docs/plans/smooth-reveal-implementation.md §10): up to RevealBands.Capacity contiguous logical
+    // row ranges whose PRESENTED height springs while the model stays laid out at full size. BandMask bit i = slot i live.
+    // Plain named fields (no array, no InlineArray), so the render snapshot copies them with the row and the default
+    // struct equality the parity check uses still works.
+    public RevealBands Bands;
+    public byte BandMask;
     public int   FirstRealized, LastRealized;   // the realized window [First, Last) (exclusive end)
     public NodeHandle ContentNode;        // the single content child carrying the content translate
 
@@ -402,7 +401,7 @@ public struct ScrollState
     // its handle is destroyed and calls ScrollHandle.Restore on the next mount with the same key (design §9).
     public string? ScrollKey;             // content identity (app-supplied); null ⇒ no restoration for this viewport
 
-    public static ScrollState Default => new() { ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, ItemClipTopInset = float.NaN, DisclosureFirst = -1, DisclosureT = float.NaN, Motion = FluentGpu.Scroll.Runtime.ScrollMotionState.Idle };
+    public static ScrollState Default => new() { ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, ItemClipTopInset = float.NaN, Motion = FluentGpu.Scroll.Runtime.ScrollMotionState.Idle };
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });
@@ -413,6 +412,80 @@ public struct ScrollState
     public readonly float ContentMain => Orientation == 1 ? ContentW : ContentH;
     /// <summary>The main-axis clamp maximum: <c>max(0, ContentMain·Zoom − ViewportMain)</c>.</summary>
     public readonly float MaxOffset => MathF.Max(0f, ContentMain * (ZoomFactor > 0f ? ZoomFactor : 1f) - ViewportMain);
+}
+
+/// <summary>One live virtual reveal band (see <see cref="ScrollState.Bands"/>): the logical rows [First, First+Count), their
+/// content-local laid-out Top/Extent (refreshed every flow pass from the layout), and the PRESENTED height (0 … Extent,
+/// written by the band's AnimChannel.RevealBand row). Opening = the band is revealing toward Extent (cleared at rest);
+/// a closing band rests at 0 until its owner's commit removes the rows. Committed = that commit is running
+/// (ItemsViewController.BandSettled marks it right before invoking it) and CommitCount = the viewport's ItemCount then:
+/// once the count moves off it the rows are gone, and the band presents nothing at all (<see cref="Presents"/>).</summary>
+public struct RevealBand : IEquatable<RevealBand>
+{
+    public int First, Count;
+    public float Top, Extent;
+    public float Presented;
+    public bool Opening;
+    public bool Committed;
+    public int CommitCount;
+
+    /// <summary>False for a committed collapse whose rows already left the model (<paramref name="itemCount"/> moved off
+    /// <see cref="CommitCount"/>): it contributes no delta and no clip from that flush on, so the commit frame's flow pass
+    /// and scroll sync see exactly the laid-out extent (the zero-delta handoff). True otherwise.</summary>
+    public readonly bool Presents(int itemCount) => !Committed || itemCount == CommitCount;
+
+    // float.Equals, not ==: a NaN Presented equals itself (the default struct equality's semantics, which parity relies on).
+    public readonly bool Equals(RevealBand o)
+        => First == o.First && Count == o.Count && Top.Equals(o.Top) && Extent.Equals(o.Extent)
+           && Presented.Equals(o.Presented) && Opening == o.Opening && Committed == o.Committed && CommitCount == o.CommitCount;
+    public override readonly bool Equals(object? obj) => obj is RevealBand o && Equals(o);
+    public override readonly int GetHashCode() => HashCode.Combine(First, Count, Top, Extent, Presented, Opening, Committed, CommitCount);
+}
+
+/// <summary>The fixed per-viewport band slots. FOUR NAMED FIELDS, deliberately not an <c>[InlineArray]</c>: ScrollState is
+/// compared with the default struct equality (SceneRecordingSnapshot.Parity <c>ScrollEqual</c>, every DEBUG/diag no-op
+/// publication check and the snapshot tests), and the runtime throws NotSupportedException from Equals/GetHashCode on any
+/// struct that holds an InlineArray field. Read with <see cref="Get"/>, write with <see cref="Set"/>.</summary>
+public struct RevealBands : IEquatable<RevealBands>
+{
+    public const int Capacity = 4;
+    public RevealBand Band0, Band1, Band2, Band3;
+
+    public readonly RevealBand Get(int slot) => slot switch
+    {
+        0 => Band0,
+        1 => Band1,
+        2 => Band2,
+        3 => Band3,
+        _ => throw new ArgumentOutOfRangeException(nameof(slot)),
+    };
+
+    public void Set(int slot, in RevealBand band)
+    {
+        switch (slot)
+        {
+            case 0: Band0 = band; break;
+            case 1: Band1 = band; break;
+            case 2: Band2 = band; break;
+            case 3: Band3 = band; break;
+            default: throw new ArgumentOutOfRangeException(nameof(slot));
+        }
+    }
+
+    /// <summary><paramref name="mask"/> without the committed bands whose rows already left a model of
+    /// <paramref name="itemCount"/> items (<see cref="RevealBand.Presents"/>): the bands the flow pass and every
+    /// FlowCursor walk honour.</summary>
+    public readonly byte PresentingMask(byte mask, int itemCount)
+    {
+        for (int i = 0; i < Capacity; i++)
+            if ((mask & (1 << i)) != 0 && !Get(i).Presents(itemCount)) mask &= (byte)~(1 << i);
+        return mask;
+    }
+
+    public readonly bool Equals(RevealBands o)
+        => Band0.Equals(o.Band0) && Band1.Equals(o.Band1) && Band2.Equals(o.Band2) && Band3.Equals(o.Band3);
+    public override readonly bool Equals(object? obj) => obj is RevealBands o && Equals(o);
+    public override readonly int GetHashCode() => HashCode.Combine(Band0, Band1, Band2, Band3);
 }
 
 /// <summary>

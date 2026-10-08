@@ -6,6 +6,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
+using FluentGpu.Input;
 using FluentGpu.Pal;
 using FluentGpu.Pal.Headless;
 using FluentGpu.Reconciler;
@@ -47,6 +48,8 @@ static class RevealSuite
         SuppressedCloseSettles(strings, fonts);
         SettleOnFree(strings);
         GrowChildOfScrollContent(strings, fonts);
+        BandChecks(strings, fonts);
+        BandFastPath(strings);
     }
 
     /// <summary>The root column holds ONE inner column ("col": a 40-DIP head, N reveal clip wrappers whose declared Height
@@ -723,5 +726,281 @@ static class RevealSuite
         float contentDelta = rig.Scene.Paint(content).FlowDelta;
         Check("rv.16 FlowReveal inside a Grow child of a scroll content reaches the content: its presented extent tracks the reveal mid-flight",
             revealed < -1f && Near(contentDelta, revealed, 0.5f), $"revealed={revealed:0.00} contentDelta={contentDelta:0.00}");
+    }
+
+    /// <summary>A bound vertical ItemsView over labelled rows of authored heights; Publish swaps the model (the owner's
+    /// commit).</summary>
+    sealed class VirtualRevealProbe : Component
+    {
+        public readonly Signal<int> Count;
+        public readonly Signal<int> SourceVersion = new(0);
+        public readonly ItemsViewController Controller = new();
+        public readonly List<ItemDisclosureDiagnostic> Diagnostics = [];
+        public Func<string, ItemDisclosureRange?>? Resolve;
+        public string[] Labels;
+        public float[] Heights;
+
+        public VirtualRevealProbe(string[] labels, float[] heights) { Labels = labels; Heights = heights; Count = new Signal<int>(labels.Length); }
+
+        public void Publish(string[] labels, float[] heights)
+        {
+            void Mutate() { Labels = labels; Heights = heights; Count.Value = labels.Length; SourceVersion.Value = SourceVersion.Peek() + 1; }
+            if (Context.Runtime is { } runtime) runtime.Batch(Mutate); else Mutate();
+        }
+
+        public void Remove(string label)
+        {
+            int i = Array.IndexOf(Labels, label);
+            if (i < 0) return;
+            var l = new List<string>(Labels); var h = new List<float>(Heights);
+            l.RemoveAt(i); h.RemoveAt(i);
+            Publish(l.ToArray(), h.ToArray());
+        }
+
+        public ItemDisclosureRange? Range(string key, string label)
+        {
+            int i = Array.IndexOf(Labels, label);
+            return i < 0 ? null : new ItemDisclosureRange(key, i, 1);
+        }
+
+        public override Element Render() => Embed.Comp(() => new ItemsView
+        {
+            ItemCount = Labels.Length,
+            ItemCountSignal = Count,
+            BoundMode = true,
+            RowTemplate = scope => new BoxEl
+            {
+                Height = Prop.Of(() => { _ = SourceVersion.Value; return scope.Index.Value < Heights.Length ? Heights[scope.Index.Value] : 0f; }),
+                Fill = Tok.FillSubtleSecondary,
+                Children = [new TextEl("") { Text = Prop.Of(() => { _ = SourceVersion.Value; return scope.Index.Value < Labels.Length ? Labels[scope.Index.Value] : ""; }), Size = 12f }],
+            },
+            Layout = RepeatLayout.VariableList(32f),
+            HasExplicitLayout = true,
+            SelectionMode = ItemsSelectionMode.None,
+            Selector = SelectorVisual.None,
+            Controller = Controller,
+            Disclosure = new DisclosureOptions { Version = SourceVersion, ResolveRange = Resolve, Diagnostic = Diagnostics.Add },
+            Grow = 1f,
+        });
+    }
+
+    static void BandChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        string[] five = ["A", "B", "C", "D", "E"];
+        float[] fiveH = [28f, 36f, 44f, 32f, 40f];
+
+        // rv.band.1 — collapse keeps the expanded model until rest, commits once, clears the band the frame the rows leave.
+        {
+            var probe = new VirtualRevealProbe(five, fiveH);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 220f);
+            int settled = 0, commits = 0;
+            float DY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "D"));
+            float y0 = DY(), prev = y0, maxStep = 0f;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("band", 1, 2), ItemDisclosureDirection.Collapse,
+                collapseCommit: () => { commits++; probe.Publish(["A", "D", "E"], [28f, 32f, 40f]); }, settled: () => settled++);
+            bool monotone = true;
+            int pollers = 0;
+            for (int i = 0; i < 70; i++)
+            {
+                rig.Host.RunFrame();
+                pollers = Math.Max(pollers, rig.Host.FrameClockPollerCount);
+                float y = DY();
+                monotone &= y <= prev + 0.01f;
+                maxStep = MathF.Max(maxStep, prev - y);
+                prev = y;
+            }
+            bool done = commits == 1 && settled == 1 && probe.Count.Peek() == 3 && !rig.Scene.HasActiveRevealBands;
+            Check("rv.band.1 collapse: the rows stay modelled while the band closes (monotone, no step >15%), the commit runs once at rest, and the band clears with no jump",
+                monotone && maxStep <= 80f * 0.15f && done && Near(prev, y0 - 80f, 0.6f) && pollers == 0,
+                $"y {y0:0.0}→{prev:0.0} maxStep={maxStep:0.00} commits={commits} settled={settled} count={probe.Count.Peek()} bands={rig.Scene.HasActiveRevealBands} pollers={pollers}");
+        }
+
+        // rv.band.2 — expand from the inserted model.
+        {
+            var probe = new VirtualRevealProbe(["A", "D", "E"], [28f, 32f, 40f]);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 220f);
+            int settled = 0;
+            float DY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "D"));
+            float y0 = DY();
+            probe.Publish(five, fiveH);   // the owner inserts FIRST …
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("band", 1, 2), ItemDisclosureDirection.Expand, settled: () => settled++);
+            rig.Host.RunFrame();
+            float yCommit = DY(), prev = yCommit;
+            bool monotone = true;
+            for (int i = 0; i < 70; i++) { rig.Host.RunFrame(); float y = DY(); monotone &= y >= prev - 0.01f; prev = y; }
+            Check("rv.band.2 expand: the inserted rows reveal from 0 (the commit frame shows none of them), monotone, and the band clears at rest",
+                Near(yCommit, y0, 0.6f) && monotone && Near(prev, y0 + 80f, 0.6f) && settled == 1 && !rig.Scene.HasActiveRevealBands,
+                $"y {y0:0.0}→{yCommit:0.0}→{prev:0.0} settled={settled}");
+        }
+
+        // rv.band.3 — reverse mid-flight: a closing band reopens from where it stands; its commit never runs.
+        {
+            var probe = new VirtualRevealProbe(five, fiveH);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 220f);
+            int commits = 0, settled = 0;
+            float DY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "D"));
+            float y0 = DY(), prev = y0, maxStep = 0f;
+            var range = new ItemDisclosureRange("band", 1, 2);
+            probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Collapse, collapseCommit: () => commits++, settled: () => settled++);
+            for (int i = 0; i < 6; i++) { rig.Host.RunFrame(); maxStep = MathF.Max(maxStep, MathF.Abs(DY() - prev)); prev = DY(); }
+            probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Expand, settled: () => settled++);
+            for (int i = 0; i < 70; i++) { rig.Host.RunFrame(); maxStep = MathF.Max(maxStep, MathF.Abs(DY() - prev)); prev = DY(); }
+            Check("rv.band.3 reverse: a closing band reverses into an expand continuously (no step >15%), its collapse commit never runs, it lands open",
+                commits == 0 && settled == 1 && maxStep <= 80f * 0.15f && Near(prev, y0, 0.6f) && probe.Count.Peek() == 5
+                && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Reversed),
+                $"commits={commits} settled={settled} maxStep={maxStep:0.00} y={prev:0.0}/{y0:0.0}");
+        }
+
+        // rv.band.4 — two bands at once, re-found by key after the first commit shifts the indices.
+        {
+            var probe = new VirtualRevealProbe(["A", "B", "C", "D", "E", "F"], [30f, 30f, 30f, 30f, 30f, 30f]);
+            probe.Resolve = key => key == "b1" ? probe.Range(key, "B") : key == "b2" ? probe.Range(key, "E") : null;
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 260f);
+            float FY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "F"));
+            float y0 = FY(), prev = y0;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("b1", 1, 1), ItemDisclosureDirection.Collapse, collapseCommit: () => probe.Remove("B"));
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("b2", 4, 1), ItemDisclosureDirection.Collapse, collapseCommit: () => probe.Remove("E"));
+            bool monotone = true;
+            for (int i = 0; i < 80; i++) { rig.Host.RunFrame(); float y = FY(); monotone &= y <= prev + 0.01f; prev = y; }
+            Check("rv.band.4 concurrency: two collapsing bands run together (monotone follower), both commit, both clear",
+                monotone && probe.Count.Peek() == 4 && Near(prev, y0 - 60f, 0.6f) && !rig.Scene.HasActiveRevealBands,
+                $"monotone={monotone} count={probe.Count.Peek()} y {y0:0.0}→{prev:0.0} bands={rig.Scene.HasActiveRevealBands}");
+        }
+
+        // rv.band.5 — 40 rows closing in a 300-DIP view: the moving edge stays on screen (visible-span clamp).
+        {
+            var labels = new string[45]; var heights = new float[45];
+            for (int i = 0; i < 45; i++) { labels[i] = "r" + i; heights[i] = 30f; }
+            var probe = new VirtualRevealProbe(labels, heights);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 300f);
+            var vp = probe.Controller.Viewport;
+            float top = rig.Scene.AbsoluteRect(vp).Y;
+            rig.Scene.TryGetScroll(vp, out var sc);
+            float bottom = top + sc.ViewportH;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("big", 1, 40), ItemDisclosureDirection.Collapse, collapseCommit: () => { });
+            int frames = 0, onScreen = 0;
+            for (int i = 0; i < 70; i++)
+            {
+                rig.Host.RunFrame();
+                if (!rig.Host.Animation.TryGetTrackValue(vp, AnimEngine.RevealBandChannel(0), out _) || !rig.Scene.TryGetRevealBand(vp, 0, out var b)) continue;
+                frames++;
+                rig.Scene.TryGetScroll(vp, out var s2);
+                float edge = rig.Scene.AbsoluteRect(s2.ContentNode).Y + b.Top + b.Presented;
+                if (edge >= top && edge <= bottom) onScreen++;
+            }
+            Check("rv.band.5 a 40-row band closing in a 300-DIP view keeps its moving edge on screen for ≥70% of its frames",
+                frames > 5 && onScreen >= frames * 0.7f, $"frames={frames} onScreen={onScreen}");
+        }
+
+        // rv.band.8 — the TAIL band of a list scrolled to its end (the sidebar collapsing its last section at the bottom).
+        // The offset rides the PRESENTED max down while the band closes, and the commit frame (the rows leave the model at
+        // the frame start; ItemsView releases the slot only at 6.5) HOLDS it: the committed band adds nothing at 6.3, so the
+        // scroll sync sees exactly the laid-out extent, never laid-out minus a phantom band.
+        {
+            // Every row at the layout's 32-DIP estimate, so realizing rows mid-flight measures nothing new: the only extent
+            // change is the band (5 × 32 = 160 DIP).
+            const float rowH = 32f, band = 5 * rowH;
+            var labels = new string[20]; var heights = new float[20];
+            for (int i = 0; i < 20; i++) { labels[i] = "t" + i; heights[i] = rowH; }
+            var probe = new VirtualRevealProbe(labels, heights);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 300f);
+            var vp = probe.Controller.Viewport;
+            var handle = rig.Host.TryGetScrollHandle(vp)!;
+            handle.ScrollTo(handle.MaxOffset, FluentGpu.Scroll.Runtime.ScrollMove.Immediate);
+            for (int i = 0; i < 3; i++) rig.Host.RunFrame();
+            rig.Scene.TryGetScroll(vp, out var s0);
+            double start = s0.Offset;
+            float startMax = 20 * rowH - s0.ViewportH;
+            int frame = 0, commitFrame = -1, commits = 0;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("tail", 15, 5), ItemDisclosureDirection.Collapse,
+                collapseCommit: () => { commits++; commitFrame = frame; probe.Publish(labels[..15], heights[..15]); });
+            double prev = start, maxStep = 0, beforeCommit = double.NaN, atCommit = double.NaN;
+            bool monotone = true;
+            for (; frame < 80; frame++)
+            {
+                rig.Host.RunFrame();
+                rig.Scene.TryGetScroll(vp, out var s);
+                if (commitFrame == frame) { beforeCommit = prev; atCommit = s.Offset; }
+                monotone &= s.Offset <= prev + 0.01;
+                maxStep = Math.Max(maxStep, Math.Abs(s.Offset - prev));
+                prev = s.Offset;
+            }
+            bool commitHolds = commitFrame >= 0 && Math.Abs(atCommit - beforeCommit) <= 0.5;
+            Check("rv.band.8 a tail band collapsing in a list scrolled to its end: the offset rides the presented max down (monotone, no step >15%), the commit frame holds it, and it lands on the new max",
+                startMax > band && Near((float)start, startMax, 1f) && commitHolds && monotone && maxStep <= band * 0.15f
+                && Near((float)prev, startMax - band, 1f)
+                && commits == 1 && probe.Count.Peek() == 15 && !rig.Scene.HasActiveRevealBands,
+                $"offset {start:0.0}→{prev:0.0} commit@{commitFrame} {beforeCommit:0.0}→{atCommit:0.0} maxStep={maxStep:0.00} monotone={monotone} commits={commits} bands={rig.Scene.HasActiveRevealBands}");
+        }
+    }
+
+    // rv.band.6/7 — the scene-level band API: hit-testing clips the band and maps the shifted suffix; the census balances.
+    static void BandFastPath(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 100f, Height = 200f, ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 1, Width = 100f,
+                    Children =
+                    [
+                        new BoxEl { Key = "A", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "B", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "C", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "D", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "E", Width = 100f, Height = 40f, OnClick = static () => { } },
+                    ],
+                },
+            ],
+        }, null);
+        new FluentGpu.Layout.FlexLayout(scene, fonts).Run(scene.Root);
+        var viewport = scene.Root;
+        var content = Child(scene, viewport, 0);
+        var b = Child(scene, content, 1);
+        var c = Child(scene, content, 2);
+        var d = Child(scene, content, 3);
+        ref ScrollState scroll = ref scene.ScrollRef(viewport);
+        scroll.Orientation = 0;
+        scroll.ContentNode = content;
+        scroll.ItemCount = 5;
+        scroll.FirstRealized = 0;
+
+        bool idle = !scene.HasActiveRevealBands;
+        bool armed = scene.SetRevealBand(viewport, 0, 1, 2, 40f, 80f, opening: false, presented: 40f) && scene.HasActiveRevealBands;
+        var dispatcher = new InputDispatcher(scene);
+        var bodyHit = dispatcher.HitTest(new Point2(10f, 50f));
+        var suffixHit = dispatcher.HitTest(new Point2(10f, 90f));
+        scene.ClearRevealBand(viewport, 0);
+        var restingHit = dispatcher.HitTest(new Point2(10f, 90f));
+        scene.SetRevealBandPresented(viewport, 0, 10f);   // a late animation write after the clear is ignored
+        bool cleared = !scene.HasActiveRevealBands;
+        Check("rv.band.6 hit-testing clips a band to its presented height and maps the shifted suffix; a clear restores layout",
+            idle && armed && bodyHit == b && suffixHit == d && restingHit == c && cleared,
+            $"idle={idle} armed={armed} body={bodyHit == b} suffix={suffixHit == d} resting={restingHit == c} cleared={cleared}");
+
+        var census = new SceneStore();
+        var root = census.CreateNode(1);
+        census.Root = root;
+        var viewportA = census.CreateNode(1); var contentA = census.CreateNode(1);
+        var viewportB = census.CreateNode(1); var contentB = census.CreateNode(1);
+        census.AppendChild(root, viewportA); census.AppendChild(viewportA, contentA);
+        census.AppendChild(root, viewportB); census.AppendChild(viewportB, contentB);
+        ref ScrollState scrollA = ref census.ScrollRef(viewportA); scrollA.ContentNode = contentA; scrollA.ItemCount = 1;
+        ref ScrollState scrollB = ref census.ScrollRef(viewportB); scrollB.ContentNode = contentB; scrollB.ItemCount = 1;
+        bool both = census.SetRevealBand(viewportA, 0, 0, 1, 0f, 10f, false, 0f)
+            && census.SetRevealBand(viewportB, 2, 0, 1, 0f, 10f, true, 10f) && census.HasActiveRevealBands;
+        census.ClearRevealBand(viewportA, 0);
+        bool oneRemains = census.HasActiveRevealBands;
+        census.ClearRevealBand(viewportA, 0);
+        bool repeatSafe = census.HasActiveRevealBands;
+        census.FreeSubtree(viewportB);
+        bool freeClears = !census.HasActiveRevealBands;
+        Check("rv.band.7 concurrent, repeated-clear and viewport-free band census edges stay balanced",
+            both && oneRemains && repeatSafe && freeClears, $"both={both} one={oneRemains} repeat={repeatSafe} free={freeClears}");
     }
 }

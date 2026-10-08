@@ -14,7 +14,7 @@ internal readonly record struct PublicationKey(
     float DeviceScale,
     RectF OverlayClip,
     RectF? SpotlightScrimClip,
-    bool VirtualDisclosures,
+    bool RevealBands,
     int PendingRemovals,
     bool RemovalOverflow,
     long ImageSerial,

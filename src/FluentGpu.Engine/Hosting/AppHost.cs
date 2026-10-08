@@ -4442,7 +4442,7 @@ public sealed partial class AppHost : IDisposable
     /// <summary>What a scene publication made now would carry beyond the store's own ledger (see <see cref="PublicationKey"/>).</summary>
     private PublicationKey BuildPublicationKey(in Threading.SceneRecordOptions options, Size2 frameSize) => new(
         _renderSeam.TargetEpoch, _scene.Root, _scene.DeviceScale, _scene.OverlayClip, _scene.SpotlightScrimClip,
-        _scene.HasActiveVirtualDisclosures, _scene.PendingRemovalExtents.Length, _scene.PendingRemovalOverflow,
+        _scene.HasActiveRevealBands, _scene.PendingRemovalExtents.Length, _scene.PendingRemovalOverflow,
         ImageCache.RecordingInputSerial, _anim.CompositorCaptureFingerprint(), _scene.Recording.ConfigurationVersion,
         options, frameSize, _window.Scale, Clear);
 

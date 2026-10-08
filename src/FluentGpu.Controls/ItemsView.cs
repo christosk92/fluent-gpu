@@ -33,31 +33,28 @@ public sealed class ItemsViewController
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
     internal Action<object>? ObserveInsertionMembershipImpl;
-    internal Action<bool>? CompleteDisclosureImpl;
+    internal Action<int>? ClearBandImpl;
+    /// <summary>Marks the engine band committed (AnimEngine.CommitRevealBand) right before a collapse commit runs.</summary>
+    internal Action<int>? CommitBandImpl;
     internal readonly Signal<int> DisclosureVersion = new(0);
-    internal ItemDisclosureRequest? PendingDisclosure;
-    internal ItemDisclosureRequest? ActiveDisclosure;
-    internal ItemDisclosureRequest? CompletedDisclosure;
-    internal bool DisclosureStarted;
-    internal bool DisclosurePresentationArmed;
-    internal bool DisclosureTrackObserved;
-    internal bool DisclosureNeedsClear;
-    internal int DisclosureStartedItemCount;
-    internal int DisclosureStartedSourceVersion;
-    internal bool DisclosureTracksSourceVersion;
-    internal int DisclosureClearAtCount = int.MaxValue;
-    internal int DisclosureClearAtSourceVersion = int.MaxValue;
-    internal int DisclosureProgressBucket = -1;
+    /// <summary>The live disclosure bands, by slot (the engine's RevealBands slots on this view's viewport).</summary>
+    internal readonly ItemRevealBand?[] Bands = new ItemRevealBand?[RevealBands.Capacity];
+    /// <summary>One settle callback per slot, registered with the engine by the mounted view (AnimEngine.WhenSettled).</summary>
+    internal readonly Action[] BandSettledActions;
     internal Action<ItemDisclosureDiagnostic>? DisclosureDiagnostic;
+    /// <summary>The item count the mounted view last laid out (a collapse's commit-time count).</summary>
+    internal int ObservedCount;
     private long _nextDisclosureOperationId;
 
-    /// <summary>The band a disclosure is about to insert, is animating, or just committed away — the STRUCTURAL shape of
-    /// the item-count change the view is about to observe. <see cref="ItemsView"/> hands it to an
-    /// <see cref="ISplicingVirtualLayout"/> so the surviving rows keep their measured extents across that count change
-    /// instead of the whole extent table re-seeding to one estimate (which jumps the content extent and re-pins the
-    /// scroll anchor against a stale offset — the visible expander flicker).</summary>
-    internal ItemDisclosureRange? DisclosureSpliceRange
-        => (PendingDisclosure ?? ActiveDisclosure ?? CompletedDisclosure)?.Range;
+    public ItemsViewController()
+    {
+        BandSettledActions = new Action[RevealBands.Capacity];
+        for (int i = 0; i < BandSettledActions.Length; i++)
+        {
+            int slot = i;
+            BandSettledActions[i] = () => BandSettled(slot);
+        }
+    }
 
     internal delegate bool TryGetItemIndexDelegate(float horizontalViewportRatio, float verticalViewportRatio,
                                                    out int index);
@@ -204,8 +201,11 @@ public sealed class ItemsViewController
         ObserveInsertionMembershipImpl?.Invoke(token);
     }
 
-    /// <summary>Begin or retarget one contiguous disclosure band. Expand callers insert the range first; collapse callers
-    /// supply the mutation that removes it, which runs exactly once after the close reaches zero.</summary>
+    /// <summary>Begin a disclosure over one contiguous band, or REVERSE the one already running under the same key. Any
+    /// number of keys run at once (four bands in flight per view; a fifth lands the oldest at its endpoint). Expand: the
+    /// owner inserts the rows FIRST (in the same input turn), then calls this. Collapse: the rows stay until the band rests,
+    /// then <paramref name="collapseCommit"/> runs exactly once (at the next frame's start) to remove them — a collapse
+    /// reversed into an expand never commits. <paramref name="settled"/> runs when the latest direction comes to rest.</summary>
     public void BeginDisclosure(ItemDisclosureRange range, ItemDisclosureDirection direction,
                                 Action? collapseCommit = null, Action? settled = null)
     {
@@ -215,138 +215,155 @@ public sealed class ItemsViewController
         if (direction == ItemDisclosureDirection.Collapse && collapseCommit is null)
             throw new ArgumentNullException(nameof(collapseCommit));
 
-        var next = new ItemDisclosureRequest(++_nextDisclosureOperationId, range, direction, collapseCommit, settled);
-        var active = ActiveDisclosure;
-        if (active is not null && !string.Equals(active.Range.Key, range.Key, StringComparison.Ordinal))
-            CompleteDisclosure();
-        PendingDisclosure = next;
-        Trace(ItemDisclosureDiagnosticKind.Queued, next, -1, -1, -1f);
-        DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
-    }
-
-    /// <summary>Force the active transaction to its requested endpoint. A pending collapse still commits exactly once.</summary>
-    public void CompleteDisclosure()
-    {
-        var active = ActiveDisclosure;
-        if (active is null)
-        {
-            if (PendingDisclosure is { } pending)
+        // A committed collapse under this key is superseded by the new disclosure: release its engine band now, or it keeps
+        // clipping the reopened rows (its count never leaves CommitCount when the rows come straight back).
+        for (int i = 0; i < Bands.Length; i++)
+            if (Bands[i] is { Phase: ItemRevealPhase.Committed } done && string.Equals(done.Range.Key, range.Key, StringComparison.Ordinal))
             {
-                PendingDisclosure = null;
-                if (pending.Direction == ItemDisclosureDirection.Collapse) pending.CollapseCommit?.Invoke();
-                pending.Settled?.Invoke();
-                DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
+                ClearBandImpl?.Invoke(i);
+                Bands[i] = null;
+                Trace(ItemDisclosureDiagnosticKind.Cleared, done, ObservedCount);
             }
-            return;
-        }
-        CompleteDisclosureImpl?.Invoke(active.Direction == ItemDisclosureDirection.Expand);
-        FinishDisclosure(active);
-    }
-
-    internal void StartDisclosure(ItemDisclosureRequest request, int itemCount, int sourceVersion, bool tracksSourceVersion)
-    {
-        CompletedDisclosure = null;
-        ActiveDisclosure = request;
-        PendingDisclosure = null;
-        DisclosureStarted = true;
-        DisclosurePresentationArmed = false;
-        DisclosureTrackObserved = false;
-        DisclosureStartedItemCount = itemCount;
-        DisclosureStartedSourceVersion = sourceVersion;
-        DisclosureTracksSourceVersion = tracksSourceVersion;
-        DisclosureProgressBucket = -1;
-        Trace(ItemDisclosureDiagnosticKind.Starting, request, itemCount, sourceVersion, -1f);
-    }
-
-    internal void ArmDisclosure()
-    {
-        if (ActiveDisclosure is not { } request) return;
-        DisclosurePresentationArmed = true;
-        Trace(ItemDisclosureDiagnosticKind.Armed, request, DisclosureStartedItemCount,
-            DisclosureStartedSourceVersion, request.Direction == ItemDisclosureDirection.Expand ? 0f : 1f);
-    }
-
-    internal void ObserveDisclosure(float progress)
-    {
-        if (ActiveDisclosure is not { } request) return;
-        DisclosureTrackObserved = true;
-        int bucket = Math.Clamp((int)MathF.Floor(Math.Clamp(progress, 0f, 1f) * 4f), 0, 4);
-        if (bucket == DisclosureProgressBucket) return;
-        DisclosureProgressBucket = bucket;
-        Trace(ItemDisclosureDiagnosticKind.Progress, request, DisclosureStartedItemCount,
-            DisclosureStartedSourceVersion, progress);
-    }
-
-    internal void PrepareExpand(ItemDisclosureRange range, Action? settled)
-    {
-        if (ActiveDisclosure is { } active && string.Equals(active.Range.Key, range.Key, StringComparison.Ordinal)) return;
-        if (PendingDisclosure is { } pending && string.Equals(pending.Range.Key, range.Key, StringComparison.Ordinal)) return;
-        var request = new ItemDisclosureRequest(++_nextDisclosureOperationId, range,
-            ItemDisclosureDirection.Expand, null, settled, true);
-        PendingDisclosure = request;
-        Trace(ItemDisclosureDiagnosticKind.Queued, request, -1, -1, -1f);
-    }
-
-    internal void SettleDisclosure()
-    {
-        if (ActiveDisclosure is not { } active) return;
-        FinishDisclosure(active);
-    }
-
-    private void FinishDisclosure(ItemDisclosureRequest request)
-    {
-        CompletedDisclosure = request;
-        ActiveDisclosure = null;
-        PendingDisclosure = null;
-        DisclosureStarted = false;
-        DisclosurePresentationArmed = false;
-        DisclosureTrackObserved = false;
-        DisclosureNeedsClear = true;
-        DisclosureClearAtCount = request.Direction == ItemDisclosureDirection.Collapse
-            ? Math.Max(0, DisclosureStartedItemCount - request.Range.Count)
-            : int.MaxValue;
-        DisclosureClearAtSourceVersion = request.Direction == ItemDisclosureDirection.Collapse
-            ? DisclosureStartedSourceVersion + 1
-            : DisclosureStartedSourceVersion;
-        if (request.Direction == ItemDisclosureDirection.Collapse)
+        int slot = SlotOf(range.Key);
+        bool reverse = slot >= 0 && Bands[slot]!.Direction != direction;
+        if (slot < 0)
         {
-            Trace(ItemDisclosureDiagnosticKind.Committing, request, DisclosureStartedItemCount,
-                DisclosureStartedSourceVersion, 0f);
-            request.CollapseCommit?.Invoke();
+            slot = FreeSlot();
+            if (slot < 0) { slot = OldestSlot(); FinishNow(slot); }
+            Bands[slot] = new ItemRevealBand();
         }
-        Trace(ItemDisclosureDiagnosticKind.Settled, request, DisclosureStartedItemCount,
-            DisclosureStartedSourceVersion, request.Direction == ItemDisclosureDirection.Expand ? 1f : 0f);
-        request.Settled?.Invoke();
+        var band = Bands[slot]!;
+        band.Range = range;
+        band.Direction = direction;
+        band.CollapseCommit = direction == ItemDisclosureDirection.Collapse ? collapseCommit : null;
+        band.Settled = settled;
+        band.Phase = ItemRevealPhase.Pending;
+        band.Spliced = false;
+        band.OperationId = ++_nextDisclosureOperationId;
+        Trace(reverse ? ItemDisclosureDiagnosticKind.Reversed : ItemDisclosureDiagnosticKind.Queued, band, -1);
         DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
     }
 
-    internal void DisclosureCleared(bool recovery, int itemCount, int sourceVersion)
+    private int SlotOf(string key)
     {
-        var request = CompletedDisclosure ?? ActiveDisclosure ?? PendingDisclosure;
-        DisclosureNeedsClear = false;
-        DisclosureClearAtCount = int.MaxValue;
-        DisclosureClearAtSourceVersion = int.MaxValue;
-        if (request is not null)
-            Trace(recovery ? ItemDisclosureDiagnosticKind.Recovered : ItemDisclosureDiagnosticKind.Cleared,
-                request, itemCount, sourceVersion, -1f);
-        else
-            DisclosureDiagnostic?.Invoke(new ItemDisclosureDiagnostic(
-                recovery ? ItemDisclosureDiagnosticKind.Recovered : ItemDisclosureDiagnosticKind.Cleared,
-                0, default, ItemDisclosureDirection.Expand, itemCount, sourceVersion, -1f));
-        CompletedDisclosure = null;
+        for (int i = 0; i < Bands.Length; i++)
+            if (Bands[i] is { Phase: not ItemRevealPhase.Committed } b && string.Equals(b.Range.Key, key, StringComparison.Ordinal)) return i;
+        return -1;
     }
 
-    internal void TraceFailure()
+    private int FreeSlot()
     {
-        if (ActiveDisclosure is { } request)
-            Trace(ItemDisclosureDiagnosticKind.FailedToArm, request, DisclosureStartedItemCount,
-                DisclosureStartedSourceVersion, -1f);
+        for (int i = 0; i < Bands.Length; i++) if (Bands[i] is null) return i;
+        return -1;
     }
 
-    private void Trace(ItemDisclosureDiagnosticKind kind, ItemDisclosureRequest request,
-                       int itemCount, int sourceVersion, float progress)
-        => DisclosureDiagnostic?.Invoke(new ItemDisclosureDiagnostic(kind, request.OperationId, request.Range,
-            request.Direction, itemCount, sourceVersion, progress));
+    private int OldestSlot()
+    {
+        int best = 0;
+        for (int i = 1; i < Bands.Length; i++) if (Bands[i]!.OperationId < Bands[best]!.OperationId) best = i;
+        return best;
+    }
+
+    // A fifth concurrent band: the OLDEST lands at its endpoint now — the one place a disclosure snaps (four in flight on
+    // one list is already past anything a user starts by hand).
+    private void FinishNow(int slot)
+    {
+        if (Bands[slot] is not { } band) return;
+        ClearBandImpl?.Invoke(slot);
+        Bands[slot] = null;
+        if (band.Direction == ItemDisclosureDirection.Collapse && band.Phase != ItemRevealPhase.Committed) band.CollapseCommit?.Invoke();
+        band.Settled?.Invoke();
+    }
+
+    /// <summary>The view armed band <paramref name="slot"/> against <paramref name="count"/> items.</summary>
+    internal void BandArmed(int slot, int count)
+    {
+        if (Bands[slot] is not { } band) return;
+        band.Phase = ItemRevealPhase.Running;
+        Trace(ItemDisclosureDiagnosticKind.Armed, band, count);
+    }
+
+    /// <summary>The engine reported band <paramref name="slot"/> at rest (next-frame callback).</summary>
+    internal void BandSettled(int slot)
+    {
+        if (Bands[slot] is not { Phase: ItemRevealPhase.Running } band) return;
+        if (band.Direction == ItemDisclosureDirection.Collapse)
+        {
+            band.Phase = ItemRevealPhase.Committed;
+            band.CountAtCommit = ObservedCount;
+            band.Spliced = false;
+            Trace(ItemDisclosureDiagnosticKind.Committing, band, ObservedCount);
+            // The engine band goes committed BEFORE the owner removes the rows: from the flush that drops them it adds no
+            // delta and no clip, so this frame's 6.3 pass and scroll sync see exactly the laid-out extent (a list scrolled
+            // to its end keeps its offset). The view's layout effect only releases the slot afterwards.
+            CommitBandImpl?.Invoke(slot);
+            band.CollapseCommit?.Invoke();
+        }
+        else Bands[slot] = null;   // the engine cleared the band when it rested open
+        Trace(ItemDisclosureDiagnosticKind.Settled, band, ObservedCount);
+        band.Settled?.Invoke();
+        DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
+    }
+
+    /// <summary>The view could not arm band <paramref name="slot"/> (no range, not a vertical virtual list): it lands now —
+    /// a collapse still commits exactly once.</summary>
+    internal void BandFailed(int slot, int count)
+    {
+        if (Bands[slot] is not { } band) return;
+        Bands[slot] = null;
+        Trace(ItemDisclosureDiagnosticKind.FailedToArm, band, count);
+        if (band.Direction == ItemDisclosureDirection.Collapse) band.CollapseCommit?.Invoke();
+        band.Settled?.Invoke();
+    }
+
+    /// <summary>A committed collapse's rows left the layout: its slot is released (the engine band stopped presenting at
+    /// 6.3 of the same frame — CommitBandImpl).</summary>
+    internal void BandCleared(int slot, int count)
+    {
+        if (Bands[slot] is not { } band) return;
+        Bands[slot] = null;
+        Trace(ItemDisclosureDiagnosticKind.Cleared, band, count);
+    }
+
+    /// <summary>The view unmounted: every band lands (a pending collapse commits, so the model ends where it was asked to).</summary>
+    internal void ResetBands()
+    {
+        for (int i = 0; i < Bands.Length; i++)
+        {
+            if (Bands[i] is not { } band) continue;
+            Bands[i] = null;
+            if (band.Direction == ItemDisclosureDirection.Collapse && band.Phase != ItemRevealPhase.Committed) band.CollapseCommit?.Invoke();
+            band.Settled?.Invoke();
+        }
+    }
+
+    /// <summary>The bands' STRUCTURAL edits, applied to a splicing layout in the render that first observes the new count —
+    /// an expand's insertion, a committed collapse's removal — so every surviving row keeps its measured extent.</summary>
+    internal void SpliceDisclosures(ISplicingVirtualLayout layout, int count)
+    {
+        int have = layout.ItemCount;
+        if (have < 0 || have == count) return;
+        int diff = count - have;
+        for (int i = 0; i < Bands.Length; i++)
+        {
+            if (Bands[i] is not { Spliced: false } b) continue;
+            if (b.Direction == ItemDisclosureDirection.Expand && b.Phase != ItemRevealPhase.Committed && diff == b.Range.Count)
+            {
+                layout.Splice(b.Range.FirstIndex, 0, b.Range.Count);
+                b.Spliced = true;
+                return;
+            }
+            if (b.Phase == ItemRevealPhase.Committed && diff == -b.Range.Count)
+            {
+                layout.Splice(b.Range.FirstIndex, b.Range.Count, 0);
+                b.Spliced = true;
+                return;
+            }
+        }
+    }
+
+    private void Trace(ItemDisclosureDiagnosticKind kind, ItemRevealBand band, int itemCount)
+        => DisclosureDiagnostic?.Invoke(new ItemDisclosureDiagnostic(kind, band.OperationId, band.Range, band.Direction, itemCount));
 }
 
 /// <summary>A stable contiguous logical range over an ItemsView's expanded item model.</summary>
@@ -354,16 +371,25 @@ public readonly record struct ItemDisclosureRange(string Key, int FirstIndex, in
 
 public enum ItemDisclosureDirection : byte { Expand, Collapse }
 
-public enum ItemDisclosureDiagnosticKind : byte
-{
-    Queued, Starting, Armed, Progress, Committing, Settled, Cleared, Recovered, FailedToArm,
-}
+public enum ItemDisclosureDiagnosticKind : byte { Queued, Reversed, Armed, Committing, Settled, Cleared, FailedToArm }
 
 public readonly record struct ItemDisclosureDiagnostic(ItemDisclosureDiagnosticKind Kind, long OperationId,
-    ItemDisclosureRange Range, ItemDisclosureDirection Direction, int ItemCount, int SourceVersion, float Progress);
+    ItemDisclosureRange Range, ItemDisclosureDirection Direction, int ItemCount);
 
-internal sealed record ItemDisclosureRequest(long OperationId, ItemDisclosureRange Range, ItemDisclosureDirection Direction,
-                                             Action? CollapseCommit, Action? Settled, bool PreparedExpansion = false);
+internal enum ItemRevealPhase : byte { Pending, Running, Committed }
+
+/// <summary>One disclosure band the controller tracks (slot = the engine RevealBands slot on the view's viewport).</summary>
+internal sealed class ItemRevealBand
+{
+    public ItemDisclosureRange Range;
+    public ItemDisclosureDirection Direction;
+    public Action? CollapseCommit;
+    public Action? Settled;
+    public ItemRevealPhase Phase;
+    public long OperationId;
+    public int CountAtCommit = -1;
+    public bool Spliced;
+}
 
 /// <summary>Per-item visual state handed to a custom <see cref="ItemContainerFactory"/> (the L4 skin seam).</summary>
 public readonly record struct ItemChromeState(
@@ -910,12 +936,6 @@ public sealed class ItemsView : Component
         int dispVer = DisplacementVersion?.Value ?? 0;     // subscribe — reorder drag-delta/dwell re-seeds displacement
         int disclosureVer = Controller?.DisclosureVersion.Value ?? 0;
         int disclosureSourceVer = Disclosure?.Version?.Value ?? 0;
-        if (Controller is { } disclosureOwner && Disclosure?.PendingExpand?.Invoke() is { } preparedRange
-            && preparedRange.FirstIndex >= 0 && preparedRange.Count > 0
-            && preparedRange.FirstIndex + preparedRange.Count <= count)
-            disclosureOwner.PrepareExpand(preparedRange,
-                Disclosure.OnExpandSettled is { } onSettled ? () => onSettled(preparedRange) : null);
-                                                           //   (crosses the frozen-ComponentEl boundary; the only re-render trigger here)
 
         if (!ReferenceEquals(subscribed.Value, model))     // forward the model's event once per model instance
         {
@@ -942,19 +962,12 @@ public sealed class ItemsView : Component
         // A measured layout resolves a bare count change index-by-index, which is right for an append and wrong for the
         // middle: an expanded folder's children push the whole tail down one band, so every row below the edit would be
         // matched against a DIFFERENT row's extent (or, before ISplicingVirtualLayout existed, the whole table re-seeded
-        // to one estimate). Splicing the known band here — in the render that first observes the new count, ahead of the
+        // to one estimate). Splicing the known bands here — in the render that first observes the new count, ahead of the
         // layout pass that consumes it — keeps every surviving row's measured extent, which is also what makes the
-        // reconciler's disclosure travel distance (ItemRect over the disclosed band) a real number instead of an
+        // band extent AnimEngine.BeginRevealBand / AddBands read (ItemRect over the band's rows) a real number instead of an
         // estimate. Idempotent: after the splice the layout's count matches and the guard stops firing.
-        if (layout is ISplicingVirtualLayout splicing && Controller?.DisclosureSpliceRange is { Count: > 0 } band)
-        {
-            int have = splicing.ItemCount;
-            if (have >= 0 && have != count && band.FirstIndex >= 0)
-            {
-                if (count - have == band.Count) splicing.Splice(band.FirstIndex, 0, band.Count);
-                else if (have - count == band.Count) splicing.Splice(band.FirstIndex, band.Count, 0);
-            }
-        }
+        if (layout is ISplicingVirtualLayout splicing && Controller is { } spliceOwner)
+            spliceOwner.SpliceDisclosures(splicing, count);
 
         var sceneRef = Context.Scene;
 
@@ -1572,8 +1585,8 @@ public sealed class ItemsView : Component
                 ? null
                 : (indices, commit) => beginRemoval(
                     viewportNode.Value, indices, removal.Exit, removal.Motion, removal.StaggerMs, commit);
-            ctl.CompleteDisclosureImpl = expanded
-                => Context.CompleteVirtualDisclosure?.Invoke(viewportNode.Value, expanded);
+            ctl.ClearBandImpl = slot => Context.Anim?.ClearRevealBand(viewportNode.Value, slot);
+            ctl.CommitBandImpl = slot => Context.Anim?.CommitRevealBand(viewportNode.Value, slot);
             ctl.DisclosureDiagnostic = Disclosure?.Diagnostic;
             ctl.ObserveInsertionMembershipImpl = insertion is null ? null : insertion.ObserveMembership;
         }
@@ -1602,48 +1615,71 @@ public sealed class ItemsView : Component
                 ctl.GetOffsetImpl = null;
                 ctl.BeginRemovalImpl = null;
                 ctl.ObserveInsertionMembershipImpl = null;
-                ctl.CompleteDisclosureImpl = null;
+                ctl.ClearBandImpl = null;
+                ctl.CommitBandImpl = null;
+                ctl.ResetBands();
                 ctl.Selection = null;
             };
         }, DepKey.FromRef(Controller));
 
-        // Seed after the changed item model has reconciled and laid out, but before paint: an expanding range therefore
-        // starts clipped at zero instead of flashing once at full height.
+        // Band settle callbacks (the engine reports a band at rest at the next frame's start — no per-frame watcher).
+        UseEffect(() =>
+        {
+            var ctl = Controller;
+            var anim = Context.Anim;
+            var vp = viewportNode.Value;
+            if (ctl is null || anim is null || vp.IsNull) return null;
+            for (int i = 0; i < RevealBands.Capacity; i++) anim.WhenSettled(vp, AnimEngine.RevealBandChannel(i), ctl.BandSettledActions[i]);
+            return () => { for (int i = 0; i < RevealBands.Capacity; i++) anim.WhenSettled(vp, AnimEngine.RevealBandChannel(i), null); };
+        },
+        // keyed on the viewport too: the first render sees NodeHandle.Null (OnRealized fills it), and a remounted viewport
+        // needs its callbacks re-registered under the new index/gen
+        DepKey.From(HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Controller),
+                                        viewportNode.Value.Raw.Index, viewportNode.Value.Raw.Gen)));
+
+        // Arm / move / clear the bands after the changed item model has reconciled and laid out, but before paint: an
+        // expanding band therefore starts at 0 instead of flashing once at full height. A committed collapse's band stopped
+        // presenting at 6.3 of the frame its rows left the model (CommitBandImpl, the zero-delta handoff); here its slot is
+        // only released.
         UseLayoutEffect(() =>
         {
-            if (Controller is not { } ctl) return;
+            if (Controller is not { } ctl || Context.Anim is not { } anim) return;
             var viewport = viewportNode.Value;
-            bool countReady = count <= ctl.DisclosureClearAtCount;
-            bool sourceReady = !ctl.DisclosureTracksSourceVersion
-                || disclosureSourceVer >= ctl.DisclosureClearAtSourceVersion;
-            if (ctl.DisclosureNeedsClear && countReady && sourceReady
-                && Context.ClearVirtualDisclosure is { } clear)
+            if (viewport.IsNull) return;
+            ctl.ObservedCount = count;
+            var resolve = Disclosure?.ResolveRange;
+            for (int slot = 0; slot < ctl.Bands.Length; slot++)
             {
-                clear(viewport);
-                ctl.DisclosureCleared(recovery: false, count, disclosureSourceVer);
-            }
-            else if (!ctl.DisclosureNeedsClear && ctl.PendingDisclosure is null && ctl.ActiveDisclosure is null
-                     && Context.Scene is { } scene && scene.TryGetScroll(viewport, out var stale)
-                     && float.IsFinite(stale.DisclosureT) && Context.ClearVirtualDisclosure is { } recover)
-            {
-                // A remount/interrupted owner must never inherit a finite disclosure clip forever.
-                recover(viewport);
-                ctl.DisclosureCleared(recovery: true, count, disclosureSourceVer);
-            }
-            if (ctl.PendingDisclosure is not { } request) return;
-            ctl.StartDisclosure(request, count, disclosureSourceVer, Disclosure?.Version is not null);
-            bool started = Context.BeginVirtualDisclosure?.Invoke(
-                viewport, request.Range.FirstIndex, request.Range.Count,
-                request.Direction == ItemDisclosureDirection.Expand) == true;
-            if (started)
-            {
-                ctl.ArmDisclosure();
-                if (request.PreparedExpansion) Disclosure?.OnExpandStarted?.Invoke(request.Range);
-            }
-            else
-            {
-                ctl.TraceFailure();
-                ctl.SettleDisclosure();
+                if (ctl.Bands[slot] is not { } band) continue;
+                if (band.Phase == ItemRevealPhase.Committed)
+                {
+                    bool gone = resolve is not null
+                        ? resolve(band.Range.Key) is null && count != band.CountAtCommit
+                        : count <= band.CountAtCommit - band.Range.Count;
+                    if (!gone) continue;
+                    anim.ClearRevealBand(viewport, slot);
+                    ctl.BandCleared(slot, count);
+                    continue;
+                }
+                ItemDisclosureRange range = resolve?.Invoke(band.Range.Key) ?? band.Range;
+                if (range.FirstIndex < 0 || range.Count <= 0 || range.FirstIndex + range.Count > count)
+                {
+                    if (band.Phase == ItemRevealPhase.Pending) { anim.ClearRevealBand(viewport, slot); ctl.BandFailed(slot, count); }
+                    continue;
+                }
+                if (band.Phase == ItemRevealPhase.Running)
+                {
+                    if (range != band.Range) { band.Range = range; anim.SetRevealBandRange(viewport, slot, range.FirstIndex, range.Count); }
+                    continue;
+                }
+                band.Range = range;
+                if (anim.BeginRevealBand(viewport, slot, range.FirstIndex, range.Count, band.Direction == ItemDisclosureDirection.Expand))
+                    ctl.BandArmed(slot, count);
+                else
+                {
+                    anim.ClearRevealBand(viewport, slot);
+                    ctl.BandFailed(slot, count);
+                }
             }
         }, DepKey.From(HashCode.Combine(disclosureVer, disclosureSourceVer, count)));
 
@@ -2006,12 +2042,7 @@ public sealed class ItemsView : Component
                 ],
             };
 
-        ItemsViewController? disclosureController = Controller;
-        bool watchesDisclosure = disclosureController is not null
-            && (disclosureController.PendingDisclosure is not null || disclosureController.ActiveDisclosure is not null);
-        Element[] rootChildren = watchesDisclosure
-            ? [itemsHost, Embed.Comp(() => new ItemsViewDisclosureWatcher(disclosureController!))]
-            : [itemsHost];
+        Element[] rootChildren = [itemsHost];
 
         return new BoxEl
         {
@@ -2510,39 +2541,5 @@ internal sealed class ItemsViewInsertionPreview : Component
         if (_owner.SlotSignal.Value < 0) return Affine2D.Identity;
         float at = _owner.Offset.Value;
         return _owner.Horizontal ? Affine2D.Translation(at, 0f) : Affine2D.Translation(0f, at);
-    }
-}
-
-/// <summary>Frame-clock settle watcher mounted only while one disclosure track is active.</summary>
-internal sealed class ItemsViewDisclosureWatcher : Component
-{
-    private readonly ItemsViewController _controller;
-    public ItemsViewDisclosureWatcher(ItemsViewController controller) => _controller = controller;
-
-    public override Element Render()
-    {
-        long tick = UseContext(FrameClock.Tick);
-        UseEffect(() =>
-        {
-            if (!_controller.DisclosureStarted || _controller.ActiveDisclosure is null
-                || !_controller.DisclosurePresentationArmed) return;
-            var viewport = _controller.Viewport;
-            var anim = Context.Anim;
-            var scene = Context.Scene;
-            if (anim is null || scene is null || viewport.IsNull || !scene.IsLive(viewport))
-            {
-                _controller.TraceFailure();
-                _controller.SettleDisclosure();
-                return;
-            }
-
-            bool presented = scene.TryGetScroll(viewport, out var scroll) && float.IsFinite(scroll.DisclosureT);
-            bool tracked = anim.TryGetTrackValue(viewport, AnimChannel.DisclosureProgress, out float progress);
-            if (tracked) _controller.ObserveDisclosure(progress);
-            else if (presented) _controller.ObserveDisclosure(scroll.DisclosureT);
-            if (!tracked && (presented || _controller.DisclosureTrackObserved))
-                _controller.SettleDisclosure();
-        }, tick);
-        return new BoxEl { Height = 0f, Shrink = 0f, HitTestVisible = false };
     }
 }

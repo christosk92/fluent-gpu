@@ -614,6 +614,9 @@ public byte  FlowBits;         // SEMANTICS: backdrop-effects-animation.md §5.8
                                //   FlowOwnsShiftBit 8, FlowBoundaryBit 16, FlowRevealBit 32, FlowInnerBit 64 (an inner reveal's delta stopped here)
 // ScrollState — directly after ItemClipTopFadeBand
 public float RevealOverscan;   // SEMANTICS: backdrop-effects-animation.md §5.8b — DIP the realize window reaches past the viewport bottom
+// ScrollState — the virtual reveal bands (AS-BUILT 2026-10; replaces the Disclosure* columns)
+public RevealBands Bands;      // SEMANTICS: backdrop-effects-animation.md §5.8b (virtual reveal bands) — four named RevealBand fields, NEVER an [InlineArray]: ScrollState is compared by default struct equality
+public byte BandMask;          // SEMANTICS: backdrop-effects-animation.md §5.8b — bit i = band slot i live
 ```
 
 ### 2.8 `UpdateQueueSlab` — the phase-3 lane/update-queue backing storage (P1/P2a)

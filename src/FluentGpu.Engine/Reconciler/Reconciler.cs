@@ -762,9 +762,6 @@ public sealed partial class TreeReconciler
     // The seams every component's context is handed. A method-group conversion allocates a delegate each time it is evaluated,
     // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
     private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
-    private Func<NodeHandle, int, int, bool, bool>? _beginVirtualDisclosureSeam;
-    private Action<NodeHandle, bool>? _completeVirtualDisclosureSeam;
-    private Action<NodeHandle>? _clearVirtualDisclosureSeam;
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
@@ -775,9 +772,6 @@ public sealed partial class TreeReconciler
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
         ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
-        ctx.BeginVirtualDisclosure = _beginVirtualDisclosureSeam ??= BeginVirtualDisclosure;
-        ctx.CompleteVirtualDisclosure = _completeVirtualDisclosureSeam ??= CompleteVirtualDisclosure;
-        ctx.ClearVirtualDisclosure = _clearVirtualDisclosureSeam ??= ClearVirtualDisclosure;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -4673,48 +4667,6 @@ public sealed partial class TreeReconciler
         }
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
         _realizeProgress = true;
-    }
-
-    /// <summary>Seed or retarget one contiguous disclosure range. The backing list stays in its EXPANDED shape while
-    /// progress moves; the composing control owns insert-before-expand and collapse-commit-after-settle ordering.</summary>
-    private bool BeginVirtualDisclosure(NodeHandle viewport, int first, int count, bool expanding)
-    {
-        if (viewport.IsNull || !_scene.IsLive(viewport) || Anim is null
-            || !_virtuals.TryGetValue(viewport, out var entry) || entry.El?.RowBind is null
-            || !_scene.TryGetScroll(viewport, out var snapshot) || snapshot.Orientation != 0
-            || snapshot.Layout is null || first < 0 || count <= 0 || first + count > snapshot.ItemCount)
-            return false;
-
-        float cross = MathF.Max(1f, _scene.Bounds(viewport).W);
-        RectF firstRect = snapshot.Layout.ItemRect(first, cross);
-        RectF lastRect = snapshot.Layout.ItemRect(first + count - 1, cross);
-        float top = firstRect.Y;
-        float extent = lastRect.Bottom - top;
-        if (!float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f) return false;
-
-        float from = float.IsFinite(snapshot.DisclosureT) ? Math.Clamp(snapshot.DisclosureT, 0f, 1f)
-                                                          : expanding ? 0f : 1f;
-        if (!_scene.BeginVirtualDisclosure(viewport, first, count, top, extent, from)) return false;
-        Anim.SeedValue(viewport, AnimChannel.DisclosureProgress, expanding ? 1f : 0f,
-            expanding ? MotionTokenId.DisclosureExpand : MotionTokenId.DisclosureCollapse, from: from);
-        return true;
-    }
-
-    /// <summary>Force the active disclosure to its requested endpoint. Used before a different logical band starts.</summary>
-    private void CompleteVirtualDisclosure(NodeHandle viewport, bool expanded)
-    {
-        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out var sc)
-            || !float.IsFinite(sc.DisclosureT)) return;
-        Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
-        _scene.SetVirtualDisclosureProgress(viewport, expanded ? 1f : 0f);
-    }
-
-    /// <summary>Release the presentation after the expanded model has reached the same resting geometry.</summary>
-    private void ClearVirtualDisclosure(NodeHandle viewport)
-    {
-        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out _)) return;
-        Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
-        _scene.ClearVirtualDisclosure(viewport);
     }
 
     private delegate void ActionRef<T>(in T value);

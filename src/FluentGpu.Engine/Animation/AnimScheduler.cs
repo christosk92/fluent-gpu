@@ -211,7 +211,16 @@ public sealed partial class AnimEngine
         foreach (int s in _settledScratch)
         {
             AnimChannel ch = _slab.At(s).Channel;
-            if (ch == AnimChannel.RevealExtent) QueueSettled(_slab.At(s).Node, ch);   // a reveal at rest: its owner's callback
+            NodeHandle owner = _slab.At(s).Node;
+            if (ch == AnimChannel.RevealExtent) QueueSettled(owner, ch);   // a reveal at rest: its owner's callback
+            else if (IsRevealBand(ch))
+            {
+                // An OPENING band is done: present the laid-out rows as they are. A closing one rests at 0 until its owner's
+                // commit removes the rows (BandSettled marks it committed first: it stops presenting the flush they leave).
+                int slot = (int)ch - (int)AnimChannel.RevealBand0;
+                if (_scene.TryGetRevealBand(owner, slot, out var band) && band.Opening) _scene.ClearRevealBand(owner, slot);
+                QueueSettled(owner, ch);
+            }
             SettleRestore(s);
             FreeSlot(s);
         }
@@ -341,7 +350,7 @@ public sealed partial class AnimEngine
     /// seam for the deleted AdvanceBrushAnims + InteractionAnimator tickers.</summary>
     private static bool IsSideTableChannel(AnimChannel ch)
         => ch == AnimChannel.BrushFade || ch == AnimChannel.HoverFade || ch == AnimChannel.PressFade
-           || ch == AnimChannel.DisclosureProgress || ch == AnimChannel.GlyphWipeSplit || ch == AnimChannel.RevealExtent;
+           || IsRevealBand(ch) || ch == AnimChannel.GlyphWipeSplit || ch == AnimChannel.RevealExtent;
 
     private void WriteSideTable(AnimChannel ch, NodeHandle node, float v)
     {
@@ -350,7 +359,7 @@ public sealed partial class AnimEngine
             case AnimChannel.BrushFade: _scene.SetBrushAnimT((int)node.Raw.Index, v); break;
             case AnimChannel.HoverFade: _scene.SetInteractT(node, press: false, v); break;
             case AnimChannel.PressFade: _scene.SetInteractT(node, press: true, v); break;
-            case AnimChannel.DisclosureProgress: _scene.SetVirtualDisclosureProgress(node, v); break;
+            case >= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3: _scene.SetRevealBandPresented(node, (int)ch - (int)AnimChannel.RevealBand0, v); break;
             case AnimChannel.GlyphWipeSplit: _scene.SetGlyphWipeSplit(node, v); break;
             case AnimChannel.RevealExtent: break;   // read straight off the row by PropagateFlowReveals
         }
@@ -529,7 +538,8 @@ public sealed partial class AnimEngine
     }
 
     private static float RestDeltaFor(AnimChannel ch)
-        => ch is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.RevealExtent ? 0.5f : Generators.RestDelta;
+        => ch is (AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.RevealExtent)
+           or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 0.5f : Generators.RestDelta;
 
     // RevealExtent is in DIP: rest once the edge is within RestDeltaFor (0.5 DIP) and slower than 8 DIP/s (< 0.07 DIP per
     // 120 Hz frame) — the normalized 0.01/s floor held a 90-DIP reveal ~0.75 s (and the Expander's unmount with it).
@@ -555,7 +565,7 @@ public sealed partial class AnimEngine
             AnimChannel.BlurSigma => p.BlurSigma,
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : 0f,
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : 1f,
-            AnimChannel.DisclosureProgress => _scene.VirtualDisclosureProgress(node),
+            >= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3 => _scene.TryGetRevealBand(node, (int)ch - (int)AnimChannel.RevealBand0, out var band) && float.IsFinite(band.Presented) ? band.Presented : 0f,
             // Rotation IS recoverable — atan2(M12, M11) is exact for a uniform-scale transform (rotation composed
             // BEFORE scale in Compose: tf = Translation * Rotation * Scale, so M11/M12 carry the rotation angle
             // unscaled). Matches Accum.FromPaint's decomposition below verbatim, so a fresh CurrentValue read and a
