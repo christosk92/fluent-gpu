@@ -32,7 +32,6 @@ public enum MotionTokenId : ushort
     StandardSpring, ExpressiveSpring,
     // Feature motions
     ConnectedFly, ContentResize, ItemPlacement, ScrollFade,
-    DisclosureExpand, DisclosureCollapse, DisclosureChevron,
     // Media transport chrome — deliberately ASYMMETRIC (reveal must feel instant, conceal must not blink out).
     MediaChromeReveal, MediaChromeConceal,
     // Navigation pane (WinUI SplitView: open 200 ms, close 100 ms, both on the FluentPane spline).
@@ -185,9 +184,6 @@ public static class MotionTok
         MotionTokenId.ContentResize => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.90f)),
         MotionTokenId.ItemPlacement => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.85f)),
         MotionTokenId.ScrollFade => MotionTokenDef.Eased(150f, Easing.Linear, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.DisclosureExpand => MotionTokenDef.Eased(333f, Easing.FluentPopOpen),
-        MotionTokenId.DisclosureCollapse => MotionTokenDef.Eased(167f, Easing.FluentDisclosureCollapse),
-        MotionTokenId.DisclosureChevron => MotionTokenDef.Eased(167f, Easing.FluentDisclosureChevron),
         // Media chrome — SnapEnd (not KeepFade): under reduced motion the transport must appear/disappear instantly.
         // "Chrome that fades" IS the motion here; there is no orientation cue in it worth keeping. The conceal is an
         // EASE-OUT, not FluentAccelerate: cubic-bezier(1,0,1,1) stays near 1 for most of its duration and then drops, so
@@ -214,9 +210,6 @@ public static class MotionTok
     public static MotionTokenDef ContentResize => Get(MotionTokenId.ContentResize);
     public static MotionTokenDef ItemPlacement => Get(MotionTokenId.ItemPlacement);
     public static MotionTokenDef ScrollFade => Get(MotionTokenId.ScrollFade);
-    public static MotionTokenDef DisclosureExpand => Get(MotionTokenId.DisclosureExpand);
-    public static MotionTokenDef DisclosureCollapse => Get(MotionTokenId.DisclosureCollapse);
-    public static MotionTokenDef DisclosureChevron => Get(MotionTokenId.DisclosureChevron);
     public static MotionTokenDef MediaChromeReveal => Get(MotionTokenId.MediaChromeReveal);
     public static MotionTokenDef MediaChromeConceal => Get(MotionTokenId.MediaChromeConceal);
     public static MotionTokenDef PaneOpen => Get(MotionTokenId.PaneOpen);
