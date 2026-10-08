@@ -2852,6 +2852,7 @@ internal sealed class SceneRecordingContext
             bool bandStarted = false;
             SliceCtx bandSaved = default;
             var bandResult = new SpanRecordResult();
+            var flow = FlowCursor.For(in p);   // SizeMode.FlowReveal: children ride their earlier siblings' presented flow
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
                 if (hasItemBand && !bandStarted && childOrdinal >= itemBandPrefix)
@@ -2936,6 +2937,14 @@ internal sealed class SceneRecordingContext
                         activeChildClip = activeChildClip.Intersect(disclosureClip);
                     else if (logicalIndex >= disclosureLast)
                         activeChildWorld = childWorld.Translate(0f, disclosureShift);
+                }
+                if (flow.Active)
+                {
+                    float flowShift = flow.Step(ordinal, scene.Bounds(c).Y, scene.Paint(c).FlowDelta, out float flowClipTop, out float flowClipBottom);
+                    if (flowShift != 0f) activeChildWorld = activeChildWorld.Translate(0f, flowShift);
+                    if (!float.IsNaN(flowClipTop))
+                        activeChildClip = activeChildClip.Intersect(childWorld.TransformBounds(new RectF(0f, flowClipTop,
+                            MathF.Max(1f, scene.Bounds(node).W), MathF.Max(0f, flowClipBottom - flowClipTop))));
                 }
                 NodeFlags cf = scene.Flags(c);
                 childOrdinal++;
@@ -3026,7 +3035,13 @@ internal sealed class SceneRecordingContext
                 int pinnedSlot = -1;
                 SliceCtx pinnedSaved = default;
                 var pinnedResult = new SpanRecordResult();
+                var pinnedFlow = FlowCursor.For(in p);
                 for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c), pinnedOrdinal++)
+                {
+                    // Every child steps the flow cursor (pinned or not) so a pinned child sees its true presented offset.
+                    float pinnedShift = 0f, pinnedClipTop = float.NaN, pinnedClipBottom = float.NaN;
+                    if (pinnedFlow.Active)
+                        pinnedShift = pinnedFlow.Step(pinnedOrdinal, scene.Bounds(c).Y, scene.Paint(c).FlowDelta, out pinnedClipTop, out pinnedClipBottom);
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
                     {
                         RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
@@ -3041,6 +3056,10 @@ internal sealed class SceneRecordingContext
                             else if (logicalIndex >= disclosureLast)
                                 pinnedWorld = childWorld.Translate(0f, disclosureShift);
                         }
+                        if (pinnedShift != 0f) pinnedWorld = pinnedWorld.Translate(0f, pinnedShift);
+                        if (!float.IsNaN(pinnedClipTop))
+                            pinnedClip = pinnedClip.Intersect(childWorld.TransformBounds(new RectF(0f, pinnedClipTop,
+                                MathF.Max(1f, scene.Bounds(node).W), MathF.Max(0f, pinnedClipBottom - pinnedClipTop))));
                         if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed && pinnedSlot < 0
                             && itemBandClipChanged && !itemBandClip.IsEmpty)
                         {
@@ -3074,6 +3093,7 @@ internal sealed class SceneRecordingContext
                         result.Include(childResult);
                         if (pinnedSlot >= 0) pinnedResult.Include(childResult);
                     }
+                }
                 if (pinnedSlot >= 0)
                 {
                     stats.Slices!.EndWalk(pinnedSlot, pinnedResult.HasBounds ? pinnedResult.SubtreeBounds : default);
@@ -3131,6 +3151,7 @@ internal sealed class SceneRecordingContext
         if (chromeOverFade && !omitLayer) { dl.PopLayer(deviceBounds, key); stats.InlineLayerDepth--; }
         if (overlapsRecordClip && (flags & NodeFlags.Scrollable) != 0 && scene.TryGetScroll(node, out var sec))
         {
+            sec.ContentH = PresentedContentH(scene, in sec);   // thumb + chevrons follow a running reveal
             var scbChrome = scene.ScrollChrome.Get((int)node.Raw.Index);
             float shownOff = ShownOffset(scene, node, in sec);
             bool bar = scrollThumb.A > 0f;
@@ -3388,6 +3409,10 @@ internal sealed class SceneRecordingContext
         ref readonly NodePaint p = ref scene.Paint(node);
         MixFloat(ref h, p.ChildShiftX);
         MixFloat(ref h, p.ChildShiftY);
+        MixFloat(ref h, p.FlowDelta);          // SizeMode.FlowReveal: the presented flow moves this node's later children
+        MixFloat(ref h, p.FlowOrphanTop);
+        MixFloat(ref h, p.FlowOrphanDelta);
+        Mix(ref h, p.FlowBits);
         if (!clipComposite && !p.ClipRect.IsInfinite) MixRect(ref h, in p.ClipRect);
     }
 
@@ -3869,6 +3894,13 @@ internal sealed class SceneRecordingContext
     /// <summary>Does <paramref name="sc"/> overflow its viewport along its axis (anything to scroll)?</summary>
     private static bool ScrollOverflows(in ScrollState sc)
         => sc.Orientation == 1 ? sc.ContentW > sc.ViewportW + 0.5f : sc.ContentH > sc.ViewportH + 0.5f;
+
+    /// <summary>The PRESENTED vertical content extent: the laid-out one plus the content node's live flow delta
+    /// (SizeMode.FlowReveal) — what the scrollbar measures against while a reveal runs. The laid-out one at rest.</summary>
+    internal static float PresentedContentH(SceneRecordingSnapshot scene, in ScrollState sc)
+        => sc.Orientation != 0 || sc.ContentNode.IsNull || !scene.IsLive(sc.ContentNode)
+            ? sc.ContentH
+            : MathF.Max(0f, sc.ContentH + scene.Paint(sc.ContentNode).FlowDelta);
 
     /// <summary>Does <see cref="EmitScrollbar"/> draw anything at all (its early-outs, read up front)?</summary>
     private static bool ScrollBarShows(in ScrollState sc, in FluentGpu.Scroll.Runtime.ScrollBarChromeRow chrome)

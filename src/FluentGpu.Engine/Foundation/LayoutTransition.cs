@@ -29,14 +29,20 @@ public enum SizeMode : byte
                    // layout (boundary-scoped re-solve), so neighbours/siblings reflow smoothly. The deliberate
                    // smoother-than-WinUI mode for open/close surfaces (Expander, panes, info rows).
     Auto,
+    FlowReveal,    // lay out ONCE at the final size; the PRESENTED vertical extent springs old → new at paint time
+                   // (AnimChannel.RevealExtent) and every following sibling/ancestor rides the difference
+                   // (NodePaint.FlowDelta) — no per-frame layout, no render. The smooth disclosure mode
+                   // (docs/plans/smooth-reveal-implementation.md). Vertical axis only.
 }
 
 /// <summary>Which edge of a <see cref="SizeMode.Reflow"/> node its CONTENT is anchored to while the size animates.
 /// <see cref="Leading"/> = content stays put, the far edge sweeps (a wipe). <see cref="Trailing"/> = the content's
 /// end edge rides the animated edge (the WinUI Expander "slide out from under the header": at reveal 0 the content
 /// sits fully behind the leading edge; its trailing rounded corners stay visible mid-motion). Applied by the recorder
-/// as a child-group offset — compositor-composed, no per-child knowledge.</summary>
-public enum SizeAnchor : byte { Leading, Trailing }
+/// as a child-group offset — compositor-composed, no per-child knowledge. <see cref="Parallax"/> (SizeMode.FlowReveal
+/// only) = the content trails the moving edge by a damped share of what is still hidden (RevealPlan.ParallaxShift) —
+/// a card unfolding rather than being wiped.</summary>
+public enum SizeAnchor : byte { Leading, Trailing, Parallax }
 
 /// <summary>Axes affected by a size transition. Useful when one dimension is author-owned while the other is
 /// continuously parent-owned (for example a measured shelf whose height settles while its width tracks the window).</summary>
@@ -95,7 +101,7 @@ public readonly record struct LayoutTransition(
     EnterExit Exit = default,
     ushort CustomCurveId = 0,
     // Optional separate dynamics for the EXIT (disappear/collapse) leg — for controls whose WinUI open/close timings are
-    // asymmetric (e.g. Expander expand 333ms / collapse 167ms). Null ⇒ exit reuses <see cref="Dynamics"/>.
+    // asymmetric (e.g. WinUI's Expander storyboards: expand 333ms / collapse 167ms). Null ⇒ exit reuses <see cref="Dynamics"/>.
     TransitionDynamics? ExitDynamics = null,
     // Optional start delay for layout-transition channels + enter/exit terminals. This keeps stagger as an engine
     // primitive (a field on the transition spec), not a control-local timer or per-frame callback.

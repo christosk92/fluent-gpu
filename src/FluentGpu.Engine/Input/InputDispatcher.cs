@@ -4120,10 +4120,15 @@ public sealed partial class InputDispatcher
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
         int childOrdinal = 0;
+        var flow = FlowCursor.For(in np);   // SizeMode.FlowReveal: children are hit where the recorder paints them
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), childOrdinal++)
         {
+            float flowShift = 0f, flowClipTop = float.NaN, flowClipBottom = float.NaN;
+            if (flow.Active)   // step EVERY child (the item-band skip below must not desync the cursor)
+                flowShift = flow.Step(childOrdinal, _scene.Bounds(c).Y, _scene.Paint(c).FlowDelta, out flowClipTop, out flowClipBottom);
             if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
-            Point2 presentedPoint = childLocal;
+            if (!float.IsNaN(flowClipTop) && (childLocal.Y < flowClipTop || childLocal.Y >= flowClipBottom)) continue;
+            Point2 presentedPoint = flowShift != 0f ? new Point2(childLocal.X, childLocal.Y - flowShift) : childLocal;
             if (hasDisclosure)
             {
                 int logicalIndex = childOrdinal < disclosurePrefix
@@ -4134,7 +4139,7 @@ public sealed partial class InputDispatcher
                     if (childLocal.Y < disclosureTop || childLocal.Y >= disclosureBottom) continue;
                 }
                 else if (logicalIndex >= disclosureLast)
-                    presentedPoint = new Point2(childLocal.X, childLocal.Y - disclosureShift);
+                    presentedPoint = new Point2(presentedPoint.X, presentedPoint.Y - disclosureShift);
             }
             var r = HitAny(c, presentedPoint, netSx, netSy, anyDisclosure);
             if (!r.IsNull) result = r;
@@ -4175,10 +4180,15 @@ public sealed partial class InputDispatcher
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
         int childOrdinal = 0;
+        var flow = FlowCursor.For(in np);   // SizeMode.FlowReveal: children are hit where the recorder paints them
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), childOrdinal++)
         {
+            float flowShift = 0f, flowClipTop = float.NaN, flowClipBottom = float.NaN;
+            if (flow.Active)   // step EVERY child (the item-band skip below must not desync the cursor)
+                flowShift = flow.Step(childOrdinal, _scene.Bounds(c).Y, _scene.Paint(c).FlowDelta, out flowClipTop, out flowClipBottom);
             if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
-            Point2 presentedPoint = childLocal;
+            if (!float.IsNaN(flowClipTop) && (childLocal.Y < flowClipTop || childLocal.Y >= flowClipBottom)) continue;
+            Point2 presentedPoint = flowShift != 0f ? new Point2(childLocal.X, childLocal.Y - flowShift) : childLocal;
             if (hasDisclosure)
             {
                 int logicalIndex = childOrdinal < disclosurePrefix
@@ -4189,7 +4199,7 @@ public sealed partial class InputDispatcher
                     if (childLocal.Y < disclosureTop || childLocal.Y >= disclosureBottom) continue;
                 }
                 else if (logicalIndex >= disclosureLast)
-                    presentedPoint = new Point2(childLocal.X, childLocal.Y - disclosureShift);
+                    presentedPoint = new Point2(presentedPoint.X, presentedPoint.Y - disclosureShift);
             }
             var r = Hit(c, presentedPoint, netSx, netSy, anyDisclosure);
             if (!r.IsNull) result = r;

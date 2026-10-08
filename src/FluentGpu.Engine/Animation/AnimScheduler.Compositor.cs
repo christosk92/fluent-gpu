@@ -82,7 +82,7 @@ public sealed partial class AnimEngine
     {
         if (row.Has(AnimFlags.Driven | AnimFlags.Additive | AnimFlags.RestoreLayout | AnimFlags.TrailingAnchor)) return false;
         if (row.Kind is not (GenKind.Spring or GenKind.Eased or GenKind.Keyframes)) return false;
-        if (row.Channel is AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.DisclosureProgress) return false;
+        if (row.Channel is AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.DisclosureProgress or AnimChannel.RevealExtent) return false;
         // A mixed additive/replace axis remains one UI-owned composition so no captured additive value is applied twice.
         for (int slot = _slab.HeadOnNode((int)row.Node.Raw.Index); slot >= 0; slot = _slab.At(slot).NextOnNode)
             if (_slab.At(slot).Channel == row.Channel && _slab.At(slot).Has(AnimFlags.Additive)) return false;

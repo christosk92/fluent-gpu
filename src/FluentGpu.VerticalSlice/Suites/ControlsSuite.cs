@@ -2008,9 +2008,9 @@ static partial class ControlsSuite
         float m11Collapsed = host.Scene.Paint(chevron0).LocalTransform.M11;
         bool noContent = Child(host.Scene, Child(host.Scene, host.Scene.Root, 1), 0).IsNull;   // clip mounted, panel not
 
-        // Toggle open. (a) The chevron rotation TWEENS (167ms): track peak sin θ — a tween passes through a mid-angle
+        // Toggle open. (a) The chevron rotation rides the Reveal spring: track peak sin θ — a tween passes through a mid-angle
         // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel SLIDES out from under the
-        // header: the clip wrapper's SizeMode.Reflow Trailing anchor keeps the panel's bottom edge on the reveal edge
+        // header: the clip wrapper's FlowReveal Parallax anchor trails the panel behind the reveal edge
         // (ChildShiftY < 0 mid-flight, 0 at rest) — an instant appear would read 0 every frame.
         ClickNode(host, window, Child(host.Scene, host.Scene.Root, 0));
         float peakSin = 0f, minShift = 0f;
@@ -8490,7 +8490,7 @@ static partial class ControlsSuite
             $"wrapped0={wrapped0} textW {textW0:0.0}->{textW1:0.0} textH {textH0:0.0}->{textH1:0.0} (1line~{lineH:0.0}) markerY {markerY0:0.0}->{markerY1:0.0} below {below0}/{below1}");
     }
 
-    // ExpanderOptions.AnimateContentResize=false: the 333ms/167ms disclosure Reflow tween is scoped to the open/close
+    // ExpanderOptions.AnimateContentResize=false: the disclosure reveal (the FlowReveal spring) is scoped to the open/close
     // TOGGLE itself. A STEADY-open Expander whose content resizes for an unrelated reason (an inline drawer growing
     // inside it) must re-lay out in ONE frame instead of replaying the disclosure motion; the toggle itself must still
     // get the full motion. Default (AnimateContentResize=true, i.e. Options omitted) is unchanged — cp3.a/cp3.b above
@@ -8536,13 +8536,13 @@ static partial class ControlsSuite
         {
             var (app, host, _, clip, hSig, maxPollers) = Mount(animateResize: false, initiallyExpanded: true, tag: "steady-off");
             // A resting open mount is not a toggle: it raises no `transitioning` window, so no per-frame watcher is mounted.
-            Check("cp3.acr0 — Expander: a resting open mount holds no frame-clock poller (only a toggle mounts the resize watcher)",
+            Check("cp3.acr0 — Expander: a resting open mount holds no frame-clock poller (the engine settle callback replaced the watchers)",
                 maxPollers == 0, $"max pollers over the mount frames={maxPollers}");
             for (int i = 0; i < 5; i++) host.RunFrame();
-            float before = host.Scene.AbsoluteRect(clip).H;        // 60 + 2×16 padding − 1 margin = 91
+            float before = host.Scene.PresentedAbsoluteRect(clip).H;        // 60 + 2×16 padding − 1 margin = 91
             hSig.Value = 160f;
             host.RunFrame();                                       // ONE frame after the resize
-            float after1 = host.Scene.AbsoluteRect(clip).H;
+            float after1 = host.Scene.PresentedAbsoluteRect(clip).H;
             Check("cp3.acr1 — Expander AnimateContentResize=false: a steady-open resize relays out in one instant frame (no tween)",
                 Near(before, 91f, 2f) && Near(after1, 191f, 2f),
                 $"before={before:0.0} after1frame={after1:0.0} (target 191)");
@@ -8554,12 +8554,12 @@ static partial class ControlsSuite
         {
             var (app, host, _, clip, hSig, _) = Mount(animateResize: true, initiallyExpanded: true, tag: "steady-on");
             for (int i = 0; i < 5; i++) host.RunFrame();
-            float before = host.Scene.AbsoluteRect(clip).H;
+            float before = host.Scene.PresentedAbsoluteRect(clip).H;
             hSig.Value = 160f;
             host.RunFrame();
-            float after1 = host.Scene.AbsoluteRect(clip).H;
+            float after1 = host.Scene.PresentedAbsoluteRect(clip).H;
             for (int i = 0; i < 25; i++) host.RunFrame();
-            float settled = host.Scene.AbsoluteRect(clip).H;
+            float settled = host.Scene.PresentedAbsoluteRect(clip).H;
             Check("cp3.acr2 — Expander AnimateContentResize=true (default): a steady-open resize still replays the disclosure tween",
                 Near(before, 91f, 2f) && after1 < 150f && Near(settled, 191f, 2f),
                 $"before={before:0.0} after1frame={after1:0.0} settled={settled:0.0} (target 191)");
@@ -8567,7 +8567,7 @@ static partial class ControlsSuite
         }
 
         // (c) AnimateContentResize=false does NOT defeat the TOGGLE's own disclosure motion: opening from collapsed
-        // still eases over the full ~333ms (ExpanderResizeWatcher keeps `transitioning` up the whole time), one frame
+        // still rides the full Reveal spring (the toggle window lasts until the engine reports the reveal at rest), one frame
         // in it is nowhere near the open height, and it settles there.
         {
             var (app, host, window, clip, _, collapsedPollers) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
@@ -8576,11 +8576,11 @@ static partial class ControlsSuite
             ClickNode(host, window, header);
             host.RunFrame();
             int openingPollers = host.FrameClockPollerCount;
-            Check("cp3.acr0b — Expander: a collapsed mount holds no frame-clock poller; the open toggle mounts the resize watcher",
-                collapsedPollers == 0 && openingPollers > 0, $"collapsed={collapsedPollers} opening={openingPollers}");
-            float after1 = host.Scene.AbsoluteRect(clip).H;
+            Check("cp3.acr0b — Expander: no frame-clock poller ever — neither a collapsed mount nor the open toggle (the engine settle callback replaced the watchers)",
+                collapsedPollers == 0 && openingPollers == 0, $"collapsed={collapsedPollers} opening={openingPollers}");
+            float after1 = host.Scene.PresentedAbsoluteRect(clip).H;
             for (int i = 0; i < 25; i++) host.RunFrame();
-            float open = host.Scene.AbsoluteRect(clip).H;
+            float open = host.Scene.PresentedAbsoluteRect(clip).H;
             Check("cp3.acr3 — Expander AnimateContentResize=false: the open/close TOGGLE itself still eases (not instant)",
                 after1 < open - 10f && Near(open, 91f, 2f),
                 $"after1frame={after1:0.0} open={open:0.0}");
@@ -8622,60 +8622,60 @@ static partial class ControlsSuite
         var card = host.Scene.FirstChild(anchor);              // component anchor → the card box
         var header = Child(host.Scene, card, 0);
         float headerH = host.Scene.AbsoluteRect(header).H;
-        float siblingYCollapsed = host.Scene.AbsoluteRect(sibling).Y;
+        float siblingYCollapsed = host.Scene.PresentedAbsoluteRect(sibling).Y;
 
-        // cp3.a — open click: the content mounts, but the click frame still PAINTS the old size (the reflow track's
-        // JustSeeded first tick re-establishes 0 before record), so the sibling never jumps; later frames ease it down
-        // MONOTONICALLY while the Trailing anchor keeps the panel's bottom edge on the reveal edge.
+        // cp3.a — open click: the content mounts, but the click frame still PAINTS the old size (the FlowReveal row's
+        // seed frame presents the old extent), so the sibling never jumps; later frames ease it down
+        // MONOTONICALLY while the Parallax anchor trails the panel behind the reveal edge.
         ClickNode(host, window, header);
         var clip = Child(host.Scene, card, 1);           // the clip wrapper is ALWAYS mounted (the transition's host)
         var content = clip.IsNull ? NodeHandle.Null : Child(host.Scene, clip, 0);
-        float cardHClick = host.Scene.AbsoluteRect(card).H;
-        float clipHClick = clip.IsNull ? 0f : host.Scene.AbsoluteRect(clip).H;
+        float cardHClick = host.Scene.PresentedAbsoluteRect(card).H;
+        float clipHClick = clip.IsNull ? 0f : host.Scene.PresentedAbsoluteRect(clip).H;
         float contentH = content.IsNull ? 0f : host.Scene.AbsoluteRect(content).H;
         float contentExtent = contentH - 1f;             // the −1px border-overlap margin: panel bottom = contentH − 1
-        float siblingYClick = host.Scene.AbsoluteRect(sibling).Y;
+        float siblingYClick = host.Scene.PresentedAbsoluteRect(sibling).Y;
         bool monotoneOpen = true;
         float prevSibY = siblingYClick, clipHMid = 0f, shiftMid = 0f, siblingYMid = 0f;
         for (int i = 0; i < 30; i++)                     // ≥ 333ms — settle (sampled per frame for monotonicity)
         {
             host.RunFrame();
-            float y = host.Scene.AbsoluteRect(sibling).Y;
+            float y = host.Scene.PresentedAbsoluteRect(sibling).Y;
             if (y < prevSibY - 0.25f) monotoneOpen = false;
             prevSibY = y;
-            if (i == 2) { clipHMid = host.Scene.AbsoluteRect(clip).H; shiftMid = host.Scene.Paint(clip).ChildShiftY; siblingYMid = host.Scene.AbsoluteRect(sibling).Y; }
+            if (i == 2) { clipHMid = host.Scene.PresentedAbsoluteRect(clip).H; shiftMid = host.Scene.Paint(clip).ChildShiftY; siblingYMid = host.Scene.PresentedAbsoluteRect(sibling).Y; }
         }
-        float clipHOpen = host.Scene.AbsoluteRect(clip).H;
-        float siblingYOpen = host.Scene.AbsoluteRect(sibling).Y;
+        float clipHOpen = host.Scene.PresentedAbsoluteRect(clip).H;
+        float siblingYOpen = host.Scene.PresentedAbsoluteRect(sibling).Y;
         float shiftDone = host.Scene.Paint(clip).ChildShiftY;
         bool liRestoredOpen = float.IsNaN(host.Scene.Layout(clip).Height);   // settle returned the declared NaN(auto)
         bool noClickJump = !clip.IsNull && !content.IsNull && Near(siblingYClick, siblingYCollapsed, 1.5f) && Near(cardHClick, headerH + clipHClick, 1.5f) && clipHClick < 2f;
         bool layoutRevealed = siblingYMid > siblingYClick + 4f && siblingYMid < siblingYOpen - 4f && clipHMid > 4f && clipHMid < clipHOpen - 4f;
-        bool anchoredOpen = Near(shiftMid, clipHMid - contentExtent, 1.5f) && shiftMid < -4f;   // bottom edge rides the reveal edge
-        Check("cp3.a — expand: sibling eases down monotonically (no click jump); the panel's bottom edge rides the reveal edge",
+        bool anchoredOpen = shiftMid < -0.5f && shiftMid >= -RevealPlan.ParallaxMaxDip - 0.01f;   // Parallax: the panel trails the edge, <= 24 DIP
+        Check("cp3.a — expand: sibling eases down monotonically (no click jump); the panel trails the reveal edge (Parallax)",
             noClickJump && layoutRevealed && monotoneOpen && anchoredOpen && MathF.Abs(shiftDone) < 0.01f
             && Near(clipHOpen, contentExtent, 1.5f) && liRestoredOpen,
             $"siblingY {siblingYCollapsed:0.0}→{siblingYClick:0.0}→{siblingYMid:0.0}→{siblingYOpen:0.0} clipH {clipHClick:0.0}→{clipHMid:0.0}→{clipHOpen:0.0} shift {shiftMid:0.0}→{shiftDone:0.00} liNaN={liRestoredOpen}");
 
-        // cp3.b — close click: the content stays LIVE through the 167ms reflow while the sibling eases upward; only
-        // after the reflow settles does the content unmount (the clip itself STAYS mounted at its declared 0 height).
-        ClickNode(host, window, header);                 // collapse — the declared Height flips to 0; ExitDynamics leg
-        float siblingYCloseClick = host.Scene.AbsoluteRect(sibling).Y;
-        for (int i = 0; i < 3; i++) host.RunFrame();     // ~48ms into the 167ms reflow
+        // cp3.b — close click: the content stays LIVE through the reveal close while the sibling eases upward; it unmounts
+        // when the engine reports the reveal at rest (the clip itself STAYS mounted at its declared 0 height).
+        ClickNode(host, window, header);                 // collapse — the declared Height flips to 0; the same Reveal spring as the open
+        float siblingYCloseClick = host.Scene.PresentedAbsoluteRect(sibling).Y;
+        for (int i = 0; i < 3; i++) host.RunFrame();     // ~33 ms into the close
         var contentEarly = Child(host.Scene, clip, 0);
         bool liveEarly = !contentEarly.IsNull && host.Scene.IsLive(contentEarly);
-        float siblingYClosing = host.Scene.AbsoluteRect(sibling).Y;
-        float clipHClosing = host.Scene.AbsoluteRect(clip).H;
+        float siblingYClosing = host.Scene.PresentedAbsoluteRect(sibling).Y;
+        float clipHClosing = host.Scene.PresentedAbsoluteRect(clip).H;
         float shiftClosing = host.Scene.Paint(clip).ChildShiftY;
-        for (int i = 0; i < 20; i++) host.RunFrame();    // settle + the collapse watcher's unmount frame
+        for (int i = 0; i < 30; i++) host.RunFrame();    // settle (~0.4 s) + the settle callback's unmount frame
         bool unmounted = Child(host.Scene, clip, 0).IsNull && !Child(host.Scene, card, 1).IsNull;
-        float closedH = host.Scene.AbsoluteRect(card).H;
-        float siblingYClosed = host.Scene.AbsoluteRect(sibling).Y;
+        float closedH = host.Scene.PresentedAbsoluteRect(card).H;
+        float siblingYClosed = host.Scene.PresentedAbsoluteRect(sibling).Y;
         bool liRestoredClosed = host.Scene.Layout(clip).Height == 0f;        // settle returned the declared 0
         bool noCloseJump = Near(siblingYCloseClick, siblingYOpen, 1.5f);
         bool layoutCollapsed = siblingYClosing < siblingYCloseClick - 4f && siblingYClosing > siblingYCollapsed + 4f && clipHClosing > 4f && clipHClosing < clipHOpen - 4f;
-        bool anchoredClosing = Near(shiftClosing, clipHClosing - contentExtent, 1.5f) && shiftClosing < -8f;
-        Check("cp3.b — collapse: content stays LIVE while the sibling eases up (anchored to the reveal edge), unmounts at settle",
+        bool anchoredClosing = shiftClosing < -0.5f && shiftClosing >= -RevealPlan.ParallaxMaxDip - 0.01f;
+        Check("cp3.b — collapse: content stays LIVE while the sibling eases up (anchored to the reveal edge (Parallax)), unmounts at settle",
             liveEarly && noCloseJump && layoutCollapsed && anchoredClosing && unmounted && Near(closedH, headerH, 1.5f)
             && Near(siblingYClosed, siblingYCollapsed, 1.5f) && liRestoredClosed,
             $"liveEarly={liveEarly} siblingY {siblingYOpen:0.0}→{siblingYCloseClick:0.0}→{siblingYClosing:0.0}→{siblingYClosed:0.0} clipHClosing={clipHClosing:0.0} shift={shiftClosing:0.0} unmounted={unmounted} li0={liRestoredClosed}");

@@ -59,6 +59,7 @@ public sealed partial class TreeReconciler
             {
                 anim.SeedEnter(node, dt.Enter, dt);
                 if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+                else if (dt.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
             }
         }));
     }

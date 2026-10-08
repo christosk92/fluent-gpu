@@ -3156,7 +3156,8 @@ public sealed partial class TreeReconciler
             _scene.ScrollHandleFor(node)?.ShiftFrame(reseedDelta);
         }
         var feel = ScrollTunables.Current;
-        var rw = Virtualizer.Plan(ext, offset, velocity, viewport, in feel, sc.AnchorIndex);
+        // + the rows a running reveal pulls into view
+        var rw = Virtualizer.Plan(ext, offset, velocity, viewport + sc.RevealOverscan, in feel, sc.AnchorIndex);
 
         int first, last;   // [first, last) exclusive
         if (rw.IsEmpty) { first = 0; last = 0; }
@@ -4245,7 +4246,10 @@ public sealed partial class TreeReconciler
         // Parked KeepAlive content is already invisible. A reactive boundary may settle after the park edge, but its
         // animated child must be hard-removed instead of escaping the detached page as a globally drawn exit orphan.
         bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0;
-        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
+        // A recycle (a rebind flush) never replays a FlowReveal: from the app's view it is the same persistent row.
+        bool recycledReveal = SuppressBoundTransitions > 0;
+        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active
+            && !(spec.Size == SizeMode.FlowReveal && recycledReveal))
         {
             // Smooth exit (mirror of the enter-reflow): orphaning DETACHES this node, so its sibling would SNAP into the
             // freed space. For a SizeMode.Reflow exit, snapshot the surviving PARENT's with-child size + queue it — after
@@ -4256,6 +4260,12 @@ public sealed partial class TreeReconciler
                 var par = _scene.Parent(node);
                 if (!par.IsNull) { var pb = _scene.Bounds(par); anim.PendingExitReflow.Add((par, pb.W, pb.H, spec)); }
             }
+            // FlowReveal: read the live presented extent BEFORE the unmount below cancels the row, so an interrupted open
+            // closes from where it stands (with its speed) instead of from the full height.
+            bool flowReveal = spec.Size == SizeMode.FlowReveal;
+            NodeHandle revealParent = flowReveal ? _scene.Parent(node) : NodeHandle.Null;
+            float revealFrom = 0f, revealVelocity = 0f;
+            if (flowReveal) anim.ReadFlowReveal(node, out revealFrom, out revealVelocity);
             UnmountSubtree(node);
             // Kill any looping track (the SkeletonPulse) BEFORE orphaning + SeedExit, so only the FINITE exit tracks
             // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
@@ -4266,6 +4276,11 @@ public sealed partial class TreeReconciler
             // two seconds.
             _scene.Orphan(node, ExitMaxAgeMs(spec));
             anim.SeedExit(node, spec.Exit, spec);
+            if (flowReveal)
+            {
+                anim.SeedFlowRevealExit(node, revealFrom, revealVelocity, in spec);
+                anim.RevealExitCarriers.Add((node, revealParent));
+            }
             return;
         }
         UnmountSubtree(node);
@@ -4447,10 +4462,13 @@ public sealed partial class TreeReconciler
         {
             danim.SetTransition(node, dt);
             if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-            if (isMount && dt.Enter.Active)
+            if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
+                // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout (host-driven). SizeMode.FlowReveal enter:
+                // present 0 → laid-out height after layout (recycles never get here).
                 if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);
+                else if (dt.Size == SizeMode.FlowReveal) danim.PendingEnterReveal.Add(node);
             }
         }
 
@@ -5108,12 +5126,14 @@ public sealed partial class TreeReconciler
                 {
                     anim.SetTransition(node, at);
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && at.Enter.Active)
+                    if (isMount && at.Enter.Active && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnter(node, at.Enter, at);
                         // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
                         // reveals (host-driven; the natural size isn't known here, pre-layout).
                         if (at.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+                        // SizeMode.FlowReveal enter: present 0 → laid-out height after layout (recycles never get here).
+                        else if (at.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
                     }
                 }
                 else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
@@ -5125,10 +5145,11 @@ public sealed partial class TreeReconciler
                 {
                     danim.SetTransition(node, dt);
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && dt.Enter.Active)
+                    if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnter(node, dt.Enter, dt);
                         if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);
+                        else if (dt.Size == SizeMode.FlowReveal) danim.PendingEnterReveal.Add(node);
                     }
                 }
                 // NEW declarative gesture-state targets (WhileHover/WhilePressed/WhileFocus): stashed for the

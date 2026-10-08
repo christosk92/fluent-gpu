@@ -70,6 +70,17 @@ public sealed partial class AppHost
         return ResolveScrollHandle((int)viewport.Raw.Index);
     }
 
+    /// <summary>The PRESENTED main-axis content extent: the laid-out one plus the content node's live flow delta
+    /// (SizeMode.FlowReveal, reveal bands). Every scroll plan clamps against this, so a collapse at the end of a list rides
+    /// its edge down instead of clamping the offset in one frame. The laid-out extent at rest.</summary>
+    private float PresentedContentMain(in ScrollState sc)
+    {
+        float main = sc.ContentMain;
+        if (sc.Orientation == 0 && !sc.ContentNode.IsNull && _scene.IsLive(sc.ContentNode))
+            main = MathF.Max(0f, main + _scene.Paint(sc.ContentNode).FlowDelta);
+        return main;
+    }
+
     private void InitScrollWiring()
     {
         _scene.PlanSlots = _planSlots;
@@ -170,7 +181,7 @@ public sealed partial class AppHost
         var handle = authored ?? new ScrollHandle();
         if (authored is null) _internalScrollHandles.Add(idx);
         handle.Bind(_planSlots, vp, ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
-        handle.SetExtent(sc.ContentMain * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f), sc.ViewportMain);
+        handle.SetExtent(PresentedContentMain(in sc) * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f), sc.ViewportMain);
         _scrollHandles[idx] = handle;
         return handle;
     }
@@ -227,7 +238,7 @@ public sealed partial class AppHost
             var motion0 = sc.Motion;
             int anchor0 = sc.AnchorIndex;
             float zoom = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-            handle.SetExtent(sc.ContentMain * zoom, sc.ViewportMain);
+            handle.SetExtent(PresentedContentMain(in sc) * zoom, sc.ViewportMain);
             handle.SetSnap(ScrollContentPose.SnapGridOf(in sc));
             handle.SettleIfDue(presentSec);
             double p = handle.EvalAt(presentSec, out double v, out bool settled);
@@ -254,7 +265,7 @@ public sealed partial class AppHost
             bool needsRealize = false;
             if (sc.ItemCount > 0 && sc.Extent is { } ext)
             {
-                var rw = Virtualizer.Plan(ext, shown, v, sc.ViewportMain, in feel, sc.AnchorIndex);
+                var rw = Virtualizer.Plan(ext, shown, v, sc.ViewportMain + sc.RevealOverscan, in feel, sc.AnchorIndex);
                 if (!rw.IsEmpty) sc.AnchorIndex = rw.AnchorIndex;
                 needsRealize = ScrollContentPose.NeedsRealize(in sc, in rw);
             }
@@ -290,13 +301,23 @@ public sealed partial class AppHost
             // This frame's laid-out geometry first: a move authored against a viewport that only now has an extent (a
             // freshly mounted list's BringIntoView from its layout effect) resolves its latched target HERE, so the first
             // presented frame already shows it — never a frame at 0 followed by the jump.
-            handle.SetExtent(peek.ContentMain * (peek.ZoomFactor > 0f ? peek.ZoomFactor : 1f), peek.ViewportMain);
+            handle.SetExtent(PresentedContentMain(in peek) * (peek.ZoomFactor > 0f ? peek.ZoomFactor : 1f), peek.ViewportMain);
             double p = handle.EvalAt(_lastScrollPresentSec, out double v, out bool settled);
             var plan = handle.Plan;
             double shown = plan.Overpan == OverpanPolicy.RubberBand ? p : Math.Clamp(p, 0.0, handle.MaxOffset);
             if (shown == peek.Offset) continue;
             ref ScrollState sc = ref _scene.ScrollRef(node);
             sc.Offset = shown;
+            // Re-pose the content for the moved offset NOW (layout posed it for the pre-sync one): a layout effect or the
+            // flow pass reading AbsoluteRect this frame sees where the content is drawn. PoseScrollUi re-poses at 7.7 anyway.
+            if (!sc.ContentNode.IsNull && _scene.IsLive(sc.ContentNode))
+            {
+                float trans = ScrollContentPose.Translate(sc.WindowOrigin, shown, _scene.DeviceScale);
+                ref NodePaint cp = ref _scene.Paint(sc.ContentNode);
+                Affine2D before = cp.LocalTransform;
+                ScrollContentPose.WriteContentTransform(ref cp, in _scene.Bounds(sc.ContentNode), sc.Orientation == 1, trans, sc.ZoomFactor);
+                if (before != cp.LocalTransform) _scene.Mark(sc.ContentNode, NodeFlags.TransformDirty);
+            }
             sc.Velocity = settled ? 0.0 : v;
             handle.ApplyShown(shown, v, plan.Kind, settled);
             sc.Motion = handle.Motion.Peek();
@@ -307,7 +328,7 @@ public sealed partial class AppHost
             _scene.NoteCaptureChanged(idx);
             if (sc.ItemCount > 0 && sc.Extent is { } ext)
             {
-                var rw = Virtualizer.Plan(ext, shown, v, sc.ViewportMain, in feel, sc.AnchorIndex);
+                var rw = Virtualizer.Plan(ext, shown, v, sc.ViewportMain + sc.RevealOverscan, in feel, sc.AnchorIndex);
                 if (!rw.IsEmpty) sc.AnchorIndex = rw.AnchorIndex;
                 if (ScrollContentPose.NeedsRealize(in sc, in rw)) _scene.Mark(node, NodeFlags.VirtualRangeDirty);
             }
@@ -329,7 +350,7 @@ public sealed partial class AppHost
             var node = _scene.HandleAt(idx);
             if (node.IsNull || !_scene.IsLive(node) || !_scene.TryGetScroll(node, out var sc)) continue;
             float zoom = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-            ResolveScrollHandle(idx).SetExtent(sc.ContentMain * zoom, sc.ViewportMain);
+            ResolveScrollHandle(idx).SetExtent(PresentedContentMain(in sc) * zoom, sc.ViewportMain);
         }
     }
 
@@ -359,7 +380,8 @@ public sealed partial class AppHost
             var content = sc.ContentNode;
             if (content.IsNull || !_scene.IsLive(content)) continue;
             bool horizontal = sc.Orientation == 1;
-            double extentTotal = sc.Extent is { } ext ? ext.Total : sc.ContentMain;
+            // the PRESENTED extent: the thumb effect and the coverage's true end follow a running reveal
+            double extentTotal = (sc.Extent is { } ext ? ext.Total : sc.ContentMain) + (sc.Orientation == 0 ? _scene.Paint(content).FlowDelta : 0f);
             double coverEnd = sc.ItemCount > 0 ? sc.CoverEnd : extentTotal;
             var row = new ScrollCoverageRow(idx, node.Raw.Gen, (int)content.Raw.Index, sc.WindowOrigin, sc.CoverStart, coverEnd,
                 sc.ViewportMain, extentTotal, horizontal, 0, 0, _planSlots.FrameShiftOf(new ScrollViewportId(idx, node.Raw.Gen)));

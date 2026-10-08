@@ -37,6 +37,8 @@ public enum MotionTokenId : ushort
     MediaChromeReveal, MediaChromeConceal,
     // Navigation pane (WinUI SplitView: open 200 ms, close 100 ms, both on the FluentPane spline).
     PaneOpen, PaneClose,
+    // The smooth disclosure (SizeMode.FlowReveal, reveal bands, their chevrons) — one critically damped spring both ways.
+    Reveal,
 }
 
 /// <summary>A resolved motion recipe: dynamics (eased OR spring) + the reduced-motion policy. 24B-ish POD.</summary>
@@ -159,6 +161,10 @@ public static class MotionTok
     /// <summary>Chrome reveal duration (ms): 150 ms Fluent decelerate (Fluent "fast" 167; Chromium 250; mpv instant) — a
     /// reveal answers a user action and must feel immediate. See <see cref="MotionTokenId.MediaChromeReveal"/>.</summary>
     public const float MediaChromeFadeInMs = 150f;
+    /// <summary>Response (s) of <see cref="MotionTokenId.Reveal"/>: ω = 2π/0.31 ≈ 20.3 rad/s, critically damped — 1.3 % of
+    /// the travel on the first 120 Hz frame, 95 % at ~235 ms, 99 % at ~330 ms, no overshoot, the same curve open and close
+    /// (docs/plans/smooth-reveal-implementation.md §1).</summary>
+    public const float RevealResponseSec = 0.31f;
 
     public static MotionTokenDef Get(MotionTokenId id) => id switch
     {
@@ -190,6 +196,8 @@ public static class MotionTok
         MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.EaseOut),
         MotionTokenId.PaneOpen => MotionTokenDef.Eased(200f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
         MotionTokenId.PaneClose => MotionTokenDef.Eased(100f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
+        // The smooth disclosure — one critically damped spring both ways (no overshoot, the same curve open and close).
+        MotionTokenId.Reveal => MotionTokenDef.SpringOf(SpringParams.FromResponse(RevealResponseSec, 1f)),
         _ => MotionTokenDef.SpringOf(SpringParams.Default),
     };
 
@@ -213,4 +221,5 @@ public static class MotionTok
     public static MotionTokenDef MediaChromeConceal => Get(MotionTokenId.MediaChromeConceal);
     public static MotionTokenDef PaneOpen => Get(MotionTokenId.PaneOpen);
     public static MotionTokenDef PaneClose => Get(MotionTokenId.PaneClose);
+    public static MotionTokenDef Reveal => Get(MotionTokenId.Reveal);
 }

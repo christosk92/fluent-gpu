@@ -197,8 +197,25 @@ public struct NodePaint
 
     // Child-group offset (a SizeMode.Reflow Trailing anchor): when non-zero, the recorder shifts every CHILD's origin
     // by this amount while the node's own fill/border/clip stay put — so the content's end edge rides the animated
-    // layout edge (the Expander slide-from-under-the-header). Written by the reflow re-solve each tick; 0 at rest.
+    // layout edge. Written by the reflow re-solve each tick, or by AnimEngine.PropagateFlowReveals for a
+    // SizeMode.FlowReveal Parallax anchor (FlowOwnsShiftBit); 0 at rest.
     public float ChildShiftX, ChildShiftY;
+    // SizeMode.FlowReveal presented flow (rebuilt every frame a reveal runs by AnimEngine.PropagateFlowReveals; all zero at
+    // rest). FlowDelta = this node's PRESENTED vertical extent minus its laid-out one: the deltas of the reveals inside it,
+    // and for a node with its own reveal row (bounded by its content while an inner reveal runs) P − H (nested reveals
+    // combine, never sum — AddReveal). A boundary keeps
+    // 0, except a scroll content, which keeps the sum (the presented content extent the scroll plan clamps against).
+    // FlowBits: FlowShiftsBit = a column whose children the recorder AND hit-testing walk with a running Y shift (each
+    // child at +shift, then shift += child.FlowDelta — FlowCursor); FlowOrphanBit = a revealing exit orphan's presented
+    // extent pushes the children laid out at/below FlowOrphanTop down by FlowOrphanDelta; FlowOwnsHBit / FlowOwnsShiftBit
+    // = the pass wrote PresentedH / ChildShiftY and resets them; FlowBoundaryBit = the shift lives inside this node but its
+    // own presented size is its laid-out one (a declared height, a scroll content, the root); FlowRevealBit = this node's
+    // own reveal row set its FlowDelta this pass; FlowInnerBit = an inner reveal's delta stopped here (this node is a live
+    // reveal containing it), so its own reveal is bounded by its content's presented bottom (AddReveal).
+    public float FlowDelta;
+    public float FlowOrphanTop, FlowOrphanDelta;
+    public byte FlowBits;
+    public const byte FlowShiftsBit = 1, FlowOrphanBit = 2, FlowOwnsHBit = 4, FlowOwnsShiftBit = 8, FlowBoundaryBit = 16, FlowRevealBit = 32, FlowInnerBit = 64;
     public float StrokeTrimStart, StrokeTrimEnd;
     public ColorF Fill;
     public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
@@ -364,6 +381,10 @@ public struct ScrollState
     public bool  MeasureAll;              // VirtualListEl.MeasureAll: the realized window is every item (bounded by ItemCount)
     public float ItemClipTopInset;         // viewport-space top clip for recyclable items; NaN = disabled
     public float ItemClipTopFadeBand;      // top alpha feather for recyclable items; 0 = disabled
+    // SizeMode.FlowReveal: DIP the realize window reaches past the viewport bottom while reveals in this (vertical)
+    // viewport present less than they lay out — the rows they pull up into view. Monotone over a reveal's flight, so the
+    // rows realize once on its seed frame (AnimEngine.PropagateFlowReveals writes it; 0 at rest; UI-side only).
+    public float RevealOverscan;
     // One contiguous expand/collapse band over the flat virtual child ladder. Progress 0 = collapsed, 1 = expanded;
     // NaN disables the presentation. The recorder and input dispatcher consume the same row-range geometry.
     public int   DisclosureFirst;
