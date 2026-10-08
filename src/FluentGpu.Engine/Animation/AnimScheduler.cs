@@ -541,9 +541,11 @@ public sealed partial class AnimEngine
         => ch is (AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.RevealExtent)
            or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 0.5f : Generators.RestDelta;
 
-    // RevealExtent is in DIP: rest once the edge is within RestDeltaFor (0.5 DIP) and slower than 8 DIP/s (< 0.07 DIP per
-    // 120 Hz frame) — the normalized 0.01/s floor held a 90-DIP reveal ~0.75 s (and the Expander's unmount with it).
-    private static float RestSpeedFor(AnimChannel ch) => ch == AnimChannel.RevealExtent ? 8f : Generators.RestSpeed;
+    // RevealExtent and the reveal bands are in DIP: rest once the edge is within RestDeltaFor (0.5 DIP) and slower than
+    // 8 DIP/s (< 0.07 DIP per 120 Hz frame) — the normalized 0.01/s floor held a 90-DIP reveal ~0.75 s (and the Expander's
+    // unmount with it), and a 494-DIP sidebar band ~0.2 s past where it visibly landed (its collapse commit with it).
+    private static float RestSpeedFor(AnimChannel ch)
+        => ch is AnimChannel.RevealExtent or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 8f : Generators.RestSpeed;
 
     /// <summary>The node's current value on a channel (read from composited paint) — the fresh spring's start point.
     /// Ported from AnimEngine.CurrentValue.</summary>
