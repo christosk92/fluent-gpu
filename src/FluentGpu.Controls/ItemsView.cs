@@ -81,6 +81,14 @@ public sealed class ItemsViewController
     /// <summary>WinUI <c>CurrentItemIndex</c> (idl:46-47, default −1) — the keyboard-current item.</summary>
     public int CurrentItemIndex => GetCurrent?.Invoke() ?? -1;
 
+    internal Action<int>? FocusItemImpl;
+
+    /// <summary>Make <paramref name="index"/> the current item, bring it into view and give it keyboard focus (the bound
+    /// list's roving tab stop follows). The way a fixed head above a list hands keyboard focus down into it. A no-op for
+    /// a disabled or out-of-range index, and before the list mounts. Selection follows exactly as for a plain arrow key
+    /// (Single with follow-focus and Extended select the item; None/Multiple leave the selection alone).</summary>
+    public void FocusItem(int index) => FocusItemImpl?.Invoke(index);
+
     /// <summary>WinUI <c>StartBringItemIntoView(index, BringIntoViewOptions)</c> (idl:52): realizes the target by
     /// scrolling the virtualized viewport. <paramref name="alignmentRatio"/> NaN = minimal scroll (the default
     /// BringIntoViewOptions); 0 = align item start to viewport start, 1 = end to end (the Home/End ratios,
@@ -471,6 +479,8 @@ public sealed class ItemsView : Component
     /// <summary>Per-item SELECTABLE gate (null ⇒ every item). A non-selectable item still takes focus and invokes, but
     /// interaction never runs the selector on it and Ctrl+A skips it (hero / header prefix rows of a mixed list).</summary>
     public Func<int, bool>? IsItemSelectable;
+    /// <summary>See <see cref="ListOptions.OnEdgeNavigate"/>.</summary>
+    public Action<int>? OnEdgeNavigate;
     /// <summary>L4 skin seam: replaces the default <see cref="ItemContainer"/> chrome (the List/Grid presets + TreeView).</summary>
     // Per-item chrome SKIN goes through the ContainerFactory/SelectorVisual seam; per-item VARIATION goes through the
     // PartDelta value seam (fill/fg/opacity/corner/padding/glyph as values, applied during construction — shape-stable,
@@ -623,6 +633,7 @@ public sealed class ItemsView : Component
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
             IsItemSelectable = o.IsItemSelectable,
+            OnEdgeNavigate = o.OnEdgeNavigate,
             Controller = o.Controller,
             Handle = o.Scroll?.Handle,
             ContainerFactory = o.ContainerFactory,
@@ -682,6 +693,7 @@ public sealed class ItemsView : Component
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
             IsItemSelectable = o.IsItemSelectable,
+            OnEdgeNavigate = o.OnEdgeNavigate,
             Controller = o.Controller,
             Handle = o.Scroll?.Handle,
             Grow = o.Grow,
@@ -749,6 +761,7 @@ public sealed class ItemsView : Component
             ItemText = text,
             IsItemEnabled = enabled,
             IsItemSelectable = o.IsItemSelectable,
+            OnEdgeNavigate = o.OnEdgeNavigate,
             Controller = o.Controller,
             Grow = o.Grow,
             Selector = o.Selector,
@@ -1393,6 +1406,7 @@ public sealed class ItemsView : Component
                     BringIntoView(home ? 0 : count - 1, home ? 0f : 1f, animate: false);
                     int t = home ? FirstEnabled(0, +1) : FirstEnabled(count - 1, -1);
                     if (t >= 0) MoveCurrent(t, ctrl, shift);   // minimal scroll keeps the edge alignment above
+                    if (t >= 0 && t == from) OnEdgeNavigate?.Invoke(home ? -1 : 1);
                     e.Handled = true;
                     return;
                 }
@@ -1402,6 +1416,8 @@ public sealed class ItemsView : Component
                     int dy = e.KeyCode == Keys.Up ? -1 : e.KeyCode == Keys.Down ? 1 : 0;
                     int next = NavigateIndex(from, dx, dy);
                     if (next >= 0 && next != from) MoveCurrent(next, ctrl, shift);
+                    else if (dy != 0 && !(spec.Kind == RepeatKind.Stack && spec.Horizontal))
+                        OnEdgeNavigate?.Invoke(dy);   // ran off an end: a head above may take focus back
                     e.Handled = true;   // nav keys never fall through to an outer scroller (cpp:806-807)
                     return;
                 }
@@ -1526,6 +1542,7 @@ public sealed class ItemsView : Component
             ctl.BringIntoViewImpl = BringIntoView;
             ctl.TryGetItemIndexImpl = TryGetItemAtViewport;
             ctl.GetCurrent = current.Peek;
+            ctl.FocusItemImpl = i => MoveCurrent(i, false, false);
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
             ctl.WheelNotchImpl = PostWheelNotch;
@@ -1575,6 +1592,7 @@ public sealed class ItemsView : Component
                 ctl.BringIntoViewImpl = null;
                 ctl.TryGetItemIndexImpl = null;
                 ctl.GetCurrent = null;
+                ctl.FocusItemImpl = null;
                 ctl.ScrollByImpl = null;
                 ctl.WheelNotchImpl = null;
                 ctl.SetAutoScrollVelocityImpl = null;

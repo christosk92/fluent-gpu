@@ -3168,6 +3168,19 @@ static class AnimSuite
             $"peak=({stretchedOut.Dy:0.0},{stretchedIn.Dy:0.0},{stretchedOut.M22:0.00}) " +
             $"end=({settledOut.Dy:0.0},{settledIn.Dy:0.0},{settledIn.M22:0.00}) " +
             $"seed=({immediateIn.Dy:0.0},{immediateIn.M22:0.00}) reset=({reset.Dy:0.0},{reset.M22:0.00})");
+
+        // gate.anim.easing.fluentPane — the WinUI SplitView spline, and the two pane tokens built on it.
+        {
+            float e0 = Easings.Ease(Easing.FluentPane, 0f), e1 = Easings.Ease(Easing.FluentPane, 1f);
+            float mid = Easings.Ease(Easing.FluentPane, 0.5f);           // cubic-bezier(0,.35,.15,1) at x=.5 ≈ 0.90
+            float q = Easings.Ease(Easing.FluentPane, 0.25f), q3 = Easings.Ease(Easing.FluentPane, 0.75f);
+            var open = MotionTok.PaneOpen; var close = MotionTok.PaneClose;
+            Check("gate.anim.easing.fluentPane FluentPane is cubic-bezier(0,0.35,0.15,1): ends pinned, monotone, ~0.90 at the midpoint; PaneOpen 200 ms / PaneClose 100 ms on it",
+                e0 == 0f && e1 == 1f && mid > 0.88f && mid < 0.92f && q < mid && mid < q3
+                && open.DurationMs == 200f && open.Easing == Easing.FluentPane
+                && close.DurationMs == 100f && close.Easing == Easing.FluentPane,
+                $"e0={e0} e1={e1} q={q:0.000} mid={mid:0.000} q3={q3:0.000} open={open.DurationMs}/{open.Easing} close={close.DurationMs}/{close.Easing}");
+        }
     }
 
     static void NestedHoverBoundaryChecks(StringTable strings)

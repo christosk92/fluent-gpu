@@ -332,6 +332,10 @@ public record ListOptions
     /// <summary>Per-item selectable gate (null ⇒ all). Non-selectable items still focus/invoke but interaction never runs
     /// the selector on them and Ctrl+A selects only the selectable runs (hero / header prefix rows).</summary>
     public Func<int, bool>? IsItemSelectable { get; init; }
+    /// <summary>Arrow navigation ran off an END of the list: −1 for Up/Home at the first enabled item, +1 for Down/End at
+    /// the last. The key stays handled (nav keys never fall through to an outer scroller); the callback lets a fixed head
+    /// above or below the list take focus back. Null ⇒ nothing happens at the ends (today's behaviour).</summary>
+    public Action<int>? OnEdgeNavigate { get; init; }
     /// <summary>Imperative handle (CurrentItemIndex / StartBringItemIntoView / ScrollBy / Selection).</summary>
     public ItemsViewController? Controller { get; init; }
     /// <summary>Flex participation of the view: 1 (default) = fill the parent (hard viewport); 0 = natural (measures to ContentExtent).</summary>

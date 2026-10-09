@@ -252,10 +252,10 @@ public sealed class NavigationView : Component
     const float PaneToggleWidth = 40f;    // PaneToggleButtonWidth (:206)
     const float PaneToggleHeight = 36f;   // PaneToggleButtonHeight (:205)
     const float ItemHeight = 36f;         // NavigationViewItemOnLeftMinHeight (:217)
-    const float ItemOuterHeight = 36f;    // matches ItemHeight
     const float ItemMarginX = 4f;
-    const float ItemMarginY = 0f;
-    const float HeaderHeight = 36f;
+    const float ItemMarginY = 2f;         // NavigationViewItemButtonMargin 4,2 (:228, applied :451)
+    const float ItemOuterHeight = ItemHeight + 2f * ItemMarginY;   // the row PITCH, 40
+    const float HeaderHeight = 40f;       // NavigationViewItemInnerHeaderMargin row (:229)
     const float SeparatorRowHeight = 8f;  // 1px rule + the 0,3,0,4 margin (:247/:223)
     const float IconColumnWidth = 40f;
     const float IconSize = 16f;
@@ -714,14 +714,14 @@ public sealed class NavigationView : Component
             children.Add(PaneGlyphButton(Icons.Search, toggle));
 
         foreach (var (it, _) in compactFlat)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 }
+            children.Add(it.IsHeader ? new BoxEl { Height = 0f }
                        : it.IsSeparator ? SeparatorRow(expandedLayout: false)
                        : Item(it, 0, children.Count, compactSelected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key), Parts));
 
         children.Add(new BoxEl { Grow = 1 });
 
         foreach (var it in footerItems)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 }
+            children.Add(it.IsHeader ? new BoxEl { Height = 0f }
                        : it.IsSeparator ? SeparatorRow(expandedLayout: false)
                        : Item(it, 0, children.Count, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key), Parts));
 
@@ -1012,16 +1012,15 @@ public sealed class NavigationView : Component
         return result;
     }
 
-    /// <summary>NavigationViewItemSeparator: a 1px DividerStroke rule (height :223, foreground :46, margin 0,3,0,4 :247).
-    /// Nested separators indent 31/level like items (NavigationViewItemSeparator.cpp:74-83 rootGrid Margin.Left).</summary>
+    /// <summary>NavigationViewItemSeparator: a 1px DividerStroke rule (height :223, foreground :46, margin 0,3,0,4 :247),
+    /// full width in both layouts. Nested separators indent 31/level like items (NavigationViewItemSeparator.cpp:74-83
+    /// rootGrid Margin.Left).</summary>
     static Element SeparatorRow(bool expandedLayout, int depth = 0) => new BoxEl
     {
         Height = SeparatorRowHeight,
         Direction = 1,
-        Justify = FlexJustify.Center,
-        Padding = expandedLayout
-            ? new Edges4(ItemMarginX + depth * IndentStep, 0, ItemMarginX, 0)
-            : new Edges4(8, 0, 8, 0),
+        Justify = FlexJustify.Start,
+        Padding = new Edges4(expandedLayout ? depth * IndentStep : 0f, 3f, 0f, 4f),
         Children = [new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
     };
 
@@ -1032,7 +1031,7 @@ public sealed class NavigationView : Component
         {
             if (it.IsHeader)
             {
-                y += labelsVisible ? HeaderHeight : 8f;
+                y += labelsVisible ? HeaderHeight : 0f;
                 continue;
             }
             if (it.IsSeparator)
@@ -1090,14 +1089,18 @@ public sealed class NavigationView : Component
             Children = it.InfoBadge is not null && !expandedLayout
                 ?
                 [
-                    // Compact rail: the badge overlays the icon's top-right corner (the WinUI compact InfoBadge).
+                    // Compact rail: the badge overlays the icon column's top-right corner, margin 0,2,2,0 (themeresources:586-595).
                     new BoxEl
                     {
-                        ZStack = true,
+                        ZStack = true, Width = IconColumnWidth - IndicatorW, Height = ItemHeight,
                         Children =
                         [
-                            iconVisual,
-                            new BoxEl { OffsetX = 10f, OffsetY = -6f, HitTestVisible = false, Children = [it.InfoBadge] },
+                            new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [iconVisual] },
+                            new BoxEl
+                            {
+                                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.End,
+                                Margin = new Edges4(0f, 2f, 2f, 0f), HitTestVisible = false, Children = [it.InfoBadge],
+                            },
                         ],
                     },
                 ]
@@ -1167,7 +1170,7 @@ public sealed class NavigationView : Component
             Height = ItemHeight,
             Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),   // constant — depth indents the CONTENT (iconCell), not the row
             AlignItems = FlexAlign.Center,
-            Corners = Radii.OverlayAll,   // WinUI nav items round to OverlayCornerRadius (8), not ControlCornerRadius (4)
+            Corners = Radii.ControlAll,   // ControlCornerRadius (4): NavigationView.xaml:432 sets it and the presenter template-binds it (:462)
             // Backplate ramp (themeresources:9-20): rest Transparent/Selected=Secondary; hover Secondary/SelectedPointerOver=Tertiary;
             // pressed Tertiary/SelectedPressed=Secondary. (The old focused-fill cue is gone — keyboard focus draws the
             // engine focus ring on the focused row instead.)
@@ -1197,7 +1200,7 @@ public sealed class NavigationView : Component
     static Element HeaderItem(NavItem it, bool expandedLayout, bool labelsVisible, int depth = 0)
     {
         if (!expandedLayout)
-            return new BoxEl { Height = 8 };
+            return new BoxEl { Height = 0f };
 
         // Nested headers indent 31/level like items (NavigationViewItemHeader.cpp:76-84 rootGrid Margin.Left).
         return AnimatedLabel(labelsVisible, new NavLabelSpec(
