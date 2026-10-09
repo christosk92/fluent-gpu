@@ -136,7 +136,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     // lineBounds); a (text,style) match restores them and replays ONLY WrapAndPosition at the new width. Plain
     // (no-span) text only — spanned inline runs (rtb-01) re-shape (never a resize hot path). Bounded LRU, instance
     // reused on eviction. Single-thread-confined: the measure engine (UI thread) and the render engine (render thread)
-    // are SEPARATE instances (DirectWriteFontSystem.cs:13), so each has its own cache — no cross-thread sharing.
+    // are SEPARATE instances (DirectWriteFontSystem.cs:13), so each has its own cache and eviction scratch — no cross-thread sharing.
     private sealed class ShapeEntry
     {
         public char[] Text = Array.Empty<char>(); public int TextLen;
@@ -154,7 +154,9 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     // ago re-ran DirectWrite itemize+shape. Eviction is batched (EvictLru) so a full cache costs one pass per ~cap/4
     // misses instead of one full scan per miss.
     private const int ShapeCacheCap = 2048;
-    private static readonly List<long> s_evictScratch = new(ShapeCacheCap / 4);
+    // Per instance, like the cache it scans: the UI measure engine and the render-thread glyph engines evict on their
+    // own threads, and a shared static scratch let one engine's Clear/Add break another's foreach mid-eviction.
+    private readonly List<long> _evictScratch = new(ShapeCacheCap / 4);
 
     /// <summary>Diagnostics/regression counter: the number of ACTUAL itemize+shape passes. A width-only re-wrap of
     /// already-shaped text does NOT bump it, so a resize that re-wraps cached text leaves this flat.</summary>
@@ -227,17 +229,17 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         // buys ~cap/4 misses), handing the caller one of the evicted entries to reuse. When every entry is recent
         // (a burst larger than the cache), fall back to evicting the single oldest.
         long threshold = _shapeTick - ShapeCacheCap * 3 / 4;
-        s_evictScratch.Clear();
+        _evictScratch.Clear();
         long oldestKey = 0, oldestTick = long.MaxValue; ShapeEntry? oldest = null;
         foreach (var kv in _shapeCache)
         {
-            if (kv.Value.Tick < threshold) s_evictScratch.Add(kv.Key);
+            if (kv.Value.Tick < threshold) _evictScratch.Add(kv.Key);
             if (kv.Value.Tick < oldestTick) { oldestTick = kv.Value.Tick; oldestKey = kv.Key; oldest = kv.Value; }
         }
-        if (s_evictScratch.Count > 1)
+        if (_evictScratch.Count > 1)
         {
             ShapeEntry? reuse = null;
-            foreach (long key in s_evictScratch)
+            foreach (long key in _evictScratch)
                 if (_shapeCache.Remove(key, out var evicted)) reuse ??= evicted;
             return reuse ?? new ShapeEntry();
         }
