@@ -65,11 +65,12 @@ public sealed partial class TreeReconciler
     private sealed class VirtualEntry
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
-        // W2-E3: the viewport's VISIBLE item band [VisibleFirst, VisibleLast) as of the latest RealizeWindow — the
-        // reference every image request from a realized slot classifies against (inside → Visible lane; realized in the
-        // overscan halo, incl. the +1 guard rows → Overscan lane). Written before the realize dispatch so the cold-mount
-        // requests of the same pass already see it; read again at the host's post-realize Flush by the bound ImageEl
-        // effect's later fires (a RebindBoundSlot recycle drains there, outside the pass).
+        // W2-E3: the viewport's VISIBLE item band [VisibleFirst, VisibleLast) (whole rows for a grid/FillRow layout) as of
+        // the latest RealizeWindow — the reference every image request from a realized slot classifies against (inside →
+        // Visible lane; realized in the overscan halo, incl. the +1 guard rows → Overscan lane). Written before the
+        // realize dispatch so the cold-mount requests of the same pass already see it; read again at the host's
+        // post-realize Flush by the bound ImageEl effect's later fires (a RebindBoundSlot recycle drains there, outside
+        // the pass).
         public int VisibleFirst, VisibleLast;
         public List<BoundSlot>? Slots;
         // Retained slow-path scratch. Equal-size contiguous scrolls use the in-place rotation fast path; this is touched
@@ -3282,6 +3283,14 @@ public sealed partial class TreeReconciler
         int visibleLast = count == 0 ? 0 : Math.Min(count, ext.IndexAt(offset + viewport) + 1);
         visibleFirst = Math.Clamp(visibleFirst, 0, count);
         visibleLast = Math.Clamp(visibleLast, visibleFirst, count);
+        // The visible band is whole rows, like the realized window: IndexAt answers the FIRST item of the row under the
+        // bottom edge, so the band used to end one cell into that row. The rest of that row then requested the Overscan
+        // lane, which drops under backpressure, and PromoteNewlyVisibleRows never moved it while it stayed the bottom row.
+        if (ext is VirtualLayoutExtent bandRows && visibleLast > visibleFirst)
+        {
+            visibleFirst = bandRows.RowStart(visibleFirst);
+            visibleLast = bandRows.RowEnd(visibleLast - 1);
+        }
         first = Math.Clamp(first, 0, count);
         last = Math.Clamp(last, first, count);
 
