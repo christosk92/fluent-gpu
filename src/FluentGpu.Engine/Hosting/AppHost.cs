@@ -714,6 +714,11 @@ public sealed partial class AppHost : IDisposable
     // present's lag counts the whole wait; and the count of real Presents this host made on the render thread (a drain tells a
     // present from an elided turn by its change).
     private long _deferredSinceQpc, _renderPresentCount;
+    // Render-thread-owned: whether the last RenderMotion reached the swapchain (a counted Present). False when the turn elided an
+    // unchanged pose (§13.1), skipped a byte-identical submit, held its present or found motion ended in the slot wait: the
+    // render loop then keeps the tick open for a fresh publication (RenderThread tickPresented) instead of deferring it a vblank.
+    private bool _motionPresented;
+    private bool MotionTurnPresented() => _motionPresented;
     // Render-thread-owned: this child's non-blocking present was REFUSED (DXGI_ERROR_WAS_STILL_DRAWING; see PresentFrame), so the
     // frame it drew into the back buffer is still owed to the glass. _owedFrame names it; DrainChildRenderSources re-presents it
     // on a later turn (or a fresh publication supersedes it). The latency credit was never spent, so it is still held.
@@ -726,6 +731,7 @@ public sealed partial class AppHost : IDisposable
 
     private void RenderMotion()
     {
+        long presents0 = _renderPresentCount;
         // motionRepresent: true — this re-presents the RETAINED _activeRenderFrame on a later vblank than the one it
         // was published for. It is a plain vsync'd refresh, never the original publish's interactive/suppressed-vsync
         // present (item C, §2): ApplyPresentPacing must not re-apply SuppressVsync here.
@@ -737,6 +743,7 @@ public sealed partial class AppHost : IDisposable
             _presentSplit = default;
             _splitVideoMs = 0;
         }
+        _motionPresented = _renderPresentCount != presents0;
     }
 
     private bool _idleTrimDormant;   // the last pass found nothing trimmable; any composite turn clears it (SubmitSlices)
@@ -3640,7 +3647,7 @@ public sealed partial class AppHost : IDisposable
             submitAbortHandleSink: _device.SetSubmitAbortHandle,
             ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
             presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent,
-            idleTrim: TrimIdleOnRenderThread)
+            idleTrim: TrimIdleOnRenderThread, tickPresented: MotionTurnPresented)
         { LedgerSink = LedgerRenderTurn };
 
     /// <summary>Test-only: give a HEADLESS primary host the force-sync render loop a windowed one would have (one
