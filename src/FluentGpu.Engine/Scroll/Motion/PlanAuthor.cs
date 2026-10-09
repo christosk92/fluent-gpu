@@ -328,21 +328,27 @@ public static class PlanAuthor
             prev.ViewportExtent, prev.RubberC, prev.Clock, OverpanPolicy.None, MotionKind.Programmatic, default);
     }
 
-    /// <summary>A keyboard move — arrows/page/home/end — authored as a <see cref="Glide"/> from the plan's current
-    /// displayed position.</summary>
+    /// <summary>A keyboard move — arrows/page/home/end — authored as a <see cref="Glide"/>. A line/page step
+    /// ACCUMULATES onto the pending destination like a wheel notch: while the previous plan is a live programmatic glide
+    /// heading the same way, the step is added to <c>prev.Dest</c>, so quick presses and a held key's auto-repeat travel
+    /// every step's full distance instead of re-basing on the lagging displayed position. A first press, a press after
+    /// the glide settled, a press over any other motion (a fling's destination is only its asymptote), or a reversal
+    /// steps from the displayed position. Home/End glide to the extent's ends.</summary>
     public static ScrollPlan Key(in ScrollPlan prev, double tNow, KeyMove move, in MotionFeel feel, double viewportExtent)
     {
-        double p0 = prev.Eval(tNow, out _, out _);
-        double target = move switch
+        if (move == KeyMove.Home) return Glide(in prev, tNow, prev.Min, in feel);
+        if (move == KeyMove.End) return Glide(in prev, tNow, prev.Max, in feel);
+        double step = move switch
         {
-            KeyMove.LineUp => p0 - feel.KeyLineDip,
-            KeyMove.LineDown => p0 + feel.KeyLineDip,
-            KeyMove.PageUp => p0 - feel.PageFraction * viewportExtent,
-            KeyMove.PageDown => p0 + feel.PageFraction * viewportExtent,
-            KeyMove.Home => prev.Min,
-            KeyMove.End => prev.Max,
-            _ => p0,
+            KeyMove.LineUp => -feel.KeyLineDip,
+            KeyMove.LineDown => feel.KeyLineDip,
+            KeyMove.PageUp => -feel.PageFraction * viewportExtent,
+            KeyMove.PageDown => feel.PageFraction * viewportExtent,
+            _ => 0.0,
         };
-        return Glide(in prev, tNow, target, in feel);
+        double p0 = prev.Eval(tNow, out _, out _);
+        bool liveGlide = prev.Kind == MotionKind.Programmatic && prev.Count == 1 && prev.S0.Kind == SegKind.Glide;
+        double from = liveGlide && (prev.Dest - p0) * step > 0.0 ? prev.Dest : p0;
+        return Glide(in prev, tNow, from + step, in feel);
     }
 }
