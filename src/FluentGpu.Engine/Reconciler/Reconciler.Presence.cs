@@ -50,6 +50,7 @@ public sealed partial class TreeReconciler
             NodeBindingWriteCount++;
             _scene.SetCollapsed(node, nowCollapsed);
             SetSubtreeHidden(node, nowCollapsed);
+            RemirrorAncestors(node);   // a component's root (or a bound anchor): the boundary above leaves/rejoins flow too
             // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
             // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
             // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
@@ -57,7 +58,7 @@ public sealed partial class TreeReconciler
             if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion
                 && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
             {
-                anim.SeedEnter(node, dt.Enter, dt);
+                anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
                 if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
             }
         }));

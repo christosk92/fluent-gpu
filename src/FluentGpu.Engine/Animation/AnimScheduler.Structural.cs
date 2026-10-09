@@ -151,17 +151,28 @@ public sealed partial class AnimEngine
     /// <see cref="EnterExit.DelayMs"/> (E20, Wavee Home redesign) is an enter-only extra delay, added on top of
     /// <paramref name="spec"/>'s own <see cref="LayoutTransition.DelayMs"/> (which already carries any parent
     /// <c>FluentGpu.Dsl.Element.Stagger</c> — <c>FluentGpu.Reconciler.TreeReconciler.SynthesizeDeclarative</c> bakes
-    /// <c>index * Stagger</c> in there). Default 0f sums to the pre-E20 delay exactly (byte-identical).</summary>
+    /// <c>index * Stagger</c> in there). Default 0f sums to the pre-E20 delay exactly (byte-identical). The reconciler
+    /// calls <see cref="SeedEnterOver"/> with the element's authored pose instead.</summary>
     public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+        => SeedEnterOver(node, in e, in spec, EnterRest.Identity);
+
+    /// <summary><see cref="SeedEnter"/> over the node's AUTHORED static pose <paramref name="rest"/>: the enter settles ON
+    /// it, and its terminal is relative to it (offset/blur ADD, scale/opacity MULTIPLY — <see cref="MotionTarget"/>'s
+    /// contract). WHY explicit, like <see cref="SeedTargetOver"/>: PASS2 replace-folds the row over paint, so the row owns
+    /// the channel, and a settle leaves its last value in paint (SettleRestore skips opacity/transform). An identity
+    /// terminal therefore erased an authored Opacity/OffsetY/Scale until the next reconcile (the Queue's dimmed Autoplay
+    /// rows faded in to 1, then popped to 0.72). Read from the ELEMENT, not paint: a keep-alive reclaim or a presence
+    /// re-show seeds while paint still holds a cancelled mid-exit value.</summary>
+    internal void SeedEnterOver(NodeHandle node, in EnterExit e, in LayoutTransition spec, in EnterRest rest)
     {
         TransitionDynamics dyn = Normalize(spec.Dynamics);
         float delay = spec.DelayMs + e.DelayMs;
-        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity, delayMs: delay);
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx, delayMs: delay);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy, delayMs: delay);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: delay);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: delay);
-        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, 0f, dyn, initial: e.Blur, delayMs: delay);
+        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, rest.Opacity, dyn, initial: rest.Opacity * e.Opacity, delayMs: delay);
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, rest.OffsetX, dyn, initial: rest.OffsetX + e.Dx, delayMs: delay);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, rest.OffsetY, dyn, initial: rest.OffsetY + e.Dy, delayMs: delay);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX, dyn, initial: rest.ScaleX * e.Sx, delayMs: delay);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY, dyn, initial: rest.ScaleY * e.Sy, delayMs: delay);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur, dyn, initial: rest.Blur + e.Blur, delayMs: delay);
         MarkStartPending(node);
     }
 
@@ -231,16 +242,8 @@ public sealed partial class AnimEngine
                     if (height) RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Relayout:   // re-solve the subtree at the interpolated size each tick (live re-wrap)
-                    if (width)
-                    {
-                        RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
-                        MarkRestoreLayout(node, AnimChannel.SizeW, _scene.Layout(node).Width);
-                    }
-                    if (height)
-                    {
-                        RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
-                        MarkRestoreLayout(node, AnimChannel.SizeH, _scene.Layout(node).Height);
-                    }
+                    if (width) RelayoutSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
+                    if (height) RelayoutSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     _scene.Mark(node, NodeFlags.Relayouting);
                     break;
                 case SizeMode.ScaleCorrect:
@@ -324,6 +327,24 @@ public sealed partial class AnimEngine
             Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
+    // SizeMode.Relayout seed/retarget. While a row flies, RunIncrementalLayout pins LayoutInput.Width/Height to its interp
+    // every tick, so that column is OURS, not the author's. A commit that re-solves the parent WITHOUT re-rendering this
+    // node (it was only shoved — a centred/trailing toggle beside an async count) hands that pinned interp back as BOTH the
+    // captured and the solved size: re-seeding from it restarted a zero-distance tween (the resize froze mid-way), and
+    // re-reading the column as the "declared" size stashed the interp as RestoreTo, which SettleRestore then wrote back
+    // as the node's permanent size. Mirror ReflowSize: an echo of our own interp keeps flying, and a genuine retarget
+    // carries the declared value stashed at the row's creation (a re-render refreshes it through RecordDeclaredSize).
+    private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs)
+    {
+        int ex = Find(node, ch);
+        bool live = ex >= 0 && _slab.At(ex).Has(AnimFlags.RestoreLayout);
+        if (live && MathF.Abs(_slab.At(ex).Position - toSize) < 0.5f) return;   // echo: layout still holds our own interp
+        float declared = live ? _slab.At(ex).RestoreTo
+            : ch == AnimChannel.SizeW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
+        RevealSize(node, ch, fromSize, toSize, dyn, delayMs);
+        MarkRestoreLayout(node, ch, declared);
+    }
+
     // ScaleCorrect: spring a scale channel old/new → 1 (recorder composites about centre; opted-in children counter-scale).
     private void ScaleReveal(NodeHandle node, AnimChannel ch, float fromRatio, in TransitionDynamics dyn, float delayMs = 0f)
     {
@@ -346,4 +367,11 @@ public sealed partial class AnimEngine
                 Easing = d.Easing.IsDefault ? TweenDefault : d.Easing,
             };
     }
+}
+
+/// <summary>A node's AUTHORED static pose, the rest an Enter settles on (<see cref="AnimEngine.SeedEnterOver"/>).
+/// Unlike <see cref="MotionTarget"/>, scale is per axis, because an Enter seeds ScaleX and ScaleY separately.</summary>
+internal readonly record struct EnterRest(float OffsetX, float OffsetY, float ScaleX, float ScaleY, float Opacity, float Blur)
+{
+    public static EnterRest Identity => new(0f, 0f, 1f, 1f, 1f, 0f);
 }
