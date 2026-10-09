@@ -133,6 +133,10 @@ public sealed class WheelEventArgs
     public Point2 Local;
     public float Delta;     // vertical wheel (the value the viewport vertical-scroll path consumes)
     public float DeltaX;    // horizontal wheel (WM_POINTERHWHEEL / trackpad two-finger horizontal); 0 on a plain wheel
+    public int Steps;       // whole wheel detents this event completes, signed like Delta: ±1 per detented notch; a hi-res
+                            // (free-spin) wheel sends a detent as several fractional packets, so most of its events read 0.
+                            // A DISCRETE action (seek ±5 s, a volume step) steps by this, never once per event.
+    public int StepsX;      // the same for DeltaX
     public KeyModifiers Mods;
     public bool Handled;
 }

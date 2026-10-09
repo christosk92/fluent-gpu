@@ -145,7 +145,7 @@ public sealed partial class InputDispatcher : IScrollerQuery
     {
         // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport: a Handled
         // NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
-        if (DispatchWheel(in e)) return true;
+        if (DispatchWheel(in e, t)) return true;
         // App zoom (browser Ctrl+wheel): after element first-refusal, before the viewport. The hook speaks the device
         // convention (>0 = rotated away = zoom in), the event "positive = toward the content end" — WheelClassifier.ZoomNotches
         // is the one conversion. A horizontal-only notch never zooms (it scrolls, Ctrl or not).
@@ -404,18 +404,47 @@ public sealed partial class InputDispatcher : IScrollerQuery
     /// <summary>Drops the wheel latch (focus loss / window deactivate).</summary>
     public void ResetScrollLatch() => _scrollRouter?.ResetLatch();
 
+    // Hi-res (free-spin) wheel packets are fractional notches; element handlers that act once per detent read whole
+    // detents (WheelEventArgs.Steps) from this carryover, kept in raw WHEEL_DELTA units like the PAL's detented one.
+    private int _wheelStepAccumX, _wheelStepAccumY;
+    private double _wheelStepLastSec = double.NegativeInfinity;
+
+    private void WheelSteps(in ScrollInputEvent e, double t, out int steps, out int stepsX)
+    {
+        bool hiRes = e.Source == ScrollSource.MouseWheelHiRes;
+        if (!hiRes || t - _wheelStepLastSec > WheelClassifier.GestureGapMs / 1000.0) { _wheelStepAccumX = 0; _wheelStepAccumY = 0; }
+        _wheelStepLastSec = t;
+        if (!hiRes)
+        {
+            steps = e.Dy > 0f ? 1 : e.Dy < 0f ? -1 : 0;   // a detented event is one step whatever the wheel-lines scale
+            stepsX = e.Dx > 0f ? 1 : e.Dx < 0f ? -1 : 0;
+            return;
+        }
+        steps = WheelStep(ref _wheelStepAccumY, e.Dy);
+        stepsX = WheelStep(ref _wheelStepAccumX, e.Dx);
+    }
+
+    private static int WheelStep(ref int accum, float notches)
+    {
+        int raw = (int)MathF.Round(notches * WheelClassifier.DeltaPerNotch);
+        if ((raw > 0 && accum < 0) || (raw < 0 && accum > 0)) accum = 0;   // a reversal restarts the detent
+        return WheelClassifier.Carryover(ref accum, raw);
+    }
+
     /// <summary>Element-level wheel routing (WinUI PointerWheelChanged bubbling): every enabled WheelBit handler up the
     /// chain sees the event until one sets Handled, which also stops the enclosing viewport from scrolling. Deltas are
-    /// reported in DIP (notches × the feel's notch distance), positive toward the content end.</summary>
-    private bool DispatchWheel(in ScrollInputEvent e)
+    /// reported in DIP (notches × the feel's notch distance), positive toward the content end; Steps are the whole
+    /// detents the event completes (a hi-res wheel's fractional packets accumulate to them).</summary>
+    private bool DispatchWheel(in ScrollInputEvent e, double t)
     {
+        WheelSteps(in e, t, out int steps, out int stepsX);
         WheelEventArgs? args = null;
         float dip = (float)ScrollTunables.Current.WheelNotchDip;
         for (var n = HitTestAny(e.PointerDip); !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if ((_scene.Interaction(n).HandlerMask & InteractionInfo.WheelBit) == 0) continue;
-            args ??= new WheelEventArgs { Delta = e.Dy * dip, DeltaX = e.Dx * dip, Mods = e.Mods };
+            args ??= new WheelEventArgs { Delta = e.Dy * dip, DeltaX = e.Dx * dip, Steps = steps, StepsX = stepsX, Mods = e.Mods };
             args.Local = LocalPos(n, e.PointerDip);
             _scene.GetPointerWheel(n)?.Invoke(args);
             if (args.Handled) return true;
