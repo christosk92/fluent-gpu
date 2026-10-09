@@ -678,24 +678,55 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private void EmitLine(int start, int end, int lineIndex, float lineHeight, bool doTrim, float maxWidth, ref float maxLineW)
     {
         if (end <= start) return;
-        // Reorder visual order: reverse maximal sequences of level >= L, for L from highest down to 1 (UAX #9 L2).
         int len = end - start;
-        Span<int> order = len <= 256 ? stackalloc int[len] : new int[len];
-        for (int i = 0; i < len; i++) order[i] = start + i;
-        byte maxLevel = 0, minOdd = 255; int minCluster = int.MaxValue;
-        for (int i = start; i < end; i++)
+        int minCluster = int.MaxValue;
+        for (int i = start; i < end; i++) { int c = _glyphs[i].Cluster; if (c < minCluster) minCluster = c; }
+
+        // Trim in LOGICAL order, before the reorder: the cut drops the line's logical END and keeps its logical start, as
+        // DirectWrite/WinUI do. Fitting the visual prefix instead kept an RTL run's logical TAIL (L2 puts its last glyph
+        // first), so a trimmed Hebrew/Arabic title showed its closing words and lost its opening ones.
+        int useLen = len; bool ellipsize = false; int ellSpan = -1;
+        if (doTrim)
+        {
+            float total = 0f; for (int i = start; i < end; i++) total += _glyphs[i].Advance;
+            if (total > maxWidth)
+            {
+                if (_spanEllCount == 0)
+                {
+                    // Single-style paragraph: the base "…" (unchanged path).
+                    float budget = MathF.Max(0f, maxWidth - _ellAdv); float acc = 0f; useLen = 0;
+                    for (int k = 0; k < len; k++) { float a = _glyphs[start + k].Advance; if (acc + a > budget && useLen > 0) break; acc += a; useLen++; }
+                }
+                else
+                {
+                    // Spanned paragraph: the "…" takes the style of the span the cut lands in (the last kept glyph's),
+                    // and each candidate cut reserves THAT ellipsis's advance — the pure fit is LineBreaker's.
+                    Span<float> advs = len <= 256 ? stackalloc float[len] : new float[len];
+                    Span<short> spanOf = len <= 256 ? stackalloc short[len] : new short[len];
+                    for (int k = 0; k < len; k++) { ref readonly var g = ref _glyphs[start + k]; advs[k] = g.Advance; spanOf[k] = g.Span; }
+                    useLen = FluentGpu.Text.LineBreaker.FitEllipsisBySpan(advs, spanOf, maxWidth, _ellAdv,
+                        _spanEllAdv.AsSpan(0, _spanEllCount), out ellSpan);
+                }
+                ellipsize = true;
+            }
+        }
+
+        // Reorder the KEPT glyphs into visual order: reverse maximal sequences of level >= L, for L from highest down to 1 (UAX #9 L2).
+        Span<int> order = useLen <= 256 ? stackalloc int[useLen] : new int[useLen];
+        for (int i = 0; i < useLen; i++) order[i] = start + i;
+        byte maxLevel = 0, minOdd = 255;
+        for (int i = start; i < start + useLen; i++)
         {
             byte l = _glyphs[i].Level; if (l > maxLevel) maxLevel = l; if ((l & 1) != 0 && l < minOdd) minOdd = l;
-            int c = _glyphs[i].Cluster; if (c < minCluster) minCluster = c;
         }
         for (int lvl = maxLevel; lvl >= (minOdd == 255 ? maxLevel + 1 : minOdd); lvl--)
         {
             int i = 0;
-            while (i < len)
+            while (i < useLen)
             {
                 if (_glyphs[order[i]].Level >= lvl)
                 {
-                    int j = i; while (j < len && _glyphs[order[j]].Level >= lvl) j++;
+                    int j = i; while (j < useLen && _glyphs[order[j]].Level >= lvl) j++;
                     order.Slice(i, j - i).Reverse();
                     i = j;
                 }
@@ -704,31 +735,6 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
 
         float baselineY = Baseline + lineIndex * lineHeight;
-        int useLen = len; bool ellipsize = false; int ellSpan = -1;
-        if (doTrim)
-        {
-            float total = 0f; for (int k = 0; k < len; k++) total += _glyphs[order[k]].Advance;
-            if (total > maxWidth)
-            {
-                if (_spanEllCount == 0)
-                {
-                    // Single-style paragraph: the base "…" (unchanged path).
-                    float budget = MathF.Max(0f, maxWidth - _ellAdv); float acc = 0f; useLen = 0;
-                    for (int k = 0; k < len; k++) { float a = _glyphs[order[k]].Advance; if (acc + a > budget && useLen > 0) break; acc += a; useLen++; }
-                }
-                else
-                {
-                    // Spanned paragraph: the "…" takes the style of the span the cut lands in (the last visible glyph's),
-                    // and each candidate cut reserves THAT ellipsis's advance — the pure fit is LineBreaker's.
-                    Span<float> advs = len <= 256 ? stackalloc float[len] : new float[len];
-                    Span<short> spanOf = len <= 256 ? stackalloc short[len] : new short[len];
-                    for (int k = 0; k < len; k++) { ref readonly var g = ref _glyphs[order[k]]; advs[k] = g.Advance; spanOf[k] = g.Span; }
-                    useLen = FluentGpu.Text.LineBreaker.FitEllipsisBySpan(advs, spanOf, maxWidth, _ellAdv,
-                        _spanEllAdv.AsSpan(0, _spanEllCount), out ellSpan);
-                }
-                ellipsize = true;
-            }
-        }
         float x = 0f;
         EnsureLaid(_laidCount + useLen + 1);
         EnsureClusters(_clusterCount + useLen);
