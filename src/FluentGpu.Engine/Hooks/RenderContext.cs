@@ -374,7 +374,7 @@ public sealed class Ref<T>
 
 /// <summary>Persistent backing for one <see cref="RenderContext.UseGesture"/> declaration (input-a11y.md §13). Created
 /// once (held in a <see cref="Ref{T}"/> cell), so its <see cref="Register"/> effect delegate + the installed forwarder
-/// are stable instances — the layout-effect registers only at mount / kind-change and the steady render allocates
+/// are stable instances — the layout-effect registers only at mount / kind-change / when a root-type change remounts the host node and the steady render allocates
 /// nothing. The forwarder dispatches to the LATEST <see cref="Handler"/> (overwritten each render), so the call site
 /// may pass a fresh lambda without re-registering.</summary>
 internal sealed class GestureHookState
@@ -400,10 +400,15 @@ internal sealed class GestureHookState
     {
         var node = _ctx.HostNode;
         var scene = _ctx.Scene;
-        if (scene is null || node.IsNull || !scene.IsLive(node)) return;
-        // Re-target: a kind-change effect re-run (or a node swap) clears the prior install before the new one.
-        if (!_registeredNode.IsNull && _registeredNode != node && scene.IsLive(_registeredNode))
-            scene.SetGestureHandler(_registeredNode, _kind, null);
+        if (scene is null) return;
+        // Re-target: a kind-change re-run or a root-node swap (RenderContext.SetHostNode re-runs this) clears the prior
+        // install before the new one, also when the new root is empty.
+        if (!_registeredNode.IsNull && _registeredNode != node)
+        {
+            if (scene.IsLive(_registeredNode)) scene.SetGestureHandler(_registeredNode, _kind, null);
+            _registeredNode = default;
+        }
+        if (node.IsNull || !scene.IsLive(node)) return;
         scene.SetGestureHandler(node, _kind, _forward);
         _registeredNode = node;
     }
@@ -463,6 +468,20 @@ public sealed partial class RenderContext
     public Action<NodeHandle, bool>? CompleteVirtualDisclosure;
     public Action<NodeHandle>? ClearVirtualDisclosure;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
+    private List<Action>? _hostBound;           // registrations installed ON HostNode (UseMeasuredBounds/Width, UseGesture)
+
+    /// <summary>Reconciler seam: publish this component's rendered root after a render. A root-TYPE change remounts
+    /// that node, so every registration installed on the old one is re-run at phase 6.5 to move onto the new one
+    /// (each is idempotent on an unchanged node). Unchanged root: a struct compare, nothing enqueued.</summary>
+    internal void SetHostNode(NodeHandle node)
+    {
+        if (HostNode == node) return;
+        HostNode = node;
+        if (_hostBound is { } hb)
+            for (int i = 0; i < hb.Count; i++) EnqueueEffect(PendingLayoutEffects, hb[i]);
+    }
+
+    internal void AddHostBound(Action register) => (_hostBound ??= new()).Add(register);
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
     public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
@@ -1027,7 +1046,7 @@ public sealed partial class RenderContext
     /// Hooks⇄Input seam) and routes the arena winner's event to <paramref name="handler"/>. No render output, no
     /// re-render. Zero per-render allocation after mount: the latest handler is stashed in a persistent cell (a field
     /// write each render) and a STABLE forwarder is installed ONCE via a phase-6.5 layout-effect keyed by the kind (so
-    /// it only (re)registers at mount / kind-change, reading the valid mounted node). The forwarder dispatches to the
+    /// it only (re)registers at mount / kind-change / root-node swap, reading the valid mounted node). The forwarder dispatches to the
     /// current cell handler, so a fresh lambda each render needs no re-registration. On unmount the freed node drops the
     /// column (SceneStore); a kind-change re-target clears the prior install.</summary>
     public void UseGesture(GestureType kind, Action<GestureEventArgs> handler, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
@@ -1036,7 +1055,8 @@ public sealed partial class RenderContext
         // (so nothing here allocates on a steady re-render — only the handler field is overwritten). Keyed to the
         // CALLER's call site: a skipped UseGesture(Hold) must not hand its state (kind frozen) to the next call.
         var cell = UseRef<GestureHookState?>(null, __hf, __hl);
-        var st = cell.Value ??= new GestureHookState(this, kind);
+        var st = cell.Value;
+        if (st is null) { cell.Value = st = new GestureHookState(this, kind); AddHostBound(st.Register); }
         st.Handler = handler;   // always route to the latest closure (no re-registration needed)
         // Mount-once registration (re-runs only if the kind changes): install the stable forwarder on the node. The
         // cached effect/cleanup delegates make this a no-alloc layout-effect on a steady render (the effect closure is

@@ -739,7 +739,7 @@ public sealed partial class TreeReconciler
             // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
         _oldRoot = newRoot;
-        if (_root is not null) _root.Context.HostNode = _scene.Root;
+        _root?.Context.SetHostNode(_scene.Root);
     }
 
     /// <summary>Imperative full reconcile of an explicit element tree (tests / non-host callers).</summary>
@@ -1312,7 +1312,7 @@ public sealed partial class TreeReconciler
         if (census) NoteRenderCensus(comp, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0, cause, causeTag);
         MirrorParticipation(node, _scene.FirstChild(node));
         RemirrorAncestors(node);   // an enclosing boundary that did not re-render still mirrors this anchor
-        comp.Context.HostNode = _scene.FirstChild(node);
+        comp.Context.SetHostNode(_scene.FirstChild(node));
         entry.Rendered = newRendered;
         // Scoped relayout: mark the rendered root only when reconcile mutated structure or a layout-affecting
         // column. Starting the dirty walk HERE (not only at the deep mutation site) clears ContentSized scroll

@@ -15,7 +15,7 @@ namespace FluentGpu.Hooks;
 //  NOT the parent slot the anchor occupies. (The anchor is layout-transparent and mirrors the child's participation, so
 //  there is no separate "my host slot" rect to report — the rendered root IS the measurable box.)
 //
-//  Timing: registration is a MOUNT-ONCE layout effect (phase 6.5, after layout, when HostNode's Bounds are resolved). It
+//  Timing: registration is a layout effect (phase 6.5, after layout, when HostNode's Bounds are resolved) that runs at mount and again whenever a root-type change remounts HostNode (RenderContext.SetHostNode). It
 //  seeds the signal from the live bounds THEN, so a value written during the LAYOUT phase only MarksStale — the consumer
 //  re-renders NEXT frame (never re-entrant). ⇒ a same-frame layout-effect reading the signal sees the PREVIOUS value.
 //
@@ -34,7 +34,7 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
     public FloatSignal? WidthSig;
     public float Quantum;
 
-    public readonly Action Register;              // mount-once layout-effect body: seed + install (HostNode valid at 6.5)
+    public readonly Action Register;              // layout-effect body (mount + root swap): seed + install (HostNode valid at 6.5)
     private readonly Action<RectF> _onBounds;     // stable handler in the SceneStore hook slot
     private NodeHandle _node;
     private bool _installed;
@@ -56,7 +56,14 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
     {
         var node = _ctx.HostNode;
         var scene = _ctx.Scene;
-        if (scene is null || node.IsNull || !scene.IsLive(node)) return;
+        if (scene is null) return;
+        if (_installed)
+        {
+            if (_node == node) return;                           // mount + the first SetHostNode both enqueue this
+            scene.RemoveBoundsChangedHook(_node, _onBounds);     // root swapped: leave the old node (no-op once it is freed)
+            _installed = false;
+        }
+        if (node.IsNull || !scene.IsLive(node)) return;
         _node = node;
         // Frame clock — read ONLY by the DEBUG tripwire below, which itself early-outs on !Diag.Enabled. Both operands
         // are deliberate: the const CompiledIn is what folds this away in release, the non-const Enabled is what keeps
@@ -110,7 +117,7 @@ public sealed partial class RenderContext
     internal HostTimerQueue? ResolveFrameClockForMeasure() => ResolveTimers();
 
     /// <summary>The arranged LOCAL bounds of this component's rendered root (<see cref="HostNode"/>) as a read signal —
-    /// updated whenever layout re-arranges it. Wiring: a mount-once layout-effect registers on the node's bounds-changed
+    /// updated whenever layout re-arranges it. Wiring: a layout-effect (mount, and again on a root-node swap) registers on the node's bounds-changed
     /// column (composed with any element-declared <c>OnBoundsChanged</c>, not clobbering it). The value is written during
     /// the layout phase, so a same-frame layout-effect sees the PREVIOUS value and the consumer re-renders NEXT frame (no
     /// re-entrancy). Equality-gated: no re-render while the bounds are stable. Prefer <see cref="UseMeasuredWidth"/> when
@@ -123,7 +130,8 @@ public sealed partial class RenderContext
         {
             cell = new MeasuredBoundsCell(this) { BoundsSig = new Signal<RectF>(default) };
             RegisterCell(__k, cell, cleanupCapable: true);
-            EnqueueEffect(PendingLayoutEffects, cell.Register);   // runs once at phase 6.5 (HostNode valid) then is cleared
+            AddHostBound(cell.Register);                          // re-run when a root-type change remounts HostNode
+            EnqueueEffect(PendingLayoutEffects, cell.Register);   // runs at phase 6.5 (HostNode valid) then is cleared
         }
         else cell = (MeasuredBoundsCell)_cells[idx];
         return cell.BoundsSig!;
@@ -142,6 +150,7 @@ public sealed partial class RenderContext
         {
             cell = new MeasuredBoundsCell(this) { WidthSig = new FloatSignal(0f), Quantum = MathF.Max(quantum, 0f) };
             RegisterCell(__k, cell, cleanupCapable: true);
+            AddHostBound(cell.Register);                          // re-run when a root-type change remounts HostNode
             EnqueueEffect(PendingLayoutEffects, cell.Register);
         }
         else cell = (MeasuredBoundsCell)_cells[idx];
