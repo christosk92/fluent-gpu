@@ -141,7 +141,7 @@ public static class BoundItemScopeExtensions
         var item = scope.Item;
         var runtime = scope.Row.Runtime ?? throw new InvalidOperationException(
             "BoundItemScope<T>.Signal requires a RowScope built by ItemsView.CreateBound (RowScope.Runtime is unset).");
-        return new Memo<TVal>(runtime, () => sel(item.Value), comparer);
+        return new Memo<TVal>(runtime, () => sel(item.Value), comparer, releaseWhenUnobserved: true);
     }
 
     /// <summary>Wraps a per-item handler for a no-argument callback (<c>OnClick</c>, …): resolves <c>Item.Peek()</c> —
