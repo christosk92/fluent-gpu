@@ -106,6 +106,7 @@ public sealed partial class InputDispatcher
     private bool _altPending;          // Alt is down with no intervening key (candidate for access-key-mode toggle)
     private int _pendingHighSurrogate; // a Char high surrogate waiting for its low half (0 = none) — see JoinSurrogate
     private readonly List<NodeHandle> _focusScopes = new();
+    private readonly List<bool> _modalScopes = new();   // parallel to _focusScopes: true = pushed modal (scopes chord lookup too)
     // Double/triple-click tracking (platform timestamps; slop + window per Win32 defaults, capped at 3).
     private uint _lastDownMs;
     private Point2 _lastDownPos;
@@ -783,14 +784,23 @@ public sealed partial class InputDispatcher
 
     // ── focus scopes (modal focus trap: ContentDialog / flyout) ───────────────────────────────────
     /// <summary>Push a focus scope: Tab/Shift+Tab and arrow focus stay within <paramref name="root"/>'s subtree until popped.</summary>
-    public void PushFocusScope(NodeHandle root) => _focusScopes.Add(root);
-    public void PopFocusScope() { if (_focusScopes.Count > 0) _focusScopes.RemoveAt(_focusScopes.Count - 1); }
+    public void PushFocusScope(NodeHandle root) { _focusScopes.Add(root); _modalScopes.Add(false); }
+    /// <summary>Push a MODAL focus scope (ContentDialog, DismissBehavior.Modal): the Tab trap of <see cref="PushFocusScope"/>, and
+    /// keyboard accelerators / access keys resolve only inside it and the scopes stacked above it. The scrim already blocks the
+    /// pointer, so Ctrl+T or Alt+letter must not reach the page behind the dialog either.</summary>
+    public void PushModalFocusScope(NodeHandle root) { _focusScopes.Add(root); _modalScopes.Add(true); }
+    public void PopFocusScope()
+    {
+        if (_focusScopes.Count == 0) return;
+        _focusScopes.RemoveAt(_focusScopes.Count - 1);
+        _modalScopes.RemoveAt(_modalScopes.Count - 1);
+    }
     /// <summary>Remove the focus scope for <paramref name="root"/> wherever it sits in the stack (overlays can close
     /// out of stack order - popping blindly could drop another live trap).</summary>
     public void RemoveFocusScope(NodeHandle root)
     {
         for (int i = _focusScopes.Count - 1; i >= 0; i--)
-            if (_focusScopes[i] == root) { _focusScopes.RemoveAt(i); return; }
+            if (_focusScopes[i] == root) { _focusScopes.RemoveAt(i); _modalScopes.RemoveAt(i); return; }
     }
     private NodeHandle ScopeRoot
     {
@@ -799,6 +809,19 @@ public sealed partial class InputDispatcher
             for (int i = _focusScopes.Count - 1; i >= 0; i--)
                 if (_scene.IsLive(_focusScopes[i])) return _focusScopes[i];
             return _scene.Root;
+        }
+    }
+
+    /// <summary>Where accelerators and access keys resolve: the innermost live MODAL scope plus every scope stacked above it (a
+    /// ComboBox or context menu opened from the dialog). Empty = no modal open, so chords resolve over the whole tree.</summary>
+    private ReadOnlySpan<NodeHandle> ChordScopes
+    {
+        get
+        {
+            for (int i = _focusScopes.Count - 1; i >= 0; i--)
+                if (_modalScopes[i] && _scene.IsLive(_focusScopes[i]))
+                    return System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_focusScopes)[i..];
+            return default;
         }
     }
 
@@ -3699,7 +3722,7 @@ public sealed partial class InputDispatcher
         // Keyboard accelerators (WinUI ProcessKeyboardAccelerators order: after focused routing leaves it unhandled).
         if ((e.Mods & (KeyModifiers.Ctrl | KeyModifiers.Alt)) != 0 || (key >= Keys.F1 && key <= Keys.F12))
         {
-            var owner = _scene.FindAccelerator(key, e.Mods);
+            var owner = _scene.FindAccelerator(key, e.Mods, ChordScopes);
             if (!owner.IsNull) InvokeActivation(owner, ContextRequestTrigger.Keyboard);   // one commit path (an accelerator owner is never a ContextBit invoker in practice)
         }
     }
@@ -3746,7 +3769,7 @@ public sealed partial class InputDispatcher
 
     private bool InvokeAccessKey(char key)
     {
-        var owner = _scene.FindAccessKey(key);
+        var owner = _scene.FindAccessKey(key, ChordScopes);
         if (owner.IsNull) return false;
         _accessKeyMode = false;
         InvokeActivation(owner, ContextRequestTrigger.Keyboard);   // one commit path (an access-key owner is never a ContextBit invoker in practice)

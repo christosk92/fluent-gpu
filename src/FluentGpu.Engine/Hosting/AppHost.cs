@@ -4894,6 +4894,7 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);
         _inputHooks.MoveFocusVisual = h => _dispatcher.SetFocus(h, visual: true);   // roving arrow-key focus shows the ring (RadioButtons)
         _inputHooks.PushFocusScope = _dispatcher.PushFocusScope;     // REAL Tab trap for FocusTrap overlays (ContentDialog)
+        _inputHooks.PushModalFocusScope = _dispatcher.PushModalFocusScope;   // Modal overlays: Tab trap + chords scoped to the dialog
         _inputHooks.PopFocusScope = _dispatcher.RemoveFocusScope;    // order-independent (overlays close out of stack order)
         _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)

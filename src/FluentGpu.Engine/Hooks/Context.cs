@@ -283,6 +283,10 @@ public sealed class InputHooks
     /// (WinUI TabFocusNavigation=Cycle - the ContentDialog/flyout focus trap). Host-wired to
     /// <c>InputDispatcher.PushFocusScope</c>.</summary>
     public Action<NodeHandle>? PushFocusScope;
+    /// <summary>Push a MODAL focus scope (DismissBehavior.Modal): the Tab trap of <see cref="PushFocusScope"/>, and keyboard
+    /// accelerators / access keys resolve only inside it (and overlays stacked above it) until popped by <see cref="PopFocusScope"/>.
+    /// Host-wired to <c>InputDispatcher.PushModalFocusScope</c>.</summary>
+    public Action<NodeHandle>? PushModalFocusScope;
     /// <summary>Remove the focus scope previously pushed for this root (order-independent - overlays can close out of
     /// stack order). Host-wired to <c>InputDispatcher.RemoveFocusScope</c>.</summary>
     public Action<NodeHandle>? PopFocusScope;

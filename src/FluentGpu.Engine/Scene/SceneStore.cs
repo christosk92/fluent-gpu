@@ -1220,8 +1220,9 @@ public sealed partial class SceneStore : ISceneBackend
     }
 
     /// <summary>First live, enabled, visible, attached node whose keyboard-accelerator chord matches — cold keydown path, O(high).
-    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible.</summary>
-    public NodeHandle FindAccelerator(int key, KeyModifiers mods)
+    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible. A non-empty
+    /// <paramref name="within"/> (an open modal and the overlays stacked above it) also requires the owner under one of those roots.</summary>
+    public NodeHandle FindAccelerator(int key, KeyModifiers mods, ReadOnlySpan<NodeHandle> within = default)
     {
         for (int i = 1; i < _high; i++)
         {
@@ -1231,14 +1232,16 @@ public sealed partial class SceneStore : ISceneBackend
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
             if (!IsAttachedToRoot(i)) continue;
             if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
+            if (!InAnyScope(i, within)) continue;   // a modal dialog is open: the page behind it gets no chords
             return h;
         }
         return NodeHandle.Null;
     }
 
     /// <summary>First live, enabled, visible, attached node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).
-    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible.</summary>
-    public NodeHandle FindAccessKey(char key)
+    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible. A non-empty
+    /// <paramref name="within"/> (an open modal and the overlays stacked above it) also requires the owner under one of those roots.</summary>
+    public NodeHandle FindAccessKey(char key, ReadOnlySpan<NodeHandle> within = default)
     {
         for (int i = 1; i < _high; i++)
         {
@@ -1248,6 +1251,7 @@ public sealed partial class SceneStore : ISceneBackend
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
             if (!IsAttachedToRoot(i)) continue;
             if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
+            if (!InAnyScope(i, within)) continue;   // a modal dialog is open: the page behind it gets no chords
             return h;
         }
         return NodeHandle.Null;
@@ -1256,12 +1260,23 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>Is this chord owner linked under <see cref="Root"/>? A KeepAlive-parked page, a parked virtual-list slot and
     /// an exit orphan stay live with their handlers but are detached, so without this a hidden page's Ctrl+R (lower slot
     /// index, first match) shadows the shown page's same chord.</summary>
-    private bool IsAttachedToRoot(int idx)
+    private bool IsAttachedToRoot(int idx) => IsAttachedUnder(idx, (int)Root.Raw.Index);
+
+    private bool IsAttachedUnder(int idx, int ancestor)
     {
-        int root = (int)Root.Raw.Index;
-        if (root == 0) return false;
+        if (ancestor == 0) return false;
         for (int n = idx; n != 0; n = _parent[n])
-            if (n == root) return true;
+            if (n == ancestor) return true;
+        return false;
+    }
+
+    /// <summary>Empty <paramref name="within"/> = no restriction; else the node sits under one of its LIVE roots (a dead
+    /// root's slot may already belong to another node).</summary>
+    private bool InAnyScope(int idx, ReadOnlySpan<NodeHandle> within)
+    {
+        if (within.IsEmpty) return true;
+        foreach (var r in within)
+            if (IsLive(r) && IsAttachedUnder(idx, (int)r.Raw.Index)) return true;
         return false;
     }
 

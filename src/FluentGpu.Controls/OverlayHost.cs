@@ -1281,7 +1281,10 @@ public sealed class OverlayHost : Component
                 if (e.FocusTrap && !e.ScopePushed && e.Phase != OverlayPhase.Closing)
                 {
                     e.ScopePushed = true;
-                    hooks.PushFocusScope?.Invoke(e.WrapperNode);
+                    // A Modal trap also scopes accelerators and access keys: the scrim blocks the pointer to the page behind,
+                    // and Ctrl+T / Alt+Left / Alt+letter must not reach it either (a light-dismiss menu leaves them window-global).
+                    if (e.DismissBehavior == DismissBehavior.Modal) hooks.PushModalFocusScope?.Invoke(e.WrapperNode);
+                    else hooks.PushFocusScope?.Invoke(e.WrapperNode);
                     if (!e.PreserveFocusOnOpen)
                     {
                         var firstStop = hooks.FirstFocusableIn?.Invoke(e.WrapperNode) ?? NodeHandle.Null;
