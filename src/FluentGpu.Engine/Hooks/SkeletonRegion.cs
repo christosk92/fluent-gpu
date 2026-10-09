@@ -245,13 +245,22 @@ internal static class SkelGroupCoordinator
     /// <summary>A region in the group has mounted (Pending) — count it as a member whose reveal the round waits for.</summary>
     public static void Register(object group, int regionId) => Get(group).Members.Add(regionId);
 
-    /// <summary>A region left the group (unmounted) — drop it so the round can complete without it.</summary>
+    /// <summary>A region left the group (unmounted, or re-pointed at another group) — drop it so the round can complete
+    /// without it. When it was the last member the round was waiting on, the round completes HERE (the done members
+    /// reveal now) instead of parking their reveals until some member's next Done replays them on settled content.
+    /// Safe inside UnmountSubtree: a reveal seeded on a member the same pass tears down is cancelled (CancelAll) before
+    /// it ever ticks.</summary>
     public static void Unregister(object group, int regionId)
     {
         if (_groups is null || !_groups.TryGetValue(group, out var g)) return;
         g.Members.Remove(regionId);
         g.Done.Remove(regionId);
-        if (g.Members.Count == 0) _groups.Remove(group);
+        if (g.Members.Count == 0) { _groups.Remove(group); return; }
+        if (g.Done.Count > 0 && g.Done.Count >= g.Members.Count)
+        {
+            foreach (var kv in g.Done) kv.Value?.Invoke();
+            g.Done.Clear();
+        }
     }
 
     /// <summary>Report a member done (Ready ⇒ <paramref name="reveal"/> thunk; Failed ⇒ null). When EVERY registered
