@@ -1198,6 +1198,11 @@ internal sealed class SceneRecordingContext
             ref readonly NodePaint cp = ref scene.Paint(c);
             if (cp.VisualKind != VisualKind.Box) continue;
             if (cp.Fill.A < 1f || cp.Opacity < 1f) continue;     // must paint FULLY opaque to overwrite
+            // ...and stay opaque under the pointer: a hover/press opacity (eased by its own or an ancestor's progress, or
+            // stepped by the bare Hovered/Pressed flags) or a translucent hover/press fill lets the parent show through.
+            // Static props, so the cull never depends on a hover flip that does not re-record this parent.
+            if (cp.HoverOpacity < 1f || cp.PressedOpacity < 1f) continue;   // NaN (unset) compares false
+            if ((cp.HoverFill.A is > 0f and < 1f) || (cp.PressedFill.A is > 0f and < 1f)) continue;
             // Fill is the BrushTransition TARGET: mid-fade the child draws LerpLinear(FillFrom, Fill, T), which is not the
             // opaque cover its target claims — culling the parent then would show a hole for the whole fade.
             if ((cf & NodeFlags.SparsePaint) != 0 && scene.TryGetBrushAnim(c, out var cba)
@@ -1210,10 +1215,10 @@ internal sealed class SceneRecordingContext
             if (slices is not null && slices.IsStickyClipNode((int)c.Raw.Index)) continue;
             // A fill that does not REPLACE the pixels under it needs the parent's fill beneath it: additive paint adds onto
             // it, a Screen boundary screens onto it, an acrylic surface frosts it (and drops its Fallback fill where the
-            // layer runs).
+            // layer runs), an edge fade feathers it to transparent along its edges.
             if ((cf & NodeFlags.SparsePaint) != 0
                 && (scene.PaintBlendOf(c) != PaintBlend.SrcOver || scene.LayerBlendOf(c) != LayerBlend.SrcOver
-                    || scene.TryGetAcrylic(c, out _)))
+                    || scene.TryGetAcrylic(c, out _) || (scene.TryGetEdgeFade(c, out EdgeFadeSpec cef) && !cef.IsNone)))
                 continue;
             if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
@@ -2300,7 +2305,9 @@ internal sealed class SceneRecordingContext
         // the node has NO border — the SDF border ring straddles the edge (extends ~stroke/2 OUTSIDE deviceBounds), which a
         // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe. Never inside
         // an additive bracket (this node's own Blend or an enclosing one in this arena): its children ADD onto its fill.
-        if (drawSelf && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f && stats.AdditiveDepth == 0
+        // Never under a partial NON-group opacity (its own, e.g. an Enter fade, or inherited): the child then draws at that
+        // same alpha, so it no longer overwrites the fill beneath it (a group has already reset `opacity` to 1 here).
+        if (drawSelf && opacity >= 0.999f && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f && stats.AdditiveDepth == 0
             && IsOccludedByOpaqueChild(scene, node, in world, p.ChildShiftX, p.ChildShiftY, in deviceBounds, in recordClip, inMotion,
                 stats.Slicing ? stats.Slices : null))
             drawSelf = false;
