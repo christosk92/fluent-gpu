@@ -23,6 +23,7 @@ public sealed partial class SliceRecorder
     private int[] _cSegScopeLen = new int[32];
     private int[] _cScope = new int[32];
     private ulong[] _cScopeSig = new ulong[33];   // [d] = the fold of the hashes of the d innermost-open scopes' chain
+    private float[] _cScopeReach = new float[32];   // [d] = how far scope d's composite spreads what it encloses (DIP); < 0 = a clip
     private int _cScopeDepth;
     private bool _cBlendAdditive;   // the paint blend the arena's last SetBlend left set (ContentScanBlend)
     private const ulong AdditiveBlendMark = 0xB1E2_0ADD_0000_0001UL;
@@ -56,9 +57,10 @@ public sealed partial class SliceRecorder
     }
 
     /// <summary>ScanSlot: one op at byte <paramref name="pos"/> with its effective footprint (slice-space DIP) and hash;
-    /// <paramref name="scope"/> = it opens a clip / stencil clip / layer the following ops are drawn inside.</summary>
+    /// <paramref name="scope"/> = it opens a clip / stencil clip / layer the following ops are drawn inside;
+    /// <paramref name="reach"/> = how far a layer's composite spreads what it encloses (a blur's tap radius).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false)
+    private void ContentScanOp(int s, int pos, in RectF bounds, ulong hash, bool scope, bool clip = false, bool spread = false, float reach = 0f)
     {
         // An op drawn under the ADDITIVE paint blend paints differently with the same bytes: the blend is part of its
         // content hash — of every want that folds it and of the sub-tile damage diff (a moved SetBlend re-rasters what
@@ -69,10 +71,36 @@ public sealed partial class SliceRecorder
         if (n == ops.Length) Array.Resize(ref ops, n * 2);
         ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, ScopeSig = _cScopeSig[_cScopeDepth] };
         _cOpCount[s] = n + 1;
+        if (!clip) GrowOpenLayers(ops, in bounds);
         if (!scope) return;
-        if (_cScopeDepth == _cScope.Length) { Array.Resize(ref _cScope, _cScope.Length * 2); Array.Resize(ref _cScopeSig, _cScope.Length + 1); }
+        if (_cScopeDepth == _cScope.Length)
+        {
+            Array.Resize(ref _cScope, _cScope.Length * 2);
+            Array.Resize(ref _cScopeSig, _cScope.Length + 1);
+            Array.Resize(ref _cScopeReach, _cScope.Length);
+        }
         _cScopeSig[_cScopeDepth + 1] = TileContentHash.Fold(_cScopeSig[_cScopeDepth], hash);
+        _cScopeReach[_cScopeDepth] = clip ? -1f : reach;
         _cScope[_cScopeDepth++] = n;
+    }
+
+    /// <summary>ContentScanOp: an inline LAYER composites everything it encloses back at its alpha (and blur) wherever that
+    /// content paints — a shadow halo, an overflowing child past the layer's own box — so the tiles its GroupAlpha or sigma
+    /// reaches are the tiles its content reaches. Grow every open layer's footprint by <paramref name="bounds"/> (spread
+    /// by each enclosing blur's reach, innermost first), so such a tile folds the layer's bytes into its want. A clip
+    /// paints nothing and grows by nothing.</summary>
+    private void GrowOpenLayers(TileOp[] ops, in RectF bounds)
+    {
+        if (bounds.IsEmpty) return;
+        RectF r = bounds;
+        for (int d = _cScopeDepth - 1; d >= 0; d--)
+        {
+            float reach = _cScopeReach[d];
+            if (reach < 0f) continue;
+            if (reach > 0f && !r.IsInfinite) r = new RectF(r.X - reach, r.Y - reach, r.W + 2f * reach, r.H + 2f * reach);
+            ref RectF lb = ref ops[_cScope[d]].Bounds;
+            lb = Union(lb, r);
+        }
     }
 
     /// <summary>ScanSlot: a SetBlend — the paint blend of every op after it (until the next one).</summary>

@@ -1212,6 +1212,7 @@ public sealed partial class SliceRecorder
             ulong oh = FluentGpu.Render.Evidence.TileContentHash.OpHash(bytes.Slice(pos, sizeof(int) + body));
             whole = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, oh);
             bool layerPush = false, layerSpread = false;
+            float layerReach = 0f;
             switch (op)
             {
                 case DrawOp.PushClip:
@@ -1233,6 +1234,7 @@ public sealed partial class SliceRecorder
                     layerPush = true;
                     // a blurred group composites each pixel from its content AROUND it: no sub-tile repaint bounds it
                     layerSpread = (kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && lc.BlurSigma > 0f;
+                    if (layerSpread) layerReach = SelfBlurRegion.TapRadius(lc.BlurSigma);
                     goto default;
                 }
                 case DrawOp.PushStencilClip:
@@ -1296,7 +1298,7 @@ public sealed partial class SliceRecorder
                         if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && !_cBlendAdditive && OpaqueFill(op, p, in top, out RectF o)
                             && o.W * o.H > segOpaque.W * segOpaque.H)
                             segOpaque = o;
-                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread);
+                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread, reach: layerReach);
                         // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
                         // own DrawVideo is added below, after this, and never counts against itself).
                         if (!b.IsEmpty)
@@ -1335,7 +1337,7 @@ public sealed partial class SliceRecorder
                             }
                         }
                     }
-                    else if (layerPush) ContentScanOp(s, pos, in top, oh, scope: true, spread: layerSpread);   // an extent-unknown layer: all it encloses
+                    else if (layerPush) ContentScanOp(s, pos, in top, oh, scope: true, spread: layerSpread, reach: layerReach);   // an extent-unknown layer: all it encloses
                     break;
             }
             cmds++;
