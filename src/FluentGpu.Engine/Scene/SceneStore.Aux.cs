@@ -143,6 +143,18 @@ public sealed partial class SceneStore
         return true;
     }
 
+    /// <summary>True when <paramref name="h"/> or any ancestor is presence-collapsed (<see cref="IsCollapsed"/>).
+    /// <see cref="SetCollapsed"/> clears NodeFlags.Visible on the collapsed node only (the recorder and the hit-test prune
+    /// on the way down), so input that reaches a node directly rather than by a root-down walk (the focused node, an
+    /// accelerator owner) asks this instead. Reads the Collapsed bit, not NodeFlags.Visible, so a ConnectedAnimation
+    /// fly-cull does not count. Allocation-free; O(depth).</summary>
+    public bool InCollapsedSubtree(NodeHandle h)
+    {
+        for (var n = h; !n.IsNull; n = Parent(n))
+            if (((AuxFlags)_aux[n.Raw.Index] & AuxFlags.Collapsed) != 0) return true;
+        return false;
+    }
+
     // ── P4 (Operation ultra-fast GPU engine, incremental layout by default) ────────────────────────────────────
 
     /// <summary>True when some node STRICTLY BELOW <paramref name="h"/> (a descendant, not <paramref name="h"/>

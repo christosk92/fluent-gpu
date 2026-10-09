@@ -814,6 +814,11 @@ public sealed partial class InputDispatcher
         if (!_keyArmed.IsNull && !_scene.IsLive(_keyArmed)) { _keyArmed = NodeHandle.Null; _keyArmedKey = 0; }
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_selText.IsNull && !_scene.IsLive(_selText)) { _selText = NodeHandle.Null; _selDragging = false; }
+        // A presence collapse (Element.Visible -> false) reaches no input state on its own (DeactivateSubtree covers only
+        // the KeepAlive park), so a focus or a held Space/Enter inside a collapsed subtree would keep taking keys, and
+        // fire on key-up, for a node nothing paints. Drop both, as the park edge does.
+        if (!_keyArmed.IsNull && _scene.InCollapsedSubtree(_keyArmed)) CancelKeyArm(fire: false);
+        if (!_focused.IsNull && _scene.InCollapsedSubtree(_focused)) SetFocus(NodeHandle.Null);
         if (!_pinchSessionViewport.IsNull && !_scene.IsLive(_pinchSessionViewport)) EndPinchSession();   // a reconciled-away zoom viewport ends the pinch
         PruneDeadSlots();      // every contact's per-pointer down/drag/scroll-drag/pan target dropped if its node died
         Drag.PruneDead();      // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
@@ -3954,6 +3959,8 @@ public sealed partial class InputDispatcher
     private void Collect(NodeHandle node, List<NodeHandle> into, NodeHandle disabledAnchor = default)
     {
         if (node.IsNull) return;
+        // A presence collapse clears Visible on the collapsed node only: prune its whole subtree, as the hit-test does.
+        if (_scene.IsCollapsed(node)) return;
         ref InteractionInfo ii = ref _scene.Interaction(node);
         var gate = node == disabledAnchor ? NodeFlags.Visible : NodeFlags.Visible | NodeFlags.Disabled;
         if (ii.Focusable && (_scene.Flags(node) & gate) == NodeFlags.Visible) into.Add(node);

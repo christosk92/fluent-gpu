@@ -1219,7 +1219,8 @@ public sealed partial class SceneStore : ISceneBackend
         slot.Count = rects.Length;
     }
 
-    /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).</summary>
+    /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).
+    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible.</summary>
     public NodeHandle FindAccelerator(int key, KeyModifiers mods)
     {
         for (int i = 1; i < _high; i++)
@@ -1228,12 +1229,14 @@ public sealed partial class SceneStore : ISceneBackend
             var h = new NodeHandle(new Handle((uint)i, _gen[i]));
             if (!IsLive(h)) continue;
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
             return h;
         }
         return NodeHandle.Null;
     }
 
-    /// <summary>First live, enabled, visible node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).</summary>
+    /// <summary>First live, enabled, visible node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).
+    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible.</summary>
     public NodeHandle FindAccessKey(char key)
     {
         for (int i = 1; i < _high; i++)
@@ -1242,6 +1245,7 @@ public sealed partial class SceneStore : ISceneBackend
             var h = new NodeHandle(new Handle((uint)i, _gen[i]));
             if (!IsLive(h)) continue;
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
             return h;
         }
         return NodeHandle.Null;
