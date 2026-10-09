@@ -5503,7 +5503,6 @@ public sealed partial class TreeReconciler
                     _scene.SetDragStarted(node, b.OnDragStarted);
                     _scene.SetDragDelta(node, b.OnDragDelta);
                     _scene.SetDragCompleted(node, b.OnDragCompleted);
-                    _scene.SetDragCanceled(node, b.OnDragCanceled);
                     _scene.SetDragSource(node, b.Draggable);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
@@ -5513,9 +5512,14 @@ public sealed partial class TreeReconciler
                     _scene.SetDragStarted(node, null);
                     _scene.SetDragDelta(node, null);
                     _scene.SetDragCompleted(node, null);
-                    _scene.SetDragCanceled(node, null);
                     _scene.SetDragSource(node, null);
                 }
+
+                // OnDragCanceled is ALSO the abort edge of a captured OnDrag gesture owner (InputDispatcher.CancelWorkingContact
+                // fires it on per-pointer capture loss / window blur, where no release — the OnClick commit — will come), so it
+                // is written for every box, not only a CanDrag reorder source: gated on CanDrag it was null for the FlipView /
+                // SwipeControl pan, the Splitter grip and the seek-bar scrub, stranding whatever their drag had pinned.
+                _scene.SetDragCanceled(node, b.OnDragCanceled);
 
                 // L2 drop target (BoxEl.DropTarget → sparse spec column). Discovery is hit-test-CHAIN based (the
                 // context walks parents for the nearest accepting spec), so no handler-mask bit is needed — any

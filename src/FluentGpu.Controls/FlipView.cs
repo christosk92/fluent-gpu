@@ -324,6 +324,16 @@ internal sealed class FlipViewCore : Component
             }
         }
 
+        void CancelPan()   // the gesture died with no release (capture loss / window blur / touch cancel): commit nothing
+        {
+            if (!panning.Value) return;
+            panning.Value = false;
+            // PanMove pinned the strip with a hold keyframe and no OnClick will come, so spring back to the resting page
+            // from the live pan offset (no velocity projection — a lost contact is not a flick).
+            if (!stripRef.Value.IsNull)
+                Context.Anim?.Animate(stripRef.Value, ch, panOffset.Value, -cur * extent, Motion.ControlFast, Easing.FluentPopOpen);
+        }
+
         // ── Pointer presence: non-touch shows + re-arms the fade, touch hides immediately
         //    (OnPointerEntered/OnPointerMoved, FlipView_Partial.cpp:755-803).
         void OnPressed(PointerEventArgs pe)
@@ -447,6 +457,7 @@ internal sealed class FlipViewCore : Component
             // deterministic and unifies the touch commit on the arena's velocity.)
             DragYieldsToPan = true,
             OnClick = CommitPan,
+            OnDragCanceled = CancelPan,   // capture loss has no release edge — the strip must not stay between two pages
             OnFocusChanged = focused => { if (focused) ShowButtonsAndArmFade(); },   // keyboard focus shows buttons (:1471-1473)
             Children = children.ToArray(),
         };

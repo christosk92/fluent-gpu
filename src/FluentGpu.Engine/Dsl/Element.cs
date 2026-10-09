@@ -321,7 +321,8 @@ public sealed record BoxEl : Element
     /// <summary>Release after an active drag (WinUI DragItemsCompleted): commit the reorder here
     /// (<c>ReorderList.Complete()</c>); the drop-glide and the displaced-sibling FLIP retarget off this commit.</summary>
     public Action<DragEventArgs>? OnDragCompleted { get => (_cGesture ?? BoxColdGesture.Default).OnDragCompleted; init { if (!EqualityComparer<Action<DragEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragCompleted, value)) CGesture.OnDragCompleted = value; } }
-    /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing.</summary>
+    /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing. Also the abort
+    /// edge of an <c>OnDrag</c> capture owner whose contact dies with no release (its OnClick commit never comes).</summary>
     public Action? OnDragCanceled { get => (_cGesture ?? BoxColdGesture.Default).OnDragCanceled; init { if (!EqualityComparer<Action?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragCanceled, value)) CGesture.OnDragCanceled = value; } }
     /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
     /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
