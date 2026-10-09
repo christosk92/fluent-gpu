@@ -18,6 +18,7 @@ public enum SpanReuseDisabledReason : uint
     Detached = 1u << 9,
     ImageContent = 1u << 10,
     DragSpotlight = 1u << 11,
+    PathSlab = 1u << 12,   // PathRealizationCache compacted since the table last recorded: stored spans index moved slab offsets
 }
 
 public readonly record struct DrawSpan(
@@ -262,6 +263,21 @@ public sealed class SpanTable
 
     /// <summary>The just-recorded frame id (diagnostics/tests). Pairs with <see cref="StoredAtFrame"/>.</summary>
     public uint CurrentFrameId => _frameId;
+
+    /// <summary>The <see cref="PathRealizationCache.Generation"/> this table's spans were recorded under.</summary>
+    public ulong PathSlabGeneration { get; private set; }
+
+    /// <summary>When the path slab compacted since this table last recorded, forget every copyable span. A stored span's
+    /// path commands carry raw slab offsets the compaction moved, and a slice arena's keep is the same TryGet. Clearing bufGen
+    /// makes TryGet miss for every node until it is re-stored, and keeps the extents that removal damage reads.
+    /// True when it forgot.</summary>
+    public bool SyncPathSlab(ulong generation)
+    {
+        if (generation == PathSlabGeneration) return false;
+        PathSlabGeneration = generation;
+        Array.Clear(_bufGen);
+        return true;
+    }
 
     /// <summary>Diagnostics/tests: did <paramref name="nodeIndex"/> get a span STORED (reused, re-recorded, or culled) on
     /// frame <paramref name="frameId"/>? A span-reuse-blocked node stores nothing, so this returns false for it — the
