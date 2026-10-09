@@ -636,6 +636,7 @@ public sealed partial class FlexLayout
                 }
 
                 float main = 0f, cross = 0f;
+                float baseUsed = 0f, totalShrinkScaled = 0f;   // Arrange's first pass, mirrored for the shrink re-measure below
                 int n = 0;
                 for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
                 {
@@ -667,11 +668,38 @@ public sealed partial class FlexLayout
                             ? MathF.Max(cli.FlexBasis, cMain)
                             : cli.FlexBasis;
                     }
+                    float baseMain = ClampMain(cli, row, cMain);
+                    baseUsed += baseMain + MarginMain(cli, row);
+                    totalShrinkScaled += cli.FlexShrink * baseMain;
                     cMain += MarginMain(cli, row);
                     cCross += MarginCross(cli, row);
                     main += cMain;
                     cross = MathF.Max(cross, cCross);
                     n++;
+                }
+                // A row that overflows its definite width hands the deficit to its Shrink children in Arrange, which
+                // re-measures each at its narrower main size — where wrapped text gains lines. Take the cross from THAT
+                // measure: otherwise the row reserves the one-line height its parent already stacked against, and the
+                // extra line paints over the next sibling (or is clipped by a Stretch row). Same distribution as
+                // Arrange's; the child's base W/H is put back after, since Arrange reads its base main from Bounds.
+                if (row && !float.IsInfinity(childAvail) && totalShrinkScaled > 0f)
+                {
+                    float free = childAvail - baseUsed - (n > 1 ? li.Gap * (n - 1) : 0f);
+                    if (free < 0f)
+                    {
+                        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
+                        {
+                            ref LayoutInput cli = ref _scene.Layout(c);
+                            if (cli.FlexShrink <= 0f) continue;
+                            ref RectF cb = ref _scene.Bounds(c);
+                            float baseMain = ClampMain(cli, row, !float.IsNaN(cli.FlexBasis) ? cli.FlexBasis : cb.W);
+                            float fm = MathF.Max(0f, ClampMain(cli, row, baseMain + free * (cli.FlexShrink * baseMain / totalShrinkScaled)));
+                            if (fm <= 0f || fm >= cb.W) continue;   // not narrower than its measure ⇒ same height
+                            float bw = cb.W, bh = cb.H;
+                            cross = MathF.Max(cross, Measure(c, fm).Height + MarginCross(cli, row));
+                            WriteMeasuredBounds(c, bw, bh);
+                        }
+                    }
                 }
                 // A SizeMode.Reflow exit orphan is detached (FirstVisibleChild skips it) but still owns the closing
                 // height: without this add, a measured virtual row snaps to the without-child extent on the remove
