@@ -26,15 +26,18 @@ public readonly record struct ScrollMotionState(MotionKind Kind, float SpeedDipP
 }
 
 /// <summary>Pure latch for <see cref="ScrollHandle.Restore"/>: a restored offset is held until the extent can
-/// actually hold it (<c>extent − viewport ≥ target</c>), then applied once.</summary>
+/// actually hold it (<c>extent − viewport ≥ target</c>), then applied once. <see cref="Glide"/> marks a latched
+/// <see cref="ScrollHandle.ScrollTo"/> glide past the end: it travels on to the grown end instead of jumping.</summary>
 public struct RestoreLatch
 {
     public bool Pending { get; private set; }
     public double Target { get; private set; }
+    public bool Glide { get; private set; }
 
-    public void Arm(double target)
+    public void Arm(double target, bool glide = false)
     {
         Target = target;
+        Glide = glide;
         Pending = true;
     }
 
@@ -226,13 +229,23 @@ public sealed class ScrollHandle
         if (!geometryChanged && !_restore.Pending && prev.Min == 0.0 && prev.Max == max && prev.ViewportExtent == viewport) return;
         MotionFeel feel = ScrollTunables.Current;
         ScrollPlan next = prev with { Min = 0.0, Max = max, ViewportExtent = viewport, RubberC = feel.RubberBandC };
+        bool glide = _restore.Glide;   // read before TryResolve clears the latch
         if (_restore.TryResolve(extent, viewport, out double restored))
-            next = PlanAuthor.Immediate(in next, _nowSec(), restored);
+            next = glide ? PlanAuthor.Glide(in next, AnchorAt(_nowSec()), restored, feel) : PlanAuthor.Immediate(in next, _nowSec(), restored);
         else if (_restore.Pending && _restore.Target > max && prev.Kind is MotionKind.Idle or MotionKind.Programmatic)
         {
-            // A latched target still past the (grown) extent chases the end: hold at the new max until it can resolve.
-            double p = prev.Eval(_nowSec(), out _, out _);
-            if (p < max - 0.5) next = PlanAuthor.Immediate(in next, _nowSec(), max);
+            if (glide)
+            {
+                // A ScrollTo/BringIntoView glide past the end already heads for today's clamp: it is re-aimed (velocity-
+                // continuous, from what is shown) only when the end grew past its destination — never cut to a jump.
+                if (prev.Dest < max - 0.5) next = PlanAuthor.Glide(in next, AnchorAt(_nowSec()), max, feel);
+            }
+            else
+            {
+                // A latched restore still past the (grown) extent chases the end: hold at the new max until it can resolve.
+                double p = prev.Eval(_nowSec(), out _, out _);
+                if (p < max - 0.5) next = PlanAuthor.Immediate(in next, _nowSec(), max);
+            }
         }
         else if (prev.Kind == MotionKind.Idle && prev.Count > 0)
         {
@@ -283,7 +296,7 @@ public sealed class ScrollHandle
         // A destination past the extent known NOW lands at today's max and stays latched as the RAW request: the moment
         // the content grows to hold it (a late measure, a list that is still filling) SetExtent completes the move. Any
         // user input (wheel, contact, thumb, key, stop) drops the latch, so a stale request never resurrects.
-        if (offset > MaxOffset + 0.5) _restore.Arm(offset);
+        if (offset > MaxOffset + 0.5) _restore.Arm(offset, glide: move != ScrollMove.Immediate);
     }
 
     /// <summary>Moves relative to the plan's destination (so repeated ScrollBy calls accumulate) for a glide, or
