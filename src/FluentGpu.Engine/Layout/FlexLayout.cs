@@ -1421,9 +1421,13 @@ public sealed partial class FlexLayout
         // Border-box width: explicit, else the width the parent will stretch us to (availW). A CSS grid is block-level —
         // it fills the available inline size, and star tracks NEED that concrete width to divide. Without availW a
         // stretch-width grid measured to height 0, so the parent column stacked the next sibling over its overflow.
-        float w = !float.IsNaN(li.Width) ? li.Width
+        // Clamped by MinWidth/MaxWidth BEFORE the tracks resolve: the parent arranges us at the clamped width
+        // (ClampCross/ClampMain) and ArrangeGrid counts columns there. Resolving at the raw width and clamping after
+        // measured a different row count: a MaxWidth grid painted its last row over the next sibling, a MinWidth one
+        // left an empty band (the TryWrapMainLimit rule, for grids).
+        float w = Clamp(!float.IsNaN(li.Width) ? li.Width
                 : float.IsInfinity(availW) ? 0f
-                : MathF.Max(0f, availW);
+                : MathF.Max(0f, availW), li.MinW, li.MaxW);
         int count = GridColCount(in g, w - padH);   // auto-fill resolves the count from the (now known) width
         float h;
         if (w > 0f && count > 0)
@@ -1433,7 +1437,6 @@ public sealed partial class FlexLayout
             h = GridContentHeight(node, in g, count, colW) + padV;
         }
         else h = float.IsNaN(li.Height) ? 0f : li.Height;
-        w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
         WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
