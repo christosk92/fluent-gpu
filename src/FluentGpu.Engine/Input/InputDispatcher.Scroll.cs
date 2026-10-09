@@ -382,13 +382,11 @@ public sealed partial class InputDispatcher : IScrollerQuery
         _scene.Mark(vp, NodeFlags.PaintDirty);
     }
 
-    /// <summary>Drag-and-drop edge auto-scroll (host-ticked every frame while a drag hovers an overflowing edge):
-    /// <paramref name="dipPerS"/> along the axis, applied as one frame's worth of immediate travel.</summary>
-    private void AutoScroll(NodeHandle vp, float dipPerS)
-    {
-        if (dipPerS == 0f) return;
-        HandleOf(vp)?.ScrollBy(dipPerS / 60.0, ScrollMove.Immediate);
-    }
+    /// <summary>Drag-and-drop edge auto-scroll: a held VELOCITY (<paramref name="dipPerS"/> along the axis; 0 = stop in
+    /// place), authored as the handle's closed-form constant-velocity plan that runs on to the edge by itself.
+    /// <see cref="DragDropContext"/> posts only when the velocity or the viewport changes, so a still pointer in the edge
+    /// zone posts once: a one-frame step here would move the list once and then stop.</summary>
+    private void AutoScroll(NodeHandle vp, float dipPerS) => HandleOf(vp)?.AutoScroll(dipPerS);
 
     /// <summary>Keyboard scroll: arrows/PageUp/PageDown/Home/End glide the nearest scrollable of the focused node.</summary>
     private bool ScrollKey(int key, NodeHandle vp)
