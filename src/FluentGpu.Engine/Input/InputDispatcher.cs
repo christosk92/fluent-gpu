@@ -1230,7 +1230,9 @@ public sealed partial class InputDispatcher
     {
         // A captured item-drag/L2 session is single-pointer today (mouse/pen OR the arena-claimed touch reorder) —
         // cancel it on this contact's loss. L2 first: OnLeave fires on a live target while the session still exists.
-        if (Drag.IsActive || DragDrop.IsActive) { DragDrop.Cancel(); Drag.Cancel(); }
+        // An ARMED candidate (pressed, still inside the drag box) dies too, silently (Drag.Cancel just disarms it): left
+        // armed, Win32's park move or the next hover move would promote it with no button held.
+        if (Drag.IsActive || Drag.IsArmed || DragDrop.IsActive) { DragDrop.Cancel(); Drag.Cancel(); }
         if (e.Pointer == PointerKind.Touch) ClearTouchHover();   // a touch contact never leaves a latched hover behind
         // A contact lost mid-thumb-drag drops the bar's conscious-fade reveal so it fades (touch has no resting hover
         // to keep it up). Captured BEFORE CancelWorkingContact nulls _scrollDragNode.
