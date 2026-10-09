@@ -245,8 +245,11 @@ public sealed class ConnectedAnimation
     /// to the dest on the new route. No-op under reduced motion or if no live source carries an image.</summary>
     public void Begin(string key) => Begin(new ConnectedTransitionRequest(key, FlyMotion));
 
-    /// <summary>Capture a source with request-local motion. If the same key is already flying, its CURRENT presented
-    /// overlay becomes the new source so a threshold reversal continues without snapping to either endpoint.</summary>
+    /// <summary>Capture a source with request-local motion. If the same key is already flying, its presented overlay becomes
+    /// the new source so a threshold reversal starts where the cover is instead of snapping to either endpoint. That start is
+    /// the UI's view of the overlay: exact while the UI owns its rows, but the last imported compositor pose once the render
+    /// thread owns them. The reversal is a fresh instance, which the render thread does not re-base, so a render-owned cover
+    /// can start a frame or two behind the pixels on screen.</summary>
     public void Begin(ConnectedTransitionRequest request)
     {
         if (ReducedMotion || string.IsNullOrEmpty(request.Key)) return;
@@ -301,9 +304,10 @@ public sealed class ConnectedAnimation
         _pending[key] = snap;
     }
 
-    // A second Begin for an in-flight key is a reversal/retarget. Preserve the exact pixels currently on screen, transfer
-    // the existing image pin to a pending snapshot, and leave the old tagged endpoint culled until the new destination
-    // mounts. The app flips its Flow.Show signal immediately after this call.
+    // A second Begin for an in-flight key is a reversal/retarget. Capture the overlay's presented rect (the UI's view: the
+    // exact pixels when the UI owns the rows, the last imported compositor pose when the render thread does - see Begin),
+    // transfer the existing image pin to a pending snapshot, and leave the old tagged endpoint culled until the new
+    // destination mounts. The app flips its Flow.Show signal immediately after this call.
     private bool TryCaptureFlight(string key, ConnectedMotion requested, out Snapshot snapshot)
     {
         for (int i = _flights.Count - 1; i >= 0; i--)
@@ -917,7 +921,11 @@ public sealed class ConnectedAnimation
         if (f.AnimateClip) p.ClipRect = currentClip;
         _scene.Mark(f.Overlay, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
 
-        // Re-seed the motion from the re-based state toward the new identity (== exactly covering the live dest).
+        // Re-seed the motion from the re-based state toward the new identity (== exactly covering the live dest). Each
+        // re-seed names its basis change: scale is visual/box, so it (and its rate) scales by old/new; translate is a
+        // constant shift; the clip is box-local. With a render thread `t` is the last imported feedback pose, a frame or
+        // two behind the pixels, and the renderer re-bases its own pose by the same change instead of stepping back.
+        float kx = oldW / newDest.W, ky = oldH / newDest.H;
         float progressNow = FlightProgress(in f, in t);
         var motion = f.Motion;
         if (motion.IsSpring)
@@ -925,7 +933,6 @@ public sealed class ConnectedAnimation
             // The rows hold OLD-basis values (scale of the old box), so a plain Spring retarget would continue from them
             // over the new box and jump. Rebase each from its new-basis value, carrying the velocity into the new basis:
             // scale is visual/box, so its rate scales by old/new; translate is a constant shift; the clip is box-local.
-            float kx = oldW / newDest.W, ky = oldH / newDest.H;
             _anim.RebaseSpring(f.Overlay, AnimChannel.ScaleX, 1f, motion.Spring, sx, kx);
             _anim.RebaseSpring(f.Overlay, AnimChannel.ScaleY, 1f, motion.Spring, sy, ky);
             _anim.RebaseSpring(f.Overlay, AnimChannel.TranslateX, 0f, motion.Spring, tx);
@@ -942,16 +949,16 @@ public sealed class ConnectedAnimation
         {
             float floorMs = MathF.Min(120f, motion.DurationMs);
             float dur = Math.Clamp(motion.DurationMs * (1f - progressNow), floorMs, motion.DurationMs);
-            _anim.Animate(f.Overlay, AnimChannel.ScaleX, sx, 1f, dur, motion.Easing);
-            _anim.Animate(f.Overlay, AnimChannel.ScaleY, sy, 1f, dur, motion.Easing);
-            _anim.Animate(f.Overlay, AnimChannel.TranslateX, tx, 0f, dur, motion.Easing);
-            _anim.Animate(f.Overlay, AnimChannel.TranslateY, ty, 0f, dur, motion.Easing);
+            _anim.RebaseTween(f.Overlay, AnimChannel.ScaleX, sx, 1f, dur, motion.Easing, kx);
+            _anim.RebaseTween(f.Overlay, AnimChannel.ScaleY, sy, 1f, dur, motion.Easing, ky);
+            _anim.RebaseTween(f.Overlay, AnimChannel.TranslateX, tx, 0f, dur, motion.Easing);
+            _anim.RebaseTween(f.Overlay, AnimChannel.TranslateY, ty, 0f, dur, motion.Easing);
             if (f.AnimateClip)
             {
-                _anim.Animate(f.Overlay, AnimChannel.ClipL, currentClip.X, destClip.X, dur, motion.Easing);
-                _anim.Animate(f.Overlay, AnimChannel.ClipT, currentClip.Y, destClip.Y, dur, motion.Easing);
-                _anim.Animate(f.Overlay, AnimChannel.ClipR, currentClip.Right, destClip.Right, dur, motion.Easing);
-                _anim.Animate(f.Overlay, AnimChannel.ClipB, currentClip.Bottom, destClip.Bottom, dur, motion.Easing);
+                _anim.RebaseTween(f.Overlay, AnimChannel.ClipL, currentClip.X, destClip.X, dur, motion.Easing, 1f / kx);
+                _anim.RebaseTween(f.Overlay, AnimChannel.ClipT, currentClip.Y, destClip.Y, dur, motion.Easing, 1f / ky);
+                _anim.RebaseTween(f.Overlay, AnimChannel.ClipR, currentClip.Right, destClip.Right, dur, motion.Easing, 1f / kx);
+                _anim.RebaseTween(f.Overlay, AnimChannel.ClipB, currentClip.Bottom, destClip.Bottom, dur, motion.Easing, 1f / ky);
             }
             motion = ConnectedMotion.Eased(motion.Easing, dur);
         }

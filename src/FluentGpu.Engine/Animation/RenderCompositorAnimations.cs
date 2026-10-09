@@ -133,11 +133,12 @@ public sealed class RenderCompositorAnimations
                 {
                     float current = state.Value, velocity = state.Velocity;
                     // A re-seed from the UI's view of this row (AnimEngine.MarkSeedRelative), taken against the revision
-                    // held here: its start moves by how far this thread's pose has run past that view since.
+                    // held here: its start moves by how far this thread's pose has run past that view since, scaled into the
+                    // start's basis when the UI re-based it (DriftScale: a connected fly's re-based model box).
                     if (!float.IsNaN(entry.Base) && state.Desired.Revision == entry.BaseRevision)
                     {
-                        drift = current - entry.Base;
-                        renderVelocity = velocity;
+                        drift = (current - entry.Base) * entry.DriftScale;
+                        renderVelocity = velocity * entry.DriftScale;
                     }
                     state = Seed(in entry, capturedAtMs);
                     // A retained instance has already been posed on screen: a retarget continues it, it never re-pends.

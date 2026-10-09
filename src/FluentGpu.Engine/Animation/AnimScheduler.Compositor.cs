@@ -11,9 +11,10 @@ public sealed partial class AnimEngine
     private readonly List<int> _compositorCompletedSlots = new(64);
     private ulong _nextCompositorInstance;
     /// <summary><paramref name="Base"/>: NaN, or the UI's view of the row that this re-seed's start departed from (taken
-    /// against <paramref name="BaseRevision"/>, the revision the row carried before it) - see <see cref="MarkSeedRelative"/>.</summary>
+    /// against <paramref name="BaseRevision"/>, the revision the row carried before it), and <paramref name="DriftScale"/>
+    /// the factor that start re-based it by - see <see cref="MarkSeedRelative"/>.</summary>
     private readonly record struct CompositorSeed(ulong Instance, ulong Revision, bool ExplicitFrom, float Base = float.NaN,
-        ulong BaseRevision = 0);
+        ulong BaseRevision = 0, float DriftScale = 1f);
 
     /// <summary>Enabled by a host whose render thread owns scene recording and compositor pose evaluation.</summary>
     public bool RenderOwnsCompositor
@@ -93,13 +94,15 @@ public sealed partial class AnimEngine
     /// view is only the last imported feedback pose (or, before a pose of that revision came back, the start the UI gave it),
     /// while the render thread kept advancing it - so the renderer moves this start by however far its own pose ran from
     /// <paramref name="uiBase"/> (RenderCompositorAnimations.Adopt), and an interrupted fade or move continues from the pixel
-    /// on screen instead of stepping back to the older pose. A fresh instance has nothing in flight there: it keeps its start.</summary>
-    private void MarkSeedRelative(int slot, float uiBase)
+    /// on screen instead of stepping back to the older pose. A fresh instance has nothing in flight there: it keeps its start.
+    /// <paramref name="driftScale"/>: a start the caller re-based into a new basis (uiBase times the scale, plus a shift - a
+    /// connected fly's re-based model box) moves by the render drift times the same scale, and so does its velocity.</summary>
+    private void MarkSeedRelative(int slot, float uiBase, float driftScale = 1f)
     {
         if (!RenderOwnsCompositor || slot < 0) return;
         ref var seed = ref CollectionsMarshal.GetValueRefOrNullRef(_compositorSeeds, slot);
         if (System.Runtime.CompilerServices.Unsafe.IsNullRef(ref seed) || seed.Revision <= 1) return;
-        seed = seed with { Base = uiBase, BaseRevision = seed.Revision - 1 };
+        seed = seed with { Base = uiBase, BaseRevision = seed.Revision - 1, DriftScale = driftScale };
     }
 
     /// <summary>The structural part of compositor eligibility — everything except the live scene-state (Relayouting)
@@ -167,7 +170,7 @@ public sealed partial class AnimEngine
             // due-check the UI-thread PASS1 does or an explicit Cadence.At(hz) row would silently run at panel rate once
             // the compositor adopts it.
             target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot),
-                identity.Base, identity.BaseRevision);
+                identity.Base, identity.BaseRevision, identity.DriftScale);
         }
         target.EndCapture();
     }
@@ -269,6 +272,8 @@ public sealed class CompositorAnimationSnapshot
         /// departed from - see <c>AnimEngine.MarkSeedRelative</c>.</summary>
         public float Base;
         public ulong BaseRevision;
+        /// <summary>The factor the re-seed's start re-based the UI's view by: the renderer scales its drift and velocity by it.</summary>
+        public float DriftScale;
     }
     private Entry[] _entries = [];
     private int _count, _oldCount, _distinctNodes;
@@ -288,7 +293,7 @@ public sealed class CompositorAnimationSnapshot
         _distinctNodes = 0; _lastAddedNode = NodeHandle.Null;
     }
     internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys, ushort periodMs,
-        float fromBase = float.NaN, ulong baseRevision = 0)
+        float fromBase = float.NaN, ulong baseRevision = 0, float driftScale = 1f)
     {
         SceneRecordingSnapshot.Grow(ref _entries, _count + 1);
         if (row.Node != _lastAddedNode) { _distinctNodes++; _lastAddedNode = row.Node; }
@@ -301,7 +306,7 @@ public sealed class CompositorAnimationSnapshot
         target.Row.DrivenSrc = AnimValue.WallClock;
         target.Instance = instance; target.Revision = revision; target.ExplicitFrom = explicitFrom;
         target.PeriodMs = periodMs;
-        target.Base = fromBase; target.BaseRevision = baseRevision;
+        target.Base = fromBase; target.BaseRevision = baseRevision; target.DriftScale = driftScale;
     }
     internal void EndCapture()
     {
