@@ -1270,6 +1270,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         return true;
     }
 
+    /// <summary>Whether an NC pointer DOWN/UP transitioned the primary button. Mouse-in-pointer delivers EVERY physical
+    /// button as WM_NCPOINTERDOWN/UP (the client path reads the same ButtonChangeType for right/middle clicks), so a
+    /// right, middle or side click on Min/Max/Close used to arrive as a left click and run the button's action. A
+    /// non-primary change, or a contact whose info can no longer be read, falls through to DefWindowProc: no engine
+    /// click, and a side button still reaches WM_APPCOMMAND for back/forward.</summary>
+    private bool NcPrimaryButton(WPARAM wParam)
+    {
+        POINTER_INFO pi;
+        if (!GetPointerInfo(GET_POINTERID_WPARAM(wParam), &pi)) return false;
+        Decode(in pi, out PointerKind kind, out _, out _, out _);
+        return NcPrimaryChange(kind, pi.pointerType, pi.ButtonChangeType);
+    }
+
+    /// <summary>The NC caption-button rule: only the engine's primary button (0, see <see cref="PointerButton"/>) presses
+    /// or clicks an engine caption button. Right (1), middle (2), the side buttons (3/4) and a pen barrel never do.</summary>
+    internal static bool NcPrimaryChange(PointerKind kind, uint pointerType, uint buttonChangeType)
+        => PointerButton(kind, pointerType, buttonChangeType) == 0;
+
     private CursorId _cursor = CursorId.Arrow;
     private readonly HCURSOR[] _cursorCache = new HCURSOR[11];
 
@@ -2327,11 +2345,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
             case WM_NCPOINTERDOWN when _customFrame:
                 _ncPointerSeen = true;
+                if (!NcPrimaryButton(wParam)) { result = 0; return false; }   // right/middle/side: never a caption click
                 return NcPress(NcHitAtScreen(hWnd, lp), out result);
 
             case WM_NCPOINTERUP when _customFrame:
                 _ncPointerSeen = true;
-                return NcRelease(NcHitAtScreen(hWnd, lp), out result);
+                // A non-primary up while a press is held (the left let go as an UPDATE first, then the right) cancels it:
+                // Client never matches the held button, so NcRelease sends the offscreen up instead of a click. With no
+                // press held it falls through to DefWindowProc like the down did.
+                return NcRelease(NcPrimaryButton(wParam) ? NcHitAtScreen(hWnd, lp) : TitleBarHit.Client, out result);
 
             case WM_NCMOUSEMOVE when _customFrame:
             {
