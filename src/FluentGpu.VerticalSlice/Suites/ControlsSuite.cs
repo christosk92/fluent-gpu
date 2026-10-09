@@ -112,9 +112,11 @@ static partial class ControlsSuite
         ShelfLiftChecks(strings);
         BoundRowFocusChecks(strings);
         CurrentClampChecks(strings);
+        TypeaheadPrefixChecks(strings);
         PipsControlledChecks(strings);
         IconButtonBoundEnabledChecks(strings);
         InfoBarClosePlateChecks(strings);
+        MenuBarReopenChecks(strings);
     }
 
     // ── InfoBar / toast: the close button must stay INSIDE the painted plate ─────────────────────────────────────────
@@ -6201,6 +6203,56 @@ static partial class ControlsSuite
                     $"coalesced={coalesced} moveSpeaks={moveSpeaks} silent={silentByDefault}");
             }
             finally { InputHooks.Current.Default.Announce = prior; Announcer.Reset(); }
+        }
+
+        // e5dragdrop.reorder.scrolled — the same-list slot math ran on the pointer's WINDOW-space travel (TotalDy) against
+        // RESTING starts, so a list that scrolled under a held drag (the drag's own edge auto-scroll, a wheel, the page
+        // scroller around the queue) committed the row at the pointer's on-screen distance, not the slot under it; and the
+        // per-frame auto-scroll OnOver returned early for the list's own payload, so a still pointer never re-projected.
+        {
+            var scene = new SceneStore();
+            int from = -1, to = -1;
+            var ro = new Reorderable("scrolled")
+            {
+                ItemCount = 20, ItemExtent = 40f, Spacing = 0f, Scene = scene, AutoDwell = false,
+                RequestRender = static () => { }, OnReorder = (f, t) => { from = f; to = t; },
+            };
+            var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 200, Children = [ro.List(new BoxEl { Width = 200, Height = 800 })],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+
+            // Lift row 0, the page scrolls 10 rows (400 DIP) under the pointer, a 50 DIP move, release: the row under
+            // the pointer is slot 11 (a 450 DIP content-space travel), not slot 1 (the 50 DIP on-screen one).
+            item.OnDragStarted?.Invoke(new DragEventArgs { Absolute = new Point2(50f, 25f), TotalDy = 5f });
+            scene.Paint(scene.Root).LocalTransform = Affine2D.Translation(0f, -400f);
+            var moved = new DragEventArgs { Absolute = new Point2(50f, 70f), TotalDy = 50f };
+            item.OnDragDelta?.Invoke(moved);
+            int pending = ro.Core.PendingIndex;
+            item.OnDragCompleted?.Invoke(moved);
+            bool commit = pending == 11 && from == 0 && to == 11;
+
+            // A STILL pointer while the list scrolls: the engine re-runs the target's OnOver per auto-scroll frame, and
+            // that alone must carry the pending slot to the row now under the pointer.
+            scene.Paint(scene.Root).LocalTransform = Affine2D.Identity;
+            item.OnDragStarted?.Invoke(moved);
+            item.OnDragDelta?.Invoke(moved);
+            int still = ro.Core.PendingIndex;                       // 1: nothing has scrolled yet
+            var disp = new InputDispatcher(scene);
+            var at = new Point2(50f, 70f);
+            disp.DragDrop.ExternalBegin("scrolled", new ReorderPayload(ro, 0, null), at, KeyModifiers.None);
+            disp.DragDrop.Move(disp.DiagHitTest(at), at, 0f, 0f, KeyModifiers.None);
+            scene.Paint(scene.Root).LocalTransform = Affine2D.Translation(0f, -400f);
+            disp.DragDrop.Move(disp.DiagHitTest(at), at, 0f, 0f, KeyModifiers.None);
+            int followed = ro.Core.PendingIndex;
+            disp.DragDrop.Cancel();
+            item.OnDragCanceled?.Invoke();
+            bool tracks = still == 1 && followed == 11;
+
+            Check("e5dragdrop.reorder.scrolled a same-list reorder resolves its slot in CONTENT space — a list that scrolled under the held drag (edge auto-scroll, wheel, page scroller) commits the row under the pointer, and an auto-scroll frame with a still pointer re-projects it",
+                commit && tracks, $"pending={pending} commit=({from},{to}) still={still} followed={followed} expected 11/(0,11)/1/11");
         }
     }
 
