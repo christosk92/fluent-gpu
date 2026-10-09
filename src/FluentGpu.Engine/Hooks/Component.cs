@@ -133,10 +133,20 @@ public abstract class Component
 
     /// <summary>Create a reactive validation field over a caller-owned value signal (form-validation.md): pass the
     /// resulting <see cref="Field{T}"/> to a control's <c>Field</c> prop. Cross-field/conditional rules that read a
-    /// sibling signal re-validate automatically.</summary>
-    protected Field<T> UseField<T>(Signal<T> value, params Validator<T>[] rules) => Context.UseField(value, rules);
-    /// <summary>As <see cref="UseField{T}(Signal{T}, Validator{T}[])"/> with timing/async/compound/explicit-form options.</summary>
-    protected Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, params Validator<T>[] rules) => Context.UseField(value, options, rules);
+    /// sibling signal re-validate automatically. Takes up to four inline rules, or an array for more.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, Validator<T>? rule0 = null, Validator<T>? rule1 = null, Validator<T>? rule2 = null,
+                                   Validator<T>? rule3 = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => Context.UseField(value, rule0, rule1, rule2, rule3, __hf, __hl);
+    /// <summary>As <c>UseField(value, rules…)</c> with the rules as an array.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, Validator<T>[] rules, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => Context.UseField(value, rules, __hf, __hl);
+    /// <summary>As <c>UseField(value, rules…)</c> with timing/async/compound/explicit-form options.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, Validator<T>? rule0 = null, Validator<T>? rule1 = null,
+                                   Validator<T>? rule2 = null, Validator<T>? rule3 = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => Context.UseField(value, options, rule0, rule1, rule2, rule3, __hf, __hl);
+    /// <summary>As <c>UseField(value, options, rules…)</c> with the rules as an array.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, Validator<T>[] rules, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => Context.UseField(value, options, rules, __hf, __hl);
     /// <summary>Establish a <see cref="FormScope"/> for this component (submit gating + focus-first-error); the
     /// <c>UseField</c> calls that follow in this render auto-join it.</summary>
     protected FormScope UseForm() => Context.UseForm();
@@ -174,7 +184,7 @@ public abstract class Component
     protected FluentGpu.Media.MediaPlayer UseMediaPlayer(Action<FluentGpu.Media.MediaPlayerBuilder>? configure = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMediaPlayer(configure, __hf, __hl);
     /// <summary>A <see cref="FluentGpu.Media.MediaPlayer"/> pointed at a source that re-loads when the <paramref name="source"/>
     /// thunk yields a different value (auto SMTC/buffering/default tracks; auto-disposed on unmount).</summary>
-    protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source) => Context.UseVideo(source);
+    protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseVideo(source, __hf, __hl);
     /// <summary>Seed a keyframe track on this component's node. <paramref name="cadence"/> is the row's own frame
     /// rate (<c>AnimEngine.Keyframes</c>): <c>null</c> = display rate, one-shot or loop.</summary>
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null,
@@ -182,7 +192,7 @@ public abstract class Component
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a
     /// gesture-arena member and routes the winner's Tap/Hold/Pan event to <paramref name="handler"/>. No re-render.</summary>
-    protected void UseGesture(GestureType kind, Action<GestureEventArgs> handler) => Context.UseGesture(kind, handler);
+    protected void UseGesture(GestureType kind, Action<GestureEventArgs> handler, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseGesture(kind, handler, __hf, __hl);
 
     /// <summary>Run one render pass with hook bookkeeping. In DEBUG / FLUENTGPU_DIAG builds the render duration is fed to
     /// the <see cref="FluentGpu.Hosting.RenderBudget"/> tripwire (slow-render + every-frame-re-render detection); the

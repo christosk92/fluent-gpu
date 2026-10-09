@@ -922,11 +922,13 @@ public sealed partial class RenderContext
     /// <see cref="Reactive.Untrack"/> (a callback's signal reads do not subscribe the effect).</summary>
     public void UseActivation(Action? onActivated = null, Action? onDeactivated = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var cb = UseRef<(Action? On, Action? Off)>(default);
+        // Every cell (the refs, the activation memo, the effect) is keyed to the CALLER's call site, so a conditionally
+        // skipped UseActivation never hands its cells to the next one.
+        var cb = UseRef<(Action? On, Action? Off)>(default, __hf, __hl);
         cb.Value = (onActivated, onDeactivated);     // always route to the latest closures
-        var active = UseIsActive();
-        var prev = UseRef(true);
-        var started = UseRef(false);
+        var active = UseIsActive(__hf, __hl);
+        var prev = UseRef(true, __hf, __hl);
+        var started = UseRef(false, __hf, __hl);
 
         int idx = LookupCell(__hf, __hl, out var __k);
         if (idx < 0)
@@ -1028,17 +1030,18 @@ public sealed partial class RenderContext
     /// it only (re)registers at mount / kind-change, reading the valid mounted node). The forwarder dispatches to the
     /// current cell handler, so a fresh lambda each render needs no re-registration. On unmount the freed node drops the
     /// column (SceneStore); a kind-change re-target clears the prior install.</summary>
-    public void UseGesture(GestureType kind, Action<GestureEventArgs> handler)
+    public void UseGesture(GestureType kind, Action<GestureEventArgs> handler, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         // Persistent per-call cell: holds the latest user handler + the once-allocated stable forwarder/effect/cleanup
-        // (so nothing here allocates on a steady re-render — only the handler field is overwritten).
-        var cell = UseRef<GestureHookState?>(null);
+        // (so nothing here allocates on a steady re-render — only the handler field is overwritten). Keyed to the
+        // CALLER's call site: a skipped UseGesture(Hold) must not hand its state (kind frozen) to the next call.
+        var cell = UseRef<GestureHookState?>(null, __hf, __hl);
         var st = cell.Value ??= new GestureHookState(this, kind);
         st.Handler = handler;   // always route to the latest closure (no re-registration needed)
         // Mount-once registration (re-runs only if the kind changes): install the stable forwarder on the node. The
         // cached effect/cleanup delegates make this a no-alloc layout-effect on a steady render (the effect closure is
         // the SAME instance every render, so EffectImpl adds it only when deps change). HostNode is valid at 6.5.
-        UseLayoutEffect(st.Register, st.KindDep);
+        UseLayoutEffect(st.Register, st.KindDep, __hf, __hl);
     }
 
     /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to that
