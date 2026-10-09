@@ -609,8 +609,10 @@ public sealed partial class SceneStore : ISceneBackend
 
     /// <summary>One unmounted node's identity + its model extent at free time (see <see cref="PendingRemovalExtents"/>).
     /// The recorder prefers the span table's stored SubtreeBounds for this (index, gen) — which folds in every halo —
-    /// and falls back to <paramref name="ModelRect"/> when the node presented under no stored span.</summary>
-    public readonly record struct RemovedNodeExtent(int NodeIndex, uint Gen, RectF ModelRect);
+    /// and falls back to <paramref name="ModelRect"/> when the node presented under no stored span. <paramref name="Hidden"/>:
+    /// at free time the node sat in a collapsed (<see cref="InCollapsedSubtree"/>) or KeepAlive-parked subtree, which the
+    /// recorder never reaches, so whatever it once presented was vacated when the subtree hid.</summary>
+    public readonly record struct RemovedNodeExtent(int NodeIndex, uint Gen, RectF ModelRect, bool Hidden);
 
     private readonly RemovedNodeExtent[] _removedExtents = new RemovedNodeExtent[RemovalLedgerCap];
     private readonly ulong[] _removedStamp = new ulong[RemovalLedgerCap];
@@ -656,8 +658,10 @@ public sealed partial class SceneStore : ISceneBackend
         float pw = float.IsNaN(p.PresentedW) ? abs.W : p.PresentedW;   // presented (Reveal) extent may exceed the model box
         float ph = float.IsNaN(p.PresentedH) ? abs.H : p.PresentedH;
         // A degenerate rect is recorded too (not skipped): the recorder needs to see the entry so it can tell "this node
-        // never presented anything" from "it presented and we lost the extent" (⇒ MissingRemovalExtent).
-        _removedStamp[_removedCount] = _publishSeq + 1; _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph));
+        // never presented anything" from "it presented and we lost the extent" (⇒ MissingRemovalExtent). A node mounted
+        // under a collapsed or parked ancestor is never laid out or walked: no span, a 0x0 box, and nothing to vacate.
+        bool hidden = (_flags[(int)node.Raw.Index] & NodeFlags.Parked) != 0 || InCollapsedSubtree(node);
+        _removedStamp[_removedCount] = _publishSeq + 1; _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph), hidden);
     }
 
     public void AppendChild(NodeHandle parent, NodeHandle child)

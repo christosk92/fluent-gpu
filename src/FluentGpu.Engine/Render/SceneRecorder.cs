@@ -689,7 +689,9 @@ internal sealed class SceneRecordingContext
         // re-touches that band, so a region-aware repaint would freeze last frame's pixels there. The span table holds the
         // EXACT extent it presented at (halos folded in) under its pre-free (index, gen), in the space of the slice it was
         // recorded into — mapped into the window by that slice's offset; the scene's ledger holds the model rect as the
-        // fallback. Neither ⇒ the vacated band is unknown ⇒ full. Record is the ledger's only consumer, so it drains it here.
+        // fallback. Neither ⇒ the vacated band is unknown ⇒ full — unless the node was freed inside a collapsed or parked
+        // subtree: the walk never reaches it there, so it presents nothing now and its slice may have retired with it.
+        // Record is the ledger's only consumer, so it drains it here.
         var removals = scene.PendingRemovalExtents;
         if (scene.PendingRemovalOverflow) stats.Repaint.ForceFull(RepaintFullReason.StructuralInvalidation);
         for (int i = 0; i < removals.Length; i++)
@@ -702,11 +704,12 @@ internal sealed class SceneRecordingContext
                 int slot = spans!.SliceSlotOf(removals[i].NodeIndex, removals[i].Gen);
                 if (slices.TryPresentedDelta(slot, out float rdx, out float rdy))
                     stats.AddRepaintWindow(RepaintBand(SliceRecorder.Offset(in presented, rdx, rdy)));
-                else stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);
+                else if (!removals[i].Hidden) stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);
             }
             else if (!removals[i].ModelRect.IsEmpty)
                 stats.AddRepaintWindow(RepaintBand(removals[i].ModelRect, RepaintUnknownHaloDip));
-            else stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);   // never presented AND no model rect
+            else if (!removals[i].Hidden)
+                stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);   // never presented AND no model rect
         }
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
