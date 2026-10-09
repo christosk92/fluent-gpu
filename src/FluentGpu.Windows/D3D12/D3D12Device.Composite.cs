@@ -46,7 +46,7 @@ public sealed unsafe partial class D3D12Device
     private int[] _rowPrepared = new int[256];
     private int[] _itemSurface = new int[64];
     private int[] _itemDown = new int[64];
-    private ulong[] _itemKey = new ulong[64];   // a prepared group's content key (GroupCacheKey; 0 = not cacheable)
+    private ulong[] _itemKey = new ulong[64];   // a prepared surface's content key (GroupDelta.Describe for a group; 0 = not cacheable)
     // the item's prepared surface was RENDERED this turn (not a retained hit): a re-render under the same key can differ by
     // an LSB (a sampled blur / upsample through a pooled scratch of another size), so the partial-present diff dirties it
     private bool[] _itemRendered = new bool[64];
@@ -1023,7 +1023,7 @@ public sealed unsafe partial class D3D12Device
     /// <summary>The retained-surface byte cap this turn: <c>TileBudget.RetainedShare</c> of the window's tile budget.</summary>
     private long RetainedCap() => TileBudget.RetainedBytesCap(TileBudget.Current((int)_w, (int)_h));
 
-    /// <summary>The surface pool's tile serials, for <see cref="GroupCacheKey"/>.</summary>
+    /// <summary>The surface pool's tile serials, for <see cref="GroupDelta.Describe"/>.</summary>
     private readonly struct PoolSerials : ITileSerials
     {
         private readonly SurfacePool _pool;
@@ -1033,7 +1033,7 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>A GROUP (a layer slice with child slices): its enclosed items composited into one surface covering its
     /// placed footprint (its clip ∩ the window when the footprint is larger than a tile — <see cref="GroupCacheKey.Region"/>),
-    /// then blurred when the layer self-blurs. The result is RETAINED under its content key (<see cref="GroupCacheKey"/>): a
+    /// then blurred when the layer self-blurs. The result is RETAINED under its content key (<see cref="GroupDelta.Describe"/>): a
     /// turn whose enclosed items, tiles and relative placement are unchanged — a page scroll moving the group rigidly —
     /// re-draws it instead of re-rendering it (gpu-renderer.md §13.1e).</summary>
     private void PrepareGroup(in CompositeFrame frame, int i)
@@ -1045,8 +1045,14 @@ public sealed unsafe partial class D3D12Device
         int w = region.Right - region.Left, h = region.Bottom - region.Top;
         ulong fence = _fenceValue + 1;
         var serials = new PoolSerials(_surfaces!);
-        bool cacheable = (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0;
-        ulong key = cacheable ? GroupCacheKey.Compute(in frame, i, in region, ref serials, _itemKey, out cacheable) : 0UL;
+        // ONE description (GroupDelta.Describe) gives the shape, the entries and the content key, so the retained-surface hit
+        // and the in-place repair can never disagree about what the group is made of.
+        ulong key = 0UL, shape = 0UL;
+        int entryCount = 0;
+        if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+            shape = GroupDelta.Describe(in frame, i, in region, ref serials, _itemKey, _itemRegion, _itemSurface,
+                ref _groupEntries, out entryCount, out key);
+        bool cacheable = key != 0UL;
         if (cacheable)
         {
             _itemKey[i] = key;
@@ -1061,13 +1067,9 @@ public sealed unsafe partial class D3D12Device
         // An unblurred group whose key missed only because something inside it changed is REPAIRED in place over the
         // pixels that changed (GroupDelta) — bit-identical to the full render below, at the cost of the changed area.
         GroupMemo? memo = null;
-        ulong shape = 0;
-        int entryCount = 0;
         bool repairable = cacheable && it.BlurSigma <= 0f;
         if (repairable)
         {
-            ulong fresh = 0xF2E5_0000_0000_0000UL ^ (ulong)(uint)_compositeTurn * 0x9E3779B97F4A7C15UL;
-            shape = GroupDelta.Build(in frame, i, in region, ref serials, _itemKey, _itemRegion, _itemSurface, fresh, ref _groupEntries, out entryCount);
             memo = FindGroupMemo(shape);
             if (memo is not null && RepairGroup(in frame, i, in region, key, memo, entryCount)) return;
         }
@@ -1158,9 +1160,9 @@ public sealed unsafe partial class D3D12Device
         int w = region.Right - region.Left, h = region.Bottom - region.Top;
         int n = GroupDelta.Diff(memo.Entries.AsSpan(0, memo.Count), _groupEntries.AsSpan(0, count), (long)w * h, _groupDirty);
         if (n < 0) return false;
-        // Nothing changed means everything the content key is made of is unchanged: the key matched, and the retained
-        // surface was found before the repair was ever considered. A zero diff with a different key would re-key pixels
-        // that are not this content.
+        // The key is a function of the shape and the entries (GroupDelta.Describe): a zero diff under the memo's shape IS the
+        // memo's key, and that retained surface was looked up before the repair was considered. Reaching here with nothing to
+        // repair means it is gone (FindRetainedForRepair below fails) — never that the key moved.
         Debug.Assert(n > 0 || key == memo.Key, "GroupDelta found no change but the group's content key moved");
         if (n == 0 && key != memo.Key) return false;
         int s = _surfaces!.FindRetainedForRepair(memo.Key, _fenceValue + 1);

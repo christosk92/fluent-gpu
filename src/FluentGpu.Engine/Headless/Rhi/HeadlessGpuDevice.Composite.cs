@@ -140,7 +140,7 @@ public sealed partial class HeadlessGpuDevice
         NotePlacedUnsampled(in frame);
 
         // The offscreen phase, as a backend prepares it: GROUP surfaces nested first and LEAF self-blurs, each keyed
-        // (GroupCacheKey.Compute / GroupCacheKey.LeafBlur) and looked up in the modelled retained set — a hit re-draws the
+        // (GroupDelta.Describe / GroupCacheKey.LeafBlur) and looked up in the modelled retained set — a hit re-draws the
         // retained surface and SAMPLES NO TILE, a miss renders it from its tiles and retains it.
         PrepareOffscreen(in frame);
         _groupRetained.RemoveAll(static g => g.Turn < 0);
@@ -204,7 +204,12 @@ public sealed partial class HeadlessGpuDevice
         public readonly uint Serial(int surface) => S is not null && (uint)surface < (uint)S.Length ? S[surface] : 0u;
     }
     private Serials _serials;
+    // per item this composite, as the backend keeps them: a prepared surface's content key, its window-px region, and
+    // whether it was prepared (≥ 0) — what GroupDelta.Describe reads for a nested group or a leaf self-blur
     private ulong[] _groupKeys = new ulong[64];
+    private PixelRect[] _itemRegions = new PixelRect[64];
+    private int[] _itemPrepared = new int[64];
+    private GroupEntry[] _groupEntries = new GroupEntry[16];
     /// <summary>At most this many retained group / leaf-blur surfaces are modelled; past it a miss replaces the least
     /// recently used one — fixed storage, like the backend's pool bounded by <c>TileBudget.RetainedShare</c> (a scroll that
     /// misses every turn must not grow the model's list inside a measured frame).</summary>
@@ -330,8 +335,13 @@ public sealed partial class HeadlessGpuDevice
     private void PrepareOffscreen(in CompositeFrame frame)
     {
         ReadOnlySpan<CompositeItem> items = frame.Items;
-        if (_groupKeys.Length < items.Length) _groupKeys = new ulong[Math.Max(items.Length, _groupKeys.Length * 2)];
+        if (_groupKeys.Length < items.Length)
+        {
+            int c = Math.Max(items.Length, _groupKeys.Length * 2);
+            _groupKeys = new ulong[c]; _itemRegions = new PixelRect[c]; _itemPrepared = new int[c];
+        }
         Array.Clear(_groupKeys, 0, items.Length);
+        Array.Fill(_itemPrepared, -1, 0, items.Length);
         _groupRenders = _groupHits = 0;
         PrepareRange(in frame, 0, items.Length);
         for (int g = 0; g < _groupRetained.Count; g++)
@@ -369,7 +379,10 @@ public sealed partial class HeadlessGpuDevice
         int halo = it.BlurSigma > 0f ? SelfBlurRegion.TapRadius(it.BlurSigma) : 0;
         PixelRect region = GroupCacheKey.Region(in it, halo, (int)frame.Info.SizePx.Width, (int)frame.Info.SizePx.Height);
         if (region.IsEmpty) return;
-        ulong key = GroupCacheKey.Compute(in frame, i, in region, ref _serials, _groupKeys, out bool cacheable);
+        GroupDelta.Describe(in frame, i, in region, ref _serials, _groupKeys, _itemRegions, _itemPrepared,
+            ref _groupEntries, out _, out ulong key);
+        bool cacheable = key != 0UL;
+        _itemRegions[i] = region; _itemPrepared[i] = 0;
         bool hit = false;
         if (cacheable)
         {
@@ -398,6 +411,7 @@ public sealed partial class HeadlessGpuDevice
         GroupCacheKey.BlurRegions(in it, (int)frame.Info.SizePx.Width, (int)frame.Info.SizePx.Height, out PixelRect src, out PixelRect region);
         if (src.IsEmpty || region.IsEmpty) return;
         ulong key = GroupCacheKey.LeafBlur(in it, placed, in src, in region, ref _serials);
+        _groupKeys[i] = key; _itemRegions[i] = region; _itemPrepared[i] = 0;
         if (LookupOrRetain(_leafRetained, key)) { LeafBlurHits++; return; }
         LeafBlurRenders++;
         for (int p = 0; p < placed.Length; p++) Sample(placed[p].Surface);
