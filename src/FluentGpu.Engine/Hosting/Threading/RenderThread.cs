@@ -489,6 +489,17 @@ public sealed class RenderThread : IDisposable
         bool clockPaced = ownMotion && _displayClock?.IsAvailable == true;
         long tickSeq = clockPaced ? _displayClock!.TickSeq : 0;
         long tickQpc = clockPaced ? _displayClock!.TickQpc : 0;
+        // A stamp older than s_tickMaxAgeQpc is not this turn's vblank, and its seq is no tick this turn may find spent
+        // (TryGetDisplayTick's rule, and the UI production gate's: AppHost.GateTickSeq). Either the clock STALLED (its waits
+        // time out, a timeout is never a tick, so the seq freezes while the loop keeps waking on BackstopMs), or the loop
+        // disarmed it while no motion was live and its last tick is from before that park. A FRESH publication pending must
+        // not wait on that frozen seq: gated on it, the UI's backstop-paced frames (input feedback, timers) never reached the
+        // glass until the clock ticked again. Such a turn runs unpaced (the credit's liveness take bounds it, as with no
+        // clock), and its poses anchor on now: a row whose motion just came back (an unpark or un-occlusion:
+        // HasOwnRenderMotion re-anchors every row at now) must not be posed at its anchor from the old stamp (a loop at
+        // phase 0, a fade rewound). With no fresh publication the seq stays in force: a clock that stops mid-motion presents
+        // nothing more for the tick it already spent, so the stale stamp alone never re-presents motion on every backstop wake.
+        if (tickQpc != 0 && turnStart - tickQpc > s_tickMaxAgeQpc) { if (_publisher.HasPendingFrame) tickSeq = 0; tickQpc = 0; }
         bool fresh = _publisher.HasPendingFrame;
         if (!fresh && !ownMotion) return motion;   // bare wake (child drain, quiesce nudge) or child-only motion: nothing for the parent, no slot reserved (extraDrain already ran, before this decision)
         // This tick has already been presented for: the work waits for the next tick. Decided BEFORE the slot wait so
@@ -514,12 +525,6 @@ public sealed class RenderThread : IDisposable
         // publication has anything to show on this vblank (a hover or keystroke landing mid-tick presents now, not a tick later);
         // a bare re-wake would re-pose the same tick into the same bytes and elide again.
         if (tickSeq != 0 && tickSeq == _elidedTickSeq && !fresh) { _turnKind = LedgerTurnKind.TickSpent; return motion; }
-        // A stamp older than s_tickMaxAgeQpc is not this turn's vblank: the loop disarms the clock while no motion is live, so its
-        // last tick is from before that park. A turn whose motion just came back on it (an unpark or un-occlusion: HasOwnRenderMotion
-        // re-anchors every row at now) would predict its present time from that stamp and pose every row at its anchor - a loop at
-        // phase 0, a fade rewound - for one refresh. Anchor the prediction on now instead (TryGetDisplayTick's rule); the seq still
-        // marks this tick spent, so the next turn waits for a current one.
-        if (tickQpc != 0 && turnStart - tickQpc > s_tickMaxAgeQpc) tickQpc = 0;
         _turnTickQpc = tickQpc;
         _turnLedgerTickSeq = tickSeq;
         _turnLedgerTickQpc = tickQpc;
