@@ -53,6 +53,7 @@ public sealed partial class AppHost
     // The latest present time the RENDER poser has posed (render thread writes, UI reads) — the pose floor's source.
     private double _renderPosedPresentSec = double.NegativeInfinity;
     private Func<double>? _scrollShownFloorFn;
+    private Func<double>? _scrollNowFn;   // cached: a slot-starved viewport re-binds every resolve, and a method group allocates per conversion
 
     /// <summary>The window's plan table (UI thread writes, render thread reads).</summary>
     public PlanSlots Plans => _planSlots;
@@ -172,12 +173,12 @@ public sealed partial class AppHost
                 bound = authored;
                 _scrollHandles[idx] = bound;
             }
-            if (!bound.IsBound || bound.Vp != vp || bound.Horizontal != horizontal) bound.Bind(_planSlots, vp, ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
+            if (!bound.IsBound || bound.Vp != vp || bound.Horizontal != horizontal) bound.Bind(_planSlots, vp, _scrollNowFn ??= ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
             return bound;
         }
         var handle = authored ?? new ScrollHandle();
         if (authored is null) _internalScrollHandles.Add(idx);
-        handle.Bind(_planSlots, vp, ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
+        handle.Bind(_planSlots, vp, _scrollNowFn ??= ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
         handle.SetExtent(sc.ContentMain * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f), sc.ViewportMain);
         _scrollHandles[idx] = handle;
         return handle;

@@ -159,7 +159,8 @@ public sealed class ScrollHandle
     // ── binding (host) ──────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Binds the handle to a viewport slot. A pending programmatic move/restore latched while unbound is
-    /// applied once the extent arrives (<see cref="SetExtent"/>).</summary>
+    /// applied once the extent arrives (<see cref="SetExtent"/>). When all <see cref="PlanSlots.Capacity"/> slots are live
+    /// the handle stays unbound (<see cref="IsBound"/> false) and a later Bind retries.</summary>
     /// <param name="shownFloorSec">The pose floor (plan clock): the latest present time a frame has ALREADY been posed
     /// for (the render poser runs ahead of the clock by the present lead). A re-plan that starts from the live plan
     /// (a wheel notch, a glide, a key step, a contact begin) is anchored at <c>max(input time, floor)</c>: frames posed
@@ -169,13 +170,20 @@ public sealed class ScrollHandle
     {
         if (_slots is not null && !Vp.IsNone && (!ReferenceEquals(_slots, slots) || Vp != vp)) _slots.Release(Vp);
         if (Vp != vp) JumpWatch = default;   // a new viewport starts a new baseline
-        _slots = slots;
-        Vp = vp;
         _shownValid = false;
         _nowSec = nowSec;
         _shownFloorSec = shownFloorSec ?? s_noFloor;
         _horizontal = horizontal;
-        _slots.Allocate(vp, ScrollPlan.Idle(vp.Node, _lastShown, 0.0, MaxOffset, _viewport, ScrollTunables.Current.RubberBandC));
+        // Every slot live (parked KeepAlive pages keep theirs): stay UNBOUND rather than bound to no slot. Moves latch as
+        // they do before mount, and the host's ResolveScrollHandle sees !IsBound and retries until a slot frees.
+        if (!slots.Allocate(vp, ScrollPlan.Idle(vp.Node, _lastShown, 0.0, MaxOffset, _viewport, ScrollTunables.Current.RubberBandC)))
+        {
+            _slots = null;
+            Vp = ScrollViewportId.None;
+            return;
+        }
+        _slots = slots;
+        Vp = vp;
     }
 
     /// <summary>Unbinds the slot. Call on unmount. The handle keeps its last shown offset so a re-bind (a KeepAlive
