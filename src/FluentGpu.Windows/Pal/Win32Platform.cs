@@ -2489,7 +2489,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // enqueued, so a latched OnDrag node never takes one more sample past the real release.
         if (_primaryDown && pi.pointerId == _primaryDownId)
         {
-            bool stillDown = kind == PointerKind.Mouse
+            bool stillDown = IsMouseButtonStream(kind, pi.pointerType)
                 ? (pi.pointerFlags & POINTER_FLAG_FIRSTBUTTON) != 0
                 : (pi.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
             if (!stillDown) CancelPrimaryContact("move-without-button");
@@ -2507,11 +2507,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         POINTER_INFO pi;
         if (!GetPointerInfo(pointerId, &pi)) return;
         Decode(in pi, out PointerKind kind, out float pressure, out uint time, out long qpc);
-        int button = kind == PointerKind.Mouse ? ButtonForChange(pi.ButtonChangeType) : 0;
+        bool mouseStream = IsMouseButtonStream(kind, pi.pointerType);
+        int button = PointerButton(kind, pi.pointerType, pi.ButtonChangeType);
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
         // The primary mouse/pen contact (input-capture hardening): the one contact every OS-visible loss path cancels
-        // through CancelPrimaryContact. Touch never qualifies — a finger's implicit capture is the whole story.
-        if (kind is PointerKind.Mouse or PointerKind.Pen && button == 0)
+        // through CancelPrimaryContact. Touch (and a raw PT_TOUCHPAD finger) never qualifies; a touchpad CURSOR rides the
+        // mouse stream (IsMouseButtonStream). A finger's implicit capture is the whole story.
+        if ((mouseStream || kind == PointerKind.Pen) && button == 0)
         {
             if (down)
             {
@@ -2520,7 +2522,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // hardening, field comment above). MOUSE ONLY — button 0 covers Pen too, but SetCapture has no
                 // pen-specific meaning here and pen's implicit capture already tracks reliably; widening this to
                 // Pen/Touch would fire WM_CAPTURECHANGED on every stylus hover-to-contact transition for nothing.
-                if (kind == PointerKind.Mouse) { SetCapture(_hwnd); _captureHeld = true; }
+                if (mouseStream) { SetCapture(_hwnd); _captureHeld = true; }
             }
             else if (pointerId == _primaryDownId)
             {
@@ -2685,7 +2687,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         return touchpad;
     }
 
-    private static int ButtonForChange(uint change) => change switch
+    // The mouse-in-pointer BUTTON stream: a real mouse, or a precision-touchpad CURSOR that Decode tags Touchpad from its
+    // sourceDevice while the message itself is PT_MOUSE. Its two-finger tap / click zones report the physical button in
+    // ButtonChangeType exactly like a mouse, and it wants the same primary-contact capture hardening. Keyed on the
+    // message type, not the device class, so a raw PT_TOUCHPAD finger contact (DirectManipulation's) is unaffected.
+    internal static bool IsMouseButtonStream(PointerKind kind, uint pointerType) =>
+        kind == PointerKind.Mouse || pointerType == PT_MOUSE;
+
+    internal static int PointerButton(PointerKind kind, uint pointerType, uint buttonChangeType) =>
+        IsMouseButtonStream(kind, pointerType) ? ButtonForChange(buttonChangeType) : 0;
+
+    internal static int ButtonForChange(uint change) => change switch
     {
         POINTER_CHANGE_SECONDBUTTON_DOWN or POINTER_CHANGE_SECONDBUTTON_UP => 1,
         POINTER_CHANGE_THIRDBUTTON_DOWN or POINTER_CHANGE_THIRDBUTTON_UP => 2,
