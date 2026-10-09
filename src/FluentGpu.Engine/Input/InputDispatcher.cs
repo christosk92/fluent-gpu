@@ -726,6 +726,9 @@ public sealed partial class InputDispatcher
     /// the brush transition (kept as delegates to keep Input decoupled from the Animation assembly).</summary>
     public Action<NodeHandle, bool>? OnHoverChanged;
     public Action<NodeHandle, bool>? OnPressChanged;
+    /// <summary>Set by the host: notified when focus actually moves (old node false, new node true), so the declarative
+    /// WhileFocus resolver can spring the node. Distinct from the per-node <c>OnFocusChanged</c> element handlers.</summary>
+    public Action<NodeHandle, bool>? OnFocusEdge;
 
     public Action<Point2>? OnPointerDownObserved;
 
@@ -3915,6 +3918,10 @@ public sealed partial class InputDispatcher
         }
         if (prev != node)
         {
+            // The While* focus leg hears the move before the routed handlers run, so a LostFocus handler that re-moves
+            // focus nests its own false/true pair after this one (the resolver ends on the final focus owner).
+            if (!prev.IsNull && _scene.IsLive(prev)) OnFocusEdge?.Invoke(prev, false);
+            if (!node.IsNull) OnFocusEdge?.Invoke(node, true);
             // WinUI GotFocus/LostFocus are ROUTED (bubbling) events: an ancestor with an OnFocusChanged handler hears
             // focus ENTERING/LEAVING its SUBTREE, fired only on boundary crossings. The focused node itself keeps the
             // exact pre-existing self semantics. ToolTipService's keyboard-focus trigger hangs off this

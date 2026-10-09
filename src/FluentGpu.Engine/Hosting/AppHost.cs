@@ -4871,10 +4871,12 @@ public sealed partial class AppHost : IDisposable
         // A reactive write (anywhere) requests a frame.
         _runtime.FrameRequested = WakeFrame;
         _dispatcher.RequestRerender = WakeFrame;   // virtual list crossing an item boundary on scroll
-        // Hover/press edges drive BOTH the (record-time) InteractionAnimator AND the new declarative While* resolver.
-        // The resolver is a no-op for nodes without WhileHover/WhilePressed targets — additive, no regression.
+        // Hover/press edges drive BOTH the (record-time) InteractionAnimator AND the new declarative While* resolver;
+        // focus edges drive the resolver only (no record-time focus channel). The resolver is a no-op for nodes without
+        // WhileHover/WhilePressed/WhileFocus targets — additive, no regression.
         _dispatcher.OnHoverChanged = (n, on) => { _anim.SetHover(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Hover, on); };
         _dispatcher.OnPressChanged = (n, on) => { _anim.SetPress(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Press, on); };
+        _dispatcher.OnFocusEdge = (n, on) => _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Focus, on);
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
         _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
