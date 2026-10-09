@@ -351,14 +351,22 @@ public sealed class NumberBox : Component
                     Corners = Radii.ControlAll, Repeats = true, Role = AutomationRole.Button,
                     HoverFill = s.SpinHoverFill, PressedFill = s.SpinPressedFill,
                     OnClick = step,
+                    // NumberBoxPopupSpinButtonStyle IsTabStop=False (NumberBox.xaml:196): the popup lives in the overlay
+                    // layer, OUTSIDE the field, so a press that took focus would blur the field -> ClosePopup, and the
+                    // close's focus restore would reopen a fresh popup under the held button (flicker, and the repeat
+                    // dies with the old popup's fade). A press leaves focus on the field, as WinUI's TextBox keeps it.
+                    TabStop = false, AllowFocusOnInteraction = false,
                     // Popup spin glyph: FontSize 16 (NumberBox.xaml:201), TextControlButtonForeground → pressed Tertiary
                     // (NumberBox.xaml:125–146 RepeatButton* remap).
                     Children = [Parts.Apply(PartSpinGlyph,
                         new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor })],
                 };
-                // Parts: restyle the button; the step mechanics (click + auto-repeat) always win.
+                // Parts: restyle the button; the step mechanics (click + auto-repeat) and the field-keeps-focus guard always win.
                 if (Parts is { } sp)
-                    b = sp.Apply(PartSpinButton, b) with { OnClick = step, Repeats = true, Role = AutomationRole.Button };
+                    b = sp.Apply(PartSpinButton, b) with
+                    {
+                        OnClick = step, Repeats = true, Role = AutomationRole.Button, TabStop = false, AllowFocusOnInteraction = false,
+                    };
                 return b;
             }
             return new BoxEl
