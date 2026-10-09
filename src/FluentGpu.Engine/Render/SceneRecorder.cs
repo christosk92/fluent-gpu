@@ -882,6 +882,12 @@ internal sealed class SceneRecordingContext
         // still clearing the inner rail scissor so the cover isn't cut off). Its LocalTransform carries the animated fly
         // translate+scale (set by ConnectedAnimation); AbsoluteRect strips only the node's own bounds offset + translate.
         RectF overlayClip = scene.OverlayClip;
+        // The walk only CULLS against its clip argument (WalkCore treats it as the scissor already in effect and skips a
+        // node push equal to it), so a finite band clip is pushed here, as RecordDetachedNode brackets the detached fly:
+        // without it a cover straddling the region's edge drew whole over the sidebar / window chrome.
+        ulong overlayKey = (ulong)((1 << 16) | 1) << 32;
+        bool overlayClipped = overlayCount != 0 && !overlayClip.IsInfinite;
+        if (overlayClipped) rootDl.PushClip(overlayClip, overlayKey);
         for (int i = 0; i < overlayCount; i++)
         {
             var ov = scene.OverlayAt(i);
@@ -894,6 +900,7 @@ internal sealed class SceneRecordingContext
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
         }
+        if (overlayClipped) rootDl.PopClip(overlayKey);
         // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
         // AFTER the connected-animation overlays, so the drag chip is the topmost thing in the frame. Unclipped, at
         // parent opacity 1 (the chip owns its own alpha), with the popup skipRoots threaded like every other band.
