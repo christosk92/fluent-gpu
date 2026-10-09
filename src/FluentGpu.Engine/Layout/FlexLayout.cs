@@ -653,9 +653,14 @@ public sealed partial class FlexLayout
                     // pass (which re-measures at the true flexed width) then gets Stretch-clipped to this under-count:
                     // every card cut mid-line. Weight-dividing makes measure equal arrange for the standard
                     // equal-grow/basis-0 row; a grow child with a real basis still errs high (an upper bound), never low.
+                    // A column child gets the content width LESS its own cross margin — exactly what Arrange re-measures
+                    // it at. Measuring at the full content width let a wrap row inside a margined child fit on one line
+                    // here and wrap in Arrange, so the column under-reported its height by a line and the next sibling
+                    // (a virtual list's next row, below an open track drawer) painted over the extra line.
                     float cAvail = row && cli.FlexGrow > 0f && totalGrow > 0f && !float.IsInfinity(growAvail)
                         ? growAvail * (cli.FlexGrow / totalGrow) + (float.IsNaN(cli.FlexBasis) ? 0f : cli.FlexBasis)
-                        : (row && cli.FlexGrow > 0f ? growAvail : childAvail);
+                        : row ? (cli.FlexGrow > 0f ? growAvail : childAvail)
+                        : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - cli.Margin.Horizontal);
                     var cs = Measure(c, cAvail);
                     float cMain = row ? cs.Width : cs.Height;
                     float cCross = row ? cs.Height : cs.Width;
@@ -1324,9 +1329,15 @@ public sealed partial class FlexLayout
         {
             // A3: a MeasureUnboundedWidth child (e.g. a rail tooltip) opts out of the stack's own constrained
             // width and reports its natural content width instead of being squeezed to childAvail.
-            bool unbounded = _scene.Layout(c).MeasureUnboundedWidth;
-            var cs = Measure(c, unbounded ? float.PositiveInfinity : childAvail);
-            maxW = MathF.Max(maxW, cs.Width); maxH = MathF.Max(maxH, cs.Height);
+            // Every other layer measures in the slot ArrangeZStack gives it (the stack less its own margin), and its
+            // margin box is what the stack must hold: measuring at the full width let wrapped content come back a line
+            // short of what arrange lays out in the narrower slot.
+            ref LayoutInput cli = ref _scene.Layout(c);
+            bool unbounded = cli.MeasureUnboundedWidth;
+            float mH = cli.Margin.Horizontal, mV = cli.Margin.Vertical;
+            var cs = Measure(c, unbounded ? float.PositiveInfinity
+                : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - mH));
+            maxW = MathF.Max(maxW, cs.Width + mH); maxH = MathF.Max(maxH, cs.Height + mV);
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
         float h = float.IsNaN(li.Height) ? maxH + li.Padding.Vertical : li.Height;
