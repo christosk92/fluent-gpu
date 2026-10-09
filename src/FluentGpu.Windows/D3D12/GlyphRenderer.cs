@@ -81,7 +81,7 @@ internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors
 /// CharacterSpacing ×10, LineHeight ×10, packed LineStacking|LineBounds, the SpanRunId inline-run overlay — a span style
 /// change mints a fresh id upstream, so the key self-invalidates), so two runs differing only in weight or tracking
 /// can never alias. Excludes color/transform/opacity (replayed). Bounds origin and width are layout-stable for a given
-/// element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
+/// element (scroll rides the world transform, not the bounds), so they can key safely — and they key EXACTLY (their float bits), never rounded: see MakeRunKey.</summary>
 internal readonly struct RunKey : IEquatable<RunKey>
 {
     private readonly int _textId, _famId, _sizeQ, _weight, _wrap, _trim, _maxLines, _widthQ, _originXQ, _originYQ, _scaleQ;
@@ -1033,17 +1033,26 @@ float4 PSMain(VSOutG i) : SV_Target
 
     // Colour-blind by design (like GlyphKey and the atlas): a colour emoji's palette layers bake into the run's Colors
     // array, not the key, so the same run replays under any run colour; forceColor (selection/disabled) still wins.
-    private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
+    // Width and origin key on their EXACT float bits, never a whole-DIP bucket: the shape bakes the origin into every
+    // quad and makes every wrap/trim decision at the exact width (TextLayoutEngine.WrapAndPosition's
+    // `pen + adv > maxWidth + WrapSlack`, the same test the UI measure pass re-runs at the exact width). A rounded key
+    // let a box resizing through 199.6 and settling at 200.4 replay the 199.6 shape — a line more than measure sized the
+    // box for, or an ellipsis cut at the wrong width — for as long as the text stayed on screen. A box at rest keeps its
+    // exact width, so steady-state hits are unchanged.
+    internal static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, int spanRunId)
     {
-        int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : (int)MathF.Round(maxWidth);
+        int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : ExactKey(maxWidth);
         int lineHQ = float.IsNaN(lineHeight) || lineHeight <= 0f ? 0 : (int)MathF.Round(lineHeight * 10f);   // 0 = font-natural
         // The size at the glyph cache's own resolution (DeviceEmQ): a whole-DIP bucket let a 13.5-DIP and a 14-DIP run
         // of the same text share ONE baked quad set.
         return new RunKey(textId.Value, familyId.Value, DeviceEmQ(size, dpiScale), weight, wrap, trim, maxLines,
-            widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f),
+            widthQ, ExactKey(originX), ExactKey(topY), (int)MathF.Round(dpiScale * 100f),
             (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId);
     }
+
+    /// <summary>A layout float as an exact key: its IEEE bits, with -0 folded onto +0 (they lay out identically).</summary>
+    private static int ExactKey(float v) => v == 0f ? 0 : BitConverter.SingleToInt32Bits(v);
 
     /// <summary>Per-run vertical placement, applied at replay: snap the run's baseline to the nearest <b>1/N device
     /// row</b> and report which of the <see cref="SubPixelPhases"/> baked variants realises that fraction. Returns the
