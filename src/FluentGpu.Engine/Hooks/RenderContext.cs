@@ -1039,7 +1039,13 @@ public sealed partial class RenderContext
                              bool snapToDevicePixels = false)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, snapToDevicePixels: snapToDevicePixels); }, deps);
     public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
+        => UseLayoutEffect(() =>
+        {
+            if (Anim is not { } a || HostNode.IsNull) return null;
+            int src = a.Clocks.Register(source);
+            a.Drive(HostNode, channel, keys, src, min, max);
+            return () => a.Clocks.Unregister(src);   // re-seed / unmount: release the source closure, reuse its index
+        }, deps);
 
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13 <c>UseGesture</c>). Config-only:
     /// enrolls a gesture-arena member on <see cref="HostNode"/> (via the <c>SceneStore</c> gesture column — the

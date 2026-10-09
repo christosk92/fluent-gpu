@@ -63,10 +63,27 @@ public readonly record struct Keyframe
 }
 
 /// <summary>A value source (scroll offset, playback ms, a custom MotionValue) that can drive a timeline instead of wall-time.
-/// (Retained for parity; the index-based SignalSource that retires this List&lt;Func&lt;float&gt;&gt; closure model is a follow-up.)</summary>
+/// A source's owner <see cref="Unregister"/>s it when it unmounts or re-seeds: the closure is released and its index reused,
+/// so the table stays as small as the live drivers. (The index-based SignalSource that retires this closure model is a follow-up.)</summary>
 public sealed class DrivenClockTable
 {
-    private readonly List<Func<float>> _sources = new();
-    public int Register(Func<float> source) { _sources.Add(source); return _sources.Count - 1; }
-    public float Sample(int i) => (uint)i < (uint)_sources.Count ? _sources[i]() : 0f;
+    private readonly List<Func<float>?> _sources = new();
+    private readonly Stack<int> _free = new();   // unregistered indices, reused before the list grows
+
+    public int Register(Func<float> source)
+    {
+        if (_free.TryPop(out int i)) { _sources[i] = source; return i; }
+        _sources.Add(source);
+        return _sources.Count - 1;
+    }
+
+    /// <summary>Drop a registered source; a row still reading the index samples 0 until it is re-driven.</summary>
+    public void Unregister(int i)
+    {
+        if ((uint)i >= (uint)_sources.Count || _sources[i] is null) return;
+        _sources[i] = null;
+        _free.Push(i);
+    }
+
+    public float Sample(int i) => (uint)i < (uint)_sources.Count && _sources[i] is { } s ? s() : 0f;
 }
