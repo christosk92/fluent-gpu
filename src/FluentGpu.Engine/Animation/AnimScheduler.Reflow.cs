@@ -234,7 +234,15 @@ public sealed partial class AnimEngine
     {
         if (!_slab.NodeHasRows((int)node.Raw.Index)) return false;   // O(1) — the common case, per reconciled node
         int s = Find(node, ch);
-        if (s < 0) return false;
+        if (s < 0)
+        {
+            // SizeMode.Relayout keeps its declared shadow on the SizeW/SizeH row (the host pins this column to the interp
+            // each tick). File the re-declaration there so a retarget carries ground truth, but still answer false: the
+            // reconciler must write the column so this commit's layout solves the destination AnimateBounds aims at.
+            int rs = Find(node, ch == AnimChannel.LayoutW ? AnimChannel.SizeW : AnimChannel.SizeH);
+            if (rs >= 0 && _slab.At(rs).Has(AnimFlags.RestoreLayout)) _slab.At(rs).RestoreTo = declared;
+            return false;
+        }
 
         _slab.At(s).RestoreTo = declared;
         // NaN ("auto"): nothing to re-aim and nothing to clear — the seed owns NaturalTarget (see the note above).
