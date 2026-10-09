@@ -43,13 +43,18 @@ public sealed partial class AnimEngine
 
     /// <summary>Current state → exit terminal, driven by a <see cref="MotionTokenDef"/> (the declarative Element.Exit path).</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in MotionTokenDef m, float delayMs = 0f)
+        => SeedExitOver(node, in e, in m, EnterRest.Identity, delayMs);
+
+    /// <summary>Token <see cref="SeedExit(NodeHandle, in EnterExit, in MotionTokenDef, float)"/> over the node's AUTHORED
+    /// pose (see the LayoutTransition overload).</summary>
+    internal void SeedExitOver(NodeHandle node, in EnterExit e, in MotionTokenDef m, in EnterRest rest, float delayMs = 0f)
     {
-        SeedChannel(node, AnimChannel.Opacity, e.Opacity, in m, null, delayMs);   // always (the exit-settle signal)
-        if (e.Dx != 0f) SeedChannel(node, AnimChannel.TranslateX, e.Dx, in m, null, delayMs);
-        if (e.Dy != 0f) SeedChannel(node, AnimChannel.TranslateY, e.Dy, in m, null, delayMs);
-        if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, e.Sx, in m, null, delayMs);
-        if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, e.Sy, in m, null, delayMs);
-        if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, e.Blur, in m, null, delayMs);
+        SeedChannel(node, AnimChannel.Opacity, rest.Opacity * e.Opacity, in m, null, delayMs);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedChannel(node, AnimChannel.TranslateX, rest.OffsetX + e.Dx, in m, null, delayMs);
+        if (e.Dy != 0f) SeedChannel(node, AnimChannel.TranslateY, rest.OffsetY + e.Dy, in m, null, delayMs);
+        if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, in m, null, delayMs);
+        if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, in m, null, delayMs);
+        if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, in m, null, delayMs);
         MarkStartPending(node);
     }
 
@@ -220,15 +225,22 @@ public sealed partial class AnimEngine
     /// <summary>A removed (now-Exiting) node animates FROM its current state TO the exit terminal; the host reclaims it
     /// when its rows settle. (Under the full rework this routes through the DetachedAnimSlab — Phase 5.)</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+        => SeedExitOver(node, in e, in spec, EnterRest.Identity);
+
+    /// <summary><see cref="SeedExit"/> relative to the node's AUTHORED pose <paramref name="rest"/>, the mirror of
+    /// <see cref="SeedEnterOver"/>: offset/blur ADD, scale/opacity MULTIPLY. The rows replace-fold over paint, so a raw
+    /// terminal is absolute: a dimmed (Opacity 0.6) row under a slide-only Exit brightened to 1 as it left, and an
+    /// OffsetX 24 node with Exit Dx 24 did not move at all.</summary>
+    internal void SeedExitOver(NodeHandle node, in EnterExit e, in LayoutTransition spec, in EnterRest rest)
     {
         TransitionDynamics dyn = Normalize(spec.ExitDynamics ?? spec.Dynamics);
         float delay = spec.ExitDelayMs ?? spec.DelayMs;
-        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn, delayMs: delay);   // always (the exit-settle signal)
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn, delayMs: delay);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn, delayMs: delay);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: delay);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: delay);
-        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: delay);
+        SeedTerminal(node, AnimChannel.Opacity, rest.Opacity * e.Opacity, dyn, delayMs: delay);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, rest.OffsetX + e.Dx, dyn, delayMs: delay);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, rest.OffsetY + e.Dy, dyn, delayMs: delay);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, dyn, delayMs: delay);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, dyn, delayMs: delay);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, dyn, delayMs: delay);
         MarkStartPending(node);
         // SizeMode.Reflow exit: ease THIS node's layout size to 0. SeedExit used to seed only opacity/transform, so a
         // DrawerReveal-style orphan kept its last full Bounds (and therefore its ClipToBounds window) while its
@@ -464,7 +476,8 @@ public sealed partial class AnimEngine
     }
 }
 
-/// <summary>A node's AUTHORED static pose, the rest an Enter settles on (<see cref="AnimEngine.SeedEnterOver"/>).
+/// <summary>A node's AUTHORED static pose, the rest an Enter settles on and an Exit's terminal is relative to (<see cref="AnimEngine.SeedEnterOver"/>,
+/// <see cref="AnimEngine.SeedExitOver(NodeHandle, in EnterExit, in LayoutTransition, in EnterRest)"/>).
 /// Unlike <see cref="MotionTarget"/>, scale is per axis, because an Enter seeds ScaleX and ScaleY separately.</summary>
 internal readonly record struct EnterRest(float OffsetX, float OffsetY, float ScaleX, float ScaleY, float Opacity, float Blur)
 {

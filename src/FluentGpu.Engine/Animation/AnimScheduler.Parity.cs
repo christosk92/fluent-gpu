@@ -30,6 +30,9 @@ public sealed partial class AnimEngine
     // node index -> the AUTHORED static transform WriteColumns wrote (OffsetX/Y·Rotation·Scale or the unbound matrix):
     // the rest a position FLIP settles on and a structural snap lands back on. Absent => identity.
     private readonly Dictionary<int, Affine2D> _restTransforms = new();
+    // node index -> the AUTHORED static pose (EnterRest: offset/scale/opacity/blur) WriteColumns read off the BoxEl: the
+    // rest an Exit's terminal is relative to (Reconciler.Remove has no Element in hand, only the node). Absent => identity.
+    private readonly Dictionary<int, EnterRest> _restPoses = new();
 
     // ── census (read by the MemCensus sampler / wake diagnostics) ─────────────────────────────────
     /// <summary>Active rows, all channels — O(1).</summary>
@@ -240,6 +243,7 @@ public sealed partial class AnimEngine
     {
         _transitions.Remove((int)node.Raw.Index);
         _restTransforms.Remove((int)node.Raw.Index);
+        _restPoses.Remove((int)node.Raw.Index);
     }
 
     /// <summary>Stash a transition node's AUTHORED static transform (the reconciler calls this beside SetTransition).
@@ -255,6 +259,19 @@ public sealed partial class AnimEngine
 
     private Affine2D RestTransformOf(int nodeIndex)
         => _restTransforms.TryGetValue(nodeIndex, out Affine2D m) ? m : Affine2D.Identity;
+
+    /// <summary>Stash a transition node's AUTHORED pose (the reconciler calls this beside SetRestTransform) for
+    /// <see cref="SeedExitOver(NodeHandle, in EnterExit, in LayoutTransition, in EnterRest)"/>: the orphan path has only
+    /// the node. Identity is not stored.</summary>
+    internal void SetRestPose(NodeHandle node, in EnterRest rest)
+    {
+        int idx = (int)node.Raw.Index;
+        if (rest == EnterRest.Identity) _restPoses.Remove(idx);
+        else _restPoses[idx] = rest;
+    }
+
+    internal EnterRest RestPoseOf(NodeHandle node)
+        => _restPoses.TryGetValue((int)node.Raw.Index, out EnterRest r) ? r : EnterRest.Identity;
     /// <summary>Symmetric teardown when a scene slot is FREED (wired to SceneStore.OnFreeIndex): drop the index-keyed
     /// spec so a freed node leaves no dormant spec the next node reusing the slot inherits. In-flight rows are
     /// gen-checked and self-prune at the next tick's IsLive guard.</summary>
@@ -262,6 +279,7 @@ public sealed partial class AnimEngine
     {
         _transitions.Remove(index);
         _restTransforms.Remove(index);
+        _restPoses.Remove(index);
         ClearInteractTargets(index);
         // A forced orphan reclaim runs after Tick. Render-owned rows cannot rely on another UI tick
         // to notice the dead node: those rows intentionally do not request one. Retire them with the node.

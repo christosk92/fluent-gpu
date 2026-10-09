@@ -1853,7 +1853,7 @@ public sealed partial class TreeReconciler
         OnSubtreeDeactivated?.Invoke(entry.Root);
         _scene.Unmark(entry.Root, NodeFlags.HitTestVisible);
         Anim!.CancelAll(entry.Root);
-        Anim.SeedExit(entry.Root, spec.Exit, spec);
+        Anim.SeedExitOver(entry.Root, spec.Exit, spec, EnterRestOf(entry.El));
         // Freeze component renders for the outgoing snapshot: the page stays attached (exit tracks keep ticking;
         // UseActivation does not fire — park still owns that) but must not rebuild against the incoming route.
         SetSubtreeExitFrozen(entry.Root, frozen: true);
@@ -4431,7 +4431,7 @@ public sealed partial class TreeReconciler
             // exit track on a page-sized subtree (the skeleton shimmer) must not keep painting over the live content for
             // two seconds.
             _scene.Orphan(node, ExitMaxAgeMs(spec));
-            anim.SeedExit(node, spec.Exit, spec);
+            anim.SeedExitOver(node, spec.Exit, spec, anim.RestPoseOf(node));
             return;
         }
         UnmountSubtree(node);
@@ -4764,7 +4764,7 @@ public sealed partial class TreeReconciler
             {
                 anim!.CancelAll(root);
                 _scene.Orphan(root);
-                anim!.SeedExit(root, exit, in motionDef, dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
+                anim!.SeedExitOver(root, exit, in motionDef, EnterRestOf(slot.El), dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
             }
             else _scene.FreeSubtree(root);
             _reconciled = true;
@@ -5334,6 +5334,7 @@ public sealed partial class TreeReconciler
                 {
                     anim.SetTransition(node, at);
                     anim.SetRestTransform(node, restTf);
+                    anim.SetRestPose(node, EnterRestOf(b));
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
                     if (isMount && at.Enter.Active)
                     {
@@ -5352,6 +5353,7 @@ public sealed partial class TreeReconciler
                 {
                     danim.SetTransition(node, dt);
                     danim.SetRestTransform(node, restTf);
+                    danim.SetRestPose(node, EnterRestOf(b));
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
                     if (isMount && dt.Enter.Active)
                     {
