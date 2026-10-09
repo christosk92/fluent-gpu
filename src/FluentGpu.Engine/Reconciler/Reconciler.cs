@@ -5373,6 +5373,9 @@ public sealed partial class TreeReconciler
                         Opacity = b.Opacity.IsBound ? 1f : b.Opacity.Value, Blur = b.Blur,
                     },
                     b.Transition ?? MotionTok.ControlFaster);
+                // The static writes above re-asserted the authored rest; a gesture still engaged on a reused node (its
+                // While* rows settled and freed) re-poses over it, so a hovered fan or dim does not snap to rest mid-hover.
+                if (!isMount) Anim?.ReassertEngagedPose(node);
                 // E15: bindable like Fill/Opacity — guarded the same way, a bound channel is owned by its bind effect
                 // (wired below in BindNode) and the static write here must not clobber it back between signal fires.
                 if (!b.HitTestVisible.IsBound)

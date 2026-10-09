@@ -49,6 +49,38 @@ public sealed partial class AnimEngine
 
     internal void ClearInteractTargets(int nodeIndex) => _interactTargets.Remove(nodeIndex);
 
+    /// <summary>Re-pose an ENGAGED gesture state over the static columns a re-render just re-wrote. WriteColumns
+    /// re-asserts the authored rest transform, opacity and blur on every changed-props reconcile, which is right at rest
+    /// but wipes a hover/press/focus pose whose rows have settled: a settle leaves its value in paint and frees the row,
+    /// so nothing re-posed it and a hovered cover fan (or a While* dim/blur) snapped to rest under a pointer that never
+    /// left, until the next edge. Lands the active target over the re-stashed rest at once, on the gesture channels no
+    /// live row owns; a live row replace-folds its own value on the next tick. No-op at rest or without stashed targets.</summary>
+    internal void ReassertEngagedPose(NodeHandle node)
+    {
+        if (!_interactTargets.TryGetValue((int)node.Raw.Index, out var t) || !_scene.IsLive(node)) return;
+        MotionTarget? engaged =
+            t.IsPressed && t.Press is { } p ? p :
+            t.IsFocused && t.Focus is { } f ? f :
+            t.IsHovered && t.Hover is { } h ? h :
+            null;
+        if (engaged is not { } d) return;
+        var acc = Accum.FromPaint(in _scene.Paint(node));
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.ScaleX,     t.Rest.Scale    * d.Scale);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.ScaleY,     t.Rest.Scale    * d.Scale);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.Opacity,    t.Rest.Opacity  * d.Opacity);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.TranslateX, t.Rest.OffsetX  + d.OffsetX);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.TranslateY, t.Rest.OffsetY  + d.OffsetY);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.Rotation,   t.Rest.Rotation + d.Rotation);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.BlurSigma,  t.Rest.Blur     + d.Blur);
+        Compose(node, in acc);
+    }
+
+    // SeedTargetOver's composition (offset/rotation/blur ADD, scale/opacity MULTIPLY), landed instead of seeded.
+    private void LandUnowned(ref Accum acc, NodeHandle node, uint channels, AnimChannel ch, float v)
+    {
+        if (Drives(channels, ch) && Find(node, ch) < 0) acc.Fold(ch, v, replace: true);
+    }
+
     /// <summary>On an input hover/press/focus edge: update the state, resolve the active target by fixed priority
     /// (press &gt; focus &gt; hover &gt; rest), and spring the gesture channels to it. Releasing the top state animates
     /// to the next writer's target — or, with nothing active, back to the node's AUTHORED rest pose (never identity;
