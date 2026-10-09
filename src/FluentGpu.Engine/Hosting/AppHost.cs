@@ -5639,6 +5639,11 @@ public sealed partial class AppHost : IDisposable
         if (restoreEdge)
         {
             _frameNeeded = true;   // restored: repaint now
+            // A present that raced the park (render motion presenting into a window already iconic or cloaked) stood down, and
+            // nothing presents while parked, so the swapchain still reads occluded: render motion stays paused and WindowOccluded
+            // true. Repaint in full so this frame presents and clears it (an unchanged restore frame would be elided), as the
+            // detached reveal does - or the stale state lingers until the occlusion probe.
+            if (_swapchain.IsOccluded) RequestFullRepaintOnce();
             // Restore is a cold-start interaction edge exactly like the post-input arm above (search WarmCadenceInputMask):
             // the render thread and DM were parked through the minimize, so DM re-establishes its surfacing rhythm in
             // BURSTS. Without a hold, ComputeWakeReasons reads None in the gaps between bursts, RecommendedWaitMsCore takes
