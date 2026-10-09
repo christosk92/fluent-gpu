@@ -270,6 +270,15 @@ internal sealed class SceneRecordingContext
     private readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
     private int _publishedVideoRectCount;
 
+    // The vacated extent of a SPAN-LESS node (a top band: the drag ghost, connected overlays, the drag chip, and rootless
+    // orphans), indexed by node index. Those walks have no span table to recover a prior from, so each one stamps the
+    // window-space extent it presented at, with its generation and the host pass that wrote it. A slot is only trusted
+    // from the immediately preceding host pass (TryBandPriorExtent); anything else falls back to the forced-full repaint.
+    private RectF[] _bandPriorRect = [];
+    private uint[] _bandPriorGen = [];
+    private uint[] _bandPriorPass = [];
+    private uint _bandPass;
+
     // F070: the same turn's holes as the video placement must follow them (unclipped posed rect + the clip that cut it, per registry
     // token). Written by Record / Compose on the thread that records, read by that thread's present turn right after - the render
     // thread's VideoPlacementApplier moves the video by each hole's travel since the UI published, so it lands under the hole of
@@ -639,6 +648,17 @@ internal sealed class SceneRecordingContext
         // slice recorder (the host's), the scene records into the slice arenas and `dl` stays empty: the composite plan
         // (SliceRecorder.Place → BuildComposite) is what every backend consumes.
         bool standalone = slices is null;
+        if (!standalone)
+        {
+            _bandPass++;   // the pass that stamps the band slots this record writes (TryBandPriorExtent)
+            // Sized here, before the node walk, so StoreBandPriorExtent only indexes and never allocates mid-walk.
+            if (_bandPriorGen.Length < scene.Capacity)
+            {
+                Array.Resize(ref _bandPriorRect, scene.Capacity);
+                Array.Resize(ref _bandPriorGen, scene.Capacity);
+                Array.Resize(ref _bandPriorPass, scene.Capacity);
+            }
+        }
         slices ??= _ownSlices ??= new SliceRecorder();
         dl.Reset();
         if (scene.Root.IsNull) return default;
@@ -3358,11 +3378,16 @@ internal sealed class SceneRecordingContext
                 {
                     stats.AddRepaint(RepaintBand(result.SubtreeBounds, blurHalo));
                     // old ∪ new: the band the node VACATED repaints too. A brand-new node never presented, so its current
-                    // extent is the whole truth. With no span table at all there is no prior to recover and a move leaves
-                    // an unknown vacated band ⇒ full.
+                    // extent is the whole truth. With a span table the prior comes from there. A span-less node (a top band:
+                    // drag ghost, connected overlays, drag chip) takes it from its band slot, stamped by the host pass it
+                    // presented at. It must be repainted EXPLICITLY: a transparent root has nothing under the band to
+                    // re-raster, so the tiles it left do not carry the vacated pixels into the Present set. No trusted
+                    // prior (a first presentation, or not walked last pass) ⇒ the move is unknown ⇒ full.
                     if (spans is null)
                     {
-                        if (movedNode) stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
+                        if (stats.CompositeArenas && TryBandPriorExtent((int)node.Raw.Index, node.Raw.Gen, out RectF bandPrior))
+                            stats.AddRepaintWindow(RepaintBand(in bandPrior, blurHalo));
+                        else if (movedNode) stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
                     }
                     else if (spans.TryGetPriorExtent((int)node.Raw.Index, node.Raw.Gen, spanFrame, out RectF priorExtent, out _))
                     {
@@ -3374,6 +3399,11 @@ internal sealed class SceneRecordingContext
                 }
             }
         }
+
+        // A span-less composite walk stamps the extent it presented at for the next pass's vacated band. Stored after the
+        // repaint block above, which reads the previous extent first; an empty extent when nothing was drawn.
+        if (spans is null && stats.CompositeArenas)
+            StoreBandPriorExtent(node, result.HasBounds ? result.SubtreeBounds : default);
 
         if (selfAdditive) dl.SetBlend(PaintBlend.SrcOver);
 
@@ -3397,6 +3427,31 @@ internal sealed class SceneRecordingContext
         stats.Reloc = parentReloc;
 
         return result;
+    }
+
+    /// <summary>The window-space extent a span-less node presented at on the last host pass that walked it, for the repaint of
+    /// the band it vacated. Trusted only from the IMMEDIATELY preceding host pass: a node not walked there was not presented
+    /// there, so the caller falls back to the forced-full repaint.</summary>
+    private bool TryBandPriorExtent(int nodeIndex, uint gen, out RectF prior)
+    {
+        prior = default;
+        if ((uint)nodeIndex >= (uint)_bandPriorGen.Length) return false;
+        uint stamp = _bandPriorPass[nodeIndex];
+        if (stamp == 0 || stamp + 1 != _bandPass || _bandPriorGen[nodeIndex] != gen) return false;
+        prior = _bandPriorRect[nodeIndex];
+        return true;
+    }
+
+    /// <summary>Stamps the extent a span-less node presented at during this host pass (empty when it drew nothing).</summary>
+    private void StoreBandPriorExtent(NodeHandle node, in RectF extent)
+    {
+        int nodeIndex = (int)node.Raw.Index;
+        // Sized by Record before the walk; an index past it is left unstamped, so TryBandPriorExtent falls back to the
+        // forced-full repaint rather than allocating here.
+        if ((uint)nodeIndex >= (uint)_bandPriorGen.Length) return;
+        _bandPriorRect[nodeIndex] = extent;
+        _bandPriorGen[nodeIndex] = node.Raw.Gen;
+        _bandPriorPass[nodeIndex] = _bandPass;
     }
 
     private static void CountGroups(ref RecordAccumulator stats, bool edgeFade, bool blurCandidate, bool blurGroup)
