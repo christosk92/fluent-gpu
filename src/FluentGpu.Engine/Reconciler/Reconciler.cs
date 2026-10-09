@@ -1990,7 +1990,16 @@ public sealed partial class TreeReconciler
             // (evictable mid-hold) and an un-park re-pins it (idempotent via _imagePinnedNodes).
             if (_pendingImageId.TryGetValue((int)node.Raw.Index, out int pendingId) && pendingId != 0)
             {
-                if (active) PinImageNode(node, pendingId);
+                if (active)
+                {
+                    PinImageNode(node, pendingId);
+                    // The hold target may have settled while this subtree was detached: a hold begun while parked was
+                    // never tracked (PinImageNode skips an unreachable node), one begun before the park was untracked by
+                    // it, so its status event reached no node, and re-pinning a Ready/Failed entry raises none. Commit
+                    // it now (checked AFTER the pin, which restarts a dropped decode), or the held picture stays for good.
+                    if (Images is not null && Images.StateOf(new ImageHandle(pendingId)) is ImageState.Ready or ImageState.Failed)
+                        MarkImageDirty(pendingId);
+                }
                 else UnpinImageNode(node, pendingId);
             }
             // A parked page has nothing on screen to dissolve: finish any swap crossfade instead of parking its pin.
