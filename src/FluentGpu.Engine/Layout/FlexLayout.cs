@@ -285,7 +285,8 @@ public sealed partial class FlexLayout
     }
 
     /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
-    /// LayoutInput size if set — a SizeMode.Relayout animation writes the interpolated width there each tick). The parent
+    /// LayoutInput size if set — a SizeMode.Relayout animation writes the interpolated width there each tick — except
+    /// under a grid / virtual list, which place it in their own slot). The parent
     /// already placed this node, so this cannot propagate upward — a scoped, per-frame-affordable relayout for live reflow.</summary>
     public void RunSubtree(NodeHandle node)
     {
@@ -304,7 +305,19 @@ public sealed partial class FlexLayout
         // (minus this node's margin): a parent-determined boundary can never legitimately exceed its parent. Explicit
         // li.Width/Height (incl. a SizeMode.Relayout animation writing the interpolated size) are honoured untouched.
         var parent = _scene.Parent(node);
-        if (!parent.IsNull)
+        uint ni = node.Raw.Index;
+        if (!parent.IsNull && PlacesChildInSlot(parent) && (_scene.Flags(node) & NodeFlags.Relayouting) == 0
+            && ni < (uint)_arranged.Length && _scene.IsArrangedValid(node))
+        {
+            // A grid cell / virtual row: the parent arranges it at a SLOT it computes (ArrangeGrid's colW×rowH,
+            // ArrangeVirtual's ItemRect) and ignores its explicit Width/Height, so the authored size is NOT the box a full
+            // layout gives it. Re-solve at the box the parent last placed it in — else a change inside a fixed-size
+            // ClipToBounds card narrows that one tile to its authored 160 in a 240 track until the next full layout.
+            // A SizeMode.Relayout animation (Relayouting) still re-solves at the size it wrote into li.Width/Height.
+            ref RectF slot = ref _arranged[ni];
+            w = slot.W; h = slot.H;
+        }
+        else if (!parent.IsNull)
         {
             ref RectF pb = ref _scene.Bounds(parent);
             ref LayoutInput pli = ref _scene.Layout(parent);
@@ -315,6 +328,17 @@ public sealed partial class FlexLayout
         float ox = b.X, oy = b.Y;
         Arrange(node, ox, oy, w, h);
         VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
+    }
+
+    /// <summary>A parent that arranges each child at a slot it computes itself and ignores the child's explicit
+    /// Width/Height: a grid (column track × row height) or a virtual list's content node (ItemRect / extent slot).</summary>
+    private bool PlacesChildInSlot(NodeHandle parent)
+    {
+        if (_scene.HasGrid(parent)) return true;
+        var viewport = _scene.Parent(parent);
+        if (viewport.IsNull || !_scene.HasScroll(viewport)) return false;
+        ref readonly ScrollState sc = ref _scene.ScrollRow(viewport);
+        return sc.ItemCount > 0 && sc.ContentNode == parent;
     }
 
     // P1 presence (layout.md §4.7): a collapsed node (Element.Visible resolved false) is out of layout flow. This
