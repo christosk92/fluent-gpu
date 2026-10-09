@@ -397,7 +397,8 @@ internal sealed class SceneRecordingContext
         // index). Self* = the pending slice-root walk the containing cut handed over (consumed by WalkCore).
         public SliceRecorder? Slices;
         /// <summary>How many enclosing <see cref="Walk"/> frames of the CURRENT arena are inside an additive subtree
-        /// (BoxEl.Blend). Saved and zeroed at every slice cut, restored after it.</summary>
+        /// (BoxEl.Blend). Saved at every slice cut and restored after it; zeroed for the cut's arena unless the cut carries
+        /// the bracket (<see cref="SelfAdditive"/>), which then counts as one.</summary>
         public int AdditiveDepth;
         public bool Slicing;
         public int CurSlot;
@@ -425,6 +426,9 @@ internal sealed class SceneRecordingContext
         // The pending slice-root walk carries its node's .StickyClip as a COMPOSITE-TIME clip on its marker
         // (CompositeSliceFlags.StickyClip): that walk leaves NodePaint.ClipRect out of every byte it records.
         public bool SelfStickyClip;
+        // The pending slice-root walk re-opens the additive bracket its cut fell inside (BoxEl.Blend): EnterSlice sets it
+        // for a cut that would record inside that bracket when folded inline, WalkCore emits the pair inside the root's span.
+        public bool SelfAdditive;
         // The walk records into slice arenas that composite through retained tiles (the host's pass — every band of it,
         // top bands included), as opposed to a standalone stream a backend replays whole (where an inline acrylic layer
         // composites at push time).
@@ -1264,8 +1268,9 @@ internal sealed class SceneRecordingContext
             markersBefore = dl.OpcodeStats.CompositeSlice;
         }
         // BoxEl.Blend: an additive subtree is bracketed by a balanced SetBlend pair INSIDE this node's span-index entry, so a
-        // clean-span copy carries both ends. Nested additive subtrees emit nothing (depth-counted, per arena: a slice cut
-        // starts its own arena at depth 0, so the bracket never reaches across a RepaintBoundary).
+        // clean-span copy carries both ends. Nested additive subtrees emit nothing (depth-counted, per arena: a repaint
+        // boundary starts its own arena at depth 0, so the bracket never reaches across it; a cut that can fold back
+        // inline re-opens the bracket in its own arena, see EnterSlice).
         bool additive = scene.PaintBlendOf(node) == PaintBlend.Additive;
         bool opened = additive && stats.AdditiveDepth++ == 0;
         if (opened) dl.SetBlend(PaintBlend.Additive);
@@ -1317,14 +1322,19 @@ internal sealed class SceneRecordingContext
         stats.AdditiveDepth = c.AdditiveDepth;
     }
 
-    private static void EnterSlice(ref RecordAccumulator stats, SliceRecorder sl, int slot, float ownDx, float ownDy)
+    private static void EnterSlice(ref RecordAccumulator stats, SliceRecorder sl, int slot, float ownDx, float ownDy,
+        bool carryAdditive = false)
     {
         stats.CurSlot = slot;
         stats.CurDx += ownDx; stats.CurDy += ownDy;
         stats.SliceOwnDx = ownDx; stats.SliceOwnDy = ownDy;
         stats.SliceDepth = 0;
         stats.GeomCovered = false;
-        stats.AdditiveDepth = 0;   // a child arena opens its own SetBlend brackets
+        // A child arena opens its own SetBlend brackets. A cut that records inline once the effect budget is spent (or
+        // inside an inline group layer) would paint inside an open additive bracket there, so it re-opens that bracket
+        // in its own walk: cut or folded, the subtree adds light alike. A repaint boundary starts source-over.
+        stats.SelfAdditive = carryAdditive && stats.AdditiveDepth > 0;
+        stats.AdditiveDepth = stats.SelfAdditive ? 1 : 0;
         stats.CurGen = sl.CurGen(slot);
         stats.PriorGen = sl.PriorGen(slot);
     }
@@ -1435,7 +1445,7 @@ internal sealed class SceneRecordingContext
         stats.SelfPose = pose;
         stats.SelfAcrylic = false;
         stats.SelfStickyClip = false;   // a translation root's sticky clip (a nonsensical .Sticky().StickyClip()) records baked
-        EnterSlice(ref stats, sl, slot, ownDx, ownDy);
+        EnterSlice(ref stats, sl, slot, ownDx, ownDy, carryAdditive: true);
         SpanRecordResult res;
         try
         {
@@ -1471,7 +1481,7 @@ internal sealed class SceneRecordingContext
         // records into the slice's own arena — KEPT whole when its root is clean (zero bytes), else swapped + walked.
         bool isSliceSelf = !stats.SelfNode.IsNull && stats.SelfNode == node;
         int selfSlot = -1;
-        bool selfHasLocal = false, omitLayer = false, acrylicCut = false, selfSticky = false;
+        bool selfHasLocal = false, omitLayer = false, acrylicCut = false, selfSticky = false, selfAdditive = false;
         Affine2D selfLocal = default;
         SliceRecorder.PoseKind selfPose = SliceRecorder.PoseKind.None;
         if (isSliceSelf)
@@ -1483,9 +1493,11 @@ internal sealed class SceneRecordingContext
             selfPose = stats.SelfPose;
             acrylicCut = stats.SelfAcrylic;
             selfSticky = stats.SelfStickyClip;
+            selfAdditive = stats.SelfAdditive;
             stats.SelfNode = NodeHandle.Null;
             stats.SelfAcrylic = false;
             stats.SelfStickyClip = false;
+            stats.SelfAdditive = false;
         }
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
@@ -1776,7 +1788,7 @@ internal sealed class SceneRecordingContext
                     stats.SelfPose = SliceRecorder.PoseKind.None;
                     stats.SelfAcrylic = isAcrylic;
                     stats.SelfStickyClip = stickyCut;
-                    EnterSlice(ref stats, sl, slot, 0f, 0f);
+                    EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: true);
                     SpanRecordResult res;
                     try
                     {
@@ -1865,7 +1877,7 @@ internal sealed class SceneRecordingContext
                 stats.SelfPose = posed ? SliceRecorder.PoseKind.Posed : SliceRecorder.PoseKind.None;
                 stats.SelfAcrylic = false;
                 stats.SelfStickyClip = stickyCut;
-                EnterSlice(ref stats, sl, slot, 0f, 0f);
+                EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: stickyCut);
                 SpanRecordResult res;
                 try
                 {
@@ -2045,6 +2057,9 @@ internal sealed class SceneRecordingContext
             stats.CurGen = sl.CurGen(selfSlot);
             stats.PriorGen = sl.PriorGen(selfSlot);
         }
+        // The additive bracket a carrying cut re-opens (EnterSlice): inside the root's span, so a kept arena holds both ends
+        // (the carried depth is already in the span signature).
+        if (selfAdditive) dl.SetBlend(PaintBlend.Additive);
 
         // -- Geometry damage decision (retained tiles) --
         // A node that re-records WITHOUT a paint change of its own (clean itself, or only layout / structure dirty) damages
@@ -3312,6 +3327,8 @@ internal sealed class SceneRecordingContext
                 }
             }
         }
+
+        if (selfAdditive) dl.SetBlend(PaintBlend.SrcOver);
 
         if (spanTracking)
         {
