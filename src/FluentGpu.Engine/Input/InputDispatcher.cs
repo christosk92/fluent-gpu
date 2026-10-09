@@ -484,6 +484,18 @@ public sealed partial class InputDispatcher
     /// point, ToolTipService_Partial.cpp:1060-1098) so the bubble can stay hit-test-INVISIBLE like a real tooltip.</summary>
     public Point2? PointerPosition => _lastPointerValid ? _lastPointerPx : null;
 
+    /// <summary>The window's effective scale changed (an app-zoom step or a WM_DPICHANGED hop) under a possibly STATIONARY
+    /// cursor. The last pointer position was captured in the OLD window DIP space (client px / old scale), and no pointer
+    /// event is coming to replace it, so re-express it in the new space before this frame's stationary hover refresh
+    /// hit-tests it (and before the ToolTip safe zone reads <see cref="PointerPosition"/>). Exact for app zoom: the physical
+    /// window and the cursor are untouched. Called by the host's EnsureSize. Scalar, zero-alloc.</summary>
+    internal void RescalePointerPosition(float oldScale, float newScale)
+    {
+        if (!_lastPointerValid || oldScale <= 0f || newScale <= 0f || oldScale == newScale) return;
+        float k = oldScale / newScale;
+        _lastPointerPx = new Point2(_lastPointerPx.X * k, _lastPointerPx.Y * k);
+    }
+
     /// <summary>
     /// SIP reflow (input-a11y.md §10): scroll the focused editor's caret above the occluded region the touch keyboard
     /// reported (<see cref="Pal.IPlatformTextInput.OccludedRectChanged"/>). Walks from <see cref="Focused"/> to its
@@ -934,6 +946,10 @@ public sealed partial class InputDispatcher
 
                 case InputKind.PointerDown:
                     OnPointerDownObserved?.Invoke(e.PositionPx);
+                    // Any press (every device, every button) ends access-key mode and spoils a pending bare-Alt tap:
+                    // Alt+click is not an Alt tap (DefWindowProc cancels the menu activation the same way), and pointer
+                    // input is WinUI's exit from access-key mode, so a stale mode can't steal the next typed letter.
+                    _accessKeyMode = false; _altPending = false;
                     if (e.Pointer == PointerKind.Touch) { if (TouchDown(in e)) handled++; break; }
                     if (e.Button == 1)   // right button: context-menu tracking only — never presses/activates
                     {
@@ -3751,14 +3767,18 @@ public sealed partial class InputDispatcher
     public void MoveFocus(bool forward)
     {
         _focusables.Clear();
-        Collect(ScopeRoot, _focusables);
+        // A node disabled while it held focus (IsEnabled bound to !Busy on a Save button) keeps its tab slot as the
+        // anchor, so Tab/Shift+Tab step to its neighbours (WinUI) instead of restarting at the scope's first/last stop.
+        Collect(ScopeRoot, _focusables, disabledAnchor: _focused);
         StableSortByTabIndex(_focusables);
         if (_focusables.Count == 0) { SetFocus(NodeHandle.Null); return; }
 
         int idx = _focusables.IndexOf(_focused);
         int n = _focusables.Count;
         int next = idx < 0 ? (forward ? 0 : n - 1) : (forward ? (idx + 1) % n : (idx - 1 + n) % n);
-        SetFocus(_focusables[next], visual: true);   // keyboard focus → show the focus ring
+        var target = _focusables[next];
+        if ((_scene.Flags(target) & NodeFlags.Disabled) != 0) { SetFocus(NodeHandle.Null); return; }   // the disabled anchor was the only stop
+        SetFocus(target, visual: true);   // keyboard focus → show the focus ring
     }
 
     /// <summary>Directional (arrow/XY) focus movement: from the focused node, pick the nearest focusable in
@@ -3927,12 +3947,15 @@ public sealed partial class InputDispatcher
         return false;
     }
 
-    private void Collect(NodeHandle node, List<NodeHandle> into)
+    // disabledAnchor: a tab stop that is collected even while Disabled (MoveFocus passes the focused node so it keeps
+    // its slot). Null for every other caller; a real node never equals Null (the IsNull return above).
+    private void Collect(NodeHandle node, List<NodeHandle> into, NodeHandle disabledAnchor = default)
     {
         if (node.IsNull) return;
         ref InteractionInfo ii = ref _scene.Interaction(node);
-        if (ii.Focusable && (_scene.Flags(node) & (NodeFlags.Visible | NodeFlags.Disabled)) == NodeFlags.Visible) into.Add(node);
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into);
+        var gate = node == disabledAnchor ? NodeFlags.Visible : NodeFlags.Visible | NodeFlags.Disabled;
+        if (ii.Focusable && (_scene.Flags(node) & gate) == NodeFlags.Visible) into.Add(node);
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into, disabledAnchor);
     }
 
     /// <summary>Event position (window space) → the node's MODEL-LOCAL coords, clamped to its box (slider/scrollbar
