@@ -1029,6 +1029,9 @@ public sealed partial class TreeReconciler
             // so the fresh Items/KeyOf/Row closures take hold instead of freezing at first mount (the Show-parity fix —
             // ForEl.Update used to be a no-op, which froze rows built from parent render state).
             WriteAnchorColumns(node, nfe, oldEl);
+            // The parent's WriteColumns ran before this child reconcile: a re-render that changed its Gap/Direction/Wrap
+            // reaches the rows here. Mark the anchor itself, or its clean subtree early-outs at the old row placement.
+            if (MirrorParentFlow(node)) MarkLayoutShape(node);
             UpdateFor(node, nfe);
             return;
         }
@@ -1660,6 +1663,7 @@ public sealed partial class TreeReconciler
         int mountIdx = (int)node.Raw.Index;
         _forEl[mountIdx] = fe;
         WriteAnchorColumns(node, fe, old: null);   // before the first rows mount: a Stagger must be on record for them
+        MirrorParentFlow(node);                    // the rows flow on the enclosing container's axis, gap and wrap
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
@@ -1677,6 +1681,27 @@ public sealed partial class TreeReconciler
         _forEffect[mountIdx] = eff;
         AddBinding(node, eff);
         eff.RunNow();
+    }
+
+    /// <summary>
+    /// A For boundary is layout-transparent: its rows must flow as if they were the enclosing container's own children.
+    /// The anchor is a real node seeded with <see cref="LayoutInput.Default"/> (a gap-less column) and ForElBase carries no
+    /// flow props, so copy the container's flow (Direction, Gap, Wrap, AlignItems) onto it: the container lays the anchor
+    /// out as one item, and the anchor lays the rows out on the container's axis with its spacing. The container is the
+    /// first ancestor that is not a single-child transparent boundary (component / provider / Show / Skel / KeepAlive
+    /// anchors carry no flow of their own). A GridEl container still places the whole list in one cell. Returns whether
+    /// the anchor changed.
+    /// </summary>
+    private bool MirrorParentFlow(NodeHandle anchor)
+    {
+        var p = _scene.Parent(anchor);
+        while (!p.IsNull && _scene.ElementTypeId(p) is 3 or 4 or 7 or 13 or 14) p = _scene.Parent(p);
+        if (p.IsNull) return false;
+        ref readonly LayoutInput src = ref _scene.Layout(p);
+        ref LayoutInput a = ref _scene.Layout(anchor);
+        if (a.Direction == src.Direction && a.Gap == src.Gap && a.Wrap == src.Wrap && a.AlignItems == src.AlignItems) return false;
+        a.Direction = src.Direction; a.Gap = src.Gap; a.Wrap = src.Wrap; a.AlignItems = src.AlignItems;
+        return true;
     }
 
     private void UpdateFor(NodeHandle node, ForElBase next)
