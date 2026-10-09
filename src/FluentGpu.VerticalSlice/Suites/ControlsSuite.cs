@@ -1632,6 +1632,32 @@ static partial class ControlsSuite
             Check("gate.ctl.bind.textbox-options TextBox via TextBoxOptions round-trips text through the signal; onChange fires on user edits (not the mount seed)",
                 mountQuiet && userWrote, $"mountQuiet={mountQuiet} text='{text.Peek()}' changes={changes} last='{last}'");
         }
+
+        // gate.ctl.bind.textbox-seeded — the mount seed is silent for a NON-EMPTY seed too (the empty seed above never
+        // reaches the doc reset): a TextBox / PasswordBox opened on a saved value fires no onChange / OnPasswordChanged at
+        // mount, while a later programmatic write still notifies.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-tb-seed", new Size2(420, 240), 1f)); window.Show();
+            var name = new Signal<string>("My playlist");
+            var pw = new Signal<string>("hunter2");
+            int nameChanges = 0, pwChanges = 0; string last = "";
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [
+                        TextBox.Create(name, onChange: s => { nameChanges++; last = s; },
+                            new TextBox.TextBoxOptions { Placeholder = "ph", Width = 200f }),
+                        PasswordBox.Create("pw", 200f, password: pw, onChange: _ => pwChanges++),
+                    ] } });
+            host.RunFrame();
+            host.RunFrame();
+            bool mountQuiet = nameChanges == 0 && pwChanges == 0;
+            name.Value = "Renamed";
+            host.RunFrame();
+            bool programmatic = nameChanges == 1 && last == "Renamed";
+            Check("gate.ctl.bind.textbox-seeded a non-empty seed fires no onChange/OnPasswordChanged at mount; a later programmatic write still does",
+                mountQuiet && programmatic, $"nameChanges={nameChanges} pwChanges={pwChanges} last='{last}'");
+        }
     }
 
     static void ControlsChecks(StringTable strings)

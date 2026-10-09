@@ -964,10 +964,14 @@ public sealed class EditableText : Component
     /// The IME provisional span is the sanctioned divergence and must not be clobbered.</summary>
     private void SyncFromSignal(string v)
     {
+        // The FIRST evaluation is the mount-time seed (fresh empty document, signal holds the initial value): fold it in
+        // without OnTextChanged. Consumed before the early-outs so an empty seed still uses it up and the next external
+        // write notifies.
+        bool first = !_synced;
+        _synced = true;
         if (_ime is { Active: true }) return;
         string nv = EditDocument.NormalizeNewlines(v);
         if (_core.Doc.AsSpan().SequenceEqual(nv)) return;
-        bool first = !_synced;
         _core.ResetText(nv);
         LastChangeReason = TextChangeReason.ProgrammaticChange;
         // Dispatch the consumer notification OUTSIDE this call's tracked scope. SyncFromSignal runs inside the
@@ -993,7 +997,6 @@ public sealed class EditableText : Component
     {
         string v = _text!.Value;     // subscribe: external writes re-evaluate this binding
         _ = _epoch!.Value;           // subscribe: doc-only changes (IME provisional) re-evaluate too
-        _synced = true;
         SyncFromSignal(v);
         if (_empty is { } em) em.Value = _core.Doc.Length == 0;   // re-renders the component on the FLIP only
         return _core.Doc.Length == 0 ? Placeholder.Current() : DisplayText();
