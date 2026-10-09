@@ -593,9 +593,10 @@ public sealed partial class TreeReconciler
     /// walkable, so the dispatcher can run the hover exit for a hovered row that is about to orphan or free. NOT the
     /// deactivation hook: a removal ends no captured gesture and must not clear focus/press/drag.</summary>
     public Action<NodeHandle>? OnSubtreeRemoved { get; set; }
-    /// <summary>Set by the host; called when a bound-list recycle rebinds a LIVE slot root to a different item. The
-    /// handle survives the rebind, so state keyed on it (an in-flight drag's source) must let go here — the IsLive
-    /// prunes never fire for it. Hot scroll path: the host handler is O(1) unless a drag is armed or active.</summary>
+    /// <summary>Set by the host; called when a virtual-list recycle (a bound slot's index write, or a keyed RenderItem
+    /// row rewritten in place) rebinds a LIVE slot root to a different item. The handle survives the rebind, so state
+    /// keyed on it (an in-flight drag's source, keyboard focus) must let go here — the IsLive prunes never fire for it.
+    /// Hot scroll path: the host handler is O(1) unless a drag is armed or active, or focus is held (one parent walk).</summary>
     public Action<NodeHandle>? OnSlotRebound { get; set; }
     /// <summary>Set by the host; called when a component context's passive/layout effect queue transitions 0→1.</summary>
     public Action<RenderContext, bool>? RegisterPendingEffectContext { get; set; }
@@ -4065,6 +4066,9 @@ public sealed partial class TreeReconciler
                 used[match] = true;
                 newNodes[i] = oldNodes[match];
                 AssertRecycleShapeStable(oldKids[match], nk);   // [Conditional("DEBUG")] — catches a PartDelta/factory that varied SHAPE per item
+                // Before the rewrite, like RebindBoundSlot: focus/drag let go while the node still carries the OLD item's
+                // handlers, so its focus-lost edge reaches the item that had focus.
+                OnSlotRebound?.Invoke(oldNodes[match]);
                 _realizeSlotIndex = firstIndex + i;
                 Update(oldNodes[match], nk, oldKids[match]);
                 _realizeSlotIndex = -1;

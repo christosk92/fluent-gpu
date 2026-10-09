@@ -674,13 +674,16 @@ public sealed partial class InputDispatcher
         _hoverResolvePending = true;
     }
 
-    /// <summary>Wired by the host as <c>TreeReconciler.OnSlotRebound</c>: a bound-list recycle rebound
+    /// <summary>Wired by the host as <c>TreeReconciler.OnSlotRebound</c>: a virtual-list recycle rebound
     /// <paramref name="slotRoot"/> to another item and KEPT its handle, so the IsLive-based prunes never fire for it. A
-    /// drag whose source sits in that slot lets go of it. UI thread only; 0-alloc.</summary>
+    /// drag whose source sits in that slot lets go of it, and so do focus and a held Space/Enter: keys routed to the old
+    /// handle would act on the item the slot shows now (Enter plays it, typing lands in its field), as the park edge
+    /// (<see cref="DeactivateSubtree"/>) already prevents. UI thread only; 0-alloc (one parent walk while focus is held).</summary>
     public void NotifySlotRebound(NodeHandle slotRoot)
     {
         Drag.NotifySlotRebound(slotRoot);
         DragDrop.NotifySlotRebound(slotRoot);
+        if (IsSelfOrAncestorOf(slotRoot, _focused)) SetFocus(NodeHandle.Null);   // also cancels a held Space/Enter (armed on _focused)
     }
 
     /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes

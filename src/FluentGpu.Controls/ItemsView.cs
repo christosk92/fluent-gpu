@@ -1125,11 +1125,11 @@ public sealed class ItemsView : Component
             if (n.IsNull) return;
             focusNode(n, visual);
             // E1 re-stamp (RowScope.IsFocused). Landing focus on the node that ALREADY holds it fires no focus edge
-            // (SetFocus: prev == node) — yet a bound slot can hold focus while showing another item than the one focus
-            // arrived on: it recycled while focused (the rebind clears its Focused flag but keeps the dispatcher's handle;
-            // a pointer press then re-asserts focus on it, again edge-free). Focusing it for `index` IS focus arriving on
-            // a new item, so stamp it. The index check keeps a stale reference from stamping any slot but the one now
-            // showing `index`; an unchanged stamp is an equality-gated no-op (allocation-free either way).
+            // (SetFocus: prev == node). A recycle no longer carries focus onto a slot's new item (the rebind's
+            // OnSlotRebound drops it, so the next focus fires a real edge), but should a slot ever hold focus while showing
+            // another item than the one focus arrived on, focusing it for `index` IS focus arriving on a new item, so stamp
+            // it. The index check keeps a stale reference from stamping any slot but the one now showing `index`; an
+            // unchanged stamp is an equality-gated no-op (allocation-free either way).
             if (focusedSlot.Value is { } slot && slot.Index.Peek() == index && hooks.GetFocus?.Invoke() == n)
                 slot.Edge(true);
         }
