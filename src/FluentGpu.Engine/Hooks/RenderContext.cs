@@ -145,7 +145,8 @@ internal sealed class LoadableCell<T> : HookCell
 
 /// <summary>Tuning for <see cref="RenderContext.UseResource{T}"/>. <see cref="StaleTimeMs"/> = how long a freshly-loaded
 /// value is considered fresh (0 = stale immediately on Ready); <see cref="KeepPreviousData"/> = on a deps change, keep
-/// showing the previous <c>Ready</c> value while the new identity loads (instead of resetting to <c>Pending(seed)</c>).</summary>
+/// showing the previous <c>Ready</c> value while the new identity loads (instead of resetting to <c>Pending(seed)</c>);
+/// if that load fails the resource goes <c>Failed</c>, it never presents the previous identity's value as the new one's).</summary>
 public sealed record ResourceOptions
 {
     public float StaleTimeMs { get; init; }
@@ -211,6 +212,9 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
     public Action<Action> Post = null!;                       // UI-thread marshal for completions
     public FluentGpu.Hosting.HostTimerQueue? Queue;           // drives the stale-time flip (UI cadence; NOT the media clock)
     public Exception? LastError { get; private set; }
+    // True while the visible Ready value is the PREVIOUS deps identity's, kept by a KeepPreviousData re-key. A failure
+    // must then surface Failed: that value is a placeholder for the new identity, not a stale copy of it.
+    private bool _keptForeign;
     private readonly Action<long> _staleFire;
 
     public ResourceCell() => _staleFire = OnStaleFire;
@@ -271,15 +275,17 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         if (error is null)
         {
             LastError = null;
+            _keptForeign = false;
             Loadable.SetReady(value);
             ArmStale();
         }
         else
         {
             LastError = error;
-            // A refresh/revalidation failure keeps the prior Ready value (stale-while-revalidate); only surface Failed
-            // when there is no prior data to keep.
-            if (!Loadable.IsReady) Loadable.SetFailed(error);
+            // A refresh/revalidation failure keeps the prior Ready value (stale-while-revalidate); surface Failed when
+            // there is no prior data to keep, or when the kept data belongs to the previous deps identity (a re-key).
+            if (_keptForeign) { _keptForeign = false; Loadable.Value.Value = Seed; Loadable.SetFailed(error); }
+            else if (!Loadable.IsReady) Loadable.SetFailed(error);
         }
     }
 
@@ -290,7 +296,8 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         long epoch = Advance();
         StaleGen++;
         IsStaleSig.Value = false;
-        if (!keepPrevious || !Loadable.IsReady) Loadable.SetPending(Seed);
+        _keptForeign = keepPrevious && Loadable.IsReady;
+        if (!_keptForeign) Loadable.SetPending(Seed);
         Launch(epoch);
     }
 
@@ -309,6 +316,7 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         StaleGen++;
         IsStaleSig.Value = false;
         LastError = null;
+        _keptForeign = false;            // the optimistic value belongs to the current identity
         Loadable.SetReady(optimistic);   // (2) optimistic write, visible immediately
         if (refresh) Launch(epoch);      // (3) revalidate on this epoch (keeps Ready(optimistic) visible until it lands)
         else { IsFetchingSig.Value = false; ArmStale(); }
@@ -550,6 +558,11 @@ public sealed partial class RenderContext
     {
         private readonly RenderContext _ctx;
         private readonly Context<T> _context;
+        // Last-resolved provider signal, the per-cell twin of _ctxResolveCache. A bind (or tracked effect) reading this
+        // while its subtree is KeepAlive-parked runs DETACHED: the resolve walk stops at the page root and finds no
+        // provider. Without this it would read the context Default AND drop the provider from its dependencies, so the
+        // bound value stays wrong after re-activation. The providers above a parked subtree don't change while parked.
+        private Signal<object?>? _last;
 
         public ContextReadSignal(RenderContext ctx, Context<T> context)
         {
@@ -561,15 +574,22 @@ public sealed partial class RenderContext
         {
             get
             {
-                var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+                var sig = Resolve();
                 return sig is not null && sig.Value is T tv ? tv : _context.Default;
             }
         }
 
         public T Peek()
         {
-            var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+            var sig = Resolve();
             return sig is not null && sig.Peek() is T tv ? tv : _context.Default;
+        }
+
+        private Signal<object?>? Resolve()
+        {
+            var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+            if (sig is not null) _last = sig;   // attached: refresh the last-resolved provider
+            return sig ?? _last;                // detached/parked: reuse it (providers above are unchanged)
         }
     }
 
@@ -752,6 +772,7 @@ public sealed partial class RenderContext
     // parked re-render (triggered by a signal it still subscribes to, like a store's Version) would resolve to the
     // context Default and overwrite its cached content with the empty fallback — the "History tab goes blank after
     // switching tabs" bug. The normal (attached) path is unchanged: resolution succeeds and refreshes the cache.
+    // ContextReadSignal keeps the same fallback per cell (its `_last`), so a parked UseContextSignal bind keeps its provider.
     Dictionary<object, Signal<object?>>? _ctxResolveCache;
 
     /// <summary>Read the nearest provided value of <paramref name="context"/> (or its default), subscribing this
