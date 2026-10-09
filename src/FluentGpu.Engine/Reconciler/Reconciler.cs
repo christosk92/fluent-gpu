@@ -1515,7 +1515,12 @@ public sealed partial class TreeReconciler
         if (!Equals(oldGroup, next.Group))
         {
             if (oldGroup is not null) SkelGroupCoordinator.Unregister(oldGroup, idx);
-            if (next.Group is not null) SkelGroupCoordinator.Register(next.Group, idx);
+            if (next.Group is not null)
+            {
+                SkelGroupCoordinator.Register(next.Group, idx);
+                // Re-pointed mid-load: the new group's round waits for this member's Ready edge too.
+                if (st.Branch == 1) SkelGroupCoordinator.Loading(next.Group, idx);
+            }
             if (_skelState.TryGetValue(idx, out st)) _skelState[idx] = (st.Branch, st.El, next.Group);
         }
 
@@ -1582,6 +1587,11 @@ public sealed partial class TreeReconciler
         // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
         // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
         SetSkeletonScrollbarSuppression(node, branch == 1);
+
+        // Every edge INTO the shimmer (mount, refresh, retry after Failed) opens this member's slot in its group's round,
+        // so the round waits only for the members that are actually loading — a region that reloads alone reveals on
+        // its own Ready edge instead of parking its reveal behind siblings that stayed Ready.
+        if (branch == 1 && lastBranch != 1 && se.Group is { } lg) SkelGroupCoordinator.Loading(lg, idx);
 
         if (branch == 1 && lastBranch != 1 && Anim is { } a1)
         {
