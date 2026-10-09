@@ -78,14 +78,15 @@ public sealed class DropDownButton : Component
             if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
             // Light dismiss (Escape / click-outside) + FocusTrap (Tab/Shift-Tab roves the menu); the overlay captures focus on
             // open and restores it on close (host-wired). ExpandCollapse Collapsed↔Expanded is raised by the overlay lifecycle.
-            handle.Value = svc.Open(
+            var opened = handle.Value = svc.Open(
                 () => anchor.Value,
                 () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,
                 // WinUI menus are WINDOWED popups (FlyoutBase_Partial.cpp:3181-3205 SetIsWindowedPopup) — a tall
                 // menu may escape the window when the platform supports popup windows (constrained fallback otherwise).
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () => handle.Value = null;
+            // A reopen during this menu's close fade owns the cell now: only the current handle clears it.
+            opened.ClosedAction = () => { if (ReferenceEquals(handle.Value, opened)) handle.Value = null; };
         }
 
         UseEffect(() =>

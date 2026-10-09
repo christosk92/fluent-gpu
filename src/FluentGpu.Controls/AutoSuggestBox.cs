@@ -320,7 +320,7 @@ public sealed class AutoSuggestBox : Component
             open.Value = true;
             if (SuggestionPresentation == AutoSuggestBoxSuggestionPresentation.Inline) return;
             if (handle.Value is { IsOpen: true }) return;
-            handle.Value = svc.Open(
+            var opened = handle.Value = svc.Open(
                 () => anchor.Value,
                 // The list renders against the USER-TYPED query signal: arrow previews must not re-filter the rows.
                 () => Presenter is { } presenter
@@ -336,8 +336,9 @@ public sealed class AutoSuggestBox : Component
                 // chrome (AcrylicBackgroundFillColorDefault + 1px border + OverlayCornerRadius + 0,2 padding,
                 // AutoSuggestBox_themeresources.xaml:283 + generic.xaml:119).
                 new PopupOptions(Chrome: PopupChrome.Static));
-            handle.Value.ClosedAction = () =>
+            opened.ClosedAction = () =>
             {
+                if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;   // reopened before this close finalized
                 handle.Value = null;
                 highlight.Value = -1;
                 Presenter?.ResetSelection?.Invoke();

@@ -290,8 +290,12 @@ public sealed class ComboBox : Component
                     new PopupOptions(FocusTrap: true, Chrome: PopupChrome.Dropdown) { ConstrainToRootBounds = false, SeamOffsetY = seamY },
                     owner: anchorOf);
             }
-            handle.Value.ClosedAction = () =>
+            var opened = handle.Value;
+            opened.ClosedAction = () =>
             {
+                // Choose/Close null the cell before this runs; a NEWER handle there means the list was reopened inside
+                // the 167 ms close: that open owns the cell, the highlight and the commit now.
+                if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;
                 handle.Value = null;
                 highlight.Value = -1;
                 openVer.Value = openVer.Peek() + 1;
