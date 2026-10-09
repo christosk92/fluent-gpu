@@ -489,7 +489,10 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             if (!end)
             {
                 int c = _glyphs[i].Cluster;
-                byte bb = c >= 0 && c < _breaks.Count ? _breaks[c].BreakBefore : BreakOpp.Neutral;
+                // A break opportunity belongs to the cluster's first glyph: a multi-glyph cluster (base + combining
+                // mark, Devanagari consonant + matra) must never open a line or set lastBreak mid-cluster.
+                bool clusterHead = i == 0 || _glyphs[i - 1].Cluster != c;
+                byte bb = clusterHead && c >= 0 && c < _breaks.Count ? _breaks[c].BreakBefore : BreakOpp.Neutral;
                 bool mustBreak = bb == BreakOpp.MustBreak;
                 bool canBreak = bb == BreakOpp.CanBreak || mustBreak;
 
@@ -550,6 +553,24 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 // The final line: it may overflow (no-wrap, or the maxLines-truncated remainder) → trim if requested.
                 EmitLine(lineStart, gc, line, lineHeight, doTrim, maxWidth, ref maxLineW); line++;
             }
+        }
+
+        // A paragraph that ENDS in a hard break owns an empty last line after the terminator (IDWriteTextLayout reports it
+        // too). UAX #14 puts the MustBreak BEFORE the char that follows the terminator, and there is none, so the loop above
+        // never opens that line: Enter at the end of a multi-line TextBox left the caret on the old line and the box did not
+        // grow. DWrite reports MustBreak AFTER the final char only for a hard break (a plain final char gets CanBreak). The
+        // line is skipped when MaxLines already cut the paragraph or the overflow suffix ended it.
+        if (!emittedOverflowSuffix && line < maxL && _lineRecCount > 0
+            && visibleTextEnd > 0 && visibleTextEnd <= _breaks.Count
+            && _breaks[visibleTextEnd - 1].BreakAfter == BreakOpp.MustBreak)
+        {
+            EnsureLines(_lineRecCount + 1);
+            _lines[_lineRecCount++] = new LaidLine
+            {
+                StartChar = visibleTextEnd, EndChar = visibleTextEnd, VisibleBodyEnd = -1, SuffixStart = -1,
+                Top = line * lineHeight, Height = lineHeight, Width = 0f, FirstGlyph = _clusterCount, GlyphCount = 0,
+            };
+            line++;
         }
 
         LineCount = Math.Max(1, line);
@@ -625,7 +646,8 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int i = start; i < end; i++)
         {
             int c = _glyphs[i].Cluster;
-            if (c >= 0 && c < _breaks.Count)
+            bool clusterHead = i == 0 || _glyphs[i - 1].Cluster != c;
+            if (clusterHead && c >= 0 && c < _breaks.Count)
             {
                 byte before = _breaks[c].BreakBefore;
                 if (before == BreakOpp.CanBreak || before == BreakOpp.MustBreak) lastBreak = i;
@@ -861,16 +883,18 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     }
 
     /// <summary>The insertion index for a hit past a line's right edge. Normally the line's EndChar (== the next line's
-    /// start at a soft wrap — affinity is the caller's job); a HARD-broken line (UAX #14 MustBreak before the next line)
-    /// returns the terminator cluster's start instead, keeping the caret on the clicked line. (TextEditCore feeds
-    /// single-char '\r' hard breaks, so the terminator is one cluster.)</summary>
+    /// start at a soft wrap — affinity is the caller's job); a HARD-broken line (UAX #14 MustBreak after its terminator,
+    /// including the empty line after a trailing hard break) returns the terminator cluster's start instead, keeping the
+    /// caret on the clicked line. (TextEditCore feeds single-char '\r' hard breaks, so the terminator is one cluster.)</summary>
     private int LineEndInsertion(int li)
     {
         ref readonly var line = ref _lines[li];
         if (li + 1 < _lineRecCount && line.GlyphCount > 0)
         {
-            int nextStart = _lines[li + 1].StartChar;
-            if (nextStart >= 0 && nextStart < _breaks.Count && _breaks[nextStart].BreakBefore == BreakOpp.MustBreak)
+            // The char before the next line's start is this line's terminator; MustBreak AFTER it also covers the empty
+            // line that follows a trailing hard break (whose start == text length has no BreakBefore entry).
+            int term = _lines[li + 1].StartChar - 1;
+            if (term >= 0 && term < _breaks.Count && _breaks[term].BreakAfter == BreakOpp.MustBreak)
                 return _clusters[line.FirstGlyph + line.GlyphCount - 1].Cluster;
         }
         return line.EndChar;
