@@ -122,6 +122,7 @@ static partial class ControlsSuite
         SelectionUnsubscribeChecks(strings);
         TabContentIdentityChecks(strings);
         NavigateRequestRepeatChecks(strings);
+        DatePickerDayCountChecks(strings);
     }
 
     // ── InfoBar / toast: the close button must stay INSIDE the painted plate ─────────────────────────────────────────
