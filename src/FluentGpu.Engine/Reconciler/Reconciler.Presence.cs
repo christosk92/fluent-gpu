@@ -70,8 +70,19 @@ public sealed partial class TreeReconciler
     /// presence collapse pauses timers (<c>UseInterval</c>, which already gates on <c>UseIsActive()</c>) WITHOUT
     /// suspending the component's own re-renders, unlike KeepAlive parking. <c>UseTimeout</c>/<c>UseKeyframes</c>
     /// have no active-gating at all today (neither for Parked nor Hidden) — see the P1 progress notes for that
-    /// follow-up.</summary>
+    /// follow-up. A reveal only clears Hidden where no collapsed node remains on the chain: it is a no-op under a
+    /// still-collapsed ancestor and skips nested collapsed subtrees.</summary>
     private void SetSubtreeHidden(NodeHandle node, bool hidden)
+    {
+        // Hidden means "some node on my ancestor chain is collapsed", not "the node that just flipped is". A reveal
+        // under a still-collapsed ancestor changes nothing below it (the mount seed walks the same chain).
+        if (!hidden)
+            for (var a = _scene.Parent(node); !a.IsNull; a = _scene.Parent(a))
+                if (_scene.IsCollapsed(a)) return;
+        WriteSubtreeHidden(node, hidden);
+    }
+
+    private void WriteSubtreeHidden(NodeHandle node, bool hidden)
     {
         if (!_scene.IsLive(node)) return;
         if (_comps.TryGetValue(node, out var entry))
@@ -80,6 +91,10 @@ public sealed partial class TreeReconciler
             if (entry.ActiveSig is { } sig) sig.Value = !entry.Parked && !entry.Hidden;
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
-            SetSubtreeHidden(c, hidden);
+        {
+            // A reveal stops at a nested collapsed node: its subtree stays hidden under its own Visible=false.
+            if (!hidden && _scene.IsCollapsed(c)) continue;
+            WriteSubtreeHidden(c, hidden);
+        }
     }
 }
