@@ -1610,6 +1610,12 @@ public sealed partial class FlexLayout
     // including the last), so a wrapped row fills edge-to-edge instead of leaving a ragged gap. A line with no grow child
     // (pill/chip rows, FlexGrow 0) yields growUnit 0 and is placed at base size byte-for-byte as before. Allocation-free:
     // two linked-list walks per line, no per-line buffer.
+    // Within each line, items are then placed exactly like the single-line path: the line's leftover main goes through
+    // Distribute(li.Justify) (zero when a grow child took it), and each item's cross placement follows AlignSelf ?? AlignItems
+    // against the LINE's cross size (its tallest item + margins): Stretch fills it unless the item has an explicit cross
+    // size, Center/End offset it. Line breaking and the measured height are untouched (alignment only moves items inside a
+    // line whose cross size is already fixed), so measure and arrange still agree on every line. No AlignContent: a line is
+    // as tall as its content.
     // BASE SIZES COME FROM Measure, NEVER FROM scene.Bounds. A wrap container that hits the cross-pass measure ring (or the
     // within-pass memo) returns its size WITHOUT visiting its children (Measure, P4), so each child's Bounds still hold its
     // LAST ARRANGED rect — a Grow child stretched to fill the previous, wider line. Breaking lines on those stretched widths
@@ -1631,7 +1637,7 @@ public sealed partial class FlexLayout
         {
             // Pass 1 — gather one line: the children that fit, their base-main extent (bases + margins + gaps), total grow.
             // The break condition mirrors MeasureWrap exactly, so arrange's line count matches the measured cross height.
-            float usedMain = 0f, totalGrow = 0f;
+            float usedMain = 0f, totalGrow = 0f, lineCross = 0f;
             int count = 0;
             for (var c = lineStart; !c.IsNull; c = NextVisibleSibling(c))
             {
@@ -1641,11 +1647,15 @@ public sealed partial class FlexLayout
                 float next = usedMain + (count > 0 ? li.Gap : 0f) + oMain;
                 if (count > 0 && next > availMain + 0.01f) break;   // CSS: always ≥1 item per line
                 usedMain = next; totalGrow += cli.FlexGrow; count++;
+                lineCross = MathF.Max(lineCross, (row ? cs.Height : cs.Width) + MarginCross(cli, row));   // the line's cross size, known before placement
             }
 
-            // Pass 2 — share this line's free main across its grow children (0 grow ⇒ growUnit 0 ⇒ base size), place L→R.
-            float growUnit = totalGrow > 0f ? MathF.Max(0f, availMain - usedMain) / totalGrow : 0f;
-            float cursor = padMainStart, lineCross = 0f;
+            // Pass 2 — share this line's free main across its grow children (0 grow ⇒ growUnit 0 ⇒ base size), then justify
+            // what is left (nothing when a grow child took it) and align each item on the line's cross size, like Arrange.
+            float freeMain = MathF.Max(0f, availMain - usedMain);
+            float growUnit = totalGrow > 0f ? freeMain / totalGrow : 0f;
+            (float lead, float between) = Distribute(li.Justify, totalGrow > 0f ? 0f : freeMain, count);
+            float cursor = padMainStart + lead;
             var cc = lineStart;
             for (int i = 0; i < count; i++, cc = NextVisibleSibling(cc))
             {
@@ -1653,14 +1663,28 @@ public sealed partial class FlexLayout
                 ref LayoutInput cli = ref _scene.Layout(cc);
                 float baseMain = row ? cs.Width : cs.Height, baseCross = row ? cs.Height : cs.Width;
                 float mainSize = baseMain + cli.FlexGrow * growUnit;
-                if (i > 0) cursor += li.Gap;
+                if (i > 0) cursor += li.Gap + between;
+
+                FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
+                float crossMargin = MarginCross(cli, row);
+                bool hasExplicitCross = !float.IsNaN(row ? cli.Height : cli.Width);
+                float crossSize = (align == FlexAlign.Stretch && !hasExplicitCross)
+                    ? ClampCross(cli, row, lineCross - crossMargin)
+                    : baseCross;
+                float crossFree = lineCross - (crossSize + crossMargin);
+                float crossOff = align switch
+                {
+                    FlexAlign.Center => crossFree / 2f,
+                    FlexAlign.End => crossFree,
+                    _ => 0f,   // Start / Stretch
+                };
+
                 float childMainPos = cursor + MarginMainStart(cli, row);
-                float childCrossPos = lineTop + MarginCrossStart(cli, row);
+                float childCrossPos = lineTop + crossOff + MarginCrossStart(cli, row);
                 float cx = row ? childMainPos : childCrossPos;
                 float cy = row ? childCrossPos : childMainPos;
-                Arrange(cc, cx, cy, row ? mainSize : baseCross, row ? baseCross : mainSize);
+                Arrange(cc, cx, cy, row ? mainSize : crossSize, row ? crossSize : mainSize);
                 cursor += MarginMain(cli, row) + mainSize;
-                lineCross = MathF.Max(lineCross, baseCross + MarginCross(cli, row));
             }
             lineTop += lineCross + li.Gap;
             lineStart = cc;   // cc walked exactly `count` siblings ⇒ first child of the next line (or Null)
