@@ -2324,7 +2324,7 @@ public sealed partial class InputDispatcher
     }
 
     /// <summary>Pointer-up sweep (§7A.2 rule 4) for the contact's arena: the clean-tap resolution. Feeds OnUp to the Tap/
-    /// DoubleTap members so a within-slop release votes Accept, then <c>ResolveUp</c> picks the highest-priority survivor.
+    /// DoubleTap/Hold members so a within-slop release votes Accept (a sub-deadline Hold votes Reject), then <c>ResolveUp</c> picks the highest-priority survivor.
     /// The scalar <see cref="TouchUp"/> still fires the actual click on the winner; this keeps the arena state correct
     /// (and frees the seat). A claimed-pan or captured-OnDrag contact never reaches here (those branches return earlier).</summary>
     private void UpSweepTouchArena(in InputEvent e)
@@ -2336,7 +2336,9 @@ public sealed partial class InputDispatcher
         for (int i = 0; i < members.Length; i++)
         {
             GestureKind k = members[i].Kind;
-            if (k is GestureKind.Tap or GestureKind.RightTap or GestureKind.DoubleTap)
+            // Hold is fed too: a release before the ~500ms timer votes Reject (PointerFsm.OnUp), so it can't linger armed
+            // (ArenaHasArmedHold keeps a context-only contact's seat alive) and fire the long-press after the finger lifted.
+            if (k is GestureKind.Tap or GestureKind.RightTap or GestureKind.DoubleTap or GestureKind.Hold)
             {
                 int ms = _arena.ArenaAt(slot).MemberOffset + i;
                 ArenaVote v = _fsms[ms].OnUp(e.PositionPx, timeUs);
