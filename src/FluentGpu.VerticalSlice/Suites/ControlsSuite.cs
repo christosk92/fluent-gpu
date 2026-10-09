@@ -121,6 +121,7 @@ static partial class ControlsSuite
         FocusDepartureCloseChecks(strings);
         SelectionUnsubscribeChecks(strings);
         TabContentIdentityChecks(strings);
+        NavigateRequestRepeatChecks(strings);
     }
 
     // ── InfoBar / toast: the close button must stay INSIDE the painted plate ─────────────────────────────────────────

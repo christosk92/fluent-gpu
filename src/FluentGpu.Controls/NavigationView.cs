@@ -158,7 +158,8 @@ public sealed class NavigationView : Component
     /// same mode-aware action as the internal hamburger (expanded↔rail inline; open↔close the overlay otherwise).</summary>
     public Signal<int>? PaneToggleRequest;
     /// <summary>External navigate seam (the titlebar search commit): set a nav-item key to select it (collapsed
-    /// ancestor groups expand to reveal it). Ignored when empty or unknown.</summary>
+    /// ancestor groups expand to reveal it). Ignored when empty or unknown. Every changed write is a request, so to
+    /// re-request the key the signal already holds (Back to it after a pane click), write "" first.</summary>
     public Signal<string>? NavigateRequest;
     /// <summary>WinUI <c>PaneDisplayMode</c>: Auto (adaptive), forced Left modes, or Top.</summary>
     public NavPaneDisplayMode PaneDisplayMode = NavPaneDisplayMode.Auto;
@@ -437,22 +438,30 @@ public sealed class NavigationView : Component
             ? () => setCollapsed(!collapsed)
             : () => { if (paneOpen) TryClosePane(); else setPaneOpen(true); };
 
-        // External chrome seams (the custom TitleBar): reading subscribes this component; each effect re-runs only
-        // when its request value changes and applies the SAME internal action (state writes happen post-present).
+        // External chrome seams (the custom TitleBar): each applies the SAME internal action (state writes happen
+        // post-present). The pane toggle is a counter, so its deps-gated effect re-runs on every bump.
         int paneToggleReq = PaneToggleRequest?.Value ?? 0;
         UseEffect(() => { if (paneToggleReq != 0) toggle(); }, paneToggleReq);
-        string navigateReq = NavigateRequest?.Value ?? "";
+        // NavigateRequest is EDGE-triggered: this auto-tracked effect reads only the request signal, so every changed
+        // write re-runs it. A deps-gated effect keyed on the string could not re-request the key it last saw: the
+        // caller's ""-then-key pair lands in one render that reads the same key (Back to a page the user has since left
+        // via the pane did nothing). The apply runs untracked: a signal read by Select's callbacks (OnSelect, Navigator)
+        // must not subscribe this effect, or its next write would re-apply a stale request over a later click.
         UseEffect(() =>
         {
+            string navigateReq = NavigateRequest?.Value ?? "";
             if (navigateReq.Length == 0 || navigateReq == selected) return;
-            if (FindItem(Items, navigateReq) is not { } target) return;
-            // Reveal the target: expand any collapsed ancestor groups, then select (the WinUI search-commit path).
-            string[] reveal = expanded;
-            for (NavItem? p = ParentOf(Items, target.Key); p is not null; p = ParentOf(Items, p.Key))
-                if (!reveal.Contains(p.Key)) reveal = [.. reveal, p.Key];
-            if (!ReferenceEquals(reveal, expanded)) setExpanded(reveal);
-            Select(target.Key, hasChildren: target.IsExpandable);
-        }, navigateReq);
+            Reactive.Untrack(() =>
+            {
+                if (FindItem(Items, navigateReq) is not { } target) return;
+                // Reveal the target: expand any collapsed ancestor groups, then select (the WinUI search-commit path).
+                string[] reveal = expanded;
+                for (NavItem? p = ParentOf(Items, target.Key); p is not null; p = ParentOf(Items, p.Key))
+                    if (!reveal.Contains(p.Key)) reveal = [.. reveal, p.Key];
+                if (!ReferenceEquals(reveal, expanded)) setExpanded(reveal);
+                Select(target.Key, hasChildren: target.IsExpandable);
+            });
+        });
 
         Action<NodeHandle> CaptureRow(string key) => h => rowHandles[key] = h;
 
