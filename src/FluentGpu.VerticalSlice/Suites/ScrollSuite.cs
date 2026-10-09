@@ -5338,9 +5338,9 @@ static class ScrollSuite
         // countdown, so this block drives them the way the engine's other timer gates do: clock.Advance(ms) then
         // host.Paint(0). That is not a shortcut — a pending-but-not-due timer sets NO wake bit (the whole point: the
         // loop idles to the deadline), so RunFrame takes its idle early-out BEFORE Paint, and Paint is both the only
-        // place the headless frame clock advances and the only HostTimerQueue.Drain site. Paint ALSO steps the
-        // conscious ticker at its fixed 16ms convention — and the ticker exists ONLY while the 167ms/83ms tween or a
-        // held page repeat is live — so "advance the clock" (Jump) and "pump the tween" (Pump) are separate moves.
+        // place the headless frame clock advances and the only HostTimerQueue.Drain site. The conscious ticker (mounted
+        // ONLY while the 167ms/83ms tween or a held page repeat is live) samples that SAME host clock, so Pump advances
+        // it one 16ms frame per Paint; Jump moves it in one leap to hit a dwell deadline.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("cp4-sb", new Size2(320, 280), 1f));
@@ -5361,7 +5361,7 @@ static class ScrollSuite
             host.RunFrame();
             for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (incl. the 0ms arm)
 
-            void Pump(int n) { for (int i = 0; i < n; i++) host.Paint(0); }      // step the tween; the clock stays put
+            void Pump(int n) { for (int i = 0; i < n; i++) { clock.Advance(16f); host.Paint(0); } }   // 16ms frames — the ticker reads the host clock
             void Jump(float ms) { clock.Advance(ms); host.Paint(0); }            // move the host timer clock + drain
             var pollerSb = new System.Text.StringBuilder();
             string Pollers() { pollerSb.Clear(); host.DescribeFrameClockPollers(pollerSb); return pollerSb.ToString().Trim(); }
@@ -5485,7 +5485,7 @@ static class ScrollSuite
             var thumb = Child(host.Scene, column, 1);
             var barR = host.Scene.AbsoluteRect(bar);
             float W() => host.Scene.AbsoluteRect(thumb).W;
-            void Pump(int n) { for (int i = 0; i < n; i++) host.Paint(0); }
+            void Pump(int n) { for (int i = 0; i < n; i++) { clock.Advance(16f); host.Paint(0); } }   // 16ms frames — the ticker reads the host clock
             void Jump(float ms) { clock.Advance(ms); host.Paint(0); }
             void Enter() { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.X + 6f, barR.Y + 100f), 0, 0)); host.RunFrame(); }
             void Exit() { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.Right + 80f, barR.Y + 100f), 0, 0)); host.RunFrame(); }
@@ -5510,7 +5510,7 @@ static class ScrollSuite
             // the LIVE eased width, so the bar never snaps back to 2px on its way out and back.
             Exit();
             Jump(505f);                       // the contract one-shot pops → the 167ms fade-out starts
-            Pump(2);                          // ~48ms into the 167ms contract tween — mid-flight, not settled
+            Pump(2);                          // 32ms into the 167ms contract tween — mid-flight, not settled
             float midFade = W();
             bool midFadeIsMidFlight = midFade > 2.05f && midFade < 5.95f;
             Enter();                          // re-reveal mid-fade
@@ -5523,6 +5523,50 @@ static class ScrollSuite
                 midFadeIsMidFlight && noSnapBack && backToExpanded,
                 $"midFade={midFade:0.##} atReveal={atReveal:0.##} final={W():0.##}");
             Check("gate.scroll.sb-rearm-idle the re-arm sequence leaves the loop idle: no ticker, no armed dwell", !host.HasActiveWork);
+        }
+
+        // ── gate.scroll.sb-refresh-invariant: the conscious ticker times the held track-press repeat and the 167ms
+        //    expand on the HOST clock, never a per-frame constant. At a 240 Hz frame step (4ms) a fixed 16ms/tick ran
+        //    them 4× fast: the 500ms RepeatButton delay elapsed in 32 frames (~128ms), so an ordinary click paged twice. ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-sb-hz", new Size2(320, 280), 1f));
+            window.Show();
+            var pos = new FloatSignal(0f);
+            int pages = 0;
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                    Children = [ScrollBar.Create(0.25f, pos, p => { pages++; pos.Value = p; }, 200f)],
+                },
+            };
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.RunFrame();
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+
+            var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var thumb = Child(host.Scene, Child(host.Scene, bar, 2), 1);
+            var barR = host.Scene.AbsoluteRect(bar);
+            void Frames240(int n) { for (int i = 0; i < n; i++) { clock.Advance(4f); host.Paint(0); } }
+
+            // Hover then press-and-hold the track 2px above the down-arrow cell (below the thumb until the very end).
+            var pt = new Point2(barR.X + 6f, barR.Bottom - 14f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0));
+            host.RunFrame();
+            int atPress = pages;                    // the press-edge page
+            Frames240(110);                         // 440ms of 4ms frames: inside the 500ms delay; the 400ms dwell flipped ~40ms ago
+            int inDelay = pages;
+            float midTween = host.Scene.AbsoluteRect(thumb).W;
+            Frames240(20);                          // 520ms: the delay elapsed → exactly ONE repeat (the next is due at 550ms)
+            int afterDelay = pages;
+            Check("gate.scroll.sb-refresh-invariant at a 240 Hz frame step the held track press waits the full 500ms RepeatButton delay (1 page at 440ms, 2 at 520ms) and the 167ms expand is still mid-flight 40ms after its flip — the conscious ticker samples the host clock, not 16ms per frame",
+                atPress == 1 && inDelay == 1 && afterDelay == 2 && midTween > 2.5f && midTween < 5.5f,
+                $"press={atPress} @440ms={inDelay} @520ms={afterDelay} widthAt+40ms={midTween:0.##}");
         }
 
         // ── AnnotatedScrollBar: 44px right-rail template geometry + jump/step interactions ──

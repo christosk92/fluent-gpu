@@ -34,8 +34,9 @@ namespace FluentGpu.Controls;
 /// 400/500ms begin times are a host ONE-SHOT (<c>UseTimeout</c> on the HostTimerQueue), never a per-frame countdown:
 /// a dwell is a wall-clock WAIT in which nothing on screen changes, so it holds no <c>FrameClock.Tick</c>
 /// subscription and produces no frames — the loop just shortens its wait to the deadline. ONLY the 167ms/83ms tween
-/// (and a HELD track-press page repeat) is stepped by a mounted FrameClock ticker, at the engine's 16ms-per-frame
-/// convention (the <c>UseAnimatedValue</c> precedent), so it is deterministic on the headless host.
+/// (and a HELD track-press page repeat) is stepped by a mounted FrameClock ticker, which SAMPLES the dwell's host timer
+/// clock (monotonic wall clock in a real window, the deterministic frame clock headlessly) instead of counting frames —
+/// so 500ms is 500ms at 60, 144 or 240 Hz and under a power cap.
 /// The auto-hiding OVERLAY scrollbar on scroll viewports is engine-drawn (SceneRecorder.EmitScrollbar) with its
 /// timing in <c>Scroll.ScrollBarChrome</c> — this control is the standalone (always-visible) ScrollBar element.
 /// </summary>
@@ -118,7 +119,7 @@ public static partial class ScrollBar
 /// changes, so the component holds no frame-clock subscription and the loop idles to the deadline. The flip then
 /// plays the 167ms KeySpline(0,0,0,1) cross-axis width 2↔6 + the 83ms linear chrome fades, and ONLY that tween (plus
 /// a HELD track-press page repeat) is stepped per frame by a mounted <see cref="FrameClock"/> ticker
-/// (16ms-per-frame engine convention — the <c>UseAnimatedValue</c> precedent; deterministic headlessly). The eased
+/// (timed on the host timer clock, never a per-frame constant — refresh-rate independent; deterministic headlessly). The eased
 /// values flow through SIGNALS into a cross-axis <c>Width/HeightBind</c> (scoped relayout) and bound <c>Opacity</c>s
 /// (track/arrow fades, compositor-only) — the component itself never re-renders per frame. Thumb position is a
 /// <c>TransformBind</c> on the position signal: instant, compositor-only, never animated. The arrow cells are
@@ -141,15 +142,12 @@ internal sealed class ScrollBarAnatomy : Component
     /// see <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
 
-    // Engine-time step per ticker frame — the UseAnimatedValue convention (RenderContext.cs: Elapsed += 16f per
-    // render) and the headless FixedFrameTimeSource step. Deterministic in the VerticalSlice harness.
-    private const float TickStepMs = 16f;
-
     // Conscious-state machine (instance fields persist for the component's lifetime; the hover edges and the dwell
     // one-shot drive them, the ticker steps only the tween/page-repeat).
     private bool _laneHovered;
     private bool _expanded;
     private float _animMs = 10_000f;         // time since the last expanded flip (drives the 167ms width + 83ms fade)
+    private double _flipAtMs;                // host-clock ms of that flip — the ticker samples _animMs = Now − _flipAtMs
     private float _flipFromW = ScrollBar.CollapsedThumb;   // eased width at the flip instant (interruption continuity)
     private float _flipFromFade;             // eased chrome opacity at the flip instant
     // The dwell is a DEADLINE on the host timer clock, not a per-frame accumulator: _dwellStartMs is when the current
@@ -172,8 +170,7 @@ internal sealed class ScrollBarAnatomy : Component
     private bool _pageHeld;                  // a track press is held in a page zone (LargeDecrease/LargeIncrease)
     private bool _pageDown;                  // page direction, fixed at press (WinUI: only the PRESSED zone repeats)
     private float _pagePointer;              // latest strip-local main-axis pointer position while the press is held
-    private float _pageElapsedMs;            // accumulator toward the next page-repeat fire
-    private bool _pageRepeating;             // false = still inside the 500ms initial-delay window
+    private double _pageDueMs;               // host-clock ms the next page-repeat fires (press + 500ms delay, then +50ms)
     private float _travel;                   // track travel px (geometry snapshot for OnTick)
     private float _thumbLen;                 // thumb main-axis length px
     private float _page;                     // resolved page amount in 0..1 position units
@@ -239,8 +236,7 @@ internal sealed class ScrollBarAnatomy : Component
                 _dragging = false;
                 _pageDown = m > thumbTop + thumbLen;
                 _pagePointer = m;
-                _pageElapsedMs = 0f;
-                _pageRepeating = false;
+                _pageDueMs = Now + ScrollBar.RepeatDelayMs;   // a wall-clock deadline: refresh-rate independent
                 _pageHeld = true;
                 Move(Position.Peek() + (_pageDown ? page : -page));
                 if (!_ticking) _setTicking?.Invoke(true);
@@ -383,10 +379,11 @@ internal sealed class ScrollBarAnatomy : Component
     internal void OnTick()
     {
         bool busy = false;
+        double now = Now;                           // the dwell's host clock — a frame count would scale with the panel rate
 
         if (_animMs < ScrollBar.ExpandMs)           // 167ms width (and the shorter 83ms fade) still in flight
         {
-            _animMs += TickStepMs;
+            _animMs = (float)(now - _flipAtMs);
             WriteEased();
             busy = true;
         }
@@ -399,22 +396,17 @@ internal sealed class ScrollBarAnatomy : Component
             // beneath it and the RepeatButton pauses) and re-arms with a FRESH delay when the pointer is past the
             // thumb again (pause/resume semantics, RepeatButton_Partial.cpp:530-574). Direction is fixed at press
             // — only the PRESSED zone repeats; the release edge (ReleaseStrip) or a lane exit ends the hold.
-            _pageElapsedMs += TickStepMs;
-            float wait = _pageRepeating ? ScrollBar.RepeatIntervalMs : ScrollBar.RepeatDelayMs;
-            while (_pageElapsedMs >= wait)
+            while (now >= _pageDueMs)
             {
-                _pageElapsedMs -= wait;
                 float thumbTop = Math.Clamp(Position.Peek(), 0f, 1f) * _travel;
                 bool pastThumb = _pageDown ? _pagePointer > thumbTop + _thumbLen : _pagePointer < thumbTop;
                 if (!pastThumb)
                 {
-                    _pageElapsedMs = 0f;
-                    _pageRepeating = false;         // paused — fresh delay once the pointer is past the thumb again
+                    _pageDueMs = now + ScrollBar.RepeatDelayMs;   // paused — fresh delay once the pointer is past the thumb again
                     break;
                 }
-                _pageRepeating = true;
                 Move(Position.Peek() + (_pageDown ? _page : -_page));
-                wait = ScrollBar.RepeatIntervalMs;
+                _pageDueMs += ScrollBar.RepeatIntervalMs;
             }
             busy = true;                            // keep ticking while held (the release edge clears _pageHeld)
         }
@@ -446,6 +438,7 @@ internal sealed class ScrollBarAnatomy : Component
         _flipFromFade = _chromeSig?.Peek() ?? 0f;                     // (mid-flight continuity)
         _expanded = _laneHovered;
         _animMs = 0f;
+        _flipAtMs = Now;
         WriteEased();                            // t = 0 holds the from values; the ticker eases toward target
         if (!_ticking) _setTicking?.Invoke(true);
     }
