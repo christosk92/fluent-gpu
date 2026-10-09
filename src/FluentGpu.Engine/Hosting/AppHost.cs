@@ -5655,7 +5655,12 @@ public sealed partial class AppHost : IDisposable
                     // paints must still let the hold's time pass, as the wall clock does under a real window, or the hold
                     // would never expire there. Here only: a turn whose decode completed falls through to Paint, which
                     // advances the clock itself.
-                    if (_isHeadless) _frameClockMs += _frameTime.NextDeltaMs();
+                    // A real window consumes the delta too and drops it: this turn's wait was the hold's display tick,
+                    // which Paint's step-up guard reads as display-rate and never resyncs, so an unconsumed delta handed
+                    // the next input's Paint the whole gap since the last painted frame (clamped to 34 ms) and every
+                    // animation that input started lurched on frame 1.
+                    float warmDtMs = _frameTime.NextDeltaMs();
+                    if (_isHeadless) _frameClockMs += warmDtMs;
                 }
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 // Genuinely idle — no active work, no completed image (the deep-idle case: streak/idleAgo in the
