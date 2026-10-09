@@ -38,7 +38,7 @@ public sealed class AudioDeviceStateMachineTests
     }
 
     // A track loaded but never played: the session does not want sound, so an exhausted ladder goes Faulted (a playing
-    // session keeps a 5 s slow retry instead, see PlayingSession_PastTheLadder_KeepsASlowRetry).
+    // session keeps a 5 s slow retry only while its kept sink is dead, see PlayingSession_PastTheLadder_KeepsASlowRetry).
     private static PcmAudioSession LoadedSession(out MemoryAudioSource voice, long latencyFrames = 100)
     {
         var ep = new HeadlessAudioEndpoint(Fmt, warmupFrames: 0, latencyFrames: latencyFrames);
@@ -219,7 +219,7 @@ public sealed class AudioDeviceStateMachineTests
     }
 
     /// <summary>The ladder: 250 ms → 1 s → 3 s while the endpoint stays not-ready, then <c>Faulted</c> for a session that does
-    /// not want sound (a playing one keeps a 5 s slow retry) — and a device event re-arms the whole thing (ladder reset to
+    /// not want sound (a playing one keeps a 5 s slow retry only while its kept sink is dead) — and a device event re-arms the whole thing (ladder reset to
     /// 250 ms) instead of staying dead.</summary>
     [Fact]
     public void Retrying_LadderExhausted_Faulted_ThenDeviceEventRearms()
@@ -263,19 +263,48 @@ public sealed class AudioDeviceStateMachineTests
         Assert.Equal(6, opens);
     }
 
-    /// <summary>Past the ladder, a session that wants sound keeps a slow retry instead of going <c>Faulted</c>: a Bluetooth
-    /// endpoint can refuse Initialize longer than the ladder and then recover with no default-device event.</summary>
+    // The kept endpoint of a playing session; Lost models a running client that MarkLost invalidated (IsReady false).
+    private sealed class KeptEndpoint : IAudioEndpoint
+    {
+        private readonly HeadlessAudioEndpoint _inner = new(Fmt, warmupFrames: 0);
+        public bool Lost;
+        public IAudioSink Sink => _inner.Sink;
+        public IAudioClockSource Clock => _inner.Clock;
+        public bool IsReady => !Lost;
+        public void Dispose() { }
+    }
+
+    private static PcmAudioSession PlayingSessionOn(KeptEndpoint kept)
+    {
+        var session = new PcmAudioSession(Fmt, kept.Sink, kept.Clock, maxBlock: 256, driveWithOwnThread: false, kept);
+        session.Configure(AudioGraphSpec.Passthrough);
+        var voice = new MemoryAudioSource(new float[Fmt.SampleRate * 2 * 10], 2);   // 10 s
+        session.SetVoice(voice, TimeSpan.FromSeconds(10), Fmt.SampleRate * 10, NormMode.Off, -14f, initialVolume: 1f);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+        _ = session.PlayAsync();
+        session.PumpAudio(256);   // Opening → Buffering
+        session.PumpAudio(256);   // Buffering → Ready → Playing
+        return session;
+    }
+
+    /// <summary>Past the ladder, a session that wants sound keeps a slow retry instead of going <c>Faulted</c>, but only while its
+    /// kept sink is dead: a Bluetooth endpoint can refuse Initialize longer than the ladder and then recover with no
+    /// default-device event, and with nothing audible to protect the slow retry is the only way back. A live kept sink goes
+    /// <c>Faulted</c> instead (see SlowRetryKeptSinkTests).</summary>
     [Fact]
     public void PlayingSession_PastTheLadder_KeepsASlowRetry()
     {
-        var session = PlayingSession(out _);
+        var kept = new KeptEndpoint();
+        var session = PlayingSessionOn(kept);
+        Assert.True(session.WantsOutput);
+        kept.Lost = true;                                                 // the kept sink was invalidated: silence until a retry lands
         bool ready = false;
         using var ctrl = new AudioDeviceController(session, () => new HeadlessAudioEndpoint(Fmt, warmupFrames: 0, ready: ready));
         ctrl.MarkRunning();
 
         ctrl.OnDefaultDeviceChanged();                                    // attempt 1
         for (int i = 0; i < 3; i++) Assert.True(ctrl.TryRunDueRetry(long.MaxValue));   // attempts 2-4: the ladder runs out
-        Assert.Equal(AudioDeviceState.Retrying, ctrl.State.Peek());       // not Faulted: the listener wants sound
+        Assert.Equal(AudioDeviceState.Retrying, ctrl.State.Peek());       // not Faulted: the listener wants sound and the kept sink is dead
 
         ready = true;                                                     // the endpoint comes back, no device event
         Assert.True(ctrl.TryRunDueRetry(long.MaxValue));

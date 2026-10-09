@@ -226,9 +226,12 @@ public sealed class AudioDeviceController : IDisposable
 
     // Schedule the next ladder step (→ Retrying) or declare exhaustion (→ Faulted; the next device event resets the ladder
     // and re-enters the machine). Wakes the cold loop so it recomputes its wait.
-    // Past the ladder, a session that still wants to play keeps trying every SlowRetryMs: a Bluetooth endpoint can stay
-    // "Active" but refuse Initialize (AUDCLNT_E_DEVICE_INVALIDATED) for longer than the 4 s ladder and then recover
-    // WITHOUT a default-device event, which left Wavee silent until restart. A paused or idle session goes Faulted as before.
+    // Past the ladder, a session that still wants to play keeps trying every SlowRetryMs while its kept sink is dead: a
+    // Bluetooth endpoint can stay "Active" but refuse Initialize (AUDCLNT_E_DEVICE_INVALIDATED) for longer than the 4 s
+    // ladder and then recover WITHOUT a default-device event, which left Wavee silent until restart. A paused or idle
+    // session goes Faulted as before, and so does one whose kept sink still plays: every attempt parks the RT feed around a
+    // synchronous open, and a refusing endpoint's open drained the audible sink's ~100 ms buffer every 5 s for as long as
+    // the listener kept playing. Play (Rearm) or the next device event tries that device again.
     private const int SlowRetryMs = 5000;
 
     private void ScheduleRetry()
@@ -237,7 +240,7 @@ public sealed class AudioDeviceController : IDisposable
         lock (_gate)
         {
             delay = _policy.NextRetryDelayMs();
-            if (delay is null && _session.WantsOutput) delay = SlowRetryMs;
+            if (delay is null && _session.WantsOutput && !_session.OutputLive) delay = SlowRetryMs;
             _nextRetryAt = delay is int d ? Environment.TickCount64 + d : long.MinValue;
         }
         _state.Value = delay is null ? AudioDeviceState.Faulted : AudioDeviceState.Retrying;
