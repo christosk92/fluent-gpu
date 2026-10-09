@@ -6468,6 +6468,9 @@ public sealed partial class AppHost : IDisposable
             // A stationary pointer emits no PointerMove while edge auto-scroll moves/recycles the rows beneath it;
             // still re-hit after the frame's realize so the nearest target and its insertion slot follow.
             if (dragEdgeActive) _dispatcher.RefreshDragDropAfterAutoScroll();
+            // Same for a wheel notch or touchpad pan given mid-drag (the hover refresh below stands down while an item-drag
+            // holds the pointer), but target-only, so it never arms edge auto-scroll against the user's own scroll.
+            else if (_anyScrollMovedThisFrame) _dispatcher.RefreshDragDropAfterScroll();
             long tRealizeCatchup = Stopwatch.GetTimestamp();
 
             // Stuck-hover fix (input-a11y.md §5.4/§15 — "hover re-resolves when content moves under a stationary pointer,

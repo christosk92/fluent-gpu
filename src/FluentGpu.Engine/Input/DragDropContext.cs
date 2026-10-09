@@ -203,6 +203,17 @@ public sealed class DragDropContext
         _session.VelocityX = velocityX;
         _session.VelocityY = velocityY;
         _session.Mods = mods;
+        Retarget(hit);
+        UpdateEdgeScroll(hit, abs);
+    }
+
+    /// <summary>Content scrolled under a STATIONARY pointer (a wheel notch or touchpad pan given mid-drag): re-resolve the
+    /// target on <paramref name="hit"/>'s chain at the session's unchanged position (Enter/Leave/Over, refusal and spring,
+    /// exactly as <see cref="Move"/>) but leave edge auto-scroll alone. The pointer arms that, and re-arming it here would
+    /// scroll the list back against the user's own wheel whenever the pointer rests in a hot zone. 0-alloc.</summary>
+    internal void Retarget(NodeHandle hit)
+    {
+        if (!_active) return;
         RefreshSpotlight(force: false);
 
         var next = FindTarget(hit, out var refuser, out var refuserSpec, out var springHost, out var springSpec);
@@ -231,8 +242,6 @@ public sealed class DragDropContext
         // only when nothing on the chain accepted, in which case the caption slot is free by construction.
         UpdateRefusal(_over.IsNull ? refuser : NodeHandle.Null, _over.IsNull ? refuserSpec : null);
         UpdateSpring(springHost, springSpec);
-
-        UpdateEdgeScroll(hit, abs);
     }
 
     /// <summary>Release: when the pointer is over an accepting target, fire <c>OnDrop(session)</c> and close the

@@ -2991,6 +2991,16 @@ public sealed partial class InputDispatcher
             session.VelocityX, session.VelocityY, session.Mods);
     }
 
+    /// <summary>Refresh a stationary drag after a phase-7 scroll the USER drove (wheel notch, touchpad pan) moved content
+    /// under it. <see cref="RefreshHoverAfterScroll"/> stands down while an item-drag holds the pointer, so without this
+    /// the target and its insertion slot stayed on the row that used to be under the pointer and a release with no move
+    /// dropped there. Target-only (<see cref="DragDropContext.Retarget"/>): edge auto-scroll stays the pointer's to arm.</summary>
+    internal void RefreshDragDropAfterScroll()
+    {
+        if (!DragDrop.IsActive) return;
+        DragDrop.Retarget(HitTestAny(DragDrop.Session.Position));
+    }
+
     /// <summary>Stuck-hover fix (input-a11y.md §5.4/§15): a phase-7 scroll offset write moved content under a possibly
     /// STATIONARY mouse/pen cursor, so synthesize the hover re-resolve a real <see cref="InputKind.PointerMove"/> would
     /// have done — HitTest at the last known pointer position and drive the SAME _hovered / scroll-hover / cursor path.
