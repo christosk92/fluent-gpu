@@ -449,7 +449,7 @@ public sealed partial class AppHost
     }
 
     /// <summary>Content-space position of <paramref name="node"/> along the scroller's axis (relative to its content
-    /// start), false when the node is not inside <paramref name="content"/>.</summary>
+    /// start), false when the node is not inside <paramref name="content"/> or belongs to a nested viewport inside it.</summary>
     private bool NodeInScroller(NodeHandle node, NodeHandle scroller, NodeHandle content, bool horizontal, out double pos, out double extent)
     {
         double acc = 0.0;
@@ -457,6 +457,10 @@ public sealed partial class AppHost
         {
             if (n == content) break;
             if (n == scroller) { pos = 0; extent = 0; return false; }
+            // A nested viewport between the node and this content owns it: an effect binds to its NEAREST scroller (CSS
+            // position:sticky / scroll()), so an outer scroller must not pose it too, or the two rows overwrite each other
+            // and a sticky's engaged edge flips twice a frame. The node itself may be a viewport (pinned in this one).
+            if (n != node && _scene.HasScroll(n)) { pos = 0; extent = 0; return false; }
             ref readonly RectF b = ref _scene.Bounds(n);
             acc += horizontal ? b.X : b.Y;
             if (_scene.Parent(n).IsNull) { pos = 0; extent = 0; return false; }
