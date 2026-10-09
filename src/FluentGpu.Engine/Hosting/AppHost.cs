@@ -7725,7 +7725,10 @@ public sealed partial class AppHost : IDisposable
                 {
                     if (_scene.IsOrphan(c)) continue;
                     ref readonly RectF cb = ref _scene.Bounds(c);   // parent-relative — the same space the Trailing walk below reads
-                    extentH = MathF.Max(extentH, cb.Y + cb.H);
+                    // Bounds are the BORDER box, but the natural size the row was seeded with counts each child's margin
+                    // (FlexLayout's MarginMain/MarginCross): without the trailing one, a list whose items carry a bottom
+                    // margin re-aimed the row short by it and SettleRestore snapped the remainder open on the last frame.
+                    extentH = MathF.Max(extentH, cb.Y + cb.H + _scene.Layout(c).Margin.Bottom);
                 }
                 if (extentH > 0f) extentH += _scene.Layout(r).Padding.Bottom;
                 if (extentH > 0.5f && MathF.Abs(toH - extentH) >= 0.5f)
@@ -7741,7 +7744,7 @@ public sealed partial class AppHost : IDisposable
                 {
                     if (_scene.IsOrphan(c)) continue;
                     ref readonly RectF cb = ref _scene.Bounds(c);
-                    extentW = MathF.Max(extentW, cb.X + cb.W);
+                    extentW = MathF.Max(extentW, cb.X + cb.W + _scene.Layout(c).Margin.Right);
                 }
                 if (extentW > 0f) extentW += _scene.Layout(r).Padding.Right;
                 if (extentW > 0.5f && MathF.Abs(toW - extentW) >= 0.5f)
