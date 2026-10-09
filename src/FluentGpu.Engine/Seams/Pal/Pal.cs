@@ -693,8 +693,8 @@ public interface IPlatformWindow : IDisposable
 
     /// <summary>True while the OS compositor CLOAKS the window: it keeps <c>WS_VISIBLE</c> but nothing of it reaches the
     /// screen (Win32 <c>DWMWA_CLOAKED</c>: the window lives on another virtual desktop, or a shell transition is running).
-    /// Unlike <see cref="IsVisible"/> this raises no message, so a host that parks on it must poll. A detached child host
-    /// parks while this holds (<see cref="CloakParkGate"/>); the primary window does not read it. Default false.</summary>
+    /// Unlike <see cref="IsVisible"/> this raises no message, so a host that parks on it must poll. Every host, the primary
+    /// window as much as a pop-out, parks while this holds (<see cref="CloakParkGate"/>). Default false.</summary>
     bool IsCloaked => false;
 
     /// <summary>F118: a counter that changes whenever the set, the Z-order or the geometry of the top-level windows on this

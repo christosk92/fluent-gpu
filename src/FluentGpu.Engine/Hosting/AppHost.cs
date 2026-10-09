@@ -783,9 +783,10 @@ public sealed partial class AppHost : IDisposable
     internal void AdvanceFrameClockForTest(double ms) => _frameClockMs += ms;
 
     /// <summary>Why this host is parked, for the hidden-memory delay: an OS minimize / hide (the DWM restore animation covers a
-    /// re-raster) versus only being covered by another window (back the instant it moves, so a longer delay).</summary>
+    /// re-raster) versus only being covered by another window or cloaked on another virtual desktop (back the instant it moves
+    /// or uncloaks, so a longer delay).</summary>
     private HiddenPark CurrentHiddenPark()
-        => IsOsParked ? HiddenPark.Os : (_coverParked ? HiddenPark.Cover : HiddenPark.None);
+        => IsOsParked ? HiddenPark.Os : (_coverParked || _cloakParked ? HiddenPark.Cover : HiddenPark.None);
 
     // ── Deep stage + restore hold: UI side ────────────────────────────────────────────────────────────────────────
     // The hold is a property of the PUBLICATION: every scene published while the hold is armed carries PresentHeld, and the render
@@ -2827,9 +2828,9 @@ public sealed partial class AppHost : IDisposable
     private const int PostRecoveryThrottleFrames = 45;
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
     private bool _wasParked;                 // previous frame's parked state (minimized OR hidden) — the un-park EDGE forces a repaint
-    // Detached CHILD only: the DWM-cloak state (another virtual desktop, a shell transition), debounced by CloakParkGate and
-    // sampled once per RunFrame. A cloaked pop-out presents nothing (Present stands down) yet keeps WS_VISIBLE, so without
-    // this it kept painting + RenderMotion-presenting a window nobody can see, on the render thread shared with the main window.
+    // Any host: the DWM-cloak state (another virtual desktop, a shell transition), debounced by CloakParkGate and sampled once
+    // per RunFrame. A cloaked window presents nothing (Present stands down) yet keeps WS_VISIBLE, so without this it kept
+    // painting + RenderMotion-presenting a window nobody can see (and the primary forced an occlusion-probe repaint every 250 ms).
     private CloakParkGate _cloakGate;
     private bool _cloakParked;
     // Any host (F118, UI thread): the window is completely covered, so it parks exactly like a minimized one. Two causes feed it
@@ -2840,7 +2841,7 @@ public sealed partial class AppHost : IDisposable
     private long _occlusionEpochSeen;      // the IPlatformWindow.OcclusionEpoch the cached OS verdict was computed for (0 = never / untracked)
     private bool _occludedByWindows;       // the cached OS-level verdict: covered by the union of the windows above it
     private RectF[]? _occluderRects;       // reused buffer for IPlatformWindow.CopyOccluderRectsPx (WindowCoverPolicy.MaxOccluders)
-    // A cloak-parked child polls at this period: DWM raises no message when a window is un-cloaked, so unlike a minimized or
+    // A cloak-parked host polls at this period: DWM raises no message when a window is un-cloaked, so unlike a minimized or
     // hidden window (whose restore IS a message) nothing would ever wake a loop that blocked until one.
     private const int CloakPollMs = 250;
     // Detached CHILD only (F115, UI thread): the pop-out window was created HIDDEN and is waiting for its first present
@@ -4005,7 +4006,7 @@ public sealed partial class AppHost : IDisposable
         int w = ClampWaitToTimers(raw, _lastWaitKind);
         w = ClampWaitToScrollChrome(w, _lastWaitKind);   // a scrollbar dwell (the idle hide) wakes exactly when it expires
         w = ClampWaitToOcclusionProbe(w, _lastWaitKind);   // an occluded (not parked) window still wakes to re-probe its target
-        w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked detached child wakes when its park debounce ends
+        w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked host wakes when its park debounce ends
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
@@ -4130,16 +4131,16 @@ public sealed partial class AppHost : IDisposable
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
-    /// <summary>Shorten an idle/throttled wait so a cloaked detached child reaches its park when the
+    /// <summary>Shorten an idle/throttled wait so a cloaked host reaches its park when the
     /// <see cref="CloakParkGate"/> debounce ends. The gate is sampled only inside <see cref="RunFrame"/> and a cloak posts no
     /// message, so a child whose UI is idle (render-thread-only motion does not wake the UI loop) would otherwise keep
     /// presenting into the cloaked window until something unrelated woke it. Same guards as
-    /// <see cref="ClampWaitToTimers"/>: only a detached child reads the cloak, a display-rate wait already runs the next frame
+    /// <see cref="ClampWaitToTimers"/>: a display-rate wait already runs the next frame
     /// (which samples the gate), a parked host has nothing left to debounce, and the clamp floors at 1 ms (never a spin).
     /// An uncloaked or already-parked gate reports infinity, so the wait is unchanged.</summary>
     private int ClampWaitToCloakDebounce(int w, HostWaitKind kind)
     {
-        if (!_isDetachedChild || IsDisplayRateWait(kind, w) || IsParked) return w;
+        if (IsDisplayRateWait(kind, w) || IsParked) return w;
         double untilPark = _cloakGate.MsUntilPark(_timers.NowMs);
         if (double.IsPositiveInfinity(untilPark)) return w;
         int dueIn = (int)Math.Ceiling(Math.Max(1.0, untilPark));
@@ -5525,12 +5526,14 @@ public sealed partial class AppHost : IDisposable
             WindowStateChanged?.Invoke(windowChange);
             windowStatus = new(_window.State, _window.IsVisible);
         }
-        // A detached child whose window DWM has cloaked for a sustained period parks exactly like a hidden one (the
-        // debounce keeps a shell transition from flapping it). Sampled AFTER the relay: the app-facing WindowStateChanged
-        // reports the window's own placement/visibility, which a cloak does not change.
+        // A window DWM has cloaked for a sustained period (another virtual desktop) parks exactly like a hidden one, the primary
+        // as much as a pop-out: it presents nothing (Present stands down) yet keeps WS_VISIBLE, so unparked it kept painting,
+        // ticking UseIsActive consumers and forcing an occlusion-probe repaint every 250 ms. The debounce keeps a shell
+        // transition from flapping it. Sampled AFTER the relay: the app-facing WindowStateChanged reports the window's own
+        // placement/visibility, which a cloak does not change.
         // An unrevealed pop-out (created hidden, F115) is neither hidden-parked nor cloak-parked: its first frame has to paint into
         // the hidden window for the reveal to have anything to show.
-        if (_isDetachedChild && !_revealPending) _cloakParked = _cloakGate.Advance(_window.IsCloaked, _timers.NowMs);
+        if (!_revealPending) _cloakParked = _cloakGate.Advance(_window.IsCloaked, _timers.NowMs);
         // A window parks while other windows completely cover it (F118): the DXGI occlusion latch does not fire for a flip-model
         // composition swapchain another top-level covers, so without this it kept recording and presenting invisible frames on the
         // render thread it shares with the pop-out (a fullscreen pop-out over the primary window, or any other window over either).
@@ -5806,10 +5809,10 @@ public sealed partial class AppHost : IDisposable
     }
 
     /// <summary>True when nothing of the host window is on screen: minimized (PAL <see cref="Pal.WindowState.Minimized"/>)
-    /// OR hidden (<see cref="IPlatformWindow.IsVisible"/> false — a close-to-tray app), OR (a detached child only) cloaked by
+    /// OR hidden (<see cref="IPlatformWindow.IsVisible"/> false — a close-to-tray app), OR cloaked by
     /// the OS compositor for a sustained period (<see cref="IPlatformWindow.IsCloaked"/>, debounced by
     /// <see cref="CloakParkGate"/>). A parked host produces no frames: no reconcile, layout, record or present,
-    /// <c>UseIsActive</c> reads false, and the loop blocks on messages (a cloak-parked child polls for the un-cloak) — the
+    /// <c>UseIsActive</c> reads false, and the loop blocks on messages (a cloak-parked host polls for the un-cloak) — the
     /// minimized behaviour, now shared by the hidden window (<see cref="WindowStatus.Parked"/>). The PRIMARY host also parks
     /// while a fullscreen, active pop-out covers it entirely (<see cref="WindowCoverPolicy"/>, F118) and raises
     /// <c>InputHooks.WindowOccluded</c> like any parked window. Live read of the window (the cloak and cover halves are the

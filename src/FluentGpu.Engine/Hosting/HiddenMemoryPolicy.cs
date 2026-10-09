@@ -33,7 +33,8 @@ public enum HiddenPark : byte
 {
     /// <summary>The window is not parked.</summary>
     None = 0,
-    /// <summary>Completely covered by another window (cover-park). Still presentable the instant the occluder moves.</summary>
+    /// <summary>Completely covered by another window (cover-park) or DWM-cloaked on another virtual desktop (cloak-park). Still
+    /// presentable the instant the occluder moves or the cloak clears.</summary>
     Cover = 1,
     /// <summary>Minimized or hidden (tray).</summary>
     Os = 2,
