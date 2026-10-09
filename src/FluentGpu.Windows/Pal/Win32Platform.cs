@@ -2616,6 +2616,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
     }
 
+    // WM_SETCURSOR over the popup's client: re-assert the engine-chosen cursor (I-beam/hand/resize) exactly like the
+    // owner's own WM_SETCURSOR arm. The popup is WS_POPUP, not a child, so DefWindowProc never consults the owner and would
+    // answer every move with the popup class arrow, and PublishCursor only re-sends on a change, so nothing restores it.
+    internal void ForwardPopupSetCursor() => ApplyCursor();
+
     // Classify a contact + read its normalized pressure and timestamp. PT_TOUCH/PT_PEN pressure is 0..1024 (0 = the
     // digitizer reports none → keep 1 like a mouse); dwTime may be 0 (injected/synthetic) → fall back to the message clock.
     private void Decode(in POINTER_INFO pi, out PointerKind kind, out float pressure, out uint time, out long qpc)
