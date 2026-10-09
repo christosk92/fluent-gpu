@@ -1629,6 +1629,16 @@ public sealed class ItemsView : Component
             }
         }, DepKey.From(HashCode.Combine(disclosureVer, disclosureSourceVer, count)));
 
+        // A count shrink can strand `current` past the new end: nothing else re-targets it (its writers are the key,
+        // pointer and focus paths), so Up/Down would step from a phantom index (StepEnabled stays put, the key is still
+        // Handled), the RenderItem roving tab stop would name no realized container (Tab skips the list), and
+        // CurrentItemIndex would hand the app an out-of-range index. Re-target it onto the last focusable item (−1 when
+        // none) on the render that first observes the smaller count; a write here is an effect, never a render write.
+        UseLayoutEffect(() =>
+        {
+            if (current.Peek() >= count) current.Value = FirstEnabled(count - 1, -1);
+        }, DepKey.From(count));
+
         // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it. Keyed on
         // (cur, focusTick): RenderItem mode re-renders on every current move (cur changes); bound mode renders only on
         // a focusTick wake (MoveCurrent/FollowTabStop's deferred path), and `cur` alone could repeat an old key there.
