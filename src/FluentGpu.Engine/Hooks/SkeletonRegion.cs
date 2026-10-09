@@ -218,7 +218,7 @@ internal static class SkeletonReveal
         return NodeHandle.Null;
     }
 
-    static bool IsTransparentBoundary(ushort typeId) => typeId is
+    internal static bool IsTransparentBoundary(ushort typeId) => typeId is
         3   // ComponentEl
         or 4   // ContextProviderEl
         or 7   // ShowEl

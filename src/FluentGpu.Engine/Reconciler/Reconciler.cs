@@ -1376,7 +1376,18 @@ public sealed partial class TreeReconciler
         // whose branch never mounted.
         ref LayoutInput a = ref _scene.Layout(anchor);
         ref readonly LayoutInput c = ref child.IsNull ? ref EmptyBoundaryLayout : ref _scene.Layout(child);
-        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
+        // The anchor's box is its child's MARGIN box: the anchor keeps Margin 0 and its column places the child at the
+        // child's leading margin inside it (so a grid cell or a viewport slot, which never read a margin, still honour the
+        // child's). Every DECLARED extent below describes the child's BORDER box, so it grows by the child's margin on its
+        // axis. Mirrored bare, a 32-wide root with an 8+8 horizontal margin got a 32-wide anchor, sat at x=8 inside it and
+        // spilled its trailing gap under the next sibling. An auto (NaN) extent already measures margin-inclusive through
+        // the anchor's own content pass, so it stays NaN; a zero margin (the common case) is a +0 no-op.
+        float mH = c.Margin.Horizontal, mV = c.Margin.Vertical;
+        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
+        // Basis lies on the FLEX PARENT's main axis, so it takes that axis' margin (the walk only runs for a based,
+        // margined root).
+        a.FlexBasis = float.IsNaN(c.FlexBasis) || (mH == 0f && mV == 0f) ? c.FlexBasis
+            : c.FlexBasis + (FlexParentIsRow(anchor) ? mH : mV);
         // NEVER snapshot an ACTIVELY ANIMATED size. A SizeMode.Reflow track writes the eased extent straight into the
         // child's LayoutInput.Width/Height each tick; mirroring THAT onto the transparent anchor freezes a mid-flight
         // number as a hard declared size, and nothing ever undoes it — SettleRestore restores only the animated node,
@@ -1384,8 +1395,8 @@ public sealed partial class TreeReconciler
         // (normally NaN/auto) so the anchor stays genuinely transparent and measures the eased child naturally.
         if (Anim is { } mpAnim)
         {
-            float mirroredW = !child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width;
-            float mirroredH = !child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height;
+            float mirroredW = OutsetByMargin(!child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width, mH);
+            float mirroredH = OutsetByMargin(!child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height, mV);
             // The SAME hazard one level up, with the roles swapped: the ANCHOR itself may be the reflow node. A
             // SkelRegionEl with SmoothResize puts the SizeMode.Reflow track on the BOUNDARY (MountSkeletonRegion marks
             // the region BoundsAnimated), and ReconcileSkeletonRegion then mirrors its branch onto it on every flush —
@@ -1398,9 +1409,23 @@ public sealed partial class TreeReconciler
             if (!mpAnim.RecordDeclaredSize(anchor, AnimChannel.LayoutW, mirroredW)) a.Width = mirroredW;
             if (!mpAnim.RecordDeclaredSize(anchor, AnimChannel.LayoutH, mirroredH)) a.Height = mirroredH;
         }
-        else { a.Width = c.Width; a.Height = c.Height; }
-        a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
+        else { a.Width = OutsetByMargin(c.Width, mH); a.Height = OutsetByMargin(c.Height, mV); }
+        a.MinW = OutsetByMargin(c.MinW, mH); a.MinH = OutsetByMargin(c.MinH, mV);
+        a.MaxW = OutsetByMargin(c.MaxW, mH); a.MaxH = OutsetByMargin(c.MaxH, mV);
         a.MeasureUnboundedWidth = c.MeasureUnboundedWidth;
+    }
+
+    /// <summary>A border-box extent the anchor mirrors, grown to its child's margin box on that axis. NaN (auto) stays
+    /// auto: the anchor's content pass already measures the child margin-inclusive.</summary>
+    private static float OutsetByMargin(float extent, float margin) => float.IsNaN(extent) ? extent : extent + margin;
+
+    /// <summary>Whether the container that reads an anchor's mirrored FlexBasis lays out as a row: the first ancestor
+    /// that is not itself a transparent boundary (a nested anchor is a default column whatever row it sits in).</summary>
+    private bool FlexParentIsRow(NodeHandle anchor)
+    {
+        var p = _scene.Parent(anchor);
+        while (!p.IsNull && SkeletonReveal.IsTransparentBoundary(_scene.ElementTypeId(p))) p = _scene.Parent(p);
+        return !p.IsNull && _scene.Layout(p).Direction == 0;
     }
 
     /// <summary>Re-mirror every transparent anchor above <paramref name="node"/> whose mirrored child it is, bottom-up. A
