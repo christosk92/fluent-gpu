@@ -820,19 +820,25 @@ public sealed partial class InputDispatcher
         get
         {
             for (int i = _focusScopes.Count - 1; i >= 0; i--)
-                if (_scene.IsLive(_focusScopes[i])) return _focusScopes[i];
+                if (ScopeShown(_focusScopes[i])) return _focusScopes[i];
             return _scene.Root;
         }
     }
 
-    /// <summary>Where accelerators and access keys resolve: the innermost live MODAL scope plus every scope stacked above it (a
+    /// <summary>A pushed scope traps only while its root is linked under the scene root. A KeepAlive park detaches the page
+    /// but keeps it live, and nothing pops a scope pushed from inside it (an open overlay SplitView pane's watcher is parked
+    /// with the page), so Tab on the next page cycled through the hidden pane. The entry stays in the stack: when the page
+    /// comes back with the pane still open, the trap resumes.</summary>
+    private bool ScopeShown(NodeHandle root) => IsSelfOrAncestorOf(_scene.Root, root);
+
+    /// <summary>Where accelerators and access keys resolve: the innermost shown MODAL scope plus every scope stacked above it (a
     /// ComboBox or context menu opened from the dialog). Empty = no modal open, so chords resolve over the whole tree.</summary>
     private ReadOnlySpan<NodeHandle> ChordScopes
     {
         get
         {
             for (int i = _focusScopes.Count - 1; i >= 0; i--)
-                if (_modalScopes[i] && _scene.IsLive(_focusScopes[i]))
+                if (_modalScopes[i] && ScopeShown(_focusScopes[i]))
                     return System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_focusScopes)[i..];
             return default;
         }
