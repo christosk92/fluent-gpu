@@ -27,10 +27,10 @@ public enum ImageFailureKind : byte
 {
     None = 0,
     Network = 1,      // transient: connection reset / DNS / socket — retried
-    Timeout = 2,      // transient: slow internet exceeded the per-request deadline — retried
-    ServerError = 3,  // transient: HTTP 5xx — retried
+    Timeout = 2,      // transient: slow internet exceeded the per-request deadline, or HTTP 408 — retried
+    ServerError = 3,  // transient: HTTP 5xx or 429 (throttled) — retried
     NotFound = 4,     // permanent: HTTP 404/410 — not retried
-    HttpError = 5,    // permanent: other 4xx — not retried
+    HttpError = 5,    // permanent: other 4xx (not 408/429) — not retried
     Decode = 6,       // bytes fetched but not decodable — retried while visible (stale disk poison / CDN glitch)
     Canceled = 7,     // request was canceled (row recycled / unmounted) before completion
     GpuResourceExhausted = 8, // transient across a later remount: backend could not admit another resident texture/SRV
