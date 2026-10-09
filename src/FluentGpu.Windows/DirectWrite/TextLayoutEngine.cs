@@ -998,7 +998,11 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
         if (_fallback == null || _sysColl == null) return;
         string fam = string.IsNullOrEmpty(family) ? DefaultFamily : family;
-        if (fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)) return;
+        // A custom font FILE ("Assets/Fonts/Inter.ttf#Inter") names no system family, but its uncovered characters still
+        // need a system face: returning here shaped CJK / emoji / other scripts in the file face as drawn .notdef boxes.
+        // MapCharacters only takes the family as a preference, so hand it the default; the covered-prefix scan above
+        // already kept every character the file can render in the file face.
+        if (fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)) fam = DefaultFamily;
         uint mappedLen; IDWriteFont* mappedFont = null; float sc;
         int hr;
         fixed (char* fn = fam)
