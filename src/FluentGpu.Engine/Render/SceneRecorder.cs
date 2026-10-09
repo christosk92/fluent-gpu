@@ -1727,11 +1727,17 @@ internal sealed class SceneRecordingContext
                         default, group ? groupLayer : default, new ClipCmd(groupSourceClip), deviceBounds, key, key);
                     if (selfLayerCut)
                     {
-                        // This slice's stream is the Layer marker alone: KEEP it whole when nothing below changed and the
-                        // marker is the one it already holds (else swap its arena and write the marker afresh).
+                        // This slice's stream is the Layer marker alone: KEEP it whole when nothing below changed, the
+                        // marker is the one it already holds AND the Layer's content was recorded under the same inputs (else
+                        // swap its arena and write the marker afresh). The marker carries no opacity for a bare acrylic and
+                        // no inherited state / focus / text-edit / scroll colours for any layer, and record-dirty only rises:
+                        // a parent's fade, hover or theme reaches this clean subtree only through the span input signature.
+                        ulong layerSig = ComputeSpanInputSig(scene, node, flags, depth, in clip, in world, opacity,
+                            parentScaleX, parentScaleY, childScaleX, childScaleY, pw, ph, inMotion, inherited, in focus, in textEdit,
+                            scrollThumb, scrollTrack, clipComposite: stickyCut);
                         bool clean = spans is not null && !spanReuseDisabled && scene.RecordDirtyBits(node) == 0
                             && !spans.IsBlocked((int)node.Raw.Index, spanFrame) && stats.KeepDenySlot != selfSlot;
-                        if (clean && sl.HoldsOnlyMarker(selfSlot, in cmd))
+                        if (clean && sl.HoldsOnlyMarker(selfSlot, in cmd, layerSig))
                         {
                             sl.Keep(selfSlot);
                             stats.NodesVisited--;
@@ -1745,6 +1751,7 @@ internal sealed class SceneRecordingContext
                             spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame), scene.RecordDirtyBits(node),
                             stats.KeepDenySlot == selfSlot, selfSlot == SliceRecorder.RootSlot, missClass: 2, wholeArena: true, out uint lwhyDetail);
                         sl.BeginWalk(selfSlot, lwhy, lwhyDetail);
+                        sl.SetLayerInputSig(selfSlot, layerSig);
                         stats.CurGen = sl.CurGen(selfSlot);
                         stats.PriorGen = sl.PriorGen(selfSlot);
                     }

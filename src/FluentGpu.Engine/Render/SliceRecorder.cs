@@ -179,6 +179,9 @@ public sealed partial class SliceRecorder
         public RectF AcrylicRect;
         public CornerRadius4 AcrylicRadii;
         public float AcrylicAlpha;
+        // a slice root whose stream is its Layer marker alone: the span input signature (opacity, inherited state, focus /
+        // text-edit / scroll colours…) its last walk recorded that marker and the Layer's content under
+        public ulong LayerInputSig;
         // a COMPOSITE-TIME sticky clip (CompositeSliceFlags.StickyClip): the node's world in its own walk's space, with
         // which its current NodePaint.ClipRect (the ClipTop pose) becomes the slice's half-plane clip at placement
         public bool Sticky;
@@ -389,11 +392,17 @@ public sealed partial class SliceRecorder
 
     internal RectF BoundsOf(int slot) => _recs[slot].Bounds;
 
-    /// <summary>Does <paramref name="slot"/>'s arena hold exactly ONE op — the marker <paramref name="cmd"/>, byte for byte?
-    /// (A slice root whose stream is its nested Layer slice's marker alone keeps whole on that.)</summary>
-    internal bool HoldsOnlyMarker(int slot, in CompositeSliceCmd cmd)
+    /// <summary>The span input signature the walk that just swapped <paramref name="slot"/>'s arena records its Layer marker
+    /// (and so its Layer slice's content) under — what <see cref="HoldsOnlyMarker"/> keeps the slice whole on.</summary>
+    internal void SetLayerInputSig(int slot, ulong inputSig) => _recs[slot].LayerInputSig = inputSig;
+
+    /// <summary>Does <paramref name="slot"/>'s arena hold exactly ONE op — the marker <paramref name="cmd"/>, byte for byte —
+    /// written by a walk under span input signature <paramref name="inputSig"/> (<see cref="SetLayerInputSig"/>)? (A slice
+    /// root whose stream is its nested Layer slice's marker alone keeps whole on that.)</summary>
+    internal bool HoldsOnlyMarker(int slot, in CompositeSliceCmd cmd, ulong inputSig)
     {
-        if (!_recs[slot].Live || _arenas[slot] is not { } dl || _recs[slot].FirstChild < 0) return false;
+        if (!_recs[slot].Live || _arenas[slot] is not { } dl || _recs[slot].FirstChild < 0
+            || _recs[slot].LayerInputSig != inputSig) return false;
         ReadOnlySpan<byte> bytes = dl.Bytes;
         int body = Unsafe.SizeOf<CompositeSliceCmd>();
         if (bytes.Length != sizeof(int) + body || (DrawOp)MemoryMarshal.Read<int>(bytes) != DrawOp.CompositeSlice) return false;
