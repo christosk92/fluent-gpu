@@ -2157,7 +2157,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 return true;
             case WM_CHAR:
                 // TranslateMessage (run in the pump) synthesizes WM_CHAR from WM_KEYDOWN → the layout/IME-resolved
-                // codepoint, carried in the InputEvent.KeyCode slot. Editing/navigation keys still arrive via WM_KEYDOWN.
+                // UTF-16 code unit, carried in the InputEvent.KeyCode slot (a non-BMP character arrives as two; the
+                // InputDispatcher joins the surrogate pair). Editing/navigation keys still arrive via WM_KEYDOWN.
                 _queue.Enqueue(new InputEvent(InputKind.Char, default, 0, (int)(nuint)wParam, Mods: Mods(), TimestampMs: Now()));
                 return true;
             case WM_ACTIVATE:
