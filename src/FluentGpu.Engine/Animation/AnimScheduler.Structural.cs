@@ -415,7 +415,17 @@ public sealed partial class AnimEngine
     {
         if (MathF.Abs(fromRatio - 1f) < 0.001f && Find(node, ch) < 0) return;
         if (dyn.Kind == DynamicsKind.Spring)
-            Spring(node, ch, 1f, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromRatio, delayMs: delayMs);
+        {
+            var sp = SpringParams.FromResponse(dyn.Response, dyn.DampingRatio);
+            // fromRatio is old LAYOUT / new layout, and a live spring row holds a ratio of the OLD layout box: Spring's
+            // retarget would continue from it against the new box and pop (a 240→480 cover reversed at 360 showed 180).
+            // Re-base the row into the new box, its velocity too, as ConnectedAnimation.RetargetFlight does. An unchanged
+            // box (a position-only move) keeps the plain retarget, which continues from the render thread's own pose.
+            int ex = Find(node, ch);
+            if (ex >= 0 && _slab.At(ex).Kind == GenKind.Spring && MathF.Abs(fromRatio - 1f) >= 0.001f)
+                RebaseSpring(node, ch, 1f, sp, _slab.At(ex).Position * fromRatio, fromRatio);
+            else Spring(node, ch, 1f, sp, initial: fromRatio, delayMs: delayMs);
+        }
         else
         {
             // fromRatio is old LAYOUT / new layout; an interrupted tween was presenting old layout × its live scale, so
