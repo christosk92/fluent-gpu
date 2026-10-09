@@ -3097,18 +3097,6 @@ internal sealed class SceneRecordingContext
                 for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c), pinnedOrdinal++)
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
                     {
-                        RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
-                        Affine2D pinnedWorld = childWorld;
-                        if (hasDisclosure)
-                        {
-                            int logicalIndex = pinnedOrdinal < disclosurePrefix
-                                ? pinnedOrdinal
-                                : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
-                            if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
-                                pinnedClip = pinnedClip.Intersect(disclosureClip);
-                            else if (logicalIndex >= disclosureLast)
-                                pinnedWorld = childWorld.Translate(0f, disclosureShift);
-                        }
                         if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed && pinnedSlot < 0
                             && itemBandClipChanged && !itemBandClip.IsEmpty)
                         {
@@ -3134,6 +3122,21 @@ internal sealed class SceneRecordingContext
                                 if (contentSlice) stats.Slices!.MarkPoseLocked(selfSlot);
                                 pinnedBandPushed = true;
                             }
+                        }
+                        // Like the band rows: a PinnedBand slice carries the band line on its marker at the live pose, so its rows
+                        // walk under the incoming clip; recorded inline (pose-locked) they cull and nest their clips against the
+                        // line in the stream's own space (the viewport-space line sits SliceOwnDy away from it).
+                        RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix && pinnedSlot < 0 ? itemBandClipInline : childClip;
+                        Affine2D pinnedWorld = childWorld;
+                        if (hasDisclosure)
+                        {
+                            int logicalIndex = pinnedOrdinal < disclosurePrefix
+                                ? pinnedOrdinal
+                                : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
+                            if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
+                                pinnedClip = pinnedClip.Intersect(disclosureClip);
+                            else if (logicalIndex >= disclosureLast)
+                                pinnedWorld = childWorld.Translate(0f, disclosureShift);
                         }
                         if (pinnedClip.IsEmpty) continue;
                         var childResult = Walk(scene, childDl, images, c, pinnedWorld, opacity, depth + 1,
