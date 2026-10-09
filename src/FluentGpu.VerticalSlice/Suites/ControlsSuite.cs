@@ -119,6 +119,7 @@ static partial class ControlsSuite
         InfoBarClosePlateChecks(strings);
         MenuBarReopenChecks(strings);
         SelectionUnsubscribeChecks(strings);
+        TabContentIdentityChecks(strings);
     }
 
     // ── InfoBar / toast: the close button must stay INSIDE the painted plate ─────────────────────────────────────────
