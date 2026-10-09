@@ -5192,11 +5192,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // 6. Recreate every swapchain (SwapChain / RtvHeap / BackBuffers / Backdrop / its own command list) at its
         //    retained size, then rebind its DirectComposition graph HERE (RecoverDevice is render-confined,
         //    AssertSubmitThread at the top) so the recover frame is composited-correct on the render thread without
-        //    waiting for the next Present's lazy bind.
+        //    waiting for the next Present's lazy bind. Only where InitSwapChain armed the bind (the same gate Present
+        //    uses): a desktop-acrylic popup is Composited too, but its content is hosted by the WUC Backdrop just rebuilt
+        //    on that HWND, and a DComp target on top would show a second, unclipped, unanimated copy of the menu (or
+        //    throw out of the recovery and leave the device marked lost).
         for (int i = 0; i < _swapchains.Count; i++)
         {
             InitSwapChain(_swapchains[i]);
-            if (_swapchains[i].Composited) BindDComp(_swapchains[i]);
+            if (_swapchains[i].DcompBindPending) BindDComp(_swapchains[i]);
         }
         // No Activate(_primarySwapchain) — Phase 1 has no device-global working copy to prime; the next
         // SubmitDrawList/Present calls BeginTargetFrame for whichever target it services.
