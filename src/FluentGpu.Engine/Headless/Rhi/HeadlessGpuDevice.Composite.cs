@@ -68,6 +68,10 @@ public sealed partial class HeadlessGpuDevice
 
     public bool SupportsComposite => true;
 
+    /// <summary>Test seam for <see cref="IGpuDevice.HasLiveFeedback"/>: the headless model runs no feedback trail, so a gate
+    /// sets this to stand in for one the backend reports as still settling. False by default (today's behaviour).</summary>
+    public bool HasLiveFeedback { get; set; }
+
     /// <summary>Completed <see cref="SubmitComposite"/> calls.</summary>
     public int CompositeFrameCount { get; private set; }
 

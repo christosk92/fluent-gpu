@@ -578,7 +578,7 @@ public sealed partial class AppHost : IDisposable
                 ? _holdRetryOwed
                 : _renderAnimations.HasActive || _renderPoser.HasActive || RenderPlanUnposed
                     || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
-                    || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
+                    || HasOwnLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
         return active;
@@ -620,6 +620,14 @@ public sealed partial class AppHost : IDisposable
     /// cache) pumps it, as does every primary host.</summary>
     private bool PumpsSharedImages
         => !_isDetachedChild || _parentHost is not { } parent || !ReferenceEquals(parent._images, _images) || parent.IsParked;
+
+    /// <summary>F6: a feedback trail is settling AND it is this host's. Trails live only on the composite route (the backend
+    /// advances them inside <c>SubmitComposite</c> and republishes <see cref="IGpuDevice.HasLiveFeedback"/> at its end), so the
+    /// device-wide flag only ever describes the primary window: a detached child (direct route) has no trail of its own. Read
+    /// raw, it made a pop-out wake, publish, re-record and present at panel rate while the main window's visualizer ran, and for
+    /// the whole of a primary park, where the flag stays latched until the primary's next composite.</summary>
+    private bool HasOwnLiveFeedback
+        => ChooseSubmitRoute(_isDetachedChild) == SubmitRoute.Composite && _device.HasLiveFeedback;
 
     private void AdvanceImagePresentationClock()
     {
@@ -2263,7 +2271,7 @@ public sealed partial class AppHost : IDisposable
                 // stream AND an empty repaint region, which is exactly the question ShouldSkipRenderSubmit asks. A row
                 // that DID move fails the hash compare on its own. Only image crossfades advance pixels with no bit
                 // anywhere to show for it, so they alone keep a frame owed.
-                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || _device.HasLiveFeedback;   // + a settling feedback trail (F6)
+                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || HasOwnLiveFeedback;   // + a settling feedback trail (F6)
                 // An armed frame capture must present (evidence-diagnostics §A.6) — no tile is invalidated: the capture shows
                 // exactly the retained pixels.
                 // Never while HELD (or when this publication is the one that releases): the held frames must submit for their uploads
@@ -4563,7 +4571,7 @@ public sealed partial class AppHost : IDisposable
             || _scene.OrphanCount != 0 || _scene.OverlayCount != 0 || !_scene.DragGhost.IsNull || !_scene.DragOverlay.IsNull
             || _scene.DropSpotlightActive) return NoopPublicationBlock.Overlay;
         if (_images.HasActiveCrossfades || _device.HasPendingUploads || _bakedBlurQueue.HasRunnableJob) return NoopPublicationBlock.Images;
-        if (_videoSurfaces.HasUnpublishedChanges || _swapchain.TextRepaintPending || _device.HasLiveFeedback) return NoopPublicationBlock.Device;
+        if (_videoSurfaces.HasUnpublishedChanges || _swapchain.TextRepaintPending || HasOwnLiveFeedback) return NoopPublicationBlock.Device;
         if (_anyScrollMovedThisFrame || _scrollUnsettledCount != 0 || AnyUserScrollMoving) return NoopPublicationBlock.Scroll;
         lock (_popupActionLock) { if (_popupActionsIn.Count != 0 || _ownResizePending) return NoopPublicationBlock.Overlay; }
         return NoopPublicationBlock.None;
@@ -4699,7 +4707,7 @@ public sealed partial class AppHost : IDisposable
         // A paceable per-frame clock (a visualizer) asks for frames too, but the governor may pace it (GpuGovernorWake.NeverPace).
         if (_frameClockPaceableSig.HasSubscribers) r |= WakeReasons.FrameClockPaceable;
         // A feedback trail (visualizer F6) still settling: the backend advances it on frames with no scene change.
-        if (_device.HasLiveFeedback) r |= WakeReasons.FeedbackSettle;
+        if (HasOwnLiveFeedback) r |= WakeReasons.FeedbackSettle;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
         // from playback state: a playing DComp video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
