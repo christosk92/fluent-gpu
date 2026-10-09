@@ -2022,6 +2022,8 @@ internal sealed class SceneRecordingContext
                 if (stats.Slicing && stats.SliceDepth >= 0 && stats.SliceDepth < SliceRecorder.SpanIndexDepth)
                     stats.Slices!.CopyIndexFromPrior(stats.CurSlot, span.ByteStart, span.ByteLength, span.SortStart,
                         copiedByteStart, copiedSortStart, stats.SliceDepth);
+                // …and the baked poses inside it: their nodes are not walked, but their bytes still need watching
+                if (stats.Slicing) stats.Slices!.CopyBakedFromPrior(stats.CurSlot, span.ByteStart, span.ByteLength, copiedByteStart);
                 var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world };
                 spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, in currentSpan, stats.CurGen, stats.CurSlot);
                 stats.SpansReused++;

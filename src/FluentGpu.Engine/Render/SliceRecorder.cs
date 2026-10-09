@@ -202,7 +202,8 @@ public sealed partial class SliceRecorder
         public readonly int NodeIndex;
         public readonly uint Gen;
         public readonly Affine2D Local;
-        public Baked(int nodeIndex, uint gen, in Affine2D local) { NodeIndex = nodeIndex; Gen = gen; Local = local; }
+        public readonly int ByteStart;   // where the node's walk stood in the slot's arena: a span copy carries the entry along
+        public Baked(int nodeIndex, uint gen, in Affine2D local, int byteStart) { NodeIndex = nodeIndex; Gen = gen; Local = local; ByteStart = byteStart; }
     }
 
     private Rec[] _recs = new Rec[32];
@@ -216,8 +217,13 @@ public sealed partial class SliceRecorder
     // the scene, never of which subtrees happened to be copied.
     private SliceSpan[][] _indexPrior = new SliceSpan[32][];
     private int[] _indexPriorCount = new int[32];
+    // The baked poses a slot's stream holds, double-buffered like the index: a clean span copied out of the prior buffer
+    // carries the baked bytes of every scaled / folded effect under it, so it carries their entries too (the effect node's
+    // own walk, which adds them, never runs).
     private Baked[][] _baked = new Baked[32][];
     private int[] _bakedCount = new int[32];
+    private Baked[][] _bakedPrior = new Baked[32][];
+    private int[] _bakedPriorCount = new int[32];
     private int _slotCount;   // high-water of used slots
 
     private uint _frame;
@@ -239,7 +245,7 @@ public sealed partial class SliceRecorder
 
     public SliceRecorder()
     {
-        for (int i = 0; i < _index.Length; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; }
+        for (int i = 0; i < _index.Length; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; _bakedPrior[i] = new Baked[4]; }
     }
 
     // ── census ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -307,7 +313,9 @@ public sealed partial class SliceRecorder
         Array.Resize(ref _indexPriorCount, n);
         Array.Resize(ref _baked, n);
         Array.Resize(ref _bakedCount, n);
-        for (int i = old; i < n; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; }
+        Array.Resize(ref _bakedPrior, n);
+        Array.Resize(ref _bakedPriorCount, n);
+        for (int i = old; i < n; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; _bakedPrior[i] = new Baked[4]; }
     }
 
     /// <summary>The slot for (node, gen, role), created when absent. −1 when that slice was already registered THIS
@@ -332,6 +340,7 @@ public sealed partial class SliceRecorder
         _indexCount[s] = 0;
         _indexPriorCount[s] = 0;
         _bakedCount[s] = 0;
+        _bakedPriorCount[s] = 0;
         _recs[s] = new Rec
         {
             Live = true, NodeIndex = nodeIndex, Gen = gen, Role = (int)role, Kind = kind, Parent = -1,
@@ -363,6 +372,8 @@ public sealed partial class SliceRecorder
         (_index[slot], _indexPrior[slot]) = (_indexPrior[slot], _index[slot]);
         _indexPriorCount[slot] = _indexCount[slot];
         _indexCount[slot] = 0;
+        (_baked[slot], _bakedPrior[slot]) = (_bakedPrior[slot], _baked[slot]);
+        _bakedPriorCount[slot] = _bakedCount[slot];
         _bakedCount[slot] = 0;
         _walked++;
         CountBudget(in r);
@@ -577,12 +588,33 @@ public sealed partial class SliceRecorder
     }
 
     internal void AddBaked(int slot, NodeHandle node, in Affine2D local)
+        => AppendBaked(slot, new Baked((int)node.Raw.Index, node.Raw.Gen, local, _arenas[slot]!.BytePosition));
+
+    private void AppendBaked(int slot, in Baked b)
     {
         int n = _bakedCount[slot];
         ref Baked[] arr = ref _baked[slot];
         if (n == arr.Length) Array.Resize(ref arr, arr.Length * 2);
-        arr[n] = new Baked((int)node.Raw.Index, node.Raw.Gen, local);
+        arr[n] = b;
         _bakedCount[slot] = n + 1;
+    }
+
+    /// <summary>A clean span was copied out of the slot's prior buffer (<paramref name="priorByteStart"/>,
+    /// <paramref name="byteLength"/>) to <paramref name="byteStart"/>: carry along the baked poses recorded inside it,
+    /// shifted, so a later move of one still re-records the slice (<see cref="CollectPoseMismatches"/>).</summary>
+    internal void CopyBakedFromPrior(int slot, int priorByteStart, int byteLength, int byteStart)
+    {
+        int count = _bakedPriorCount[slot];
+        if (count == 0 || byteLength <= 0) return;
+        Baked[] prior = _bakedPrior[slot];
+        int lo = 0, hi = count;   // first entry at or after priorByteStart (entries are in walk order: sorted by start)
+        while (lo < hi) { int mid = (lo + hi) >> 1; if (prior[mid].ByteStart < priorByteStart) lo = mid + 1; else hi = mid; }
+        int end = priorByteStart + byteLength, db = byteStart - priorByteStart;
+        for (int i = lo; i < count && prior[i].ByteStart < end; i++)
+        {
+            ref readonly Baked b = ref prior[i];
+            AppendBaked(slot, new Baked(b.NodeIndex, b.Gen, in b.Local, b.ByteStart + db));
+        }
     }
 
     /// <summary>Where the slot's space was last PRESENTED (the last placement's accumulated offset; before any, its
@@ -659,7 +691,7 @@ public sealed partial class SliceRecorder
             _arenas[RootSlot]!.Reset();
             _curGen[RootSlot] = NewGen();
             _priorGen[RootSlot] = 0;
-            _indexCount[RootSlot] = _indexPriorCount[RootSlot] = _bakedCount[RootSlot] = 0;
+            _indexCount[RootSlot] = _indexPriorCount[RootSlot] = _bakedCount[RootSlot] = _bakedPriorCount[RootSlot] = 0;
             _recs[RootSlot] = new Rec
             {
                 Live = true, NodeIndex = (int)root.Raw.Index, Gen = root.Raw.Gen, Role = 0, Kind = SliceKind.Static,
