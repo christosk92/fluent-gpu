@@ -97,13 +97,17 @@ internal sealed class FlipViewCore : Component
         var panOffset = UseRef(0f);
         var showButtons = UseSignal(false);      // m_showNavigationButtons — hidden by default
         var keepButtonsVisible = UseRef(false);  // m_keepNavigationButtonsVisible (pointer over a nav button)
-        var fadeDeadline = UseRef(0L);
-        var fadePending = UseSignal(false);
         var lastWheelTime = UseRef(0L);          // m_lastScrollWheelTime
         var lastWheelDelta = UseRef(0f);         // m_lastScrollWheelDelta
         var swipeAccum = UseRef(0f);             // accumulated hi-res axis travel toward the next flip
         var swipeLastMs = UseRef(0L);            // last hi-res packet time (a gap resets the accumulator)
         var swipeCooldownUntil = UseRef(0L);     // post-flip refractory deadline (inertia tail can't re-flip)
+        // The 3000ms fade-out timer (m_tpButtonsFadeOutTimer) as a host ONE-SHOT on the HostTimerQueue, never a per-frame
+        // countdown: while it runs nothing on screen changes, so it must not pin the loop at panel rate (the ToolTipClock
+        // rationale). Mount-once and armed at 0 so the mount fire lands on the first drain with the buttons already hidden
+        // (a no-op, the ScrollBar dwell idiom); every real arm is a generation-guarded RestartIn from ShowButtonsAndArmFade,
+        // so a hover move re-arms with no allocation and a superseded deadline can never hide the buttons.
+        var fadeTimer = UseTimeout(FadeButtons, 0f, DepKey.Empty);
 
         var p = props;
         int count = p?.Items.Count ?? 0;
@@ -172,12 +176,15 @@ internal sealed class FlipViewCore : Component
         void ShowButtonsAndArmFade()
         {
             showButtons.Value = true;
-            fadeDeadline.Value = Environment.TickCount64 + (long)ButtonsShowDurationMs;
-            fadePending.Value = true;
+            fadeTimer.RestartIn(ButtonsShowDurationMs);
         }
         void HideButtonsImmediately()
         {
-            fadePending.Value = false;
+            fadeTimer.Cancel();
+            FadeButtons();
+        }
+        void FadeButtons()
+        {
             if (!keepButtonsVisible.Value) showButtons.Value = false;   // pointer over a button keeps them (:1904-1908)
         }
 
@@ -396,9 +403,8 @@ internal sealed class FlipViewCore : Component
             };
         }
 
-        // ── Assembly: ZStack — item strip, then the conditional nav bars, then the invisible fade ticker.
+        // ── Assembly: ZStack — item strip, then the conditional nav bars.
         bool buttonsVisible = showButtons.Value;
-        bool fadeTicking = fadePending.Value;
 
         var items = p?.Items;
         var cells = new Element[count];
@@ -409,7 +415,7 @@ internal sealed class FlipViewCore : Component
 
         // Keyed children: the bars mount/unmount, and the strip must survive those diffs (it carries the live
         // translate track) — the keyed reconciler matches by key, never by position.
-        var children = new List<Element>(4)
+        var children = new List<Element>(3)
         {
             new BoxEl
             {
@@ -428,14 +434,6 @@ internal sealed class FlipViewCore : Component
             if (cur > 0) children.Add(NavBar(next: false) with { Key = "fv-prev" });
             if (cur < count - 1) children.Add(NavBar(next: true) with { Key = "fv-next" });
         }
-        if (fadeTicking)
-            // The 3000ms fade-out timer (m_tpButtonsFadeOutTimer), as the engine-idiomatic deadline ticker.
-            children.Add(Embed.Comp(() => new DebounceTicker
-            {
-                DeadlineMs = fadeDeadline,
-                Pending = fadePending,
-                Fire = HideButtonsImmediately,
-            }) with { Key = "fv-buttons-fade" });
 
         return new BoxEl
         {
