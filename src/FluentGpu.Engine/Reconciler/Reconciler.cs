@@ -1415,6 +1415,10 @@ public sealed partial class TreeReconciler
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
         if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
+        // The anchor survives but its bound-Visible effect (node-owned, so the scope dispose above never reaches it) was
+        // wired for the OLD embed: drop it as UnmountSubtree does. MountComponent's BindNode wires the new embed afresh;
+        // a surviving old effect would keep driving the new component's presence and stack one more per swap.
+        if (_nodeBindings.Remove((int)node.Raw.Index, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         MountComponent(node, ce);
         // Remount (the shimmer↔real swap) — a whole child tree was torn down and rebuilt. Promote AFTER MountComponent:
         // the nested RunComponent it triggers restores the enclosing scope's saved value on exit, which would otherwise
