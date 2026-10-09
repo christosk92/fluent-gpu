@@ -793,6 +793,10 @@ public sealed partial class SliceRecorder
                 _clipBaked.RemoveAt(_clipBaked.Count - 1);
                 continue;
             }
+            // Collapsed (itself or under a collapsed ancestor): the walk returns before it can re-bake the node, and the
+            // node paints nothing, so a moved clip is no reason to re-record its chain. Kept, not purged: a span stored
+            // before the collapse still carries the baked bytes, so the watch resumes the pass it shows again.
+            if (!PaintReachable(scene, h)) continue;
             if (scene.Paint(h).ClipRect != _clipBakedRect[idx])
             {
                 _clipChangedFrame[idx] = _frame;
@@ -839,6 +843,14 @@ public sealed partial class SliceRecorder
                 if (ChromeSig(in sc, ShownOffset(scene, vp, in sc)) != r.ChromeSig) _mustRewalk.Add(vp);
             }
         }
+    }
+
+    // The record walk's presence cut (SceneRecorder.Walk): a node is reached only when it and every ancestor are Visible.
+    private static bool PaintReachable(SceneRecordingSnapshot scene, NodeHandle node)
+    {
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if ((scene.Flags(n) & NodeFlags.Visible) == 0) return false;
+        return true;
     }
 
     /// <summary>Close the pass: retire every slice not registered in it (its arena returns to the pool).</summary>
