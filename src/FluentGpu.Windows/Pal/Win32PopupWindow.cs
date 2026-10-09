@@ -33,7 +33,8 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
     // the popup's mouse/touch/pen ALL arrive as WM_POINTER* (the retired WM_MOUSE* client messages never fire here), so
     // the forwarding path is keyed on these exactly like the owner window. wParam LOW word = pointer id on every message.
     private const uint WM_POINTERUPDATE = 0x0245, WM_POINTERDOWN = 0x0246, WM_POINTERUP = 0x0247,
-                       WM_POINTERCAPTURECHANGED = 0x024C, WM_POINTERWHEEL = 0x024E, WM_POINTERHWHEEL = 0x024F;
+                       WM_POINTERLEAVE = 0x024A, WM_POINTERCAPTURECHANGED = 0x024C, WM_POINTERWHEEL = 0x024E,
+                       WM_POINTERHWHEEL = 0x024F;
     private const int MA_NOACTIVATE = 3;
     private const uint WS_POPUP = 0x80000000;
     private const uint WS_EX_TOOLWINDOW = 0x00000080, WS_EX_NOACTIVATE = 0x08000000, WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
@@ -167,6 +168,11 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
                 return true;
             case WM_POINTERCAPTURECHANGED:
                 if (ResolveOwner() is { } cap) cap.ForwardPopupPointerCancel(GET_POINTERID_WPARAM(wParam));
+                return true;
+            // The pointer left the popup HWND. If it went onto the owner (or another popup), that window's own update
+            // re-hovers. If it went onto the desktop, nothing else ever would, so the owner parks it like its own leave.
+            case WM_POINTERLEAVE:
+                if (ResolveOwner() is { } lv) lv.ForwardPopupPointerLeave(GET_POINTERID_WPARAM(wParam));
                 return true;
             case WM_POINTERWHEEL:
             case WM_POINTERHWHEEL:

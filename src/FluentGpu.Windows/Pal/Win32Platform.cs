@@ -2591,6 +2591,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
 
+    // WM_POINTERLEAVE over the popup: the hovering pointer left the popup HWND. Leaving onto the owner is already covered
+    // (its own WM_POINTERUPDATE re-hovers). Leaving onto the desktop sends the owner nothing, so without this park the
+    // last in-popup hover (a menu item's plate, HoverWithin, a hover-opened cascade, the dispatcher's last pointer
+    // position) stays latched until the mouse comes back to the main window. Same park move as the owner's own leave.
+    // The HELD primary contact is left alone. Its press took a real SetCapture on the OWNER (PointerDownUp), and that
+    // capture move can itself deliver this leave to the popup mid-press, so cancelling or parking here would kill the
+    // click (or feed a latched drag the offscreen sample). The owner's stream and loss paths own that contact now.
+    internal void ForwardPopupPointerLeave(uint pointerId)
+    {
+        if (_primaryDown && pointerId == _primaryDownId) return;
+        _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
+    }
+
     // Classify a contact + read its normalized pressure and timestamp. PT_TOUCH/PT_PEN pressure is 0..1024 (0 = the
     // digitizer reports none → keep 1 like a mouse); dwTime may be 0 (injected/synthetic) → fall back to the message clock.
     private void Decode(in POINTER_INFO pi, out PointerKind kind, out float pressure, out uint time, out long qpc)
