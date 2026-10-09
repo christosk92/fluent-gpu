@@ -283,6 +283,11 @@ public sealed class EditableText : Component
     private bool _cancelling;
     private bool _synced;                    // first signal→doc sync done (suppress the mount-time OnTextChanged)
     private NodeHandle _rootNode, _laneNode, _scrollerNode;
+    // Lane arranged width the caret-follow clamp last saw (NaN until the mount-time delivery seeds it). The lane's width
+    // changes WITHOUT a caret move when the DeleteButton mounts/unmounts on the focus flip (34 DIP) or WidthSignal
+    // resizes the field — OnLaneBounds re-clamps _scroll against the new viewport then.
+    private float _laneW = float.NaN;
+    private Action<RectF>? _onLaneBounds;    // cached: a stable delegate keeps the reconciler from re-arming the one-shot
     private ImeSession? _ime;
     private int _lastSelStart = -1, _lastSelLen = -1;
 
@@ -353,6 +358,7 @@ public sealed class EditableText : Component
         // lane (padded, clipping viewport) > scroller (caret-follow transform) > text leaf.
         var laneAlign = AcceptsReturn ? FlexAlign.Start : FlexAlign.Center;
         Action<NodeHandle> laneCapture = h => _laneNode = h;
+        Action<RectF> laneBounds = _onLaneBounds ??= OnLaneBounds;
         Element[] laneKids =
         [
             new BoxEl
@@ -376,6 +382,7 @@ public sealed class EditableText : Component
             Padding = LanePadding ?? new Edges4(10, 5, 6, 6),
             ClipToBounds = true,
             OnRealized = laneCapture,
+            OnBoundsChanged = laneBounds,   // the ✕ mount/unmount and WidthSignal resizes re-clamp the caret-follow
             Children = laneKids,
         };
         if (Parts is { } lp)
@@ -386,6 +393,7 @@ public sealed class EditableText : Component
                 ClipToBounds = true,    // the caret-follow viewport must crop
                 Children = laneKids,    // the scroller wrapper IS the mechanism (−ScrollX TransformBind + caret/IME node)
                 OnRealized = TemplateParts.Chain(laneCapture, m.OnRealized),
+                OnBoundsChanged = TemplateParts.Chain(laneBounds, m.OnBoundsChanged),
             };
         }
 
@@ -764,6 +772,28 @@ public sealed class EditableText : Component
         var tn = TextNode();
         if (Context.Scene is { } sc && !tn.IsNull && sc.IsLive(tn)) sc.TextEditRef(tn).ScrollX = nextX;
         e.Handled = true;
+    }
+
+    // ── lane resize (single-line): the viewport changed under a caret that did not move ────────────────────────────
+    // The focus flip mounts/unmounts the DeleteButton AFTER HandleFocus's SyncVisual (the _setFocused re-render), and a
+    // WidthSignal write re-lays out the lane, so the clamp SyncVisual last wrote was computed against the OLD width: on
+    // focus the caret could sit under the ✕ (outside the clipped lane); on blur / widen the offset overshot the new
+    // max, leaving a blank tail. Runs from FlexLayout's arrange (lane Bounds already hold the new rect). Focused:
+    // full caret-follow. Unfocused: only clamp into [0, max] — an unfocused field keeps its (wheel-chosen) offset.
+    private void OnLaneBounds(RectF r)
+    {
+        float prev = _laneW;
+        _laneW = r.W;
+        if (AcceptsReturn || float.IsNaN(prev) || MathF.Abs(r.W - prev) < 0.5f) return;
+        if (_focusedNow) { SyncVisual(); return; }
+        if (_scroll is not { } s) return;
+        TryHScrollExtent(out float maxScrollX);
+        float cur = s.Peek();
+        float next = Math.Clamp(cur, 0f, maxScrollX);
+        if (MathF.Abs(next - cur) < 0.01f) return;
+        s.Value = next;                                              // TransformBind applies the new -ScrollX next flush
+        var tn = TextNode();
+        if (Context.Scene is { } sc && !tn.IsNull && sc.IsLive(tn)) sc.TextEditRef(tn).ScrollX = next;
     }
 
     /// <summary>The horizontal overflow extent of a single-line field: the max <c>-ScrollX</c> that brings the text end

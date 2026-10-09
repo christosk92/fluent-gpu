@@ -841,6 +841,42 @@ static class OverlaySuite
                 idle.HotPhaseAllocBytes == 0, $"{idle.HotPhaseAllocBytes} bytes");
         }
 
+        // ── W0e.14c — the caret-follow re-clamps when the LANE resizes under a still caret: the focus flip mounts the
+        //    ✕ (30+4 DIP) after HandleFocus's SyncVisual, and the blur unmounts it after the blur SyncVisual ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-lane", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            // lane viewport 160 − (10+6) = 144 without the ✕, 110 with it; 40 chars end at 40×7.7 = 308.
+            var root = new W0eProbe { W = 160f, ShowDelete = true, Initial = new string('m', 40) };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));   // select-all → caret at 308
+            host.RunFrame();
+            host.RunFrame();   // the focus re-render mounts the ✕ and re-lays out the lane
+            host.RunFrame();
+            bool shown = Roles(scene, AutomationRole.Button).Count == 1;
+            scene.TryGetTextEdit(tn, out var tf);
+            // narrow lane: caret-follow max = (308+2) − 110 = 200 (the stale wide-lane clamp was 166 → caret hidden under the ✕).
+            bool focusFollow = Near(tf.ScrollX, 200f) && Near(scene.Paint(scene.Parent(tn)).LocalTransform.Dx, -200f);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));  // blur → the ✕ unmounts
+            host.RunFrame();
+            host.RunFrame();
+            host.RunFrame();
+            bool gone = Roles(scene, AutomationRole.Button).Count == 0;
+            scene.TryGetTextEdit(tn, out var tb);
+            // wide lane again: max = 310 − 144 = 166; leaving 200 would show a 34 DIP blank tail after the text end.
+            bool blurClamp = Near(tb.ScrollX, 166f) && Near(scene.Paint(scene.Parent(tn)).LocalTransform.Dx, -166f);
+            Check("W0e.14c caret-follow re-clamps when the ✕ mount/unmount resizes the lane (focus: caret stays visible; blur: no blank tail)",
+                shown && focusFollow && gone && blurClamp,
+                $"shown={shown} focusScroll={tf.ScrollX:0.#} gone={gone} blurScroll={tb.ScrollX:0.#}");
+        }
+
         // ── W0e.15 — multi-line: Up/Down honor the StickyX goal column over wrapped lines; Enter inserts '\r' ──
         {
             using var app = new HeadlessPlatformApp();
@@ -2320,6 +2356,70 @@ static class OverlaySuite
             Check("gate.menu.cascade-timer-rearm a submenu hover arms one keyed ToolTipClock; moving to another sub-item remounts it and restarts the full MenuShowDelay (the first row's countdown is cancelled, not inherited)",
                 rowsFound && aNotYet && reArmed && bOpened,
                 $"rows={rowsFound} aNotYet={aNotYet} reArmed={reArmed} bOpened={bOpened} delay={delay:0.#}");
+        }
+
+        // gate.menu.cascade-pointer-exit — WinUI CascadingMenuHelper::OnPointerExited: leaving a sub-item row cancels its
+        // pending delay-open (the cascade never pops beside a pointer that already moved on), and leaving the OPEN
+        // sub-item row for anywhere but its cascade arms the delay-close; moving straight into the cascade keeps it open.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("menu-cascade-exit", new Size2(480, 400), 1f));
+            window.Show();
+            var root = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.PopupWindowsEnabled = false;   // keep the cascade in-window so one scene carries every level
+            host.RunFrame();
+
+            var svc = root.Service!;
+            svc.Open(() => root.Anchor, () => MenuFlyout.Create(new[]
+            {
+                MenuFlyoutItem.SubMenu("cascadeA", new[] { new MenuFlyoutItem("leaf-a") }),
+                new MenuFlyoutItem("plain"),
+            }, () => svc.CloseTop()), FlyoutPlacement.BottomLeft);
+            for (int i = 0; i < 10; i++) host.RunFrame();
+
+            NodeHandle Find(string s) => FindTextNode(host.Scene, strings, host.Scene.Root, s);
+            void MoveTo(float x, float y)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0));
+                host.RunFrame();
+                for (int i = 0; i < 2; i++) host.Paint(0);
+            }
+            void HoverRow(string label) { var r = host.Scene.AbsoluteRect(Find(label)); MoveTo(r.X + r.W * 0.5f, r.Y + r.H * 0.5f); }
+            void Jump(float ms) { clock.Advance(ms); host.Paint(0); for (int i = 0; i < 4; i++) host.Paint(0); }
+            void Away() => MoveTo(470f, 390f);   // off the menu and its cascade (bottom-right of the page)
+
+            float delay = MenuFlyout.SubMenuShowDelayMs;   // 400 ms headless
+            bool rowFound = !Find("cascadeA").IsNull;
+            // 1) the pointer passes over the sub-item on its way off the menu → the pending open is cancelled.
+            HoverRow("cascadeA");
+            Jump(delay * 0.5f);
+            Away();
+            Jump(delay * 1.5f);
+            bool passOverNoOpen = Find("leaf-a").IsNull;
+            // 2) dwell to open, then leave the menu straight from the open sub-item → the delay-close fires.
+            HoverRow("cascadeA");
+            Jump(delay * 1.25f);
+            bool opened = !Find("leaf-a").IsNull;
+            Away();
+            Jump(delay * 0.5f);
+            bool openMidDelay = !Find("leaf-a").IsNull;   // close is DELAYED, not immediate
+            Jump(delay);                                  // past the 400 ms close deadline
+            Jump(delay);                                  // let the cascade's exit transition settle
+            bool closedAfterExit = Find("leaf-a").IsNull;
+            // 3) control: re-open, then move from the sub-item straight into the cascade → it stays open.
+            HoverRow("cascadeA");
+            Jump(delay * 1.25f);
+            bool reopened = !Find("leaf-a").IsNull;
+            HoverRow("leaf-a");
+            Jump(delay * 1.5f);
+            bool keptInCascade = !Find("leaf-a").IsNull;
+
+            Check("gate.menu.cascade-pointer-exit leaving a sub-item row cancels its pending 400ms open; leaving the open sub-item row for outside the menu delay-closes the cascade; moving into the cascade keeps it open",
+                rowFound && passOverNoOpen && opened && openMidDelay && closedAfterExit && reopened && keptInCascade,
+                $"row={rowFound} passOverNoOpen={passOverNoOpen} opened={opened} openMidDelay={openMidDelay} "
+                + $"closedAfterExit={closedAfterExit} reopened={reopened} keptInCascade={keptInCascade} delay={delay:0.#}");
         }
 
         // gate.cbf.close-timer — CommandBarFlyout's close COMPLETION is the same one-shot: invoking a command starts
