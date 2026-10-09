@@ -145,7 +145,11 @@ public sealed partial class AnimEngine
         if (m.Mode == IntegrationMode.Spring)
             Spring(node, ch, to, m.Spring, initial, initialVelocity, delayMs: delayMs);
         else
-            Animate(node, ch, initial ?? CurrentValue(node, ch), to, m.DurationMs, m.Easing, delayMs: delayMs);
+        {
+            float from = initial ?? CurrentValue(node, ch);
+            Animate(node, ch, from, to, m.DurationMs, m.Easing, delayMs: delayMs);
+            if (initial is null) MarkSeedRelative(Find(node, ch), from);   // from-current: rebased on the render pose
+        }
     }
 
     // Reduced-motion as a VALUE (read at the seed, never an early-return in authoring code — Motion.ReducedMotion is a
@@ -287,11 +291,13 @@ public sealed partial class AnimEngine
             if (ex >= 0 && _slab.At(ex).Kind == GenKind.Spring)
             {
                 ref AnimValue r = ref _slab.At(ex);
+                float uiBase = r.Position;
                 r.Position += delta;                       // coordinate frame shifted by the move
                 r.To = rest;
                 r.Gen = Generators.BakeSpring(in sp, x0: r.Position - rest, v0: r.Velocity);   // keep velocity (handoff)
                 r.ElapsedMs = 0f; r.Flags &= ~AnimFlags.Done;
                 StampCompositorSeed(ex, newInstance: false, explicitFrom: true);
+                MarkSeedRelative(ex, uiBase);              // shift the render thread's pose, not the older imported one
             }
             else Spring(node, ch, rest, sp, initial: rest + delta, delayMs: delayMs);
         }
@@ -314,7 +320,8 @@ public sealed partial class AnimEngine
                 && !_slab.At(ex).Has(AnimFlags.Driven);
             if (retargetable)
             {
-                float start = _slab.At(ex).Position + delta;   // shift the coordinate frame by the move, as the spring does
+                float uiBase = _slab.At(ex).Position;
+                float start = uiBase + delta;   // shift the coordinate frame by the move, as the spring does
                 float remaining = MathF.Max(1f, _slab.At(ex).Gen.DurationMs - _slab.At(ex).ElapsedMs);
                 Animate(node, ch, start, rest, remaining, dyn.Easing);   // no delay: the entry stagger was already served
                 int s = Find(node, ch);
@@ -322,6 +329,7 @@ public sealed partial class AnimEngine
                 // it set would freeze the row outright here, because a per-tick shove would re-seed the hold every
                 // frame and ElapsedMs would never advance past 0.
                 if (s >= 0) _slab.At(s).Flags &= ~AnimFlags.JustSeeded;
+                MarkSeedRelative(s, uiBase);
             }
             else
             {

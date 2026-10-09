@@ -10,7 +10,10 @@ public sealed partial class AnimEngine
     private readonly Dictionary<NodeHandle, Accum> _compositorFeedbackAccumulators = new(64);
     private readonly List<int> _compositorCompletedSlots = new(64);
     private ulong _nextCompositorInstance;
-    private readonly record struct CompositorSeed(ulong Instance, ulong Revision, bool ExplicitFrom);
+    /// <summary><paramref name="Base"/>: NaN, or the UI's view of the row that this re-seed's start departed from (taken
+    /// against <paramref name="BaseRevision"/>, the revision the row carried before it) - see <see cref="MarkSeedRelative"/>.</summary>
+    private readonly record struct CompositorSeed(ulong Instance, ulong Revision, bool ExplicitFrom, float Base = float.NaN,
+        ulong BaseRevision = 0);
 
     /// <summary>Enabled by a host whose render thread owns scene recording and compositor pose evaluation.</summary>
     public bool RenderOwnsCompositor { get; set; }
@@ -73,6 +76,20 @@ public sealed partial class AnimEngine
         seed = !exists || newInstance
             ? new(++_nextCompositorInstance, 1, explicitFrom)
             : new(seed.Instance, seed.Revision + 1, explicitFrom);
+    }
+
+    /// <summary>The re-seed just stamped on <paramref name="slot"/> starts from the UI's view of the row's CURRENT value
+    /// (<paramref name="uiBase"/>, plus any frame shift the caller added), not from an authored one. A render-owned row's UI
+    /// view is only the last imported feedback pose (or, before a pose of that revision came back, the start the UI gave it),
+    /// while the render thread kept advancing it - so the renderer moves this start by however far its own pose ran from
+    /// <paramref name="uiBase"/> (RenderCompositorAnimations.Adopt), and an interrupted fade or move continues from the pixel
+    /// on screen instead of stepping back to the older pose. A fresh instance has nothing in flight there: it keeps its start.</summary>
+    private void MarkSeedRelative(int slot, float uiBase)
+    {
+        if (!RenderOwnsCompositor || slot < 0) return;
+        ref var seed = ref CollectionsMarshal.GetValueRefOrNullRef(_compositorSeeds, slot);
+        if (System.Runtime.CompilerServices.Unsafe.IsNullRef(ref seed) || seed.Revision <= 1) return;
+        seed = seed with { Base = uiBase, BaseRevision = seed.Revision - 1 };
     }
 
     /// <summary>The structural part of compositor eligibility — everything except the live scene-state (Relayouting)
@@ -139,7 +156,8 @@ public sealed partial class AnimEngine
             // Cadence travels WITH the row: the render thread owns these rows' advance, so it must apply the same
             // due-check the UI-thread PASS1 does or an explicit Cadence.At(hz) row would silently run at panel rate once
             // the compositor adopts it.
-            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot));
+            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot),
+                identity.Base, identity.BaseRevision);
         }
         target.EndCapture();
     }
@@ -235,6 +253,10 @@ public sealed class CompositorAnimationSnapshot
         public Keyframe[] Keys;
         /// <summary>The row's resolved cadence period in ms (0 = display rate) — see the note at the Add call site.</summary>
         public ushort PeriodMs;
+        /// <summary>NaN, or the UI's view of the row (taken against <see cref="BaseRevision"/>) that this re-seed's start
+        /// departed from - see <c>AnimEngine.MarkSeedRelative</c>.</summary>
+        public float Base;
+        public ulong BaseRevision;
     }
     private Entry[] _entries = [];
     private int _count, _oldCount, _distinctNodes;
@@ -253,7 +275,8 @@ public sealed class CompositorAnimationSnapshot
         CapturedAtMs = now; _oldCount = _count; _count = 0;
         _distinctNodes = 0; _lastAddedNode = NodeHandle.Null;
     }
-    internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys, ushort periodMs)
+    internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys, ushort periodMs,
+        float fromBase = float.NaN, ulong baseRevision = 0)
     {
         SceneRecordingSnapshot.Grow(ref _entries, _count + 1);
         if (row.Node != _lastAddedNode) { _distinctNodes++; _lastAddedNode = row.Node; }
@@ -266,6 +289,7 @@ public sealed class CompositorAnimationSnapshot
         target.Row.DrivenSrc = AnimValue.WallClock;
         target.Instance = instance; target.Revision = revision; target.ExplicitFrom = explicitFrom;
         target.PeriodMs = periodMs;
+        target.Base = fromBase; target.BaseRevision = baseRevision;
     }
     internal void EndCapture()
     {

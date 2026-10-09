@@ -106,6 +106,7 @@ public sealed class RenderCompositorAnimations
             if (!scene.IsLive(entry.Row.Node)) continue;
             State state;
             Keyframe[]? ownedKeys = null;
+            float drift = float.NaN, renderVelocity = 0f;
             if (_indices.TryGetValue(entry.Instance, out int oldIndex))
             {
                 state = _states[oldIndex];
@@ -124,6 +125,13 @@ public sealed class RenderCompositorAnimations
                 if (state.Desired.Revision != entry.Revision)
                 {
                     float current = state.Value, velocity = state.Velocity;
+                    // A re-seed from the UI's view of this row (AnimEngine.MarkSeedRelative), taken against the revision
+                    // held here: its start moves by how far this thread's pose has run past that view since.
+                    if (!float.IsNaN(entry.Base) && state.Desired.Revision == entry.BaseRevision)
+                    {
+                        drift = current - entry.Base;
+                        renderVelocity = velocity;
+                    }
                     state = Seed(in entry, capturedAtMs);
                     // A retained instance has already been posed on screen: a retarget continues it, it never re-pends.
                     state.StartPending = false;
@@ -172,6 +180,7 @@ public sealed class RenderCompositorAnimations
             if (ownedKeys is null || ownedKeys.Length != entry.Keys.Length) ownedKeys = new Keyframe[entry.Keys.Length];
             entry.Keys.AsSpan().CopyTo(ownedKeys);
             state.Desired.Keys = ownedKeys;
+            if (!float.IsNaN(drift)) Rebase(ref state, drift, renderVelocity, nowMs);
             _nextStates[count] = state;
             _nextIndices.Add(entry.Instance, count++);
         }
@@ -344,6 +353,25 @@ public sealed class RenderCompositorAnimations
         StartPending = entry.Row.Has(AnimFlags.StartPending) && entry.PeriodMs == 0,
         HoldNowMs = double.NaN,
     };
+
+    /// <summary>Move a relative re-seed's start by <paramref name="drift"/> - onto the pose this thread holds rather than
+    /// the older one the UI imported - and start it HERE, so its first sample is the pixel on screen. Spring: the value
+    /// shifts and the generator re-bakes around it with this thread's velocity; eased: the two-point FromV, or the first key
+    /// of a keyframed start (an Animate from-current is always [from, to]).</summary>
+    private static void Rebase(ref State state, float drift, float velocity, double nowMs)
+    {
+        ref var row = ref state.Desired.Row;
+        state.Value = row.Position + drift;
+        if (row.Kind == GenKind.Spring)
+        {
+            state.Velocity = velocity;
+            row.Gen = Generators.BakeSpring(row.Gen.Omega, row.Gen.Zeta, state.Value - row.To, velocity);
+        }
+        else if (state.Desired.Keys.Length >= 2)
+            state.Desired.Keys[0] = state.Desired.Keys[0] with { Value = state.Desired.Keys[0].Value + drift };
+        else row.Gen.FromV += drift;
+        state.AnchorNowMs = nowMs;
+    }
 
     private void Evaluate(ref State state, double nowMs, float refIntervalMs)
     {

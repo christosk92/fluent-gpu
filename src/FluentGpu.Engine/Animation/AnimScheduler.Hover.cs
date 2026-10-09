@@ -175,5 +175,8 @@ public sealed partial class AnimEngine
     /// duration/easing, written to the InteractionAnim side-table each tick. No first-frame hold — matches the old
     /// InteractionAnimator.Step (which advanced immediately), so the recorder's per-frame composite is identical.</summary>
     private void SeedInteractFade(NodeHandle node, AnimChannel ch, float from, float to, float durMs, EasingSpec easing)
-        => SeedEased(node, ch, from, to, durMs, easing.NamedOr(Easing.FluentPopOpen));
+    {
+        SeedEased(node, ch, from, to, durMs, easing.NamedOr(Easing.FluentPopOpen));
+        MarkSeedRelative(Find(node, ch), from);   // `from` is HoverT/PressT: the UI's view of the fade, not an authored start
+    }
 }
