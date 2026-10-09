@@ -755,7 +755,7 @@ public sealed class EditableText : Component
         SyncVisual();
     }
 
-    // ── mouse-wheel horizontal scroll (single-line) ─────────────────────────────────────────────────────────────────
+    // ── mouse-wheel scroll (single-line horizontal, multi-line vertical) ─────────────────────────────────────────────────────────────────
     // WinUI scrolls a single-line TextBox horizontally on the wheel; a read-only field that overflows is otherwise only
     // revealable via the keyboard (End/arrows). We consume the wheel ONLY when it actually moves the view — a field that
     // fits, or one already at the scroll limit in the wheel's direction, leaves Handled unset so the enclosing viewport
@@ -768,7 +768,7 @@ public sealed class EditableText : Component
             if (_scrollY is null) return;
             if (!TryVScrollExtent(out float maxScrollY)) return;
             float curY = _scrollY.Peek();
-            float nextY = Math.Clamp(curY - e.Delta, 0f, maxScrollY);
+            float nextY = Math.Clamp(curY + e.Delta, 0f, maxScrollY);   // +Delta = toward the content end (down)
             if (MathF.Abs(nextY - curY) < 0.01f) return;
             _scrollY.Value = nextY;
             e.Handled = true;

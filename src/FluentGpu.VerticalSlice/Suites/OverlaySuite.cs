@@ -919,6 +919,36 @@ static partial class OverlaySuite
                 caretLine1 && down1 && down2 && up1 && extended && newline,
                 $"caret={caretLine1} d1={down1} d2={down2} up={up1} ext={extended} nl={newline}");
         }
+
+        // ── W0e.15b — multi-line wheel: +Delta (wheel-down = toward the content end) scrolls an overflowing field toward
+        // its last line and wheel-up back to the top. The inverted sign moved the text the wrong way and, at the top,
+        // left Handled unset so a wheel-down scrolled the page instead of the box. ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-multi-wheel", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            // wrap width 144 → eight "aaaa bbbb cccc " lines (8 × 19.6 dip) in a ~51 dip viewport: the field overflows
+            var root = new W0eProbe { Multi = true, W = 160f, H = 64f, Initial = string.Concat(Enumerable.Repeat("aaaa bbbb cccc ", 8)) };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var scroller = scene.Parent(TextVisual(scene, field));   // the caret-follow wrapper carrying -ScrollY
+            var at = CenterOf(scene, field);
+            float ScrollY() => -scene.Paint(scroller).LocalTransform.Dy;
+            float y0 = ScrollY();
+            window.QueueInput(WheelEvent(at, WheelNotch: 1f));    // wheel-down: toward the content end
+            host.RunFrame(); host.RunFrame();
+            float yDown = ScrollY();
+            window.QueueInput(WheelEvent(at, WheelNotch: -1f));   // wheel-up: back toward the start
+            host.RunFrame(); host.RunFrame();
+            float yUp = ScrollY();
+            Check("W0e.15b multi-line wheel: wheel-down scrolls an overflowing field toward its last line, wheel-up back to the top",
+                Near(y0, 0f) && yDown > 1f && Near(yUp, 0f),
+                $"y0={y0} down={yDown} up={yUp}");
+        }
     }
 
     static void TextConsumerControlChecks(StringTable strings)
