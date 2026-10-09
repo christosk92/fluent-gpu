@@ -426,6 +426,30 @@ public sealed partial class AnimEngine
         _slab.BumpVersion();   // Get may retarget an existing slot in place (no slab call) — keep the census memo honest
     }
 
+    /// <summary>Re-seed a spring FROM <paramref name="from"/> toward <paramref name="to"/>, keeping the live row's velocity
+    /// (times <paramref name="velocityScale"/>). For a retarget whose caller has CHANGED the channel's basis (a re-based
+    /// model box): <see cref="Spring"/>'s retarget continues from the row's own old-basis position, which would jump; this
+    /// one starts at the caller's re-based value and stamps it as an explicit from, so the render thread seeds from it too.
+    /// With no live spring row it is a fresh <see cref="Spring"/> seed from <paramref name="from"/>.</summary>
+    internal void RebaseSpring(NodeHandle node, AnimChannel channel, float to, in SpringParams spring, float from,
+                               float velocityScale = 1f)
+    {
+        int existing = Find(node, channel);
+        if (existing < 0 || _slab.At(existing).Kind != GenKind.Spring)
+        {
+            Spring(node, channel, to, in spring, initial: from);
+            return;
+        }
+        ref AnimValue e = ref _slab.At(existing);
+        float vel = e.Velocity * velocityScale;
+        e.To = to; e.Position = from; e.Velocity = vel;
+        e.Gen = Generators.BakeSpring(in spring, x0: from - to, v0: vel);
+        e.ElapsedMs = 0f; e.DelayRemainingMs = 0f;        // keeps moving (no first-frame hold), like a retarget
+        e.Flags &= ~(AnimFlags.Done | AnimFlags.JustSeeded);
+        StampCompositorSeed(existing, newInstance: false, explicitFrom: true);
+        _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
+    }
+
     public void Cancel(NodeHandle node, AnimChannel channel)
     {
         int s = Find(node, channel);

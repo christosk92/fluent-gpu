@@ -909,6 +909,7 @@ public sealed class ConnectedAnimation
         }
 
         // Re-base: model box = the live dest rect; transform re-derived so the visual rect is bit-identical this frame.
+        float oldW = b.W, oldH = b.H;
         b = newDest;
         float sx = vw / newDest.W, sy = vh / newDest.H;
         float tx = vcx - (newDest.X + newDest.W * 0.5f), ty = vcy - (newDest.Y + newDest.H * 0.5f);
@@ -921,16 +922,20 @@ public sealed class ConnectedAnimation
         var motion = f.Motion;
         if (motion.IsSpring)
         {
-            _anim.Spring(f.Overlay, AnimChannel.ScaleX, 1f, motion.Spring, initial: sx);
-            _anim.Spring(f.Overlay, AnimChannel.ScaleY, 1f, motion.Spring, initial: sy);
-            _anim.Spring(f.Overlay, AnimChannel.TranslateX, 0f, motion.Spring, initial: tx);
-            _anim.Spring(f.Overlay, AnimChannel.TranslateY, 0f, motion.Spring, initial: ty);
+            // The rows hold OLD-basis values (scale of the old box), so a plain Spring retarget would continue from them
+            // over the new box and jump. Rebase each from its new-basis value, carrying the velocity into the new basis:
+            // scale is visual/box, so its rate scales by old/new; translate is a constant shift; the clip is box-local.
+            float kx = oldW / newDest.W, ky = oldH / newDest.H;
+            _anim.RebaseSpring(f.Overlay, AnimChannel.ScaleX, 1f, motion.Spring, sx, kx);
+            _anim.RebaseSpring(f.Overlay, AnimChannel.ScaleY, 1f, motion.Spring, sy, ky);
+            _anim.RebaseSpring(f.Overlay, AnimChannel.TranslateX, 0f, motion.Spring, tx);
+            _anim.RebaseSpring(f.Overlay, AnimChannel.TranslateY, 0f, motion.Spring, ty);
             if (f.AnimateClip)
             {
-                _anim.Spring(f.Overlay, AnimChannel.ClipL, destClip.X, motion.Spring, initial: currentClip.X);
-                _anim.Spring(f.Overlay, AnimChannel.ClipT, destClip.Y, motion.Spring, initial: currentClip.Y);
-                _anim.Spring(f.Overlay, AnimChannel.ClipR, destClip.Right, motion.Spring, initial: currentClip.Right);
-                _anim.Spring(f.Overlay, AnimChannel.ClipB, destClip.Bottom, motion.Spring, initial: currentClip.Bottom);
+                _anim.RebaseSpring(f.Overlay, AnimChannel.ClipL, destClip.X, motion.Spring, currentClip.X, 1f / kx);
+                _anim.RebaseSpring(f.Overlay, AnimChannel.ClipT, destClip.Y, motion.Spring, currentClip.Y, 1f / ky);
+                _anim.RebaseSpring(f.Overlay, AnimChannel.ClipR, destClip.Right, motion.Spring, currentClip.Right, 1f / kx);
+                _anim.RebaseSpring(f.Overlay, AnimChannel.ClipB, destClip.Bottom, motion.Spring, currentClip.Bottom, 1f / ky);
             }
         }
         else
