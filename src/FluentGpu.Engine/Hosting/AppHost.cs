@@ -509,6 +509,9 @@ public sealed partial class AppHost : IDisposable
     // change, image content, crossfades) reaches this thread as a non-empty repaint region or a new target epoch.
     private ulong _lastRenderPresentedHash;
     private Threading.RenderSubmissionContinuity _renderSubmissionContinuity;
+    // Render-thread private: the publish seq of the publication whose OWN repaint region a submitted turn last carried. Its
+    // forced full is a one-shot: a motion re-present of the same publication must not re-raster the whole window again.
+    private ulong _publicationRepaintSubmittedSeq;
     private long _lastRenderedTargetEpoch = -1;
     // UI→render mirror of _popupWindows.Count. The render thread must never present a skip candidate while a popup
     // window rides the same turn (RecordPopups submits its own swapchain from the same publication).
@@ -1903,6 +1906,16 @@ public sealed partial class AppHost : IDisposable
         => lastPresentedHash != 0UL && drawListHash == lastPresentedHash
            && !repaintPending && !clockActive && !hasPopupWindows;
 
+    /// <summary>The publication's OWN repaint region for one render turn of it. Its rects (live crossfade bands) ride every
+    /// re-record, since they advance with the image clock. A forced FULL (first frame, resize, clear colour, restore, an
+    /// undescribed image landing) is a one-shot. Once a turn of this publication was submitted, every tile it invalidated has
+    /// been re-rastered (a tile that drew a non-resident image stays invalid on its own) and the device presents whole after a
+    /// held or stood-down present, so forcing it again on each motion re-present only re-rastered the whole window at the
+    /// display rate. Kept while a crossfade is live: a full that swallowed the host's crossfade rects is then their only
+    /// description.</summary>
+    internal static RepaintDamageRegion PublicationRepaintForTurn(in RepaintDamageRegion published, bool alreadySubmitted, bool crossfadesLive)
+        => published.IsFull && alreadySubmitted && !crossfadesLive ? default : published;
+
     // ── popup swapchain work, posted UI → render thread ──────────────────────────────────────────────────────────────
     // The render thread is the sole ComPtr owner, so a popup Resize/ConfigurePopupChrome/AnimatePopupClose used to park
     // it (Quiesce) from the UI. Those calls fire on EVERY pointer move over an open flyout, so the park was a per-frame
@@ -2172,7 +2185,9 @@ public sealed partial class AppHost : IDisposable
                 // tile pool and never composites into the primary back buffer.
                 bool direct = ChooseSubmitRoute(_isDetachedChild) == SubmitRoute.DirectOwnSwapchain;
                 bool compositeOnly = !direct && !fresh && !_renderAnimations.ChangedThisTick && !scrollNeedsRecord
-                    && _renderSlices.PosesCompatible(sceneFrame.Scene);
+                    && _renderSlices.PosesCompatible(sceneFrame.Scene)
+                    // A path-slab compaction (any host's record turn) moved what the kept slices' path bytes index.
+                    && _renderSpans.PathSlabGeneration == PathRealizationCache.Shared.Generation;
                 if (compositeOnly)
                 {
                     var composed = sceneFrame.Compose(_renderSlices);
@@ -2180,18 +2195,22 @@ public sealed partial class AppHost : IDisposable
                 }
                 else
                 {
+                    PathRealizationCache.Shared.NextFrame();   // the slab's only compaction point: before a record, never between it and its encode
                     stats = sceneFrame.Record(_renderCommands, _renderSpans, direct ? null : _renderSlices, publicationGap);
                     _lastRecordedScene = rf.PublishSeq;
                 }
                 splitRecorded = Stopwatch.GetTimestamp();
                 double recordMs = ToMs(splitRecorded - recordStart);
+                // Above the damage decision, because the publication's own region and the crossfade arm below need it.
+                float imageClockMs = RenderImageClock(rf, sceneFrame);
                 // §13.1 repaint set for THIS submit: what the recorder actually dirtied, unioned with what only the UI
                 // could see (first frame / resize / DPI / clear-color / image content / live crossfades) — which the
-                // publisher also carries forward across skipped publications. Full only for the named causes below.
+                // publisher also carries forward across skipped publications. Full only for the named causes below, and a
+                // publication's forced full only on its first submitted turn (PublicationRepaintForTurn).
                 var repaint = stats.RepaintDamage;
-                repaint.Union(rf.Submit.RepaintDamage);
-                // Above the damage decision, because the crossfade arm below needs it.
-                float imageClockMs = RenderImageClock(rf, sceneFrame);
+                repaint.Union(PublicationRepaintForTurn(rf.Submit.RepaintDamage,
+                    alreadySubmitted: !fresh && rf.PublishSeq == _publicationRepaintSubmittedSeq,
+                    crossfadesLive: sceneFrame.Images.HasCrossfades(imageClockMs)));
                 if (rf.TargetEpoch != _lastRenderedTargetEpoch)
                 {
                     // First frame on this target, or the UI re-created/resized it: nothing on the target is trustworthy.
@@ -2262,6 +2281,7 @@ public sealed partial class AppHost : IDisposable
                     sceneFrame.RecordPopups(_device, submit.Scale, submit.ImageClockMs);
                     _lastRenderPresentedHash = dlHash;   // §5.2 Fix A: every SUBMITTED stream becomes the elision baseline
                     _renderSubmissionContinuity.Submitted(rf.PublishSeq);
+                    _publicationRepaintSubmittedSeq = rf.PublishSeq;   // its forced full has now been carried once
                 }
                 if (!direct)   // the per-turn cost row describes a composite turn; a direct child has no slice plan to cost
                     NoteTurnCost(_renderSlices, recordMs, compositeOnly, stats.Slices.KeptAll, skip,
@@ -4816,6 +4836,7 @@ public sealed partial class AppHost : IDisposable
         _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
         _reconciler.OnSubtreeRemoved = _dispatcher.NotifySubtreeRemoved;
+        _reconciler.OnSlotRebound = _dispatcher.NotifySlotRebound;   // a recycled slot that held the drag source lets go of it
         _anim =new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         _scrollChrome = new ScrollBarChrome(_scene);
@@ -6242,6 +6263,7 @@ public sealed partial class AppHost : IDisposable
                 reconciled = true;
                 _invalidator.RunDirty(layoutSize);
                 _scene.ClearLayoutDirty();
+                DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
             }
             long tLayoutEffects = Stopwatch.GetTimestamp();
             _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
@@ -6486,6 +6508,7 @@ public sealed partial class AppHost : IDisposable
             var recordStats = _lastRecordStats;
             if (!recordOnRender)
             {
+            PathRealizationCache.Shared.NextFrame();
             recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots),
                 spans: _spanTable, spanReuseDisabled: spanDisable,
