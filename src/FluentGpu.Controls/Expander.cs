@@ -179,7 +179,7 @@ public sealed class Expander : Component
 
         // ExpanderOptions.AnimateContentResize=false: gate the disclosure Reflow spec (Size channel) to the toggle
         // ITSELF, tracked via `open` (the same controlled-signal-or-local-state bool everything else here reads).
-        // `transitioning` flips true the instant `open` changes; an ExpanderResizeWatcher (below, the
+        // `transitioning` is up from the render in which `open` changes (the effect latches it); an ExpanderResizeWatcher (below, the
         // ExpanderCollapseWatcher idiom) clears it once the clip's Reflow track actually SETTLES
         // (anim.HasTracks(clip) goes false) — tied to the REAL disclosure motion, not a guessed duration, so it can
         // never race a slow frame or an interrupted toggle. Always tracked (cheap, and Options is a frozen field so
@@ -197,7 +197,12 @@ public sealed class Expander : Component
             if (lastOpen.Value != open) transitioning.Value = true;
             lastOpen.Value = open;
         }, open);
-        bool isTransitioning = transitioning.Value;      // subscribe: the resize watcher's write re-renders this component
+        // The flip RENDER itself already counts: the effect above drains after this commit's FLIP projection, so
+        // reading only the signal handed the toggle's own commit ReflowNoResize, and a collapse from a settled-open
+        // card (an open mount, or any open leg the resize watcher already cleared) snapped to 0 and unmounted its
+        // content in one frame. `|`, not `||`: the signal is always read (subscribe: the resize watcher's write
+        // re-renders this component).
+        bool isTransitioning = transitioning.Value | (lastOpen.Value != open);
         bool animateResize = Options.AnimateContentResize || isTransitioning;
 
         Action<NodeHandle> chevronCapture = h => chevronRef.Value = h;

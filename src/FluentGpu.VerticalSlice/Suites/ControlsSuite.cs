@@ -8714,6 +8714,35 @@ static partial class ControlsSuite
                 $"after1frame={after1:0.0} open={open:0.0}");
             host.Dispose(); app.Dispose();
         }
+
+        // (d) AnimateContentResize=false on an OPEN mount (Wavee's artist Discography): the COLLAPSE toggle must ease
+        // too. `transitioning` used to rise only in a passive effect keyed on `open`, which drains after the commit's
+        // FLIP, so the render that flipped `open` still committed ReflowNoResize: the clip snapped to 0 and the collapse
+        // watcher unmounted the content at once. The same snap hit every collapse after an animated open (the resize
+        // watcher clears the flag once the open leg settles).
+        {
+            var (app, host, window, clip, _, _) = Mount(animateResize: false, initiallyExpanded: true, tag: "collapse-off");
+            var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
+            var header = Child(host.Scene, card, 0);
+            ClickNode(host, window, header);                       // collapse an open-at-rest mount
+            host.RunFrame();
+            float collapse1 = host.Scene.AbsoluteRect(clip).H;
+            bool mounted1 = !host.Scene.FirstChild(clip).IsNull;
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            float closed1 = host.Scene.AbsoluteRect(clip).H;
+            ClickNode(host, window, header);                       // animated re-open; the resize watcher clears the flag at settle
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            ClickNode(host, window, header);                       // collapse again after the open leg settled
+            host.RunFrame();
+            float collapse2 = host.Scene.AbsoluteRect(clip).H;
+            bool mounted2 = !host.Scene.FirstChild(clip).IsNull;
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            float closed2 = host.Scene.AbsoluteRect(clip).H;
+            Check("cp3.acr4 — Expander AnimateContentResize=false: every COLLAPSE toggle eases (content stays mounted until it settles)",
+                collapse1 > 10f && mounted1 && Near(closed1, 0f, 1f) && collapse2 > 10f && mounted2 && Near(closed2, 0f, 1f),
+                $"collapse1={collapse1:0.0} mounted1={mounted1} closed1={closed1:0.0} collapse2={collapse2:0.0} mounted2={mounted2} closed2={closed2:0.0}");
+            host.Dispose(); app.Dispose();
+        }
     }
 
     static void D3ExpanderChecks(StringTable strings)
