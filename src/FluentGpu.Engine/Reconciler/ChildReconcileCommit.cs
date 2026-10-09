@@ -12,13 +12,23 @@ public sealed partial class TreeReconciler : IChildReconcileCommitter
     {
         // Nested Update/Mount can reconcile another large container: each active invocation leases a separate plan.
         var plan = _childPlans.Count == 0 ? new ChildReconcilePlan() : _childPlans.Pop();
+        // Commit mounts new children after every previous one (removal follows): Element.Stagger counts only the entering.
+        NodeHandle outerStaggerParent = _staggerDiffParent;
+        int outerStaggerBase = _staggerDiffBase;
+        _staggerDiffParent = parent;
+        _staggerDiffBase = previous.Length;
         try
         {
             plan.Begin(_scene, parent, desired, previous, _childReconcileRevision);
             plan.Step(long.MaxValue);
             if (!plan.Commit(this)) throw new InvalidOperationException("Committed child topology changed during isolated planning.");
         }
-        finally { plan.Reset(); _childPlans.Push(plan); }
+        finally
+        {
+            plan.Reset(); _childPlans.Push(plan);
+            _staggerDiffParent = outerStaggerParent;
+            _staggerDiffBase = outerStaggerBase;
+        }
     }
 
     bool IChildReconcileCommitter.Validate(NodeHandle parent, ulong revision, ReadOnlySpan<NodeHandle> originalNodes)

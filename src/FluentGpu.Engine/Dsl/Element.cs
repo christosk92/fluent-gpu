@@ -73,8 +73,9 @@ public abstract record Element
     /// <summary>Declarative exit terminal (Framer <c>exit</c>; CSS <c>allow-discrete</c>): a removed node animates TO
     /// this before its structural removal (deferred via the DetachedAnimSlab / Presence completion gate).</summary>
     public EnterExit? Exit { get => (_ecold ?? ElementCold.Default).Exit; init { if (!EqualityComparer<EnterExit?>.Default.Equals((_ecold ?? ElementCold.Default).Exit, value)) ECold.Exit = value; } }
-    /// <summary>Per-child entrance stagger (seconds): under a Presence/list boundary, child <c>i</c>'s Enter delay is
-    /// <c>index * Stagger</c>, BAKED at reconcile (no runtime closure, no O(n²) sort).</summary>
+    /// <summary>Per-child entrance stagger (ms): each child ENTERING in a reconcile delays its Enter by (its ordinal among the
+    /// children entering in that pass) × Stagger, BAKED at reconcile (no runtime closure, no O(n²) sort). Exits and layout
+    /// moves are not delayed.</summary>
     public float Stagger { get => (_ecold ?? ElementCold.Default).Stagger; init { if (!EqualityComparer<float>.Default.Equals((_ecold ?? ElementCold.Default).Stagger, value)) ECold.Stagger = value; } }
     /// <summary>Declarative auto-FLIP on layout change (the first-class spelling of the per-box <c>Animate</c> opt-in).
     /// Any layout move/resize of this node animates via transform only.</summary>
