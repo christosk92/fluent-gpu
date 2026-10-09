@@ -104,6 +104,7 @@ public sealed partial class InputDispatcher
     private int _keyArmedKey;          // which key armed it (Space or Enter) — any OTHER key-down cancels without firing
     private bool _accessKeyMode;       // Alt tapped → the next letter invokes a matching AccessKey mnemonic
     private bool _altPending;          // Alt is down with no intervening key (candidate for access-key-mode toggle)
+    private int _pendingHighSurrogate; // a Char high surrogate waiting for its low half (0 = none) — see JoinSurrogate
     private readonly List<NodeHandle> _focusScopes = new();
     // Double/triple-click tracking (platform timestamps; slop + window per Win32 defaults, capped at 3).
     private uint _lastDownMs;
@@ -593,16 +594,32 @@ public sealed partial class InputDispatcher
         // root carries HoverWithin either; if it is, clearing it walks (and clears) every ancestor up to the app root.
         if (IsSelfOrAncestorOf(root, _hovered)) SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
 
+        // A STATIONARY item-drag outlives its source being parked exactly as it outlives the source being freed
+        // (DragController.SourceRecycled / DragDropContext.PruneDead): the chip is the visual and the payload was resolved
+        // at promotion. The park is usually the drag's OWN doing — a spring-load waypoint activates a tab, and the
+        // KeepAlive navigation parks the page the row came from — so the contact carrying the drag is skipped here: its
+        // press/pan anchors in that page are not a reason to end the gesture (the release's Drag.IsActive branch clears
+        // them). The scrollbar hover it left behind is dropped like _hovered, since no move re-resolves it mid-drag.
+        bool stationaryDrag = Drag.ActiveLift == DragLift.Stationary;   // Ghost whenever no drag is in flight
+        if (stationaryDrag && IsSelfOrAncestorOf(root, _scrollHovered))
+        {
+            Chrome?.SetPointerOver((int)_scrollHovered.Raw.Index, false, false);
+            _scrollHovered = NodeHandle.Null;
+        }
+
         bool cancelPointer = IsSelfOrAncestorOf(root, _hovered) || IsSelfOrAncestorOf(root, _pressed)
-                             || IsSelfOrAncestorOf(root, _down) || IsSelfOrAncestorOf(root, _dragTarget)
-                             || IsSelfOrAncestorOf(root, _scrollHovered) || IsSelfOrAncestorOf(root, _scrollDragNode)
-                             || IsSelfOrAncestorOf(root, _panTarget) || IsSelfOrAncestorOf(root, _reorderTarget)
-                             || IsSelfOrAncestorOf(root, _swipeDrag) || IsSelfOrAncestorOf(root, _gesturePanNode)
-                             || IsSelfOrAncestorOf(root, _pinchViewport) || IsSelfOrAncestorOf(root, _pinchSessionViewport);
+                             || IsSelfOrAncestorOf(root, _scrollHovered) || IsSelfOrAncestorOf(root, _pinchSessionViewport);
+        if (!cancelPointer && !(stationaryDrag && CarriesStationaryDrag(_down, _touchReorder)))
+            cancelPointer = IsSelfOrAncestorOf(root, _down) || IsSelfOrAncestorOf(root, _dragTarget)
+                            || IsSelfOrAncestorOf(root, _scrollDragNode)
+                            || IsSelfOrAncestorOf(root, _panTarget) || IsSelfOrAncestorOf(root, _reorderTarget)
+                            || IsSelfOrAncestorOf(root, _swipeDrag) || IsSelfOrAncestorOf(root, _gesturePanNode)
+                            || IsSelfOrAncestorOf(root, _pinchViewport);
         for (int i = 0; !cancelPointer && i < _slots.Length; i++)
         {
             if (!_slots[i].Used) continue;
             ref PointerSlot s = ref _slots[i];
+            if (stationaryDrag && CarriesStationaryDrag(s.Down, s.TouchReorder)) continue;
             cancelPointer = IsSelfOrAncestorOf(root, s.Down) || IsSelfOrAncestorOf(root, s.DragTarget)
                             || IsSelfOrAncestorOf(root, s.ScrollDragNode) || IsSelfOrAncestorOf(root, s.ContextDown)
                             || IsSelfOrAncestorOf(root, s.MiddleDown) || IsSelfOrAncestorOf(root, s.PanTarget)
@@ -614,6 +631,11 @@ public sealed partial class InputDispatcher
         if (IsSelfOrAncestorOf(root, _focused)) SetFocus(NodeHandle.Null);
         if (IsSelfOrAncestorOf(root, _selText)) { _selText = NodeHandle.Null; _selDragging = false; }
     }
+
+    /// <summary>True for the contact that carries the in-flight item-drag: the touch reorder claim, or the mouse/pen press
+    /// that armed it (<see cref="DragController.TryArm"/> walks UP from the press, so the press lies in the source).</summary>
+    private bool CarriesStationaryDrag(NodeHandle down, bool touchReorder)
+        => touchReorder || IsSelfOrAncestorOf(Drag.ActiveNode, down);
 
     /// <summary>The REMOVAL twin of <see cref="DeactivateSubtree"/> (which covers the KeepAlive PARK edge): the
     /// reconciler is about to take <paramref name="root"/> out of the live tree — hard (<c>FreeSubtree</c>) or into the
@@ -637,6 +659,15 @@ public sealed partial class InputDispatcher
         if (root.IsNull || !IsSelfOrAncestorOf(root, _hovered)) return;
         SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
         _hoverResolvePending = true;
+    }
+
+    /// <summary>Wired by the host as <c>TreeReconciler.OnSlotRebound</c>: a bound-list recycle rebound
+    /// <paramref name="slotRoot"/> to another item and KEPT its handle, so the IsLive-based prunes never fire for it. A
+    /// drag whose source sits in that slot lets go of it. UI thread only; 0-alloc.</summary>
+    public void NotifySlotRebound(NodeHandle slotRoot)
+    {
+        Drag.NotifySlotRebound(slotRoot);
+        DragDrop.NotifySlotRebound(slotRoot);
     }
 
     /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes
@@ -1100,8 +1131,11 @@ public sealed partial class InputDispatcher
                     break;
 
                 case InputKind.Char:
-                    if (OnChar(e.KeyCode)) handled++;
+                {
+                    int cp = JoinSurrogate(e.KeyCode);
+                    if (cp >= 0 && OnChar(cp)) handled++;
                     break;
+                }
 
                 case InputKind.Scroll:
                     // The ONE scroll input kind (scroll rework §4): the front end routes it (InputDispatcher.Scroll.cs)
@@ -3517,11 +3551,13 @@ public sealed partial class InputDispatcher
         }
 
         // Alt access-key bookkeeping: a bare Alt tap (down with nothing in between, then up) toggles access-key mode;
-        // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path).
+        // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path). Ctrl+Alt is NOT a
+        // mnemonic chord: AltGr reports as Ctrl+Alt, so AltGr+E (the euro sign, e-ogonek) must reach the focused field
+        // as text, and an app's Ctrl+Alt+<letter> accelerator must reach FindAccelerator below.
         if (key == Keys.Alt) { _altPending = !e.IsRepeat; return; }
         _altPending = false;
 
-        if ((e.Mods & KeyModifiers.Alt) != 0 && Keys.IsAccessKeyCandidate(key))
+        if ((e.Mods & (KeyModifiers.Alt | KeyModifiers.Ctrl)) == KeyModifiers.Alt && Keys.IsAccessKeyCandidate(key))
         {
             if (InvokeAccessKey((char)key)) return;
         }
@@ -3677,6 +3713,20 @@ public sealed partial class InputDispatcher
         _accessKeyMode = false;
         InvokeActivation(owner, ContextRequestTrigger.Keyboard);   // one commit path (an access-key owner is never a ContextBit invoker in practice)
         return true;
+    }
+
+    /// <summary>WM_CHAR carries UTF-16 code UNITS, so a non-BMP character (an emoji from SendInput/VK_PACKET auto-type,
+    /// AutoHotkey, RDP Unicode input) arrives as a high then a low surrogate. Join the pair into the one codepoint
+    /// <see cref="CharEventArgs.Codepoint"/> promises. A lone half is dropped, because handlers feed the value to
+    /// char.ConvertFromUtf32, which throws on a surrogate. Returns -1 when there is nothing to route (yet).</summary>
+    private int JoinSurrogate(int unit)
+    {
+        if (unit is >= 0xD800 and <= 0xDBFF) { _pendingHighSurrogate = unit; return -1; }   // wait for the low half
+        int high = _pendingHighSurrogate;
+        _pendingHighSurrogate = 0;
+        if (unit is >= 0xDC00 and <= 0xDFFF)
+            return high != 0 ? char.ConvertToUtf32((char)high, (char)unit) : -1;   // orphan low half → drop
+        return unit;   // BMP char (a stranded high half before it is discarded)
     }
 
     /// <summary>Route a text (character) codepoint to the focused node, bubbling up ancestors until Handled.</summary>
