@@ -402,6 +402,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     public bool IsInFlight(int id)
         => _byId.TryGetValue(id, out var t) && (t.NeedsCopy || (t.Live && !SideDone(t.FenceQueue, t.Fence)));
 
+    /// <summary>How a draw of <paramref name="id"/> resolves this frame: true when it samples pixels (<see cref="IsResident"/>
+    /// — the current placement, or the prior one a replacement keeps published), false for the placeholder.
+    /// <paramref name="provisional"/> is true when newer pixels for the id are staged or still on the copy / compute queue
+    /// (<see cref="IsInFlight"/>), whichever of the two stands in for them: a retained tile that drew it is not the final
+    /// picture and must re-raster once they land.</summary>
+    public bool ResolveDraw(int id, out bool provisional)
+    {
+        provisional = IsInFlight(id);
+        return TryDrawable(id, out _);
+    }
+
     /// <summary>The resolved SRV + the per-image sub-rect UV (origin+size in 0..1, half-texel inset) for the pipeline.</summary>
     public bool TryGet(int id, out D3D12_GPU_DESCRIPTOR_HANDLE srv, out RectF uv)
     {

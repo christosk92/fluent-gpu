@@ -2120,14 +2120,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (_imgRecSlot >= 0) NoteRasterImage(im.ImageId);   // a tile raster records which pixels of the id it drew
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
-                    if (_imageTextures!.IsResident(im.ImageId)) AddReadyImage(in im);
-                    else
-                    {
-                        // Pixels staged or still on the copy / compute queue: the placeholder stands in, and a retained
-                        // tile holding it is not faithful (it re-rasters once they land — RasterTiles).
-                        if (_imageTextures.IsInFlight(im.ImageId)) _frameImagesInFlight++;
-                        AddImagePlaceholder(in im);
-                    }
+                    bool drawable = _imageTextures!.ResolveDraw(im.ImageId, out bool provisional);
+                    // Pixels staged or still on the copy / compute queue: the placeholder, or the prior pixels a replacement
+                    // keeps published (the LQIP under the landing full-res art, a re-bake's previous derivative), stands in,
+                    // and a retained tile holding it is not faithful (it re-rasters once they land — RasterTiles).
+                    if (provisional) _frameImagesInFlight++;
+                    if (drawable) AddReadyImage(in im);
+                    else AddImagePlaceholder(in im);
                     break;
                 }
                 case DrawOp.DrawRoundRectStroke:
