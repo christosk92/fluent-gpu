@@ -205,6 +205,7 @@ public sealed partial class FlexLayout
         ref LayoutInput li = ref _scene.Layout(node);
         ulong h = 14695981039346656037UL;
         MixU(ref h, (uint)_scene.Flags(node));
+        MixU(ref h, _scene.IsMirrorCollapsed(node) ? 1u : 0u);   // an anchor's flow removal leaves Flags untouched
         MixU(ref h, li.Direction);
         MixF(ref h, li.Gap);
         MixE(ref h, in li.Padding);
@@ -325,7 +326,7 @@ public sealed partial class FlexLayout
     // measured because its cells were laid out at 0x0 while record-culled). SetCollapsed still mirrors the aux bit
     // onto NodeFlags.Visible/HitTestVisible for the recorder/hit-test/LayoutSig readers, so a presence flip is still
     // seen there for free — only the LAYOUT collapse decision itself must key off the dedicated bit.
-    private bool Collapsed(NodeHandle h) => _scene.IsCollapsed(h);
+    private bool Collapsed(NodeHandle h) => _scene.IsLayoutCollapsed(h);
 
     // FirstVisibleChild/NextVisibleSibling: the ONE substitution point that makes every Flex/Wrap/ZStack child loop
     // skip a collapsed child ENTIRELY (no box, no margin, no gap slot — true CSS display:none, not visibility:hidden)
