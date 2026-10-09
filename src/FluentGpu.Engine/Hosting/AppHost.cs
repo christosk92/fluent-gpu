@@ -5927,14 +5927,20 @@ public sealed partial class AppHost : IDisposable
     /// win-event hooks bump <see cref="IPlatformWindow.OcclusionEpoch"/> (and wake the loop) whenever the set, the Z-order or the
     /// geometry of top-level windows may have changed, so the Z-order walk and the rect test run only then; between events the
     /// cached verdict stands, so an idle covered window costs one counter read per frame. Never covered while it is not on screen
-    /// anyway (minimized, hidden, cloaked: their own park gates), while a pop-out waits for its reveal or is parked warm, or when
-    /// the backend does not track occlusion (epoch 0). Uncovering is seen on the same frame the event woke the loop.</summary>
+    /// anyway (minimized, hidden, cloaked: their own park gates), while a pop-out waits for its reveal or is parked warm, while it
+    /// holds a windowed popup (its own menus are top-level windows above it, painted by its own frames), or when the backend
+    /// does not track occlusion (epoch 0). Uncovering is seen on the same frame the event woke the loop.</summary>
     private bool OsOcclusionCovers()
     {
         var w = _window;
         long epoch = w.OcclusionEpoch;
         if (epoch == 0) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }
         if (_revealPending || _warmParked) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }   // re-evaluated on the first frame it counts
+        // This host's own windowed popups (a menu, flyout or dropdown that escaped the window) are top-level windows it owns, so
+        // they sit above it and the backend reports them as occluders. Their pixels, hover, reveal and close fade are this host's
+        // Paint, so parking under one froze it on screen and it could never close: the window stayed parked under a dead menu.
+        // Never covered while one is leased; re-evaluated on the first frame without one.
+        if (_popupWindows.Count != 0) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }
         if (epoch == _occlusionEpochSeen) return _occludedByWindows;
         _occlusionEpochSeen = epoch;
         bool covered = false;
