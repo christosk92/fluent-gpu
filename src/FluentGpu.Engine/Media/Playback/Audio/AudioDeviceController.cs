@@ -96,10 +96,13 @@ public sealed class AudioDeviceController : IDisposable
     /// after a sustained run of dead writes, or a typed <see cref="AudioDeviceLostException"/>). Alloc-free. Starts a
     /// rebuild request if none is pending; NEVER re-stamps a pending one (a dead sink reports every ~80 ms — re-stamping was
     /// the 0.2.8 livelock), and is ignored while a ladder retry is scheduled or the ladder is exhausted (<c>Faulted</c>
-    /// waits for the next device event — otherwise a dead sink would drive an attempt every 250 ms forever).</summary>
+    /// waits for the next device event — otherwise a dead sink would drive an attempt every 250 ms forever). The one
+    /// exception is a session that still wants sound whose kept sink is dead (<see cref="PcmAudioSession.OutputLive"/>
+    /// false): a single request runs an attempt that finds the ladder spent, so the slow retry takes over at its 5 s rate.</summary>
     public void ReportSinkFailure()
     {
-        if (_disposed || _state.Peek() == AudioDeviceState.Faulted) return;
+        if (_disposed) return;
+        if (_state.Peek() == AudioDeviceState.Faulted && !(_session.WantsOutput && !_session.OutputLive)) return;
         bool started;
         lock (_gate)
         {
