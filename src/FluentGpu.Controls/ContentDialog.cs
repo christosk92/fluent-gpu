@@ -186,7 +186,8 @@ public sealed class ContentDialog : Component
             new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
         // Veto hook (Escape / light-dismiss / programmatic) — lets Closing.Cancel block dismissal mid-download.
         handle.ClosingAction = VetoClosing;
-        // Escape and programmatic closes report None; button closes pre-set the result before Close().
+        // Escape and programmatic closes report None (a vetoed button close resets the result); button closes pre-set
+        // the result before Close().
         handle.ClosedWithCauseAction = _ => Closed?.Invoke(result[0]);
         Opened?.Invoke();
         return handle;
@@ -215,7 +216,11 @@ public sealed class ContentDialog : Component
         {
             setResult(r);
             click?.Invoke();
-            getHandle()?.Close();
+            if (getHandle() is not { } h) return;
+            h.Close();
+            // A Closing veto keeps the dialog open: drop this button's result so a later Escape or programmatic close
+            // reports None (WinUI computes the result per close attempt, not per dialog).
+            if (h.IsOpen) setResult(ContentDialogResult.None);
         }
 
         // Run a cancelable click handler; returns true if it vetoed the close (dialog stays open to advance phases).
