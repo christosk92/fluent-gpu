@@ -9,9 +9,10 @@ namespace FluentGpu.Controls;
 /// <summary>
 /// A controlled WinUI <c>Popup</c>/<c>Flyout</c> primitive over the shared <see cref="OverlayHost"/> machinery: an
 /// <paramref name="anchor"/> element plus arbitrary <paramref name="content"/> displayed above the page, its open state
-/// owned by a caller <see cref="Signal{Boolean}"/>. Setting <c>isOpen.Value</c> opens/closes it; a light-dismiss
-/// (click-outside) or Escape writes the signal BACK to <c>false</c> and fires <c>onOpenChanged(false)</c> exactly once
-/// (cause-mapped — a programmatic close, i.e. the caller writing <c>false</c>, does NOT echo <c>onOpenChanged</c>). The
+/// owned by a caller <see cref="Signal{Boolean}"/>. Setting <c>isOpen.Value</c> opens/closes it; any close the
+/// caller did not ask for (light-dismiss/click-outside, Escape, or the host closing it on its own: a competing flyout, a
+/// KeepAlive park, a dead anchor) writes the signal BACK to <c>false</c> and fires <c>onOpenChanged(false)</c> exactly once
+/// (a close the caller asked for by writing <c>false</c> does NOT echo <c>onOpenChanged</c>). The
 /// flip/nudge/live-anchor-follow/focus-restore/light-dismiss all come free from the overlay host + FlyoutPositioner.
 /// The signal freezes at mount (a plain field the run-once core factory sets — component-props-contract.md) — swapping
 /// the signal requires a re-key (the controlled-input contract); the <paramref name="anchor"/> and <paramref name="content"/>, by contrast, are RE-PUSHED live on every
@@ -25,8 +26,8 @@ public static class Popup
     /// <param name="isOpen">The controlled open-state signal. <c>null</c> = the primitive materializes its own internal
     /// signal (uncontrolled: "the control made its own signal"), so a caller who only wants light-dismiss behaviour need
     /// not thread one.</param>
-    /// <param name="onOpenChanged">Fired when the popup CLOSES itself via light-dismiss/Escape (with <c>false</c>);
-    /// never on a programmatic open/close (no echo).</param>
+    /// <param name="onOpenChanged">Fired when the popup CLOSES itself (light-dismiss, Escape, or a host close: a competing flyout, a parked/dead anchor) with <c>false</c>;
+    /// never on a caller-driven open/close (no echo).</param>
     public static Element Create(
         Element anchor,
         Func<Element> content,
@@ -53,8 +54,8 @@ public static class Popup
 
 /// <summary>Internal controlled-popup component: captures the anchor node (<see cref="BoxEl.OnRealized"/>), resolves the
 /// overlay service (<c>UseRequiredContext</c>), and drives an AUTO-TRACKED effect off the open signal — open when it
-/// reads <c>true</c>, close when <c>false</c>. Light-dismiss/Escape (any non-programmatic close cause) writes the signal
-/// back + fires onOpenChanged(false) once.</summary>
+/// reads <c>true</c>, close when <c>false</c>. Any close the core did not start
+/// itself (light-dismiss, Escape, a host-initiated programmatic close) writes the signal back + fires onOpenChanged(false) once.</summary>
 internal sealed class PopupCore : Component
 {
     // Mount-only seeds (the controlled-input contract: plain fields the run-once factory sets). The LIVE inputs —
@@ -89,12 +90,16 @@ internal sealed class PopupCore : Component
                 if (handle.Value is { IsOpen: true }) return null;   // already open
                 var h = svc.Open(() => anchorRef.Value, content, placement, options);
                 handle.Value = h;
-                // Close STARTED by the host (light-dismiss / Escape / programmatic). ClosedWithCauseAction fires once at
-                // finalize: map the cause → a programmatic close (the caller already wrote false) must not echo.
+                // Close FINISHED (ClosedWithCauseAction fires once at finalize). A close this core started itself (the
+                // caller wrote false → the else branch below; the unmount teardown) has already dropped `handle`, so it
+                // must not echo. Any other close is the host's own: light-dismiss / Escape, or a Programmatic close the
+                // caller never asked for (a competing root flyout, a KeepAlive park, a parked or dead anchor). Those
+                // write the controlled signal BACK; otherwise isOpen keeps reading true over a closed popup and the next
+                // `isOpen = true` is dropped by the signal's equality gate.
                 h.ClosedWithCauseAction = cause =>
                 {
-                    if (cause == OverlayCloseCause.Programmatic) return;
-                    isOpen.Value = false;          // write the controlled signal BACK (light-dismiss/Escape)
+                    if (cause == OverlayCloseCause.Programmatic && !ReferenceEquals(handle.Value, h)) return;
+                    isOpen.Value = false;          // write the controlled signal BACK
                     onOpenChanged?.Invoke(false);
                 };
             }
@@ -107,7 +112,14 @@ internal sealed class PopupCore : Component
         });
 
         // Unmount safety: a popup still open when its owner unmounts must close (mount-once effect; cleanup at unmount).
-        UseEffect(() => (Action?)(() => { if (handle.Value is { IsOpen: true } h) h.Close(); }), default);
+        // Drop the handle BEFORE closing so the finalize reads it as a self-initiated close: no write-back into a caller
+        // signal a re-keyed successor may already have reopened, and no onOpenChanged after unmount.
+        UseEffect(() => (Action?)(() =>
+        {
+            var h = handle.Value;
+            handle.Value = null;
+            if (h is { IsOpen: true }) h.Close();
+        }), default);
 
         return new BoxEl
         {

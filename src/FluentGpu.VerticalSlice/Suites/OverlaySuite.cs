@@ -1620,6 +1620,40 @@ static class OverlaySuite
                 $"open={opened} progClosed={progClosed} progNoEcho={progNoEcho} reopen={reopened} dismissClosed={dismissClosed} writeback={signalWrittenBack} echoOnce={echoedOnce}");
         }
 
+        // gate.popup.host-close-writeback — a close the HOST starts on its own (here a competing root light-dismiss
+        // flyout; a KeepAlive park and a dead anchor take the same Programmatic path) writes the controlled signal back
+        // to false + fires onOpenChanged(false) once, so the next isOpen=true reopens instead of being dropped by the
+        // signal's equality gate.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-popup-hostclose", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new PopupCtlProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+            void Settle() { for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); } }
+            host.RunFrame();
+            var svc = probe.Service!;
+
+            probe.Open.Value = true; Settle();
+            bool opened = svc.AnyOpen;
+            int changesBefore = probe.OpenChanges;
+
+            // A competing ROOT light-dismiss flyout: CloseCompetingLightDismiss closes the popup with cause Programmatic.
+            var rival = svc.OpenAt(static () => new RectF(300f, 200f, 10f, 10f),
+                static () => new BoxEl { Width = 60, Height = 40, Fill = Tok.FillCardDefault }, FlyoutPlacement.BottomLeft);
+            Settle();
+            bool writtenBack = !probe.Open.Peek();
+            bool echoedOnce = probe.OpenChanges == changesBefore + 1 && !probe.LastChanged;
+
+            rival.Close(); Settle();
+            probe.Open.Value = true; Settle();
+            bool reopened = svc.AnyOpen && probe.Open.Peek();
+
+            Check("gate.popup.host-close-writeback", opened && writtenBack && echoedOnce && reopened,
+                $"open={opened} writeback={writtenBack} echoOnce={echoedOnce} reopen={reopened}");
+        }
+
         // gate.popup.anchor — the primitive rides the FlyoutPositioner: node-anchored (live-follow eligible), placed
         // below a top anchor, and FLIPS above when it would overflow below a bottom anchor.
         {
@@ -3131,6 +3165,40 @@ static class OverlaySuite
                 opened && offOrigin && notOriginWalk && closing,
                 $"opened={opened} offOrigin={offOrigin} notWalk={notOriginWalk} closing={closing} "
                 + $"placed=({placed.X:0.#},{placed.Y:0.#}) mid=({midRect.X:0.#},{midRect.Y:0.#})");
+        }
+
+        // gate.overlay.rect-anchor-follow: a rect-thunk popup (non-editable ComboBox, ToolTip, TeachingTip margin form)
+        // re-places when its derived rect moves under a resize/reflow, with no OverlayHost re-render (no open/close bump).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overlay-rect-follow", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            RectF live = new(80f, 60f, 40f, 24f);
+            svc.OpenAt(() => live, () => Text("follow-tip"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            var tip = FindTextNode(host.Scene, strings, host.Scene.Root, "follow-tip");
+            bool opened = !tip.IsNull;
+            RectF before = opened ? host.Scene.AbsoluteRect(tip) : default;
+
+            live = new RectF(140f, 90f, 40f, 24f);   // the target moved (layout), nothing bumped the overlay version
+            host.RunFrame();
+            host.RunFrame();
+            var after0 = FindTextNode(host.Scene, strings, host.Scene.Root, "follow-tip");
+            RectF after = after0.IsNull ? default : host.Scene.AbsoluteRect(after0);
+            bool followed = !after0.IsNull
+                && MathF.Abs(after.X - before.X - 60f) < 1.5f && MathF.Abs(after.Y - before.Y - 30f) < 1.5f;
+            bool stillOpen = svc.Entries.Count == 1 && svc.Entries[0].Phase != OverlayPhase.Closing;
+
+            Check("gate.overlay.rect-anchor-follow a rect-thunk popup re-places when its live rect moves without an OverlayHost re-render",
+                opened && followed && stillOpen,
+                $"opened={opened} followed={followed} open={stillOpen} before=({before.X:0.#},{before.Y:0.#}) after=({after.X:0.#},{after.Y:0.#})");
         }
 
         // gate.overlay.closing-deadline — a wedged close fade force-finalizes past 2000ms wall even while HasTracks.
