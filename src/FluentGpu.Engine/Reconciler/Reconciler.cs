@@ -1404,8 +1404,9 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>Re-mirror every transparent anchor above <paramref name="node"/> whose mirrored child it is, bottom-up. A
-    /// bound Visible/Width/Height fire, or a nested component's own re-render, changes the rendered root without
-    /// re-rendering the boundary that mirrors it. Stops at the first parent that is not such an anchor (one probe).</summary>
+    /// bound Visible/Width/Height fire, or a nested component's own re-render, or a Show/Skel.Region/KeepAlive swapping
+    /// its branch in its own effect, changes the rendered root without re-rendering the boundary that mirrors it. Stops
+    /// at the first parent that is not such an anchor (one probe).</summary>
     private void RemirrorAncestors(NodeHandle node)
     {
         while (true)
@@ -1455,6 +1456,7 @@ public sealed partial class TreeReconciler
             ReconcileSingleChild(node, desired, last);
             _showState[idx] = desired;
             MirrorParticipation(node, _scene.FirstChild(node));
+            RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
         }, owner: null, runNow: false);
         _showEffect[mountIdx] = eff;
         AddBinding(node, eff);
@@ -1638,6 +1640,7 @@ public sealed partial class TreeReconciler
         }
 
         MirrorParticipation(node, _scene.FirstChild(node));
+        RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
     }
 
     // Stamp the derived shimmer ROOT with an Opacity EXIT terminal so Remove() cross-dissolves it out (as an orphan
@@ -1859,6 +1862,7 @@ public sealed partial class TreeReconciler
 
         state.ActiveKey = key;
         MirrorParticipation(node, entry.Root);
+        RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
         if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion)
         {
             anim.CancelAll(entry.Root);
