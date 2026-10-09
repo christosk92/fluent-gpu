@@ -368,7 +368,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // POINTER_INPUT_TYPE (winuser.h): the physical device class behind a WM_POINTER message.
     private const uint PT_TOUCH = 2, PT_PEN = 3, PT_MOUSE = 4, PT_TOUCHPAD = 5;
     // POINTER_BUTTON_CHANGE_TYPE (winuser.h): which button transitioned on this WM_POINTERDOWN/UP — maps a PT_MOUSE
-    // contact back onto the engine's 0=left/1=right/2=middle convention (touch/pen down is always the primary action).
+    // contact back onto the engine's 0=left/1=right/2=middle convention (touch down is always the primary action; a pen
+    // contact is primary unless its barrel is held, SECONDBUTTON = Windows' pen right-click).
     private const uint POINTER_CHANGE_FIRSTBUTTON_DOWN = 1, POINTER_CHANGE_FIRSTBUTTON_UP = 2,
                        POINTER_CHANGE_SECONDBUTTON_DOWN = 3, POINTER_CHANGE_SECONDBUTTON_UP = 4,
                        POINTER_CHANGE_THIRDBUTTON_DOWN = 5, POINTER_CHANGE_THIRDBUTTON_UP = 6,
@@ -643,6 +644,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // WM_POINTERCAPTURECHANGED and by every loss path through CancelPrimaryContact).
     private uint _primaryDownId;
     private bool _primaryDown;
+    // The pen contact went down with its barrel held (PenContactButton): its release is the secondary (context) action
+    // whatever ButtonChangeType the up carries.
+    private bool _penBarrelContact;
     // ── input capture hardening (2026-09-22) ────────────────────────────────────────────────────────────────────────
     // Mouse-in-pointer's implicit per-contact capture (§ above) is the ONLY thing that used to hold a drag: nothing
     // stopped that implicit capture from being silently dropped mid-gesture — a WM_POINTERLEAVE synthesizes a park move
@@ -2505,8 +2509,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pi.pointerId, Pressure: pressure, QpcTicks: qpc));
     }
 
-    // WM_POINTERDOWN/UP. Touch/pen "down" is the primary action (button 0); a PT_MOUSE contact reports which physical
-    // button transitioned via ButtonChangeType so right/middle clicks survive. Implicit contact→window capture means no
+    // WM_POINTERDOWN/UP. Touch "down" is the primary action (button 0), pen too unless its barrel is held (button 1);
+    // a PT_MOUSE contact reports which physical button transitioned via ButtonChangeType so right/middle clicks survive. Implicit contact→window capture means no
     // SetCapture refcount: the OS streams this contact's updates+up to us until it breaks contact.
     private void PointerDownUp(uint pointerId, bool down)
     {
@@ -2515,6 +2519,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         Decode(in pi, out PointerKind kind, out float pressure, out uint time, out long qpc);
         bool mouseStream = IsMouseButtonStream(kind, pi.pointerType);
         int button = PointerButton(kind, pi.pointerType, pi.ButtonChangeType);
+        if (kind == PointerKind.Pen) button = PenContactButton(down, button, ref _penBarrelContact);
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
         // The primary mouse/pen contact (input-capture hardening): the one contact every OS-visible loss path cancels
         // through CancelPrimaryContact. Touch (and a raw PT_TOUCHPAD finger) never qualifies; a touchpad CURSOR rides the
@@ -2714,8 +2719,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     internal static bool IsMouseButtonStream(PointerKind kind, uint pointerType) =>
         kind == PointerKind.Mouse || pointerType == PT_MOUSE;
 
+    // A pen's barrel button held in contact is Windows' pen right-click (POINTER_FLAG_SECONDBUTTON): map it onto the
+    // engine's button 1 so it opens the context menu instead of activating. Any other pen change (FIRSTBUTTON, the
+    // eraser) and every touch contact stay the primary action.
     internal static int PointerButton(PointerKind kind, uint pointerType, uint buttonChangeType) =>
-        IsMouseButtonStream(kind, pointerType) ? ButtonForChange(buttonChangeType) : 0;
+        IsMouseButtonStream(kind, pointerType) ? ButtonForChange(buttonChangeType)
+        : kind == PointerKind.Pen && (buttonChangeType is POINTER_CHANGE_SECONDBUTTON_DOWN or POINTER_CHANGE_SECONDBUTTON_UP) ? 1
+        : 0;
+
+    // A pen is ONE contact with one action, decided at the DOWN edge. Pressing or letting go of the barrel mid-stroke
+    // flips FIRST/SECONDBUTTON under the held contact, so the up's own ButtonChangeType can name the other button: the
+    // release reuses the press's decision so a plain tap never strands its primary press and a barrel tap never turns
+    // back into a left click.
+    internal static int PenContactButton(bool down, int reported, ref bool barrelContact)
+    {
+        if (down) { barrelContact = reported == 1; return reported; }
+        int button = barrelContact ? 1 : 0;
+        barrelContact = false;
+        return button;
+    }
 
     internal static int ButtonForChange(uint change) => change switch
     {

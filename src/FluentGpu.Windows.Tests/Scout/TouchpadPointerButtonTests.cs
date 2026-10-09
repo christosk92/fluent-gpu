@@ -19,7 +19,7 @@ public sealed class TouchpadPointerButtonTests
     [InlineData(PointerKind.Touchpad, PtMouse, FirstDown, 0)]
     [InlineData(PointerKind.Mouse, PtMouse, SecondDown, 1)]
     [InlineData(PointerKind.Touchpad, PtTouchpad, FirstDown, 0)]
-    [InlineData(PointerKind.Pen, PtPen, SecondDown, 0)]
+    [InlineData(PointerKind.Pen, PtPen, SecondDown, 1)]
     [InlineData(PointerKind.Touch, PtTouch, FirstDown, 0)]
     public void ButtonFollowsTheMouseStream(PointerKind kind, uint pointerType, uint change, int expected)
         => Assert.Equal(expected, Win32Window.PointerButton(kind, pointerType, change));
