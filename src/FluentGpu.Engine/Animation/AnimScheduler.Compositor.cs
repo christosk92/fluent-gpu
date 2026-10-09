@@ -165,7 +165,8 @@ public sealed partial class AnimEngine
     /// <summary>A fingerprint of exactly what <see cref="CaptureCompositorAnimations"/> would hand the renderer, as far as the
     /// renderer's adoption can tell rows apart (<c>RenderCompositorAnimations.Adopt</c>): which rows are captured (live,
     /// compositor-owned), and for each its identity (instance), its seed revision (every retarget re-stamps it), its node,
-    /// its cadence and its Parked/Done flags. Two equal fingerprints mean a re-capture would adopt to the identical render
+    /// its cadence and its Parked/Done/Hold/Paused flags (a hold or a pause rewrites nothing else, and the renderer learns of
+    /// it only by adopting). Two equal fingerprints mean a re-capture would adopt to the identical render
     /// state — the renderer advances these rows itself, so their positions are not an input. Same walk as the capture
     /// (O(compositor-candidate rows)), no allocation. The host compares it across frames for its no-op publication skip.</summary>
     internal ulong CompositorCaptureFingerprint()
@@ -181,7 +182,8 @@ public sealed partial class AnimEngine
             h = Mix(h, identity.Instance);
             h = Mix(h, identity.Revision);
             h = Mix(h, ((ulong)row.Node.Raw.Index << 32) | row.Node.Raw.Gen);
-            h = Mix(h, ((ulong)(uint)PeriodMsOf(slot) << 16) | (ulong)(row.Flags & (AnimFlags.Parked | AnimFlags.Done)));
+            h = Mix(h, ((ulong)(uint)PeriodMsOf(slot) << 16)
+                | (ulong)(row.Flags & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Hold | AnimFlags.Paused)));
             n++;
         }
         return Mix(h, (ulong)n);
