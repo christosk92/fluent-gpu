@@ -433,9 +433,10 @@ internal sealed class SceneRecordingContext
         // top bands included), as opposed to a standalone stream a backend replays whole (where an inline acrylic layer
         // composites at push time).
         public bool CompositeArenas;
-        // Open INLINE group layers (opacity / self-blur / edge fade, including a folded one) in the arena being written: a
-        // tile replay skips a child slice's marker, so an inline group wrapped around one would wrap NOTHING (the child
-        // composites unfaded / unblurred / unfeathered). While > 0 no slice is cut: everything records inline, poses baked.
+        // Open INLINE group layers (opacity / self-blur / edge fade, including a folded one) and stencil (path) clips in the
+        // arena being written: a tile replay skips a child slice's marker, so an inline group wrapped around one would wrap
+        // NOTHING (the child composites unfaded / unblurred / unfeathered) and a stencil clip would clip nothing (the child
+        // composites as its marker's rectangle). While > 0 no slice is cut: everything records inline, poses baked.
         public int InlineLayerDepth;
         public int KeepDenySlot;
 #pragma warning disable CS0649 // Retained AppHost settle-latch pair; softness made the increment a lie (always 0).
@@ -2233,6 +2234,9 @@ internal sealed class SceneRecordingContext
                     dl.PushStencilClip(childClip, cfr, (byte)cps.Rule, clipWorld, key);
                     pushedClip = true; pushedStencil = true;
                     stencilClipRef = cfr; stencilClipWorld = clipWorld;
+                    // A child slice's marker carries only rectangular / rounded clips to the composite: cut inside the
+                    // scope it would composite as the silhouette's AABB. Nothing below is cut (see InlineLayerDepth).
+                    stats.InlineLayerDepth++;
                 }
             }
         }
@@ -3166,7 +3170,7 @@ internal sealed class SceneRecordingContext
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip)
         {
-            if (pushedStencil) dl.PopStencilClip(childClip, stencilClipRef, stencilClipWorld, key);
+            if (pushedStencil) { dl.PopStencilClip(childClip, stencilClipRef, stencilClipWorld, key); stats.InlineLayerDepth--; }
             else dl.PopClip(key);
         }
 
