@@ -16,7 +16,17 @@ public sealed partial class AnimEngine
         ulong BaseRevision = 0);
 
     /// <summary>Enabled by a host whose render thread owns scene recording and compositor pose evaluation.</summary>
-    public bool RenderOwnsCompositor { get; set; }
+    public bool RenderOwnsCompositor
+    {
+        get => _renderOwnsCompositor;
+        set
+        {
+            if (_renderOwnsCompositor == value) return;
+            _renderOwnsCompositor = value;
+            _slab.BumpVersion();   // ownership of every compositor row just flipped: re-derive the wake census
+        }
+    }
+    private bool _renderOwnsCompositor;
 
     // ── perf plan item 4: compositor-candidate cache ────────────────────────────────────────────────────────────────
     // IsCompositorRowStatic below is a pure function of a row's OWN static fields (Flags/Kind/Channel) plus its

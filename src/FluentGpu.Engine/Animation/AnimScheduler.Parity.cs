@@ -173,15 +173,22 @@ public sealed partial class AnimEngine
                 if (loop) loops++;
                 // Parked/Done/Driven rows are never TIMER-due: parked is quiesced, done retires this tick, driven is
                 // event-woken by its signal write (that was the whole point — a paused playhead costs zero frames).
-                // A PAUSED row (SetPaused) neither moves nor ages, so it owes no frame either.
-                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven | AnimFlags.Paused)) != 0) continue;
+                // A PAUSED row (SetPaused) neither moves nor ages, so it owes no frame either, and a HELD one (SetHeld) only
+                // ages: its value stands, so it asks for no frames (the render thread's HasActive reads both the same way).
+                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven | AnimFlags.Paused | AnimFlags.Hold)) != 0) continue;
+                // A RENDER-OWNED compositor row is advanced, posed and paced by the render thread: the UI tick skips it
+                // (Tick PASS1) and only completion feedback retires it, so it owes the UI loop no frame. HasUiWork already
+                // keeps it out of the Anim bit; counting it as due here pinned the cadence wait to 0, so a looping meter
+                // beside a focused caret ran the UI loop at the panel rate. Still counted as a loop for the diagnostics.
+                bool renderOwned = RenderOwnsCompositor && IsCompositorRow(in _slab.At(s));
                 int period = PeriodMsOf(s);
                 if (period <= 0)
                 {
-                    dueNow = true;
                     if (loop) drLoops++;
+                    if (!renderOwned) dueNow = true;
                     continue;
                 }
+                if (renderOwned) continue;
                 double last = _lastAdvanceMs[s];
                 if (last <= 0d) { dueNow = true; continue; }      // never advanced ⇒ owed its first frame
                 double due = last + period;
@@ -196,8 +203,8 @@ public sealed partial class AnimEngine
     }
 
     /// <summary>Milliseconds until the earliest live row needs a frame. <c>0</c> = a frame is due NOW; <c>+∞</c> =
-    /// nothing is timer-due (idle, or only Driven/Parked rows — those are woken by their signal write, never by the
-    /// clock); otherwise the ms until the soonest <see cref="CadenceKind.Hz"/> row's next advance. THE host's wait
+    /// nothing is timer-due (idle, or only Driven/Parked/held/paused rows and rows the render thread owns — none of them
+    /// owes the UI loop a clock frame); otherwise the ms until the soonest <see cref="CadenceKind.Hz"/> row's next advance. THE host's wait
     /// authority — it calls this several times per frame, so it is O(1): the scan is memoized per tick and per slab
     /// mutation. <paramref name="nowMs"/> is the caller's own monotonic ms clock (see the domain note above
     /// <c>_extAnchorMs</c>).</summary>
