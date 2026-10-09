@@ -185,6 +185,8 @@ internal sealed class FlipViewCore : Component
         //    (FlipView::OnPointerWheelChanged, FlipView_Partial.cpp:650-749). Generalized to the DOMINANT axis so a
         //    horizontal wheel / two-finger swipe (e.DeltaX) pages too, plus a hi-res accumulation path for the sub-notch
         //    packet stream that the dispatcher's no-scroller wheel fallback (InputDispatcher §A) now delivers.
+        //    Sign: WheelEventArgs is "positive = toward the content end" (wheel toward the user / tilt right), i.e. WinUI's
+        //    MouseWheelDelta negated, so WinUI's "delta < 0 = next" is "axis > 0 = next" here.
         void OnWheel(WheelEventArgs e)
         {
             if (e.Handled || count == 0) return;
@@ -206,7 +208,7 @@ internal sealed class FlipViewCore : Component
                 lastWheelTime.Value = now;
                 if (canFlip)
                 {
-                    bool moved = axis < 0f ? MoveNext() : MovePrevious();   // axis<0 = next (:719-726)
+                    bool moved = axis > 0f ? MoveNext() : MovePrevious();   // toward the content end = next (:719-726)
                     if (moved)
                     {
                         lastWheelDelta.Value = axis;
@@ -230,7 +232,7 @@ internal sealed class FlipViewCore : Component
             swipeAccum.Value += axis;
             if (MathF.Abs(swipeAccum.Value) >= SwipeFlipDip)
             {
-                bool moved = swipeAccum.Value < 0f ? MoveNext() : MovePrevious();
+                bool moved = swipeAccum.Value > 0f ? MoveNext() : MovePrevious();
                 swipeAccum.Value = 0f;
                 swipeCooldownUntil.Value = now + (long)SwipeCooldownMs;
                 if (moved) e.Handled = true;
