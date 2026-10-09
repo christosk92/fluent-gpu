@@ -793,6 +793,34 @@ static partial class ControlsSuite
                 $"opened={opened} blocked={blocked}(off={afterBlocked.OffsetY:0.#}) scrolls={scrolls}(off={afterFree.OffsetY:0.#})");
         }
 
+        // gate.ctx.menu-blocks-wheel — the scrim is a SIBLING of the menu, not an ancestor, so its OnPointerWheel never
+        // sees a wheel over the open menu itself; the containing-scroller fallback then found the list laid out beneath
+        // and scrolled it under the (non-overflowing) menu. The same wheel over a menu item must scroll nothing, and the
+        // menu stays open (WinUI's light-dismiss layer eats the wheel without dismissing).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-wheel-menu", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextWheelProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scroller = FindScroll(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(scroller, out var before);
+            Right(w, CenterOf(host.Scene, probe.Row)); RunN(host, 45);   // settle the unfold: the whole plate hit-tests
+            var items = Roles(host.Scene, AutomationRole.MenuItem);
+            var menuPt = items.Count > 0 ? CenterOf(host.Scene, items[^1]) : default;   // last row: well inside the list
+            var listRect = scroller.IsNull ? default : host.Scene.AbsoluteRect(scroller);
+            bool overList = items.Count > 0
+                && menuPt.X >= listRect.X && menuPt.X < listRect.X + listRect.W
+                && menuPt.Y >= listRect.Y && menuPt.Y < listRect.Y + listRect.H;
+            w.QueueInput(WheelEvent(menuPt, 0, 0, 240f)); RunN(host, 30);
+            host.Scene.TryGetScroll(scroller, out var after);
+            bool blocked = Near(after.OffsetY, before.OffsetY, 0.5f);
+            bool stillOpen = probe.Service!.AnyOpen;
+            Check("gate.ctx.menu-blocks-wheel a wheel over an open, non-overflowing menu does not scroll the list behind it and leaves the menu open",
+                !scroller.IsNull && overList && blocked && stillOpen,
+                $"items={items.Count} pt=({menuPt.X:0},{menuPt.Y:0}) overList={overList} blocked={blocked}(off={after.OffsetY:0.#}) open={stillOpen}");
+        }
+
         // gate.ctx.touch-hold-opens — a synthetic touch down + a >500ms stationary hold fires the context request
         // (Trigger.Hold) and opens the menu at the contact point (the pressed visual is held through the fire).
         {

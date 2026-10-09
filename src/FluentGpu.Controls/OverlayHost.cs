@@ -1498,6 +1498,13 @@ public sealed class OverlayHost : Component
                 // would otherwise wheel the page under an open menu. Consume the wheel here (WinUI: the light-dismiss
                 // layer eats PointerWheelChanged without dismissing). Modal eats it the same way.
                 OnPointerWheel = svc.AnyInputBlocking ? static e => e.Handled = true : null,
+                // That handler only runs for a wheel that lands ON the scrim. Over the open popup itself the hit chain is
+                // plate → surface → overlay stack (the scrim is a sibling, never an ancestor), and a touchpad pan never
+                // asks element handlers at all. Both then fell to InputDispatcher's containing-scroller scan, which still
+                // found the page list laid out beneath in Child and scrolled it under the menu. Opaque to that scan, the
+                // scrim discards everything behind it; a scroller INSIDE a popup is a later sibling and is still found.
+                // See Element.BlocksBackgroundScroll.
+                BlocksBackgroundScroll = svc.AnyInputBlocking,
                 // Right-click on the light-dismiss scrim = WinUI outside-right-click: close the top overlay AND re-fire
                 // the context request at the same point so the node underneath opens its own menu in ONE gesture. The
                 // scrim is full-bleed at origin, so args.Position (scrim-local) IS the window-DIP point. CloseTop first
