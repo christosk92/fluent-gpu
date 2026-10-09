@@ -1123,29 +1123,43 @@ public sealed partial class FlexLayout
         if (content.IsNull || sc.Extent is not { } ext) return (0f, 0f);
         var layout = sc.Layout;
         float cross = horizontal ? innerH : innerW;
+        if (ext.Count != sc.ItemCount) ext.Resize(sc.ItemCount);
+        int anchorIndex = Math.Clamp(sc.AnchorIndex, 0, Math.Max(0, sc.ItemCount - 1));
+        // A cross-size change reflows a layout that places items off it (a responsive grid's column count, a lined flow's
+        // re-wrap, an aspect grid's row height): the anchor item moves to another row with no plan shift, so the same offset
+        // shows other items. Take the anchor's offset at the cross the last arrange used, BEFORE the reflow below; pass 0
+        // shifts the frame by how far it moved. A list resting at the top keeps no anchor, and a viewport not arranged yet
+        // (the mount realizes at a hint cross) has no position on screen to keep.
+        float arrangedCross = horizontal ? sc.ContentH : sc.ContentW;
+        double reflowFrom = double.NaN;
+        if (!Verifying && ext is VirtualLayoutExtent { Cross: > 0f } reflowing && reflowing.Cross == arrangedCross
+            && cross > 0f && cross != arrangedCross && sc.Offset > 0.0)
+            reflowFrom = ext.OffsetOf(anchorIndex);
         if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
         if (ext is VirtualLayoutExtent vle && cross > 0f) vle.Cross = cross;
-        if (ext.Count != sc.ItemCount) ext.Resize(sc.ItemCount);
         _ = ext.Total;   // a lazily-tabled measured layout must own its table BEFORE the first SetMeasured below
 
         GridVirtualLayout? measuredGrid = layout is GridVirtualLayout { IsMeasured: true } grid ? grid : null;
         measuredGrid?.ResetMeasurePass(sc.ItemCount, cross);
         bool measured = ext is MeasuredExtent || layout is IMeasuredVirtualLayout;
-        int anchorIndex = Math.Clamp(sc.AnchorIndex, 0, Math.Max(0, sc.ItemCount - 1));
         var vpId = new ScrollViewportId((int)node.Raw.Index, node.Raw.Gen);
         var slots = _scene.PlanSlots;
 
-        // Pass 0 — an out-of-band extent rewrite since the last pass (a wholesale reseed, IAnchoredReseedLayout) moved the
-        // rows above the anchor with no plan shift: anchor it here, in the same call as this pass's measured corrections, so
-        // the reseed and the re-measure that corrects it net to the anchor row staying where the user sees it.
+        // Pass 0 — an out-of-band extent rewrite since the last pass (a wholesale reseed, IAnchoredReseedLayout) or the
+        // cross-size reflow above moved the rows above the anchor with no plan shift: anchor it here, in the same call as this
+        // pass's measured corrections, so the rewrite and the re-measure that corrects it net to the anchor row staying
+        // where the user sees it.
         double shift = 0.0;
+        double rebase = double.IsNaN(reflowFrom) ? 0.0 : ext.OffsetOf(anchorIndex) - reflowFrom;
         if (!Verifying && layout is IAnchoredReseedLayout reseeded
-            && reseeded.TakeReseedShift(anchorIndex, out double reseedDelta) && reseedDelta != 0.0)
+            && reseeded.TakeReseedShift(anchorIndex, out double reseedDelta))
+            rebase += reseedDelta;
+        if (rebase != 0.0)
         {
-            bool anchored = slots is not null && slots.Shift(vpId, reseedDelta);
-            shift += reseedDelta;
+            bool anchored = slots is not null && slots.Shift(vpId, rebase);
+            shift += rebase;
             if (FluentGpu.Scroll.Diag.ScrollProbe.Level != FluentGpu.Scroll.Diag.ProbeLevel.Off)
-                FluentGpu.Scroll.Diag.ScrollProbe.Extent((int)node.Raw.Index, 0, anchorIndex, reseedDelta, anchored,
+                FluentGpu.Scroll.Diag.ScrollProbe.Extent((int)node.Raw.Index, 0, anchorIndex, rebase, anchored,
                     FluentGpu.Scroll.Diag.ProbeExtentCause.Structural);
         }
 
