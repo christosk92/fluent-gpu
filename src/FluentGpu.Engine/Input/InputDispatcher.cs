@@ -1004,7 +1004,7 @@ public sealed partial class InputDispatcher
                     // must not drift under the pointer, and a scrollbar grab must not fight a live glide.
                     ScrollStopAt(e.PositionPx);
 
-                    if (TryScrollbarPointerDown(e.PositionPx))
+                    if (TryScrollbarPointerDown(e.PositionPx, out _))
                     {
                         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
                         _down = NodeHandle.Null;
@@ -1502,18 +1502,15 @@ public sealed partial class InputDispatcher
         // Scrollbar lane/thumb FIRST (mirror the mouse PointerDown order, lines feeding TryScrollbarPointerDown): the
         // scrollbar owns the contact — no content pan, no pressed visual, no press/click handlers; the per-PointerId
         // _scrollDragNode (and the bar's PointerOverScrollbar reveal) is set by TryScrollbarPointerDown and rides the slot.
-        if (TryScrollbarPointerDown(e.PositionPx))
+        if (TryScrollbarPointerDown(e.PositionPx, out var barOwner))
         {
             _down = NodeHandle.Null;
             // A touch lane PAGE-STEP (TryScrollbarPointerDown returned true but grabbed no thumb ⇒ _scrollDragNode null)
-            // can't hold the lane reveal a resting mouse cursor does — drop the PointerOver/PointerOverScrollbar it set so
-            // the bar fades on the idle timer instead of latching forever (no touch move ever clears it). A thumb grab
-            // keeps the reveal via _scrollDragNode and releases it in TouchUp.
+            // can't hold the lane reveal a resting mouse cursor does — drop the PointerOver/PointerOverScrollbar it set on
+            // the bar's owner so the bar fades on the idle timer instead of latching forever (no touch move ever clears
+            // it). A thumb grab keeps the reveal via _scrollDragNode and releases it in TouchUp.
             if (_scrollDragNode.IsNull)
-            {
-                var lane = ScrollableUnder(e.PositionPx);
-                if (!lane.IsNull) Chrome?.SetPointerOver((int)lane.Raw.Index, false, false);
-            }
+                Chrome?.SetPointerOver((int)barOwner.Raw.Index, false, false);
             return true;
         }
 
@@ -2865,8 +2862,8 @@ public sealed partial class InputDispatcher
 
     // ── scroll targets (hit-test bridges for ScrollRouter; scroll itself is a plan, posed as a transform) ──
 
-    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover and for resolving
-    /// the wheel/pan target).</summary>
+    /// <summary>The nearest scrollable viewport under the pointer (the wheel/pan target and the press-stop target; the
+    /// scrollbar lane and its hover reveal resolve through <see cref="ScrollbarLaneUnder"/>).</summary>
     public NodeHandle ScrollableUnder(Point2 p)
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
@@ -2988,11 +2985,39 @@ public sealed partial class InputDispatcher
         return NodeHandle.Null;
     }
 
+    /// <summary>The viewport whose scrollbar LANE is under <paramref name="p"/>: the nearest Scrollable self-or-ancestor of
+    /// the hit leaf whose bar can show (overflowing, not <c>SuppressBar</c>, no loading skeleton: the recorder's own bar
+    /// gate) and whose lane contains the point. The overlay bar paints over its WHOLE content, nested scrollers included,
+    /// so the walk climbs PAST a nearer scroller whose own lane is elsewhere (a paged shelf bleeding into the page gutter,
+    /// a full-width nested list) instead of letting it shadow the outer bar, and never hands a press to a bar nobody can
+    /// see. <paramref name="nearest"/> is the nearest Scrollable (the hover-reveal target when no lane is under the point).
+    /// One hit-test, no heap traffic.</summary>
+    private NodeHandle ScrollbarLaneUnder(Point2 p, out NodeHandle nearest, out ScrollbarMetrics m)
+    {
+        nearest = NodeHandle.Null;
+        for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Scrollable) == 0) continue;
+            if (nearest.IsNull) nearest = n;
+            if (!_scene.HasScroll(n)) continue;
+            ref ScrollState sc = ref _scene.ScrollRef(n);
+            if (sc.SuppressBar || sc.LoadingBarSuppressors > 0 || !TryGetScrollbarMetrics(n, out m)) continue;
+            var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+            float axis = AxisPos(local, in m);
+            if (axis >= 0f && axis < m.Axis && InScrollbarLane(local, in m)) return n;
+        }
+        m = default;
+        return NodeHandle.Null;
+    }
+
     private void UpdateScrollHover(Point2 p)
     {
         if (Chrome is null) return;
 
-        var next = ScrollableUnder(p);
+        // The bar whose lane is under the pointer owns the reveal even where a nearer scroller's content reaches under it;
+        // anywhere else the nearest viewport does.
+        var lane = ScrollbarLaneUnder(p, out var nearest, out _);
+        var next = lane.IsNull ? nearest : lane;
         if (next != _scrollHovered)
         {
             if (!_scrollHovered.IsNull && _scene.IsLive(_scrollHovered))
@@ -3001,14 +3026,7 @@ public sealed partial class InputDispatcher
         }
 
         if (!next.IsNull)
-            Chrome.SetPointerOver((int)next.Raw.Index, true, PointerInScrollbarLane(next, p));
-    }
-
-    private bool PointerInScrollbarLane(NodeHandle n, Point2 p)
-    {
-        if (!TryGetScrollbarMetrics(n, out var m)) return false;
-        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
-        return InScrollbarLane(local, in m);
+            Chrome.SetPointerOver((int)next.Raw.Index, true, !lane.IsNull);
     }
 
     /// <summary>Refresh a stationary drag after phase-7 edge auto-scroll and virtual catch-up. Reusing the ordinary
@@ -3178,13 +3196,12 @@ public sealed partial class InputDispatcher
     /// <summary>Diagnostic only: the topmost hit-test node at a point (the same walk wheel/click routing starts from).</summary>
     public NodeHandle DiagHitTest(Point2 p) => HitTestAny(p);
 
-    private bool TryScrollbarPointerDown(Point2 p)
+    private bool TryScrollbarPointerDown(Point2 p, out NodeHandle n)
     {
-        var n = ScrollableUnder(p);
-        if (n.IsNull || !TryGetScrollbarMetrics(n, out var m)) return false;
+        n = ScrollbarLaneUnder(p, out _, out var m);
+        if (n.IsNull) return false;
 
         var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
-        if (!InScrollbarLane(local, in m)) return false;
 
         // Scrollbar grab over a moving viewport stops it first: the thumb drag / track-click must own the offset, not
         // fight a live fling/glide. (Also reached from the touch path's
