@@ -1453,11 +1453,12 @@ public sealed partial class SceneStore : ISceneBackend
             if (!IsLive(h)) continue;
             _flags[h.Raw.Index] &= ~NodeFlags.LayoutDirty;
             NoteCaptureChanged((int)h.Raw.Index);   // P8: _flags is a captured column
-            // P4: mirror the SET-side chain walk in Mark() so AuxFlags.SubtreeLayoutDirty tracks exactly "some node
-            // in this subtree is layout-dirty THIS frame" — see SceneStore.Aux.cs for the full invariant.
-            ClearSubtreeLayoutDirtyChain((int)h.Raw.Index);
         }
         _layoutDirty.Clear();
+        // P4: clear every AuxFlags.SubtreeLayoutDirty bit Mark() set this frame, from the set-list rather than by walking
+        // up from the worklist entries. A freed or detached dirty node has no path back to its former ancestors - see
+        // SceneStore.Aux.cs.
+        ClearSubtreeLayoutDirtyBits();
     }
 
     // Frame-scoped transform-motion worklist (mirrors _layoutDirty): the nodes whose transform was written THIS frame

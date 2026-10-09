@@ -35,6 +35,11 @@ public sealed partial class SceneStore
         /// pass if a viewport lives anywhere below it, or that viewport silently stops being serviced. The Arrange
         /// early-out excludes any such ancestor.</summary>
         HasScrollDescendant = 1 << 3,
+        /// <summary>A layout-transparent boundary (component / provider / Show / SkelRegion / KeepAlive anchor) whose
+        /// mirrored rendered child is out of flow (<see cref="IsLayoutCollapsed"/>). Layout-only: unlike
+        /// <see cref="Collapsed"/> it leaves NodeFlags.Visible/HitTestVisible and the component's Hidden state alone (the
+        /// boundary's own Visible still owns those), it only removes the anchor from its parent's flow.</summary>
+        MirrorCollapsed = 1 << 4,
     }
 
     private byte[] _aux = System.Array.Empty<byte>();
@@ -65,6 +70,35 @@ public sealed partial class SceneStore
     /// <summary>True when the node is collapsed by the presence channel (<see cref="Dsl.Element.Visible"/> resolved
     /// false) — out of layout flow, unpainted, not hit-testable. Default false (every node starts visible).</summary>
     public bool IsCollapsed(NodeHandle h) => ((AuxFlags)_aux[h.Raw.Index] & AuxFlags.Collapsed) != 0;
+
+    /// <summary>True when the node is a layout-transparent boundary whose rendered child is out of flow
+    /// (<see cref="AuxFlags.MirrorCollapsed"/>).</summary>
+    public bool IsMirrorCollapsed(NodeHandle h) => ((AuxFlags)_aux[h.Raw.Index] & AuxFlags.MirrorCollapsed) != 0;
+
+    /// <summary>The layout collapse decision: collapsed by its own presence channel, or a transparent boundary whose
+    /// rendered child is. What <c>FlexLayout</c> skips.</summary>
+    public bool IsLayoutCollapsed(NodeHandle h)
+        => ((AuxFlags)_aux[h.Raw.Index] & (AuxFlags.Collapsed | AuxFlags.MirrorCollapsed)) != 0;
+
+    /// <summary>Equality-gated writer of <see cref="AuxFlags.MirrorCollapsed"/> (the reconciler's MirrorParticipation).
+    /// A flip zeroes the anchor's Bounds and marks it and its parent LayoutDirty, like <see cref="SetCollapsed"/>, but
+    /// touches no NodeFlags bit. Returns true iff it flipped.</summary>
+    public bool SetMirrorCollapsedIfChanged(NodeHandle h, bool collapsed)
+    {
+        if (IsMirrorCollapsed(h) == collapsed) return false;
+        int idx = (int)h.Raw.Index;
+        var cur = (AuxFlags)_aux[idx];
+        _aux[idx] = (byte)(collapsed ? (cur | AuxFlags.MirrorCollapsed) : (cur & ~AuxFlags.MirrorCollapsed));
+        if (collapsed)
+        {
+            ref RectF b = ref _bounds[idx];
+            b = new RectF(b.X, b.Y, 0f, 0f);
+        }
+        Mark(h, NodeFlags.LayoutDirty);
+        var parent = Parent(h);
+        if (!parent.IsNull && IsLive(parent)) Mark(parent, NodeFlags.LayoutDirty);
+        return true;
+    }
 
     /// <summary>Set the node's collapsed state (P1 presence). Composes <see cref="NodeFlags.Visible"/> and
     /// <see cref="NodeFlags.HitTestVisible"/> directly (collapsed ⇒ both cleared; else both set) so the recorder's
@@ -135,10 +169,21 @@ public sealed partial class SceneStore
     /// every other Arrange exit (the P1 collapsed short-circuit included) also goes through that one method.</summary>
     public void SetArrangedValid(NodeHandle h) => _aux[h.Raw.Index] |= (byte)AuxFlags.ArrangedValid;
 
+    // Every node whose SubtreeLayoutDirty bit MarkSubtreeLayoutDirtyChain set since the last ClearLayoutDirty: each
+    // node at most once, because the walk stops at an already-set bit. ClearLayoutDirty clears exactly this set. The
+    // old mirror walk climbed from each worklist entry's CURRENT parent, so a dirty node that was freed (skipped as
+    // dead) or detached (exit orphan, KeepAlive park: parent 0) before the clear stranded the bit on its former
+    // ancestors. Its former parent P also kept its own bit, because P's own clear walk starts at P's PARENT. The next
+    // mark under P then stopped at P, the ancestors read clean, and the Arrange early-out skipped the change.
+    private int[] _subtreeLayoutDirtySet = new int[64];
+    private int _subtreeLayoutDirtySetCount;
+
     /// <summary>Walk from <paramref name="idx"/>'s PARENT upward, setting <see cref="AuxFlags.SubtreeLayoutDirty"/>,
     /// stopping at the first ancestor that already has it set (everything above that point is therefore already
     /// known-dirty — the propagation from an earlier mark this frame already reached it and beyond). Called once
-    /// per <see cref="NodeFlags.LayoutDirty"/> 0→1 edge, from <see cref="Mark"/>.</summary>
+    /// per <see cref="NodeFlags.LayoutDirty"/> 0→1 edge, from <see cref="Mark"/>. Each newly set node is recorded in
+    /// <c>_subtreeLayoutDirtySet</c> so <see cref="ClearSubtreeLayoutDirtyBits"/> can clear it whatever later happens to
+    /// the node that was marked.</summary>
     private void MarkSubtreeLayoutDirtyChain(int idx)
     {
         for (int n = _parent[idx]; n != 0; n = _parent[n])
@@ -146,6 +191,9 @@ public sealed partial class SceneStore
             var bits = (AuxFlags)_aux[n];
             if ((bits & AuxFlags.SubtreeLayoutDirty) != 0) return;
             _aux[n] = (byte)(bits | AuxFlags.SubtreeLayoutDirty);
+            if (_subtreeLayoutDirtySetCount == _subtreeLayoutDirtySet.Length)
+                System.Array.Resize(ref _subtreeLayoutDirtySet, _subtreeLayoutDirtySetCount * 2);
+            _subtreeLayoutDirtySet[_subtreeLayoutDirtySetCount++] = n;
         }
     }
 
@@ -169,21 +217,20 @@ public sealed partial class SceneStore
         for (int n = _parent[idx]; n != 0; n = _parent[n]) _subtreeVersion[n]++;
     }
 
-    /// <summary>The mirror clear, run once per <c>ClearLayoutDirty</c> worklist entry: walk from
-    /// <paramref name="idx"/>'s PARENT upward clearing <see cref="AuxFlags.SubtreeLayoutDirty"/>, stopping at the
-    /// first ancestor that is already clear. Safe to stop early: <c>ClearLayoutDirty</c> processes EVERY node that
-    /// was LayoutDirty this frame (the worklist is exactly that set, by construction — see <see cref="Mark"/>), so
-    /// by the time this whole loop finishes, no ancestor chain can still have a live reason to stay set; an
-    /// already-clear ancestor found mid-walk means either it was never set, or an earlier iteration of this same
-    /// loop already cleared it (and, by the same stopping rule, everything above it too).</summary>
-    private void ClearSubtreeLayoutDirtyChain(int idx)
+    /// <summary>The mirror clear, run once by <c>ClearLayoutDirty</c> after its worklist loop: clears
+    /// <see cref="AuxFlags.SubtreeLayoutDirty"/> on exactly the nodes <see cref="MarkSubtreeLayoutDirtyChain"/> set since
+    /// the last clear. It does not walk from the worklist entries, so a dirty node that was freed or detached (exit
+    /// orphan, KeepAlive park) before the clear cannot strand the bit on its former ancestors. A recorded slot that was
+    /// freed and reallocated meanwhile is harmless to clear: no bit survives the frame boundary by definition, and
+    /// <see cref="CreateNode"/> already zeroed it.</summary>
+    private void ClearSubtreeLayoutDirtyBits()
     {
-        for (int n = _parent[idx]; n != 0; n = _parent[n])
+        for (int i = 0; i < _subtreeLayoutDirtySetCount; i++)
         {
-            var bits = (AuxFlags)_aux[n];
-            if ((bits & AuxFlags.SubtreeLayoutDirty) == 0) return;
-            _aux[n] = (byte)(bits & ~AuxFlags.SubtreeLayoutDirty);
+            int n = _subtreeLayoutDirtySet[i];
+            _aux[n] = (byte)((AuxFlags)_aux[n] & ~AuxFlags.SubtreeLayoutDirty);
         }
+        _subtreeLayoutDirtySetCount = 0;
     }
 
     /// <summary>True when <paramref name="h"/> itself is a scroll viewport OR has one anywhere below it. The Arrange
