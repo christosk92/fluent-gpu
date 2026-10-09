@@ -18,6 +18,7 @@ namespace FluentGpu.Engine.Tests.Scout;
 /// cancelled the whole gesture: the chip went home with the button still held and nothing could be dropped on the
 /// page the spring-load had just opened. A source FREED mid-drag already survives (DragController.SourceRecycled).
 /// </summary>
+[Collection(SerialTestCollection.Name)]   // builds AppHosts; HostDispatch.Current is process-static (see SerialTestCollection)
 public sealed class ParkedDragSourceTests
 {
     private sealed class Root : Component
