@@ -111,6 +111,7 @@ static partial class ControlsSuite
         ShelfKeyboardInvokeChecks(strings);
         ShelfLiftChecks(strings);
         BoundRowFocusChecks(strings);
+        BoundTabStopRecycleChecks(strings);
         CurrentClampChecks(strings);
         TypeaheadPrefixChecks(strings);
         PipsControlledChecks(strings);
