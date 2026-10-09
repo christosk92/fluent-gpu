@@ -407,8 +407,10 @@ public delegate BoxEl ItemContainerFactory(
 /// • TabNavigation="Once" (ItemsView.xaml:7): ONE roving tab stop — the keyboard-current container; tab-in with no
 ///   current lands on the selected item (Single mode) else the first focusable item (the GettingFocus redirect,
 ///   ItemsViewInteractions.cpp:645-721).
-/// • Typeahead: printable chars accumulate (1s reset) and jump to the next prefix-matching item from current+1,
-///   wrapping (the ListView typeahead shape; the plan's L3 requirement).
+/// • Typeahead: printable chars accumulate (1s reset) and jump to the first prefix-matching item, wrapping: a new search
+///   starts after the current item (repeated first letters cycle), an extended prefix starts AT it (the item that matched
+///   "ca" stays current on "cat"), and with no current item the scan starts at item 0 (the Win32 list typeahead shape;
+///   the plan's L3 requirement).
 /// • Selection is DECOUPLED from realization: SelectAll over 50k items stores one range; only the realized window
 ///   re-skins (this component subscribes to <c>SelectionModel.Version</c>).
 /// </summary>
@@ -1467,12 +1469,17 @@ public sealed class ItemsView : Component
             // list rule keeps it out of an empty typeahead buffer. Mid-prefix spaces still match ("Bell La…").
             if (e.Codepoint == 32 && buf.Length == 0) return;
             typeLastMs.Value = now;
+            bool extending = buf.Length > 0;   // read before the append: a surrogate pair is one keystroke, two units
             buf.Append(char.ConvertFromUtf32(e.Codepoint));
             string prefix = buf.ToString();
-            int start = Math.Max(0, current.Peek());
-            for (int k = 1; k <= count; k++)
+            // Win32 list typeahead: a NEW search starts after the current item so repeated first letters cycle the matches;
+            // an EXTENDED prefix starts AT the current item, so "cat" keeps "Cat" instead of hopping to "Catalog" (and back
+            // on the next key). No current item ⇒ scan from item 0 (max(0, −1)+1 used to skip it).
+            int cur = current.Peek();
+            int first = cur < 0 ? 0 : extending ? cur : cur + 1;
+            for (int k = 0; k < count; k++)
             {
-                int i = (start + k) % count;
+                int i = (first + k) % count;
                 if (!ItemEnabled(i)) continue;   // disabled items can't take current/selection
                 if (textOf(i).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 {
