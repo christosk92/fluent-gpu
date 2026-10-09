@@ -1146,6 +1146,10 @@ public sealed partial class SliceRecorder
         int stencils = 0;   // stencil (path) clips open: nothing inside them is a known opaque rect
         RectF top = RectF.Infinite, round = default;
         float roundR = 0f;
+        // The span-index entries open at each op (pre-order, properly nested, at most SpanIndexDepth deep): every footprint
+        // below grows them, so the per-tile replay's entry cull keeps whatever a tile's want counted (GrowIndex).
+        Span<int> openEntries = stackalloc int[SpanIndexDepth];
+        int openCount = 0, nextEntry = 0;
         while (pos + sizeof(int) <= bytes.Length)
         {
             var op = (DrawOp)MemoryMarshal.Read<int>(bytes[pos..]);
@@ -1229,7 +1233,11 @@ public sealed partial class SliceRecorder
                         // transparent hit plate) paints nothing: it must not stretch the segment's painted bounds, or a
                         // full-window plate makes its segment hold a window of empty tiles. Its bytes stay in the stream and
                         // its content scan below is unchanged; the day it becomes visible its bytes change and it is scanned in.
-                        if (!b.IsEmpty && !InvisibleFill(op, p)) segBounds = Union(segBounds, b);
+                        if (!b.IsEmpty && !InvisibleFill(op, p))
+                        {
+                            segBounds = Union(segBounds, b);
+                            GrowIndex(s, pos, in b, openEntries, ref openCount, ref nextEntry);
+                        }
                         // An ADDITIVE fill (SetBlend, colour ONE/ONE, alpha ZERO/ONE) leaves the tile's alpha as it found it:
                         // over the transparent clear it composites as page + glow, so it hides nothing beneath it.
                         if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && !_cBlendAdditive && OpaqueFill(op, p, in top, out RectF o)
@@ -1288,6 +1296,26 @@ public sealed partial class SliceRecorder
         _scanVideoCount[s] = videos;
         _scanFadeCount[s] = fades;
         _scanInline[s] = inline;
+    }
+
+    /// <summary>Grow every span-index entry of slot <paramref name="s"/> holding the op at <paramref name="pos"/> by its
+    /// footprint <paramref name="b"/>. An entry is recorded with its subtree's BOXES, but a tile's want counts each op by
+    /// its <see cref="SliceOpBounds"/> footprint — a glyph run's reaches a whole halo past its node box — and the per-tile
+    /// replay skips an entry that misses the tile: an entry short of a footprint drops a run the tile counted and freezes
+    /// the cut-off ink into a tile marked valid. Pre-order entries nest, so the ones open at <paramref name="pos"/> are a
+    /// stack (<paramref name="open"/>) the ascending scan pops and pushes.</summary>
+    private void GrowIndex(int s, int pos, in RectF b, Span<int> open, ref int openCount, ref int next)
+    {
+        SliceSpan[] index = _index[s];
+        int count = _indexCount[s];
+        while (openCount > 0 && index[open[openCount - 1]].ByteStart + index[open[openCount - 1]].ByteLength <= pos) openCount--;
+        for (; next < count && index[next].ByteStart <= pos; next++)
+            if (index[next].ByteStart + index[next].ByteLength > pos && openCount < open.Length) open[openCount++] = next;
+        for (int k = 0; k < openCount; k++)
+        {
+            ref SliceSpan en = ref index[open[k]];
+            en = en with { Bounds = Union(en.Bounds, b) };
+        }
     }
 
     /// <summary>How far past a clip's DIP rect the backend's scissor can reach: it rounds the clip OUT to whole device px
@@ -1716,6 +1744,31 @@ public sealed partial class SliceRecorder
 
     private static RectF ClipAnd(in RectF clip, in RectF r) => clip.IsInfinite ? r : clip.Intersect(r);
 
+    /// <summary>The video holes of a slice the band line cut away whole, and of every slice below it, posed under the clip that cut
+    /// them (window DIP) with no erase: nothing of the subtree composites, but the video placement follows <see cref="PosedHoles"/>,
+    /// and a token missing there leaves the video at the UI's published rect, whose viewport knows only ClipsToBounds ancestors.</summary>
+    private void PoseCutHoles(int slot, SceneRecordingSnapshot scene, float accDx, float accDy, float parentAccDx, float parentAccDy, in RectF clip)
+    {
+        ScanSlot(slot);
+        for (int v = 0; v < _scanVideoCount[slot]; v++)
+        {
+            ref ScanVideo sv = ref _scanVideos[slot][v];
+            if (sv.SurfaceId <= 0 || _posedHoleCount >= _posedHoles.Length) continue;
+            int at = _posedHoleCount++;
+            _posedHoles[at] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = clip };
+            _posedMeta[at] = new PosedMeta { PlanIdx = -1, Slot = slot, Seg = sv.Seg, After = Offset(sv.After, accDx, accDy), Inline = sv.Order == VideoEraseOrder.AfterSegment };
+        }
+        int marks = _scanMarkCount[slot];
+        for (int k = 0; k < marks; k++)
+        {
+            CompositeSliceCmd m = _scanMarks[slot][k].Cmd;
+            int child = Find(m.NodeIndex, m.Gen, m.Sub);
+            if (child < 0 || _recs[child].Visited) continue;
+            ChildGeometry(child, in m, scene, accDx, accDy, parentAccDx, parentAccDy, in clip, out float cdx, out float cdy, out _, out _, out RectF cc);
+            PoseCutHoles(child, scene, cdx, cdy, accDx, accDy, in cc);
+        }
+    }
+
     private static RectF GrowTop(in RectF r, float by) => new(r.X, r.Y - by, r.W, r.H + by);
 
     private void PlaceChild(int parentSlot, in ScanMark mark, SceneRecordingSnapshot scene, float accDx, float accDy,
@@ -1787,8 +1840,9 @@ public sealed partial class SliceRecorder
         c.LastStickyWc = stickyWc;
         // Fully cut away (the band line has passed the slice's far edge, its own or an enclosing sticky group's): nothing of
         // it composites this turn, exactly as the paint route culled the subtree an empty clip left nothing of.
-        if (sticky && (childClip.IsEmpty || placed.Intersect(childClip).IsEmpty)) return;
-        if (!cull.IsInfinite && placed.Intersect(cull).IsEmpty) return;
+        // Its video holes are still posed under the clip that cut them (PosedHoles): the video behind them must hide at the line too.
+        if (sticky && (childClip.IsEmpty || placed.Intersect(childClip).IsEmpty)) { PoseCutHoles(child, scene, cdx, cdy, accDx, accDy, in childClip); return; }
+        if (!cull.IsInfinite && placed.Intersect(cull).IsEmpty) { PoseCutHoles(child, scene, cdx, cdy, accDx, accDy, ClipAnd(childClip, cull)); return; }
 
         // The marker's group layer, translated to its posed offset. A WhileStuck fade (CompositeSliceFlags.FadeWhileStuck)
         // exists only on a turn whose sticky clip is engaged: released, the slice places with no layer at all.
@@ -1843,8 +1897,13 @@ public sealed partial class SliceRecorder
             MixRect(ref _compositeHash, layer.Layer.DeviceRect);
             Mix(ref _compositeHash, cdx); Mix(ref _compositeHash, cdy); MixDist(ref _compositeHash, in dist);
             bool liftThumbs = ChromeOverLayer(in layer.Layer) && ThumbsTrail(child);
+            int posedFrom = _posedHoleCount;
             PlaceSlot(child, scene, cdx, cdy, accDx, accDy, clip, clip, float.NaN, 0f,
                 sticky ? ClipAnd(cull, Offset(stickyWc, cdx, cdy)) : cull, round, roundR, default, default, default, liftThumbs, ref repaint);
+            // The group's band line cuts its surface where it is drawn, so every hole it encloses shows only below it: the video
+            // behind each takes the line too (its erase stays unclipped by it, inside the surface).
+            if (sticky)
+                for (int h = posedFrom; h < _posedHoleCount; h++) _posedHoles[h].EffClip = ClipAnd(_posedHoles[h].EffClip, childClip);
             ref Plan gc = ref NewPlan(PlanKind.GroupClose);
             gc.Slot = child;
             if (liftThumbs) PlaceTrailingThumbs(child, scene, cdx, cdy, accDx, accDy, in childClip, in cull, in round, roundR, in dist, ref repaint);
