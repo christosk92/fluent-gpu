@@ -253,6 +253,16 @@ public sealed class ScrollHandle
             double p = prev.Dest;
             if (p > max || p < 0.0) next = PlanAuthor.Immediate(in next, _nowSec(), Math.Clamp(p, 0.0, max));
         }
+        if (next.Kind is not (MotionKind.Idle or MotionKind.Drag) && next.Count > 0 && next.Dest - max >= feel.SettleEpsilonDip)
+        {
+            // A motion still heading past the new max (content shrank under it: rows measured smaller than their estimate
+            // as an End-key glide or a fling reveals them) is re-aimed at the new end from where it is. Its arcs would
+            // converge on an end the content no longer has: a blank band past the last row, and a plan the settle rule
+            // (measured against the clamped destination) never rests. A structurally settled tail rests there already.
+            double t = AnchorAt(_nowSec());
+            next.Eval(t, out _, out bool settled);
+            if (!settled) next = PlanAuthor.Reaim(in next, t, in feel);
+        }
         _slots.Write(Vp, in next);
     }
 

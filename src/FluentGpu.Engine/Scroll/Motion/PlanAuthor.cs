@@ -194,8 +194,15 @@ public static class PlanAuthor
         if (prev.Clock == ContactClock.Present && cap > 0.0 && Math.Abs(v0) > cap) v0 = v0 > 0.0 ? cap : -cap;
         // The RAW contact position the Follow plan shows at tNow (its rubber band maps it the same way this plan will).
         double p0 = prev.Ring.Eval(tNow, prev.Clock, out _);
-        double tEnd = tNow;
+        return Coast(in prev, tNow, p0, v0, in feel);
+    }
 
+    /// <summary>A released coast from RAW position <paramref name="p0"/> at velocity <paramref name="v0"/> from
+    /// <paramref name="tEnd"/> (the shape <see cref="FollowEnd"/> releases): past an edge under the rubber band, the spring
+    /// back to it; below <see cref="MotionFeel.FlingMinVelocity"/>, a Hold in place; else a Decay, ended at the edge it
+    /// crosses by a Spring (rubber band) or a Hold.</summary>
+    private static ScrollPlan Coast(in ScrollPlan prev, double tEnd, double p0, double v0, in MotionFeel feel)
+    {
         if (prev.Overpan == OverpanPolicy.RubberBand && (p0 < prev.Min || p0 > prev.Max))
             return OverpanRelease(in prev, tEnd, p0, v0, in feel);
 
@@ -231,6 +238,20 @@ public static class PlanAuthor
 
         return new ScrollPlan(decayClamped, second, default, default, 2, prev.Vp, prev.Gen, prev.Seq + 1, prev.Min, prev.Max,
             prev.ViewportExtent, prev.RubberC, prev.Clock, prev.Overpan, MotionKind.Fling, default);
+    }
+
+    /// <summary>Re-aims a moving plan whose destination the extent no longer holds — content shrank under it: an End-key
+    /// glide or a fling's edge spring authored against an estimated end, rows measured smaller as they are revealed — at
+    /// the edge, continuing from its position and velocity at <paramref name="tNow"/> (no jump, no velocity drop). A
+    /// rubber-band plan (a fling) coasts on from its raw position exactly as a release there would (<see cref="Coast"/>);
+    /// every other plan glides to its clamped destination. The plan keeps its <see cref="ScrollPlan.Kind"/> where it keeps
+    /// moving (a fling stays a fling, a wheel glide stays user-driven).</summary>
+    public static ScrollPlan Reaim(in ScrollPlan prev, double tNow, in MotionFeel feel)
+    {
+        if (prev.Overpan != OverpanPolicy.RubberBand)
+            return Glide(in prev, tNow, prev.Dest, in feel) with { Kind = prev.Kind };
+        double raw = (prev with { Overpan = OverpanPolicy.None }).Eval(tNow, out double v, out _);
+        return Coast(in prev, tNow, raw, v, in feel);
     }
 
     /// <summary>The floor of the stopped-finger window (<see cref="StoppedAfterS"/>): two reports of a 100 Hz-class
