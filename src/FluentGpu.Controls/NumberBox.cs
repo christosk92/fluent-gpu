@@ -325,7 +325,8 @@ public sealed class NumberBox : Component
         }
 
         // WinUI UpdateSpinButtonEnabled: NaN → both off; wrap or non-clamping mode → both on; else gate at the bounds.
-        bool spinEnabled = !double.IsNaN(current);
+        // A disabled box disables its spin pair too (WinUI's template inherits IsEnabled; our Disabled bit does not).
+        bool spinEnabled = IsEnabled && !double.IsNaN(current);
         bool upEnabled = spinEnabled &&
             (IsWrapEnabled || ValidationMode != NumberBoxValidationMode.InvalidInputOverwritten || current < Math.Max(Minimum, Maximum));
         bool downEnabled = spinEnabled &&
@@ -445,6 +446,7 @@ public sealed class NumberBox : Component
 
         // ── Focus: validate-on-blur + the Compact popup opens on focus / closes on blur (NumberBox.cpp:414–438) ──
         var fieldFocused = UseRef(false);
+        var liveField = UseRef<EditableText?>(null);   // the mounted field: its props froze at mount (see the effect below)
         void OnFocusChanged(bool focused)
         {
             fieldFocused.Value = focused;
@@ -484,8 +486,20 @@ public sealed class NumberBox : Component
                 if (!updatingText.Value && !fieldFocused.Value
                     && e.LastChangeReason == TextChangeReason.ProgrammaticChange) ValidateInput();
             };
+            liveField.Value = e;
             return e;
         });
+
+        // The field is a propless Embed.Comp, so its RightAffix + IsEnabled froze at mount: an empty box that gains a value,
+        // a step off a bound or a runtime disable would leave the mount-time spin pair (OnClick = null) and input gate.
+        // Push the rebuilt pair + live flag into the live instance on a flag flip only (a plain value change keeps the
+        // old affix, whose step closures read the same signals).
+        UseEffect(() =>
+        {
+            if (liveField.Value is not { } f) return;
+            f.SetEnabled(IsEnabled);
+            f.SetRightAffix(affix);
+        }, (upEnabled ? 1 : 0) | (downEnabled ? 2 : 0) | (IsEnabled ? 4 : 0));
 
         // The field wrapper: the Compact popup's anchor node + the keyboard stepping handler (Up/Down/PageUp/PageDown
         // bubble out of the single-line EditableText to here).

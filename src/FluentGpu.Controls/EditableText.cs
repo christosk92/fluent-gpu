@@ -167,6 +167,17 @@ public sealed class EditableText : Component
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }
 
+    /// <summary>Flip the enabled state on the LIVE instance. Props freeze at mount, so a composer whose enabled flag is
+    /// live (NumberBox/ComboBox re-push theirs through <c>EnabledProps</c>) forwards it here: the render epoch re-renders the
+    /// root (input gate, Focusable, Disabled chrome) and the display epoch re-evaluates BindColor's disabled foreground.</summary>
+    internal void SetEnabled(bool enabled)
+    {
+        if (IsEnabled == enabled) return;
+        IsEnabled = enabled;
+        if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
+        BumpDisplay();
+    }
+
     // ── new WinUI-parity surface ──────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Maximum length in UTF-16 code units; 0 = unlimited (WinUI <c>MaxLength</c>).</summary>
     public int MaxLength;
@@ -268,7 +279,7 @@ public sealed class EditableText : Component
     private InputHooks? _hooks;
     private Signal<string>? _text;
     private Signal<int>? _epoch;             // display epoch: bumped on doc-only changes (IME provisional, sanitize)
-    private Signal<int>? _affixEpoch;        // affix epoch: SetRightAffix re-renders the field (affix mount/unmount)
+    private Signal<int>? _affixEpoch;        // render epoch: SetLeft/RightAffix + SetEnabled re-render the field on a live instance
     private Signal<bool>? _empty;            // doc-empty flag; flips re-render (delete-button mount/unmount) only
     private FluentGpu.Signals.FloatSignal? _scroll;   // horizontal caret-follow; TransformBind shifts the text wrapper by -value
     private FluentGpu.Signals.FloatSignal? _scrollY;  // vertical caret-follow (AcceptsReturn only)
@@ -308,7 +319,7 @@ public sealed class EditableText : Component
         _epoch = epoch;
         var affixEpoch = UseSignal(0);
         _affixEpoch = affixEpoch;
-        _ = affixEpoch.Value;   // subscribe: SetRightAffix on the live instance re-renders the affix lane
+        _ = affixEpoch.Value;   // subscribe: SetRightAffix/SetEnabled on the live instance re-render the field
         var scroll = UseFloatSignal(0f);
         _scroll = scroll;
         var scrollY = UseFloatSignal(0f);

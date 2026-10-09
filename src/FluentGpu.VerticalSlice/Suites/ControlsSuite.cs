@@ -8250,6 +8250,62 @@ static partial class ControlsSuite
                 mountQuiet && stepped && noEcho, $"mountQuiet={mountQuiet} stepped={stepped} val={sig.Value:0.##} changes={changes} noEcho={noEcho} buttons={buttons.Count}");
         }
 
+        // gate.ctl.numberbox.live-affix — NumberBox hands its inline spin pair + IsEnabled to a propless EditableText, so
+        // both froze at mount: an empty box that gains a value must spin, a box mounted at its Minimum must step back down
+        // to it, and a runtime disable must gate the text field + the spin pair (the editable ComboBox's text part too).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("numberbox-live-affix", new Size2(360, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var empty = new Signal<double>(double.NaN);    // CreateWithSpinners' default: an empty box
+            var atMin = new Signal<double>(0);
+            var enabled = new Signal<bool>(true);
+            var comboIdx = new Signal<int>(0);
+            string[] comboItems = ["a", "b"];
+            var spin = new NumberBox.NumberBoxOptions
+            {
+                Minimum = 0, Maximum = 10, SmallChange = 1,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Direction = 1, Gap = 8f, Padding = Edges4.All(12f), Children =
+                [
+                    NumberBox.Create(value: empty, options: spin),
+                    NumberBox.Create(value: atMin, options: spin with { IsEnabled = enabled.Value }),
+                    ComboBox.Create(comboItems, comboIdx, editable: true, isEnabled: enabled.Value),
+                ] },
+            });
+            host.RunFrame();
+            void Settle() { for (int i = 0; i < 3; i++) host.RunFrame(); }
+            // Inline spin cells in tree order: [empty up, empty down, atMin up, atMin down] (the ComboBox chevron follows).
+            void Spin(int cell)
+            {
+                var b = Roles(host.Scene, AutomationRole.Button);
+                if (b.Count >= 4) ClickNode(host, window, b[cell]);
+                Settle();
+            }
+            empty.Value = 5;                                    // the box gains a value (typing "5" + Enter writes the same signal)
+            Settle();
+            Spin(0);
+            bool emptySpins = empty.Value == 6;
+            Spin(2);                                            // up off the Minimum: 0 → 1
+            bool steppedUp = atMin.Value == 1;
+            Spin(3);                                            // down was disabled at mount (value == Minimum)
+            bool backToMin = steppedUp && atMin.Value == 0;
+            enabled.Value = false;
+            Settle();
+            var fields = Roles(host.Scene, AutomationRole.Text); // EditableText roots: [empty, atMin, combo part]
+            bool fieldGated = fields.Count >= 3 && (host.Scene.Flags(fields[1]) & NodeFlags.Disabled) != 0;
+            bool comboGated = fields.Count >= 3 && (host.Scene.Flags(fields[2]) & NodeFlags.Disabled) != 0;
+            Spin(2);                                            // a disabled box must not step
+            bool spinGated = atMin.Value == 0;
+            Check("gate.ctl.numberbox.live-affix NumberBox: the inline spin pair + IsEnabled reach the mounted field (an empty box spins once it has a value, a box mounted at Minimum steps back down, a runtime disable gates field + spins; the editable ComboBox part too)",
+                emptySpins && backToMin && fieldGated && comboGated && spinGated,
+                $"empty={empty.Value:0.##} atMin={atMin.Value:0.##} steppedUp={steppedUp} fieldGated={fieldGated} comboGated={comboGated} spinGated={spinGated} fields={fields.Count}");
+        }
+
         // gate.ctl.bind.splitview-pane — SplitView.Create(isPaneOpen: signal, onOpenChanged): light dismiss writes the
         // pane-open signal false + fires onOpenChanged once; a programmatic re-open does NOT echo onOpenChanged.
         {

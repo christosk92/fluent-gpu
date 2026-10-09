@@ -183,6 +183,9 @@ public sealed class ComboBox : Component
         var text = Text ?? fallbackText;
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
+        // The editable TextBox part is a propless Embed.Comp (its IsEnabled froze at mount): forward the live flag so a
+        // runtime disable gates the text field too, not only the outer chrome.
+        UseEffect(() => _edit?.SetEnabled(IsEnabled), IsEnabled);
 
         // ── Editable-mode search state (ComboBox_Partial.cpp m_searchResultIndex/m_searchResultIndexSet) ────────
         var searchIdx = UseRef(-1);
