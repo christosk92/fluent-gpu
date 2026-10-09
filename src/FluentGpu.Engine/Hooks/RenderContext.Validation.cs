@@ -178,8 +178,9 @@ public sealed partial class RenderContext
     /// <see cref="Effect"/> subscribes to the value signal; on each change it (re)arms a single reused
     /// <see cref="Timer"/> for the debounce — so the per-keystroke path on the UI thread does no allocation. When the
     /// timer fires (off the UI thread) it cancels any stale request and runs the check, then posts the result back via
-    /// the UI poster. Out-of-order completion is race-immune: the result lands in an equality-gated signal the field's
-    /// error memo merges. The hook is always invoked (even with no async) so the cell sequence stays stable.
+    /// the UI poster. A result is applied only if the value has not changed since its check started (a newer keystroke
+    /// re-armed the debounce and its own check will land), so an older value's verdict never lands on a newer value.
+    /// The hook is always invoked (even with no async) so the cell sequence stays stable.
     /// </summary>
     private void UseAsyncValidation<T>(Signal<T> value, FieldOptions<T> opts, Signal<MsgId> server, Signal<bool> validating, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
@@ -213,6 +214,7 @@ public sealed partial class RenderContext
         private readonly Timer _timer;
         private CancellationTokenSource? _cts;
         private T _latest = default!;
+        private int _gen;                              // bumped per value change on the UI thread; a check tagged older is stale
         private bool _primed;
 
         public AsyncFieldState(FieldOptions<T> opts, Signal<MsgId> server, Signal<bool> validating, Action<Action> post)
@@ -231,6 +233,7 @@ public sealed partial class RenderContext
         public void OnValueChanged(T v)
         {
             _latest = v;
+            Volatile.Write(ref _gen, _gen + 1);       // publishes _latest to Fire's acquire read of _gen
             if (!_primed) { _primed = true; return; }
             _validating.Value = true;                 // equality-gated; cleared when the result (or an error) lands
             _timer.Change(_debounceMs, Timeout.Infinite);
@@ -240,11 +243,12 @@ public sealed partial class RenderContext
         {
             _cts?.Cancel();
             var cts = _cts = new CancellationTokenSource();   // off the UI thread / off the paint window
+            int gen = Volatile.Read(ref _gen);                // before _latest: a newer value only makes this check stale
             T v = _latest;
-            _ = RunAsync(v, cts);
+            _ = RunAsync(v, gen, cts);
         }
 
-        private async Task RunAsync(T v, CancellationTokenSource cts)
+        private async Task RunAsync(T v, int gen, CancellationTokenSource cts)
         {
             try
             {
@@ -252,15 +256,17 @@ public sealed partial class RenderContext
                 if (cts.IsCancellationRequested) return;
                 _post(() =>
                 {
-                    if (cts.IsCancellationRequested) return;
+                    // A keystroke since this check started means the verdict belongs to an older value; the re-armed
+                    // debounce runs the newer check, which clears the validating flag.
+                    if (cts.IsCancellationRequested || gen != _gen) return;
                     _server.Value = result;
                     _validating.Value = false;
                 });
             }
             // Only OUR cancel (a newer keystroke / unmount) is dropped; a check that times out on its own deadline
-            // must still clear the validating flag.
+            // must still clear the validating flag (unless a newer value's check is already pending).
             catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* superseded by a newer keystroke */ }
-            catch { _post(() => _validating.Value = false); }
+            catch { _post(() => { if (gen == _gen) _validating.Value = false; }); }
         }
 
         public void Dispose() { _cts?.Cancel(); _timer.Dispose(); }
