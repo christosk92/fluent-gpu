@@ -120,7 +120,7 @@ sealed class AcrylicBudgetProbeInner : Component
         };
     }
 
-static class OverlaySuite
+static partial class OverlaySuite
 {
     public static void Run(StringTable strings)
     {
@@ -149,6 +149,7 @@ static class OverlaySuite
         TeachingTipPlacementChecks(strings);
         MenuFlyoutStyleChecks(strings);
         SplitButtonStyleChecks(strings);
+        OverlayContentResizeChecks(strings);
     }
 
     static void PlacementChecks()

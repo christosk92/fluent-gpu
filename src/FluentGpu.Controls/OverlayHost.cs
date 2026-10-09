@@ -614,9 +614,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
     internal const long ClosingDeadlineMs = 2000;
 
     /// <summary>Host phase 7.1: remove closing entries whose retained tracks have settled, before recording the frame —
-    /// and follow LIVE anchors: an open popup whose anchor node moved since its last placement re-places against the
-    /// cached measure (the WinUI slider thumb tooltip tracks the scrubbing thumb; an anchored flyout rides a reflow).
-    /// No OverlayHost re-render, no open-animation reseed; silent (zero writes) while the anchor is still.</summary>
+    /// and follow LIVE anchors: an open popup whose anchor node moved, or whose own content re-laid it out at a new size,
+    /// since its last placement re-places (the WinUI slider thumb tooltip tracks the scrubbing thumb; an anchored flyout
+    /// rides a reflow; an upward menu that gains a row stays on its anchor). No OverlayHost re-render, no open-animation
+    /// reseed; silent (zero writes) while the anchor and the popup size are still.</summary>
     public void AfterAnimations()
     {
         if (Scene is not { } scene || Anim is not { } anim) return;
@@ -709,11 +710,20 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 continue;
             }
             if (resolve != AnchorResolve.Live) continue;
-            if (MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
+            // The popup's OWN laid-out size is the other placement input. Content that re-renders while open (a device
+            // roster gaining a row, a suggestion list filtering per keystroke) re-solves the wrapper at a new size without
+            // re-rendering this host, and a placement computed for the old height grows an upward popup DOWN over its
+            // anchor (or leaves a gap above it when it shrinks). A 0×0 pass is not a measure.
+            var wb = scene.Bounds(e.WrapperNode);
+            bool resized = wb.W > 0f && wb.H > 0f
+                && (MathF.Abs(wb.W - e.MeasuredW) >= 0.5f || MathF.Abs(wb.H - e.MeasuredH) >= 0.5f);
+            if (!resized
+                && MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
                 && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f)
                 continue;
 
             e.LastAnchorRect = aRect;
+            if (resized) { e.MeasuredW = wb.W; e.MeasuredH = wb.H; }
             var popupSize = new Size2(e.MeasuredW, e.MeasuredH);
             bool windowed = e.PopupWindowToken >= 0;
             RectF container = ViewportRect;
