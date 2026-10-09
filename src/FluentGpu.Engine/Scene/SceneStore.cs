@@ -1219,7 +1219,7 @@ public sealed partial class SceneStore : ISceneBackend
         slot.Count = rects.Length;
     }
 
-    /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).
+    /// <summary>First live, enabled, visible, attached node whose keyboard-accelerator chord matches — cold keydown path, O(high).
     /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible.</summary>
     public NodeHandle FindAccelerator(int key, KeyModifiers mods)
     {
@@ -1229,13 +1229,14 @@ public sealed partial class SceneStore : ISceneBackend
             var h = new NodeHandle(new Handle((uint)i, _gen[i]));
             if (!IsLive(h)) continue;
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (!IsAttachedToRoot(i)) continue;
             if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
             return h;
         }
         return NodeHandle.Null;
     }
 
-    /// <summary>First live, enabled, visible node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).
+    /// <summary>First live, enabled, visible, attached node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).
     /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible.</summary>
     public NodeHandle FindAccessKey(char key)
     {
@@ -1245,10 +1246,23 @@ public sealed partial class SceneStore : ISceneBackend
             var h = new NodeHandle(new Handle((uint)i, _gen[i]));
             if (!IsLive(h)) continue;
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (!IsAttachedToRoot(i)) continue;
             if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
             return h;
         }
         return NodeHandle.Null;
+    }
+
+    /// <summary>Is this chord owner linked under <see cref="Root"/>? A KeepAlive-parked page, a parked virtual-list slot and
+    /// an exit orphan stay live with their handlers but are detached, so without this a hidden page's Ctrl+R (lower slot
+    /// index, first match) shadows the shown page's same chord.</summary>
+    private bool IsAttachedToRoot(int idx)
+    {
+        int root = (int)Root.Raw.Index;
+        if (root == 0) return false;
+        for (int n = idx; n != 0; n = _parent[n])
+            if (n == root) return true;
+        return false;
     }
 
     public bool HasDynamicText => _dynamicTextCount > 0;
