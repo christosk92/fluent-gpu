@@ -123,10 +123,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// cancel races a claimed decode or its completed-but-unapplied pixels, and is reclaimed by the Pump drain. A
     /// queued-then-canceled request leaves none. (Census cadence only: Count takes the bucket locks.)</summary>
     public int CanceledPending => _canceled.Count;
-    /// <summary>Requests enqueued in the priority lanes but not yet claimed by a worker — O(1) census. NOTE: not
-    /// decremented for a cancel-before-claim id (TryClaim dequeues-and-skips it without a successful claim), so this
-    /// over-counts after queued cancels until those lane entries are skipped — soft-backpressure heuristic only, never
-    /// a drain/idle condition.</summary>
+    /// <summary>Requests enqueued in the priority lanes but not yet claimed or canceled — O(1) census of <c>_reqs</c>
+    /// membership: Begin increments, and whichever of a worker's claim or <see cref="Cancel"/> removes the request
+    /// decrements. Stale lane entries (a promotion's duplicate, a canceled id) are not counted. It feeds the off-screen
+    /// backpressure gate in <see cref="Begin"/>.</summary>
     public int QueueDepth => Volatile.Read(ref _queued);
     /// <summary>Pending request descriptors awaiting claim — census of the <c>_reqs</c> map (bucket-locked Count).</summary>
     public int RequestCount => _reqs.Count;
@@ -195,6 +195,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         if (_reqs.TryRemove(id, out _))
         {
+            // This TryRemove and TryClaim's are the only two ways out of _reqs, and exactly one of them wins an id, so
+            // each pays back Begin's increment. Without it every row recycled before a worker claimed it leaked +1 into
+            // _queued until the backpressure gate refused every off-screen request for the rest of the session.
+            Interlocked.Decrement(ref _queued);
             Complete(id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0);
             return;
         }
