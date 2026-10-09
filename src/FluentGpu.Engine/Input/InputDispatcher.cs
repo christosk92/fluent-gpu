@@ -3824,6 +3824,7 @@ public sealed partial class InputDispatcher
         var target = _focusables[next];
         if ((_scene.Flags(target) & NodeFlags.Disabled) != 0) { SetFocus(NodeHandle.Null); return; }   // the disabled anchor was the only stop
         SetFocus(target, visual: true);   // keyboard focus → show the focus ring
+        BringFocusedIntoView();
     }
 
     /// <summary>Directional (arrow/XY) focus movement: from the focused node, pick the nearest focusable in
@@ -3859,7 +3860,27 @@ public sealed partial class InputDispatcher
             float score = primary + cross * 2f;   // bias toward staying on the same row/column
             if (score < bestScore) { bestScore = score; best = n; }
         }
-        if (!best.IsNull) SetFocus(best, visual: true);
+        if (best.IsNull) return;
+        SetFocus(best, visual: true);
+        BringFocusedIntoView();
+    }
+
+    /// <summary>A keyboard/gamepad focus move brings the newly focused node into view (WinUI: a keyboard focus change
+    /// raises BringIntoView on the focused element). It does a minimal glide in the nearest scrolling ancestor. Each
+    /// enclosing scroller then brings the inner viewport into view in turn, so a card tabbed to inside a horizontal shelf
+    /// on a scrolled page lands on screen on both axes. Reads <see cref="Focused"/> AFTER SetFocus, so a GotFocus handler
+    /// that re-moved focus wins. Pointer focus never scrolls: the pressed control is already under the pointer. Uses
+    /// layout-space geometry (SceneScrollExtensions), valid in dispatch. Scalar walk, zero-alloc.</summary>
+    private void BringFocusedIntoView()
+    {
+        if (_focused.IsNull || !_scene.IsLive(_focused)) return;
+        var inner = _focused;
+        for (var vp = _scene.Parent(inner); !vp.IsNull; vp = _scene.Parent(vp))
+        {
+            if (!_scene.HasScroll(vp)) continue;
+            _scene.BringIntoView(vp, inner);   // NaN align = minimal move, no-op when already fully visible; Glide
+            inner = vp;
+        }
     }
 
     /// <summary>First focusable within <paramref name="root"/>'s subtree (tab order) — for focus-trap entry / menus.</summary>
