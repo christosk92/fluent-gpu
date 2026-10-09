@@ -5222,6 +5222,11 @@ public sealed partial class TreeReconciler
                     // HandlerMask — "is it its own interaction scope?" — and the handler-mask writes have not run yet.
                     seedHoverOnMount = isMount;
                 }
+                // A declarative WhileHover follows its container the same way (the hover cascade's third leg), but owns
+                // no InteractionAnim row, so it opts into the deferred seed on its own: a decorative child mounting under
+                // an already-hovered card would otherwise sit at rest, since no new container edge fires until the
+                // pointer leaves and re-enters. Its SetInteractTargets row (below) is stashed before the seed block runs.
+                if (b.WhileHover is not null) seedHoverOnMount = isMount;
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Direction = b.Direction;
