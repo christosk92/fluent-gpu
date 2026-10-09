@@ -323,7 +323,8 @@ public sealed class ScrollHandle
 
     /// <summary>A wheel notch (<paramref name="notches"/> signed notch units — fractional for a hi-res wheel) at device
     /// time <paramref name="tNotch"/>. The curve is anchored at the pose floor when frames have already been posed past
-    /// the stamp (<see cref="PlanAuthor.WheelNotch"/>).</summary>
+    /// the stamp (<see cref="PlanAuthor.WheelNotch"/>). Snap points never re-target a notch: the engine snaps FLINGS only (the
+    /// <c>SnapSpec</c> contract), so a notch over a snap grid travels exactly what it travels without one.</summary>
     public void Wheel(double tNotch, double notches)
     {
         if (_slots is null) return;
@@ -332,16 +333,11 @@ public sealed class ScrollHandle
         MotionFeel feel = ScrollTunables.Current;
         double floor = _shownFloorSec();
         double t0 = floor > tNotch ? floor : tNotch;
+        // Never snapped. A notch shorter than half a snap interval, re-targeted onto the NEAREST grid value, authored a
+        // zero-length plan back to where it started; that plan settles at once, so the next notch re-based instead of
+        // accumulating and a page shelf never moved however fast the wheel spun. A control that wants a wheel to REST on
+        // the grid re-snaps after the settle through the programmatic path (PagedShelf's post-settle re-snap).
         ScrollPlan next = PlanAuthor.WheelNotch(in prev, tNotch, notches, feel, ref _accel, floor);
-        if (!_snap.IsEmpty)
-        {
-            // Mandatory snap points: the notch's destination is re-targeted onto the grid in the notch's direction (WinUI
-            // ScrollView snap points), shaped by the same wheel segment rule from the same anchor.
-            double from = prev.Eval(t0, out _, out _);
-            double snapped = Math.Clamp(SnapTargets.Target(next.Dest, in _snap, impulse: false, from), next.Min, next.Max);
-            if (Math.Abs(snapped - next.Dest) > 1e-6)
-                next = next with { S0 = PlanAuthor.WheelSeg(in prev, t0, snapped, in feel) };
-        }
         Publish(in next, t0);
     }
 

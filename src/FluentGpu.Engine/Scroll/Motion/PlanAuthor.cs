@@ -102,8 +102,8 @@ public static class PlanAuthor
     }
 
     /// <summary>The wheel's <see cref="SegKind.Cubic"/> from what <paramref name="prev"/> shows at <paramref name="t0"/>
-    /// to <paramref name="dest"/> — the one place a wheel segment is shaped (a notch, and a snap re-target of its
-    /// destination). It starts at <c>prev</c>'s position AND velocity at <c>t0</c>, so a re-plan is C1: the velocity
+    /// to <paramref name="dest"/> — the one place a wheel segment is shaped (every notch; a wheel is never snapped). It
+    /// starts at <c>prev</c>'s position AND velocity at <c>t0</c>, so a re-plan is C1: the velocity
     /// carried in the notch's direction (0 from rest, or against it — a reversal turns at once) blends onto the
     /// front-loaded kick <c>1.5R/D</c> over <see cref="MotionFeel.WheelRiseS"/>. When the carried velocity already
     /// exceeds the kick (a slower notch late in a fast spin, or a destination clamped at an edge), the same cubic is
