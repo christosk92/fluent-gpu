@@ -30,11 +30,23 @@ public sealed class GroupDeltaTests
 
     private static ulong Build(CompositeItem[] items, TilePlacement[] placed, uint[] serials, ref GroupEntry[] entries, out int count,
         ulong[]? keys = null, PixelRect[]? regions = null, int[]? surfaces = null)
+        => Describe(items, placed, serials, ref entries, out count, out _, keys, regions, surfaces);
+
+    private static ulong Describe(CompositeItem[] items, TilePlacement[] placed, uint[] serials, ref GroupEntry[] entries, out int count,
+        out ulong key, ulong[]? keys = null, PixelRect[]? regions = null, int[]? surfaces = null)
     {
         var frame = new CompositeFrame(in Info, default, default, default, placed, items, default);
         var s = new Serials { Of = serials };
-        return GroupDelta.Build(in frame, 0, in Region, ref s, keys ?? new ulong[items.Length], regions ?? new PixelRect[items.Length],
-            surfaces ?? new int[items.Length], fresh: 0xF2E5UL, ref entries, out count);
+        return GroupDelta.Describe(in frame, 0, in Region, ref s, keys ?? new ulong[items.Length], regions ?? new PixelRect[items.Length],
+            surfaces ?? new int[items.Length], ref entries, out count, out key);
+    }
+
+    private static ulong Key(CompositeItem[] items, TilePlacement[] placed, uint[] serials,
+        ulong[]? keys = null, PixelRect[]? regions = null, int[]? surfaces = null)
+    {
+        GroupEntry[] e = new GroupEntry[4];
+        Describe(items, placed, serials, ref e, out _, out ulong key, keys, regions, surfaces);
+        return key;
     }
 
     // two lines in one segment's two tiles (the second tile paints a 400×100 line at its top)
@@ -57,6 +69,25 @@ public sealed class GroupDeltaTests
         Assert.Equal(1, n);
         // tile (0,1) sits at y 512 of the item (window y 612 → surface y 512); its paint rect 20..420 × 0..100
         Assert.Equal(new PixelRect(20, 512, 420, 612), dirty[0]);
+    }
+
+    [Fact]
+    public void ATileReRasteredOutsideTheClip_KeepsTheContentKey_AndDiffsAsNoChange()
+    {
+        // the clip ends at window y 300: tile (0,1) (window y 612..712) is placed but scissored away entirely, so its
+        // re-raster cannot change a pixel of the group surface. The key used to sign it anyway: the retained surface missed,
+        // the zero diff refused the repair and the whole group re-rendered (and a Debug build failed an assert on it).
+        CompositeItem[] items = [Group(1), Tiles(7, 100f, 100f, clip: new RectF(100f, 100f, 500f, 300f))];
+        GroupEntry[] prev = new GroupEntry[4], cur = new GroupEntry[4];
+        Build(items, Placed, [0u, 5u, 9u], ref prev, out int na);
+        Build(items, Placed, [0u, 5u, 10u], ref cur, out int nb);   // tile (0,1) re-rastered
+        Assert.Equal(0, GroupDelta.Diff(prev.AsSpan(0, na), cur.AsSpan(0, nb), 500L * 800, stackalloc PixelRect[8]));
+        Assert.Equal(Key(items, Placed, [0u, 5u, 9u]), Key(items, Placed, [0u, 5u, 10u]));
+
+        // tile (0,0) paints inside the clip: its re-raster moves both
+        Assert.NotEqual(Key(items, Placed, [0u, 5u, 9u]), Key(items, Placed, [0u, 6u, 9u]));
+        Build(items, Placed, [0u, 6u, 9u], ref cur, out nb);
+        Assert.Equal(1, GroupDelta.Diff(prev.AsSpan(0, na), cur.AsSpan(0, nb), 500L * 800, stackalloc PixelRect[8]));
     }
 
     [Fact]
@@ -143,17 +174,45 @@ public sealed class GroupDeltaTests
     }
 
     [Fact]
-    public void APreparedSurfaceWithNoKey_SignsFresh_AndIsAlwaysRepaired()
+    public void APreparedSurfaceWithNoKey_MakesTheGroupUncacheable_OnlyWhereItPaints()
     {
         CompositeItem blurred = Tiles(9, 300f, 300f) with { Kind = CompositeKind.Region, BlurSigma = 4f };
         CompositeItem[] items = [Group(1), blurred];
-        PixelRect[] regions = [default, new PixelRect(300, 300, 500, 400)];
-        var frame = new CompositeFrame(in Info, default, default, default, default, items, default);
-        var s = new Serials { Of = [] };
-        GroupEntry[] a = new GroupEntry[4], b = new GroupEntry[4];
-        GroupDelta.Build(in frame, 0, in Region, ref s, [0, 0], regions, [-1, 3], fresh: 1, ref a, out int na);
-        GroupDelta.Build(in frame, 0, in Region, ref s, [0, 0], regions, [-1, 3], fresh: 2, ref b, out int nb);
-        Assert.Equal(1, GroupDelta.Diff(a.AsSpan(0, na), b.AsSpan(0, nb), 500L * 800, stackalloc PixelRect[8]));
+        // re-drawn from scratch (key 0) inside the region: nothing can tell its pixels apart from last turn's
+        Assert.Equal(0UL, Key(items, [], [], keys: [0, 0], regions: [default, new PixelRect(300, 300, 500, 400)], surfaces: [-1, 3]));
+        // the same surface prepared wholly outside the region paints nothing into the group: the group stays cacheable
+        Assert.NotEqual(0UL, Key(items, [], [], keys: [0, 0], regions: [default, new PixelRect(700, 950, 800, 990)], surfaces: [-1, 3]));
+    }
+
+    [Fact]
+    public void ANestedSurfaceOutsideItsScissor_MovesNeitherTheKeyNorTheDiff()
+    {
+        // the nested group sits below the outer item's clip (window y 300): its content key changing cannot reach a pixel
+        CompositeItem nested = Group(0) with { Clip = new RectF(100f, 100f, 500f, 200f) };
+        CompositeItem[] items = [Group(1), nested];
+        PixelRect[] regions = [default, new PixelRect(100, 400, 400, 500)];
+        GroupEntry[] prev = new GroupEntry[4], cur = new GroupEntry[4];
+        Describe(items, [], [], ref prev, out int na, out ulong k0, keys: [0, 0x1111], regions: regions, surfaces: [-1, 6]);
+        Describe(items, [], [], ref cur, out int nb, out ulong k1, keys: [0, 0x2222], regions: regions, surfaces: [-1, 6]);
+        Assert.Equal(0, GroupDelta.Diff(prev.AsSpan(0, na), cur.AsSpan(0, nb), 500L * 800, stackalloc PixelRect[8]));
+        Assert.Equal(k0, k1);
+        // moved into the clip, the same key change is a repair of exactly its rect, and a new key
+        PixelRect[] inside = [default, new PixelRect(100, 150, 400, 250)];
+        Describe(items, [], [], ref prev, out na, out k0, keys: [0, 0x1111], regions: inside, surfaces: [-1, 6]);
+        Describe(items, [], [], ref cur, out nb, out k1, keys: [0, 0x2222], regions: inside, surfaces: [-1, 6]);
+        Span<PixelRect> dirty = stackalloc PixelRect[8];
+        Assert.Equal(1, GroupDelta.Diff(prev.AsSpan(0, na), cur.AsSpan(0, nb), 500L * 800, dirty));
+        Assert.Equal(new PixelRect(0, 50, 300, 150), dirty[0]);
+        Assert.NotEqual(k0, k1);
+    }
+
+    [Fact]
+    public void AGroupMovedUnderAFixedViewportClip_KeepsItsKey()
+    {
+        // a shelf scrolled rigidly by 10 px under a viewport whose clip covers the whole region: the key is relative
+        CompositeItem[] at0 = [Group(1), Tiles(7, 100f, 100f, clip: new RectF(0f, 0f, 1200f, 1000f))];
+        CompositeItem[] at10 = [Group(1), Tiles(7, 100f, 100f, clip: new RectF(0f, -10f, 1200f, 1000f))];
+        Assert.Equal(Key(at0, Placed, [0u, 5u, 9u]), Key(at10, Placed, [0u, 5u, 9u]));
     }
 
     [Fact]
@@ -185,20 +244,19 @@ public sealed class GroupDeltaTests
     [Fact]
     public void NoChangeFound_MeansTheContentKeyIsTheSame()
     {
-        CompositeItem[] items = [Group(1), Tiles(7, 100f, 100f, clip: new RectF(100f, 100f, 500f, 800f))];
-        var frame = new CompositeFrame(in Info, default, default, default, Placed, items, default);
-        foreach (uint[] serials in new[] { new uint[] { 0u, 5u, 9u }, new uint[] { 0u, 5u, 10u }, new uint[] { 0u, 6u, 9u } })
+        foreach (float clipH in new[] { 800f, 200f, 50f, 0.5f })
+        foreach (uint[] serials in new[] { new uint[] { 0u, 5u, 9u }, new uint[] { 0u, 5u, 10u }, new uint[] { 0u, 6u, 9u }, new uint[] { 0u, 6u, 10u } })
         {
+            CompositeItem[] items = [Group(1), Tiles(7, 100f, 100f, clip: new RectF(100f, 100f, 500f, clipH))];
+            var frame = new CompositeFrame(in Info, default, default, default, Placed, items, default);
             GroupEntry[] prev = new GroupEntry[4], cur = new GroupEntry[4];
             var s0 = new Serials { Of = [0u, 5u, 9u] };
             var s1 = new Serials { Of = serials };
-            ulong shape0 = GroupDelta.Build(in frame, 0, in Region, ref s0, new ulong[2], new PixelRect[2], new int[2], 1, ref prev, out int na);
-            ulong shape1 = GroupDelta.Build(in frame, 0, in Region, ref s1, new ulong[2], new PixelRect[2], new int[2], 1, ref cur, out int nb);
+            ulong shape0 = GroupDelta.Describe(in frame, 0, in Region, ref s0, new ulong[2], new PixelRect[2], new int[2], ref prev, out int na, out ulong k0);
+            ulong shape1 = GroupDelta.Describe(in frame, 0, in Region, ref s1, new ulong[2], new PixelRect[2], new int[2], ref cur, out int nb, out ulong k1);
             Assert.Equal(shape0, shape1);
             int n = GroupDelta.Diff(prev.AsSpan(0, na), cur.AsSpan(0, nb), 500L * 800, stackalloc PixelRect[8]);
-            ulong k0 = GroupCacheKey.Compute(in frame, 0, in Region, ref s0, new ulong[2], out bool c0);
-            ulong k1 = GroupCacheKey.Compute(in frame, 0, in Region, ref s1, new ulong[2], out bool c1);
-            Assert.True(c0 && c1);
+            Assert.True(k0 != 0UL && k1 != 0UL);
             Assert.Equal(n == 0, k0 == k1);
         }
     }
