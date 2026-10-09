@@ -502,6 +502,12 @@ public sealed class RenderThread : IDisposable
         // re-run is not a new busy tick — it would back off for a second on every such wake), or, near the end of the
         // tick, open the slot just after the next vblank and present THIS tick's frame there: the late phase the skip escaped.
         if (tickSeq != 0 && tickSeq == _catchUpTickSeq) { _turnKind = LedgerTurnKind.CatchUp; return motion; }
+        // A stamp older than s_tickMaxAgeQpc is not this turn's vblank: the loop disarms the clock while no motion is live, so its
+        // last tick is from before that park. A turn whose motion just came back on it (an unpark or un-occlusion: HasOwnRenderMotion
+        // re-anchors every row at now) would predict its present time from that stamp and pose every row at its anchor - a loop at
+        // phase 0, a fade rewound - for one refresh. Anchor the prediction on now instead (TryGetDisplayTick's rule); the seq still
+        // marks this tick spent, so the next turn waits for a current one.
+        if (tickQpc != 0 && turnStart - tickQpc > s_tickMaxAgeQpc) tickQpc = 0;
         _turnTickQpc = tickQpc;
         _turnLedgerTickSeq = tickSeq;
         _turnLedgerTickQpc = tickQpc;
