@@ -52,9 +52,17 @@ public sealed partial class AnimEngine
     /// <summary>On an input hover/press/focus edge: update the state, resolve the active target by fixed priority
     /// (press &gt; focus &gt; hover &gt; rest), and spring the gesture channels to it. Releasing the top state animates
     /// to the next writer's target — or, with nothing active, back to the node's AUTHORED rest pose (never identity;
-    /// see <see cref="MotionTarget"/>'s rest-pose-relative contract). No-op for a node without stashed targets.</summary>
+    /// see <see cref="MotionTarget"/>'s rest-pose-relative contract). No-op for a node without stashed targets.
+    /// <para>A hover edge reads the node's EFFECTIVE hover, the same guard <see cref="SetHover"/> applies: the dispatcher
+    /// fires a leaf-off edge on a card whose pointer moved onto its own nested button (the card is still HoverWithin),
+    /// and an off edge for the HoverWithin→Hovered handoff when the pointer moves back up onto the card. Neither left the
+    /// card, so neither may spring its While* pose back to rest.</para></summary>
     public void ApplyInteractionEdge(NodeHandle node, InteractKind kind, bool on)
-        => ApplyInteractionEdgeSelf(node, kind, on);
+    {
+        if (kind == InteractKind.Hover && !on && !node.IsNull && _scene.IsLive(node)
+            && (_scene.Flags(node) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0) on = true;
+        ApplyInteractionEdgeSelf(node, kind, on);
+    }
 
     /// <summary>The worker behind <see cref="ApplyInteractionEdge"/> — split out so the hover cascade
     /// (<c>AnimScheduler.Hover.SetHoverDescendants</c>) can drive a non-boundary descendant's own While* row directly,
