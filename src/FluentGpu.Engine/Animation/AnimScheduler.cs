@@ -36,6 +36,12 @@ public sealed partial class AnimEngine
     // The previous tick's step — for a StartPending row, the step of the frame that HELD it at t=0 (its seed frame):
     // the reference its first real advance is capped against (PendingStartStep).
     private float _prevTickStepMs;
+    // ADDITIVE BASE (CompositeOp.Add/Accumulate rows), per slot: the channel value the row composed ONTO last frame —
+    // the Replace rows' output, or the node's un-animated value when the channel has none. PASS2 folds over the node's
+    // CURRENT paint, which already holds last frame's additive contribution, so a channel no Replace row rewrites goes
+    // back to this base first; without it a lone additive row compounded every frame (Tx += v per tick). NaN = not
+    // composed yet. Grown at seed only (StampAdditiveSeed from Get), never in a frame phase.
+    private float[] _additiveBase = new float[64];
 
     public AnimEngine(SceneStore scene) => _scene = scene;
 
@@ -130,8 +136,8 @@ public sealed partial class AnimEngine
                 if (justSeeded) r.Flags &= ~AnimFlags.JustSeeded;
                 else if (!r.Has(AnimFlags.Paused)) r.ElapsedMs += stepMs;   // PAUSED (SetPaused): its clock stands still too
                 // HELD (AnimEngine.SetHeld): the time runs on, the value stays where it stands — released, the row resumes
-                // at the phase the clock has reached, like the render thread's hold.
-                if (r.Has(AnimFlags.Hold)) continue;
+                // at the phase the clock has reached, like the render thread's hold. A PAUSED row stands still as well.
+                if (r.Has(AnimFlags.Hold | AnimFlags.Paused)) continue;
                 if (r.Kind == GenKind.Spring)
                 {
                     float rd = RestDeltaFor(r.Channel);
@@ -163,6 +169,7 @@ public sealed partial class AnimEngine
 
             Accum acc = Accum.FromPaint(in _scene.Paint(node));
             bool any = false;
+            uint replaced = 0;   // channels a Replace row rewrote this frame (bit = AnimChannel; the enum has < 32 entries)
             // Replace first, then additive — order can't clobber the base.
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
@@ -170,12 +177,31 @@ public sealed partial class AnimEngine
                 if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
                     || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
                 acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: true); any = true;
+                replaced |= 1u << (int)r.Channel;
             }
+            // Additive base: a channel no Replace row rewrote goes back to the base its additive rows composed onto last
+            // frame (_additiveBase), and a row that settled THIS frame folds into that base (its end value holds, like a
+            // settled Replace row's). Every additive row then stamps the base, and the live ones fold on top.
+            uint restored = 0;
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
-                if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
-                    || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
+                if (!IsFoldedAdditive(in r)) continue;
+                uint bit = 1u << (int)r.Channel;
+                if ((restored & bit) == 0)
+                {
+                    restored |= bit;
+                    float b = (replaced & bit) == 0 ? AdditiveBaseOf(s, r.Channel) : float.NaN;
+                    if (!float.IsNaN(b)) acc.Fold(r.Channel, b, replace: true);
+                }
+                if (r.Has(AnimFlags.Done)) { acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: false); any = true; }
+            }
+            for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
+                if (IsFoldedAdditive(in _slab.At(s))) _additiveBase[s] = acc.Composable(_slab.At(s).Channel);
+            for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref AnimValue r = ref _slab.At(s);
+                if (!IsFoldedAdditive(in r) || r.Has(AnimFlags.Done)) continue;
                 acc.Fold(r.Channel, Posed(in r, r.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: false); any = true;
             }
             if (any) Compose(node, in acc);
@@ -393,7 +419,10 @@ public sealed partial class AnimEngine
         r.To = to; r.Position = start; r.Velocity = initialVelocity; r.ElapsedMs = 0f;
         r.Gen = Generators.BakeSpring(in spring, x0: start - to, v0: initialVelocity);
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
-        r.Flags = (r.Flags & ~(AnimFlags.Done | AnimFlags.Loop)) | AnimFlags.JustSeeded;
+        // A spring runs on wall-time: drop a Drive() row's signal source with its flag (as Keyframes/SeedEased do), or the
+        // census reads it as signal-woken (never timer-due) and the compositor refuses it — it would stall mid-flight.
+        r.Flags = (r.Flags & ~(AnimFlags.Done | AnimFlags.Loop | AnimFlags.Driven)) | AnimFlags.JustSeeded;
+        r.DrivenSrc = AnimValue.WallClock;
         _slab.BumpVersion();   // Get may retarget an existing slot in place (no slab call) — keep the census memo honest
     }
 
@@ -461,7 +490,7 @@ public sealed partial class AnimEngine
     }
 
     /// <summary>Pause (or resume) the row on <paramref name="node"/>/<paramref name="channel"/> IN PLACE: a
-    /// <see cref="SetHeld"/> whose CLOCK stops too (<see cref="AnimFlags.Paused"/>). While paused its value stays the pixel on
+    /// <see cref="SetHeld"/> whose CLOCK stops too (<see cref="AnimFlags.Paused"/>, its own flag beside a hold's). While paused its value stays the pixel on
     /// screen and it asks for no frames; resumed, it continues from the exact phase it stopped at, so an ambient loop (a
     /// drift, a Ken Burns pan) paused for minutes picks up where it stood instead of jumping to wherever its clock would
     /// have run. No-op without a live row. Re-seeding the channel clears the pause. Resuming releases only a pause, never a
@@ -472,8 +501,7 @@ public sealed partial class AnimEngine
         if (s < 0) return;
         ref AnimValue r = ref _slab.At(s);
         if (r.Has(AnimFlags.Paused) == paused) return;
-        if (paused) r.Flags |= AnimFlags.Hold | AnimFlags.Paused;
-        else r.Flags &= ~(AnimFlags.Hold | AnimFlags.Paused);
+        if (paused) r.Flags |= AnimFlags.Paused; else r.Flags &= ~AnimFlags.Paused;
         _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
     }
 
@@ -514,8 +542,41 @@ public sealed partial class AnimEngine
         // The ONLY place the cadence side arrays grow — the same seed-time path that grows the slab's own _rows
         // (never a frame phase), and the write that stops a recycled slot inheriting its predecessor's cadence.
         ResetCadence(added);
+        if (additive) StampAdditiveSeed(added);   // the row's additive base starts un-composed (PASS2 stamps it)
         StampCompositorSeed(added, newInstance: true, explicitFrom: true);
         return added;
+    }
+
+    /// <summary>An additive row PASS2 folds: live (not parked) on a NodePaint channel. Additive rows are never compositor
+    /// rows (<see cref="IsCompositorRowStatic"/>), so the render thread never owns one.</summary>
+    private static bool IsFoldedAdditive(in AnimValue r)
+        => r.Has(AnimFlags.Additive) && !r.Has(AnimFlags.Parked) && !IsSideTableChannel(r.Channel);
+
+    /// <summary>The base the additive rows on <paramref name="ch"/> composed onto last frame: the first stamp from
+    /// <paramref name="first"/> (the channel's first additive row on the node's chain) on. A row seeded since is NaN, and
+    /// <see cref="AnimValueSlab.Add"/> PREPENDS, so the older rows keep their order and all carry the same stamp.
+    /// NaN = none yet (the channel's first frame composes onto the current paint, which holds no additive contribution).</summary>
+    private float AdditiveBaseOf(int first, AnimChannel ch)
+    {
+        for (int s = first; s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            if (r.Channel == ch && IsFoldedAdditive(in r) && !float.IsNaN(_additiveBase[s])) return _additiveBase[s];
+        }
+        return float.NaN;
+    }
+
+    /// <summary>Grow <see cref="_additiveBase"/> to cover <paramref name="slot"/> and mark the fresh additive row
+    /// un-composed. Called from <see cref="Get"/> ONLY — a seed-time path, never a frame phase.</summary>
+    private void StampAdditiveSeed(int slot)
+    {
+        if (slot >= _additiveBase.Length)
+        {
+            int cap = _additiveBase.Length == 0 ? 64 : _additiveBase.Length;
+            while (cap <= slot) cap *= 2;
+            Array.Resize(ref _additiveBase, cap);
+        }
+        _additiveBase[slot] = float.NaN;
     }
 
     private static float RestDeltaFor(AnimChannel ch)
@@ -607,5 +668,13 @@ public sealed partial class AnimEngine
                 case AnimChannel.BlurSigma: Blur = add ? Blur + v : v; break;
             }
         }
+
+        /// <summary>The value <see cref="Fold"/> composes onto for <paramref name="ch"/> (add / multiply). NaN for a channel
+        /// a fold always overwrites — it has no additive base.</summary>
+        public readonly float Composable(AnimChannel ch) => ch switch
+        {
+            AnimChannel.TranslateX => Tx, AnimChannel.TranslateY => Ty, AnimChannel.ScaleX => Sx, AnimChannel.ScaleY => Sy,
+            AnimChannel.Rotation => Rot, AnimChannel.Opacity => Op, AnimChannel.BlurSigma => Blur, _ => float.NaN,
+        };
     }
 }
