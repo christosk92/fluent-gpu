@@ -2147,6 +2147,10 @@ public sealed partial class AppHost : IDisposable
                 // from the tick that woke us — animations and scroll poses are both evaluated THERE, not at "now".
                 double presentSec = RenderPresentSec(RenderTurnTickQpc());
                 double nowMs = presentSec * 1000.0;
+                int powerCap = Volatile.Read(ref _renderPowerCapFps);
+                _renderAnimations.CeilingPeriodMs = powerCap > 0
+                    ? (float)CadencePacing.LatticePeriodMs(1000.0 / powerCap, RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency)
+                    : 0f;
                 bool fresh = rf.PublishSeq != _lastRecordedScene;
                 if (fresh)
                 {
@@ -2782,6 +2786,8 @@ public sealed partial class AppHost : IDisposable
         _gpuBoundSampleSequence = 0;
         _gpuBoundLastSample = default;
         _gpuGovernorEngaged = false;
+        _governorCeilingFps = 0;
+        PublishRenderMotionCeiling();
     }
 
     private void RememberDeviceLostFrame(int clicks, bool keepAlive, bool resized, bool reconciled, bool layoutNeeded,
@@ -2923,10 +2929,37 @@ public sealed partial class AppHost : IDisposable
     /// 2026-10-03; no other reference engine throttles on focus) nor for motion it guesses is "ambient".
     /// <para>While set, every frame the loop would produce for motion — cadence rows, one-shot transitions, loops,
     /// <c>FrameClock.Tick</c> subscribers, image reveals, timers — is paced to at most this rate on the vblank lattice,
-    /// uniformly, so nothing runs smooth beside something choppy (<see cref="CadencePacing.FlooredWaitMs"/>). Scroll,
-    /// drag, touch and auto-repeat are never capped (<see cref="PowerCapNeverPace"/>), and input still DISPATCHES the
-    /// moment it arrives — only frame production waits. UI thread only.</para></summary>
-    public int PowerCapFps { get; set; }
+    /// uniformly, so nothing runs smooth beside something choppy (<see cref="CadencePacing.FlooredWaitMs"/>). Motion the
+    /// render thread owns (compositor rows: a marquee, a spinner, a fade) is held to the same ceiling there, on the same
+    /// lattice (<see cref="RenderCompositorAnimations.CeilingPeriodMs"/>). The adaptive GPU governor's pace
+    /// (<c>GpuGovernorFps</c>) reaches that render-owned motion the same way while it paces the loop: the slower of the two
+    /// wins. Scroll, drag, touch and auto-repeat are never capped (<see cref="PowerCapNeverPace"/>), and input still
+    /// DISPATCHES the moment it arrives — only frame production waits. UI thread only.</para></summary>
+    public int PowerCapFps
+    {
+        get => _powerCapFps;
+        set { _powerCapFps = value; PublishRenderMotionCeiling(); }
+    }
+    private int _powerCapFps;
+    // UI->render mirror of the EFFECTIVE motion ceiling: the slower of PowerCapFps and the governor's pace while the governor
+    // paces this loop (0 = none). Render-owned compositor rows are ticked by the render thread alone and never reach
+    // RecommendedWaitMsCore, so the ceiling travels to them here (RenderCompositorAnimations.CeilingPeriodMs).
+    private int _renderPowerCapFps;
+    // The governor's half of that ceiling, as RecommendedWaitMsCore last decided it (0 = the governor is not pacing).
+    private int _governorCeilingFps;
+
+    /// <summary>Publish the effective motion ceiling to the render thread: the slower of PowerCapFps and _governorCeilingFps
+    /// where both are set, otherwise whichever one is. UI thread only; the render turn reads it with a Volatile.Read.</summary>
+    private void PublishRenderMotionCeiling()
+    {
+        int power = Math.Max(0, _powerCapFps);
+        int governor = _governorCeilingFps;
+        int ceiling = power > 0 && governor > 0 ? Math.Min(power, governor) : Math.Max(power, governor);
+        Volatile.Write(ref _renderPowerCapFps, ceiling);
+    }
+
+    /// <summary>The render thread's effective motion ceiling in fps (0 = none), as the render turn reads it. Test seam.</summary>
+    internal int RenderMotionCeilingFps => Volatile.Read(ref _renderPowerCapFps);
 
     /// <summary>The frames <see cref="PowerCapFps"/> never paces: the GPU governor's interaction set
     /// (<see cref="GpuGovernorWake.NeverPace"/>) minus the frame-clock poller bit — a per-frame subscriber is exactly the
@@ -4228,6 +4261,15 @@ public sealed partial class AppHost : IDisposable
             return parkedWait < 0 ? dueMs : Math.Min(parkedWait, dueMs);
         }
         WakeReasons r = ComputeWakeReasons();
+        // The governor's half of the render thread's ceiling (_renderPowerCapFps), decided HERE, before the early returns below:
+        // a render-owned loop wakes no UI bit (r == None), so it would otherwise never see the governor's pace. Same gate as the
+        // governor branch further down, and the value is re-decided every call, so it clears the moment the governor releases.
+        int governorCeiling = AdaptiveGpuPacing && adaptiveGpuWaitEligible && GpuGovernorWake.MayPace(r) ? GpuGovernorFps : 0;
+        if (governorCeiling != _governorCeilingFps)
+        {
+            _governorCeilingFps = governorCeiling;
+            PublishRenderMotionCeiling();
+        }
         if (r == WakeReasons.None) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
         if ((r & ~(WakeReasons.BakedBlurPending | WakeReasons.DynamicText)) == 0)

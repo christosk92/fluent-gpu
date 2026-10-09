@@ -64,11 +64,17 @@ public sealed class RenderCompositorAnimations
     /// publish is what completes UI lifecycles, and a skipped record skips that publish too.</summary>
     public bool ChangedThisTick { get; private set; }
     public ReadOnlySpan<CompositorAnimationPose> Feedback => _feedback.AsSpan(0, _count);
+    /// <summary>The host's power ceiling (<c>AppHost.PowerCapFps</c>) as an interval between advances, in ms; 0 = none. The
+    /// host sets it on this thread before each turn. One gate for the whole set, not a per-row period: every row advances
+    /// on the SAME turns, so rows adopted on different ticks cannot interleave into a faster combined present rate.</summary>
+    public float CeilingPeriodMs { get; set; }
+    private double _lastCeilingAdvanceMs = double.NaN;
+    private bool _ceilingHeld;   // this turn falls inside the ceiling interval: every row holds (CeilingHolds, once per Tick/Adopt)
 
     public void Pause(double nowMs)
     {
         if (_paused) return;
-        for (int i = 0; i < _count; i++) Evaluate(ref _states[i], nowMs, _tickIntervalMs);
+        for (int i = 0; i < _count; i++) Evaluate(ref _states[i], nowMs, _tickIntervalMs, ceilingHeld: false);
         _pausedAtMs = nowMs;
         _paused = true;
         HasActive = false;
@@ -92,6 +98,7 @@ public sealed class RenderCompositorAnimations
     public void Adopt(CompositorAnimationSnapshot desired, SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
+        _ceilingHeld = CeilingHolds(nowMs);
         double capturedAtMs = _paused ? Math.Min(desired.CapturedAtMs, _pausedAtMs) : desired.CapturedAtMs;
         SceneRecordingSnapshot.Grow(ref _nextStates, desired.Count);
         SceneRecordingSnapshot.Grow(ref _feedback, desired.Count);
@@ -117,11 +124,11 @@ public sealed class RenderCompositorAnimations
                 if (parking && state.Desired.Revision == entry.Revision)
                 {
                     state.Done = state.Desired.Row.Has(AnimFlags.Done);
-                    Evaluate(ref state, capturedAtMs, _tickIntervalMs);
+                    Evaluate(ref state, capturedAtMs, _tickIntervalMs, ceilingHeld: false);
                 }
                 // A row this publication HOLDS stays at the value it last posed — the pixel on screen — so it is not
                 // advanced to `now` with its previous desired state first (that would move it one more step past it).
-                else if (!entry.Row.Has(AnimFlags.Hold | AnimFlags.Paused) || state.Desired.Revision != entry.Revision) Evaluate(ref state, nowMs, _tickIntervalMs);
+                else if (!entry.Row.Has(AnimFlags.Hold | AnimFlags.Paused) || state.Desired.Revision != entry.Revision) Evaluate(ref state, nowMs, _tickIntervalMs, _ceilingHeld);
                 if (state.Desired.Revision != entry.Revision)
                 {
                     float current = state.Value, velocity = state.Velocity;
@@ -198,7 +205,7 @@ public sealed class RenderCompositorAnimations
         (_states, _nextStates) = (_nextStates, _states);
         (_indices, _nextIndices) = (_nextIndices, _indices);
         _count = count;
-        Tick(scene, nowMs);
+        TickCore(scene, nowMs);
     }
 
     /// <summary>Queue a node whose pose reverted to its authored value. Grows on the Adopt path only (like
@@ -212,6 +219,12 @@ public sealed class RenderCompositorAnimations
     public void Tick(SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
+        _ceilingHeld = CeilingHolds(nowMs);
+        TickCore(scene, nowMs);
+    }
+
+    private void TickCore(SceneRecordingSnapshot scene, double nowMs)
+    {
         // The steady render interval going INTO this tick — the reference a pending-start row held on this tick caps its
         // first advance against. 0 = unknown (the first tick, or a gap longer than any frame — an idle render thread).
         if (!_paused && nowMs > _lastTickMs)
@@ -231,7 +244,7 @@ public sealed class RenderCompositorAnimations
         {
             ref var state = ref _states[i];
             bool wasDone = state.Done;
-            Evaluate(ref state, nowMs, _tickIntervalMs);
+            Evaluate(ref state, nowMs, _tickIntervalMs, _ceilingHeld);
             ref readonly var row = ref state.Desired.Row;
             _rowLive[i] = !state.Parked && scene.IsLive(row.Node);
             _rowDoneEdge[i] = state.Done && !wasDone;
@@ -326,6 +339,19 @@ public sealed class RenderCompositorAnimations
         return true;
     }
 
+    /// <summary>POWER CEILING (<see cref="CeilingPeriodMs"/>): does this turn fall inside the interval since the last turn that
+    /// advanced? Then every row holds the value it posed, the turn changes nothing, and the host elides its record, submit and
+    /// present. Stamps the turn that advances; a paused set never advances anyway.</summary>
+    private bool CeilingHolds(double nowMs)
+    {
+        float period = CeilingPeriodMs;
+        if (!(period > 0f) || _paused) return false;
+        if (!double.IsNaN(_lastCeilingAdvanceMs) && nowMs >= _lastCeilingAdvanceMs
+            && nowMs - _lastCeilingAdvanceMs < period - AnimEngine.CadenceSlackMs) return true;
+        _lastCeilingAdvanceMs = nowMs;
+        return false;
+    }
+
     /// <summary>Channels posed onto a side table (interaction, brush, glyph wipe) rather than folded into the transform /
     /// opacity accumulator.</summary>
     private static bool IsSideTable(AnimChannel channel)
@@ -373,7 +399,7 @@ public sealed class RenderCompositorAnimations
         state.AnchorNowMs = nowMs;
     }
 
-    private void Evaluate(ref State state, double nowMs, float refIntervalMs)
+    private void Evaluate(ref State state, double nowMs, float refIntervalMs, bool ceilingHeld)
     {
         if (state.Parked || state.Done) return;
         // HELD (AnimFlags.Hold) or PAUSED: the value stays the one last posed; the anchor is untouched, so the release samples
@@ -396,11 +422,15 @@ public sealed class RenderCompositorAnimations
             state.AnchorNowMs = nowMs - first;
             state.StartPending = false;
         }
+        // POWER CEILING: this turn is inside the host's ceiling interval (CeilingHolds) - hold, like a cadence row between
+        // its periods; the next turn past it samples the absolute phase, so holding never drifts.
+        if (ceilingHeld) return;
         // CADENCE (the render-thread half of AnimEngine's PASS1 due-check): a row that states its own frame rate is
         // re-sampled only when its period has elapsed; in between its Value/ElapsedMs are HELD, so a 30Hz shimmer
         // steps at 30Hz even though the compositor is posing at panel rate for something else. Sampling stays
-        // analytical/absolute, so holding costs nothing and skipping never accumulates drift. Nothing here lengthens a
-        // period: there is no background or tier floor on a visible loop (motion policy, 2026-10-03).
+        // analytical/absolute, so holding costs nothing and skipping never accumulates drift. A row's own period is never
+        // lengthened (no background or tier floor on a visible loop, motion policy 2026-10-03); the host's power ceiling
+        // above is the one rate limit.
         ushort periodMs = state.Desired.PeriodMs;
         if (periodMs > 0)
         {

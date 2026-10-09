@@ -61,5 +61,11 @@ public static class CadencePacing
     public static int FlooredWaitMs(double dueMs, double floorMs, double refreshMs, double sinceLastPresentMs)
         => QuantizedWaitMs(floorMs > 0.0 && !(dueMs >= floorMs) ? floorMs : dueMs, refreshMs, sinceLastPresentMs);
 
+    /// <summary>A frame-interval ceiling as the whole number of refreshes <see cref="QuantizedWaitMs"/> paces it to (same
+    /// rounding, never under one refresh), so a ceiling the render thread applies per tick lands on the vblanks the UI
+    /// loop's wait would. A non-positive refresh period leaves the interval as given.</summary>
+    public static double LatticePeriodMs(double intervalMs, double refreshMs)
+        => refreshMs > 0.0 ? Math.Max(1, (int)Math.Round(intervalMs / refreshMs)) * refreshMs : intervalMs;
+
     private static int Floor1(double ms) => ms < 1.0 ? 1 : ms > int.MaxValue ? int.MaxValue : (int)ms;
 }
