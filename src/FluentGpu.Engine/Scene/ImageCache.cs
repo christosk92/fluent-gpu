@@ -2044,6 +2044,10 @@ public sealed class ImageCache
         if (e.Parked) { e.Parked = false; _parkedCount--; }
         if (e.RestoreTracked) { e.RestoreTracked = false; _restorePending--; }
         _byId.Remove(id);
+        // A tombstone can still own a texture: the blur-hash LQIP Request uploads under the id survives a Canceled / failed
+        // completion (kept on purpose, so a re-pin shows it again), and Bytes==0 keeps it out of every budget. Nothing holds
+        // the id any more and ids are never reused, so this is the last chance to free it; a no-op in the store when evicted.
+        _evictSink(id);
         NoteRecordingInputChanged();   // a snapshot that held this id must not be reused as-is
     }
 
