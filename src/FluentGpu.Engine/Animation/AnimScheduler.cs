@@ -615,8 +615,14 @@ public sealed partial class AnimEngine
         {
             AnimChannel.TranslateX => p.LocalTransform.Dx,
             AnimChannel.TranslateY => p.LocalTransform.Dy,
-            AnimChannel.ScaleX => p.LocalTransform.M11,
-            AnimChannel.ScaleY => p.LocalTransform.M22,
+            // Scale is the matrix COLUMN's length, as Accum.FromPaint reads it: Compose builds Translation * Rotation *
+            // Scale, so on a rotated node the diagonal is scale·cos(rotation), and a fresh `from: null` scale row on a
+            // tilted card (a WhileHover Scale over Rotation -11) started at 0.982 — it shrank before it grew. An
+            // unrotated node keeps the signed diagonal, so a mirror flip still reads -1.
+            AnimChannel.ScaleX => p.LocalTransform.M12 == 0f ? p.LocalTransform.M11
+                : MathF.Sqrt(p.LocalTransform.M11 * p.LocalTransform.M11 + p.LocalTransform.M12 * p.LocalTransform.M12),
+            AnimChannel.ScaleY => p.LocalTransform.M21 == 0f ? p.LocalTransform.M22
+                : MathF.Sqrt(p.LocalTransform.M21 * p.LocalTransform.M21 + p.LocalTransform.M22 * p.LocalTransform.M22),
             AnimChannel.Opacity => p.Opacity,
             AnimChannel.SizeW => !float.IsNaN(p.PresentedW) ? p.PresentedW : _scene.Bounds(node).W,
             AnimChannel.SizeH => !float.IsNaN(p.PresentedH) ? p.PresentedH : _scene.Bounds(node).H,
