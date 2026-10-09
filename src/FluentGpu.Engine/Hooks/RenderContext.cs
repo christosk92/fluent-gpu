@@ -1027,25 +1027,26 @@ public sealed partial class RenderContext
 
     // ── Declarative animation (seed/retarget engine tracks on this component's node; composited, no re-render/frame) ──
     // DepKey-gated only — the retained-anim hooks re-seed when their key changes (DepKey.Empty = seed once at mount).
+    // Each is keyed to the CALLER's call site: a skipped UseSpring(ScaleX) must not hand its stored deps to the next one.
 
-    public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps);
-    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
+    public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps, __hf, __hl);
+    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps, __hf, __hl);
     /// <summary><paramref name="cadence"/> is the row's own frame rate (see <c>AnimEngine.Keyframes</c>): <c>null</c>
     /// = display rate, one-shot or <paramref name="loop"/>. <paramref name="snapToDevicePixels"/>: a ScaleX/ScaleY track poses
     /// whole device pixels of the host node's extent (<c>AnimFlags.SnapDevicePx</c>).</summary>
     public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null,
-                             bool snapToDevicePixels = false)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, snapToDevicePixels: snapToDevicePixels); }, deps);
-    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps)
+                             bool snapToDevicePixels = false, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, snapToDevicePixels: snapToDevicePixels); }, deps, __hf, __hl);
+    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
         => UseLayoutEffect(() =>
         {
             if (Anim is not { } a || HostNode.IsNull) return null;
             int src = a.Clocks.Register(source);
             a.Drive(HostNode, channel, keys, src, min, max);
             return () => a.Clocks.Unregister(src);   // re-seed / unmount: release the source closure, reuse its index
-        }, deps);
+        }, deps, __hf, __hl);
 
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13 <c>UseGesture</c>). Config-only:
     /// enrolls a gesture-arena member on <see cref="HostNode"/> (via the <c>SceneStore</c> gesture column — the

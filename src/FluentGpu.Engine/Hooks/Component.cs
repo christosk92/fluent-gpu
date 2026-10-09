@@ -163,8 +163,8 @@ public abstract class Component
     protected float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseAnimatedValue(target, durationMs, easing, __hf, __hl);
 
     // Declarative, composited animation of this component's node (no per-frame re-render); DepKey-gated (Empty = seed once):
-    protected void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps) => Context.UseSpring(channel, to, spring, deps);
-    protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps) => Context.UseTransition(channel, from, to, durationMs, easing, deps);
+    protected void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseSpring(channel, to, spring, deps, __hf, __hl);
+    protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseTransition(channel, from, to, durationMs, easing, deps, __hf, __hl);
     /// <summary>Bind an async image and observe its load state (spinner / error fallback). Pair with <c>Ui.Image</c> to paint it.</summary>
     protected ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null,
                                     ImageTransition? transition = null) => Context.UseImage(src, decodePx, priority, blurHash, transition);
@@ -188,8 +188,8 @@ public abstract class Component
     /// <summary>Seed a keyframe track on this component's node. <paramref name="cadence"/> is the row's own frame
     /// rate (<c>AnimEngine.Keyframes</c>): <c>null</c> = display rate, one-shot or loop.</summary>
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null,
-                                bool snapToDevicePixels = false) => Context.UseKeyframes(channel, keys, durationMs, loop, deps, cadence, snapToDevicePixels);
-    protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
+                                bool snapToDevicePixels = false, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseKeyframes(channel, keys, durationMs, loop, deps, cadence, snapToDevicePixels, __hf, __hl);
+    protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps, __hf, __hl);
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a
     /// gesture-arena member and routes the winner's Tap/Hold/Pan event to <paramref name="handler"/>. No re-render.</summary>
     protected void UseGesture(GestureType kind, Action<GestureEventArgs> handler, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseGesture(kind, handler, __hf, __hl);

@@ -194,8 +194,7 @@ cells (the failure mode of the old positional model). Two caveats: put loop hook
 stays aligned by ordinal when the count changes (append/remove at the end — reordering the middle re-associates state,
 same as a keyed list without a `keyOf`); and don't write **two** `Use*` calls on one physical source line behind a
 conditional (they share a line and would swap cell types). `FGRP005` remains as a compatibility lint, not a hard rule.
-The composite hooks `UseField`, `UseGesture`, `UseActivation` and `UseVideo` take the caller's call site too and key every
-inner cell to it, so they are just as legal behind a conditional. `UseField` therefore takes up to four inline rules; pass
+The composite hooks `UseField`, `UseGesture`, `UseActivation` and `UseVideo`, the animation hooks `UseSpring`, `UseTransition`, `UseKeyframes` and `UseDrivenAnimation`, and the motion sugar `UseEntrance`, `UseHoverScale` and `UseSoftReveal` take the caller's call site too and key every inner cell to it, so they are just as legal behind a conditional. `UseField` therefore takes up to four inline rules; pass
 an array (`UseField(sig, [r1, r2, r3, r4, r5])`) for more.
 
 ## One component model — run-once is inferred, not a mode

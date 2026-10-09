@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -13,21 +14,23 @@ public static class MotionHooks
 {
     /// <summary>The Fluent entrance: TranslateY 24→0 (400ms) + Opacity 0→1 (200ms), FluentDecelerate. Call inside the
     /// component whose rendered root is the node to animate. <paramref name="key"/> distinguishes deps if re-armed.</summary>
-    public static void UseEntrance(this Component c, float offsetPx = Motion.EntranceOffsetPx, DepKey key = default)
+    public static void UseEntrance(this Component c, float offsetPx = Motion.EntranceOffsetPx, DepKey key = default,
+                                   [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         // Reduced-motion as a VALUE, never an early-return — Motion.ReducedMotion is a mutable global (a resize grip flips
         // it), and skipping these two hooks mid-life would shift every later hook slot in the caller → a cell-cast crash.
         bool reduce = Motion.ReducedMotion;
         DepKey dep = key;   // default = seed once at mount
-        c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Motion.Fade, Easing.FluentDecelerate, dep);
-        c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : offsetPx, 0f, Motion.OffsetEntrance, Easing.FluentDecelerate, dep);
+        c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Motion.Fade, Easing.FluentDecelerate, dep, __hf, __hl);
+        c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : offsetPx, 0f, Motion.OffsetEntrance, Easing.FluentDecelerate, dep, __hf, __hl);
     }
 
     /// <summary>A subtle pointer-over scale lift (spring), the WinUI card/button micro-interaction.</summary>
-    public static void UseHoverScale(this Component c, bool hovered, float to = 1.02f)
+    public static void UseHoverScale(this Component c, bool hovered, float to = 1.02f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         var spring = SpringParams.FromResponse(0.25f, 0.85f);
-        c.Context.UseSpring(AnimChannel.ScaleX, hovered ? to : 1f, spring, hovered);
-        c.Context.UseSpring(AnimChannel.ScaleY, hovered ? to : 1f, spring, hovered);
+        // Both springs share the caller's site; they are told apart by ordinal, because they always run together.
+        c.Context.UseSpring(AnimChannel.ScaleX, hovered ? to : 1f, spring, hovered, __hf, __hl);
+        c.Context.UseSpring(AnimChannel.ScaleY, hovered ? to : 1f, spring, hovered, __hf, __hl);
     }
 }
