@@ -118,6 +118,7 @@ static partial class ControlsSuite
         IconButtonBoundEnabledChecks(strings);
         InfoBarClosePlateChecks(strings);
         MenuBarReopenChecks(strings);
+        FocusDepartureCloseChecks(strings);
         SelectionUnsubscribeChecks(strings);
         TabContentIdentityChecks(strings);
     }

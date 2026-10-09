@@ -15,6 +15,13 @@ public sealed class OverlayHandle
     internal Action<OverlayCloseCause>? CloseAction;
     public Action? ClosedAction;
     internal Action<OverlayCloseCause>? ClosedWithCauseAction;
+    internal Func<bool>? FocusOutsideAction;
+    /// <summary>True while keyboard focus sits on a LIVE node outside this overlay and outside every overlay nested
+    /// under it (a menu opened from one of its rows): focus has left for another control. False while focus is inside,
+    /// or cleared (null/dead — a blur, not a move). A field that keeps focus while its non-trapping popup is open
+    /// (AutoSuggestBox, editable ComboBox) closes the popup on this departure — WinUI closes the suggestion list /
+    /// dropdown in LostFocus. A press on a popup row focuses the row first, so it never reads as a departure.</summary>
+    internal bool IsFocusOutside => FocusOutsideAction?.Invoke() ?? false;
     /// <summary>Close veto. Invoked with the close cause before dismissal; return <c>true</c> to allow the close,
     /// <c>false</c> to veto it (e.g. an Escape that a zoomed viewer consumes internally). See ContentDialog.VetoClosing.</summary>
     public Func<OverlayCloseCause, bool>? ClosingAction;
@@ -366,6 +373,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             OpenRequestTicks = FluentGpu.Hosting.RenderBudget.CompiledIn ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L,
         };
         handle.CloseAction = cause => BeginClose(entry, cause);
+        handle.FocusOutsideAction = () => FocusOutside(entry);
         Entries.Add(entry);
         if (entry.PinsAnchor) _pinEpoch.Value = _pinEpoch.Peek() + 1;
         Bump();
@@ -400,6 +408,34 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 if (n == scope) return true;
         }
         return false;
+    }
+
+    /// <see cref="OverlayHandle.IsFocusOutside"/>: the focused node is live and sits under neither this entry's
+    /// wrapper nor the wrapper of any entry nested under it (ParentId chain). Null/dead focus is a cleared focus, not a
+    /// departure: BeginClose's restore would otherwise hand it straight back to the field that was just blurred.
+    internal bool FocusOutside(OverlayEntry e)
+    {
+        if (Scene is not { } scene) return false;
+        var f = GetFocus?.Invoke() ?? NodeHandle.Null;
+        if (f.IsNull || !scene.IsLive(f)) return false;
+        foreach (var x in Entries)
+            if (!x.WrapperNode.IsNull && NestedUnder(x, e) && IsUnder(scene, x.WrapperNode, f)) return false;
+        return true;
+    }
+
+    // A parent always opened first (smaller Id), so the ParentId walk cannot cycle.
+    private bool NestedUnder(OverlayEntry x, OverlayEntry root)
+    {
+        for (OverlayEntry? c = x; c is not null; c = EntryById(c.ParentId))
+            if (ReferenceEquals(c, root)) return true;
+        return false;
+    }
+
+    private OverlayEntry? EntryById(int id)
+    {
+        if (id < 0) return null;
+        foreach (var x in Entries) if (x.Id == id) return x;
+        return null;
     }
 
     /// <summary>Nested-flyout chain: the parent is the open entry whose wrapper subtree contains this entry's anchor

@@ -630,10 +630,17 @@ public sealed class ComboBox : Component
                             {
                                 bool wasCancel = cancelling.Value;
                                 cancelling.Value = false;
-                                // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391). Focus moving
-                                // INTO the open popup (a row click in flight) is not a departure — the click /
-                                // popup-close path commits instead.
-                                if (!wasCancel && handle.Value is not { IsOpen: true }) CommitSearch();
+                                if (handle.Value is { IsOpen: true } h)
+                                {
+                                    // Focus left for another control (Tab, a programmatic move) with the dropdown open:
+                                    // close it like WinUI FocusChanged (cpp:2183–2195); the close commits through
+                                    // ClosedAction (the light-dismiss path), so the search is committed exactly once.
+                                    // Focus moving INTO the open popup (a row press in flight) is not a departure — the
+                                    // click commits.
+                                    if (h.IsFocusOutside) Close();
+                                }
+                                // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391).
+                                else if (!wasCancel) CommitSearch();
                             }
                         },
                     };

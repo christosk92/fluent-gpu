@@ -542,7 +542,13 @@ public sealed class AutoSuggestBox : Component
                 OnFocusChanged = f =>
                 {
                     focused.Value = f;
-                    if (!f) Field?.MarkTouched();
+                    if (f) return;
+                    Field?.MarkTouched();
+                    // WinUI OnLostFocus closes the list when focus leaves the box (Tab, a programmatic move; cpp:913–923).
+                    // A press on a suggestion row focuses the ROW on the press edge: focus moved INTO the popup, not
+                    // away, so the click that follows still submits (and closes). Inline lists have no handle — the
+                    // composing flyout owns their lifetime.
+                    if (handle.Value is { IsOpen: true } h && h.IsFocusOutside) Close();
                 },
             };
             _edit = e;
