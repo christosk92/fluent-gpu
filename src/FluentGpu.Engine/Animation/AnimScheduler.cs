@@ -135,7 +135,7 @@ public sealed partial class AnimEngine
                 if (r.Kind == GenKind.Spring)
                 {
                     float rd = RestDeltaFor(r.Channel);
-                    Sample sp = Generators.EvalSpring(in r.Gen, r.To, r.ElapsedMs, rd, Generators.RestSpeed, out float vel);
+                    Sample sp = Generators.EvalSpring(in r.Gen, r.To, r.ElapsedMs, rd, RestSpeedFor(r.Channel), out float vel);
                     r.Position = sp.Value; r.Velocity = vel;
                     if (sp.Done) r.Flags |= AnimFlags.Done;
                 }
@@ -208,7 +208,22 @@ public sealed partial class AnimEngine
         // Free the rows that reached Done this tick, collected during PASS1's advance walk (finding #14) — no third walk
         // over every node. Kept separate from PASS1 so a free never mutates the chain mid-advance; frees route through
         // FreeSlot (parked census exact) after SettleRestore (resting value), preserving the original per-slot order.
-        foreach (int s in _settledScratch) { SettleRestore(s); FreeSlot(s); }
+        foreach (int s in _settledScratch)
+        {
+            AnimChannel ch = _slab.At(s).Channel;
+            NodeHandle owner = _slab.At(s).Node;
+            if (ch == AnimChannel.RevealExtent) QueueSettled(owner, ch);   // a reveal at rest: its owner's callback
+            else if (IsRevealBand(ch))
+            {
+                // An OPENING band is done: present the laid-out rows as they are. A closing one rests at 0 until its owner's
+                // commit removes the rows (BandSettled marks it committed first: it stops presenting the flush they leave).
+                int slot = (int)ch - (int)AnimChannel.RevealBand0;
+                if (_scene.TryGetRevealBand(owner, slot, out var band) && band.Opening) _scene.ClearRevealBand(owner, slot);
+                QueueSettled(owner, ch);
+            }
+            SettleRestore(s);
+            FreeSlot(s);
+        }
     }
 
     private void FreeSlot(int slot)
@@ -217,6 +232,7 @@ public sealed partial class AnimEngine
         NodeHandle node = r.Node;
         if (r.Has(AnimFlags.ClipAdded)) ReleaseReflowClip(node);   // reflow rows own the clip they added (see AnimFlags.ClipAdded)
         if (r.Has(AnimFlags.Parked)) _parked--;
+        if (r.Channel == AnimChannel.RevealExtent) _revealRows--;
         ClearKeys(slot);
         _slab.Free(slot);
     }
@@ -334,7 +350,7 @@ public sealed partial class AnimEngine
     /// seam for the deleted AdvanceBrushAnims + InteractionAnimator tickers.</summary>
     private static bool IsSideTableChannel(AnimChannel ch)
         => ch == AnimChannel.BrushFade || ch == AnimChannel.HoverFade || ch == AnimChannel.PressFade
-           || ch == AnimChannel.DisclosureProgress || ch == AnimChannel.GlyphWipeSplit;
+           || IsRevealBand(ch) || ch == AnimChannel.GlyphWipeSplit || ch == AnimChannel.RevealExtent;
 
     private void WriteSideTable(AnimChannel ch, NodeHandle node, float v)
     {
@@ -343,8 +359,9 @@ public sealed partial class AnimEngine
             case AnimChannel.BrushFade: _scene.SetBrushAnimT((int)node.Raw.Index, v); break;
             case AnimChannel.HoverFade: _scene.SetInteractT(node, press: false, v); break;
             case AnimChannel.PressFade: _scene.SetInteractT(node, press: true, v); break;
-            case AnimChannel.DisclosureProgress: _scene.SetVirtualDisclosureProgress(node, v); break;
+            case >= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3: _scene.SetRevealBandPresented(node, (int)ch - (int)AnimChannel.RevealBand0, v); break;
             case AnimChannel.GlyphWipeSplit: _scene.SetGlyphWipeSplit(node, v); break;
+            case AnimChannel.RevealExtent: break;   // read straight off the row by PropagateFlowReveals
         }
     }
 
@@ -411,6 +428,7 @@ public sealed partial class AnimEngine
         {
             if (_slab.At(s).Has(AnimFlags.Parked)) _parked--;
             if (_slab.At(s).Has(AnimFlags.ClipAdded)) ReleaseReflowClip(node);   // ClearNode bypasses FreeSlot
+            if (_slab.At(s).Channel == AnimChannel.RevealExtent) _revealRows--;
         }
         _slab.ClearNode(idx);
     }
@@ -511,6 +529,7 @@ public sealed partial class AnimEngine
         if (additive) seed.Flags |= AnimFlags.Additive;
         if ((_scene.Flags(node) & NodeFlags.Parked) != 0) { seed.Flags |= AnimFlags.Parked; _parked++; }
         int added = _slab.Add(idx, in seed);
+        if (ch == AnimChannel.RevealExtent) _revealRows++;
         // The ONLY place the cadence side arrays grow — the same seed-time path that grows the slab's own _rows
         // (never a frame phase), and the write that stops a recycled slot inheriting its predecessor's cadence.
         ResetCadence(added);
@@ -519,7 +538,14 @@ public sealed partial class AnimEngine
     }
 
     private static float RestDeltaFor(AnimChannel ch)
-        => ch is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.LayoutW or AnimChannel.LayoutH ? 0.5f : Generators.RestDelta;
+        => ch is (AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.RevealExtent)
+           or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 0.5f : Generators.RestDelta;
+
+    // RevealExtent and the reveal bands are in DIP: rest once the edge is within RestDeltaFor (0.5 DIP) and slower than
+    // 8 DIP/s (< 0.07 DIP per 120 Hz frame) — the normalized 0.01/s floor held a 90-DIP reveal ~0.75 s (and the Expander's
+    // unmount with it), and a 494-DIP sidebar band ~0.2 s past where it visibly landed (its collapse commit with it).
+    private static float RestSpeedFor(AnimChannel ch)
+        => ch is AnimChannel.RevealExtent or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 8f : Generators.RestSpeed;
 
     /// <summary>The node's current value on a channel (read from composited paint) — the fresh spring's start point.
     /// Ported from AnimEngine.CurrentValue.</summary>
@@ -537,10 +563,11 @@ public sealed partial class AnimEngine
             AnimChannel.SizeH => !float.IsNaN(p.PresentedH) ? p.PresentedH : _scene.Bounds(node).H,
             AnimChannel.LayoutW => _scene.Bounds(node).W,
             AnimChannel.LayoutH => _scene.Bounds(node).H,
+            AnimChannel.RevealExtent => _scene.Bounds(node).H,
             AnimChannel.BlurSigma => p.BlurSigma,
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : 0f,
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : 1f,
-            AnimChannel.DisclosureProgress => _scene.VirtualDisclosureProgress(node),
+            >= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3 => _scene.TryGetRevealBand(node, (int)ch - (int)AnimChannel.RevealBand0, out var band) && float.IsFinite(band.Presented) ? band.Presented : 0f,
             // Rotation IS recoverable — atan2(M12, M11) is exact for a uniform-scale transform (rotation composed
             // BEFORE scale in Compose: tf = Translation * Rotation * Scale, so M11/M12 carry the rotation angle
             // unscaled). Matches Accum.FromPaint's decomposition below verbatim, so a fresh CurrentValue read and a

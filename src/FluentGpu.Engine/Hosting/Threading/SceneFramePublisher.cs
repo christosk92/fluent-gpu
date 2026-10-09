@@ -483,13 +483,32 @@ public sealed class SceneFramePublisher
         Array.Clear(_sceneCaptureSeq);   // no slot describes a publication any more
     }
 
-    private int ClaimWriteSlot(ulong seq)
+    internal int ClaimWriteSlot(ulong seq)
     {
-        // Withdraw the announcement while claiming/writing. A reader that already loaded the old token can still
-        // complete ONE generation-checked acquisition, but cannot hop through multiple slots during this bounded
-        // sweep. That guarantees a writable slot without a retry/spin or a false exhaustion exception. An already
-        // claimed scene remains valid and renderable throughout capture; zero only means "no new publication yet".
+        // Withdraw the announcement while CLAIMING. A reader that already loaded the old token can still complete ONE
+        // generation-checked acquisition, but cannot hop through multiple slots during this bounded sweep. That
+        // guarantees a writable slot without a retry/spin or a false exhaustion exception. Once a slot OTHER than the
+        // announced one is claimed, the announcement is restored for the whole capture/copy (see Reannounce).
         long token = Interlocked.Exchange(ref _publishedToken, 0);
+        int claimed = SweepWriteSlot(seq, token);
+        Reannounce(token, claimed);
+        return claimed;
+    }
+
+    /// <summary>Restore the announcement the claim withdrew, unless the claim superseded that very slot. Withdrawn for the
+    /// whole capture, the latest publication was invisible to a render turn that opened its slot while the UI was writing
+    /// the next one — and the UI and the render thread wake on the same compositor tick, so that was a large share of
+    /// turns: the turn re-presented the previous pose and the waiting publication was superseded unseen (measured in Wavee
+    /// during a reveal: 27-58 % of presents carried no new frame, the motion skipping a frame at a time). The restored slot
+    /// is a different slot from the one being written, so a reader can still claim only a fully published generation.</summary>
+    private void Reannounce(long token, int claimed)
+    {
+        if (token == 0 || (int)(token & 3) == claimed) return;
+        Interlocked.CompareExchange(ref _publishedToken, token, 0);
+    }
+
+    private int SweepWriteSlot(ulong seq, long token)
+    {
         int published = token == 0 ? -1 : (int)(token & 3);
         // Refresh the oldest writable SNAPSHOT first. First-fit can abandon a third slot after a handover,
         // pinning OldestSlotCaptureSeq (and every scene dirty/removal ledger) at that old publication forever.

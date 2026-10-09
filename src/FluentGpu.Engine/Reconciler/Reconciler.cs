@@ -762,9 +762,6 @@ public sealed partial class TreeReconciler
     // The seams every component's context is handed. A method-group conversion allocates a delegate each time it is evaluated,
     // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
     private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
-    private Func<NodeHandle, int, int, bool, bool>? _beginVirtualDisclosureSeam;
-    private Action<NodeHandle, bool>? _completeVirtualDisclosureSeam;
-    private Action<NodeHandle>? _clearVirtualDisclosureSeam;
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
@@ -775,9 +772,6 @@ public sealed partial class TreeReconciler
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
         ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
-        ctx.BeginVirtualDisclosure = _beginVirtualDisclosureSeam ??= BeginVirtualDisclosure;
-        ctx.CompleteVirtualDisclosure = _completeVirtualDisclosureSeam ??= CompleteVirtualDisclosure;
-        ctx.ClearVirtualDisclosure = _clearVirtualDisclosureSeam ??= ClearVirtualDisclosure;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -3156,7 +3150,8 @@ public sealed partial class TreeReconciler
             _scene.ScrollHandleFor(node)?.ShiftFrame(reseedDelta);
         }
         var feel = ScrollTunables.Current;
-        var rw = Virtualizer.Plan(ext, offset, velocity, viewport, in feel, sc.AnchorIndex);
+        // + the rows a running reveal pulls into view
+        var rw = Virtualizer.Plan(ext, offset, velocity, viewport + sc.RevealOverscan, in feel, sc.AnchorIndex);
 
         int first, last;   // [first, last) exclusive
         if (rw.IsEmpty) { first = 0; last = 0; }
@@ -4245,7 +4240,10 @@ public sealed partial class TreeReconciler
         // Parked KeepAlive content is already invisible. A reactive boundary may settle after the park edge, but its
         // animated child must be hard-removed instead of escaping the detached page as a globally drawn exit orphan.
         bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0;
-        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
+        // A recycle (a rebind flush) never replays a FlowReveal: from the app's view it is the same persistent row.
+        bool recycledReveal = SuppressBoundTransitions > 0;
+        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active
+            && !(spec.Size == SizeMode.FlowReveal && recycledReveal))
         {
             // Smooth exit (mirror of the enter-reflow): orphaning DETACHES this node, so its sibling would SNAP into the
             // freed space. For a SizeMode.Reflow exit, snapshot the surviving PARENT's with-child size + queue it — after
@@ -4256,6 +4254,12 @@ public sealed partial class TreeReconciler
                 var par = _scene.Parent(node);
                 if (!par.IsNull) { var pb = _scene.Bounds(par); anim.PendingExitReflow.Add((par, pb.W, pb.H, spec)); }
             }
+            // FlowReveal: read the live presented extent BEFORE the unmount below cancels the row, so an interrupted open
+            // closes from where it stands (with its speed) instead of from the full height.
+            bool flowReveal = spec.Size == SizeMode.FlowReveal;
+            NodeHandle revealParent = flowReveal ? _scene.Parent(node) : NodeHandle.Null;
+            float revealFrom = 0f, revealVelocity = 0f;
+            if (flowReveal) anim.ReadFlowReveal(node, out revealFrom, out revealVelocity);
             UnmountSubtree(node);
             // Kill any looping track (the SkeletonPulse) BEFORE orphaning + SeedExit, so only the FINITE exit tracks
             // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
@@ -4266,6 +4270,11 @@ public sealed partial class TreeReconciler
             // two seconds.
             _scene.Orphan(node, ExitMaxAgeMs(spec));
             anim.SeedExit(node, spec.Exit, spec);
+            if (flowReveal)
+            {
+                anim.SeedFlowRevealExit(node, revealFrom, revealVelocity, in spec);
+                anim.RevealExitCarriers.Add((node, revealParent));
+            }
             return;
         }
         UnmountSubtree(node);
@@ -4447,10 +4456,13 @@ public sealed partial class TreeReconciler
         {
             danim.SetTransition(node, dt);
             if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-            if (isMount && dt.Enter.Active)
+            if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
+                // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout (host-driven). SizeMode.FlowReveal enter:
+                // present 0 → laid-out height after layout (recycles never get here).
                 if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);
+                else if (dt.Size == SizeMode.FlowReveal) danim.PendingEnterReveal.Add(node);
             }
         }
 
@@ -4655,48 +4667,6 @@ public sealed partial class TreeReconciler
         }
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
         _realizeProgress = true;
-    }
-
-    /// <summary>Seed or retarget one contiguous disclosure range. The backing list stays in its EXPANDED shape while
-    /// progress moves; the composing control owns insert-before-expand and collapse-commit-after-settle ordering.</summary>
-    private bool BeginVirtualDisclosure(NodeHandle viewport, int first, int count, bool expanding)
-    {
-        if (viewport.IsNull || !_scene.IsLive(viewport) || Anim is null
-            || !_virtuals.TryGetValue(viewport, out var entry) || entry.El?.RowBind is null
-            || !_scene.TryGetScroll(viewport, out var snapshot) || snapshot.Orientation != 0
-            || snapshot.Layout is null || first < 0 || count <= 0 || first + count > snapshot.ItemCount)
-            return false;
-
-        float cross = MathF.Max(1f, _scene.Bounds(viewport).W);
-        RectF firstRect = snapshot.Layout.ItemRect(first, cross);
-        RectF lastRect = snapshot.Layout.ItemRect(first + count - 1, cross);
-        float top = firstRect.Y;
-        float extent = lastRect.Bottom - top;
-        if (!float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f) return false;
-
-        float from = float.IsFinite(snapshot.DisclosureT) ? Math.Clamp(snapshot.DisclosureT, 0f, 1f)
-                                                          : expanding ? 0f : 1f;
-        if (!_scene.BeginVirtualDisclosure(viewport, first, count, top, extent, from)) return false;
-        Anim.SeedValue(viewport, AnimChannel.DisclosureProgress, expanding ? 1f : 0f,
-            expanding ? MotionTokenId.DisclosureExpand : MotionTokenId.DisclosureCollapse, from: from);
-        return true;
-    }
-
-    /// <summary>Force the active disclosure to its requested endpoint. Used before a different logical band starts.</summary>
-    private void CompleteVirtualDisclosure(NodeHandle viewport, bool expanded)
-    {
-        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out var sc)
-            || !float.IsFinite(sc.DisclosureT)) return;
-        Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
-        _scene.SetVirtualDisclosureProgress(viewport, expanded ? 1f : 0f);
-    }
-
-    /// <summary>Release the presentation after the expanded model has reached the same resting geometry.</summary>
-    private void ClearVirtualDisclosure(NodeHandle viewport)
-    {
-        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out _)) return;
-        Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
-        _scene.ClearVirtualDisclosure(viewport);
     }
 
     private delegate void ActionRef<T>(in T value);
@@ -5108,12 +5078,14 @@ public sealed partial class TreeReconciler
                 {
                     anim.SetTransition(node, at);
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && at.Enter.Active)
+                    if (isMount && at.Enter.Active && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnter(node, at.Enter, at);
                         // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
                         // reveals (host-driven; the natural size isn't known here, pre-layout).
                         if (at.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+                        // SizeMode.FlowReveal enter: present 0 → laid-out height after layout (recycles never get here).
+                        else if (at.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
                     }
                 }
                 else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
@@ -5125,10 +5097,11 @@ public sealed partial class TreeReconciler
                 {
                     danim.SetTransition(node, dt);
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && dt.Enter.Active)
+                    if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnter(node, dt.Enter, dt);
                         if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);
+                        else if (dt.Size == SizeMode.FlowReveal) danim.PendingEnterReveal.Add(node);
                     }
                 }
                 // NEW declarative gesture-state targets (WhileHover/WhilePressed/WhileFocus): stashed for the

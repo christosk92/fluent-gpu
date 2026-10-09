@@ -600,6 +600,25 @@ public int A11yRelRef;   // 4 — 0 = shared none-row; else A11yRel slab row. A1
 > RTL — lets the record-time overlay-placement path branch without re-reading `FlowState`). Both take free high
 > bits per `OQ-1`; they are *traversal/probe hints*, never skip-decision inputs (§3).
 
+#### 2.7a SizeMode.FlowReveal presented-flow columns (AS-BUILT 2026-10)
+
+These fields are written only by `AnimEngine.PropagateFlowReveals` (host 6.3 and phase 7.05) and are all zero at rest.
+The semantics are owned by backdrop-effects-animation.md §5.8b. Each line below is one field.
+
+```csharp
+// NodePaint — directly after ChildShiftX / ChildShiftY
+public float FlowDelta;        // SEMANTICS: backdrop-effects-animation.md §5.8b — presented extent minus laid-out extent
+public float FlowOrphanTop;    // SEMANTICS: backdrop-effects-animation.md §5.8b — topmost revealing exit orphan's Y in this column
+public float FlowOrphanDelta;  // SEMANTICS: backdrop-effects-animation.md §5.8b — orphan delta applied at/below FlowOrphanTop
+public byte  FlowBits;         // SEMANTICS: backdrop-effects-animation.md §5.8b — FlowShiftsBit 1, FlowOrphanBit 2, FlowOwnsHBit 4,
+                               //   FlowOwnsShiftBit 8, FlowBoundaryBit 16, FlowRevealBit 32, FlowInnerBit 64 (an inner reveal's delta stopped here)
+// ScrollState — directly after ItemClipTopFadeBand
+public float RevealOverscan;   // SEMANTICS: backdrop-effects-animation.md §5.8b — DIP the realize window reaches past the viewport bottom
+// ScrollState — the virtual reveal bands (AS-BUILT 2026-10; replaces the Disclosure* columns)
+public RevealBands Bands;      // SEMANTICS: backdrop-effects-animation.md §5.8b (virtual reveal bands) — four named RevealBand fields, NEVER an [InlineArray]: ScrollState is compared by default struct equality
+public byte BandMask;          // SEMANTICS: backdrop-effects-animation.md §5.8b — bit i = band slot i live
+```
+
 ### 2.8 `UpdateQueueSlab` — the phase-3 lane/update-queue backing storage (P1/P2a)
 
 `reconciler-hooks.md` is replacing the reserved phase-3 no-op with a real **update queue**: each `setState`

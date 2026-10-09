@@ -97,7 +97,7 @@ content **slots** like `Content`/`HeaderContent` *restructure*); (4) don't resha
 re-asserts its mechanics-critical props AFTER your modifier (toggle clicks, reflow specs, ref captures — chained, see
 each part const's doc for the owned list), so you can restyle everything but break nothing; (6) one transform owner —
 don't put a transform-owning `ScrollBinds` entry (a `PinTop` sticky / `StretchFromTop` hero bind) or a bound `Transform`
-on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
+on a transform-owned part (e.g. the Expander clip mid-reveal, whose children the FlowReveal Parallax anchor shifts). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
 `Expander.Options.AnimateContentResize` (default `true`) controls a distinct BEHAVIOUR, not a Parts style: `false`

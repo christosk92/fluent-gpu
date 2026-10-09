@@ -229,9 +229,11 @@ public sealed partial class AnimEngine
     public void ClearTransition(NodeHandle node) => _transitions.Remove((int)node.Raw.Index);
     /// <summary>Symmetric teardown when a scene slot is FREED (wired to SceneStore.OnFreeIndex): drop the index-keyed
     /// spec so a freed node leaves no dormant spec the next node reusing the slot inherits. In-flight rows are
-    /// gen-checked and self-prune at the next tick's IsLive guard.</summary>
+    /// gen-checked and self-prune at the next tick's IsLive guard. Settle callbacks registered on the slot (WhenSettled)
+    /// are queued once and forgotten.</summary>
     public void ClearForIndex(int index)
     {
+        FireSettleCallbacksForIndex(index);   // a dying node's settle callbacks run once and are dropped (smooth-reveal §4.1)
         _transitions.Remove(index);
         ClearInteractTargets(index);
         // A forced orphan reclaim runs after Tick. Render-owned rows cannot rely on another UI tick

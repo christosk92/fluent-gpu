@@ -45,6 +45,7 @@ public static class SuiteRegistry
         new("layout-inc", "layout-inc", FluentGpu.VerticalSlice.Suites.LayoutIncrementalSuite.Run),
         new("hooks", "hooks", HooksSuite.Run),
         new("anim", "anim", AnimSuite.Run),
+        new("reveal", "anim", FluentGpu.VerticalSlice.Suites.RevealSuite.Run),   // SizeMode.FlowReveal: layout once, motion at paint time (smooth-reveal plan §9)
         new("scroll", "scroll", ScrollSuite.Run),
         new("scroll-motion", "scroll", FluentGpu.VerticalSlice.Suites.ScrollMotionSuite.Run),   // scroll rework: closed-form plans, coverage, zero-alloc flat lists
         new("scroll-effects", "scroll", FluentGpu.VerticalSlice.Suites.ScrollEffectsSuite.Run),   // scroll-GPU plan §F: engaged edge, collapse, stretch, UseScroll, MeasureAll

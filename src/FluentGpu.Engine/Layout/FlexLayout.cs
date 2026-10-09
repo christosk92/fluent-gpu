@@ -18,6 +18,12 @@ public sealed partial class FlexLayout
     private readonly SceneStore _scene;
     private readonly IFontSystem _fonts;
 
+    /// <summary>Host-set for one frame while SizeMode.FlowReveal work is pending or running (AppHost step 6): the viewport
+    /// arrange then does NOT clamp a scroll offset down to the LAID-OUT max. The host clamps it right after layout (6.3)
+    /// against the PRESENTED extent, so a collapse at the end of a scroller rides its edge down. False otherwise and for
+    /// every standalone layout run (unchanged behaviour).</summary>
+    public bool DeferOffsetClamp { get; set; }
+
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
@@ -1057,11 +1063,12 @@ public sealed partial class FlexLayout
 
         // The content translate for THIS frame's shown offset (scroll rework §2/§6): UI-side for hit-testing and the
         // published frame; the render poser re-poses it at present time. A shown offset past the new clamp lands on
-        // the clamp (the plan is re-clamped by the host's SetExtent in the same frame).
+        // the clamp (the plan is re-clamped by the host's SetExtent in the same frame) — except on a SizeMode.FlowReveal frame
+        // (<see cref="DeferOffsetClamp"/>), where the host clamps against the presented extent at 6.3.
         if (!content.IsNull && _scene.IsLive(content) && !Verifying)
         {
             double max = Math.Max(0.0, (double)(horizontal ? contentW : contentH) * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f) - (horizontal ? innerW : innerH));
-            if (sc.Offset > max) sc.Offset = max;
+            if (sc.Offset > max && !DeferOffsetClamp) sc.Offset = max;   // a reveal frame: AppHost 6.3 clamps against the PRESENTED extent
             if (sc.Offset < 0.0) sc.Offset = 0.0;
             float trans = ScrollContentPose.Translate(sc.WindowOrigin, sc.Offset, _scene.DeviceScale);
             ref NodePaint cp = ref _scene.Paint(content);
@@ -1081,7 +1088,7 @@ public sealed partial class FlexLayout
         {
             float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;
             var feel = FluentGpu.Scroll.Diag.ScrollTunables.Current;
-            var rw = Virtualizer.Plan(ext, sc.Offset, sc.Velocity, vpExtent, in feel, sc.AnchorIndex);
+            var rw = Virtualizer.Plan(ext, sc.Offset, sc.Velocity, vpExtent + (horizontal ? 0f : sc.RevealOverscan), in feel, sc.AnchorIndex);
             if (ScrollContentPose.NeedsRealize(in sc, in rw))
                 _scene.Mark(node, NodeFlags.VirtualRangeDirty);
         }

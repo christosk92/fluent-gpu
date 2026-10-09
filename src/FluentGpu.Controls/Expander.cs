@@ -19,12 +19,11 @@ public readonly record struct ExpanderTemplateSettings(float ChevronRotationDeg,
 public sealed record ExpanderOptions
 {
     /// <summary>Default <c>true</c> — today's behaviour, unchanged: EVERY height change of the content clip host
-    /// replays the disclosure tween (333ms FluentPopOpen expand / 167ms collapse, <c>SizeMode.Reflow</c>), including
-    /// one caused by the SETTLED content resizing for a reason that has nothing to do with opening or closing (e.g.
-    /// an inline drawer expanding inside an already-open Expander) — the clip's <c>Animate</c> spec can't otherwise
-    /// tell "I am opening/closing" from "my content just got taller." Set <c>false</c> to scope the tween to the
-    /// open/close TOGGLE itself: a steady-open Expander whose content resizes re-lays out in one instant frame
-    /// instead of replaying the disclosure motion.</summary>
+    /// reveals the new height (the FlowReveal spring), including one caused by the SETTLED content resizing for a reason
+    /// that has nothing to do with opening or closing (e.g. an inline drawer expanding inside an already-open Expander) —
+    /// the clip's <c>Animate</c> spec can't otherwise tell "I am opening/closing" from "my content just got taller." Set
+    /// <c>false</c> to scope the reveal to the open/close TOGGLE itself: a steady-open Expander whose content resizes
+    /// re-lays out in one instant frame instead of replaying the disclosure motion.</summary>
     public bool AnimateContentResize { get; init; } = true;
 }
 
@@ -33,15 +32,14 @@ public sealed record ExpanderOptions
 /// header toggles local <see cref="Component"/> state (or a controlled <see cref="IsExpanded"/> signal); the single
 /// chevron glyph is ROTATED by the computed <see cref="ExpanderTemplateSettings"/> (down collapsed → up expanded).
 ///
-/// MOTION — a DELIBERATE divergence from WinUI: the card height EASES (WinUI's ExpandDown/CollapseUp storyboards SNAP
-/// the layout space and only translate the content, Expander.xaml:39-90), because FluentGpu's design goal is smooth
-/// transitions of content, not discrete layout repositions. The storyboard TIMINGS and EASINGS stay WinUI-exact:
-/// expand 333ms KeySpline(0,0,0,1), collapse 167ms KeySpline(1,1,0,1). The whole open/close is one declarative
-/// engine transition — <see cref="SizeMode.Reflow"/> on the content clip wrapper (the interpolated height runs
-/// through real layout each tick, so neighbouring content reflows smoothly and RIGIDLY), with
-/// <see cref="SizeAnchor.Trailing"/> riding the content's bottom edge on the reveal edge (the WinUI
-/// slide-out-from-under-the-header look, rounded bottom corners visible mid-motion). No control-local ticker, no
-/// per-frame re-render: the engine owns the motion.
+/// MOTION — NOT WinUI's (Expander.xaml snaps the layout space and slides only the content). The content clip wrapper's
+/// declared Height toggles 0 ↔ NaN(auto): layout lands ONCE at the new size and <see cref="SizeMode.FlowReveal"/> springs
+/// the PRESENTED height under <c>MotionTok.Reveal</c> (critically damped, ~0.26 s, the same spring both ways) while every
+/// sibling below rides the difference at paint time — no per-frame layout, no component render, interruptible from the
+/// live value with its velocity. <see cref="SizeAnchor.Parallax"/>: the panel trails the moving edge by a damped share of
+/// what is still hidden (≤ 24 DIP), so it reads as unfolding rather than wiped. The chevron rotates on the same spring.
+/// The panel stays mounted through a close and unmounts when the engine reports the reveal at rest
+/// (<c>AnimEngine.WhenSettled</c>) — no control-local ticker, no per-frame watcher.
 ///
 /// CUSTOMIZATION goes through <see cref="Parts"/> (the one generic door — no per-feature knobs): every named template
 /// part accepts arbitrary element props, e.g. a sticky pinned header
@@ -60,9 +58,9 @@ public sealed class Expander : Component
     /// <summary>The trailing 32×32 chevron button (WinUI ExpanderChevron). Owned: OnRealized (rotation-tween ref,
     /// chained with any modifier-supplied handler).</summary>
     public const string PartChevron = "Chevron";
-    /// <summary>The always-mounted reveal wrapper (WinUI ExpanderContentClip) — the SizeMode.Reflow host. Owned:
-    /// ClipToBounds, Height (the open/closed toggle), Animate (the reflow spec), Children, OnRealized (chained).
-    /// NOTE: also transform-owned mid-motion (Trailing anchor) — do not add a transform-owning scroll effect (Sticky / Parallax) or a bound Transform here.</summary>
+    /// <summary>The always-mounted reveal wrapper (WinUI ExpanderContentClip) — the SizeMode.FlowReveal host. Owned:
+    /// ClipToBounds, Height (the open/closed toggle), Animate (the reveal spec), Children, OnRealized (chained).
+    /// NOTE: its children are shifted mid-motion (Parallax ChildShiftY) — do not add a ChildShift-owning scroll effect here.</summary>
     public const string PartClip = "Clip";
     /// <summary>The padded content panel (WinUI ExpanderContent). Owned: Children (the <see cref="Content"/> slot —
     /// restructure via the slot, restyle via this part: padding, fill, border, corners…).</summary>
@@ -107,23 +105,13 @@ public sealed class Expander : Component
     /// whenever the re-pushed value changes (props are signal-backed). Read with <c>UsePropsOrDefault</c>.</summary>
     public sealed record ExpanderSlots(Element? HeaderContent, Element Content, TemplateParts? Parts);
 
-    // WinUI Expander durations/easings (Expander.xaml, ExpandDown ~62-77 / CollapseUp ~78-90), applied to the clip
-    // wrapper's LAYOUT height (SizeMode.Reflow) instead of WinUI's content TranslateY-into-snapped-space:
-    //   expand   = clip height 0 → ContentHeight over 333ms, KeySpline 0,0,0,1 (Easing.FluentPopOpen).
-    //   collapse = ContentHeight → 0 over 167ms, KeySpline 1,1,0,1 (the ExitDynamics leg); the content stays MOUNTED
-    //              until the reflow settles (WinUI keyframes Visibility=Collapsed at t=167ms, Expander.xaml:81-83).
-    //   chevron  = the AnimatedChevronUpDownSmall rotate keyframes span 10/260 of the 4333.33ms composition ≈ 167ms
-    //              with cubic-bezier(0.167, 0.167, 0, 1) (AnimatedChevronUpDownSmallVisualSource.cpp:104,352,438-440).
-    const float ChevronMs = 167f;
-    static readonly LayoutTransition Reflow = new(TransitionChannels.Size,
-        TransitionDynamics.Tween(333f, Easing.FluentPopOpen),
-        Size: SizeMode.Reflow,
-        ExitDynamics: TransitionDynamics.Tween(167f, EasingSpec.CubicBezier(1f, 1f, 0f, 1f)),
-        Anchor: SizeAnchor.Trailing);
-    // ExpanderOptions.AnimateContentResize=false's STEADY-state spec: no Size channel at all, so a settled-open clip
-    // host's height prop simply relays out through real layout on the frame its content changes — no clip-reveal, no
-    // tween. Only used while NOT mid-toggle (see `transitioning` in Render); the toggle itself always gets `Reflow`.
-    static readonly LayoutTransition ReflowNoResize = Reflow with { Channels = TransitionChannels.None };
+    // The one disclosure motion (docs/plans/smooth-reveal-implementation.md §1): layout snaps once, the presented height
+    // springs under MotionTok.Reveal, siblings ride it at paint time; Parallax lets the panel trail the edge.
+    static readonly LayoutTransition Reveal = new(TransitionChannels.Size, MotionTok.Reveal.ToDynamics(),
+        Size: SizeMode.FlowReveal, Anchor: SizeAnchor.Parallax);
+    // ExpanderOptions.AnimateContentResize=false's STEADY-state spec: no Size channel, so a settled-open clip host's content
+    // change lands in the next layout as is. Only used while no toggle is in flight (see `animateResize` in Render).
+    static readonly LayoutTransition RevealNoResize = Reveal with { Channels = TransitionChannels.None };
 
     public override Element Render()
     {
@@ -138,24 +126,47 @@ public sealed class Expander : Component
         // Controlled (IsExpanded signal) or local state — reading the signal subscribes this component, so external
         // writes (an "expand all" button) re-render and run the full open/close motion.
         bool open = IsExpanded is { } ext ? ext.Value : localOpen;
-        // The content's MOUNT state lags `open` on collapse: WinUI keyframes Visibility=Collapsed at t=167ms
-        // (Expander.xaml:81-83), so the panel stays mounted while the clip shrinks over it and unmounts at settle.
+        // The panel's MOUNT lags `open` on close: it stays mounted while the presented height closes over it and unmounts
+        // when the reveal settles (the settle callback below, or the always-fire check in the layout effect).
         var shown = UseSignal(IsExpanded is { } init ? init.Peek() : InitiallyExpanded);
         var settings = ExpanderTemplateSettings.For(open);   // typed computed settings drive the chevron
         var chevronRef = UseRef<NodeHandle>(default);
         var clipRef = UseRef<NodeHandle>(default);
         var chevronSeeded = UseRef(false);
+        var openNow = UseRef(open);     // the settle callback runs outside render: it reads the committed open state here
+        var lastOpen = UseRef(open);    // the open state the previous commit rendered — a toggle render sees open != lastOpen
+        // Up from a toggle until its reveal settles: keeps the Size channel on the clip while a toggle is in flight even
+        // when ExpanderOptions.AnimateContentResize=false (only the steady state drops it).
+        var transitioning = UseSignal(false);
 
-        bool showContent = shown.Value;          // subscribe: the collapse watcher's write re-renders this component
-        bool closing = showContent && !open;     // mid collapse-reflow: content mounted, clip shrinking, watcher armed
+        bool showContent = shown.Value;          // subscribe: the settle write re-renders this component
 
-        // An EXTERNAL open (controlled-signal write, not a header click) must mount the content too. Effects run
-        // after the commit, so the panel mounts one frame later and the reflow seeds from 0 — same motion.
-        UseEffect(() => { if (open && !shown.Peek()) shown.Value = true; }, open);
+        // Settle: the panel unmounts when closed, and either way the toggle window ends. Idempotent: the engine callback
+        // and the always-fire check below may both run for one toggle.
+        Action onSettled = UseMemo<Action>(() => () =>
+        {
+            if (!openNow.Value) shown.Value = false;
+            transitioning.Value = false;
+        }, DepKey.Empty);
 
-        // Animate the chevron rotation toward the computed setting whenever the open state flips (down 0° ↔ up 180°).
-        // The AnimEngine owns the chevron LocalTransform (no static Rotation); the recorder pivots it about the centre.
-        // 167ms with the Lottie rotate spline cubic-bezier(0.167, 0.167, 0, 1) (AnimatedChevronUpDownSmallVisualSource.cpp:352).
+        // The open/close bookkeeping, at 6.5 (after the host seeded this commit's reveal at 6.3):
+        //  • an EXTERNAL open (controlled-signal write, not a header click) mounts the panel; it reveals from 0 next frame;
+        //  • ALWAYS-FIRE: with a toggle in flight and NO live reveal row after this commit's layout, nothing will ever call
+        //    back — settle now.
+        UseLayoutEffect(() =>
+        {
+            openNow.Value = open;
+            if (lastOpen.Value != open) transitioning.Value = true;
+            lastOpen.Value = open;
+            if (open && !shown.Peek()) { shown.Value = true; return; }
+            if (!transitioning.Peek()) return;
+            var anim = Context.Anim;
+            var node = clipRef.Value;
+            if (anim is null || node.IsNull || !anim.IsRevealing(node)) onSettled();
+        }, DepKey.From(open ? 1 : 0, showContent ? 1 : 0));
+
+        // The chevron rides the SAME spring as the reveal, so the glyph and the edge land together; a mid-flight toggle
+        // retargets from the live angle with its velocity. The first mount seeds the resting angle with no motion.
         UseEffect(() =>
         {
             var anim = Context.Anim;
@@ -165,40 +176,25 @@ public sealed class Expander : Component
             if (!chevronSeeded.Value)
             {
                 chevronSeeded.Value = true;
-                anim.Animate(chevronRef.Value, AnimChannel.Rotation, to, to, 1f, Easing.Linear);   // seed the resting angle, no visible motion
+                anim.SeedValue(chevronRef.Value, AnimChannel.Rotation, to, MotionTokenId.Reveal, from: to);
                 return;
             }
-            // A mid-flight toggle starts from the LIVE rotation, not the recomputed endpoint — WinUI's
-            // AnimatedIcon machine never snaps on interrupt (it queues/blends, AnimatedIcon.cpp:235-267).
-            float from = anim.TryGetTrackValue(chevronRef.Value, AnimChannel.Rotation, out float live)
-                ? live
-                : (open ? 0f : 180f);
-            anim.Animate(chevronRef.Value, AnimChannel.Rotation, from, to, ChevronMs,
-                EasingSpec.CubicBezier(0.167f, 0.167f, 0f, 1f));
+            anim.SeedValue(chevronRef.Value, AnimChannel.Rotation, to, MotionTokenId.Reveal);
         }, open);
 
-        // ExpanderOptions.AnimateContentResize=false: gate the disclosure Reflow spec (Size channel) to the toggle
-        // ITSELF, tracked via `open` (the same controlled-signal-or-local-state bool everything else here reads).
-        // `transitioning` flips true the instant `open` changes; an ExpanderResizeWatcher (below, the
-        // ExpanderCollapseWatcher idiom) clears it once the clip's Reflow track actually SETTLES
-        // (anim.HasTracks(clip) goes false) — tied to the REAL disclosure motion, not a guessed duration, so it can
-        // never race a slow frame or an interrupted toggle. Always tracked (cheap, and Options is a frozen field so
-        // the branch below is stable for the component's whole lifetime either way) — only its result is consulted
-        // when the option is off.
-        // The flag is up whenever the next toggle is owed its motion: from mount while COLLAPSED (the next open must ease),
-        // and from every toggle until the open leg settles. A freshly mounted OPEN Expander starts at rest — no FLIP seeds
-        // a track at mount, so raising the flag there only mounted a per-frame watcher and re-rendered the card twice to
-        // clear it again, for every Expander that mounted or was realized (a scrolled list of them kept a frame-clock
-        // poller alive the whole time). Only a CHANGE of `open` raises it after mount.
-        var transitioning = UseSignal(!open);
-        var lastOpen = UseRef(open);
+        // The engine calls back (next frame start) when the clip's reveal rests, snapped ones included, and once more if
+        // the clip node dies. One callback per clip node, unregistered on unmount.
         UseEffect(() =>
         {
-            if (lastOpen.Value != open) transitioning.Value = true;
-            lastOpen.Value = open;
-        }, open);
-        bool isTransitioning = transitioning.Value;      // subscribe: the resize watcher's write re-renders this component
-        bool animateResize = Options.AnimateContentResize || isTransitioning;
+            var anim = Context.Anim;
+            var node = clipRef.Value;
+            if (anim is null || node.IsNull) return null;
+            anim.WhenSettled(node, AnimChannel.RevealExtent, onSettled);
+            return () => anim.WhenSettled(node, AnimChannel.RevealExtent, null);
+        }, DepKey.Empty);
+
+        bool toggled = open != lastOpen.Value;
+        bool animateResize = Options.AnimateContentResize || toggled || transitioning.Value;
 
         Action<NodeHandle> chevronCapture = h => chevronRef.Value = h;
         Action<NodeHandle> clipCapture = h => clipRef.Value = h;
@@ -246,8 +242,8 @@ public sealed class Expander : Component
             // WinUI Expander header (ToggleButton) carries a 1px CardStrokeColorDefault border (ExpanderHeaderBorderThickness = 1).
             BorderWidth = 1f,
             BorderColor = Tok.StrokeCardDefault,
-            // Keep only the top corners while the body is mounted, INCLUDING the closing reflow (the panel stays
-            // visibly attached under the header for the whole 167ms shrink — rounding the header bottom mid-reveal
+            // Keep only the top corners while the body is mounted, INCLUDING the closing reveal (the panel stays
+            // visibly attached under the header for the whole close, until the reveal settles — rounding the header bottom mid-reveal
             // would punch a notch against it). Once the body unmounts the header regains the full ControlCornerRadius.
             Corners = showContent ? new CornerRadius4(Radii.Control, Radii.Control, 0f, 0f) : Radii.ControlAll,
             OnClick = toggle,
@@ -268,7 +264,7 @@ public sealed class Expander : Component
         header = parts.Apply(PartHeader, header) with { OnClick = toggle, Role = AutomationRole.Expander };
 
         // ExpanderContent (Expander.xaml:114): the panel inside the reveal. It keeps its natural size; the clip
-        // wrapper's animated layout height crops it, and the Trailing anchor slides it with the reveal edge.
+        // wrapper's presented height crops it, and the Parallax anchor trails it behind the reveal edge.
         var content = new BoxEl
         {
             Direction = 1,                       // vertical content area: stretch the child to full width so wrapping text reserves its true height
@@ -288,17 +284,16 @@ public sealed class Expander : Component
 
         // ExpanderContentClip (Expander.xaml:112-113, "The clip is a composition clip applied in code") — ALWAYS
         // MOUNTED, the engine transition's host node. The declared Height toggle 0 ↔ NaN(auto) IS the whole motion
-        // trigger: the commit snap-solves the new target, the host's FLIP projection diffs old vs new size, and the
-        // SizeMode.Reflow track eases the LAYOUT height through the WinUI curves while siblings reflow each tick.
-        // The Trailing anchor keeps the panel's bottom edge on the reveal edge (slide-from-under-the-header).
+        // trigger: the host's projection diffs old vs new size and the SizeMode.FlowReveal row springs the presented
+        // height; siblings ride it at paint time.
         Element[] clipKids = showContent ? [content] : [];
         var contentClip = new BoxEl
         {
             Direction = 1,
             ClipToBounds = true,
             Height = open ? float.NaN : 0f,
-            Animate = animateResize ? Reflow : ReflowNoResize,
-            OnRealized = clipCapture,              // the collapse watcher polls this node's reflow track
+            Animate = animateResize ? Reveal : RevealNoResize,
+            OnRealized = clipCapture,              // the settle callback and the always-fire check read this node
             Children = clipKids,
         };
         if (parts is { } pp)
@@ -308,21 +303,14 @@ public sealed class Expander : Component
             {
                 ClipToBounds = true,
                 Height = open ? float.NaN : 0f,
-                Animate = animateResize ? Reflow : ReflowNoResize,
+                Animate = animateResize ? Reveal : RevealNoResize,
                 Children = clipKids,
                 OnRealized = TemplateParts.Chain(clipCapture, m.OnRealized),
             };
         }
 
-        // The card root mirrors the template's root Grid: pure layout, NO fill/border/clip. The collapse watcher is
-        // mounted only while the closing reflow runs (the WinUI Visibility=Collapsed-at-167ms keyframe); the resize
-        // watcher only while OPEN and still `transitioning` (it clears the flag once the expand leg settles — see
-        // ExpanderOptions.AnimateContentResize above). Never both: closing already implies !open.
-        Element[] children = closing
-            ? [header, contentClip, Embed.Comp(() => new ExpanderCollapseWatcher { Clip = () => clipRef.Value, Shown = shown })]
-            : open && isTransitioning
-                ? [header, contentClip, Embed.Comp(() => new ExpanderResizeWatcher { Clip = () => clipRef.Value, Transitioning = transitioning })]
-                : [header, contentClip];
+        // The card root mirrors the template's root Grid: pure layout, NO fill/border/clip.
+        Element[] children = [header, contentClip];
 
         var root = new BoxEl
         {
@@ -330,59 +318,5 @@ public sealed class Expander : Component
             Children = children,
         };
         return parts.Apply(PartRoot, root) with { Children = children };
-    }
-}
-
-/// <summary>Per-frame poller (the PasswordBox PeekReleaseWatcher idiom), mounted only WHILE the collapse reflow runs:
-/// the moment the clip's SizeMode.Reflow track settles (the AnimEngine reclaims it), flip the mount signal off — the
-/// WinUI CollapseUp storyboard's Visibility=Collapsed keyframe at t=167ms (Expander.xaml:81-83). The clip is already
-/// at its declared 0 height, so the unmount itself moves nothing.</summary>
-internal sealed class ExpanderCollapseWatcher : Component
-{
-    public required Func<NodeHandle> Clip;
-    public required Signal<bool> Shown;
-
-    public override Element Render()
-    {
-        var tick = UseContext(FrameClock.Tick);   // re-render every frame while mounted (only during the 167ms reflow)
-        UseEffect(() =>
-        {
-            if (!Shown.Peek()) return;
-            var anim = Context.Anim;
-            var scene = Context.Scene;
-            var node = Clip();
-            // Settled (the reflow track completed and was reclaimed) — or the node vanished: unmount now.
-            if (anim is null || scene is null || node.IsNull || !scene.IsLive(node) || !anim.HasTracks(node))
-                Shown.Value = false;
-        }, tick);
-        return new BoxEl { HitTestVisible = false };
-    }
-}
-
-/// <summary>Per-frame poller (the ExpanderCollapseWatcher idiom, mirrored for the OPEN leg), mounted only while
-/// <see cref="ExpanderOptions.AnimateContentResize"/>=false's `transitioning` flag is up during an open toggle: the
-/// moment the clip's SizeMode.Reflow track settles (the AnimEngine reclaims it — <c>anim.HasTracks</c> goes false),
-/// flips <see cref="Transitioning"/> off. From then on a content-height change with no toggle in flight gets
-/// <c>ReflowNoResize</c>'s instant relayout instead of replaying the disclosure tween. Tied to the REAL animation
-/// state rather than a guessed duration, so it can't race a slow frame, an interrupted toggle, or (on a fresh mount,
-/// where no FLIP ever seeds a track — see cp3.c) a toggle that never actually animated at all.</summary>
-internal sealed class ExpanderResizeWatcher : Component
-{
-    public required Func<NodeHandle> Clip;
-    public required Signal<bool> Transitioning;
-
-    public override Element Render()
-    {
-        var tick = UseContext(FrameClock.Tick);   // re-render every frame while mounted (only during the expand reflow)
-        UseEffect(() =>
-        {
-            if (!Transitioning.Peek()) return;
-            var anim = Context.Anim;
-            var scene = Context.Scene;
-            var node = Clip();
-            if (anim is null || scene is null || node.IsNull || !scene.IsLive(node) || !anim.HasTracks(node))
-                Transitioning.Value = false;
-        }, tick);
-        return new BoxEl { HitTestVisible = false };
     }
 }

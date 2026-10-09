@@ -4442,7 +4442,7 @@ public sealed partial class AppHost : IDisposable
     /// <summary>What a scene publication made now would carry beyond the store's own ledger (see <see cref="PublicationKey"/>).</summary>
     private PublicationKey BuildPublicationKey(in Threading.SceneRecordOptions options, Size2 frameSize) => new(
         _renderSeam.TargetEpoch, _scene.Root, _scene.DeviceScale, _scene.OverlayClip, _scene.SpotlightScrimClip,
-        _scene.HasActiveVirtualDisclosures, _scene.PendingRemovalExtents.Length, _scene.PendingRemovalOverflow,
+        _scene.HasActiveRevealBands, _scene.PendingRemovalExtents.Length, _scene.PendingRemovalOverflow,
         ImageCache.RecordingInputSerial, _anim.CompositorCaptureFingerprint(), _scene.Recording.ConfigurationVersion,
         options, frameSize, _window.Scale, Clear);
 
@@ -6167,6 +6167,8 @@ public sealed partial class AppHost : IDisposable
             double reactiveFlushMs = 0, virtualRealizeMs = 0;
             try
             {
+                _anim.DrainSettledCallbacks();                                  // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
+                                                                                // panel, a band's collapse commit) — app code, so never inside phases 6–13
                 long tRx0 = Stopwatch.GetTimestamp();
                 FlushToQuiescence();                                            // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings — the whole committed write
                 long tRx1 = Stopwatch.GetTimestamp();
@@ -6198,6 +6200,11 @@ public sealed partial class AppHost : IDisposable
             string layoutPath = "none";
             _layout.ResetFrameDiagCounters();   // frame start for the measure/arrange/text-miss counters read into FrameStats
             _invalidator.BeginFrame(_timers.NowMs);   // reset the per-frame relayout-escape counter (FrameStats.RootRelayoutEscapes)
+            // SizeMode.FlowReveal: while a reveal is pending or running, layout must not clamp a scroll offset against the
+            // LAID-OUT extent — 6.3 clamps it against the PRESENTED one (a collapse at the end of a scroller rides its edge
+            // down instead of jumping in its commit frame). Reset after the 7.05 pass.
+            bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
+            _layout.DeferOffsetClamp = flowRevealFrame;
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -6231,6 +6238,13 @@ public sealed partial class AppHost : IDisposable
                 }
             }
             long tSolve = Stopwatch.GetTimestamp();            // of LayoutMs: the flex solve itself (full or scoped + realize catch-up)
+
+            // 6.3 SizeMode.FlowReveal — BEFORE layout effects and the post-layout scroll sync: seed this commit's reveals
+            // (resizes from the FLIP capture, enters), fold them into the presented flow, and clamp every scroll offset
+            // against the PRESENTED extent. Effects and the sync below then see the geometry this frame presents.
+            bool keepAliveSuppressed = _reconciler.ConsumeKeepAliveLayoutSuppressionFrame();
+            if (flowRevealFrame && SeedFlowRevealsPostLayout(capturedProjections, Motion.LayoutTransitionsSuppressed || keepAliveSuppressed, layoutSize))
+                reconciled = true;
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
             // A layout effect that scrolled (BringIntoView on the freshly laid-out rows) shows and windows THIS frame:
@@ -6297,13 +6311,18 @@ public sealed partial class AppHost : IDisposable
             long tLayout = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
-            bool keepAliveSuppressed = _reconciler.ConsumeKeepAliveLayoutSuppressionFrame();
             if (capturedProjections) ApplyProjections(keepAliveSuppressed);       // FLIP "Last+Invert+Play"
+            _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
+            _anim.RevealExitCarriers.Clear();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
+            // 7.05 presented flow (SizeMode.FlowReveal): fold the ticked reveal rows into the flow columns, re-clamp every
+            // scroll extent against the PRESENTED content, and realize the rows a reveal pulls into view (seed frames only).
+            RunFlowPass(layoutSize);
+            _layout.DeferOffsetClamp = false;
             // 7.15 follow-rect (F169): a node that must cover ANOTHER node's rect this frame (the docked video overlay over its
             // hollow reservation) takes size and position from the target's PAINTED rect here: after layout AND the animation
             // tick (so a paint-only slide of the target is already in its transform), before the video geometry scan and
@@ -6342,6 +6361,7 @@ public sealed partial class AppHost : IDisposable
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _connected.SyncDetached();                         // 7 flag-gated rebuild: mirror the engine-animated fly into its DetachedNode snapshot (RecordDetached draws it)
+            if (_anim.HasSettledCallbacks) WakeFrame();        // reveal settle callbacks drain at the next frame's start
             // 7 eased hover/press: HoverT/PressT now driven by the engine's HoverFade/PressFade tracks (ticked in _anim.Tick above); InteractionAnimator deleted
             // 7 implicit BrushTransition: the cross-fade T is now driven by the unified engine (AnimChannel.BrushFade,
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
@@ -7419,6 +7439,22 @@ public sealed partial class AppHost : IDisposable
             for (NodeHandle c = carrier, p = _scene.Parent(c); !p.IsNull && _scene.IsLive(p); c = p, p = _scene.Parent(p))
                 _reflowShoveFrames.TryAdd((int)p.Raw.Index, (int)c.Raw.Index);   // first writer wins (nested reflows: the innermost path claims the shared hops)
         }
+        // Reveal-shove frames (SizeMode.FlowReveal): the reveal's presented flow IS the sibling's motion, so a node moved
+        // by a reveal's layout snap must not position-FLIP. Carriers: a projected FlowReveal node whose height changed this
+        // commit, a FlowReveal entrant mounted this commit, a FlowReveal exit orphaned this commit (under its old parent).
+        foreach (var kv in _projectBefore)
+        {
+            NodeHandle rn = kv.Key;
+            if (!_scene.IsLive(rn) || !_anim.TryGetTransition(rn, out var rs) || rs.Size != SizeMode.FlowReveal) continue;
+            if (MathF.Abs(kv.Value.Rel.H - _scene.Bounds(rn).H) < SizeEps) continue;
+            AddShoveCarrier(rn, _scene.Parent(rn));
+        }
+        var revealEnters = _anim.PendingEnterReveal;
+        for (int i = 0; i < revealEnters.Count; i++)
+            if (_scene.IsLive(revealEnters[i])) AddShoveCarrier(revealEnters[i], _scene.Parent(revealEnters[i]));
+        var revealExits = _anim.RevealExitCarriers;
+        for (int i = 0; i < revealExits.Count; i++)
+            if (_scene.IsLive(revealExits[i].VisualParent)) AddShoveCarrier(revealExits[i].Node, revealExits[i].VisualParent);
 
         foreach (var kv in _projectBefore)
         {
@@ -7456,7 +7492,7 @@ public sealed partial class AppHost : IDisposable
             // still animate — POSITION is the one channel the reflow owns. Accepted edge: a sibling that genuinely made an
             // independent move on the SAME commit gets snapped for that one commit; a rare coincidence, bounded to one
             // frame, and far preferable to the overlap artifact.
-            if (_liveReflowScratch.Count > 0 && IsReflowShoved(n))
+            if (_reflowShoveFrames.Count > 0 && IsReflowShoved(n))
             {
                 _anim.SnapPositionToLayout(n);
                 from = @from with { X = to.X, Y = to.Y };
@@ -7477,6 +7513,69 @@ public sealed partial class AppHost : IDisposable
         _liveReflowScratch.Clear();
         _reflowShoveFrames.Clear();
         _projectBefore.Clear();
+    }
+
+    /// <summary>True when this commit's FLIP capture holds a SizeMode.FlowReveal node (its height may change in the
+    /// layout about to run, so layout defers its scroll-offset clamp to 6.3).</summary>
+    private bool CapturedFlowReveal()
+    {
+        foreach (var kv in _projectBefore)
+            if (_scene.IsLive(kv.Key) && _anim.TryGetTransition(kv.Key, out var t) && t.Size == SizeMode.FlowReveal) return true;
+        return false;
+    }
+
+    /// <summary>6.3 — SizeMode.FlowReveal seeds, right after layout. A captured FlowReveal node whose laid-out height
+    /// changed springs its presented height from the old one; an entrant from 0 (or from the exit orphan it reclaims).
+    /// Under suppression (a user scroll in flight, a keep-alive switch) each lands at once, and its settle callback still
+    /// fires. Then the flow pass runs and every scroll plan is re-synced against the PRESENTED extent before any layout
+    /// effect reads an offset. Returns true when the sync re-realized virtual rows (the caller marks the frame reconciled).</summary>
+    private bool SeedFlowRevealsPostLayout(bool capturedProjections, bool suppressed, Size2 layoutSize)
+    {
+        if (capturedProjections)
+            foreach (var kv in _projectBefore)
+            {
+                NodeHandle n = kv.Key;
+                if (!_scene.IsLive(n) || !_anim.TryGetTransition(n, out var spec) || spec.Size != SizeMode.FlowReveal
+                    || (spec.Channels & TransitionChannels.Size) == 0 || (spec.Axes & SizeAxes.Height) == 0) continue;
+                float fromH = kv.Value.Rel.H, toH = _scene.Bounds(n).H;
+                if (MathF.Abs(fromH - toH) < 0.5f) continue;
+                if (suppressed || n == _dispatcher.Drag.ActiveNode) _anim.SnapFlowReveal(n, fromH, toH);
+                else _anim.SeedFlowRevealResize(n, fromH, toH, spec.Dynamics);
+            }
+        var enters = _anim.PendingEnterReveal;
+        for (int i = 0; i < enters.Count; i++)
+        {
+            if (!_scene.IsLive(enters[i])) continue;
+            if (suppressed) _anim.SnapFlowReveal(enters[i], 0f, _scene.Bounds(enters[i]).H);
+            else _anim.SeedFlowRevealEnter(enters[i]);
+        }
+        return RunFlowPass(layoutSize, syncAlways: true);
+    }
+
+    /// <summary>The presented-flow pass and what hangs off it: fold the reveal rows into the flow columns, re-sync every
+    /// scroll plan against the PRESENTED content extent, and re-realize + re-lay out once when the sync moved a window
+    /// (<paramref name="syncAlways"/>: 6.3, where layout deferred its clamp) or a reveal's overscan grew. True when it
+    /// re-realized.</summary>
+    private bool RunFlowPass(Size2 layoutSize, bool syncAlways = false)
+    {
+        bool flowed = _anim.PropagateFlowReveals();
+        if (!flowed && !syncAlways) return false;
+        bool moved = SyncScrollPlansMidFrame();
+        if (!(_anim.FlowOverscanGrew || (syncAlways && moved)) || _scene.Root.IsNull || !_reconciler.ReRealizeVirtuals()) return false;
+        if (_runtime.HasPending) FlushRebindsToQuiescence();
+        _reconciler.ConsumeReconciled();
+        _invalidator.RunDirty(layoutSize);
+        _scene.ClearLayoutDirty();
+        _anim.PropagateFlowReveals();
+        return true;
+    }
+
+    /// <summary>Map every hop of <paramref name="carrier"/>'s chain (starting at <paramref name="parent"/>, its parent or an
+    /// exit orphan's former visual parent) to the child that carries the move — IsReflowShoved's frame map.</summary>
+    private void AddShoveCarrier(NodeHandle carrier, NodeHandle parent)
+    {
+        for (NodeHandle c = carrier, p = parent; !p.IsNull && _scene.IsLive(p); c = p, p = _scene.Parent(p))
+            _reflowShoveFrames.TryAdd((int)p.Raw.Index, (int)c.Raw.Index);
     }
 
     /// <summary>True when <paramref name="n"/>'s commit-time move was CAUSED by an active reflow: some hop of its

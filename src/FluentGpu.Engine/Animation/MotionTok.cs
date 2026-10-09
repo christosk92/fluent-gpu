@@ -32,11 +32,12 @@ public enum MotionTokenId : ushort
     StandardSpring, ExpressiveSpring,
     // Feature motions
     ConnectedFly, ContentResize, ItemPlacement, ScrollFade,
-    DisclosureExpand, DisclosureCollapse, DisclosureChevron,
     // Media transport chrome — deliberately ASYMMETRIC (reveal must feel instant, conceal must not blink out).
     MediaChromeReveal, MediaChromeConceal,
     // Navigation pane (WinUI SplitView: open 200 ms, close 100 ms, both on the FluentPane spline).
     PaneOpen, PaneClose,
+    // The smooth disclosure (SizeMode.FlowReveal, reveal bands, their chevrons) — one critically damped spring both ways.
+    Reveal,
 }
 
 /// <summary>A resolved motion recipe: dynamics (eased OR spring) + the reduced-motion policy. 24B-ish POD.</summary>
@@ -159,6 +160,12 @@ public static class MotionTok
     /// <summary>Chrome reveal duration (ms): 150 ms Fluent decelerate (Fluent "fast" 167; Chromium 250; mpv instant) — a
     /// reveal answers a user action and must feel immediate. See <see cref="MotionTokenId.MediaChromeReveal"/>.</summary>
     public const float MediaChromeFadeInMs = 150f;
+    /// <summary>Response (s) of <see cref="MotionTokenId.Reveal"/>: ω = 2π/0.26 ≈ 24.2 rad/s, critically damped — 1.8 % of
+    /// the travel on the first 120 Hz frame (6.3 % at 60 Hz), half way at ~69 ms, 95 % at ~196 ms, 99 % at ~275 ms, no
+    /// overshoot, the same curve open and close. 0.26 s is the quickest response whose steepest 60 Hz frame stays under 15 %
+    /// of the travel; the first cut (0.31 s, 95 % at ~235 ms) read as slow in the app, its last few pixels creeping for
+    /// ~200 ms (docs/plans/smooth-reveal-implementation.md §1).</summary>
+    public const float RevealResponseSec = 0.26f;
 
     public static MotionTokenDef Get(MotionTokenId id) => id switch
     {
@@ -179,9 +186,6 @@ public static class MotionTok
         MotionTokenId.ContentResize => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.90f)),
         MotionTokenId.ItemPlacement => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.85f)),
         MotionTokenId.ScrollFade => MotionTokenDef.Eased(150f, Easing.Linear, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.DisclosureExpand => MotionTokenDef.Eased(333f, Easing.FluentPopOpen),
-        MotionTokenId.DisclosureCollapse => MotionTokenDef.Eased(167f, Easing.FluentDisclosureCollapse),
-        MotionTokenId.DisclosureChevron => MotionTokenDef.Eased(167f, Easing.FluentDisclosureChevron),
         // Media chrome — SnapEnd (not KeepFade): under reduced motion the transport must appear/disappear instantly.
         // "Chrome that fades" IS the motion here; there is no orientation cue in it worth keeping. The conceal is an
         // EASE-OUT, not FluentAccelerate: cubic-bezier(1,0,1,1) stays near 1 for most of its duration and then drops, so
@@ -190,6 +194,8 @@ public static class MotionTok
         MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.EaseOut),
         MotionTokenId.PaneOpen => MotionTokenDef.Eased(200f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
         MotionTokenId.PaneClose => MotionTokenDef.Eased(100f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
+        // The smooth disclosure — one critically damped spring both ways (no overshoot, the same curve open and close).
+        MotionTokenId.Reveal => MotionTokenDef.SpringOf(SpringParams.FromResponse(RevealResponseSec, 1f)),
         _ => MotionTokenDef.SpringOf(SpringParams.Default),
     };
 
@@ -206,11 +212,9 @@ public static class MotionTok
     public static MotionTokenDef ContentResize => Get(MotionTokenId.ContentResize);
     public static MotionTokenDef ItemPlacement => Get(MotionTokenId.ItemPlacement);
     public static MotionTokenDef ScrollFade => Get(MotionTokenId.ScrollFade);
-    public static MotionTokenDef DisclosureExpand => Get(MotionTokenId.DisclosureExpand);
-    public static MotionTokenDef DisclosureCollapse => Get(MotionTokenId.DisclosureCollapse);
-    public static MotionTokenDef DisclosureChevron => Get(MotionTokenId.DisclosureChevron);
     public static MotionTokenDef MediaChromeReveal => Get(MotionTokenId.MediaChromeReveal);
     public static MotionTokenDef MediaChromeConceal => Get(MotionTokenId.MediaChromeConceal);
     public static MotionTokenDef PaneOpen => Get(MotionTokenId.PaneOpen);
     public static MotionTokenDef PaneClose => Get(MotionTokenId.PaneClose);
+    public static MotionTokenDef Reveal => Get(MotionTokenId.Reveal);
 }

@@ -129,7 +129,7 @@ public sealed partial class SceneRecordingSnapshot
         if (OverlayClip != other.OverlayClip) return Fail(out mismatch, "OverlayClip");
         if (SpotlightScrimClip != other.SpotlightScrimClip) return Fail(out mismatch, "SpotlightScrimClip");
         if (OrphanCount != other.OrphanCount) return Fail(out mismatch, "OrphanCount");
-        if (HasActiveVirtualDisclosures != other.HasActiveVirtualDisclosures) return Fail(out mismatch, "HasActiveVirtualDisclosures");
+        if (HasActiveRevealBands != other.HasActiveRevealBands) return Fail(out mismatch, "HasActiveRevealBands");
         if (PendingRemovalOverflow != other.PendingRemovalOverflow) return Fail(out mismatch, "PendingRemovalOverflow");
         if (_removalCount != other._removalCount) return Fail(out mismatch, "removalCount");
         for (int i = 0; i < _removalCount; i++)
@@ -250,7 +250,9 @@ public sealed partial class SceneRecordingSnapshot
 
     // ScrollState carries object references (Layout/SnapPoints/ScrollKey) that capture nulls out, so the default
     // structural comparison is both complete and correct here — and completeness is the point: a field this comparison
-    // skipped would be a field an incremental capture could silently publish stale.
+    // skipped would be a field an incremental capture could silently publish stale. The reveal bands compare through
+    // RevealBands/RevealBand.Equals (explicit, NaN-safe). They are named fields, never an [InlineArray]: the runtime throws
+    // from Equals/GetHashCode on any struct holding one, which would crash every parity check of a scene with a scroll row.
     private static bool ScrollEqual(in ScrollState a, in ScrollState b) => a.Equals(b);
 
     private static bool GradientEqual(in GradientSpec a, in GradientSpec b)

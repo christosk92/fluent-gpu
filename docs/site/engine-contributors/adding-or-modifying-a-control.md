@@ -261,7 +261,7 @@ text):
   again via the apply-once prototype cache (`TemplateParts.TryApplyCached`).
 
 > **One transform owner.** Don't put a `ScrollBinds` entry (or a bound `Transform`) on a transform-owned part (e.g. the
-> Expander clip mid-reflow, whose const explicitly warns against adding a scroll-driven transform bind there) — a
+> Expander clip mid-reveal, whose children the FlowReveal Parallax anchor shifts, whose const explicitly warns against adding a scroll-driven transform bind there) — a
 > scroll bind writes the node's `LocalTransform`, which a reflow already owns, so the two would clobber. A bound prop is
 > a `Prop<T>` taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal — for the bound-prop
 > mental model see [Signals internals](./signals-and-reactivity-internals.md) and the app-author

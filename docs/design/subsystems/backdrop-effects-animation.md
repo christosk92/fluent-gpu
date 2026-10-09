@@ -979,6 +979,99 @@ phase 7  (animation): the tracks integrate toward identity; WorldTransform[] rec
   delta from a garbage rect; a `FrameCache` miss (resize/device-lost full-rebuild frame) **skips** the tween (no
   prev world rect → snap, correct). Detached-slab cap (§9.10) bounds a reorder-storm.
 
+### 5.8b `SizeMode.FlowReveal` — layout once, motion at paint time (AS-BUILT 2026-10)
+
+An expand, collapse, mount, unmount or resize of a disclosure lands in LAYOUT in one pass. The motion is a single
+spring on the node's PRESENTED vertical extent, applied at paint time: siblings, the parent and the scroll extent move
+in lockstep with it, with no per-frame relayout, no component render and no allocation. `SizeMode.Reveal` (§5.8, the
+presented-size clip window whose siblings do not follow) keeps its meaning and stays the `Auto` default; FlowReveal is
+the mode for anything that opens and closes. It is appended after `Auto`, so no enum value moves.
+
+- **The row.** `AnimChannel.RevealExtent` is one row per node that springs `P`, the PRESENTED extent (absolute DIP).
+  The delta is derived every pass: `FlowDelta = P − layoutExtent` (an exit orphan holds no layout space, so its
+  layoutExtent is 0). A retarget (a reverse, async content growth) is a plain spring retarget from the live value
+  and velocity (`AnimEngine.Spring` rebake). No coordinate frame is shifted.
+- **The spring.** `MotionTok.Reveal` = `SpringParams.FromResponse(0.31f, 1f)`: critically damped, ω = 2π/0.31 rad/s,
+  no overshoot. Open and close run the SAME spring, so expand(t) + collapse(t) = travel. Chevrons rotate on the same
+  token (`MotionTokenId.Reveal`) so the glyph and the edge land together.
+- **The flow pass.** `AnimEngine.PropagateFlowReveals` runs twice a frame at most: at host 6.3 (seed, right after
+  layout) and at phase 7.05 (after the tick). It collects the live `RevealExtent` rows (`CollectReveals`), deepest
+  first (depth counts an exit orphan through its former visual parent), and calls `AddReveal` for each. `AddReveal`
+  writes the node's `NodePaint.FlowDelta` and climbs the ancestors, adding each `FlowContribution`, until one of:
+  a live reveal (sets `FlowInnerBit`, stop: the containing reveal combines it in its own turn); a vertical scroll
+  content (`FlowBoundaryBit`, the overscan goes to the viewport, stop); `IsFlowBoundary` (`FlowBoundaryBit`, stop);
+  or the contribution is below 1e-3 DIP. A column whose children move sets `FlowShiftsBit`. A revealing exit orphan
+  in a column sets `FlowOrphanBit` on its visual parent with `FlowOrphanTop` and `FlowOrphanDelta`, which push the
+  children laid out at or below `FlowOrphanTop` down.
+- **Nesting: combine, never sum.** A reveal presents its own spring `P_own`. Only when an inner reveal's delta
+  stopped at it this pass (`FlowInnerBit`; those deltas already sit in its `FlowDelta`) is it bounded:
+  `shown = min(P_own, ContentExtent + FlowDelta)`, its content's PRESENTED bottom. With no inner reveal there is no
+  bound, so a Resize whose content shrank outright closes over the space it still presents, exactly as it opened.
+  The bound is NEVER the laid-out height `H`. A close lays out at its FINAL height (a clip at `Height = 0`, a Resize
+  that shrank), so `min(P, H + …)` would present 0 from the seed frame and snap every close shut. The open is the
+  mirror of the close: no commit snap either way.
+- **Recorder and hit-test (`FlowCursor`).** A column with `FlowShiftsBit` is walked with a running Y shift: each child
+  is placed at `+shift`, then `shift += child.FlowDelta`. `SceneRecorder` and `InputDispatcher.Hit` / `HitAny` walk it
+  identically, so a click lands where its pixels are. `SceneStore.PresentedAbsoluteRect` (it walks the same `FlowCursor`) gives the presented rect of
+  a node for geometry queries.
+- **Visible-span clamp** (`RevealPlan.TryClamp`). Only the part of a move above `viewBottom + 8 DIP` animates; the
+  rest is applied instantly where nobody can see it. A region entirely below the view snaps. A region entirely ABOVE it
+  (`RevealPlan.IsAboveView`) snaps too, and the same frame shifts the scroll frame (`ScrollHandle.ShiftFrame`) by what
+  the content below moved (scroll anchoring, `AnchorShift`), so the content the user is reading does not move.
+- **Anchors.** `SizeAnchor.Leading` (default) is a wipe: the content stays put and the edge moves; used for list and
+  tree rows and drawers. `SizeAnchor.Parallax` is for cards: the content trails the edge by
+  `−min(24, 0.35·(contentExtent − P))` DIP.
+- **Host 6.3 (`AppHost.SeedFlowRevealsPostLayout`).** Runs after layout and BEFORE layout effects and the post-layout
+  scroll sync. It seeds this commit's resizes (from the FLIP capture of the laid-out height) and enters (present 0,
+  then the laid-out height), then runs the flow pass once. While flow reveal work is pending, layout defers its
+  scroll-offset clamp (`FlexLayout.DeferOffsetClamp`), and 6.3 clamps the offset against the PRESENTED content extent,
+  so a collapse at the end of a scroller rides the max-offset edge down and the commit frame holds the offset. The
+  later syncs (2.5, 7.05, 7.7) see a presented extent that only shrinks. With no reveal anywhere, 6.3 does not run
+  and layout clamps exactly as before. `ApplyProjections` starts and snaps no reveal rows: 6.3 owns the FlowReveal height.
+- **Realize overscan.** `ScrollState.RevealOverscan` = `max(0, layoutExtent − min(shown, To))` is the DIP the realize
+  window reaches past the viewport bottom, so the rows a reveal pulls into view stay realized for its flight. The value
+  is monotone over a flight, so the rows realize once on the seed frame and never per frame.
+- **Settle.** `AnimEngine.WhenSettled(node, channel, callback)` fires once when the row reaches rest, on a snap, on a
+  suppressed toggle (a projection mid-fling, a zero-height panel, a resize frame) and when the node dies (`ClearForIndex`:
+  a recycled drawer, an orphan reclaimed by a reopen). Callbacks are queued by the tick, the snap or the death, and
+  drained at the START of the next frame, outside the zero-alloc phases. This replaces the FrameClock poller
+  components that watched `HasTracks`. The Expander uses it to unmount its content at close (§8 of the plan).
+- **Enter and exit handoff.** A FlowReveal entrant that finds a revealing exit orphan of the same slot takes over its
+  extent and velocity and reclaims it: no two copies and no restart from 0.
+- **Reduced motion.** `FluentGpu.Dsl.Motion.ReducedMotion`, or a tween of 1 ms or less, snaps the size and the chevron
+  (`ReducedMotionPolicy.SnapEnd`). The snap still runs the anchor shift and queues the settle. There is no fade substitute.
+- **Recycle suppression.** A FlowReveal Enter or Exit inside a recycle (a rebind flush, `SuppressBoundTransitions > 0`)
+  never seeds: from the app's view it is the same persistent row.
+- **Zero-alloc.** The flow pass works in pre-sized scratch lists. The per-frame cost is the rows that are live, not the
+  tree.
+
+- **Virtual reveal bands (AS-BUILT 2026-10).** A sidebar band is a range of virtual rows (separate item roots), so it
+  cannot be one FlowReveal node. It is up to `RevealBands.Capacity` (4) concurrent bands per vertical viewport: slot
+  `i` is one `AnimChannel.RevealBand0..3` row on the viewport node, springing the band's PRESENTED height (0 … Extent)
+  under the same `MotionTok.Reveal` spring. `ScrollState.Bands` holds the four named `RevealBand` fields and
+  `ScrollState.BandMask` the live slots (scene-memory §2.7a). `AddBands` folds every live band into the content's
+  FlowDelta in the same flow pass, and `FlowCursor.SetBands` walks them, so the recorder, hit-test and
+  `PresentedAbsoluteRect` place the rows below a band exactly as they place a FlowReveal child. The model stays
+  EXPANDED while a band closes and rests at 0; the owner's commit removes the rows at rest.
+  **Committed-band handoff (zero delta at 6.3).** `ItemsViewController.BandSettled` runs at frame start
+  (`DrainSettledCallbacks`): it marks the band committed (`AnimEngine.CommitRevealBand`, recording the viewport's
+  `ItemCount` as `RevealBand.CommitCount`) right BEFORE it invokes the owner's commit. A committed band keeps
+  presenting its rows at 0 while they are still modelled. From the flush that drops them (the `ItemCount` moves off
+  `CommitCount`) `RevealBand.Presents` is false: `AddBands`, `FlowCursor` and `PresentedAbsoluteRect` contribute NO
+  delta and NO clip, and `RevealBands.PresentingMask` drops the slot. So the commit frame's 6.3 flow pass and
+  `SyncScrollPlansMidFrame` already see the laid-out extent. The ItemsView layout effect (6.5) only releases the slot.
+  Clearing the band only at 6.5 is too late: 6.3 would subtract a phantom extent, and a list scrolled to its end would
+  re-hold one band short, a permanent offset jump in the commit frame (gate `rv.band.8`).
+  **Above-view snap.** A band move that lies wholly above the view snaps like any reveal (the visible-span clamp above),
+  and the scroll frame shifts by what the content below moved, so the rows the user reads do not move.
+  **Geometry.** `RevealBand.Top` and `Extent` are the content-local laid-out geometry, refreshed every flow pass from
+  the layout. `RevealBands` uses named fields with explicit NaN-safe equality, never an `[InlineArray]`, because
+  `ScrollState` is compared by default struct equality (the parity check) and the runtime throws from `Equals` on
+  InlineArray-holding structs.
+
+Gates: `rv.1`–`rv.16` (`RevealSuite`), `RevealPlanTests`, `FlowCursorTests`. Contract row: SPEC-INDEX.md §2.
+Band gates: `rv.band.1`–`rv.band.8` (`RevealSuite`), `RevealBandsTests`.
+
 ### 5.9 Reduced motion
 
 Interactive resizing is a separate policy from accessibility reduced motion. `Motion.LayoutTransitionsSuppressed` is

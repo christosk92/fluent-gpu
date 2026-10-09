@@ -70,8 +70,6 @@ static partial class ControlsSuite
         SplitterMathChecks();
         SortableSurfaceChecks(strings);
         SortableCloseChecks(strings);
-        VirtualDisclosureChecks(strings);
-        VirtualDisclosureFastPathChecks(strings);
         FocusRingChecks(strings);
         Wave2ControlChecks(strings);
         RepeatButtonChecks(strings);
@@ -2008,9 +2006,9 @@ static partial class ControlsSuite
         float m11Collapsed = host.Scene.Paint(chevron0).LocalTransform.M11;
         bool noContent = Child(host.Scene, Child(host.Scene, host.Scene.Root, 1), 0).IsNull;   // clip mounted, panel not
 
-        // Toggle open. (a) The chevron rotation TWEENS (167ms): track peak sin θ — a tween passes through a mid-angle
+        // Toggle open. (a) The chevron rotation rides the Reveal spring: track peak sin θ — a tween passes through a mid-angle
         // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel SLIDES out from under the
-        // header: the clip wrapper's SizeMode.Reflow Trailing anchor keeps the panel's bottom edge on the reveal edge
+        // header: the clip wrapper's FlowReveal Parallax anchor trails the panel behind the reveal edge
         // (ChildShiftY < 0 mid-flight, 0 at rest) — an instant appear would read 0 every frame.
         ClickNode(host, window, Child(host.Scene, host.Scene.Root, 0));
         float peakSin = 0f, minShift = 0f;
@@ -6374,238 +6372,6 @@ static partial class ControlsSuite
             $"trail={trailing} lead={leading} clamp={clamp} fade={fade} collapse={collapse} resist={resist} axis={new Splitter.SplitterOptions().Axis}");
     }
 
-    static void VirtualDisclosureChecks(StringTable strings)
-    {
-        using var app = new HeadlessPlatformApp();
-        var window = new HeadlessWindow(new WindowDesc("virtual-disclosure", new Size2(260, 220), 1f));
-        window.Show();
-        var device = new HeadlessGpuDevice();
-        var fonts = new HeadlessFontSystem(strings);
-        var probe = new VirtualDisclosureProbe();
-        using var host = new AppHost(app, window, device, fonts, strings, probe);
-        host.RunFrame();
-        bool censusInitiallyIdle = !host.Scene.HasActiveVirtualDisclosures;
-
-        int collapseSettled = 0;
-        var range = new ItemDisclosureRange("band", 1, 2);
-        probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Collapse,
-            collapseCommit: probe.CommitCollapsed,
-            settled: () => collapseSettled++);
-        host.RunFrame();
-        bool collapseStarted = host.Scene.TryGetScroll(probe.Controller.Viewport, out var opening)
-            && float.IsFinite(opening.DisclosureT) && opening.DisclosureFirst == 1 && opening.DisclosureCount == 2;
-        bool collapseCensusActive = host.Scene.HasActiveVirtualDisclosures;
-        for (int i = 0; i < 4; i++) host.RunFrame();
-        host.Scene.TryGetScroll(probe.Controller.Viewport, out var collapseMid);
-        bool collapseIntermediate = collapseMid.DisclosureT > 0f && collapseMid.DisclosureT < 1f
-            && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 1
-            && Occurrences(host.Scene.Root, "C") == 1 && Occurrences(host.Scene.Root, "D") == 1
-            && Occurrences(host.Scene.Root, "E") == 1;
-        for (int i = 0; i < 24; i++) host.RunFrame();
-        host.Scene.TryGetScroll(probe.Controller.Viewport, out var collapsed);
-        bool collapseFinished = collapseSettled == 1 && probe.Count.Peek() == 3
-            && !float.IsFinite(collapsed.DisclosureT)
-            && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 0
-            && Occurrences(host.Scene.Root, "C") == 0 && Occurrences(host.Scene.Root, "D") == 1
-            && Occurrences(host.Scene.Root, "E") == 1;
-        bool collapseCensusIdle = !host.Scene.HasActiveVirtualDisclosures;
-
-        probe.RestoreExpanded();
-        host.RunFrame();
-        int expandSettled = 0;
-        probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Expand,
-            settled: () => expandSettled++);
-        host.RunFrame();
-        bool expandStarted = host.Scene.TryGetScroll(probe.Controller.Viewport, out var closing)
-            && float.IsFinite(closing.DisclosureT) && closing.DisclosureFirst == 1 && closing.DisclosureCount == 2;
-        bool expandCensusActive = host.Scene.HasActiveVirtualDisclosures;
-        for (int i = 0; i < 4; i++) host.RunFrame();
-        host.Scene.TryGetScroll(probe.Controller.Viewport, out var expandMid);
-        bool expandIntermediate = expandMid.DisclosureT > 0f && expandMid.DisclosureT < 1f
-            && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 1
-            && Occurrences(host.Scene.Root, "C") == 1 && Occurrences(host.Scene.Root, "D") == 1
-            && Occurrences(host.Scene.Root, "E") == 1;
-        for (int i = 0; i < 36; i++) host.RunFrame();
-        host.Scene.TryGetScroll(probe.Controller.Viewport, out var expanded);
-        bool expandFinished = expandSettled == 1 && probe.Count.Peek() == 5
-            && !float.IsFinite(expanded.DisclosureT);
-        bool expandCensusIdle = !host.Scene.HasActiveVirtualDisclosures;
-        bool lifecycle = probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Armed)
-            && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Progress)
-            && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Cleared)
-            && !probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.FailedToArm);
-
-        Check("virtual-disclosure.1 collapse retains the expanded model until settle, commits once, then clears presentation",
-            collapseStarted && collapseIntermediate && collapseFinished,
-            $"started={collapseStarted} mid={collapseMid.DisclosureT:0.###} identities={collapseIntermediate} settled={collapseSettled} count={probe.Count.Peek()} t={collapsed.DisclosureT}");
-        Check("virtual-disclosure.2 expansion starts from the inserted model and releases its clip after the named motion",
-            expandStarted && expandIntermediate && expandFinished,
-            $"started={expandStarted} mid={expandMid.DisclosureT:0.###} identities={expandIntermediate} settled={expandSettled} count={probe.Count.Peek()} t={expanded.DisclosureT}");
-        Check("virtual-disclosure.3 lifecycle arms before observation and clears without a failed-start recovery",
-            lifecycle, $"events={probe.Diagnostics.Count}");
-        Check("virtual-disclosure.4 scene census is active only while presentation is armed",
-            censusInitiallyIdle && collapseCensusActive && collapseCensusIdle && expandCensusActive && expandCensusIdle,
-            $"initial={censusInitiallyIdle} collapse={collapseCensusActive}->{collapseCensusIdle} expand={expandCensusActive}->{expandCensusIdle}");
-
-        int Occurrences(NodeHandle node, string text)
-        {
-            if (node.IsNull) return 0;
-            ref var paint = ref host.Scene.Paint(node);
-            int found = paint.VisualKind == VisualKind.Text && strings.Resolve(paint.Text) == text ? 1 : 0;
-            for (var child = host.Scene.FirstChild(node); !child.IsNull; child = host.Scene.NextSibling(child))
-                found += Occurrences(child, text);
-            return found;
-        }
-    }
-
-    static void VirtualDisclosureFastPathChecks(StringTable strings)
-    {
-        var fonts = new HeadlessFontSystem(strings);
-        var scene = new SceneStore();
-        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
-        {
-            Direction = 1,
-            Width = 100f,
-            Height = 200f,
-            ClipToBounds = true,
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 1,
-                    Width = 100f,
-                    Children =
-                    [
-                        new BoxEl { Key = "A", Width = 100f, Height = 40f, OnClick = static () => { } },
-                        new BoxEl { Key = "B", Width = 100f, Height = 40f, OnClick = static () => { } },
-                        new BoxEl { Key = "C", Width = 100f, Height = 40f, OnClick = static () => { } },
-                        new BoxEl { Key = "D", Width = 100f, Height = 40f, OnClick = static () => { } },
-                        new BoxEl { Key = "E", Width = 100f, Height = 40f, OnClick = static () => { } },
-                    ],
-                },
-            ],
-        }, null);
-        new FlexLayout(scene, fonts).Run(scene.Root);
-
-        var viewport = scene.Root;
-        var content = Child(scene, viewport, 0);
-        var b = Child(scene, content, 1);
-        var c = Child(scene, content, 2);
-        var d = Child(scene, content, 3);
-        ref ScrollState scroll = ref scene.ScrollRef(viewport);
-        scroll.Orientation = 0;
-        scroll.ContentNode = content;
-        scroll.ItemCount = 5;
-        scroll.FirstRealized = 0;
-
-        bool idle = !scene.HasActiveVirtualDisclosures;
-        bool armed = scene.BeginVirtualDisclosure(viewport, 1, 2, 40f, 80f, 0.5f)
-            && scene.HasActiveVirtualDisclosures;
-        bool retargeted = scene.BeginVirtualDisclosure(viewport, 1, 2, 40f, 80f, 0.5f)
-            && scene.HasActiveVirtualDisclosures;
-        var dispatcher = new InputDispatcher(scene);
-        var bodyHit = dispatcher.HitTest(new Point2(10f, 50f));
-        var suffixHit = dispatcher.HitTest(new Point2(10f, 90f));
-        scene.ClearVirtualDisclosure(viewport);
-        var restingHit = dispatcher.HitTest(new Point2(10f, 90f));
-        scene.SetVirtualDisclosureProgress(viewport, 0.75f);   // a late animation write after clear must be ignored
-        bool cleared = !scene.HasActiveVirtualDisclosures
-            && scene.TryGetScroll(viewport, out var clearedState) && !float.IsFinite(clearedState.DisclosureT);
-
-        Check("virtual-disclosure.5 midpoint hit testing clips the body and maps the translated suffix",
-            idle && armed && retargeted && bodyHit == b && suffixHit == d && restingHit == c && cleared,
-            $"idle={idle} armed={armed} retarget={retargeted} body={bodyHit == b} suffix={suffixHit == d} resting={restingHit == c} cleared={cleared}");
-
-        var census = new SceneStore();
-        var root = census.CreateNode(1);
-        census.Root = root;
-        var viewportA = census.CreateNode(1);
-        var contentA = census.CreateNode(1);
-        var viewportB = census.CreateNode(1);
-        var contentB = census.CreateNode(1);
-        census.AppendChild(root, viewportA);
-        census.AppendChild(viewportA, contentA);
-        census.AppendChild(root, viewportB);
-        census.AppendChild(viewportB, contentB);
-        ref ScrollState scrollA = ref census.ScrollRef(viewportA);
-        scrollA.ContentNode = contentA;
-        scrollA.ItemCount = 1;
-        ref ScrollState scrollB = ref census.ScrollRef(viewportB);
-        scrollB.ContentNode = contentB;
-        scrollB.ItemCount = 1;
-
-        bool both = census.BeginVirtualDisclosure(viewportA, 0, 1, 0f, 10f, 0f)
-            && census.BeginVirtualDisclosure(viewportB, 0, 1, 0f, 10f, 1f)
-            && census.HasActiveVirtualDisclosures;
-        census.ClearVirtualDisclosure(viewportA);
-        bool oneRemains = census.HasActiveVirtualDisclosures;
-        census.ClearVirtualDisclosure(viewportA);
-        bool repeatClearSafe = census.HasActiveVirtualDisclosures;
-        census.FreeSubtree(viewportB);
-        bool freeClearsLast = !census.HasActiveVirtualDisclosures;
-
-        Check("virtual-disclosure.6 concurrent, repeated-clear, and viewport-free census edges stay balanced",
-            both && oneRemains && repeatClearSafe && freeClearsLast,
-            $"both={both} one={oneRemains} repeat={repeatClearSafe} free={freeClearsLast}");
-    }
-
-    sealed class VirtualDisclosureProbe : Component
-    {
-        public readonly Signal<int> Count = new(5);
-        public readonly Signal<int> SourceVersion = new(0);
-        public readonly ItemsViewController Controller = new();
-        public readonly List<ItemDisclosureDiagnostic> Diagnostics = [];
-        private string[] _labels = ["A", "B", "C", "D", "E"];
-        private float[] _heights = [28f, 36f, 44f, 32f, 40f];
-
-        public void CommitCollapsed() => Publish(["A", "D", "E"], [28f, 32f, 40f]);
-        public void RestoreExpanded() => Publish(["A", "B", "C", "D", "E"], [28f, 36f, 44f, 32f, 40f]);
-
-        private void Publish(string[] labels, float[] heights)
-        {
-            void Mutate()
-            {
-                _labels = labels;
-                _heights = heights;
-                Count.Value = labels.Length;
-                SourceVersion.Value = SourceVersion.Peek() + 1;
-            }
-            if (Context.Runtime is { } runtime) runtime.Batch(Mutate);
-            else Mutate();
-        }
-
-        public override Element Render() => Embed.Comp(() => new ItemsView
-        {
-            ItemCount = 8,
-            ItemCountSignal = Count,
-            BoundMode = true,
-            RowTemplate = scope => new BoxEl
-            {
-                Height = Prop.Of(() => { _ = SourceVersion.Value; return _heights[scope.Index.Value]; }),
-                Fill = Tok.FillSubtleSecondary,
-                Children =
-                [
-                    new TextEl("")
-                    {
-                        Text = Prop.Of(() => { _ = SourceVersion.Value; return _labels[scope.Index.Value]; }),
-                        Size = 12f,
-                    },
-                ],
-            },
-            Layout = RepeatLayout.VariableList(32f),
-            HasExplicitLayout = true,
-            SelectionMode = ItemsSelectionMode.None,
-            Selector = SelectorVisual.None,
-            Controller = Controller,
-            Disclosure = new DisclosureOptions
-            {
-                Version = SourceVersion,
-                Diagnostic = Diagnostics.Add,
-            },
-            Grow = 1f,
-        });
-    }
-
     static void FocusRingChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -8490,7 +8256,7 @@ static partial class ControlsSuite
             $"wrapped0={wrapped0} textW {textW0:0.0}->{textW1:0.0} textH {textH0:0.0}->{textH1:0.0} (1line~{lineH:0.0}) markerY {markerY0:0.0}->{markerY1:0.0} below {below0}/{below1}");
     }
 
-    // ExpanderOptions.AnimateContentResize=false: the 333ms/167ms disclosure Reflow tween is scoped to the open/close
+    // ExpanderOptions.AnimateContentResize=false: the disclosure reveal (the FlowReveal spring) is scoped to the open/close
     // TOGGLE itself. A STEADY-open Expander whose content resizes for an unrelated reason (an inline drawer growing
     // inside it) must re-lay out in ONE frame instead of replaying the disclosure motion; the toggle itself must still
     // get the full motion. Default (AnimateContentResize=true, i.e. Options omitted) is unchanged — cp3.a/cp3.b above
@@ -8536,13 +8302,13 @@ static partial class ControlsSuite
         {
             var (app, host, _, clip, hSig, maxPollers) = Mount(animateResize: false, initiallyExpanded: true, tag: "steady-off");
             // A resting open mount is not a toggle: it raises no `transitioning` window, so no per-frame watcher is mounted.
-            Check("cp3.acr0 — Expander: a resting open mount holds no frame-clock poller (only a toggle mounts the resize watcher)",
+            Check("cp3.acr0 — Expander: a resting open mount holds no frame-clock poller (the engine settle callback replaced the watchers)",
                 maxPollers == 0, $"max pollers over the mount frames={maxPollers}");
             for (int i = 0; i < 5; i++) host.RunFrame();
-            float before = host.Scene.AbsoluteRect(clip).H;        // 60 + 2×16 padding − 1 margin = 91
+            float before = host.Scene.PresentedAbsoluteRect(clip).H;        // 60 + 2×16 padding − 1 margin = 91
             hSig.Value = 160f;
             host.RunFrame();                                       // ONE frame after the resize
-            float after1 = host.Scene.AbsoluteRect(clip).H;
+            float after1 = host.Scene.PresentedAbsoluteRect(clip).H;
             Check("cp3.acr1 — Expander AnimateContentResize=false: a steady-open resize relays out in one instant frame (no tween)",
                 Near(before, 91f, 2f) && Near(after1, 191f, 2f),
                 $"before={before:0.0} after1frame={after1:0.0} (target 191)");
@@ -8554,12 +8320,12 @@ static partial class ControlsSuite
         {
             var (app, host, _, clip, hSig, _) = Mount(animateResize: true, initiallyExpanded: true, tag: "steady-on");
             for (int i = 0; i < 5; i++) host.RunFrame();
-            float before = host.Scene.AbsoluteRect(clip).H;
+            float before = host.Scene.PresentedAbsoluteRect(clip).H;
             hSig.Value = 160f;
             host.RunFrame();
-            float after1 = host.Scene.AbsoluteRect(clip).H;
+            float after1 = host.Scene.PresentedAbsoluteRect(clip).H;
             for (int i = 0; i < 25; i++) host.RunFrame();
-            float settled = host.Scene.AbsoluteRect(clip).H;
+            float settled = host.Scene.PresentedAbsoluteRect(clip).H;
             Check("cp3.acr2 — Expander AnimateContentResize=true (default): a steady-open resize still replays the disclosure tween",
                 Near(before, 91f, 2f) && after1 < 150f && Near(settled, 191f, 2f),
                 $"before={before:0.0} after1frame={after1:0.0} settled={settled:0.0} (target 191)");
@@ -8567,7 +8333,7 @@ static partial class ControlsSuite
         }
 
         // (c) AnimateContentResize=false does NOT defeat the TOGGLE's own disclosure motion: opening from collapsed
-        // still eases over the full ~333ms (ExpanderResizeWatcher keeps `transitioning` up the whole time), one frame
+        // still rides the full Reveal spring (the toggle window lasts until the engine reports the reveal at rest), one frame
         // in it is nowhere near the open height, and it settles there.
         {
             var (app, host, window, clip, _, collapsedPollers) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
@@ -8576,11 +8342,11 @@ static partial class ControlsSuite
             ClickNode(host, window, header);
             host.RunFrame();
             int openingPollers = host.FrameClockPollerCount;
-            Check("cp3.acr0b — Expander: a collapsed mount holds no frame-clock poller; the open toggle mounts the resize watcher",
-                collapsedPollers == 0 && openingPollers > 0, $"collapsed={collapsedPollers} opening={openingPollers}");
-            float after1 = host.Scene.AbsoluteRect(clip).H;
+            Check("cp3.acr0b — Expander: no frame-clock poller ever — neither a collapsed mount nor the open toggle (the engine settle callback replaced the watchers)",
+                collapsedPollers == 0 && openingPollers == 0, $"collapsed={collapsedPollers} opening={openingPollers}");
+            float after1 = host.Scene.PresentedAbsoluteRect(clip).H;
             for (int i = 0; i < 25; i++) host.RunFrame();
-            float open = host.Scene.AbsoluteRect(clip).H;
+            float open = host.Scene.PresentedAbsoluteRect(clip).H;
             Check("cp3.acr3 — Expander AnimateContentResize=false: the open/close TOGGLE itself still eases (not instant)",
                 after1 < open - 10f && Near(open, 91f, 2f),
                 $"after1frame={after1:0.0} open={open:0.0}");
@@ -8622,60 +8388,60 @@ static partial class ControlsSuite
         var card = host.Scene.FirstChild(anchor);              // component anchor → the card box
         var header = Child(host.Scene, card, 0);
         float headerH = host.Scene.AbsoluteRect(header).H;
-        float siblingYCollapsed = host.Scene.AbsoluteRect(sibling).Y;
+        float siblingYCollapsed = host.Scene.PresentedAbsoluteRect(sibling).Y;
 
-        // cp3.a — open click: the content mounts, but the click frame still PAINTS the old size (the reflow track's
-        // JustSeeded first tick re-establishes 0 before record), so the sibling never jumps; later frames ease it down
-        // MONOTONICALLY while the Trailing anchor keeps the panel's bottom edge on the reveal edge.
+        // cp3.a — open click: the content mounts, but the click frame still PAINTS the old size (the FlowReveal row's
+        // seed frame presents the old extent), so the sibling never jumps; later frames ease it down
+        // MONOTONICALLY while the Parallax anchor trails the panel behind the reveal edge.
         ClickNode(host, window, header);
         var clip = Child(host.Scene, card, 1);           // the clip wrapper is ALWAYS mounted (the transition's host)
         var content = clip.IsNull ? NodeHandle.Null : Child(host.Scene, clip, 0);
-        float cardHClick = host.Scene.AbsoluteRect(card).H;
-        float clipHClick = clip.IsNull ? 0f : host.Scene.AbsoluteRect(clip).H;
+        float cardHClick = host.Scene.PresentedAbsoluteRect(card).H;
+        float clipHClick = clip.IsNull ? 0f : host.Scene.PresentedAbsoluteRect(clip).H;
         float contentH = content.IsNull ? 0f : host.Scene.AbsoluteRect(content).H;
         float contentExtent = contentH - 1f;             // the −1px border-overlap margin: panel bottom = contentH − 1
-        float siblingYClick = host.Scene.AbsoluteRect(sibling).Y;
+        float siblingYClick = host.Scene.PresentedAbsoluteRect(sibling).Y;
         bool monotoneOpen = true;
         float prevSibY = siblingYClick, clipHMid = 0f, shiftMid = 0f, siblingYMid = 0f;
         for (int i = 0; i < 30; i++)                     // ≥ 333ms — settle (sampled per frame for monotonicity)
         {
             host.RunFrame();
-            float y = host.Scene.AbsoluteRect(sibling).Y;
+            float y = host.Scene.PresentedAbsoluteRect(sibling).Y;
             if (y < prevSibY - 0.25f) monotoneOpen = false;
             prevSibY = y;
-            if (i == 2) { clipHMid = host.Scene.AbsoluteRect(clip).H; shiftMid = host.Scene.Paint(clip).ChildShiftY; siblingYMid = host.Scene.AbsoluteRect(sibling).Y; }
+            if (i == 2) { clipHMid = host.Scene.PresentedAbsoluteRect(clip).H; shiftMid = host.Scene.Paint(clip).ChildShiftY; siblingYMid = host.Scene.PresentedAbsoluteRect(sibling).Y; }
         }
-        float clipHOpen = host.Scene.AbsoluteRect(clip).H;
-        float siblingYOpen = host.Scene.AbsoluteRect(sibling).Y;
+        float clipHOpen = host.Scene.PresentedAbsoluteRect(clip).H;
+        float siblingYOpen = host.Scene.PresentedAbsoluteRect(sibling).Y;
         float shiftDone = host.Scene.Paint(clip).ChildShiftY;
         bool liRestoredOpen = float.IsNaN(host.Scene.Layout(clip).Height);   // settle returned the declared NaN(auto)
         bool noClickJump = !clip.IsNull && !content.IsNull && Near(siblingYClick, siblingYCollapsed, 1.5f) && Near(cardHClick, headerH + clipHClick, 1.5f) && clipHClick < 2f;
         bool layoutRevealed = siblingYMid > siblingYClick + 4f && siblingYMid < siblingYOpen - 4f && clipHMid > 4f && clipHMid < clipHOpen - 4f;
-        bool anchoredOpen = Near(shiftMid, clipHMid - contentExtent, 1.5f) && shiftMid < -4f;   // bottom edge rides the reveal edge
-        Check("cp3.a — expand: sibling eases down monotonically (no click jump); the panel's bottom edge rides the reveal edge",
+        bool anchoredOpen = shiftMid < -0.5f && shiftMid >= -RevealPlan.ParallaxMaxDip - 0.01f;   // Parallax: the panel trails the edge, <= 24 DIP
+        Check("cp3.a — expand: sibling eases down monotonically (no click jump); the panel trails the reveal edge (Parallax)",
             noClickJump && layoutRevealed && monotoneOpen && anchoredOpen && MathF.Abs(shiftDone) < 0.01f
             && Near(clipHOpen, contentExtent, 1.5f) && liRestoredOpen,
             $"siblingY {siblingYCollapsed:0.0}→{siblingYClick:0.0}→{siblingYMid:0.0}→{siblingYOpen:0.0} clipH {clipHClick:0.0}→{clipHMid:0.0}→{clipHOpen:0.0} shift {shiftMid:0.0}→{shiftDone:0.00} liNaN={liRestoredOpen}");
 
-        // cp3.b — close click: the content stays LIVE through the 167ms reflow while the sibling eases upward; only
-        // after the reflow settles does the content unmount (the clip itself STAYS mounted at its declared 0 height).
-        ClickNode(host, window, header);                 // collapse — the declared Height flips to 0; ExitDynamics leg
-        float siblingYCloseClick = host.Scene.AbsoluteRect(sibling).Y;
-        for (int i = 0; i < 3; i++) host.RunFrame();     // ~48ms into the 167ms reflow
+        // cp3.b — close click: the content stays LIVE through the reveal close while the sibling eases upward; it unmounts
+        // when the engine reports the reveal at rest (the clip itself STAYS mounted at its declared 0 height).
+        ClickNode(host, window, header);                 // collapse — the declared Height flips to 0; the same Reveal spring as the open
+        float siblingYCloseClick = host.Scene.PresentedAbsoluteRect(sibling).Y;
+        for (int i = 0; i < 3; i++) host.RunFrame();     // ~33 ms into the close
         var contentEarly = Child(host.Scene, clip, 0);
         bool liveEarly = !contentEarly.IsNull && host.Scene.IsLive(contentEarly);
-        float siblingYClosing = host.Scene.AbsoluteRect(sibling).Y;
-        float clipHClosing = host.Scene.AbsoluteRect(clip).H;
+        float siblingYClosing = host.Scene.PresentedAbsoluteRect(sibling).Y;
+        float clipHClosing = host.Scene.PresentedAbsoluteRect(clip).H;
         float shiftClosing = host.Scene.Paint(clip).ChildShiftY;
-        for (int i = 0; i < 20; i++) host.RunFrame();    // settle + the collapse watcher's unmount frame
+        for (int i = 0; i < 30; i++) host.RunFrame();    // settle (~0.4 s) + the settle callback's unmount frame
         bool unmounted = Child(host.Scene, clip, 0).IsNull && !Child(host.Scene, card, 1).IsNull;
-        float closedH = host.Scene.AbsoluteRect(card).H;
-        float siblingYClosed = host.Scene.AbsoluteRect(sibling).Y;
+        float closedH = host.Scene.PresentedAbsoluteRect(card).H;
+        float siblingYClosed = host.Scene.PresentedAbsoluteRect(sibling).Y;
         bool liRestoredClosed = host.Scene.Layout(clip).Height == 0f;        // settle returned the declared 0
         bool noCloseJump = Near(siblingYCloseClick, siblingYOpen, 1.5f);
         bool layoutCollapsed = siblingYClosing < siblingYCloseClick - 4f && siblingYClosing > siblingYCollapsed + 4f && clipHClosing > 4f && clipHClosing < clipHOpen - 4f;
-        bool anchoredClosing = Near(shiftClosing, clipHClosing - contentExtent, 1.5f) && shiftClosing < -8f;
-        Check("cp3.b — collapse: content stays LIVE while the sibling eases up (anchored to the reveal edge), unmounts at settle",
+        bool anchoredClosing = shiftClosing < -0.5f && shiftClosing >= -RevealPlan.ParallaxMaxDip - 0.01f;
+        Check("cp3.b — collapse: content stays LIVE while the sibling eases up (anchored to the reveal edge (Parallax)), unmounts at settle",
             liveEarly && noCloseJump && layoutCollapsed && anchoredClosing && unmounted && Near(closedH, headerH, 1.5f)
             && Near(siblingYClosed, siblingYCollapsed, 1.5f) && liRestoredClosed,
             $"liveEarly={liveEarly} siblingY {siblingYOpen:0.0}→{siblingYCloseClick:0.0}→{siblingYClosing:0.0}→{siblingYClosed:0.0} clipHClosing={clipHClosing:0.0} shift={shiftClosing:0.0} unmounted={unmounted} li0={liRestoredClosed}");

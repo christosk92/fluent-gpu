@@ -251,6 +251,8 @@ public sealed partial class AnimEngine
                     if (width) ReflowSize(node, AnimChannel.LayoutW, fromAbs.W, toAbs.W, spec);
                     if (height) ReflowSize(node, AnimChannel.LayoutH, fromAbs.H, toAbs.H, spec);
                     break;
+                case SizeMode.FlowReveal:   // the presented height was seeded at 6.3 (AppHost.SeedFlowRevealsPostLayout)
+                    break;
             }
         }
     }

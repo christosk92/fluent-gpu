@@ -148,8 +148,6 @@ public sealed partial class SceneStore : ISceneBackend
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
     private readonly ColdSlab<ScrollState> _scroll = new();   // GEN-17 (wired)
-    // Scene-wide census for the recorder/input inactive fast path. Usually zero; supports concurrent ItemsViews.
-    private int _activeVirtualDisclosureCount;
     // Per-variable-list extent tables (Fenwick); persist across frames. Keyed by viewport node index.
     private readonly Dictionary<int, ExtentTable> _extents = new();
     // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
@@ -481,11 +479,9 @@ public sealed partial class SceneStore : ISceneBackend
         NodeFlags flags = _flags[idx];
         if ((flags & NodeFlags.Scrollable) != 0)
         {
-            if (_scroll.TryGet(idx, out var scroll) && float.IsFinite(scroll.DisclosureT))
-            {
-                Debug.Assert(_activeVirtualDisclosureCount > 0);
-                if (_activeVirtualDisclosureCount > 0) _activeVirtualDisclosureCount--;
-            }
+            if (_scroll.TryGet(idx, out var scroll) && scroll.BandMask != 0)
+                for (int i = _revealBandViewports.Count - 1; i >= 0; i--)
+                    if ((int)_revealBandViewports[i].Raw.Index == idx) _revealBandViewports.RemoveAt(i);
             // Tell the host first (it unbinds the viewport's ScrollHandle while the row still exists), then drop the
             // index-keyed side-tables: this node's ScrollState row, its chrome row and its authored handle.
             OnScrollNodeRemoved?.Invoke(idx);
@@ -1619,8 +1615,6 @@ public sealed partial class SceneStore : ISceneBackend
         _scrollRefByIndexFallback = default;
         return ref _scrollRefByIndexFallback;
     }
-    /// <summary>True while any viewport owns an active expand/collapse presentation.</summary>
-    public bool HasActiveVirtualDisclosures => _activeVirtualDisclosureCount != 0;
     /// <summary>Resolve the shared recyclable-item clip owned by a virtual viewport from its direct content node.
     /// The returned prefix count maps directly to the content node's leading child ordinals.</summary>
     public bool TryGetVirtualItemBand(NodeHandle content, out int persistentPrefixCount, out float topInset)
@@ -1643,92 +1637,111 @@ public sealed partial class SceneStore : ISceneBackend
         return true;
     }
 
-    /// <summary>Resolve the active contiguous disclosure band owned by a vertical virtual viewport from its direct
-    /// content node. Geometry is in content-local DIP; <paramref name="progress"/> is clamped to 0..1.</summary>
-    public bool TryGetVirtualDisclosure(NodeHandle content, out int firstIndex, out int count,
-                                        out float top, out float extent, out float progress,
-                                        out int persistentPrefixCount, out int firstRealized)
+    // ── virtual reveal bands (docs/plans/smooth-reveal-implementation.md §10) ──────────────────────────────────
+    private readonly List<NodeHandle> _revealBandViewports = new(4);
+
+    /// <summary>True while any viewport holds a live reveal band (the recorder / hit-test census).</summary>
+    public bool HasActiveRevealBands => _revealBandViewports.Count != 0;
+    /// <summary>The viewports holding live bands (the flow pass walks these).</summary>
+    internal List<NodeHandle> RevealBandViewports => _revealBandViewports;
+
+    /// <summary>Resolve the live bands of the vertical viewport whose CONTENT node is <paramref name="content"/>, with the
+    /// ordinal → logical-index mapping of its children (the persistent prefix, then the realized window).</summary>
+    public bool TryGetRevealBands(NodeHandle content, out RevealBands bands, out byte mask, out int prefix, out int firstRealized)
     {
-        firstIndex = -1;
-        count = 0;
-        top = extent = progress = 0f;
-        persistentPrefixCount = firstRealized = 0;
-        if (_activeVirtualDisclosureCount == 0) return false;
-        if (content.IsNull || !IsLive(content)) return false;
+        bands = default; mask = 0; prefix = firstRealized = 0;
+        if (_revealBandViewports.Count == 0 || content.IsNull || !IsLive(content)) return false;
         NodeHandle viewport = Parent(content);
         if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var sc)
-            || sc.ContentNode != content || sc.Orientation != 0 || !float.IsFinite(sc.DisclosureT)
-            || sc.DisclosureFirst < 0 || sc.DisclosureCount <= 0 || sc.DisclosureExtent <= 0f)
-            return false;
-        firstIndex = sc.DisclosureFirst;
-        count = sc.DisclosureCount;
-        top = sc.DisclosureTop;
-        extent = sc.DisclosureExtent;
-        progress = Math.Clamp(sc.DisclosureT, 0f, 1f);
-        persistentPrefixCount = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
-        firstRealized = Math.Max(persistentPrefixCount, sc.FirstRealized);
+            || sc.ContentNode != content || sc.Orientation != 0 || sc.BandMask == 0) return false;
+        mask = sc.Bands.PresentingMask(sc.BandMask, sc.ItemCount);   // a committed band whose rows left presents nothing
+        if (mask == 0) return false;
+        bands = sc.Bands;
+        prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+        firstRealized = Math.Max(prefix, sc.FirstRealized);
         return true;
     }
 
-    /// <summary>Arm or retarget one viewport disclosure and maintain the scene-wide active census.</summary>
-    public bool BeginVirtualDisclosure(NodeHandle viewport, int firstIndex, int count,
-                                       float top, float extent, float progress)
+    /// <summary>One band slot of a viewport (false when the slot is not live).</summary>
+    public bool TryGetRevealBand(NodeHandle viewport, int slot, out RevealBand band)
     {
-        if (viewport.IsNull || !IsLive(viewport) || firstIndex < 0 || count <= 0
-            || !float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f
-            || !float.IsFinite(progress) || !_scroll.TryGet((int)viewport.Raw.Index, out var snapshot)
-            || snapshot.Orientation != 0 || snapshot.ContentNode.IsNull || !IsLive(snapshot.ContentNode))
-            return false;
+        band = default;
+        if ((uint)slot >= RevealBands.Capacity || viewport.IsNull || !IsLive(viewport)
+            || !_scroll.TryGet((int)viewport.Raw.Index, out var sc) || (sc.BandMask & (1 << slot)) == 0) return false;
+        band = sc.Bands.Get(slot);
+        return true;
+    }
 
+    /// <summary>Arm or retarget band <paramref name="slot"/> of a vertical virtual viewport.</summary>
+    public bool SetRevealBand(NodeHandle viewport, int slot, int first, int count, float top, float extent, bool opening, float presented)
+    {
+        if ((uint)slot >= RevealBands.Capacity || viewport.IsNull || !IsLive(viewport) || first < 0 || count <= 0
+            || !float.IsFinite(top) || !(extent > 0f) || !_scroll.TryGet((int)viewport.Raw.Index, out var snap)
+            || snap.Orientation != 0 || snap.ContentNode.IsNull || !IsLive(snap.ContentNode)) return false;
         ref ScrollState sc = ref ScrollRef(viewport);
-        bool wasActive = float.IsFinite(sc.DisclosureT);
-        sc.DisclosureFirst = firstIndex;
-        sc.DisclosureCount = count;
-        sc.DisclosureTop = top;
-        sc.DisclosureExtent = extent;
-        sc.DisclosureT = Math.Clamp(progress, 0f, 1f);
-        if (!wasActive) _activeVirtualDisclosureCount++;
+        bool wasAny = sc.BandMask != 0;
+        sc.Bands.Set(slot, new RevealBand { First = first, Count = count, Top = top, Extent = extent, Opening = opening, Presented = presented });
+        sc.BandMask |= (byte)(1 << slot);
+        if (!wasAny) _revealBandViewports.Add(viewport);
         Mark(sc.ContentNode, NodeFlags.PaintDirty);
         return true;
     }
 
-    /// <summary>Animation-side write for a viewport disclosure progress channel.</summary>
-    public void SetVirtualDisclosureProgress(NodeHandle viewport, float progress)
+    /// <summary>The band row's write (AnimEngine side-table): the presented height this tick.</summary>
+    public void SetRevealBandPresented(NodeHandle viewport, int slot, float presented)
     {
-        if (viewport.IsNull || !IsLive(viewport) || !float.IsFinite(progress)
-            || !_scroll.TryGet((int)viewport.Raw.Index, out var snapshot) || !float.IsFinite(snapshot.DisclosureT))
-            return;
+        if (!TryGetRevealBand(viewport, slot, out var band) || band.Presented == presented) return;
         ref ScrollState sc = ref ScrollRef(viewport);
-        float next = Math.Clamp(progress, 0f, 1f);
-        if (sc.DisclosureT == next) return;
-        sc.DisclosureT = next;
+        band.Presented = presented;
+        sc.Bands.Set(slot, in band);
         if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
     }
 
-    /// <summary>Current disclosure progress for animation retargeting; zero when inactive.</summary>
-    public float VirtualDisclosureProgress(NodeHandle viewport)
-        => TryGetScroll(viewport, out var sc) && float.IsFinite(sc.DisclosureT) ? sc.DisclosureT : 0f;
-
-    /// <summary>Release one viewport disclosure. Repeated clears are harmless and never underflow the census.</summary>
-    public void ClearVirtualDisclosure(NodeHandle viewport)
+    /// <summary>Refresh a band's laid-out geometry (the flow pass, from the virtual layout).</summary>
+    public void SetRevealBandGeometry(NodeHandle viewport, int slot, float top, float extent)
     {
-        if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var snapshot)) return;
-        bool wasActive = float.IsFinite(snapshot.DisclosureT);
-        bool hadState = wasActive || snapshot.DisclosureFirst >= 0 || snapshot.DisclosureCount != 0
-            || snapshot.DisclosureTop != 0f || snapshot.DisclosureExtent != 0f;
-        if (!hadState) return;
-
+        if (!TryGetRevealBand(viewport, slot, out var band) || (band.Top == top && band.Extent == extent)) return;
         ref ScrollState sc = ref ScrollRef(viewport);
-        sc.DisclosureFirst = -1;
-        sc.DisclosureCount = 0;
-        sc.DisclosureTop = 0f;
-        sc.DisclosureExtent = 0f;
-        sc.DisclosureT = float.NaN;
-        if (wasActive)
-        {
-            Debug.Assert(_activeVirtualDisclosureCount > 0);
-            if (_activeVirtualDisclosureCount > 0) _activeVirtualDisclosureCount--;
-        }
+        band.Top = top;
+        band.Extent = extent;
+        sc.Bands.Set(slot, in band);
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>A closing band came to rest and its owner is about to remove its rows (ItemsViewController.BandSettled,
+    /// frame start, right before the collapse commit). It keeps presenting the rows at 0 while they are still modelled; from
+    /// the flush that drops them (ItemCount moves off <see cref="RevealBand.CommitCount"/>) it contributes no delta and no
+    /// clip, so the commit frame's 6.3 flow pass and scroll sync see exactly the laid-out extent. Idempotent.</summary>
+    public void CommitRevealBand(NodeHandle viewport, int slot)
+    {
+        if (!TryGetRevealBand(viewport, slot, out var band) || band.Committed) return;
+        ref ScrollState sc = ref ScrollRef(viewport);
+        band.Committed = true;
+        band.CommitCount = sc.ItemCount;
+        band.Presented = 0f;
+        sc.Bands.Set(slot, in band);
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>Move a band to the rows it covers now (its owner's model moved under it).</summary>
+    public void SetRevealBandRange(NodeHandle viewport, int slot, int first, int count)
+    {
+        if (first < 0 || count <= 0 || !TryGetRevealBand(viewport, slot, out var band) || (band.First == first && band.Count == count)) return;
+        ref ScrollState sc = ref ScrollRef(viewport);
+        band.First = first;
+        band.Count = count;
+        sc.Bands.Set(slot, in band);
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>Release one band. Repeated clears are harmless and never unbalance the census.</summary>
+    public void ClearRevealBand(NodeHandle viewport, int slot)
+    {
+        if (!TryGetRevealBand(viewport, slot, out _)) return;
+        ref ScrollState sc = ref ScrollRef(viewport);
+        sc.BandMask &= (byte)~(1 << slot);
+        sc.Bands.Set(slot, default);
+        if (sc.BandMask == 0) _revealBandViewports.Remove(viewport);
         if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
     }
 
