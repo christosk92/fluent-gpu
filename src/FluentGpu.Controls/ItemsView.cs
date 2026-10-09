@@ -1352,7 +1352,9 @@ public sealed class ItemsView : Component
 
         void OnRootKey(KeyEventArgs e)
         {
-            if (count == 0) return;
+            // An Alt chord is never list navigation (Win32 lists see it as WM_SYSKEYDOWN): Alt+Left/Right falls
+            // through to the app's Back/Forward accelerator, as NavigationView's HandleNavKey lets it.
+            if (count == 0 || e.Alt) return;
             bool ctrl = e.Ctrl, shift = e.Shift;
             int from = current.Peek();
             switch (e.KeyCode)

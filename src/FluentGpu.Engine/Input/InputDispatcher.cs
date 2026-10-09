@@ -3699,8 +3699,9 @@ public sealed partial class InputDispatcher
             }
 
             // No element handler consumed the key — arrow/PageUp/PageDown/Home/End glide the nearest scrollable
-            // self-or-ancestor of the focused node (scroll rework §4).
-            if (ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
+            // self-or-ancestor of the focused node (scroll rework §4). An Alt chord is a system key (WM_SYSKEYDOWN),
+            // never a scroll: Alt+Left/Right must reach the app's Back/Forward accelerator below.
+            if ((e.Mods & KeyModifiers.Alt) == 0 && ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
         }
 
         // Unhandled Escape is the app-wide "leave keyboard focus" gesture. Controls and overlays get first refusal
