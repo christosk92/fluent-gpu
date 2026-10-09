@@ -1140,8 +1140,15 @@ public sealed partial class InputDispatcher
                     // shape (the press captures on the owner) and it is what makes a plate with inert children behave as
                     // ONE button: pressing its CanDrag label and releasing on its padding is a click on the plate.
                     bool sameNode = !up.IsNull && up == _down;
-                    var upOwner = NearestClickOwner(up);
-                    bool sameOwner = sameNode || (!upOwner.IsNull && upOwner == NearestClickOwner(_down));
+                    // A press that captured a continuous OnDrag gesture (_dragTarget == _down: a TextBox click or
+                    // drag-select, a Slider scrub) OWNS its release, as WinUI's CapturePointer does: its activation owner
+                    // is the drag node itself, never the walk's result. A TextBox, or a Slider with its thumb tooltip off,
+                    // carries no OnClick, so NearestClickOwner climbed past it to a clickable card/row and a scrub released
+                    // anywhere inside the card clicked the card. Released over the node it is a release-over-same on the
+                    // node; anywhere else the capture-commit branch below takes it.
+                    bool captured = !_dragTarget.IsNull;
+                    var upOwner = captured ? _dragTarget : NearestClickOwner(up);
+                    bool sameOwner = sameNode || (!captured && !upOwner.IsNull && upOwner == NearestClickOwner(_down));
                     if (sameOwner)
                     {
                         // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
@@ -1161,7 +1168,11 @@ public sealed partial class InputDispatcher
                         else if (rowCell >= 0) FireRowCell(up, rowCell);
                         else
                         {
-                            DispatchPointerReleased(up, e.PositionPx);
+                            // A captured drag node takes the release only through its OWN press/release pair: a
+                            // press-less one (the tooltip-less Slider track) must not let the gesture-owner walk hand it
+                            // to the selection row it sits in either (rows raise their tap from OnPointerReleased).
+                            if (!captured || (_scene.Interaction(up).HandlerMask & InteractionInfo.PressedBit) != 0)
+                                DispatchPointerReleased(up, e.PositionPx);
                             // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
                             // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
                             // Commits on the OWNER, never on the inert hit node (which has no handler to fire).
