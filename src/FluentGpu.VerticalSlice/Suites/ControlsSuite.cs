@@ -6153,6 +6153,51 @@ static partial class ControlsSuite
                 lifted && shown && Near(line, 140f, 0.5f), $"lifted={lifted} shown={shown} line={line:0.#} expected=140");
         }
 
+        // e5dragdrop.reorder.stale — the list changed LENGTH under a live lift (a sync removed a row, the queue advanced, a
+        // tab closed). The projection is a permutation of the LIFT-time count, so ItemAt handed back an index past the new
+        // end (the documented `tracks[ro.ItemAt(slot)]`, and TabView's `list[ro.ItemAt(s)]`, threw), and the release
+        // committed the lift-time (from, to) against whichever row now sat there. Both the keyboard and the pointer path.
+        {
+            int commits = 0;
+            var ro = new Reorderable("stale")
+            {
+                ItemCount = 4, ItemExtent = 40f, Spacing = 0f, DwellMs = 0f, AutoDwell = false,
+                RequestRender = static () => { }, OnReorder = (_, _) => commits++,
+            };
+            var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+
+            // Keyboard: lift item 0 and move it to the end ⇒ projected [1,2,3,0]; then two rows vanish before the drop.
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));
+            for (int k = 0; k < 3; k++) item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Down));
+            bool kbProjected = ro.ItemAt(0) == 1 && ro.ItemAt(3) == 0;
+            ro.ItemCount = 2;
+            bool kbInRange = ro.ItemAt(0) == 0 && ro.ItemAt(1) == 1;
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));    // drop
+            bool kbCancelled = commits == 0 && !ro.IsLifted;
+
+            // Pointer: the same shape through the L1 lifecycle (a zero dwell, advanced once, shows the pending slot).
+            ro.ItemCount = 4;
+            var args = new DragEventArgs { TotalDy = 120f };        // item 0 past item 2's centre ⇒ slot 2
+            item.OnDragStarted?.Invoke(args);
+            item.OnDragDelta?.Invoke(args);
+            ro.Advance(0f);
+            bool ptrProjected = ro.ItemAt(2) == 0;
+            ro.ItemCount = 2;
+            bool ptrInRange = ro.ItemAt(0) == 0 && ro.ItemAt(1) == 1;
+            item.OnDragCompleted?.Invoke(args);
+            bool ptrCancelled = commits == 0 && !ro.IsLifted;
+
+            // The SAME count at release still commits (the guard is a length mismatch, not any re-render).
+            item.OnDragStarted?.Invoke(args);
+            item.OnDragDelta?.Invoke(args);
+            item.OnDragCompleted?.Invoke(args);
+            bool unchangedCommits = commits == 1;
+
+            Check("e5dragdrop.reorder.stale a lift whose list changes LENGTH mid-drag drops the projection (ItemAt stays inside the current list) and cancels on release instead of committing lift-time indices",
+                kbProjected && kbInRange && kbCancelled && ptrProjected && ptrInRange && ptrCancelled && unchangedCommits,
+                $"kb=({kbProjected},{kbInRange},{kbCancelled}) ptr=({ptrProjected},{ptrInRange},{ptrCancelled}) same={unchangedCommits} commits={commits}");
+        }
+
         // e5dragdrop.reorder.announce — the a11y channel (Primer / React-Aria): a keyboard lift has NO other feedback
         // (displacement and the insertion line are purely visual), so grab/move/drop/cancel must reach the engine's
         // live-region seam. Coalesced at ~100ms, because a held arrow key emits far more slot changes than a reader can

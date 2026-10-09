@@ -285,14 +285,20 @@ public sealed class Reorderable
     /// <summary>The resting geometry table currently describes THIS list (same item count).</summary>
     private bool Sampled => Core.Count > 0 && Core.Count == Math.Max(0, ItemCount);
 
+    /// <summary>The list changed LENGTH under a live lift (a sync removed a row, the queue advanced, a tab closed): the
+    /// projection and the lift-time (from, to) describe a list that no longer exists, so <see cref="ItemAt"/> falls back
+    /// to identity and the drop cancels instead of moving whichever row now sits at the old index.</summary>
+    private bool Stale => Core.IsActive && Core.Count != Math.Max(0, ItemCount);
+
     /// <summary>The ORIGINAL item index shown at <paramref name="slot"/> under the current projection (identity when
     /// idle): render slot s with the item at <c>ItemAt(s)</c> and the item's STABLE key — mid-drag the dragged item
     /// occupies the dwell-committed slot and the keyed diff + FLIP animate the displaced siblings. With
     /// <see cref="LiveProject"/> off this stays identity while lifted (virtual-list mode — the insertion line is the
-    /// feedback; the commit reorders the model itself).</summary>
+    /// feedback; the commit reorders the model itself). A list whose <see cref="ItemCount"/> changed under the lift drops
+    /// the projection (identity), so the result is always an index of the CURRENT list.</summary>
     public int ItemAt(int slot)
     {
-        if (!Core.IsActive || !LiveProject) return slot;
+        if (!Core.IsActive || !LiveProject || Stale) return slot;
         EnsureOrder();
         return (uint)slot < (uint)Core.Count ? _order[slot] : slot;
     }
@@ -438,6 +444,12 @@ public sealed class Reorderable
             AnnounceEnd(ReorderAnnounceKind.Cancel);
             Core.Cancel();
         }
+        else if (Stale)
+        {
+            // The list changed length mid-drag: the lift-time (from, to) would move whichever row now sits at `from`.
+            AnnounceEnd(ReorderAnnounceKind.Cancel);
+            Core.Cancel();
+        }
         else if (RequireDropOnList && !_selfDrop)
         {
             // Released away from this list (a foreign deposit target, or empty space): the downward travel that got
@@ -561,8 +573,16 @@ public sealed class Reorderable
     private void KbDrop()
     {
         _kbLifted = -1;
-        AnnounceEnd(ReorderAnnounceKind.Drop);   // before Complete() resets the slot state
-        Core.Complete();   // commits at the shown slot (pending == target in keyboard mode)
+        if (Stale)
+        {
+            AnnounceEnd(ReorderAnnounceKind.Cancel);   // the list changed length under the lift: never commit stale indices
+            Core.Cancel();
+        }
+        else
+        {
+            AnnounceEnd(ReorderAnnounceKind.Drop);   // before Complete() resets the slot state
+            Core.Complete();   // commits at the shown slot (pending == target in keyboard mode)
+        }
         Changed();
     }
 
