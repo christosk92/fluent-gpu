@@ -1411,12 +1411,12 @@ public sealed partial class AppHost : IDisposable
     private readonly bool _isHeadless;   // headless: FixedFrameTimeSource; the scroll clock's FrameSec is the deterministic _frameClockMs instead of a QPC read
     private readonly AnimEngine _anim;
     private readonly ConnectedAnimation _connected;
-    // ── the ONE frame clock — built once at the top of RunFrame, before pump/dispatch, so PumpScroll (Paint, after
+    // ── the ONE frame clock — built at the top of RunFrame, before pump/dispatch (and by each keep-alive Paint, which bypasses RunFrame), so PumpScroll (Paint, after
     // the display-phase gate) and the scroll frame step (also Paint) share the identical (FrameQpc, PresentQpc) pair
     // with whatever DirectManipulation samples this frame. Named _palFrameClock (not
     // _frameClock) because that identifier is already the FrameClock.Tick poller's frame counter (_frameClockSig).
     private FluentGpu.Pal.FrameClock _palFrameClock;
-    private ulong _frameClockSeq;                         // RunFrame-call ordinal — FrameClock.Seq (never resets)
+    private ulong _frameClockSeq;                         // frame-clock build ordinal (RunFrame + keep-alive Paint) — FrameClock.Seq (never resets)
     private long _frameClockFloorQpc;                     // RefreshLattice.Snap's monotonicity floor (replaces the old QuantizedFrameSec's _lastQuantizedFrameQpc)
     private readonly InputEventRing _scrollPumpRing = new();  // dedicated ring for IPlatformWindow.PumpScroll (kept separate from _ring, which the top-of-RunFrame pump already drained this frame)
     private readonly RepeatTicker _repeat;
@@ -3988,9 +3988,9 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Stopwatch/QPC stamp taken immediately after the last successful <c>Present()</c> returned. SUBMIT-confirmed,
     /// not vblank-confirmed — the panel had not scanned out yet. 0 before the first present.</summary>
     public long LastPresentQpc => Volatile.Read(ref _lastPresentQpc);
-    /// <summary>THIS frame's <see cref="FluentGpu.Pal.FrameClock"/> (scroll-v3-plan §5.1) — built once at the top of
-    /// <see cref="RunFrame"/>, before the input pump/dispatch. The one target time <c>IPlatformWindow.PumpScroll</c>
-    /// and the scroll frame step (<c>RunScrollFrame</c>) both consume this same frame; UI-thread read-only (no setter — RunFrame is the
+    /// <summary>THIS frame's <see cref="FluentGpu.Pal.FrameClock"/> (scroll-v3-plan §5.1) — built at the top of
+    /// <see cref="RunFrame"/> (and of a keep-alive <see cref="Paint"/>), before the input pump/dispatch. The one target time <c>IPlatformWindow.PumpScroll</c>
+    /// and the scroll frame step (<c>RunScrollFrame</c>) both consume this same frame; UI-thread read-only (no setter — BuildFrameClock is the
     /// sole writer).</summary>
     public FluentGpu.Pal.FrameClock FrameClock => _palFrameClock;
     /// <summary>Frames handed to the render seam so far (UI side). <c>PublishSequence - PresentedSequence</c> is the only
@@ -5418,6 +5418,44 @@ public sealed partial class AppHost : IDisposable
         | (1u << (int)InputKind.KeyUp) | (1u << (int)InputKind.Char)
         | (1u << (int)InputKind.Scroll);
 
+    /// <summary>Builds the ONE frame clock into <see cref="_palFrameClock"/> and publishes it to app code
+    /// (<c>Hooks.FrameClock.FrameQpc/PresentQpc</c>). <see cref="RunFrameCore"/> calls it at the top of every frame; a
+    /// keep-alive <see cref="Paint"/> (the OS modal move/size loop and the F093 peer tick, which bypass RunFrame) calls it
+    /// too, or the scroll step, DirectManipulation and every app clock sampled on PresentQpc stood still for the whole drag
+    /// and jumped on mouse-up. <paramref name="gateProduction"/> also samples the production gate's tick
+    /// (<see cref="_frameTickSeq"/>): RunFrame only, a keep-alive repaint is never gated. Cheap: a few field reads + integer
+    /// arithmetic (RefreshLattice is pure), no allocation.</summary>
+    private void BuildFrameClock(bool gateProduction)
+    {
+        unchecked { _frameClockSeq++; }
+        if (_isHeadless)
+        {
+            long headlessFrameQpc = (long)(_frameClockMs * 1e-3 * Stopwatch.Frequency);
+            _palFrameClock = RefreshLattice.Headless(headlessFrameQpc, RefreshPeriodQpcOrDefault(), _frameClockSeq);
+        }
+        else
+        {
+            // The compositor tick this frame belongs to (§13.2): production is gated to one frame per tick, and the frame
+            // is stamped with that tick's vblank instant. Sampled ONCE here so the gate and the clock agree.
+            var display = PacingClock();
+            long sampleQpc = Stopwatch.GetTimestamp();
+            if (gateProduction)
+                _frameTickSeq = GateTickSeq(display.Available, display.TickSeq, display.TickQpc, sampleQpc, s_gateTickMaxAgeQpc);
+            _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
+                sampleQpc, _frameClockFloorQpc, _frameClockSeq, Volatile.Read(ref _maxFrameLatency));
+            _frameClockFloorQpc = _palFrameClock.FrameQpc;
+        }
+        // Publish the SAME target time to app code so app motion samples the frame's vsync-lattice time instead of a
+        // ~15.6 ms-quantized wall clock. Both paths (headless: deterministic). Two static long stores.
+        // Primary host only: a detached child (ticked right after the parent, same thread) samples the parent's value
+        // instead of overwriting it with its own off-lattice instant.
+        if (!_isDetachedChild)
+        {
+            FluentGpu.Hooks.FrameClock.FrameQpc = _palFrameClock.FrameQpc;
+            FluentGpu.Hooks.FrameClock.PresentQpc = _palFrameClock.PresentQpc;
+        }
+    }
+
     /// <summary>The frame proper (<see cref="RunFrame"/> wraps it with the frame ledger, AppHost.Ledger.cs). Every early-out
     /// stamps <see cref="_ledgerExit"/> (a plain store) so a ledgered frame says which gate stopped it.</summary>
     private FrameStats RunFrameCore()
@@ -5432,36 +5470,9 @@ public sealed partial class AppHost : IDisposable
 
         // ── ONE frame clock (scroll-v3-plan §5.1) — built HERE, before the pump/dispatch below, so a frame-aligned
         // producer's PumpScroll (Paint, after the production gate) and the scroll frame step (also Paint) both
-        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call. Cheap: a few field reads + integer
-        // arithmetic (RefreshLattice is pure), no allocation.
-        unchecked { _frameClockSeq++; }
-        if (_isHeadless)
-        {
-            long headlessFrameQpc = (long)(_frameClockMs * 1e-3 * Stopwatch.Frequency);
-            _palFrameClock = RefreshLattice.Headless(headlessFrameQpc, RefreshPeriodQpcOrDefault(), _frameClockSeq);
-        }
-        else
-        {
-            // The compositor tick this frame belongs to (§13.2): production is gated to one frame per tick, and the frame
-            // is stamped with that tick's vblank instant. Sampled ONCE here so the gate below and the clock agree.
-            var display = PacingClock();
-            long sampleQpc = Stopwatch.GetTimestamp();
-            _frameTickSeq = GateTickSeq(display.Available, display.TickSeq, display.TickQpc, sampleQpc, s_gateTickMaxAgeQpc);
-            _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
-                sampleQpc, _frameClockFloorQpc, _frameClockSeq, Volatile.Read(ref _maxFrameLatency));
-            _frameClockFloorQpc = _palFrameClock.FrameQpc;
-        }
-        // Publish the SAME target time to app code (Hooks.FrameClock.FrameQpc/PresentQpc) before anything app-visible
-        // runs this frame — input handlers, posts, timers, the Tick publish, the flush — so app motion samples the
-        // frame's vsync-lattice time instead of a ~15.6 ms-quantized wall clock. Both paths (headless: deterministic).
-        // Two static long stores.
-        // Primary host only: a detached child (ticked right after the parent, same thread) samples the parent's value
-        // instead of overwriting it with its own off-lattice instant.
-        if (!_isDetachedChild)
-        {
-            FluentGpu.Hooks.FrameClock.FrameQpc = _palFrameClock.FrameQpc;
-            FluentGpu.Hooks.FrameClock.PresentQpc = _palFrameClock.PresentQpc;
-        }
+        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call, and app code sees it before any
+        // input handler, post, timer, the Tick publish or the flush runs.
+        BuildFrameClock(gateProduction: true);
 
         long db = 0, dt = 0;
         if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt = Stopwatch.GetTimestamp(); }
@@ -6106,6 +6117,11 @@ public sealed partial class AppHost : IDisposable
                 return LastStats;
             }
 
+            // A keep-alive repaint bypasses RunFrame, so it builds its own frame clock (after the idle skip: a skipped tick
+            // costs nothing). On the last RunFrame's instant a glide in flight stopped, and lyrics/progress sampled on
+            // Hooks.FrameClock.PresentQpc froze for the whole drag although the F093 peer tick repaints them.
+            if (keepAlive) BuildFrameClock(gateProduction: false);
+
             var layoutSize = LayoutSizeForFrame(keepAlive);
             PublishViewport(layoutSize);
 
@@ -6129,6 +6145,10 @@ public sealed partial class AppHost : IDisposable
                 if (staleGap || _connected.HasActive || _runtime.HasPending)
                     _frameTime.Resync();
             }
+            // Inside the modal loop the keep-alive ticks pace the frames, not a loop wait: only the FIRST may follow a stale
+            // wait, so latch it resolved. Otherwise every tick after an Idle wait resynced and NextDeltaMs returned 0 for the
+            // whole drag. RecommendedWaitMs re-latches the flag before the loop's next frame.
+            if (keepAlive) _lastWaitWasDisplayRate = true;
             float dtMs = _frameTime.NextDeltaMs();
             AdvanceImagePresentationClock(); // reconcile-time image swaps must also start from current wall time
             _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
