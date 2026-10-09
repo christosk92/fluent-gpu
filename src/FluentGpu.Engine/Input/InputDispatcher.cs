@@ -2361,6 +2361,7 @@ public sealed partial class InputDispatcher
             _down = NodeHandle.Null;
         }
         _selDragging = false;
+        _panTarget = NodeHandle.Null; _panClaimed = false;   // the reorder won — the scroller pan is off for this contact
         _touchReorder = true;
         // Arm from the press anchor (the gesture's down position, so TotalDx/Dy measure from there) and immediately drive
         // the current move so the controller promotes this frame (arena-governed ⇒ no YieldsToPan re-arbitration).
