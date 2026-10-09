@@ -6,8 +6,10 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Text.DirectWrite;
 
-/// <summary>One laid-out glyph: post-shaping glyph id, the DWrite face it belongs to (as <c>nint</c>), and its pen
-/// position in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top.
+/// <summary>One laid-out glyph: post-shaping glyph id, the DWrite face it belongs to (as <c>nint</c>), and its draw origin
+/// in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top, both shifted by
+/// the shaper's GPOS glyph offset (combining marks attach to their base; zero for ordinary glyphs). Pen positions for
+/// hit-testing are in <see cref="LaidCluster"/>.
 /// <see cref="Size"/> is the DIP em size the glyph was shaped at (spans may override the base size) and
 /// <see cref="Span"/> the index of the <see cref="SpanStyle"/> it belongs to (−1 = the base style) — the renderer
 /// rasterizes at <see cref="Size"/> and tints per span (rtb-01 inline runs).</summary>
@@ -123,7 +125,8 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// <see cref="Layout"/>.</summary>
     public ReadOnlySpan<LaidLine> Lines => _lines.AsSpan(0, _lineRecCount);
 
-    private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; public float Size; public short Span; }
+    // OffX/OffY: the shaper's GPOS glyph offset (mark-to-base / mark-to-mark attachment) in the VISUAL top-down frame — ink only; Advance (pen, wrap, hit-test) is unaffected.
+    private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; public float Size; public short Span; public float OffX, OffY; }
 
     // ── Shape cache ─────────────────────────────────────────────────────────────────────────────────
     // Shaping (itemize → shape) is width-INDEPENDENT — only WrapAndPosition consumes maxWidth. A drag-resize
@@ -417,7 +420,11 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                             // caret/terminator math relies on it) but make it NON-DRAWING (Face 0 ⇒ GlyphRenderer skips it,
                             // GlyphRenderer.cs) and zero-advance.
                             bool brk = (uint)g.Cluster < (uint)n && FluentGpu.Text.LineBreaker.IsHardBreak(p[g.Cluster]);
-                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = brk ? 0 : (nint)subFace, Advance = brk ? 0f : g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan };
+                            // GPOS offset → visual top-down frame: advanceOffset runs along the reading direction (leftward in an
+                            // RTL run, whose glyphs EmitLine reverses into left-edge slots), ascenderOffset is positive-up.
+                            float offX = brk ? 0f : (run.IsRightToLeft ? -g.OffsetX : g.OffsetX);
+                            float offY = brk ? 0f : -g.OffsetY;
+                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = brk ? 0 : (nint)subFace, Advance = brk ? 0f : g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan, OffX = offX, OffY = offY };
                         }
                         pos += subLen; remaining -= subLen;
                     }
@@ -505,7 +512,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 if (canBreak) lastBreak = i;
 
                 float adv = _glyphs[i].Advance;
-                if (doWrap && pen + adv > maxWidth + WrapSlack && i > lineStart)
+                // Trailing whitespace HANGS past the box edge (DirectWrite/WinUI/CSS): a space never triggers the wrap.
+                // UAX #14 puts the break opportunity on the letter AFTER the space, so wrapping on the space itself
+                // either pushed a word that fits to the next line (br = start of the current word) or, with no earlier
+                // break, started the next line with the space (br = i): an indented line, or a line of only spaces.
+                // The wrap now fires on the next letter, whose CanBreak keeps the spaces on this line.
+                bool hang = c >= 0 && c < _breaks.Count && _breaks[c].IsWhitespace;
+                if (doWrap && !hang && pen + adv > maxWidth + WrapSlack && i > lineStart)
                 {
                     int br = lastBreak > lineStart ? lastBreak : i;
                     if (line + 1 >= maxL)
@@ -631,7 +644,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int i = start; i < end; i++)
         {
             ref readonly var g = ref _glyphs[i];
-            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY, g.Size, g.Span);
+            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x + g.OffX, baselineY + g.OffY, g.Size, g.Span);
             _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
@@ -699,7 +712,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int k = 0; k < useLen; k++)
         {
             ref readonly var g = ref _glyphs[order[k]];
-            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY, g.Size, g.Span);
+            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x + g.OffX, baselineY + g.OffY, g.Size, g.Span);
             _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
@@ -937,6 +950,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 int len = 1;
                 while (len < remaining)
                 {
+                    // A variation selector belongs to the char before it. The base face maps none (Segoe UI has no
+                    // FE00–FE0F), but shaped WITH its base the shaper folds it into the base cluster (♥️ → the heart,
+                    // 1️⃣ → Segoe UI's keycap ligature). Breaking here handed the bare selector to MapCharacters, which
+                    // maps it to no font, so it shaped alone in the base face as a drawn .notdef box after ©️ ™️ ♥️ ‼️.
+                    int vs = VariationSelectorLength(txt, pos + len, pos + remaining);
+                    if (vs > 0) { len += vs; continue; }
                     uint cp = txt[pos + len]; ushort gi; baseFace->GetGlyphIndices(&cp, 1, &gi);
                     if (gi == 0) break;
                     len++;
@@ -961,6 +980,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             if (!string.IsNullOrEmpty(famName)) subFace = ResolveFallbackFace(famName, mappedFont, baseFace);
             mappedFont->Release();
         }
+    }
+
+    // UTF-16 length of the variation selector at t[i] — VS1–VS16 (U+FE00–FE0F, one unit) or VS17–VS256 (U+E0100–E01EF,
+    // the pair DB40 DD00–DDEF) — or 0 when t[i] starts none. `end` bounds the low-surrogate read.
+    private static int VariationSelectorLength(char* t, int i, int end)
+    {
+        char c = t[i];
+        if (c >= '︀' && c <= '️') return 1;
+        if (c == '\uDB40' && i + 1 < end && t[i + 1] >= '\uDD00' && t[i + 1] <= '\uDDEF') return 2;
+        return 0;
     }
 
     private string GetFamilyName(IDWriteFont* font)
