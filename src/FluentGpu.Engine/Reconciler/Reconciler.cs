@@ -42,7 +42,6 @@ public sealed partial class TreeReconciler
     private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
-    private readonly List<Component> _live = new();
 
     private struct BoundSlot
     {
@@ -543,8 +542,8 @@ public sealed partial class TreeReconciler
     /// <summary>The reactive scheduler — one per host; signals schedule render-effects/bindings here, the host flushes it.</summary>
     public ReactiveRuntime Runtime { get; }
 
-    /// <summary>Live nested components — the host drains their effects each frame.</summary>
-    public List<Component> LiveComponents => _live;
+    /// <summary>Live nested components (the keys of the <c>_anchorOf</c> map, so unmount stays O(1) per component).</summary>
+    public Dictionary<Component, NodeHandle>.KeyCollection LiveComponents => _anchorOf.Keys;
 
     // ── O(1) census accessors (read by the MemCensus sampler; trivial .Count reads) ───────────────
     /// <summary>Mounted component entries (the <c>_comps</c> anchor map) — O(1) census.</summary>
@@ -1238,7 +1237,6 @@ public sealed partial class TreeReconciler
         if (parked) _scene.Mark(node, NodeFlags.Parked);
         _comps[node] = entry;
         _anchorOf[comp] = node;
-        _live.Add(comp);
 
         // The component's per-instance activation signal (UseIsActive), created lazily on first read so a component that
         // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if
@@ -1420,7 +1418,7 @@ public sealed partial class TreeReconciler
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
-        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
+        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); _anchorOf.Remove(old.Comp); }
         // The anchor survives but its bound-Visible effect (node-owned, so the scope dispose above never reaches it) was
         // wired for the OLD embed: drop it as UnmountSubtree does. MountComponent's BindNode wires the new embed afresh;
         // a surviving old effect would keep driving the new component's presence and stack one more per swap.
@@ -4517,7 +4515,7 @@ public sealed partial class TreeReconciler
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
-        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
+        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); _anchorOf.Remove(e.Comp); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
             FreeSpareSlots(v, keep: 0);   // parked spares are detached, so the list's FreeSubtree cannot reach them
