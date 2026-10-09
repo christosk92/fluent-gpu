@@ -3729,7 +3729,8 @@ public sealed partial class InputDispatcher
             }
 
             // No element handler consumed the key — arrow/PageUp/PageDown/Home/End glide the nearest scrollable
-            // self-or-ancestor of the focused node (scroll rework §4). An Alt chord is a system key (WM_SYSKEYDOWN),
+            // self-or-ancestor of the focused node that can move that way, chaining outward past a cross-axis or pinned
+            // one (scroll rework §4). An Alt chord is a system key (WM_SYSKEYDOWN),
             // never a scroll: Alt+Left/Right must reach the app's Back/Forward accelerator below.
             if ((e.Mods & KeyModifiers.Alt) == 0 && ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
         }

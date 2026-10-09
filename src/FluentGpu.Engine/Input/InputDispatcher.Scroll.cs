@@ -388,16 +388,31 @@ public sealed partial class InputDispatcher : IScrollerQuery
     /// zone posts once: a one-frame step here would move the list once and then stop.</summary>
     private void AutoScroll(NodeHandle vp, float dipPerS) => HandleOf(vp)?.AutoScroll(dipPerS);
 
-    /// <summary>Keyboard scroll: arrows/PageUp/PageDown/Home/End glide the nearest scrollable of the focused node.</summary>
+    /// <summary>Keyboard scroll: arrows/PageUp/PageDown/Home/End glide the nearest scroller from the focused node's
+    /// <paramref name="vp"/> upward that can move that way (the router's keyboard contract: no latch, walking up past a
+    /// scroller the key does not map on — Up/Down inside a horizontal shelf — or one already at that edge). When none
+    /// can move, the nearest scroller the key maps on still takes it, so a pinned tree absorbs the key.</summary>
     private bool ScrollKey(int key, NodeHandle vp)
     {
-        var handle = HandleOf(vp);
-        if (handle is null) return false;
-        ref ScrollState sc = ref _scene.ScrollRef(vp);
-        if (!ScrollRouter.TryMapKey(key, sc.Orientation == 1, out KeyMove move)) return false;
-        if (sc.MaxOffset <= 0.5) return false;
-        handle.Key(NowSec, move);
-        Chrome?.NotifyMoved((int)vp.Raw.Index);
+        if (vp.IsNull) return false;
+        IScrollerQuery q = this;
+        double now = NowSec;
+        NodeHandle target = NodeHandle.Null;
+        KeyMove targetMove = default;
+        for (int i = (int)vp.Raw.Index; i >= 0; i = q.ParentScroller(i))
+        {
+            var n = _scene.HandleAt(i);
+            if (HandleOf(n) is null) continue;
+            ref ScrollState sc = ref _scene.ScrollRef(n);
+            bool horizontal = sc.Orientation == 1;
+            if (!ScrollRouter.TryMapKey(key, horizontal, out KeyMove move) || sc.MaxOffset <= 0.5) continue;
+            bool movable = q.CanMove(i, horizontal, ScrollRouter.SignOf(move), now);
+            if (movable || target.IsNull) { target = n; targetMove = move; }
+            if (movable) break;
+        }
+        if (target.IsNull) return false;
+        HandleOf(target)!.Key(now, targetMove);
+        Chrome?.NotifyMoved((int)target.Raw.Index);
         return true;
     }
 
