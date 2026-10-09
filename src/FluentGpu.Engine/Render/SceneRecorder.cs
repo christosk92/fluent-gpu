@@ -402,6 +402,10 @@ internal sealed class SceneRecordingContext
         public bool Slicing;
         public int CurSlot;
         public ulong CurGen, PriorGen;
+        /// <summary>The lineage of the walking node's prior bytes (<see cref="SpanTable.Relocation"/>): lets a clean
+        /// descendant copy out of the prior buffer although an earlier exact copy of an ancestor left its row on the retired
+        /// buffer it was recorded into. Set per walked node, restored when its walk returns.</summary>
+        public SpanReloc Reloc;
         public float CurDx, CurDy;
         public float SliceOwnDx, SliceOwnDy;
         // The composite clip (WINDOW space) of the current slice chain: a translation slice records under an unbounded
@@ -1904,6 +1908,7 @@ internal sealed class SceneRecordingContext
         // so its stored bytes could be stale. Deny reuse AND skip the store (the not-store-while-blocked safety property) —
         // its children that are NOT on a blocked chain still reuse/store normally, so only the chain re-records.
         bool blocked = spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame);
+        SpanReloc parentReloc = stats.Reloc;
         bool spanTracking = spans is not null && spanStoreEnabled && !blocked;
         if (spans is not null)
         {
@@ -1983,7 +1988,7 @@ internal sealed class SceneRecordingContext
             // signature (world, clip, opacity, inherited state, viewport chrome…). A span carrying child slice markers is
             // copied only when every one of those slices can be kept (they are re-registered in stream order).
             else if (!spanReuseDisabled && !blocked && recordDirtyBits == 0
-                && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, spanInputSig, out var span)
+                && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, stats.CurSlot, in parentReloc, spanInputSig, out var span)
                 && span.ClipComplete
                 && IsClipComplete(span.SubtreeBounds, in clip)
                 && dl.CanCopyPriorSpan(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount)
@@ -2014,13 +2019,16 @@ internal sealed class SceneRecordingContext
             // attribute WHY, and only for a span that already missed reuse.
             if (!spanReuseDisabled && !blocked && recordDirtyBits == 0 && !isSliceSelf)
             {
-                if (!spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, spanInputSig, out var exactMiss))
+                if (!spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, stats.CurSlot, in parentReloc, spanInputSig, out var exactMiss))
                     stats.SpanMissExactKey++;
                 else if (!exactMiss.ClipComplete || !IsClipComplete(exactMiss.SubtreeBounds, in clip))
                     stats.SpanMissExactClip++;
                 else if (!dl.CanCopyPriorSpan(exactMiss.ByteStart, exactMiss.ByteLength, exactMiss.SortStart, exactMiss.SortCount))
                     stats.SpanMissExactCapacity++;
             }
+
+            // This node re-records: its children copy out of the bytes it held, wherever an earlier exact copy put them.
+            stats.Reloc = spans.Relocation((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, stats.CurSlot, in parentReloc);
 
             if (spanTracking)
             {
@@ -3322,6 +3330,7 @@ internal sealed class SceneRecordingContext
             stats.SpansReRecorded++;
         }
         if (isSliceSelf) stats.Slices!.EndWalk(selfSlot, result.HasBounds ? result.SubtreeBounds : default);
+        stats.Reloc = parentReloc;
 
         return result;
     }
