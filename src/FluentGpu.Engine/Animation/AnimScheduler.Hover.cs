@@ -183,6 +183,7 @@ public sealed partial class AnimEngine
     /// InteractionAnimator.Step (which advanced immediately), so the recorder's per-frame composite is identical.</summary>
     private void SeedInteractFade(NodeHandle node, AnimChannel ch, float from, float to, float durMs, EasingSpec easing)
     {
+        if (HeadsTo(node, ch, to)) return;   // a redundant same-target edge (SeedGesture) must not restart the fade
         SeedEased(node, ch, from, to, durMs, easing.NamedOr(Easing.FluentPopOpen));
         MarkSeedRelative(Find(node, ch), from);   // `from` is HoverT/PressT: the UI's view of the fade, not an authored start
     }

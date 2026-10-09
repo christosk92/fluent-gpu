@@ -103,13 +103,25 @@ public sealed partial class AnimEngine
     internal void SeedTargetOver(NodeHandle node, in MotionTarget rest, in MotionTarget d, in MotionTokenDef m,
                                  uint channels = AllGestureChannels)
     {
-        if (Drives(channels, AnimChannel.ScaleX))     SeedChannel(node, AnimChannel.ScaleX,     rest.Scale    * d.Scale,    in m, null, 0f);
-        if (Drives(channels, AnimChannel.ScaleY))     SeedChannel(node, AnimChannel.ScaleY,     rest.Scale    * d.Scale,    in m, null, 0f);
-        if (Drives(channels, AnimChannel.Opacity))    SeedChannel(node, AnimChannel.Opacity,    rest.Opacity  * d.Opacity,  in m, null, 0f);
-        if (Drives(channels, AnimChannel.TranslateX)) SeedChannel(node, AnimChannel.TranslateX, rest.OffsetX  + d.OffsetX,  in m, null, 0f);
-        if (Drives(channels, AnimChannel.TranslateY)) SeedChannel(node, AnimChannel.TranslateY, rest.OffsetY  + d.OffsetY,  in m, null, 0f);
-        if (Drives(channels, AnimChannel.Rotation))   SeedChannel(node, AnimChannel.Rotation,   rest.Rotation + d.Rotation, in m, null, 0f);
-        if (Drives(channels, AnimChannel.BlurSigma))  SeedChannel(node, AnimChannel.BlurSigma,  rest.Blur     + d.Blur,     in m, null, 0f);
+        if (Drives(channels, AnimChannel.ScaleX))     SeedGesture(node, AnimChannel.ScaleX,     rest.Scale    * d.Scale,    in m);
+        if (Drives(channels, AnimChannel.ScaleY))     SeedGesture(node, AnimChannel.ScaleY,     rest.Scale    * d.Scale,    in m);
+        if (Drives(channels, AnimChannel.Opacity))    SeedGesture(node, AnimChannel.Opacity,    rest.Opacity  * d.Opacity,  in m);
+        if (Drives(channels, AnimChannel.TranslateX)) SeedGesture(node, AnimChannel.TranslateX, rest.OffsetX  + d.OffsetX,  in m);
+        if (Drives(channels, AnimChannel.TranslateY)) SeedGesture(node, AnimChannel.TranslateY, rest.OffsetY  + d.OffsetY,  in m);
+        if (Drives(channels, AnimChannel.Rotation))   SeedGesture(node, AnimChannel.Rotation,   rest.Rotation + d.Rotation, in m);
+        if (Drives(channels, AnimChannel.BlurSigma))  SeedGesture(node, AnimChannel.BlurSigma,  rest.Blur     + d.Blur,     in m);
+    }
+
+    // A gesture seed toward the value a running row on the channel already heads to is a no-op. The dispatcher fires
+    // REDUNDANT edges: a card whose pointer moves onto its own nested button takes a HoverWithin on edge, then a leaf off
+    // edge the effective-hover guard turns back into on (and the reverse on the way back up), and both resolve to the
+    // target the row is already easing to. Re-seeding restarted every eased row from where it stood with its full
+    // duration and a fresh seed-frame hold, so the lift stalled and landed late on every card <-> button crossing; on the
+    // render-owned path the two stamps in one frame also left the re-seed's drift base a revision ahead of the render
+    // thread's (RenderCompositorAnimations.Adopt), so it restarted from the UI's stale pose instead of the one on screen.
+    private void SeedGesture(NodeHandle node, AnimChannel ch, float to, in MotionTokenDef m)
+    {
+        if (!HeadsTo(node, ch, to)) SeedChannel(node, ch, to, in m, null, 0f);
     }
 
     /// <summary>Every gesture channel <see cref="SeedTargetOver"/> can drive, as <c>1u &lt;&lt; (int)AnimChannel</c> bits.</summary>

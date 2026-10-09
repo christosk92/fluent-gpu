@@ -561,6 +561,20 @@ public sealed partial class AnimEngine
         return -1;
     }
 
+    /// <summary>Whether the replace row on <paramref name="ch"/> is still running toward <paramref name="to"/> on its own
+    /// clock: not settled, looping, signal-driven, held or paused (a re-seed is what releases those). Re-seeding such a
+    /// row toward the same value only restarts it (see <c>SeedGesture</c>).</summary>
+    private bool HeadsTo(NodeHandle node, AnimChannel ch, float to)
+    {
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            if (r.Channel != ch || r.Has(AnimFlags.Additive)) continue;
+            return r.To == to && !r.Has(AnimFlags.Done | AnimFlags.Loop | AnimFlags.Driven | AnimFlags.Hold | AnimFlags.Paused);
+        }
+        return false;
+    }
+
     private int Get(NodeHandle node, AnimChannel ch, bool additive)
     {
         int idx = (int)node.Raw.Index;
