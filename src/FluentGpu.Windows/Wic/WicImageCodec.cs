@@ -72,11 +72,15 @@ public sealed unsafe class WicImageCodec : IImageCodec, IDisposable
         IWICFormatConverter* conv = null;
         IWICBitmap* buffered = null;                  // only for an oriented source: the flip-rotator needs a buffered input
         IWICBitmapFlipRotator* rotator = null;
+        // IWICStream::InitializeFromMemory does NOT copy: the stream (and the decoder reading through it) keeps the raw
+        // pointer until CopyPixels has pulled the last compressed byte. So the source stays pinned for the WHOLE decode and
+        // the COM teardown; a pin around InitializeFromMemory alone lets a compacting GC on any thread move a pooled
+        // small-object-heap fetch buffer mid-decode, and WIC then reads whatever sits at the old address.
+        fixed (byte* p = encoded)
         try
         {
             if (factory->CreateStream(&stream).FAILED) return false;
-            fixed (byte* p = encoded)
-                if (stream->InitializeFromMemory(p, (uint)encoded.Length).FAILED) return false;
+            if (stream->InitializeFromMemory(p, (uint)encoded.Length).FAILED) return false;
 
             if (factory->CreateDecoderFromStream((IStream*)stream, null,
                     WICDecodeOptions.WICDecodeMetadataCacheOnDemand, &decoder).FAILED) return false;
