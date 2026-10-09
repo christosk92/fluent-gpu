@@ -589,8 +589,9 @@ public sealed partial class TreeReconciler
     /// <summary>Set by the host; clears input/focus state when a retained subtree is parked off the live scene chain.</summary>
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
     /// <summary>Set by the host; called at the top of <see cref="Remove"/>, while the subtree's parent chain is still
-    /// walkable, so the dispatcher can run the hover exit for a hovered row that is about to orphan or free. NOT the
-    /// deactivation hook: a removal ends no captured gesture and must not clear focus/press/drag.</summary>
+    /// walkable, so the dispatcher can run the hover exit and the focus leave (LostFocus on the node and its ancestors)
+    /// for a subtree that is about to orphan or free. NOT the deactivation hook: a removal ends no captured gesture and
+    /// must not clear press/drag.</summary>
     public Action<NodeHandle>? OnSubtreeRemoved { get; set; }
     /// <summary>Set by the host; called when a virtual-list recycle (a bound slot's index write, or a keyed RenderItem
     /// row rewritten in place) rebinds a LIVE slot root to a different item. The handle survives the rebind, so state

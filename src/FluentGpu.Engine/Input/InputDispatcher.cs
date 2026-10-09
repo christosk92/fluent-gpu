@@ -664,14 +664,24 @@ public sealed partial class InputDispatcher
     /// OnPointerExit + OnHoverChanged → the AnimEngine hover edge), then ARM a re-resolve at the last known pointer
     /// position so the row now under the cursor lights up on the next frame instead of waiting for a mouse jiggle.</para>
     ///
-    /// <para>Press/focus/drag/text-selection are deliberately NOT cleared here (unlike the park edge): a removal does
+    /// <para>Focus LEAVES with the node, through the same <see cref="SetFocus"/> a blur uses, while the chain is still
+    /// walkable: the focused node and every ancestor with an OnFocusChanged handler hear LostFocus (an editor releases the
+    /// IME sink/context and the touch keyboard there, and focus-within chrome drops). The IsLive prune in Dispatch only
+    /// nulled a freed handle silently, and never fired for an exit orphan, which stays LIVE: a second Enter during its
+    /// fade re-fired the removed row's click.</para>
+    ///
+    /// <para>Press/drag/text-selection are deliberately NOT cleared here (unlike the park edge): a removal does
     /// not end a captured gesture, and those singletons already self-guard on <c>IsLive</c>.</para>
-    /// Idempotent; UI thread only; zero managed allocation (one parent walk).</summary>
+    /// Idempotent; UI thread only; zero managed allocation (two parent walks).</summary>
     public void NotifySubtreeRemoved(NodeHandle root)
     {
-        if (root.IsNull || !IsSelfOrAncestorOf(root, _hovered)) return;
-        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
-        _hoverResolvePending = true;
+        if (root.IsNull) return;
+        if (IsSelfOrAncestorOf(root, _hovered))
+        {
+            SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+            _hoverResolvePending = true;
+        }
+        if (IsSelfOrAncestorOf(root, _focused)) SetFocus(NodeHandle.Null);   // also cancels a held Space/Enter (armed on _focused)
     }
 
     /// <summary>Wired by the host as <c>TreeReconciler.OnSlotRebound</c>: a virtual-list recycle rebound
