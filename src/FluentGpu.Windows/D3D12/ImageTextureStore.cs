@@ -402,14 +402,21 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     public bool IsInFlight(int id)
         => _byId.TryGetValue(id, out var t) && (t.NeedsCopy || (t.Live && !SideDone(t.FenceQueue, t.Fence)));
 
+    /// <summary>Set by <c>D3D12Device.DrainImageJobs</c> at the end of every drain: true while it holds an upload over its
+    /// per-turn budget, so that job and everything queued behind it are still waiting in the upload queue (which cannot be
+    /// peeked, so WHICH ids is unknown). The UI admitted them Ready already (+1-frame admission) and will not damage their
+    /// tiles again, so every draw resolved meanwhile is provisional (<see cref="ResolveDraw"/>): a placeholder for an id
+    /// not staged yet, or prior pixels a same-id replacement behind the hold will supersede. Render thread only.</summary>
+    internal bool UploadBacklogHeld { get; set; }
+
     /// <summary>How a draw of <paramref name="id"/> resolves this frame: true when it samples pixels (<see cref="IsResident"/>
     /// — the current placement, or the prior one a replacement keeps published), false for the placeholder.
     /// <paramref name="provisional"/> is true when newer pixels for the id are staged or still on the copy / compute queue
-    /// (<see cref="IsInFlight"/>), whichever of the two stands in for them: a retained tile that drew it is not the final
-    /// picture and must re-raster once they land.</summary>
+    /// (<see cref="IsInFlight"/>) or may still wait behind a budget-held upload (<see cref="UploadBacklogHeld"/>), whichever
+    /// of the two stands in for them: a retained tile that drew it is not the final picture and must re-raster once they land.</summary>
     public bool ResolveDraw(int id, out bool provisional)
     {
-        provisional = IsInFlight(id);
+        provisional = UploadBacklogHeld || IsInFlight(id);
         return TryDrawable(id, out _);
     }
 

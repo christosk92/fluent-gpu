@@ -202,7 +202,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _frameTextCoverFlushes;   // segments cut by CoverPendingText this frame
     private int _frameImageCount;
     private int _frameImageSkipped;
-    private int _frameImagesInFlight;   // draws that showed a placeholder for pixels still on a side queue
+    private int _frameImagesInFlight;   // draws that showed a placeholder (or prior pixels) for pixels still on a side queue or behind a held upload
     private readonly List<GlyphInstance> _glyphInsts = new();
     private readonly List<GradGlyphInstance> _gradGlyphInsts = new();   // sub-glyph karaoke wipe (active lyric line + glow)
     private float _frameScale = 1f;
@@ -829,6 +829,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 stagedBytes += j.ByteLen;             // counted whether or not Stage accepted — the CPU work was spent either way
             }
         }
+        // A held job and everything behind it were admitted Ready on the UI thread but are not staged: a tile drawn this
+        // turn is not faithful while they wait (ImageTextureStore.ResolveDraw), or it would keep their placeholder (or a
+        // superseded preview) after they land, since nothing damages it again.
+        _imageTextures.UploadBacklogHeld = _hasHeldImageJob;
         // A staging create/map failed. On a healthy device that was a driver OOM and this is a cheap no-op
         // (GetDeviceRemovedReason == S_OK ⇒ false); on a removed device it RECORDS the loss so the UI recovery gate
         // (threading-render-seam.md §9) arms even if no Present happens soon — a minimized/idle window can drain image
