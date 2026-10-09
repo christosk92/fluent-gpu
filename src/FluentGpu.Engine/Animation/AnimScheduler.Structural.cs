@@ -213,7 +213,16 @@ public sealed partial class AnimEngine
         // no-op that reclaims in a couple of frames).
         if ((spec.Channels & TransitionChannels.Size) != 0 && spec.Size == SizeMode.Reflow)
         {
-            bool horiz = _scene.Layout(node).Direction == 0;
+            // The closing axis is the PARENT's main axis, as for the enter (AppHost's PendingEnterReflow) and for
+            // FlexLayout.AddOrphanMain, which reads the orphan's extent along it. Remove orphans BEFORE this seed, so the
+            // topological Parent is already null: read the retained visual parent. The node's own Direction picked the
+            // width of a default-row drawer in a column, so it wiped sideways, held no height, and opened on one axis
+            // but closed on the other.
+            NodeHandle par = _scene.Parent(node);
+            if (par.IsNull) _scene.TryGetOrphanVisualParent(node, out par);
+            bool horiz = !par.IsNull && _scene.IsLive(par)
+                ? _scene.Layout(par).Direction == 0
+                : _scene.Layout(node).Direction == 0;   // rootless orphan: no parent axis to follow
             if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) == 0) horiz = !horiz;
             if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) != 0)
             {
