@@ -1444,6 +1444,11 @@ public sealed partial class FlexLayout
         return lo;
     }
 
+    // A grid cell's slot holds its MARGIN box (CSS grid; the ArrangeVirtual slot rule): an Auto track and an auto row
+    // count the margin, and the cell is measured and placed inset by it. A collapsed cell keeps its track but sizes 0×0,
+    // so it contributes no margin either.
+    private Edges4 GridCellMargin(NodeHandle c) => Collapsed(c) ? default : _scene.Layout(c).Margin;
+
     private Size2 MeasureGrid(NodeHandle node, in LayoutInput li, float availW)
     {
         _scene.TryGetGrid(node, out var g);
@@ -1498,11 +1503,18 @@ public sealed partial class FlexLayout
 
             float rowH = autoRow ? 0f : g.RowHeight;
             if (autoRow)
-                for (int j = 0; j < n; j++) { var cs = Measure(rowKids[j], colW[j]); rowH = MathF.Max(rowH, cs.Height); }
+                for (int j = 0; j < n; j++)
+                {
+                    var m = GridCellMargin(rowKids[j]);
+                    var cs = Measure(rowKids[j], MathF.Max(0f, colW[j] - m.Horizontal));
+                    rowH = MathF.Max(rowH, cs.Height + m.Vertical);
+                }
             for (int j = 0; j < n; j++)
             {
-                if (!autoRow) Measure(rowKids[j], colW[j]);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
-                Arrange(rowKids[j], colX[j], rowTop, colW[j], rowH);
+                var m = GridCellMargin(rowKids[j]);
+                float cw = MathF.Max(0f, colW[j] - m.Horizontal);
+                if (!autoRow) Measure(rowKids[j], cw);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
+                Arrange(rowKids[j], colX[j] + m.Left, rowTop + m.Top, cw, MathF.Max(0f, rowH - m.Vertical));
             }
             rowTop += rowH + g.RowGap;
             child = c;
@@ -1540,7 +1552,7 @@ public sealed partial class FlexLayout
             for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
             {
                 int col = k % count;
-                if (g.Columns[col].Kind == TrackKind.Auto) { var cs = Measure(c); autoW[col] = MathF.Max(autoW[col], cs.Width); }
+                if (g.Columns[col].Kind == TrackKind.Auto) { var cs = Measure(c); autoW[col] = MathF.Max(autoW[col], cs.Width + GridCellMargin(c).Horizontal); }
             }
         }
 
@@ -1583,8 +1595,9 @@ public sealed partial class FlexLayout
         float sumRowH = 0f, rowH = 0f; int k = 0;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
         {
-            var cs = Measure(c, colW[k % count]);   // at the track width, so wrapping text reports its wrapped height
-            rowH = MathF.Max(rowH, cs.Height);
+            var m = GridCellMargin(c);
+            var cs = Measure(c, MathF.Max(0f, colW[k % count] - m.Horizontal));   // at the track width less the margin, so wrapping text reports its wrapped height
+            rowH = MathF.Max(rowH, cs.Height + m.Vertical);
             if (k % count == count - 1) { sumRowH += rowH; rowH = 0f; }
         }
         if (k % count != 0) sumRowH += rowH;   // trailing partial row
