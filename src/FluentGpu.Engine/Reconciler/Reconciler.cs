@@ -301,6 +301,7 @@ public sealed partial class TreeReconciler
     private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
     private readonly Dictionary<int, string> _relativeKey = new();                    // follower node → the MorphId key it FLIPs relative to (Element.RelativeTo)
     private readonly Dictionary<int, NodeHandle> _mirroredChild = new();             // transparent anchor → the child MirrorParticipation last mirrored (RemirrorAncestors)
+    private static readonly LayoutInput EmptyBoundaryLayout = LayoutInput.Default;  // what an EMPTY boundary mirrors (MirrorParticipation)
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
     private readonly Dictionary<int, (byte Branch, Element? El, object? Group)> _skelState = new();
@@ -1351,7 +1352,7 @@ public sealed partial class TreeReconciler
         // false during a branch swap and leave an outer component anchor permanently blocking descent even after the
         // inner branch became hit-testable. Child hits still win because pass-through is consulted only after descent.
         //
-        // Set BEFORE the empty-boundary return, because an EMPTY boundary is the case that bites hardest. A `Show`
+        // Set BEFORE mirroring the child, because an EMPTY boundary is the case that bites hardest. A `Show`
         // whose branch is false (and has no `else`) keeps a live anchor with NO child and therefore nothing to mirror —
         // and a bare anchor is not inert: CreateNode gives every node HitTestVisible, and an auto-sized child of a
         // ZStack is STRETCHED to the whole slot (ArrangeZStack: NaN width/height ⇒ fill), so the anchor becomes a
@@ -1366,9 +1367,12 @@ public sealed partial class TreeReconciler
         // reserving space. Layout-only (MirrorCollapsed), so the anchor's own Visible keeps owning its Hidden/timers.
         _mirroredChild[(int)anchor.Raw.Index] = child;
         _scene.SetMirrorCollapsedIfChanged(anchor, !child.IsNull && _scene.IsLayoutCollapsed(child));
-        if (child.IsNull) return;
+        // An EMPTY boundary (a Show gone false with no Else, a Failed Skel.Region with no OnFailed) has nothing to mirror,
+        // but its LayoutInput still holds what the PREVIOUS branch put there: a 20x20 badge left a 20x20 hole, a Grow=1
+        // branch kept eating the row's free space. Mirror the defaults instead, so it measures exactly like a boundary
+        // whose branch never mounted.
         ref LayoutInput a = ref _scene.Layout(anchor);
-        ref LayoutInput c = ref _scene.Layout(child);
+        ref readonly LayoutInput c = ref child.IsNull ? ref EmptyBoundaryLayout : ref _scene.Layout(child);
         a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
         // NEVER snapshot an ACTIVELY ANIMATED size. A SizeMode.Reflow track writes the eased extent straight into the
         // child's LayoutInput.Width/Height each tick; mirroring THAT onto the transparent anchor freezes a mid-flight
@@ -1377,8 +1381,8 @@ public sealed partial class TreeReconciler
         // (normally NaN/auto) so the anchor stays genuinely transparent and measures the eased child naturally.
         if (Anim is { } mpAnim)
         {
-            float mirroredW = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width;
-            float mirroredH = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height;
+            float mirroredW = !child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width;
+            float mirroredH = !child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height;
             // The SAME hazard one level up, with the roles swapped: the ANCHOR itself may be the reflow node. A
             // SkelRegionEl with SmoothResize puts the SizeMode.Reflow track on the BOUNDARY (MountSkeletonRegion marks
             // the region BoundsAnimated), and ReconcileSkeletonRegion then mirrors its branch onto it on every flush —
