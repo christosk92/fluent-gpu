@@ -1040,14 +1040,16 @@ public sealed partial class FlexLayout
         {
             int index = VirtualIndex(in sc, ord);
             if ((uint)index >= (uint)sc.ItemCount) continue;
-            var rect = layout.ItemRect(index, cross);
             ref LayoutInput rli = ref _scene.Layout(row);
-            float measureW = horizontal
-                ? MathF.Max(0f, rect.H - rli.Margin.Top - rli.Margin.Bottom)
-                : MathF.Max(0f, rect.W - rli.Margin.Left - rli.Margin.Right);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            // Commit EXACTLY what ArrangeVirtual pass 1 commits (the margin box, measured at the same availW): the two
+            // write one shared table, and a margin-less write here shrank the natural viewport by every row's margin
+            // while arrange grew the content back — clipped bottom rows and an inner scroll that never healed.
+            float measureW = horizontal ? float.PositiveInfinity
+                           : MathF.Max(0f, layout.ItemRect(index, cross).W - mL - mR);
             if (measureW <= 0f) continue;                    // same rule per row: a margin-eaten slot is not a measurement
             var measured = Measure(row, measureW);
-            layout.SetMeasured(index, horizontal ? measured.Width : measured.Height, cross);
+            layout.SetMeasured(index, horizontal ? measured.Width + mL + mR : measured.Height + mT + mB, cross);
         }
     }
 
