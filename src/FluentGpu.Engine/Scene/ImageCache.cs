@@ -1653,9 +1653,10 @@ public sealed class ImageCache
         }
         QueueSourceDependents(id, ok);
         // A decode the hidden window requested that lands while Deep (a pop-out's pump, a prefetch): accept it, then release it
-        // at once - nothing shows it, and the restore re-requests whatever something holds.
+        // at once - nothing shows it, and the restore re-requests whatever something holds. A visible pop-out's image
+        // (HiddenChildHeld) stays: RestartDecode let it restart for that pop-out, so re-parking it would evict what it shows.
         if (ok && HiddenStage == FluentGpu.Hosting.HiddenStage.Deep && !HiddenKeepLandings && !e.Derived && e.KeepRefs == 0
-            && e.State == ImageState.Ready && !HasPendingDependent(id))
+            && e.State == ImageState.Ready && !HasPendingDependent(id) && !(HiddenChildHeld?.Contains(id) ?? false))
             DropToNone(id, e, park: true, evict: true);
     }
 
