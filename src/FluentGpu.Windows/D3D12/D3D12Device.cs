@@ -1318,6 +1318,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // void. The new semaphore starts signaled, so the next TryTakePresentSlot returns at once — reserving the
         // slot rather than skipping it is also the only safe direction (skipping would present into a full queue).
         target.LatencyCreditHeld = false;
+        target.LatencyCountsOwed = 0;
         // Always-on, once per swapchain: the present-queue depth is a LATENCY decision that is invisible from the
         // outside (a queue two frames deep still reports a healthy frame rate — that is exactly how depth 2 hid ~1
         // frame of input lag until it was measured). Logged so any later session can tell from the log alone which
@@ -4074,6 +4075,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         LatencyWait wait = WaitLatencyOrAbort(sc.FrameLatencyWaitable, 1000);
         if (wait == LatencyWait.Aborted) return;
+        if (wait == LatencyWait.Opened) RepayLatencyDebt(sc);
+        else NoteUnpaidLatencyCredit(sc);
         sc.LatencyCreditHeld = true;
         if (!ReferenceEquals(sc, _primarySwapchain)) NoteNonPrimaryLatencyWait(sc, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds, wait == LatencyWait.Opened);
     }
@@ -4112,6 +4115,22 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         handles[1] = (HANDLE)abort;
         uint r = WaitForMultipleObjects(2, handles, false, timeoutMs);
         return r == WAIT_OBJECT_0 ? LatencyWait.Opened : r == WAIT_OBJECT_0 + 1 ? LatencyWait.Aborted : LatencyWait.TimedOut;
+    }
+
+    // A liveness-bounded wait that ran out holds a credit it never took: the Present that spends it queues a frame no wait paid
+    // for, which leaves one count too many once it retires. Capped at FRAME_COUNT: an understated debt only leaves the old
+    // drift, an overstated one could drain a count a real wait needs.
+    private static void NoteUnpaidLatencyCredit(D3D12Swapchain sc)
+    {
+        if (sc.LatencyCountsOwed < (int)FRAME_COUNT) sc.LatencyCountsOwed++;
+    }
+
+    // Take back the surplus counts unpaid frames left, without blocking, and only AFTER a wait took this turn's own count: repaid
+    // first, an overstated debt would eat the open slot itself and every later take would run out its bound. A count not there
+    // yet (the unpaid frame is still queued) is repaid by a later wait. Render thread only; no allocation.
+    private static void RepayLatencyDebt(D3D12Swapchain sc)
+    {
+        while (sc.LatencyCountsOwed > 0 && WaitForSingleObject(sc.FrameLatencyWaitable, 0) == WAIT_OBJECT_0) sc.LatencyCountsOwed--;
     }
 
     // Non-primary latency waits run on the shared render thread, so a long one is a main-window stall attributable to a
@@ -4168,7 +4187,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// no undo and the credit stays un-held. The bound is kept by a high-resolution timer (<see cref="WaitForSlotWithin"/>):
     /// a plain wait timeout is as coarse as the process timer resolution. <paramref name="timeoutMs"/> &lt; 0 is the
     /// liveness-bounded wait every other turn uses: it proceeds after 1 s even when the slot never opened (a lost device
-    /// must not wedge the loop) and holds the credit either way — exactly the unbounded contract this replaced.</para>
+    /// must not wedge the loop) and holds the credit either way — exactly the unbounded contract this replaced. A credit it
+    /// did not take is owed back and repaid from the surplus count its frame leaves (<c>D3D12Swapchain.LatencyCountsOwed</c>).</para>
     /// <para><b>Interruptible.</b> Every form of the wait also waits on the park-request event
     /// (<see cref="SetSubmitAbortHandle"/>), so the UI's rendezvous never waits out the 1 s bound. An interrupted take returns
     /// false in BOTH forms, takes nothing and leaves the credit un-held; the liveness form's caller must treat that false as
@@ -4209,6 +4229,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // A bounded take that did not get the slot (timed out, or the wait failed on a torn-down handle) reserved nothing:
         // report it and leave the credit un-held. The liveness path keeps today's semantics and proceeds regardless.
         if (wait != LatencyWait.Opened && timeoutMs >= 0) return false;
+        // ...but a credit it did not take is owed back once its Present's frame retires (RepayLatencyDebt).
+        if (wait == LatencyWait.Opened) RepayLatencyDebt(sc);
+        else NoteUnpaidLatencyCredit(sc);
         sc.LatencyCreditHeld = true;
         return true;
     }
@@ -5067,6 +5090,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.FrameLatencyWaitable = HANDLE.NULL;
         target.HasLatencyWaitable = false;
         target.LatencyCreditHeld = false;
+        target.LatencyCountsOwed = 0;
         if (target.RtvHeap != null)
         {
             D3D12MemoryDiagnostics.Release(target.RtvHeap, "Swapchain.RtvHeap");
@@ -5253,6 +5277,11 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // next Present that actually runs clears it. Render-thread-only (submit/present are render-confined), so a plain
     // field is the whole synchronization story. Reset to false wherever the waitable handle is (re)created or released.
     internal bool LatencyCreditHeld;
+    // Semaphore counts this swapchain owes back. A liveness-bounded wait that ran out (TryTakeLatencyCredit's negative form,
+    // WaitForLatency's 1 s bound) holds the credit without having taken a count, so the Present that spends it leaves the
+    // waitable one count above the depth once its frame retires, and every later wait would open a frame early.
+    // D3D12Device.RepayLatencyDebt takes the surplus back. Render-thread-only; reset with LatencyCreditHeld.
+    internal int LatencyCountsOwed;
     // Rate limiter for the non-primary latency-wait log (D3D12Device.NoteNonPrimaryLatencyWait): QPC of the last line, and
     // how many qualifying waits it swallowed since. Render-thread-only, like LatencyCreditHeld.
     internal long LatencyWaitLogQpc;
