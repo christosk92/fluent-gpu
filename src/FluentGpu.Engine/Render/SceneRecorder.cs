@@ -2995,13 +2995,22 @@ internal sealed class SceneRecordingContext
                 // playlist).
                 RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClipInline : childClip;
                 Affine2D activeChildWorld = childWorld;
+                // A disclosed row is revealed through the growing band (hit testing clips it there too). The clip a Walk
+                // receives only CULLS, so a row the band cuts records under that band as its own scissor: a half-revealed
+                // row otherwise paints at full height under the sliding suffix. The band rides the rows (content-local), so
+                // a content slice needs no pose-lock; the push replaces the scissor, so it carries the full intersection.
+                bool disclosed = false;
                 if (hasDisclosure)
                 {
                     int logicalIndex = ordinal < disclosurePrefix
                         ? ordinal
                         : disclosureFirstRealized + (ordinal - disclosurePrefix);
                     if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
-                        activeChildClip = activeChildClip.Intersect(disclosureClip);
+                    {
+                        RectF revealed = activeChildClip.Intersect(disclosureClip);
+                        disclosed = revealed != activeChildClip;
+                        activeChildClip = revealed;
+                    }
                     else if (logicalIndex >= disclosureLast)
                         activeChildWorld = childWorld.Translate(0f, disclosureShift);
                 }
@@ -3009,7 +3018,8 @@ internal sealed class SceneRecordingContext
                 childOrdinal++;
                 if ((cf & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
                 if (activeChildClip.IsEmpty) continue;
-                if ((scene.Interaction(c).HandlerMask & InteractionInfo.HoverElevatePaintBit) != 0)
+                // A disclosed row records in place under its band scissor: elevation would replay (or hoist) it outside it.
+                if (!disclosed && (scene.Interaction(c).HandlerMask & InteractionInfo.HoverElevatePaintBit) != 0)
                 {
                     // Hover source published at record time: NodeFlags.Hovered/HoverWithin (instantaneous), else the
                     // node's own eased InteractionAnim.HoverT so the EXIT fade keeps it elevated until it decays < 0.01.
@@ -3039,9 +3049,11 @@ internal sealed class SceneRecordingContext
                         // Lower progress than the deferred card → record it now in normal order (falls through).
                     }
                 }
+                if (disclosed) childDl.PushClip(activeChildClip, key);
                 var childResult = Walk(scene, childDl, images, c, activeChildWorld, opacity, depth + 1,
                     activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                if (disclosed) childDl.PopClip(key);
                 result.Include(childResult);
                 if (bandSlot >= 0) bandResult.Include(childResult);
             }
@@ -3128,20 +3140,27 @@ internal sealed class SceneRecordingContext
                         // line in the stream's own space (the viewport-space line sits SliceOwnDy away from it).
                         RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix && pinnedSlot < 0 ? itemBandClipInline : childClip;
                         Affine2D pinnedWorld = childWorld;
+                        bool pinnedDisclosed = false;   // scissored to the disclosure band like the in-order rows above
                         if (hasDisclosure)
                         {
                             int logicalIndex = pinnedOrdinal < disclosurePrefix
                                 ? pinnedOrdinal
                                 : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
                             if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
-                                pinnedClip = pinnedClip.Intersect(disclosureClip);
+                            {
+                                RectF revealed = pinnedClip.Intersect(disclosureClip);
+                                pinnedDisclosed = revealed != pinnedClip;
+                                pinnedClip = revealed;
+                            }
                             else if (logicalIndex >= disclosureLast)
                                 pinnedWorld = childWorld.Translate(0f, disclosureShift);
                         }
                         if (pinnedClip.IsEmpty) continue;
+                        if (pinnedDisclosed) childDl.PushClip(pinnedClip, key);
                         var childResult = Walk(scene, childDl, images, c, pinnedWorld, opacity, depth + 1,
                             pinnedClip, in focus, in textEdit, scrollThumb, scrollTrack,
                             childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                        if (pinnedDisclosed) childDl.PopClip(key);
                         result.Include(childResult);
                         if (pinnedSlot >= 0) pinnedResult.Include(childResult);
                     }
