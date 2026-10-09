@@ -3859,7 +3859,7 @@ public sealed partial class AppHost : IDisposable
     // instant) is the phase reference: input is dispatched on every wake, but a FRAME is produced at most once per tick,
     // and the frame is stamped with that tick's vblank instant (FrameClock.FrameQpc). No present-ack handshake, no stall
     // ceiling, no slip/unpaced heuristics: the tick IS the vblank, so there is nothing to infer.
-    private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable)
+    private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable or its tick stale: never gate)
     private long _lastProducedTickSeq;     // the tick the last produced frame belongs to
     private long _productionDeclines;      // diagnostic census: RunFrames that dispatched input but produced no frame (already produced for this tick)
     private readonly IInputPacingSource? _pacingSource;   // the window's paced-wait census (FrameStats.PacedUrgentBreaks); null ⇒ 0
@@ -3900,6 +3900,19 @@ public sealed partial class AppHost : IDisposable
     /// was already produced for that very tick.</summary>
     internal static bool ProductionGateDeclines(long frameTickSeq, long lastProducedTickSeq, bool waitWantsDisplayClock)
         => frameTickSeq != 0 && waitWantsDisplayClock && frameTickSeq == lastProducedTickSeq;
+
+    // A tick older than this no longer describes the clock's CURRENT beat (RenderThread.TryGetDisplayTick's rule, same value):
+    // two refreshes at a 30 Hz panel, far above a live tick interval or a backstop wake on ONE missed tick.
+    private static readonly long s_gateTickMaxAgeQpc = Stopwatch.Frequency / 15;
+
+    /// <summary>The tick seq the production gate counts a frame against (0 = never gate): the sampled tick's while it is
+    /// current, 0 without a clock, before its first tick, or when its stamp is older than <paramref name="maxAgeQpc"/>. A seq
+    /// that stopped moving while the host still waits on the clock is a STALLED compositor (its waits time out, and a timeout
+    /// is never a tick), not a tick already produced for: gated on it, every backstop wake was declined, so Paint (timers, the
+    /// reactive flush, the re-render of input just dispatched) never ran until the clock ticked again. The backstop paces
+    /// production instead, which is what <see cref="TickBackstopMs"/> promises.</summary>
+    internal static long GateTickSeq(bool available, long tickSeq, long tickQpc, long nowQpc, long maxAgeQpc)
+        => available && tickQpc != 0 && nowQpc - tickQpc <= maxAgeQpc ? tickSeq : 0;
 
     /// <summary>The display clock this host paces production on. A window with a compositor clock of its own (the primary)
     /// uses it. A detached child's window has none, so it samples the PARENT render thread's clock - the same vblank source
@@ -5382,9 +5395,10 @@ public sealed partial class AppHost : IDisposable
             // The compositor tick this frame belongs to (§13.2): production is gated to one frame per tick, and the frame
             // is stamped with that tick's vblank instant. Sampled ONCE here so the gate below and the clock agree.
             var display = PacingClock();
-            _frameTickSeq = display.Available ? display.TickSeq : 0;
+            long sampleQpc = Stopwatch.GetTimestamp();
+            _frameTickSeq = GateTickSeq(display.Available, display.TickSeq, display.TickQpc, sampleQpc, s_gateTickMaxAgeQpc);
             _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
-                Stopwatch.GetTimestamp(), _frameClockFloorQpc, _frameClockSeq, Volatile.Read(ref _maxFrameLatency));
+                sampleQpc, _frameClockFloorQpc, _frameClockSeq, Volatile.Read(ref _maxFrameLatency));
             _frameClockFloorQpc = _palFrameClock.FrameQpc;
         }
         // Publish the SAME target time to app code (Hooks.FrameClock.FrameQpc/PresentQpc) before anything app-visible
