@@ -150,6 +150,7 @@ static partial class OverlaySuite
         MenuFlyoutStyleChecks(strings);
         SplitButtonStyleChecks(strings);
         OverlayContentResizeChecks(strings);
+        OverlayViewportResizeChecks(strings);
     }
 
     static void PlacementChecks()
