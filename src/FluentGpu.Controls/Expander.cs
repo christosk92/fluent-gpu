@@ -146,11 +146,18 @@ public sealed class Expander : Component
         var clipRef = UseRef<NodeHandle>(default);
         var chevronSeeded = UseRef(false);
 
-        bool showContent = shown.Value;          // subscribe: the collapse watcher's write re-renders this component
+        // `| open`: an open render mounts the content in the SAME commit that flips the clip to auto height, so the
+        // FLIP diffs 0 → content height and seeds the Reflow track. An external open (controlled-signal write) sets
+        // `shown` only in the effect below, one commit late: its open commit FLIPped an empty clip 0 → 0, the resize
+        // watcher mounted in that commit found no track and cleared `transitioning`, and with
+        // AnimateContentResize=false the late content mount then snapped open under ReflowNoResize. `|`, not `||`:
+        // `shown` is always read (subscribe: the collapse watcher's write re-renders this component).
+        bool showContent = shown.Value | open;
         bool closing = showContent && !open;     // mid collapse-reflow: content mounted, clip shrinking, watcher armed
 
-        // An EXTERNAL open (controlled-signal write, not a header click) must mount the content too. Effects run
-        // after the commit, so the panel mounts one frame later and the reflow seeds from 0 — same motion.
+        // An EXTERNAL open (controlled-signal write, not a header click) never ran toggle(), so latch `shown` here: the
+        // render already mounts the content while open (showContent above), and the latch keeps it mounted through
+        // a later collapse's 167ms reflow until the collapse watcher clears it.
         UseEffect(() => { if (open && !shown.Peek()) shown.Value = true; }, open);
 
         // Animate the chevron rotation toward the computed setting whenever the open state flips (down 0° ↔ up 180°).
