@@ -378,10 +378,12 @@ public sealed unsafe partial class D3D12Device
             NoteRasterCensus(partial, damage, tr.W, tr.H);
             if (beyondPlan && i < frame.RasterFlags.Length) frame.RasterFlags[i] |= CompositeFrameFlags.RasterBeyondPlan;
             _frameTilesRastered++;
-            // Faithful only when nothing was dropped and every image it drew was resident: an overflowed bank grows at
-            // the next BeginFrame, an image lands when its side-queue fence passes — either way the tile, left invalid,
-            // rasters again (the host keeps turning while uploads are in flight).
-            bool faithful = DroppedInstanceCount() == dropped && _glyphs.DroppedInstances == glyphDropped && _frameImagesInFlight == inFlight;
+            // Faithful only when nothing was dropped, every image it drew was resident and the glyph atlas owes no deferred
+            // reset or upload drain: an overflowed bank grows at the next BeginFrame, an image lands when its side-queue
+            // fence passes, an overflowed atlas shaped this turn's new glyphs blank — every way the tile, left invalid,
+            // rasters again (the host keeps turning while uploads are in flight or TextRepaintPending is set).
+            bool faithful = TileRasterFaithful(dropped, DroppedInstanceCount(), glyphDropped, _glyphs.DroppedInstances,
+                inFlight, _frameImagesInFlight, _glyphs.AtlasResetPending);
             if (i < frame.RasterDone.Length) frame.RasterDone[i] = faithful ? (byte)1 : (byte)0;
             // every faithful partial raster is checked — an EMPTY damage too (the claim "nothing changed" is the strongest)
             // honesty first: the shadow replay below runs the same glyph-halo / stencil bookkeeping
@@ -405,6 +407,15 @@ public sealed unsafe partial class D3D12Device
         FlushBarriers(nb);
         InvalidateCmdState();
     }
+
+    /// <summary>Whether one tile raster painted exactly what its segment says: no instance or glyph-bank drop while it
+    /// replayed, every image it sampled resident, and no deferred atlas reset or staging-short upload owed
+    /// (<see cref="GlyphRenderer.AtlasResetPending"/>). The atlas half is turn-wide: PrepareCompositeGlyphs shapes every
+    /// rastered segment before the first tile, so once it is pending any tile of the turn may hold blank glyphs.</summary>
+    internal static bool TileRasterFaithful(int droppedBefore, int droppedAfter, int glyphDroppedBefore, int glyphDroppedAfter,
+        int inFlightBefore, int inFlightAfter, bool atlasResetPending)
+        => droppedAfter == droppedBefore && glyphDroppedAfter == glyphDroppedBefore && inFlightAfter == inFlightBefore
+            && !atlasResetPending;
 
     private static D3D12_RESOURCE_BARRIER Transition(ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
     {
