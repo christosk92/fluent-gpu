@@ -84,7 +84,7 @@ public sealed class TreeView : Component
     /// <c>&lt;Setter Property="CanReorderItems" Value="True"/&gt;</c>).</summary>
     public bool CanReorderItems = true;
     /// <summary>Reorder commit: (parent — null at root level, fromChildIndex, toChildIndex). When null and the
-    /// sibling array is mutable, the tree moves the node in place (WinUI mutates its own node tree).</summary>
+    /// sibling array is mutable, the tree moves the node in place (WinUI mutates its own node tree); read-only root lists stay put.</summary>
     public Action<TreeNode?, int, int>? OnReorder;
 
     public static Element Create(IReadOnlyList<TreeNode> roots)
@@ -236,10 +236,12 @@ public sealed class TreeView : Component
         {
             if (from == to) return;
             if (OnReorder is not null) { OnReorder(parent, from, to); return; }
-            // In-place move (WinUI mutates its own node tree — ReorderItems, TreeViewItem.cpp:543-567).
+            // In-place move (WinUI mutates its own node tree — ReorderItems, TreeViewItem.cpp:543-567). An array is tested
+            // BEFORE IList: T[] implements IList<T> but is fixed-size, so RemoveAt/Insert would throw NotSupportedException.
             if (parent is not null) MoveInArray(parent.Children, from, to);
-            else if (Roots is IList<TreeNode> mutableRoots) ReorderList.Move(mutableRoots, from, to);
             else if (Roots is TreeNode[] rootArr) MoveInArray(rootArr, from, to);
+            else if (Roots is IList<TreeNode> { IsReadOnly: false } mutableRoots) ReorderList.Move(mutableRoots, from, to);
+            else return;   // read-only roots (collection expression, ImmutableArray, ReadOnlyCollection): supply OnReorder to move
             structureVersion.Value = structureVersion.Peek() + 1;
         }
 
