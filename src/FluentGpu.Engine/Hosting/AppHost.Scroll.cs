@@ -36,6 +36,14 @@ public sealed partial class AppHost
     // Render-thread poser (render thread only) over the adopted snapshot.
     private readonly ScrollPoser _renderPoser = new(recordsProbePoses: true);
     private readonly SnapshotScrollPoseSink _renderSink = new();
+    // Render thread only: the PlanSlots.Epoch the render poser last ticked over, read BEFORE its Tick so a write landing
+    // during the tick still reads as unposed. The poser's HasActive reports its LAST tick, so a plan written at rest (every
+    // plan settled) left the render wake with no motion and no publication: the turn returned and the first scrolled pixel
+    // waited for the UI frame. HasOwnRenderMotion compares the live epoch against this instead.
+    private ulong _renderPlanEpochPosed;
+
+    /// <summary>Render thread: a plan was written since the render poser's last tick (a wheel notch or a ScrollTo from rest).</summary>
+    private bool RenderPlanUnposed => _planSlots.Epoch != _renderPlanEpochPosed;
     private bool _scrollPoseChangedThisTick;
     // Motion latches (UI thread): this frame / last frame — the FLIP-suppression decision reads the 2-frame OR.
     private bool _anyUserScrollMovingNow, _anyUserScrollMovingLast;
@@ -593,6 +601,7 @@ public sealed partial class AppHost
         Threading.ThreadGuard.AssertRender();
         if (fresh) _renderPoser.Adopt(sceneFrame.Scene.ScrollCoverage);
         _renderSink.Bind(sceneFrame.Scene);
+        _renderPlanEpochPosed = _planSlots.Epoch;   // before the Tick: a write during it is posed by the next turn
         _scrollPoseChangedThisTick = _renderPoser.Tick(_planSlots, presentSec, sceneFrame.Scene.DeviceScale, _renderSink);
         Volatile.Write(ref _renderPosedPresentSec, presentSec);   // the pose floor (ScrollShownFloorSec)
         return _scrollPoseChangedThisTick;

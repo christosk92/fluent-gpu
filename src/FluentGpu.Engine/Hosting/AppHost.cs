@@ -576,7 +576,8 @@ public sealed partial class AppHost : IDisposable
             // app-wide occlusion signal is untouched (a held frame is not a covered window).
             active = _renderHeld
                 ? _holdRetryOwed
-                : _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
+                : _renderAnimations.HasActive || _renderPoser.HasActive || RenderPlanUnposed
+                    || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
                     || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
@@ -8086,7 +8087,13 @@ public sealed partial class AppHost : IDisposable
         if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
         if (DeferModalResize(keepAlive)) return false;   // pending until WM_EXITSIZEMOVE (InModalLoop cleared before Paint)
         _lastSize = s;
-        if (scale != _lastScale) _viewportScaleSig.Value = scale <= 0f ? 1f : scale;
+        if (scale != _lastScale)
+        {
+            _viewportScaleSig.Value = scale <= 0f ? 1f : scale;
+            // The cached stationary-pointer position is window DIP at the OLD scale: carry it into the new DIP space so
+            // this frame's hover refresh hits what is under the (unmoved) cursor, not what sat at the stale coordinates.
+            _dispatcher.RescalePointerPosition(_lastScale, scale);
+        }
         _lastScale = scale;
         // Viewport.Zoom ambient (display-only — the effective Scale above already contains the zoom). Value-gated
         // float compare so this per-frame path stays zero-alloc; the boxing publish happens only on an actual zoom
