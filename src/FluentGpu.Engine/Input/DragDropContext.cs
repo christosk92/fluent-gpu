@@ -275,6 +275,17 @@ public sealed class DragDropContext
         End();
     }
 
+    /// <summary>The L2 twin of <see cref="DragController.NotifySlotRebound"/>: a Stationary session whose source sits in a
+    /// bound-list slot just rebound to another item reparents onto the scene root — the same "no in-tree source" shape
+    /// <see cref="PruneDead"/> gives a freed source — so a destination that dims the source through
+    /// <c>Session.Source</c> never dims the item the slot shows now. A Ghost session is left to the L1 abort.</summary>
+    public void NotifySlotRebound(NodeHandle slotRoot)
+    {
+        if (!_active || _lift != DragLift.Stationary || _scene.Root.IsNull || !_scene.IsLive(_session.Source)) return;
+        for (var n = _session.Source; !n.IsNull; n = _scene.Parent(n))
+            if (n == slotRoot) { _session.Source = _scene.Root; return; }
+    }
+
     /// <summary>Called at dispatch start: a session whose SOURCE was freed by a reconcile ends (Leave fires on a live
     /// target); a freed TARGET/viewport is dropped silently (its columns are dead).</summary>
     public void PruneDead()
