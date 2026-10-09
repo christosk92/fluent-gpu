@@ -632,15 +632,13 @@ public sealed partial class AnimEngine
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : 0f,
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : 1f,
             AnimChannel.DisclosureProgress => _scene.VirtualDisclosureProgress(node),
-            // Rotation IS recoverable — atan2(M12, M11) is exact for a uniform-scale transform (rotation composed
-            // BEFORE scale in Compose: tf = Translation * Rotation * Scale, so M11/M12 carry the rotation angle
-            // unscaled). Matches Accum.FromPaint's decomposition below verbatim, so a fresh CurrentValue read and a
+            // Rotation IS recoverable — Accum.Decompose is exact for a T·R·S transform (rotation composed BEFORE scale
+            // in Compose: tf = Translation * Rotation * Scale; a mirror keeps its sign on a scale axis). Matches
+            // Accum.FromPaint's decomposition below, so a fresh CurrentValue read and a
             // live PASS2 fold agree on the same node. Before this arm existed, an eased `from: null` gesture-channel
             // retarget (SeedTargetOver → SeedChannel with initial=null) departed from 0 regardless of the live angle —
             // a rotated node would visibly snap to 0° and ease FROM there instead of from where it already was.
-            AnimChannel.Rotation => (p.LocalTransform.M11 != 0f || p.LocalTransform.M12 != 0f)
-                ? MathF.Atan2(p.LocalTransform.M12, p.LocalTransform.M11) * (180f / MathF.PI)
-                : 0f,
+            AnimChannel.Rotation => Accum.RotationOf(in p.LocalTransform),
             _ => 0f,
         };
     }
@@ -653,12 +651,37 @@ public sealed partial class AnimEngine
         public float Lw, Lh;
         public float Blur;
 
+        /// <summary>Split <paramref name="tf"/>'s linear part into Compose's R(<paramref name="rotDeg"/>)·S(<paramref name="sx"/>,
+        /// <paramref name="sy"/>). A mirror (negative determinant) keeps its sign on a scale axis instead of reading as a
+        /// 180° turn: ScaleX = -1 decomposed as |sx|·R(180°) re-composed to diag(-1,-1), flipping the glyph upside down
+        /// the moment any row (even an opacity fade) composed the node. The sign rides X when the mapped X axis points
+        /// left (M11 &lt; 0, so the residual rotation stays within ±90°), else Y, so an authored Scale(-1,1) / Scale(1,-1)
+        /// comes back exactly as written.</summary>
+        internal static void Decompose(in Affine2D tf, out float sx, out float sy, out float rotDeg)
+        {
+            sx = MathF.Sqrt(tf.M11 * tf.M11 + tf.M12 * tf.M12);
+            sy = MathF.Sqrt(tf.M21 * tf.M21 + tf.M22 * tf.M22);
+            float rx = tf.M11, ry = tf.M12;
+            if (tf.M11 * tf.M22 - tf.M12 * tf.M21 < 0f)
+            {
+                if (tf.M11 < 0f) { sx = -sx; rx = -rx; ry = -ry; }
+                else sy = -sy;
+            }
+            rotDeg = (rx != 0f || ry != 0f) ? MathF.Atan2(ry, rx) * (180f / MathF.PI) : 0f;
+        }
+
+        /// <summary>The rotation <see cref="Decompose"/> reads: CurrentValue's Rotation start point, so a fresh read and a
+        /// live PASS2 fold agree on the same node (mirrored ones included).</summary>
+        internal static float RotationOf(in Affine2D tf)
+        {
+            Decompose(in tf, out _, out _, out float rotDeg);
+            return rotDeg;
+        }
+
         public static Accum FromPaint(in NodePaint p)
         {
             var tf = p.LocalTransform;
-            float sx = MathF.Sqrt(tf.M11 * tf.M11 + tf.M12 * tf.M12);
-            float sy = MathF.Sqrt(tf.M21 * tf.M21 + tf.M22 * tf.M22);
-            float rot = (tf.M11 != 0f || tf.M12 != 0f) ? MathF.Atan2(tf.M12, tf.M11) * (180f / MathF.PI) : 0f;
+            Decompose(in tf, out float sx, out float sy, out float rot);
             var a = new Accum
             {
                 Tx = tf.Dx, Ty = tf.Dy, Sx = sx == 0f ? 1f : sx, Sy = sy == 0f ? 1f : sy, Rot = rot,
