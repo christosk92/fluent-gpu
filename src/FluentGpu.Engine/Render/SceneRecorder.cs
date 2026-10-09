@@ -2879,12 +2879,15 @@ internal sealed class SceneRecordingContext
                 dl.PushClip(itemBandClipInline, key);
                 if (contentSlice) stats.Slices!.MarkPoseLocked(selfSlot);
             }
+            // The exiting rows record into THIS stream, so they cull and build their nested clips against the band line in
+            // the stream's own (pose-free) space: a clipping row's push replaces the band scissor, and the viewport-space
+            // line sits SliceOwnDy away from it (above it on a list scrolled down: the row painted over the sticky header).
             for (int i = 0; i < exitingChildren.Count; i++)
             {
                 var exiting = exitingChildren[i];
                 if (!scene.IsLive(exiting)) continue;
                 var exitResult = Walk(scene, dl, images, exiting, childWorld, opacity, depth + 1,
-                    hasItemBand ? itemBandClip : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    hasItemBand ? itemBandClipInline : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(exitResult);
             }
@@ -2978,11 +2981,13 @@ internal sealed class SceneRecordingContext
                 }
                 int ordinal = childOrdinal;
                 // The band's viewport-fixed clip culls a suffix row only where it is RECORDED with the rows: inline (the
-                // slice is then pose-locked, so the record pose is the present pose). A band SLICE carries that clip on
-                // its marker and the composite applies it at the live pose, while the rows' recording is reused at every
-                // pose inside coverage — culling them against the record-time line lost every row whose content-local
-                // top sat above it (the rows above a re-centred arrange origin: RCA 2026-09-25 G, the blank playlist).
-                RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClip : childClip;
+                // slice is then pose-locked, so the record-time offset is the present one), as the line in the stream's
+                // own space (itemBandClipInline: pose-locking freezes SliceOwnDy, it does not make it 0). A band SLICE
+                // carries that clip on its marker and the composite applies it at the live pose, while the rows' recording
+                // is reused at every pose inside coverage — culling them against the record-time line lost every row whose
+                // content-local top sat above it (the rows above a re-centred arrange origin: RCA 2026-09-25 G, the blank
+                // playlist).
+                RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClipInline : childClip;
                 Affine2D activeChildWorld = childWorld;
                 if (hasDisclosure)
                 {
