@@ -681,6 +681,8 @@ internal sealed class SceneRecordingContext
         }
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
+        // A path-slab compaction moved every realization that the prior bytes' FillPath/StrokePath/PushStencilClip index.
+        if (spans is not null && spans.SyncPathSlab(PathRealizationCache.Shared.Generation)) disabledReasons |= SpanReuseDisabledReason.PathSlab;
         // PopupWindows/Overlays/Orphans/Detached are now SPATIALLY SCOPED (scene-memory.md): rather than killing span reuse
         // + the off-screen cull for the WHOLE tree while a flyout/fly/exit is in flight, we block ONLY the ancestor chains
         // of each special-cased visual (BlockSpecials below). The bits are still recorded for diagnostics; they no longer
@@ -712,7 +714,7 @@ internal sealed class SceneRecordingContext
         const SpanReuseDisabledReason GlobalReuseKill =
             SpanReuseDisabledReason.FirstRecord | SpanReuseDisabledReason.SceneChanged | SpanReuseDisabledReason.Layout |
             SpanReuseDisabledReason.Resize | SpanReuseDisabledReason.ModalPaint | SpanReuseDisabledReason.DragGhost |
-            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight;
+            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight | SpanReuseDisabledReason.PathSlab;
         bool spanReuseOff = spans is null || (disabledReasons & GlobalReuseKill) != 0;
         // The span STORE stays alive under EVERY reason, global ones included (blocked nodes self-gate via IsBlocked, so
         // the off-screen cull survives for the unblocked rest of the tree). A pass that stored nothing would leave every
@@ -2557,6 +2559,8 @@ internal sealed class SceneRecordingContext
                 // node's image fades in over it on the SAME window with a transparent placeholder — a dissolve between
                 // two real pictures, never a placeholder frame. Both draws bake the window, so a reused span keeps
                 // animating against the replay clock and the outgoing resolves to nothing once the window has passed.
+                // A cut (the SAME picture at another decode size) keeps the outgoing under it the same way, with no fade-in:
+                // the incoming draws at once wherever its pixels are drawable, and lets the held picture show where not yet.
                 if (ready && images is not null && effects.SwapOutgoingId != 0 && effects.SwapMs > 0f
                     && images.StateOf(new ImageHandle(effects.SwapOutgoingId)) == ImageState.Ready)
                 {
@@ -2567,9 +2571,12 @@ internal sealed class SceneRecordingContext
                         effects.SwapMs, ImageCache.SwapOutgoingEasing, key | 0x1, effects.Overlay, (int)mask.Edges,
                         mask.BandLeft, mask.BandTop, mask.BandRight, mask.BandBottom, (int)mask.Falloff, mask.Intensity,
                         saturation);
-                    fadeStart = effects.SwapStartMs;
-                    fadeDur = effects.SwapMs;
-                    fadeEase = (int)ImageCache.SwapCrossfadeEasing;
+                    if (!effects.SwapCut)
+                    {
+                        fadeStart = effects.SwapStartMs;
+                        fadeDur = effects.SwapMs;
+                        fadeEase = (int)ImageCache.SwapCrossfadeEasing;
+                    }
                     placeholder = default;
                 }
                 dl.DrawImage(drawRect, p.Corners, imageId, ready, placeholder, world, opacity, uv, fadeStart, fadeDur,
@@ -3208,14 +3215,14 @@ internal sealed class SceneRecordingContext
             {
                 // The card was parked in its own slice's space (a scrolled shelf's content). Re-base it into this one at
                 // the RECORD-time offset between the two, and pin the slices in between to it: a later move of that
-                // content re-records this hoist instead of compositing it (retained tiles: pose-locked).
+                // content re-records this hoist instead of compositing it (retained tiles: pose-locked). The pin holds
+                // at a ZERO offset too (a shelf resting at page 0): the lock compares the slice's live offset with the
+                // recorded one, so the first pan still re-records rather than sliding the row out from under the card.
                 Affine2D hw = stats.PendingElevateWorld;
                 float rdx = stats.PendingElevateDx - stats.CurDx, rdy = stats.PendingElevateDy - stats.CurDy;
                 if (rdx != 0f || rdy != 0f)
-                {
                     hw = new Affine2D(hw.M11, hw.M12, hw.M21, hw.M22, hw.Dx + rdx, hw.Dy + rdy);
-                    stats.Slices?.MarkPoseLockedChain(stats.PendingElevateSlot, stats.CurSlot);
-                }
+                stats.Slices?.MarkPoseLockedChain(stats.PendingElevateSlot, stats.CurSlot);
                 var hoistResult = Walk(scene, dl, images, hoist, hw, stats.PendingElevateOpacity,
                     stats.PendingElevateDepth, hoistClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
