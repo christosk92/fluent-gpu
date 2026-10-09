@@ -17,6 +17,7 @@ public sealed class CaretBlinker
     private NodeHandle _node;
     private float _intervalMs = DefaultBlinkMs;
     private float _elapsed;
+    private double _lastTickMs = double.NaN;   // timer-clock stamp of the last Tick; NaN = the next Tick anchors the phase
 
     /// <summary>Default half-period (caret-on / caret-off time) — the Win32 <c>GetCaretBlinkTime</c> default.</summary>
     public const float DefaultBlinkMs = 500f;
@@ -47,6 +48,7 @@ public sealed class CaretBlinker
         _node = textNode;
         _intervalMs = blinkMs > 0f ? blinkMs : DefaultBlinkMs;
         _elapsed = 0f;
+        _lastTickMs = double.NaN;
         ref TextEditState tes = ref _scene.TextEditRef(textNode);
         tes.Flags |= TextEditState.CaretVisible | TextEditState.Focused;
         _scene.Mark(textNode, NodeFlags.PaintDirty);
@@ -55,7 +57,7 @@ public sealed class CaretBlinker
     /// <summary>Stop blinking for this editor (focus lost): caret hidden, <see cref="TextEditState.Focused"/> cleared.</summary>
     public void Blur(NodeHandle textNode)
     {
-        if (textNode == _node) { _node = NodeHandle.Null; _elapsed = 0f; }
+        if (textNode == _node) { _node = NodeHandle.Null; _elapsed = 0f; _lastTickMs = double.NaN; }
         if (textNode.IsNull || !_scene.IsLive(textNode) || !_scene.HasTextEdit(textNode)) return;
         ref TextEditState tes = ref _scene.TextEditRef(textNode);
         tes.Flags &= unchecked((byte)~(TextEditState.CaretVisible | TextEditState.Focused));
@@ -75,6 +77,7 @@ public sealed class CaretBlinker
         if (textNode.IsNull || textNode != _node) return;
         if (!_scene.IsLive(textNode)) { _node = NodeHandle.Null; return; }
         _elapsed = 0f;
+        _lastTickMs = double.NaN;   // re-anchor with the phase: idle time before this keystroke is not blink time
         ref TextEditState tes = ref _scene.TextEditRef(textNode);
         if ((tes.Flags & TextEditState.CaretVisible) == 0)
         {
@@ -83,17 +86,24 @@ public sealed class CaretBlinker
         }
     }
 
-    /// <summary>Phase-7 tick: accumulate; on each elapsed half-period toggle the caret bit. A slow frame spanning
+    /// <summary>Phase-7 tick on the host's TIMER clock (<paramref name="nowMs"/> = <c>HostTimerQueue.NowMs</c>: the
+    /// monotonic wall clock on a real window, the accumulated fixed frame step headless), never the frame delta. The
+    /// host sleeps <see cref="NextDueMs"/> of WALL time between blinks while the frame delta is clamped to 34 ms, so a
+    /// delta-fed blinker gained 34 ms per ~500 ms wake and toggled only every ~4 s. The first tick after
+    /// <see cref="Focus"/> anchors the phase. On each elapsed half-period the caret bit toggles; a long stall spanning
     /// several half-periods nets the parity (an even count is a visual no-op — no spurious repaint).</summary>
-    public void Tick(float dtMs)
+    public void Tick(double nowMs)
     {
         if (_node.IsNull) return;
         if (!_scene.IsLive(_node)) { _node = NodeHandle.Null; return; }   // dead node (subtree freed) → drop
 
-        _elapsed += dtMs;
-        if (_intervalMs <= 0f || _elapsed < _intervalMs) return;
-        int flips = 0;
-        while (_elapsed >= _intervalMs) { _elapsed -= _intervalMs; flips++; }
+        double last = _lastTickMs;
+        _lastTickMs = nowMs;
+        if (double.IsNaN(last) || nowMs <= last || _intervalMs <= 0f) return;
+        double elapsed = _elapsed + (nowMs - last);
+        if (elapsed < _intervalMs) { _elapsed = (float)elapsed; return; }
+        long flips = (long)(elapsed / _intervalMs);          // a hidden/suspended window can return hours later: no loop
+        _elapsed = (float)(elapsed - flips * (double)_intervalMs);
         if ((flips & 1) == 0) return;
 
         ref TextEditState tes = ref _scene.TextEditRef(_node);

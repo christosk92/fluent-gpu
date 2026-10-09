@@ -6387,7 +6387,7 @@ public sealed partial class AppHost : IDisposable
             if (_navThrottleFrames > 0) _navThrottleFrames--;   // decay the P1b nav-burst window one frame at a time
             _scrollChrome.Tick(dtMs, _timers.NowMs);           // 7 conscious scrollbar fade/expand (chrome never touches motion; dwells on the timer clock)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
-            _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
+            _caretBlinker.Tick(_timers.NowMs);                 // 7 focused-editor caret blink (toggles TextEditState; on the timer clock: the host sleeps its NextDueMs of wall time)
             // 7 E5 edge auto-scroll (drag near an overflowing viewport edge).
             bool dragEdgeActive = _dispatcher.DragDrop.Tick(dtMs);
             // 7 E5: a reconcile ran THIS frame, so ApplyBox restored the dragged node's authored opacity/shadow/hit-test.
