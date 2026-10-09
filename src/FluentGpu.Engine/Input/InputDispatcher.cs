@@ -104,7 +104,9 @@ public sealed partial class InputDispatcher
     private int _keyArmedKey;          // which key armed it (Space or Enter) — any OTHER key-down cancels without firing
     private bool _accessKeyMode;       // Alt tapped → the next letter invokes a matching AccessKey mnemonic
     private bool _altPending;          // Alt is down with no intervening key (candidate for access-key-mode toggle)
+    private int _pendingHighSurrogate; // a Char high surrogate waiting for its low half (0 = none) — see JoinSurrogate
     private readonly List<NodeHandle> _focusScopes = new();
+    private readonly List<bool> _modalScopes = new();   // parallel to _focusScopes: true = pushed modal (scopes chord lookup too)
     // Double/triple-click tracking (platform timestamps; slop + window per Win32 defaults, capped at 3).
     private uint _lastDownMs;
     private Point2 _lastDownPos;
@@ -483,6 +485,18 @@ public sealed partial class InputDispatcher
     /// point, ToolTipService_Partial.cpp:1060-1098) so the bubble can stay hit-test-INVISIBLE like a real tooltip.</summary>
     public Point2? PointerPosition => _lastPointerValid ? _lastPointerPx : null;
 
+    /// <summary>The window's effective scale changed (an app-zoom step or a WM_DPICHANGED hop) under a possibly STATIONARY
+    /// cursor. The last pointer position was captured in the OLD window DIP space (client px / old scale), and no pointer
+    /// event is coming to replace it, so re-express it in the new space before this frame's stationary hover refresh
+    /// hit-tests it (and before the ToolTip safe zone reads <see cref="PointerPosition"/>). Exact for app zoom: the physical
+    /// window and the cursor are untouched. Called by the host's EnsureSize. Scalar, zero-alloc.</summary>
+    internal void RescalePointerPosition(float oldScale, float newScale)
+    {
+        if (!_lastPointerValid || oldScale <= 0f || newScale <= 0f || oldScale == newScale) return;
+        float k = oldScale / newScale;
+        _lastPointerPx = new Point2(_lastPointerPx.X * k, _lastPointerPx.Y * k);
+    }
+
     /// <summary>
     /// SIP reflow (input-a11y.md §10): scroll the focused editor's caret above the occluded region the touch keyboard
     /// reported (<see cref="Pal.IPlatformTextInput.OccludedRectChanged"/>). Walks from <see cref="Focused"/> to its
@@ -593,16 +607,32 @@ public sealed partial class InputDispatcher
         // root carries HoverWithin either; if it is, clearing it walks (and clears) every ancestor up to the app root.
         if (IsSelfOrAncestorOf(root, _hovered)) SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
 
+        // A STATIONARY item-drag outlives its source being parked exactly as it outlives the source being freed
+        // (DragController.SourceRecycled / DragDropContext.PruneDead): the chip is the visual and the payload was resolved
+        // at promotion. The park is usually the drag's OWN doing — a spring-load waypoint activates a tab, and the
+        // KeepAlive navigation parks the page the row came from — so the contact carrying the drag is skipped here: its
+        // press/pan anchors in that page are not a reason to end the gesture (the release's Drag.IsActive branch clears
+        // them). The scrollbar hover it left behind is dropped like _hovered, since no move re-resolves it mid-drag.
+        bool stationaryDrag = Drag.ActiveLift == DragLift.Stationary;   // Ghost whenever no drag is in flight
+        if (stationaryDrag && IsSelfOrAncestorOf(root, _scrollHovered))
+        {
+            Chrome?.SetPointerOver((int)_scrollHovered.Raw.Index, false, false);
+            _scrollHovered = NodeHandle.Null;
+        }
+
         bool cancelPointer = IsSelfOrAncestorOf(root, _hovered) || IsSelfOrAncestorOf(root, _pressed)
-                             || IsSelfOrAncestorOf(root, _down) || IsSelfOrAncestorOf(root, _dragTarget)
-                             || IsSelfOrAncestorOf(root, _scrollHovered) || IsSelfOrAncestorOf(root, _scrollDragNode)
-                             || IsSelfOrAncestorOf(root, _panTarget) || IsSelfOrAncestorOf(root, _reorderTarget)
-                             || IsSelfOrAncestorOf(root, _swipeDrag) || IsSelfOrAncestorOf(root, _gesturePanNode)
-                             || IsSelfOrAncestorOf(root, _pinchViewport) || IsSelfOrAncestorOf(root, _pinchSessionViewport);
+                             || IsSelfOrAncestorOf(root, _scrollHovered) || IsSelfOrAncestorOf(root, _pinchSessionViewport);
+        if (!cancelPointer && !(stationaryDrag && CarriesStationaryDrag(_down, _touchReorder)))
+            cancelPointer = IsSelfOrAncestorOf(root, _down) || IsSelfOrAncestorOf(root, _dragTarget)
+                            || IsSelfOrAncestorOf(root, _scrollDragNode)
+                            || IsSelfOrAncestorOf(root, _panTarget) || IsSelfOrAncestorOf(root, _reorderTarget)
+                            || IsSelfOrAncestorOf(root, _swipeDrag) || IsSelfOrAncestorOf(root, _gesturePanNode)
+                            || IsSelfOrAncestorOf(root, _pinchViewport);
         for (int i = 0; !cancelPointer && i < _slots.Length; i++)
         {
             if (!_slots[i].Used) continue;
             ref PointerSlot s = ref _slots[i];
+            if (stationaryDrag && CarriesStationaryDrag(s.Down, s.TouchReorder)) continue;
             cancelPointer = IsSelfOrAncestorOf(root, s.Down) || IsSelfOrAncestorOf(root, s.DragTarget)
                             || IsSelfOrAncestorOf(root, s.ScrollDragNode) || IsSelfOrAncestorOf(root, s.ContextDown)
                             || IsSelfOrAncestorOf(root, s.MiddleDown) || IsSelfOrAncestorOf(root, s.PanTarget)
@@ -614,6 +644,11 @@ public sealed partial class InputDispatcher
         if (IsSelfOrAncestorOf(root, _focused)) SetFocus(NodeHandle.Null);
         if (IsSelfOrAncestorOf(root, _selText)) { _selText = NodeHandle.Null; _selDragging = false; }
     }
+
+    /// <summary>True for the contact that carries the in-flight item-drag: the touch reorder claim, or the mouse/pen press
+    /// that armed it (<see cref="DragController.TryArm"/> walks UP from the press, so the press lies in the source).</summary>
+    private bool CarriesStationaryDrag(NodeHandle down, bool touchReorder)
+        => touchReorder || IsSelfOrAncestorOf(Drag.ActiveNode, down);
 
     /// <summary>The REMOVAL twin of <see cref="DeactivateSubtree"/> (which covers the KeepAlive PARK edge): the
     /// reconciler is about to take <paramref name="root"/> out of the live tree — hard (<c>FreeSubtree</c>) or into the
@@ -629,14 +664,36 @@ public sealed partial class InputDispatcher
     /// OnPointerExit + OnHoverChanged → the AnimEngine hover edge), then ARM a re-resolve at the last known pointer
     /// position so the row now under the cursor lights up on the next frame instead of waiting for a mouse jiggle.</para>
     ///
-    /// <para>Press/focus/drag/text-selection are deliberately NOT cleared here (unlike the park edge): a removal does
+    /// <para>Focus LEAVES with the node, through the same <see cref="SetFocus"/> a blur uses, while the chain is still
+    /// walkable: the focused node and every ancestor with an OnFocusChanged handler hear LostFocus (an editor releases the
+    /// IME sink/context and the touch keyboard there, and focus-within chrome drops). The IsLive prune in Dispatch only
+    /// nulled a freed handle silently, and never fired for an exit orphan, which stays LIVE: a second Enter during its
+    /// fade re-fired the removed row's click.</para>
+    ///
+    /// <para>Press/drag/text-selection are deliberately NOT cleared here (unlike the park edge): a removal does
     /// not end a captured gesture, and those singletons already self-guard on <c>IsLive</c>.</para>
-    /// Idempotent; UI thread only; zero managed allocation (one parent walk).</summary>
+    /// Idempotent; UI thread only; zero managed allocation (two parent walks).</summary>
     public void NotifySubtreeRemoved(NodeHandle root)
     {
-        if (root.IsNull || !IsSelfOrAncestorOf(root, _hovered)) return;
-        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
-        _hoverResolvePending = true;
+        if (root.IsNull) return;
+        if (IsSelfOrAncestorOf(root, _hovered))
+        {
+            SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+            _hoverResolvePending = true;
+        }
+        if (IsSelfOrAncestorOf(root, _focused)) SetFocus(NodeHandle.Null);   // also cancels a held Space/Enter (armed on _focused)
+    }
+
+    /// <summary>Wired by the host as <c>TreeReconciler.OnSlotRebound</c>: a virtual-list recycle rebound
+    /// <paramref name="slotRoot"/> to another item and KEPT its handle, so the IsLive-based prunes never fire for it. A
+    /// drag whose source sits in that slot lets go of it, and so do focus and a held Space/Enter: keys routed to the old
+    /// handle would act on the item the slot shows now (Enter plays it, typing lands in its field), as the park edge
+    /// (<see cref="DeactivateSubtree"/>) already prevents. UI thread only; 0-alloc (one parent walk while focus is held).</summary>
+    public void NotifySlotRebound(NodeHandle slotRoot)
+    {
+        Drag.NotifySlotRebound(slotRoot);
+        DragDrop.NotifySlotRebound(slotRoot);
+        if (IsSelfOrAncestorOf(slotRoot, _focused)) SetFocus(NodeHandle.Null);   // also cancels a held Space/Enter (armed on _focused)
     }
 
     /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes
@@ -683,6 +740,9 @@ public sealed partial class InputDispatcher
     /// the brush transition (kept as delegates to keep Input decoupled from the Animation assembly).</summary>
     public Action<NodeHandle, bool>? OnHoverChanged;
     public Action<NodeHandle, bool>? OnPressChanged;
+    /// <summary>Set by the host: notified when focus actually moves (old node false, new node true), so the declarative
+    /// WhileFocus resolver can spring the node. Distinct from the per-node <c>OnFocusChanged</c> element handlers.</summary>
+    public Action<NodeHandle, bool>? OnFocusEdge;
 
     public Action<Point2>? OnPointerDownObserved;
 
@@ -737,22 +797,50 @@ public sealed partial class InputDispatcher
 
     // ── focus scopes (modal focus trap: ContentDialog / flyout) ───────────────────────────────────
     /// <summary>Push a focus scope: Tab/Shift+Tab and arrow focus stay within <paramref name="root"/>'s subtree until popped.</summary>
-    public void PushFocusScope(NodeHandle root) => _focusScopes.Add(root);
-    public void PopFocusScope() { if (_focusScopes.Count > 0) _focusScopes.RemoveAt(_focusScopes.Count - 1); }
+    public void PushFocusScope(NodeHandle root) { _focusScopes.Add(root); _modalScopes.Add(false); }
+    /// <summary>Push a MODAL focus scope (ContentDialog, DismissBehavior.Modal): the Tab trap of <see cref="PushFocusScope"/>, and
+    /// keyboard accelerators / access keys resolve only inside it and the scopes stacked above it. The scrim already blocks the
+    /// pointer, so Ctrl+T or Alt+letter must not reach the page behind the dialog either.</summary>
+    public void PushModalFocusScope(NodeHandle root) { _focusScopes.Add(root); _modalScopes.Add(true); }
+    public void PopFocusScope()
+    {
+        if (_focusScopes.Count == 0) return;
+        _focusScopes.RemoveAt(_focusScopes.Count - 1);
+        _modalScopes.RemoveAt(_modalScopes.Count - 1);
+    }
     /// <summary>Remove the focus scope for <paramref name="root"/> wherever it sits in the stack (overlays can close
     /// out of stack order - popping blindly could drop another live trap).</summary>
     public void RemoveFocusScope(NodeHandle root)
     {
         for (int i = _focusScopes.Count - 1; i >= 0; i--)
-            if (_focusScopes[i] == root) { _focusScopes.RemoveAt(i); return; }
+            if (_focusScopes[i] == root) { _focusScopes.RemoveAt(i); _modalScopes.RemoveAt(i); return; }
     }
     private NodeHandle ScopeRoot
     {
         get
         {
             for (int i = _focusScopes.Count - 1; i >= 0; i--)
-                if (_scene.IsLive(_focusScopes[i])) return _focusScopes[i];
+                if (ScopeShown(_focusScopes[i])) return _focusScopes[i];
             return _scene.Root;
+        }
+    }
+
+    /// <summary>A pushed scope traps only while its root is linked under the scene root. A KeepAlive park detaches the page
+    /// but keeps it live, and nothing pops a scope pushed from inside it (an open overlay SplitView pane's watcher is parked
+    /// with the page), so Tab on the next page cycled through the hidden pane. The entry stays in the stack: when the page
+    /// comes back with the pane still open, the trap resumes.</summary>
+    private bool ScopeShown(NodeHandle root) => IsSelfOrAncestorOf(_scene.Root, root);
+
+    /// <summary>Where accelerators and access keys resolve: the innermost shown MODAL scope plus every scope stacked above it (a
+    /// ComboBox or context menu opened from the dialog). Empty = no modal open, so chords resolve over the whole tree.</summary>
+    private ReadOnlySpan<NodeHandle> ChordScopes
+    {
+        get
+        {
+            for (int i = _focusScopes.Count - 1; i >= 0; i--)
+                if (_modalScopes[i] && ScopeShown(_focusScopes[i]))
+                    return System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_focusScopes)[i..];
+            return default;
         }
     }
 
@@ -771,6 +859,11 @@ public sealed partial class InputDispatcher
         if (!_keyArmed.IsNull && !_scene.IsLive(_keyArmed)) { _keyArmed = NodeHandle.Null; _keyArmedKey = 0; }
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_selText.IsNull && !_scene.IsLive(_selText)) { _selText = NodeHandle.Null; _selDragging = false; }
+        // A presence collapse (Element.Visible -> false) reaches no input state on its own (DeactivateSubtree covers only
+        // the KeepAlive park), so a focus or a held Space/Enter inside a collapsed subtree would keep taking keys, and
+        // fire on key-up, for a node nothing paints. Drop both, as the park edge does.
+        if (!_keyArmed.IsNull && _scene.InCollapsedSubtree(_keyArmed)) CancelKeyArm(fire: false);
+        if (!_focused.IsNull && _scene.InCollapsedSubtree(_focused)) SetFocus(NodeHandle.Null);
         if (!_pinchSessionViewport.IsNull && !_scene.IsLive(_pinchSessionViewport)) EndPinchSession();   // a reconciled-away zoom viewport ends the pinch
         PruneDeadSlots();      // every contact's per-pointer down/drag/scroll-drag/pan target dropped if its node died
         Drag.PruneDead();      // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
@@ -903,6 +996,10 @@ public sealed partial class InputDispatcher
 
                 case InputKind.PointerDown:
                     OnPointerDownObserved?.Invoke(e.PositionPx);
+                    // Any press (every device, every button) ends access-key mode and spoils a pending bare-Alt tap:
+                    // Alt+click is not an Alt tap (DefWindowProc cancels the menu activation the same way), and pointer
+                    // input is WinUI's exit from access-key mode, so a stale mode can't steal the next typed letter.
+                    _accessKeyMode = false; _altPending = false;
                     if (e.Pointer == PointerKind.Touch) { if (TouchDown(in e)) handled++; break; }
                     if (e.Button == 1)   // right button: context-menu tracking only — never presses/activates
                     {
@@ -923,7 +1020,7 @@ public sealed partial class InputDispatcher
                     // must not drift under the pointer, and a scrollbar grab must not fight a live glide.
                     ScrollStopAt(e.PositionPx);
 
-                    if (TryScrollbarPointerDown(e.PositionPx))
+                    if (TryScrollbarPointerDown(e.PositionPx, out _))
                     {
                         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
                         _down = NodeHandle.Null;
@@ -1043,8 +1140,15 @@ public sealed partial class InputDispatcher
                     // shape (the press captures on the owner) and it is what makes a plate with inert children behave as
                     // ONE button: pressing its CanDrag label and releasing on its padding is a click on the plate.
                     bool sameNode = !up.IsNull && up == _down;
-                    var upOwner = NearestClickOwner(up);
-                    bool sameOwner = sameNode || (!upOwner.IsNull && upOwner == NearestClickOwner(_down));
+                    // A press that captured a continuous OnDrag gesture (_dragTarget == _down: a TextBox click or
+                    // drag-select, a Slider scrub) OWNS its release, as WinUI's CapturePointer does: its activation owner
+                    // is the drag node itself, never the walk's result. A TextBox, or a Slider with its thumb tooltip off,
+                    // carries no OnClick, so NearestClickOwner climbed past it to a clickable card/row and a scrub released
+                    // anywhere inside the card clicked the card. Released over the node it is a release-over-same on the
+                    // node; anywhere else the capture-commit branch below takes it.
+                    bool captured = !_dragTarget.IsNull;
+                    var upOwner = captured ? _dragTarget : NearestClickOwner(up);
+                    bool sameOwner = sameNode || (!captured && !upOwner.IsNull && upOwner == NearestClickOwner(_down));
                     if (sameOwner)
                     {
                         // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
@@ -1064,7 +1168,11 @@ public sealed partial class InputDispatcher
                         else if (rowCell >= 0) FireRowCell(up, rowCell);
                         else
                         {
-                            DispatchPointerReleased(up, e.PositionPx);
+                            // A captured drag node takes the release only through its OWN press/release pair: a
+                            // press-less one (the tooltip-less Slider track) must not let the gesture-owner walk hand it
+                            // to the selection row it sits in either (rows raise their tap from OnPointerReleased).
+                            if (!captured || (_scene.Interaction(up).HandlerMask & InteractionInfo.PressedBit) != 0)
+                                DispatchPointerReleased(up, e.PositionPx);
                             // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
                             // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
                             // Commits on the OWNER, never on the inert hit node (which has no handler to fire).
@@ -1100,8 +1208,11 @@ public sealed partial class InputDispatcher
                     break;
 
                 case InputKind.Char:
-                    if (OnChar(e.KeyCode)) handled++;
+                {
+                    int cp = JoinSurrogate(e.KeyCode);
+                    if (cp >= 0 && OnChar(cp)) handled++;
                     break;
+                }
 
                 case InputKind.Scroll:
                     // The ONE scroll input kind (scroll rework §4): the front end routes it (InputDispatcher.Scroll.cs)
@@ -1180,7 +1291,9 @@ public sealed partial class InputDispatcher
     {
         // A captured item-drag/L2 session is single-pointer today (mouse/pen OR the arena-claimed touch reorder) —
         // cancel it on this contact's loss. L2 first: OnLeave fires on a live target while the session still exists.
-        if (Drag.IsActive || DragDrop.IsActive) { DragDrop.Cancel(); Drag.Cancel(); }
+        // An ARMED candidate (pressed, still inside the drag box) dies too, silently (Drag.Cancel just disarms it): left
+        // armed, Win32's park move or the next hover move would promote it with no button held.
+        if (Drag.IsActive || Drag.IsArmed || DragDrop.IsActive) { DragDrop.Cancel(); Drag.Cancel(); }
         if (e.Pointer == PointerKind.Touch) ClearTouchHover();   // a touch contact never leaves a latched hover behind
         // A contact lost mid-thumb-drag drops the bar's conscious-fade reveal so it fades (touch has no resting hover
         // to keep it up). Captured BEFORE CancelWorkingContact nulls _scrollDragNode.
@@ -1416,18 +1529,15 @@ public sealed partial class InputDispatcher
         // Scrollbar lane/thumb FIRST (mirror the mouse PointerDown order, lines feeding TryScrollbarPointerDown): the
         // scrollbar owns the contact — no content pan, no pressed visual, no press/click handlers; the per-PointerId
         // _scrollDragNode (and the bar's PointerOverScrollbar reveal) is set by TryScrollbarPointerDown and rides the slot.
-        if (TryScrollbarPointerDown(e.PositionPx))
+        if (TryScrollbarPointerDown(e.PositionPx, out var barOwner))
         {
             _down = NodeHandle.Null;
             // A touch lane PAGE-STEP (TryScrollbarPointerDown returned true but grabbed no thumb ⇒ _scrollDragNode null)
-            // can't hold the lane reveal a resting mouse cursor does — drop the PointerOver/PointerOverScrollbar it set so
-            // the bar fades on the idle timer instead of latching forever (no touch move ever clears it). A thumb grab
-            // keeps the reveal via _scrollDragNode and releases it in TouchUp.
+            // can't hold the lane reveal a resting mouse cursor does — drop the PointerOver/PointerOverScrollbar it set on
+            // the bar's owner so the bar fades on the idle timer instead of latching forever (no touch move ever clears
+            // it). A thumb grab keeps the reveal via _scrollDragNode and releases it in TouchUp.
             if (_scrollDragNode.IsNull)
-            {
-                var lane = ScrollableUnder(e.PositionPx);
-                if (!lane.IsNull) Chrome?.SetPointerOver((int)lane.Raw.Index, false, false);
-            }
+                Chrome?.SetPointerOver((int)barOwner.Raw.Index, false, false);
             return true;
         }
 
@@ -2251,6 +2361,7 @@ public sealed partial class InputDispatcher
             _down = NodeHandle.Null;
         }
         _selDragging = false;
+        _panTarget = NodeHandle.Null; _panClaimed = false;   // the reorder won — the scroller pan is off for this contact
         _touchReorder = true;
         // Arm from the press anchor (the gesture's down position, so TotalDx/Dy measure from there) and immediately drive
         // the current move so the controller promotes this frame (arena-governed ⇒ no YieldsToPan re-arbitration).
@@ -2264,7 +2375,7 @@ public sealed partial class InputDispatcher
     }
 
     /// <summary>Pointer-up sweep (§7A.2 rule 4) for the contact's arena: the clean-tap resolution. Feeds OnUp to the Tap/
-    /// DoubleTap members so a within-slop release votes Accept, then <c>ResolveUp</c> picks the highest-priority survivor.
+    /// DoubleTap/Hold members so a within-slop release votes Accept (a sub-deadline Hold votes Reject), then <c>ResolveUp</c> picks the highest-priority survivor.
     /// The scalar <see cref="TouchUp"/> still fires the actual click on the winner; this keeps the arena state correct
     /// (and frees the seat). A claimed-pan or captured-OnDrag contact never reaches here (those branches return earlier).</summary>
     private void UpSweepTouchArena(in InputEvent e)
@@ -2276,7 +2387,9 @@ public sealed partial class InputDispatcher
         for (int i = 0; i < members.Length; i++)
         {
             GestureKind k = members[i].Kind;
-            if (k is GestureKind.Tap or GestureKind.RightTap or GestureKind.DoubleTap)
+            // Hold is fed too: a release before the ~500ms timer votes Reject (PointerFsm.OnUp), so it can't linger armed
+            // (ArenaHasArmedHold keeps a context-only contact's seat alive) and fire the long-press after the finger lifted.
+            if (k is GestureKind.Tap or GestureKind.RightTap or GestureKind.DoubleTap or GestureKind.Hold)
             {
                 int ms = _arena.ArenaAt(slot).MemberOffset + i;
                 ArenaVote v = _fsms[ms].OnUp(e.PositionPx, timeUs);
@@ -2777,8 +2890,8 @@ public sealed partial class InputDispatcher
 
     // ── scroll targets (hit-test bridges for ScrollRouter; scroll itself is a plan, posed as a transform) ──
 
-    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover and for resolving
-    /// the wheel/pan target).</summary>
+    /// <summary>The nearest scrollable viewport under the pointer (the wheel/pan target and the press-stop target; the
+    /// scrollbar lane and its hover reveal resolve through <see cref="ScrollbarLaneUnder"/>).</summary>
     public NodeHandle ScrollableUnder(Point2 p)
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
@@ -2900,11 +3013,39 @@ public sealed partial class InputDispatcher
         return NodeHandle.Null;
     }
 
+    /// <summary>The viewport whose scrollbar LANE is under <paramref name="p"/>: the nearest Scrollable self-or-ancestor of
+    /// the hit leaf whose bar can show (overflowing, not <c>SuppressBar</c>, no loading skeleton: the recorder's own bar
+    /// gate) and whose lane contains the point. The overlay bar paints over its WHOLE content, nested scrollers included,
+    /// so the walk climbs PAST a nearer scroller whose own lane is elsewhere (a paged shelf bleeding into the page gutter,
+    /// a full-width nested list) instead of letting it shadow the outer bar, and never hands a press to a bar nobody can
+    /// see. <paramref name="nearest"/> is the nearest Scrollable (the hover-reveal target when no lane is under the point).
+    /// One hit-test, no heap traffic.</summary>
+    private NodeHandle ScrollbarLaneUnder(Point2 p, out NodeHandle nearest, out ScrollbarMetrics m)
+    {
+        nearest = NodeHandle.Null;
+        for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Scrollable) == 0) continue;
+            if (nearest.IsNull) nearest = n;
+            if (!_scene.HasScroll(n)) continue;
+            ref ScrollState sc = ref _scene.ScrollRef(n);
+            if (sc.SuppressBar || sc.LoadingBarSuppressors > 0 || !TryGetScrollbarMetrics(n, out m)) continue;
+            var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+            float axis = AxisPos(local, in m);
+            if (axis >= 0f && axis < m.Axis && InScrollbarLane(local, in m)) return n;
+        }
+        m = default;
+        return NodeHandle.Null;
+    }
+
     private void UpdateScrollHover(Point2 p)
     {
         if (Chrome is null) return;
 
-        var next = ScrollableUnder(p);
+        // The bar whose lane is under the pointer owns the reveal even where a nearer scroller's content reaches under it;
+        // anywhere else the nearest viewport does.
+        var lane = ScrollbarLaneUnder(p, out var nearest, out _);
+        var next = lane.IsNull ? nearest : lane;
         if (next != _scrollHovered)
         {
             if (!_scrollHovered.IsNull && _scene.IsLive(_scrollHovered))
@@ -2913,14 +3054,7 @@ public sealed partial class InputDispatcher
         }
 
         if (!next.IsNull)
-            Chrome.SetPointerOver((int)next.Raw.Index, true, PointerInScrollbarLane(next, p));
-    }
-
-    private bool PointerInScrollbarLane(NodeHandle n, Point2 p)
-    {
-        if (!TryGetScrollbarMetrics(n, out var m)) return false;
-        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
-        return InScrollbarLane(local, in m);
+            Chrome.SetPointerOver((int)next.Raw.Index, true, !lane.IsNull);
     }
 
     /// <summary>Refresh a stationary drag after phase-7 edge auto-scroll and virtual catch-up. Reusing the ordinary
@@ -2932,6 +3066,16 @@ public sealed partial class InputDispatcher
         var session = DragDrop.Session;
         DragDrop.Move(HitTestAny(session.Position), session.Position,
             session.VelocityX, session.VelocityY, session.Mods);
+    }
+
+    /// <summary>Refresh a stationary drag after a phase-7 scroll the USER drove (wheel notch, touchpad pan) moved content
+    /// under it. <see cref="RefreshHoverAfterScroll"/> stands down while an item-drag holds the pointer, so without this
+    /// the target and its insertion slot stayed on the row that used to be under the pointer and a release with no move
+    /// dropped there. Target-only (<see cref="DragDropContext.Retarget"/>): edge auto-scroll stays the pointer's to arm.</summary>
+    internal void RefreshDragDropAfterScroll()
+    {
+        if (!DragDrop.IsActive) return;
+        DragDrop.Retarget(HitTestAny(DragDrop.Session.Position));
     }
 
     /// <summary>Stuck-hover fix (input-a11y.md §5.4/§15): a phase-7 scroll offset write moved content under a possibly
@@ -3080,13 +3224,12 @@ public sealed partial class InputDispatcher
     /// <summary>Diagnostic only: the topmost hit-test node at a point (the same walk wheel/click routing starts from).</summary>
     public NodeHandle DiagHitTest(Point2 p) => HitTestAny(p);
 
-    private bool TryScrollbarPointerDown(Point2 p)
+    private bool TryScrollbarPointerDown(Point2 p, out NodeHandle n)
     {
-        var n = ScrollableUnder(p);
-        if (n.IsNull || !TryGetScrollbarMetrics(n, out var m)) return false;
+        n = ScrollbarLaneUnder(p, out _, out var m);
+        if (n.IsNull) return false;
 
         var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
-        if (!InScrollbarLane(local, in m)) return false;
 
         // Scrollbar grab over a moving viewport stops it first: the thumb drag / track-click must own the offset, not
         // fight a live fling/glide. (Also reached from the touch path's
@@ -3517,11 +3660,13 @@ public sealed partial class InputDispatcher
         }
 
         // Alt access-key bookkeeping: a bare Alt tap (down with nothing in between, then up) toggles access-key mode;
-        // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path).
+        // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path). Ctrl+Alt is NOT a
+        // mnemonic chord: AltGr reports as Ctrl+Alt, so AltGr+E (the euro sign, e-ogonek) must reach the focused field
+        // as text, and an app's Ctrl+Alt+<letter> accelerator must reach FindAccelerator below.
         if (key == Keys.Alt) { _altPending = !e.IsRepeat; return; }
         _altPending = false;
 
-        if ((e.Mods & KeyModifiers.Alt) != 0 && Keys.IsAccessKeyCandidate(key))
+        if ((e.Mods & (KeyModifiers.Alt | KeyModifiers.Ctrl)) == KeyModifiers.Alt && Keys.IsAccessKeyCandidate(key))
         {
             if (InvokeAccessKey((char)key)) return;
         }
@@ -3602,8 +3747,10 @@ public sealed partial class InputDispatcher
             }
 
             // No element handler consumed the key — arrow/PageUp/PageDown/Home/End glide the nearest scrollable
-            // self-or-ancestor of the focused node (scroll rework §4).
-            if (ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
+            // self-or-ancestor of the focused node that can move that way, chaining outward past a cross-axis or pinned
+            // one (scroll rework §4). An Alt chord is a system key (WM_SYSKEYDOWN),
+            // never a scroll: Alt+Left/Right must reach the app's Back/Forward accelerator below.
+            if ((e.Mods & KeyModifiers.Alt) == 0 && ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
         }
 
         // Unhandled Escape is the app-wide "leave keyboard focus" gesture. Controls and overlays get first refusal
@@ -3625,7 +3772,7 @@ public sealed partial class InputDispatcher
         // Keyboard accelerators (WinUI ProcessKeyboardAccelerators order: after focused routing leaves it unhandled).
         if ((e.Mods & (KeyModifiers.Ctrl | KeyModifiers.Alt)) != 0 || (key >= Keys.F1 && key <= Keys.F12))
         {
-            var owner = _scene.FindAccelerator(key, e.Mods);
+            var owner = _scene.FindAccelerator(key, e.Mods, ChordScopes);
             if (!owner.IsNull) InvokeActivation(owner, ContextRequestTrigger.Keyboard);   // one commit path (an accelerator owner is never a ContextBit invoker in practice)
         }
     }
@@ -3672,11 +3819,25 @@ public sealed partial class InputDispatcher
 
     private bool InvokeAccessKey(char key)
     {
-        var owner = _scene.FindAccessKey(key);
+        var owner = _scene.FindAccessKey(key, ChordScopes);
         if (owner.IsNull) return false;
         _accessKeyMode = false;
         InvokeActivation(owner, ContextRequestTrigger.Keyboard);   // one commit path (an access-key owner is never a ContextBit invoker in practice)
         return true;
+    }
+
+    /// <summary>WM_CHAR carries UTF-16 code UNITS, so a non-BMP character (an emoji from SendInput/VK_PACKET auto-type,
+    /// AutoHotkey, RDP Unicode input) arrives as a high then a low surrogate. Join the pair into the one codepoint
+    /// <see cref="CharEventArgs.Codepoint"/> promises. A lone half is dropped, because handlers feed the value to
+    /// char.ConvertFromUtf32, which throws on a surrogate. Returns -1 when there is nothing to route (yet).</summary>
+    private int JoinSurrogate(int unit)
+    {
+        if (unit is >= 0xD800 and <= 0xDBFF) { _pendingHighSurrogate = unit; return -1; }   // wait for the low half
+        int high = _pendingHighSurrogate;
+        _pendingHighSurrogate = 0;
+        if (unit is >= 0xDC00 and <= 0xDFFF)
+            return high != 0 ? char.ConvertToUtf32((char)high, (char)unit) : -1;   // orphan low half → drop
+        return unit;   // BMP char (a stranded high half before it is discarded)
     }
 
     /// <summary>Route a text (character) codepoint to the focused node, bubbling up ancestors until Handled.</summary>
@@ -3701,14 +3862,19 @@ public sealed partial class InputDispatcher
     public void MoveFocus(bool forward)
     {
         _focusables.Clear();
-        Collect(ScopeRoot, _focusables);
+        // A node disabled while it held focus (IsEnabled bound to !Busy on a Save button) keeps its tab slot as the
+        // anchor, so Tab/Shift+Tab step to its neighbours (WinUI) instead of restarting at the scope's first/last stop.
+        Collect(ScopeRoot, _focusables, disabledAnchor: _focused);
         StableSortByTabIndex(_focusables);
         if (_focusables.Count == 0) { SetFocus(NodeHandle.Null); return; }
 
         int idx = _focusables.IndexOf(_focused);
         int n = _focusables.Count;
         int next = idx < 0 ? (forward ? 0 : n - 1) : (forward ? (idx + 1) % n : (idx - 1 + n) % n);
-        SetFocus(_focusables[next], visual: true);   // keyboard focus → show the focus ring
+        var target = _focusables[next];
+        if ((_scene.Flags(target) & NodeFlags.Disabled) != 0) { SetFocus(NodeHandle.Null); return; }   // the disabled anchor was the only stop
+        SetFocus(target, visual: true);   // keyboard focus → show the focus ring
+        BringFocusedIntoView();
     }
 
     /// <summary>Directional (arrow/XY) focus movement: from the focused node, pick the nearest focusable in
@@ -3744,7 +3910,27 @@ public sealed partial class InputDispatcher
             float score = primary + cross * 2f;   // bias toward staying on the same row/column
             if (score < bestScore) { bestScore = score; best = n; }
         }
-        if (!best.IsNull) SetFocus(best, visual: true);
+        if (best.IsNull) return;
+        SetFocus(best, visual: true);
+        BringFocusedIntoView();
+    }
+
+    /// <summary>A keyboard/gamepad focus move brings the newly focused node into view (WinUI: a keyboard focus change
+    /// raises BringIntoView on the focused element). It does a minimal glide in the nearest scrolling ancestor. Each
+    /// enclosing scroller then brings the inner viewport into view in turn, so a card tabbed to inside a horizontal shelf
+    /// on a scrolled page lands on screen on both axes. Reads <see cref="Focused"/> AFTER SetFocus, so a GotFocus handler
+    /// that re-moved focus wins. Pointer focus never scrolls: the pressed control is already under the pointer. Uses
+    /// layout-space geometry (SceneScrollExtensions), valid in dispatch. Scalar walk, zero-alloc.</summary>
+    private void BringFocusedIntoView()
+    {
+        if (_focused.IsNull || !_scene.IsLive(_focused)) return;
+        var inner = _focused;
+        for (var vp = _scene.Parent(inner); !vp.IsNull; vp = _scene.Parent(vp))
+        {
+            if (!_scene.HasScroll(vp)) continue;
+            _scene.BringIntoView(vp, inner);   // NaN align = minimal move, no-op when already fully visible; Glide
+            inner = vp;
+        }
     }
 
     /// <summary>First focusable within <paramref name="root"/>'s subtree (tab order) — for focus-trap entry / menus.</summary>
@@ -3828,6 +4014,10 @@ public sealed partial class InputDispatcher
         }
         if (prev != node)
         {
+            // The While* focus leg hears the move before the routed handlers run, so a LostFocus handler that re-moves
+            // focus nests its own false/true pair after this one (the resolver ends on the final focus owner).
+            if (!prev.IsNull && _scene.IsLive(prev)) OnFocusEdge?.Invoke(prev, false);
+            if (!node.IsNull) OnFocusEdge?.Invoke(node, true);
             // WinUI GotFocus/LostFocus are ROUTED (bubbling) events: an ancestor with an OnFocusChanged handler hears
             // focus ENTERING/LEAVING its SUBTREE, fired only on boundary crossings. The focused node itself keeps the
             // exact pre-existing self semantics. ToolTipService's keyboard-focus trigger hangs off this
@@ -3877,12 +4067,17 @@ public sealed partial class InputDispatcher
         return false;
     }
 
-    private void Collect(NodeHandle node, List<NodeHandle> into)
+    // disabledAnchor: a tab stop that is collected even while Disabled (MoveFocus passes the focused node so it keeps
+    // its slot). Null for every other caller; a real node never equals Null (the IsNull return above).
+    private void Collect(NodeHandle node, List<NodeHandle> into, NodeHandle disabledAnchor = default)
     {
         if (node.IsNull) return;
+        // A presence collapse clears Visible on the collapsed node only: prune its whole subtree, as the hit-test does.
+        if (_scene.IsCollapsed(node)) return;
         ref InteractionInfo ii = ref _scene.Interaction(node);
-        if (ii.Focusable && (_scene.Flags(node) & (NodeFlags.Visible | NodeFlags.Disabled)) == NodeFlags.Visible) into.Add(node);
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into);
+        var gate = node == disabledAnchor ? NodeFlags.Visible : NodeFlags.Visible | NodeFlags.Disabled;
+        if (ii.Focusable && (_scene.Flags(node) & gate) == NodeFlags.Visible) into.Add(node);
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into, disabledAnchor);
     }
 
     /// <summary>Event position (window space) → the node's MODEL-LOCAL coords, clamped to its box (slider/scrollbar

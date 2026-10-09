@@ -127,7 +127,7 @@ public static class MenuFlyout
     //    = this row's cascading sub-menu is open (WinUI SubMenuOpened state = the PointerOver fill held). ────────────
     internal static Element Row(
         MenuFlyoutItem it, int index, Action activate, bool checkColumn, bool iconColumn, bool highlighted,
-        Action<int>? onKeyMove, Action<KeyEventArgs>? onRowKey, Action<Point2>? onHover, Action<NodeHandle>? onRealized,
+        Action<int>? onKeyMove, Action<KeyEventArgs>? onRowKey, Action<Point2>? onHover, Action? onExit, Action<NodeHandle>? onRealized,
         bool subOpen = false, TemplateParts? parts = null)
     {
         bool enabled = it.Enabled;
@@ -201,6 +201,7 @@ public static class MenuFlyout
             TabIndex = index + 1,                                  // document order within the menu
             OnRealized = onRealized,
             OnHoverMove = onHover,                                 // presenter cascade bookkeeping (sub-menu delay open/close)
+            OnPointerExit = onExit,                                // pointer left the row: cancel delay-open / arm delay-close
             OnClick = enabled ? activate : null,
             // Arrow roving (Up/Down/Home/End) — moves the shared highlight AND keyboard focus; Enter/Space activation
             // is the engine's focused-clickable contract; Escape light-dismiss is the overlay's PreviewKey. Left/Right
@@ -227,7 +228,7 @@ public static class MenuFlyout
             row = m with
             {
                 Role = row.Role, TabIndex = row.TabIndex,
-                OnClick = row.OnClick, OnKeyDown = row.OnKeyDown, OnHoverMove = row.OnHoverMove,
+                OnClick = row.OnClick, OnKeyDown = row.OnKeyDown, OnHoverMove = row.OnHoverMove, OnPointerExit = row.OnPointerExit,
                 OnRealized = TemplateParts.Chain(onRealized, m.OnRealized),
                 Children = row.Children,
             };
@@ -410,7 +411,7 @@ internal sealed class MenuFlyoutPresenter : Component
         }, FocusFirstOnMount);
 
         // Per-row hover bookkeeping — the CascadingMenuHelper timers:
-        //  • hovering a sub-item row arms the 400ms delay-OPEN (cancelled by leaving it);
+        //  • hovering a sub-item row arms the 400ms delay-OPEN (cancelled by hovering another row or leaving it — OnRowExit);
         //  • hovering any OTHER row while a cascade is open arms the 400ms delay-CLOSE (cancelled by re-entering the
         //    open sub-item row or by the pointer reaching the child popup — OnChildHover).
         // Safe-triangle (WinUI/macOS submenu hover-intent): while the pointer moves from the sub-item that opened a
@@ -469,6 +470,22 @@ internal sealed class MenuFlyoutPresenter : Component
             }
         }
 
+        // Pointer left row i (WinUI CascadingMenuHelper::OnPointerExited): the row's pending delay-OPEN is cancelled — the
+        // cascade never pops beside a pointer that already moved on (the page, a separator, the menu padding) — and
+        // leaving the OPEN sub-item row for anywhere but its cascade arms the delay-CLOSE. Re-entering the row or reaching
+        // a child row cancels it (OnRowHover / OnChildHover, which fire after this exit on the same move); a pointer that
+        // is already inside the cascade's rect (the 4px overlap, the child's padding/separators) leaves it alone.
+        void OnRowExit(int i)
+        {
+            if (pendingOpenIdx.Peek() == i) pendingOpenIdx.Value = -1;
+            if (subOpenIdx.Peek() != i || pendingClose.Peek()) return;
+            var scene = Context.Scene;
+            var sub = subMenuNode.Value;
+            var ptr = hooks.GetPointerPosition?.Invoke() ?? default;
+            if (scene is not null && !sub.IsNull && scene.IsLive(sub) && scene.AbsoluteRect(sub).Contains(ptr)) return;
+            pendingClose.Value = true;
+        }
+
         // Row-level non-roving keys: Right opens a cascade (focus-first), Left closes a cascade level (sub menus) or
         // navigates the MenuBar; Enter on a sub-item row opens its cascade (the OnClick path handles activation).
         void OnRowKey(KeyEventArgs a)
@@ -506,6 +523,7 @@ internal sealed class MenuFlyoutPresenter : Component
                 onKeyMove: Move,
                 onRowKey: OnRowKey,
                 onHover: _ => OnRowHover(idx),
+                onExit: () => OnRowExit(idx),
                 onRealized: h => rowNodes.Value[idx] = h,
                 subOpen: i == subOpen,
                 parts: Parts);

@@ -29,14 +29,23 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
     private readonly Action _compute;   // stable delegate (`_next = _fn()`) — no closure allocated per recompute
     private T _value = default!;
     private T _next = default!;
+    private readonly bool _releaseWhenUnobserved;
 
-    public Memo(ReactiveRuntime runtime, Func<T> fn, IEqualityComparer<T>? comparer = null, Computation? owner = null)
+    /// <param name="releaseWhenUnobserved">For an OWNER-LESS memo over a source that outlives it (a recycled list
+    /// slot's item over a page-lifetime snapshot): the memo stays linked to its sources only while something subscribes
+    /// to it. It is not primed, it unlinks when its last reader leaves (re-run or dispose), and an untracked
+    /// <see cref="Peek"/>/<see cref="Value"/> computes and unlinks again, so a dead slot's memo can never sit in the
+    /// source's subscriber list. An observed memo keeps the equality cut-off unchanged. Default false: an owned or hook
+    /// memo is disposed with its owner.</param>
+    public Memo(ReactiveRuntime runtime, Func<T> fn, IEqualityComparer<T>? comparer = null, Computation? owner = null,
+                bool releaseWhenUnobserved = false)
         : base(runtime, owner)
     {
         _fn = fn;
         _cmp = comparer ?? EqualityComparer<T>.Default;
         _compute = () => _next = _fn();
-        Recompute();   // prime the cached value + dependency links
+        _releaseWhenUnobserved = releaseWhenUnobserved;
+        if (!releaseWhenUnobserved) Recompute();   // prime the cached value + dependency links (a releasing memo stays DIRTY)
     }
 
     public T Value
@@ -45,6 +54,7 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
         {
             UpdateIfNecessary();   // a lazy read outside a flush still pulls (it may be CHECK or DIRTY)
             SubscribeReader();
+            if (_releaseWhenUnobserved && _subs.Count == 0) ReleaseSources();   // an untracked read keeps no links
             return _value;
         }
     }
@@ -52,6 +62,7 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
     public T Peek()
     {
         UpdateIfNecessary();
+        if (_releaseWhenUnobserved && _subs.Count == 0) ReleaseSources();
         return _value;
     }
 
@@ -97,7 +108,11 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
         if (!_subs.Contains(c)) { _subs.Add(c); c.AddSource(this); }
     }
 
-    void ISignalSource.Unsubscribe(Computation c) => _subs.Remove(c);
+    void ISignalSource.Unsubscribe(Computation c)
+    {
+        // The last reader left: let go of upstream now (a re-running reader re-links through its next read).
+        if (_subs.Remove(c) && _subs.Count == 0 && _releaseWhenUnobserved) ReleaseSources();
+    }
 
     /// <summary>DIAGNOSTIC name for report lines (the render census's <c>by=</c>). Never read on a hot path.</summary>
     public string? DebugName { get; init; }

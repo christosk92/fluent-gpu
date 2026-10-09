@@ -1802,14 +1802,22 @@ static class ImageSuite
 
             dec.Release(idB);
             host.RunFrame();                           // B settles → MarkImageDirty commits the hard cut
-            bool committed = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idB
-                && device.LastImages[0].Ready == 1
+            // The SAME picture: B draws at once (no fade restart) over the held A, which backs it for the swap window
+            // with a see-through placeholder — a frame that cannot sample B yet (its copy still in flight) shows A.
+            var cut = device.LastImages;
+            bool committed = cut.Count == 2
+                && cut[0].ImageId == idA && cut[0].Ready == 1 && cut[0].FadeEasing == ImageCache.SwapOutgoingEasing
+                && cut[1].ImageId == idB && cut[1].Ready == 1 && cut[1].Placeholder.A == 0f
+                && (float.IsNaN(cut[1].FadeStartMs) || cut[1].FadeDurationMs <= 0f)
                 && cache.StateOf(new ImageHandle(idB)) == ImageState.Ready
                 && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;   // hard cut — no fade restart
+            for (int i = 0; i < 24; i++) host.RunFrame();   // ≥ window + release slack of fixed frames
+            bool released = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idB
+                && cache.RefsOf(new ImageHandle(idA)) == 0;
 
-            Check("46n. hold-last-good: a re-keyed Ready image holds its OLD texture while the NEW key decodes, then hard-cuts with no fade restart",
-                aReady && held && committed,
-                $"idA={idA} idB={idB} aReady={aReady} held={held} committed={committed}");
+            Check("46n. hold-last-good: a re-keyed Ready image holds its OLD texture while the NEW key decodes, then hard-cuts with no fade restart, the OLD texture backing it for the swap window",
+                aReady && held && committed && released,
+                $"idA={idA} idB={idB} aReady={aReady} held={held} committed={committed} released={released} draws={device.LastImages.Count}");
         }
 
         // 46n2a: the OLD pin survives a forced EvictToBudget while the hold is in progress; commit releases exactly
@@ -1842,12 +1850,13 @@ static class ImageSuite
                 && cache.RefsOf(new ImageHandle(idA)) >= 1;
 
             dec.Release(idB);
-            host.RunFrame();                             // commit
+            host.RunFrame();                             // commit (A backs B for the swap window)
+            for (int i = 0; i < 24; i++) host.RunFrame();
             bool commitReleasedOld = cache.RefsOf(new ImageHandle(idA)) == 0
                 && cache.RefsOf(new ImageHandle(idB)) == 1
                 && cache.StateOf(new ImageHandle(idB)) == ImageState.Ready;
 
-            Check("46n2a. hold-last-good pin bookkeeping: the OLD pin survives a forced EvictToBudget mid-hold; commit releases exactly the OLD pin",
+            Check("46n2a. hold-last-good pin bookkeeping: the OLD pin survives a forced EvictToBudget mid-hold; the committed swap releases exactly the OLD pin",
                 survivedEvict && commitReleasedOld,
                 $"idA={idA} idB={idB} survivedEvict={survivedEvict} refsA={cache.RefsOf(new ImageHandle(idA))} refsB={cache.RefsOf(new ImageHandle(idB))}");
         }

@@ -128,6 +128,7 @@ public sealed class ScrollPoser
             if (!slots.TryRead(row.Id, out ScrollPlan plan, out double frameShift))
             {
                 _lastPosed[r] = false;
+                RetireFeedback(r);
                 continue;
             }
 
@@ -207,6 +208,11 @@ public sealed class ScrollPoser
             PublishFeedback(r, new ScrollPoseFeedback(row.Vp, row.Gen, shownPlan, v, settled, clamped, plan.Kind, presentSec));
         }
 
+        // A slot past this coverage's rows still holds a viewport this poser no longer poses (a parked KeepAlive page's
+        // list, an unmounted scroller): retire it, or TryGetFeedback hands the UI that old pose (mid-fling, unsettled)
+        // when the viewport comes back, before a coverage that covers it again has been adopted.
+        for (int r = rows; r < Cap; r++) RetireFeedback(r);
+
         _hasActive = anyActive;
         return changed;
     }
@@ -239,6 +245,17 @@ public sealed class ScrollPoser
         }
         feedback = default;
         return false;
+    }
+
+    private void RetireFeedback(int slot)
+    {
+        ref FeedbackSlot s = ref _feedback[slot];
+        if (!s.Live) return;   // the render thread is the only writer: a plain read is exact, and idle slots cost no seqlock write
+        Volatile.Write(ref s.Seq, s.Seq + 1);
+        Thread.MemoryBarrier();
+        s.Live = false;
+        Thread.MemoryBarrier();
+        Volatile.Write(ref s.Seq, s.Seq + 1);
     }
 
     private void PublishFeedback(int slot, in ScrollPoseFeedback f)

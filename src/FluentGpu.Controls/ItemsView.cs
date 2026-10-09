@@ -441,8 +441,10 @@ public delegate BoxEl ItemContainerFactory(
 /// • TabNavigation="Once" (ItemsView.xaml:7): ONE roving tab stop — the keyboard-current container; tab-in with no
 ///   current lands on the selected item (Single mode) else the first focusable item (the GettingFocus redirect,
 ///   ItemsViewInteractions.cpp:645-721).
-/// • Typeahead: printable chars accumulate (1s reset) and jump to the next prefix-matching item from current+1,
-///   wrapping (the ListView typeahead shape; the plan's L3 requirement).
+/// • Typeahead: printable chars accumulate (1s reset) and jump to the first prefix-matching item, wrapping: a new search
+///   starts after the current item (repeated first letters cycle), an extended prefix starts AT it (the item that matched
+///   "ca" stays current on "cat"), and with no current item the scan starts at item 0 (the Win32 list typeahead shape;
+///   the plan's L3 requirement).
 /// • Selection is DECOUPLED from realization: SelectAll over 50k items stores one range; only the realized window
 ///   re-skins (this component subscribes to <c>SelectionModel.Version</c>).
 /// </summary>
@@ -893,11 +895,11 @@ public sealed class ItemsView : Component
         var current = UseSignal(-1);                       // CurrentItemIndex (idl:46-47, default −1)
         var viewportNode = UseRef(NodeHandle.Null);        // the VirtualListEl scene node (OnRealized capture)
         var ownHandle = UseMemo(static () => new ScrollHandle(), DepKey.Empty);   // the viewport's handle when the app supplies none
-        var subscribed = UseRef<SelectionModel?>(null);
         var typeBuffer = UseRef(new System.Text.StringBuilder());
         var typeLastMs = UseRef(0L);
         var pendingFocus = UseRef(-1);
         var lastTabStop = UseRef(-1);                      // bound mode: the index currently holding the roving tab stop
+        var tabStopNode = UseRef(NodeHandle.Null);         // bound mode: the slot root carrying that stop's Focusable flags
         var focusedSlot = UseRef<SlotFocus?>(null);        // bound mode: the slot whose root last took a focus edge (E1)
         // Bound mode: bumped only when a `current` move could not be serviced IN PLACE (its slot is not realized yet) —
         // the one wake that re-renders a bound list for a current move (see the `cur` read below + FollowTabStop).
@@ -905,6 +907,10 @@ public sealed class ItemsView : Component
         // Bound mode: the latest render's FollowTabStop, read by the current-tracking signal effect (whose body freezes
         // at mount) so the move always sees this render's scene/viewport/count helpers.
         var tabStopFollow = UseRef<Action<int>?>(null);
+        // Bound mode: bumped when the tab-stop item enters/leaves the realized window or its slot rebinds, and the latest
+        // render's SetSlotTabStop — both read by the re-sync signal effect (whose body freezes at mount).
+        var tabStopResync = UseSignal(0);
+        var tabStopPlace = UseRef<Action<int>?>(null);
         var insertionRef = UseRef<ItemsViewInsertion?>(null);
         var lastEntranceVer = UseRef(int.MinValue);        // last DisplacementVersion the entrance seeds were applied for
         var post = UsePost();                              // consumes no hook cell (safe to call unconditionally)
@@ -937,11 +943,16 @@ public sealed class ItemsView : Component
         int disclosureVer = Controller?.DisclosureVersion.Value ?? 0;
         int disclosureSourceVer = Disclosure?.Version?.Value ?? 0;
 
-        if (!ReferenceEquals(subscribed.Value, model))     // forward the model's event once per model instance
+        // Forward the model's event for the life of this mount and take the forwarder off again on unmount (or a model
+        // swap): an app-owned SelectionModel outlives a re-keyed list, and a forwarder left on it pins the dead ItemsView
+        // and raises OnChange once more per remount. Each mount removes only its OWN delegate, so a keyed swap mounting
+        // the successor before this cleanup runs is harmless.
+        UseEffect(() =>
         {
-            subscribed.Value = model;
-            model.SelectionChanged += () => SelectionChanged?.Invoke();
-        }
+            Action forward = () => SelectionChanged?.Invoke();
+            model.SelectionChanged += forward;
+            return () => model.SelectionChanged -= forward;
+        }, DepKey.FromRef(model));
 
         // Resolve the layout spec → a (hoisted) IVirtualLayout. Stateful layout objects must be stable across
         // renders, so the instance is memoized on the spec's identity fields.
@@ -1140,11 +1151,11 @@ public sealed class ItemsView : Component
             if (n.IsNull) return;
             focusNode(n, visual);
             // E1 re-stamp (RowScope.IsFocused). Landing focus on the node that ALREADY holds it fires no focus edge
-            // (SetFocus: prev == node) — yet a bound slot can hold focus while showing another item than the one focus
-            // arrived on: it recycled while focused (the rebind clears its Focused flag but keeps the dispatcher's handle;
-            // a pointer press then re-asserts focus on it, again edge-free). Focusing it for `index` IS focus arriving on
-            // a new item, so stamp it. The index check keeps a stale reference from stamping any slot but the one now
-            // showing `index`; an unchanged stamp is an equality-gated no-op (allocation-free either way).
+            // (SetFocus: prev == node). A recycle no longer carries focus onto a slot's new item (the rebind's
+            // OnSlotRebound drops it, so the next focus fires a real edge), but should a slot ever hold focus while showing
+            // another item than the one focus arrived on, focusing it for `index` IS focus arriving on a new item, so stamp
+            // it. The index check keeps a stale reference from stamping any slot but the one now showing `index`; an
+            // unchanged stamp is an equality-gated no-op (allocation-free either way).
             if (focusedSlot.Value is { } slot && slot.Index.Peek() == index && hooks.GetFocus?.Invoke() == n)
                 slot.Edge(true);
         }
@@ -1152,13 +1163,26 @@ public sealed class ItemsView : Component
         // Bound mode roving SINGLE tab stop (TabNavigation="Once"): the slot roots are built Focusable=false, so the tab
         // WALK skips them; this moves the one tab stop to the keyboard-current slot by toggling its scene focusability
         // flags IN PLACE — no re-render, mirroring the WriteColumns mirror (Reconciler: ii.Focusable ⇄ NodeFlags.Focusable).
-        void SetSlotTabStop(int index, bool on)
+        // Tracked by NODE, not index: a slot recycles (or parks and is re-taken) with its flags intact, so the node holding
+        // the stop is cleared whatever item it shows now, and an index with no realized slot holds no stop until it
+        // re-enters the window (the window re-sync effect below).
+        void SetSlotTabStop(int stop)
         {
             if (sceneRef is null) return;
-            var n = SlotRootForIndex(index);
-            if (n.IsNull) return;
-            sceneRef.Interaction(n).Focusable = on;
-            if (on) sceneRef.Mark(n, NodeFlags.Focusable); else sceneRef.Unmark(n, NodeFlags.Focusable);
+            var n = stop >= 0 ? SlotRootForIndex(stop) : NodeHandle.Null;
+            var old = tabStopNode.Value;
+            if (old != n && !old.IsNull && sceneRef.IsLive(old))
+            {
+                sceneRef.Interaction(old).Focusable = false;
+                sceneRef.Unmark(old, NodeFlags.Focusable);
+            }
+            if (!n.IsNull)
+            {
+                sceneRef.Interaction(n).Focusable = true;
+                sceneRef.Mark(n, NodeFlags.Focusable);
+            }
+            tabStopNode.Value = n;
+            lastTabStop.Value = stop;
         }
 
         // Bound mode: move the roving tab stop to a NEW current index in place — the body of the current-tracking signal
@@ -1169,16 +1193,13 @@ public sealed class ItemsView : Component
         // scene flag writes + one equality-gated int signal write on the rare deferred path.
         void FollowTabStop(int stop)
         {
-            int old = lastTabStop.Value;
-            if (old == stop) return;
+            if (lastTabStop.Value == stop) return;
             if (SlotRootForIndex(stop).IsNull)
             {
                 if (pendingFocus.Value != stop) focusTick.Value = focusTick.Peek() + 1;
                 return;
             }
-            if (old >= 0) SetSlotTabStop(old, false);
-            SetSlotTabStop(stop, true);
-            lastTabStop.Value = stop;
+            SetSlotTabStop(stop);
         }
 
         // Instant coordinate-frame rebase (drag-reorder anchor correction, e.g. DetailTracks.Choreograph — must land
@@ -1357,7 +1378,9 @@ public sealed class ItemsView : Component
 
         void OnRootKey(KeyEventArgs e)
         {
-            if (count == 0) return;
+            // An Alt chord is never list navigation (Win32 lists see it as WM_SYSKEYDOWN): Alt+Left/Right falls
+            // through to the app's Back/Forward accelerator, as NavigationView's HandleNavKey lets it.
+            if (count == 0 || e.Alt) return;
             bool ctrl = e.Ctrl, shift = e.Shift;
             int from = current.Peek();
             switch (e.KeyCode)
@@ -1496,12 +1519,17 @@ public sealed class ItemsView : Component
             // list rule keeps it out of an empty typeahead buffer. Mid-prefix spaces still match ("Bell La…").
             if (e.Codepoint == 32 && buf.Length == 0) return;
             typeLastMs.Value = now;
+            bool extending = buf.Length > 0;   // read before the append: a surrogate pair is one keystroke, two units
             buf.Append(char.ConvertFromUtf32(e.Codepoint));
             string prefix = buf.ToString();
-            int start = Math.Max(0, current.Peek());
-            for (int k = 1; k <= count; k++)
+            // Win32 list typeahead: a NEW search starts after the current item so repeated first letters cycle the matches;
+            // an EXTENDED prefix starts AT the current item, so "cat" keeps "Cat" instead of hopping to "Catalog" (and back
+            // on the next key). No current item ⇒ scan from item 0 (max(0, −1)+1 used to skip it).
+            int cur = current.Peek();
+            int first = cur < 0 ? 0 : extending ? cur : cur + 1;
+            for (int k = 0; k < count; k++)
             {
-                int i = (start + k) % count;
+                int i = (first + k) % count;
                 if (!ItemEnabled(i)) continue;   // disabled items can't take current/selection
                 if (textOf(i).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1683,6 +1711,16 @@ public sealed class ItemsView : Component
             }
         }, DepKey.From(HashCode.Combine(disclosureVer, disclosureSourceVer, count)));
 
+        // A count shrink can strand `current` past the new end: nothing else re-targets it (its writers are the key,
+        // pointer and focus paths), so Up/Down would step from a phantom index (StepEnabled stays put, the key is still
+        // Handled), the RenderItem roving tab stop would name no realized container (Tab skips the list), and
+        // CurrentItemIndex would hand the app an out-of-range index. Re-target it onto the last focusable item (−1 when
+        // none) on the render that first observes the smaller count; a write here is an effect, never a render write.
+        UseLayoutEffect(() =>
+        {
+            if (current.Peek() >= count) current.Value = FirstEnabled(count - 1, -1);
+        }, DepKey.From(count));
+
         // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it. Keyed on
         // (cur, focusTick): RenderItem mode re-renders on every current move (cur changes); bound mode renders only on
         // a focusTick wake (MoveCurrent/FollowTabStop's deferred path), and `cur` alone could repeat an old key there.
@@ -1704,6 +1742,18 @@ public sealed class ItemsView : Component
             if (c >= 0) tabStopFollow.Value?.Invoke(c);
         });
 
+        // Bound mode: re-place the stop when its item enters or leaves the realized window or its slot rebinds (scroll
+        // recycle, a parked slot re-taken, a data-shift remap) — otherwise the flags ride the slot to whatever item it
+        // shows next while the re-realized current item gets none. The VirtualListEl lifecycle hooks fire INSIDE realize
+        // and only bump `tabStopResync`; this effect runs in the post-realize reactive flush, once FirstRealized and the
+        // child order are final. Allocation-free: scene flag writes only.
+        tabStopPlace.Value = BoundMode ? SetSlotTabStop : null;
+        UseSignalEffect(() =>
+        {
+            _ = tabStopResync.Value;                       // subscribe — bumped by the window/rebind hooks
+            tabStopPlace.Value?.Invoke(lastTabStop.Value);
+        });
+
         // Bound mode: move the single roving tab stop to the keyboard-current slot IN PLACE (no re-render). RenderItem
         // mode bakes the tab stop into each container via isTabStop at build time; bound slots are built once, so the
         // stop is moved imperatively by toggling the old/new current slot's focusability flags post-layout. This
@@ -1718,11 +1768,8 @@ public sealed class ItemsView : Component
             int stop = cur >= 0 ? cur
                      : count == 0 ? -1
                      : SelectionMode == ItemsSelectionMode.Single && model.FirstSelectedIndex >= 0 ? model.FirstSelectedIndex : 0;
-            int old = lastTabStop.Value;
-            if (old == stop) return;
-            if (old >= 0) SetSlotTabStop(old, false);
-            if (stop >= 0) SetSlotTabStop(stop, true);
-            lastTabStop.Value = stop;
+            if (lastTabStop.Value == stop) return;
+            SetSlotTabStop(stop);
         }, DepKey.From(cur, focusTickVer));
 
         // ── reorder displacement seed (the WinUI "siblings part to make room" over the positional recycler) ──────────
@@ -1920,8 +1967,20 @@ public sealed class ItemsView : Component
         // SIGNAL + IsSelected/IsCurrent/IsEnabled predicates + the interaction/focus callbacks). A recycle/selection is
         // then a signal write into existing slots — no row rebuild, no remount, no Enter replay (the flash fix).
         Func<IReadSignal<int>, Element>? rowBind = null;
+        Action<int>? onSlotWindow = null;
+        Action<int, int>? onSlotRebind = null;
         if (BoundMode && RowTemplate is { } rowTpl)
         {
+            // The tab-stop re-sync triggers: the stop's item entering/leaving the window, or a rebind onto/off it.
+            onSlotWindow = index =>
+            {
+                if (index == lastTabStop.Value) tabStopResync.Value = tabStopResync.Peek() + 1;
+            };
+            onSlotRebind = (previous, next) =>
+            {
+                int stop = lastTabStop.Value;
+                if (previous == stop || next == stop) tabStopResync.Value = tabStopResync.Peek() + 1;
+            };
             rowBind = index =>
             {
                 // Created ONCE per slot (RealizeBoundWindow invokes rowBind only while growing slots), retained by the
@@ -1993,6 +2052,9 @@ public sealed class ItemsView : Component
                 Snap = Snap,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
+                OnItemPrepared = onSlotWindow,     // bound roving tab stop re-sync (window enter/leave + rebind)
+                OnItemClearing = onSlotWindow,
+                OnItemIndexChanged = onSlotRebind,
             }
             : layout is not null
             ? new VirtualListEl

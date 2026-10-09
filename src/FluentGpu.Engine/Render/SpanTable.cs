@@ -18,6 +18,7 @@ public enum SpanReuseDisabledReason : uint
     Detached = 1u << 9,
     ImageContent = 1u << 10,
     DragSpotlight = 1u << 11,
+    PathSlab = 1u << 12,   // PathRealizationCache compacted since the table last recorded: stored spans index moved slab offsets
 }
 
 public readonly record struct DrawSpan(
@@ -29,7 +30,19 @@ public readonly record struct DrawSpan(
     DrawListOpcodeStats OpcodeStats,
     Affine2D World,
     RectF SubtreeBounds,
-    bool ClipComplete);
+    bool ClipComplete,
+    ulong OriginGen = 0,
+    int OriginByteStart = 0,
+    int OriginSortStart = 0);
+
+/// <summary>Where the bytes of a walked node's prior span came from, handed down its walk (<see cref="SpanTable.Relocation"/>).
+/// An ancestor's exact copy moves its descendants' bytes but restamps none of their rows (that would re-walk the subtree
+/// the copy exists to skip), so a descendant row still names the buffer its bytes were RECORDED into: bytes
+/// [<see cref="ByteStart"/>, <see cref="ByteEnd"/>) and sorts [<see cref="SortStart"/>, <see cref="SortEnd"/>) of the
+/// retired buffer <see cref="FromGen"/> now sit, shifted by <see cref="ByteDelta"/> / <see cref="SortDelta"/>, in buffer
+/// <see cref="TargetGen"/> of slice <see cref="Slot"/>. Default = none.</summary>
+internal readonly record struct SpanReloc(ulong FromGen, ulong TargetGen, int Slot, int ByteStart, int ByteEnd, int SortStart, int SortEnd,
+    int ByteDelta, int SortDelta);
 
 /// <summary>Per-node prior-frame DrawList span metadata. The DrawList owns the byte/sort arenas; this table owns only
 /// offsets and validation keys, so a clean subtree can memcpy its previous commands without re-walking descendants.
@@ -56,6 +69,11 @@ public sealed class SpanTable
     private RectF[] _selfBounds;
     private bool[] _clipComplete;
     private bool[] _culled;
+    // Where each span's bytes were last RECORDED (an exact copy carries it along): the buffer generation its descendants'
+    // rows were stored under, and its offsets there — the lineage SpanReloc maps into the current prior buffer.
+    private ulong[] _originGen;
+    private int[] _originByte;
+    private int[] _originSort;
     // Spatial span-reuse scoping (scene-memory.md): per-node BLOCK stamp. stamp == the current record frame ⇒ this node's
     // stored span could go stale (a special-cased visual lives inside its subtree) ⇒ deny reuse AND skip the store. Stale
     // stamps from prior frames read as unblocked, so no per-frame clear is needed (the _frame/_frameId pattern).
@@ -81,6 +99,9 @@ public sealed class SpanTable
         _selfBounds = new RectF[capacity];
         _clipComplete = new bool[capacity];
         _culled = new bool[capacity];
+        _originGen = new ulong[capacity];
+        _originByte = new int[capacity];
+        _originSort = new int[capacity];
         _blockStamp = new uint[capacity];
     }
 
@@ -120,9 +141,54 @@ public sealed class SpanTable
             _opcodeStats[nodeIndex],
             _world[nodeIndex],
             _subtreeBounds[nodeIndex],
-            _clipComplete[nodeIndex]);
+            _clipComplete[nodeIndex],
+            _originGen[nodeIndex],
+            _originByte[nodeIndex],
+            _originSort[nodeIndex]);
         return true;
     }
+
+    /// <summary><see cref="TryGet"/> for a node walked under <paramref name="reloc"/>: its span out of <paramref name="bufGen"/>
+    /// directly, else out of the retired buffer an ancestor's exact copy carried its bytes from — returned with its offsets
+    /// moved into <paramref name="bufGen"/>.</summary>
+    internal bool TryGet(int nodeIndex, uint gen, ulong bufGen, int sliceSlot, in SpanReloc reloc, ulong inputSig, out DrawSpan span)
+    {
+        if (TryGet(nodeIndex, gen, bufGen, inputSig, out span)) return true;
+        if (reloc.FromGen == 0 || reloc.TargetGen != bufGen || reloc.Slot != sliceSlot
+            || !TryGet(nodeIndex, gen, reloc.FromGen, inputSig, out span) || _sliceSlot[nodeIndex] != sliceSlot
+            || !Covers(in reloc, span.ByteStart, span.ByteLength, span.SortStart, span.SortCount))
+        {
+            span = default;
+            return false;
+        }
+        span = span with { ByteStart = span.ByteStart + reloc.ByteDelta, SortStart = span.SortStart + reloc.SortDelta };
+        return true;
+    }
+
+    /// <summary>The relocation <paramref name="nodeIndex"/>'s children walk under when it re-records out of buffer
+    /// <paramref name="priorGen"/> of <paramref name="sliceSlot"/> (it walked under <paramref name="inherited"/>): its
+    /// prior bytes, found directly or through <paramref name="inherited"/>, are the bytes it recorded at its origin, so the
+    /// rows its descendants stored there map by the same shift. Default when it has no prior bytes there.</summary>
+    internal SpanReloc Relocation(int nodeIndex, uint gen, ulong priorGen, int sliceSlot, in SpanReloc inherited)
+    {
+        if ((uint)nodeIndex >= (uint)_gen.Length || priorGen == 0 || _culled[nodeIndex] || _gen[nodeIndex] != gen
+            || _sliceSlot[nodeIndex] != sliceSlot || _originGen[nodeIndex] == 0) return default;
+        int byteAt = _byteStart[nodeIndex], sortAt = _sortStart[nodeIndex];
+        int byteLength = _byteLength[nodeIndex], sortCount = _sortCount[nodeIndex];
+        if (_bufGen[nodeIndex] != priorGen)
+        {
+            if (inherited.FromGen != _bufGen[nodeIndex] || inherited.TargetGen != priorGen || inherited.Slot != sliceSlot
+                || !Covers(in inherited, byteAt, byteLength, sortAt, sortCount)) return default;
+            byteAt += inherited.ByteDelta;
+            sortAt += inherited.SortDelta;
+        }
+        int ob = _originByte[nodeIndex], os = _originSort[nodeIndex];
+        return new SpanReloc(_originGen[nodeIndex], priorGen, sliceSlot, ob, ob + byteLength, os, os + sortCount, byteAt - ob, sortAt - os);
+    }
+
+    private static bool Covers(in SpanReloc reloc, int byteStart, int byteLength, int sortStart, int sortCount)
+        => byteStart >= reloc.ByteStart && byteStart + byteLength <= reloc.ByteEnd
+           && sortStart >= reloc.SortStart && sortStart + sortCount <= reloc.SortEnd;
 
     /// <summary>Why <see cref="TryGet"/> would miss for (<paramref name="nodeIndex"/>, <paramref name="gen"/>) under
     /// <paramref name="bufGen"/> / <paramref name="inputSig"/> — a READ-ONLY probe for the walk ledger
@@ -226,6 +292,11 @@ public sealed class SpanTable
         _subtreeBounds[nodeIndex] = span.SubtreeBounds;
         _clipComplete[nodeIndex] = span.ClipComplete;
         _culled[nodeIndex] = false;
+        // A fresh record is its own origin; an exact copy (or a kept slice) carries the origin it was read with.
+        bool fresh = span.OriginGen == 0;
+        _originGen[nodeIndex] = fresh ? bufGen : span.OriginGen;
+        _originByte[nodeIndex] = fresh ? span.ByteStart : span.OriginByteStart;
+        _originSort[nodeIndex] = fresh ? span.SortStart : span.OriginSortStart;
     }
 
     public void StoreCulled(int nodeIndex, uint gen, uint frameId, in Affine2D world, in RectF subtreeBounds, int sliceSlot)
@@ -242,6 +313,7 @@ public sealed class SpanTable
         _world[nodeIndex] = world;
         _subtreeBounds[nodeIndex] = subtreeBounds;
         _culled[nodeIndex] = true;
+        _originGen[nodeIndex] = 0;
     }
 
     /// <summary>Spatial span-reuse scoping (scene-memory.md): stamp <paramref name="nodeIndex"/> as blocked for
@@ -262,6 +334,21 @@ public sealed class SpanTable
 
     /// <summary>The just-recorded frame id (diagnostics/tests). Pairs with <see cref="StoredAtFrame"/>.</summary>
     public uint CurrentFrameId => _frameId;
+
+    /// <summary>The <see cref="PathRealizationCache.Generation"/> this table's spans were recorded under.</summary>
+    public ulong PathSlabGeneration { get; private set; }
+
+    /// <summary>When the path slab compacted since this table last recorded, forget every copyable span. A stored span's
+    /// path commands carry raw slab offsets the compaction moved, and a slice arena's keep is the same TryGet. Clearing bufGen
+    /// makes TryGet miss for every node until it is re-stored, and keeps the extents that removal damage reads.
+    /// True when it forgot.</summary>
+    public bool SyncPathSlab(ulong generation)
+    {
+        if (generation == PathSlabGeneration) return false;
+        PathSlabGeneration = generation;
+        Array.Clear(_bufGen);
+        return true;
+    }
 
     /// <summary>Diagnostics/tests: did <paramref name="nodeIndex"/> get a span STORED (reused, re-recorded, or culled) on
     /// frame <paramref name="frameId"/>? A span-reuse-blocked node stores nothing, so this returns false for it — the
@@ -290,6 +377,9 @@ public sealed class SpanTable
         Array.Resize(ref _selfBounds, n);
         Array.Resize(ref _clipComplete, n);
         Array.Resize(ref _culled, n);
+        Array.Resize(ref _originGen, n);
+        Array.Resize(ref _originByte, n);
+        Array.Resize(ref _originSort, n);
         Array.Resize(ref _blockStamp, n);
     }
 }

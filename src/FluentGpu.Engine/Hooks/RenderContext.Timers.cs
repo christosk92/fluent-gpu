@@ -125,11 +125,14 @@ internal sealed class ThrottleCell<T> : HookCell, IDisposableCell
         // else: suppressed during the window — remembered in Latest for the trailing sample
     }
 
+    // Window closed. A quiet window reopens the leading edge; a trailing sample is itself an emit, so it starts the next
+    // window (lodash semantics) — otherwise the next change would emit right behind it, twice per window.
     private void OnFire(long g)
     {
         if (g != Gen) return;
-        Cooling = false;
-        if (!EqualityComparer<T>.Default.Equals(Output.Peek(), Latest)) Output.Value = Latest;   // trailing sample
+        if (EqualityComparer<T>.Default.Equals(Output.Peek(), Latest)) { Cooling = false; return; }
+        Output.Value = Latest;   // trailing sample (Cooling stays true: a re-entrant change is coalesced into Latest)
+        Arm();                   // ...and its own cooldown
     }
 
     public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire, OwnerType); }

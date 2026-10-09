@@ -120,7 +120,7 @@ sealed class AcrylicBudgetProbeInner : Component
         };
     }
 
-static class OverlaySuite
+static partial class OverlaySuite
 {
     public static void Run(StringTable strings)
     {
@@ -149,6 +149,8 @@ static class OverlaySuite
         TeachingTipPlacementChecks(strings);
         MenuFlyoutStyleChecks(strings);
         SplitButtonStyleChecks(strings);
+        OverlayContentResizeChecks(strings);
+        OverlayViewportResizeChecks(strings);
     }
 
     static void PlacementChecks()
@@ -841,6 +843,42 @@ static class OverlaySuite
                 idle.HotPhaseAllocBytes == 0, $"{idle.HotPhaseAllocBytes} bytes");
         }
 
+        // ── W0e.14c — the caret-follow re-clamps when the LANE resizes under a still caret: the focus flip mounts the
+        //    ✕ (30+4 DIP) after HandleFocus's SyncVisual, and the blur unmounts it after the blur SyncVisual ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-lane", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            // lane viewport 160 − (10+6) = 144 without the ✕, 110 with it; 40 chars end at 40×7.7 = 308.
+            var root = new W0eProbe { W = 160f, ShowDelete = true, Initial = new string('m', 40) };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));   // select-all → caret at 308
+            host.RunFrame();
+            host.RunFrame();   // the focus re-render mounts the ✕ and re-lays out the lane
+            host.RunFrame();
+            bool shown = Roles(scene, AutomationRole.Button).Count == 1;
+            scene.TryGetTextEdit(tn, out var tf);
+            // narrow lane: caret-follow max = (308+2) − 110 = 200 (the stale wide-lane clamp was 166 → caret hidden under the ✕).
+            bool focusFollow = Near(tf.ScrollX, 200f) && Near(scene.Paint(scene.Parent(tn)).LocalTransform.Dx, -200f);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));  // blur → the ✕ unmounts
+            host.RunFrame();
+            host.RunFrame();
+            host.RunFrame();
+            bool gone = Roles(scene, AutomationRole.Button).Count == 0;
+            scene.TryGetTextEdit(tn, out var tb);
+            // wide lane again: max = 310 − 144 = 166; leaving 200 would show a 34 DIP blank tail after the text end.
+            bool blurClamp = Near(tb.ScrollX, 166f) && Near(scene.Paint(scene.Parent(tn)).LocalTransform.Dx, -166f);
+            Check("W0e.14c caret-follow re-clamps when the ✕ mount/unmount resizes the lane (focus: caret stays visible; blur: no blank tail)",
+                shown && focusFollow && gone && blurClamp,
+                $"shown={shown} focusScroll={tf.ScrollX:0.#} gone={gone} blurScroll={tb.ScrollX:0.#}");
+        }
+
         // ── W0e.15 — multi-line: Up/Down honor the StickyX goal column over wrapped lines; Enter inserts '\r' ──
         {
             using var app = new HeadlessPlatformApp();
@@ -880,6 +918,36 @@ static class OverlaySuite
             Check("W0e.15 multi-line: Up/Down/StickyX over wrapped lines (clamped at edges); Shift+Down extends; Enter inserts '\\r'",
                 caretLine1 && down1 && down2 && up1 && extended && newline,
                 $"caret={caretLine1} d1={down1} d2={down2} up={up1} ext={extended} nl={newline}");
+        }
+
+        // ── W0e.15b — multi-line wheel: +Delta (wheel-down = toward the content end) scrolls an overflowing field toward
+        // its last line and wheel-up back to the top. The inverted sign moved the text the wrong way and, at the top,
+        // left Handled unset so a wheel-down scrolled the page instead of the box. ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-multi-wheel", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            // wrap width 144 → eight "aaaa bbbb cccc " lines (8 × 19.6 dip) in a ~51 dip viewport: the field overflows
+            var root = new W0eProbe { Multi = true, W = 160f, H = 64f, Initial = string.Concat(Enumerable.Repeat("aaaa bbbb cccc ", 8)) };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var scroller = scene.Parent(TextVisual(scene, field));   // the caret-follow wrapper carrying -ScrollY
+            var at = CenterOf(scene, field);
+            float ScrollY() => -scene.Paint(scroller).LocalTransform.Dy;
+            float y0 = ScrollY();
+            window.QueueInput(WheelEvent(at, WheelNotch: 1f));    // wheel-down: toward the content end
+            host.RunFrame(); host.RunFrame();
+            float yDown = ScrollY();
+            window.QueueInput(WheelEvent(at, WheelNotch: -1f));   // wheel-up: back toward the start
+            host.RunFrame(); host.RunFrame();
+            float yUp = ScrollY();
+            Check("W0e.15b multi-line wheel: wheel-down scrolls an overflowing field toward its last line, wheel-up back to the top",
+                Near(y0, 0f) && yDown > 1f && Near(yUp, 0f),
+                $"y0={y0} down={yDown} up={yUp}");
         }
     }
 
@@ -1582,6 +1650,40 @@ static class OverlaySuite
 
             Check("gate.popup.controlled", opened && progClosed && progNoEcho && reopened && dismissClosed && signalWrittenBack && echoedOnce,
                 $"open={opened} progClosed={progClosed} progNoEcho={progNoEcho} reopen={reopened} dismissClosed={dismissClosed} writeback={signalWrittenBack} echoOnce={echoedOnce}");
+        }
+
+        // gate.popup.host-close-writeback — a close the HOST starts on its own (here a competing root light-dismiss
+        // flyout; a KeepAlive park and a dead anchor take the same Programmatic path) writes the controlled signal back
+        // to false + fires onOpenChanged(false) once, so the next isOpen=true reopens instead of being dropped by the
+        // signal's equality gate.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-popup-hostclose", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new PopupCtlProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+            void Settle() { for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); } }
+            host.RunFrame();
+            var svc = probe.Service!;
+
+            probe.Open.Value = true; Settle();
+            bool opened = svc.AnyOpen;
+            int changesBefore = probe.OpenChanges;
+
+            // A competing ROOT light-dismiss flyout: CloseCompetingLightDismiss closes the popup with cause Programmatic.
+            var rival = svc.OpenAt(static () => new RectF(300f, 200f, 10f, 10f),
+                static () => new BoxEl { Width = 60, Height = 40, Fill = Tok.FillCardDefault }, FlyoutPlacement.BottomLeft);
+            Settle();
+            bool writtenBack = !probe.Open.Peek();
+            bool echoedOnce = probe.OpenChanges == changesBefore + 1 && !probe.LastChanged;
+
+            rival.Close(); Settle();
+            probe.Open.Value = true; Settle();
+            bool reopened = svc.AnyOpen && probe.Open.Peek();
+
+            Check("gate.popup.host-close-writeback", opened && writtenBack && echoedOnce && reopened,
+                $"open={opened} writeback={writtenBack} echoOnce={echoedOnce} reopen={reopened}");
         }
 
         // gate.popup.anchor — the primitive rides the FlyoutPositioner: node-anchored (live-follow eligible), placed
@@ -2322,6 +2424,70 @@ static class OverlaySuite
                 $"rows={rowsFound} aNotYet={aNotYet} reArmed={reArmed} bOpened={bOpened} delay={delay:0.#}");
         }
 
+        // gate.menu.cascade-pointer-exit — WinUI CascadingMenuHelper::OnPointerExited: leaving a sub-item row cancels its
+        // pending delay-open (the cascade never pops beside a pointer that already moved on), and leaving the OPEN
+        // sub-item row for anywhere but its cascade arms the delay-close; moving straight into the cascade keeps it open.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("menu-cascade-exit", new Size2(480, 400), 1f));
+            window.Show();
+            var root = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.PopupWindowsEnabled = false;   // keep the cascade in-window so one scene carries every level
+            host.RunFrame();
+
+            var svc = root.Service!;
+            svc.Open(() => root.Anchor, () => MenuFlyout.Create(new[]
+            {
+                MenuFlyoutItem.SubMenu("cascadeA", new[] { new MenuFlyoutItem("leaf-a") }),
+                new MenuFlyoutItem("plain"),
+            }, () => svc.CloseTop()), FlyoutPlacement.BottomLeft);
+            for (int i = 0; i < 10; i++) host.RunFrame();
+
+            NodeHandle Find(string s) => FindTextNode(host.Scene, strings, host.Scene.Root, s);
+            void MoveTo(float x, float y)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0));
+                host.RunFrame();
+                for (int i = 0; i < 2; i++) host.Paint(0);
+            }
+            void HoverRow(string label) { var r = host.Scene.AbsoluteRect(Find(label)); MoveTo(r.X + r.W * 0.5f, r.Y + r.H * 0.5f); }
+            void Jump(float ms) { clock.Advance(ms); host.Paint(0); for (int i = 0; i < 4; i++) host.Paint(0); }
+            void Away() => MoveTo(470f, 390f);   // off the menu and its cascade (bottom-right of the page)
+
+            float delay = MenuFlyout.SubMenuShowDelayMs;   // 400 ms headless
+            bool rowFound = !Find("cascadeA").IsNull;
+            // 1) the pointer passes over the sub-item on its way off the menu → the pending open is cancelled.
+            HoverRow("cascadeA");
+            Jump(delay * 0.5f);
+            Away();
+            Jump(delay * 1.5f);
+            bool passOverNoOpen = Find("leaf-a").IsNull;
+            // 2) dwell to open, then leave the menu straight from the open sub-item → the delay-close fires.
+            HoverRow("cascadeA");
+            Jump(delay * 1.25f);
+            bool opened = !Find("leaf-a").IsNull;
+            Away();
+            Jump(delay * 0.5f);
+            bool openMidDelay = !Find("leaf-a").IsNull;   // close is DELAYED, not immediate
+            Jump(delay);                                  // past the 400 ms close deadline
+            Jump(delay);                                  // let the cascade's exit transition settle
+            bool closedAfterExit = Find("leaf-a").IsNull;
+            // 3) control: re-open, then move from the sub-item straight into the cascade → it stays open.
+            HoverRow("cascadeA");
+            Jump(delay * 1.25f);
+            bool reopened = !Find("leaf-a").IsNull;
+            HoverRow("leaf-a");
+            Jump(delay * 1.5f);
+            bool keptInCascade = !Find("leaf-a").IsNull;
+
+            Check("gate.menu.cascade-pointer-exit leaving a sub-item row cancels its pending 400ms open; leaving the open sub-item row for outside the menu delay-closes the cascade; moving into the cascade keeps it open",
+                rowFound && passOverNoOpen && opened && openMidDelay && closedAfterExit && reopened && keptInCascade,
+                $"row={rowFound} passOverNoOpen={passOverNoOpen} opened={opened} openMidDelay={openMidDelay} "
+                + $"closedAfterExit={closedAfterExit} reopened={reopened} keptInCascade={keptInCascade} delay={delay:0.#}");
+        }
+
         // gate.cbf.close-timer — CommandBarFlyout's close COMPLETION is the same one-shot: invoking a command starts
         // the 83 ms ClosingOpacityStoryboard and the entry may only enter Closing once Motion.ControlFaster has
         // actually elapsed on the host clock (the pre-fix poll would have needed a per-frame wake to notice).
@@ -3031,6 +3197,40 @@ static class OverlaySuite
                 opened && offOrigin && notOriginWalk && closing,
                 $"opened={opened} offOrigin={offOrigin} notWalk={notOriginWalk} closing={closing} "
                 + $"placed=({placed.X:0.#},{placed.Y:0.#}) mid=({midRect.X:0.#},{midRect.Y:0.#})");
+        }
+
+        // gate.overlay.rect-anchor-follow: a rect-thunk popup (non-editable ComboBox, ToolTip, TeachingTip margin form)
+        // re-places when its derived rect moves under a resize/reflow, with no OverlayHost re-render (no open/close bump).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overlay-rect-follow", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            RectF live = new(80f, 60f, 40f, 24f);
+            svc.OpenAt(() => live, () => Text("follow-tip"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            var tip = FindTextNode(host.Scene, strings, host.Scene.Root, "follow-tip");
+            bool opened = !tip.IsNull;
+            RectF before = opened ? host.Scene.AbsoluteRect(tip) : default;
+
+            live = new RectF(140f, 90f, 40f, 24f);   // the target moved (layout), nothing bumped the overlay version
+            host.RunFrame();
+            host.RunFrame();
+            var after0 = FindTextNode(host.Scene, strings, host.Scene.Root, "follow-tip");
+            RectF after = after0.IsNull ? default : host.Scene.AbsoluteRect(after0);
+            bool followed = !after0.IsNull
+                && MathF.Abs(after.X - before.X - 60f) < 1.5f && MathF.Abs(after.Y - before.Y - 30f) < 1.5f;
+            bool stillOpen = svc.Entries.Count == 1 && svc.Entries[0].Phase != OverlayPhase.Closing;
+
+            Check("gate.overlay.rect-anchor-follow a rect-thunk popup re-places when its live rect moves without an OverlayHost re-render",
+                opened && followed && stillOpen,
+                $"opened={opened} followed={followed} open={stillOpen} before=({before.X:0.#},{before.Y:0.#}) after=({after.X:0.#},{after.Y:0.#})");
         }
 
         // gate.overlay.closing-deadline — a wedged close fade force-finalizes past 2000ms wall even while HasTracks.

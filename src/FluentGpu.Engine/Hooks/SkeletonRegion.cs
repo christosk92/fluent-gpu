@@ -218,7 +218,7 @@ internal static class SkeletonReveal
         return NodeHandle.Null;
     }
 
-    static bool IsTransparentBoundary(ushort typeId) => typeId is
+    internal static bool IsTransparentBoundary(ushort typeId) => typeId is
         3   // ComponentEl
         or 4   // ContextProviderEl
         or 7   // ShowEl
@@ -227,12 +227,19 @@ internal static class SkeletonReveal
 }
 
 /// <summary>Coordinates the reveal of sibling <see cref="SkelRegionEl"/>s sharing a <c>group</c> token: each member
-/// registers on mount and reports done (Ready/Failed) with its reveal thunk; when the LAST member of the group is done,
-/// all reveals fire together (one settle window) instead of N unsynchronized blur-reveals. Per-thread (the UI thread);
-/// no group token ⇒ regions reveal independently (the common path, never touches this).</summary>
+/// registers on mount, reports loading on every edge INTO its shimmer, and reports done (Ready/Failed) with its reveal
+/// thunk; when the last LOADING member of the round is done, all reveals fire together (one settle window) instead of N
+/// unsynchronized blur-reveals. A member that stayed Ready is not part of the round, so a region that reloads alone
+/// reveals on its own Ready edge. Per-thread (the UI thread); no group token ⇒ regions reveal independently (the common
+/// path, never touches this).</summary>
 internal static class SkelGroupCoordinator
 {
-    private sealed class Group { public readonly HashSet<int> Members = new(); public readonly Dictionary<int, Action?> Done = new(); }
+    private sealed class Group
+    {
+        public readonly HashSet<int> Members = new();
+        public readonly HashSet<int> Loading = new();
+        public readonly Dictionary<int, Action?> Done = new();
+    }
     [ThreadStatic] private static Dictionary<object, Group>? _groups;
 
     private static Group Get(object group)
@@ -242,29 +249,49 @@ internal static class SkelGroupCoordinator
         return g;
     }
 
-    /// <summary>A region in the group has mounted (Pending) — count it as a member whose reveal the round waits for.</summary>
+    /// <summary>A region joined the group (mounted, or re-pointed at it). Membership alone never holds a round open:
+    /// only <see cref="Loading"/> does.</summary>
     public static void Register(object group, int regionId) => Get(group).Members.Add(regionId);
 
-    /// <summary>A region left the group (unmounted) — drop it so the round can complete without it.</summary>
+    /// <summary>A member entered its shimmer (mount, refresh, or retry after Failed): the current round now waits for
+    /// its <see cref="Done"/> too.</summary>
+    public static void Loading(object group, int regionId)
+    {
+        var g = Get(group);
+        g.Members.Add(regionId);
+        g.Loading.Add(regionId);
+    }
+
+    /// <summary>A region left the group (unmounted, or re-pointed at another group) — drop it so the round can complete
+    /// without it. When it was the last loading member the round was waiting on, the round completes HERE (the done
+    /// members reveal now) instead of parking their reveals until some member's next Done replays them on settled
+    /// content. Safe inside UnmountSubtree: a reveal seeded on a member the same pass tears down is cancelled
+    /// (CancelAll) before it ever ticks.</summary>
     public static void Unregister(object group, int regionId)
     {
         if (_groups is null || !_groups.TryGetValue(group, out var g)) return;
         g.Members.Remove(regionId);
+        g.Loading.Remove(regionId);
         g.Done.Remove(regionId);
-        if (g.Members.Count == 0) _groups.Remove(group);
+        if (g.Members.Count == 0) { _groups.Remove(group); return; }
+        if (g.Done.Count > 0 && g.Loading.Count == 0) Fire(g);
     }
 
-    /// <summary>Report a member done (Ready ⇒ <paramref name="reveal"/> thunk; Failed ⇒ null). When EVERY registered
-    /// member is done, fire all pending reveals together (one settle window) and reset the round (a refresh re-coordinates).</summary>
+    /// <summary>Report a member done (Ready ⇒ <paramref name="reveal"/> thunk; Failed ⇒ null). When no member of the
+    /// round is still loading, fire all pending reveals together (one settle window) and reset the round (a refresh
+    /// re-coordinates with whichever members load alongside it).</summary>
     public static void Done(object group, int regionId, Action? reveal)
     {
         var g = Get(group);
         g.Members.Add(regionId);
+        g.Loading.Remove(regionId);
         g.Done[regionId] = reveal;
-        if (g.Done.Count >= g.Members.Count)
-        {
-            foreach (var kv in g.Done) kv.Value?.Invoke();
-            g.Done.Clear();
-        }
+        if (g.Loading.Count == 0) Fire(g);
+    }
+
+    private static void Fire(Group g)
+    {
+        foreach (var kv in g.Done) kv.Value?.Invoke();
+        g.Done.Clear();
     }
 }

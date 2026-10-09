@@ -175,8 +175,9 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
                 return FetchResult.Fail(code switch
                 {
                     404 or 410 => ImageFailureKind.NotFound,
-                    >= 500 => ImageFailureKind.ServerError,   // transient → retried
-                    _ => ImageFailureKind.HttpError,          // other 4xx → permanent
+                    408 => ImageFailureKind.Timeout,              // server/proxy gave up waiting → transient, retried
+                    429 or >= 500 => ImageFailureKind.ServerError, // throttled burst / server fault → transient, retried
+                    _ => ImageFailureKind.HttpError,              // other 4xx → permanent
                 });
             }
             using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);

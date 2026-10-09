@@ -509,6 +509,9 @@ public sealed partial class AppHost : IDisposable
     // change, image content, crossfades) reaches this thread as a non-empty repaint region or a new target epoch.
     private ulong _lastRenderPresentedHash;
     private Threading.RenderSubmissionContinuity _renderSubmissionContinuity;
+    // Render-thread private: the publish seq of the publication whose OWN repaint region a submitted turn last carried. Its
+    // forced full is a one-shot: a motion re-present of the same publication must not re-raster the whole window again.
+    private ulong _publicationRepaintSubmittedSeq;
     private long _lastRenderedTargetEpoch = -1;
     // UI→render mirror of _popupWindows.Count. The render thread must never present a skip candidate while a popup
     // window rides the same turn (RecordPopups submits its own swapchain from the same publication).
@@ -573,8 +576,9 @@ public sealed partial class AppHost : IDisposable
             // app-wide occlusion signal is untouched (a held frame is not a covered window).
             active = _renderHeld
                 ? _holdRetryOwed
-                : _renderAnimations.HasActive || _renderPoser.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
-                    || _device.HasLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
+                : _renderAnimations.HasActive || _renderPoser.HasActive || RenderPlanUnposed
+                    || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
+                    || HasOwnLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
         return active;
@@ -616,6 +620,14 @@ public sealed partial class AppHost : IDisposable
     /// cache) pumps it, as does every primary host.</summary>
     private bool PumpsSharedImages
         => !_isDetachedChild || _parentHost is not { } parent || !ReferenceEquals(parent._images, _images) || parent.IsParked;
+
+    /// <summary>F6: a feedback trail is settling AND it is this host's. Trails live only on the composite route (the backend
+    /// advances them inside <c>SubmitComposite</c> and republishes <see cref="IGpuDevice.HasLiveFeedback"/> at its end), so the
+    /// device-wide flag only ever describes the primary window: a detached child (direct route) has no trail of its own. Read
+    /// raw, it made a pop-out wake, publish, re-record and present at panel rate while the main window's visualizer ran, and for
+    /// the whole of a primary park, where the flag stays latched until the primary's next composite.</summary>
+    private bool HasOwnLiveFeedback
+        => ChooseSubmitRoute(_isDetachedChild) == SubmitRoute.Composite && _device.HasLiveFeedback;
 
     private void AdvanceImagePresentationClock()
     {
@@ -710,6 +722,11 @@ public sealed partial class AppHost : IDisposable
     // present's lag counts the whole wait; and the count of real Presents this host made on the render thread (a drain tells a
     // present from an elided turn by its change).
     private long _deferredSinceQpc, _renderPresentCount;
+    // Render-thread-owned: whether the last RenderMotion reached the swapchain (a counted Present). False when the turn elided an
+    // unchanged pose (§13.1), skipped a byte-identical submit, held its present or found motion ended in the slot wait: the
+    // render loop then keeps the tick open for a fresh publication (RenderThread tickPresented) instead of deferring it a vblank.
+    private bool _motionPresented;
+    private bool MotionTurnPresented() => _motionPresented;
     // Render-thread-owned: this child's non-blocking present was REFUSED (DXGI_ERROR_WAS_STILL_DRAWING; see PresentFrame), so the
     // frame it drew into the back buffer is still owed to the glass. _owedFrame names it; DrainChildRenderSources re-presents it
     // on a later turn (or a fresh publication supersedes it). The latency credit was never spent, so it is still held.
@@ -722,6 +739,7 @@ public sealed partial class AppHost : IDisposable
 
     private void RenderMotion()
     {
+        long presents0 = _renderPresentCount;
         // motionRepresent: true — this re-presents the RETAINED _activeRenderFrame on a later vblank than the one it
         // was published for. It is a plain vsync'd refresh, never the original publish's interactive/suppressed-vsync
         // present (item C, §2): ApplyPresentPacing must not re-apply SuppressVsync here.
@@ -733,6 +751,7 @@ public sealed partial class AppHost : IDisposable
             _presentSplit = default;
             _splitVideoMs = 0;
         }
+        _motionPresented = _renderPresentCount != presents0;
     }
 
     private bool _idleTrimDormant;   // the last pass found nothing trimmable; any composite turn clears it (SubmitSlices)
@@ -772,9 +791,10 @@ public sealed partial class AppHost : IDisposable
     internal void AdvanceFrameClockForTest(double ms) => _frameClockMs += ms;
 
     /// <summary>Why this host is parked, for the hidden-memory delay: an OS minimize / hide (the DWM restore animation covers a
-    /// re-raster) versus only being covered by another window (back the instant it moves, so a longer delay).</summary>
+    /// re-raster) versus only being covered by another window or cloaked on another virtual desktop (back the instant it moves
+    /// or uncloaks, so a longer delay).</summary>
     private HiddenPark CurrentHiddenPark()
-        => IsOsParked ? HiddenPark.Os : (_coverParked ? HiddenPark.Cover : HiddenPark.None);
+        => IsOsParked ? HiddenPark.Os : (_coverParked || _cloakParked ? HiddenPark.Cover : HiddenPark.None);
 
     // ── Deep stage + restore hold: UI side ────────────────────────────────────────────────────────────────────────
     // The hold is a property of the PUBLICATION: every scene published while the hold is armed carries PresentHeld, and the render
@@ -1391,12 +1411,12 @@ public sealed partial class AppHost : IDisposable
     private readonly bool _isHeadless;   // headless: FixedFrameTimeSource; the scroll clock's FrameSec is the deterministic _frameClockMs instead of a QPC read
     private readonly AnimEngine _anim;
     private readonly ConnectedAnimation _connected;
-    // ── the ONE frame clock — built once at the top of RunFrame, before pump/dispatch, so PumpScroll (Paint, after
+    // ── the ONE frame clock — built at the top of RunFrame, before pump/dispatch (and by each keep-alive Paint, which bypasses RunFrame), so PumpScroll (Paint, after
     // the display-phase gate) and the scroll frame step (also Paint) share the identical (FrameQpc, PresentQpc) pair
     // with whatever DirectManipulation samples this frame. Named _palFrameClock (not
     // _frameClock) because that identifier is already the FrameClock.Tick poller's frame counter (_frameClockSig).
     private FluentGpu.Pal.FrameClock _palFrameClock;
-    private ulong _frameClockSeq;                         // RunFrame-call ordinal — FrameClock.Seq (never resets)
+    private ulong _frameClockSeq;                         // frame-clock build ordinal (RunFrame + keep-alive Paint) — FrameClock.Seq (never resets)
     private long _frameClockFloorQpc;                     // RefreshLattice.Snap's monotonicity floor (replaces the old QuantizedFrameSec's _lastQuantizedFrameQpc)
     private readonly InputEventRing _scrollPumpRing = new();  // dedicated ring for IPlatformWindow.PumpScroll (kept separate from _ring, which the top-of-RunFrame pump already drained this frame)
     private readonly RepeatTicker _repeat;
@@ -1903,6 +1923,16 @@ public sealed partial class AppHost : IDisposable
         => lastPresentedHash != 0UL && drawListHash == lastPresentedHash
            && !repaintPending && !clockActive && !hasPopupWindows;
 
+    /// <summary>The publication's OWN repaint region for one render turn of it. Its rects (live crossfade bands) ride every
+    /// re-record, since they advance with the image clock. A forced FULL (first frame, resize, clear colour, restore, an
+    /// undescribed image landing) is a one-shot. Once a turn of this publication was submitted, every tile it invalidated has
+    /// been re-rastered (a tile that drew a non-resident image stays invalid on its own) and the device presents whole after a
+    /// held or stood-down present, so forcing it again on each motion re-present only re-rastered the whole window at the
+    /// display rate. Kept while a crossfade is live: a full that swallowed the host's crossfade rects is then their only
+    /// description.</summary>
+    internal static RepaintDamageRegion PublicationRepaintForTurn(in RepaintDamageRegion published, bool alreadySubmitted, bool crossfadesLive)
+        => published.IsFull && alreadySubmitted && !crossfadesLive ? default : published;
+
     // ── popup swapchain work, posted UI → render thread ──────────────────────────────────────────────────────────────
     // The render thread is the sole ComPtr owner, so a popup Resize/ConfigurePopupChrome/AnimatePopupClose used to park
     // it (Quiesce) from the UI. Those calls fire on EVERY pointer move over an open flyout, so the park was a per-frame
@@ -1977,7 +2007,14 @@ public sealed partial class AppHost : IDisposable
                     if (!a.Slot!.Retired) CreatePopupSwapchainOnRender(a.Slot!, a.Desc);   // closed again before this turn: nothing to build
                     break;
                 case PopupRenderOp.ResizeAndChrome:
-                    if (a.Slot!.Swapchain is { } resized) { resized.Resize(a.Size); resized.ConfigurePopupChrome(a.Chrome); }
+                    // ResizeBuffers throws on a removed device, and every caller of this drain but the recover gate runs outside any
+                    // catch on the render thread: a recorded loss skips the resize as the own resize above does (RecoverDevice rebuilds
+                    // every swapchain, the next placement re-posts the size) and the rest of the queue still runs. Anything else rethrows.
+                    if (a.Slot!.Swapchain is { } resized)
+                    {
+                        try { resized.Resize(a.Size); resized.ConfigurePopupChrome(a.Chrome); }
+                        catch (Exception) when (_device.NoteIfDeviceLost()) { }
+                    }
                     break;
                 case PopupRenderOp.AnimateClose:
                     a.Slot!.Swapchain?.AnimatePopupClose();
@@ -2039,6 +2076,10 @@ public sealed partial class AppHost : IDisposable
     internal void PostOwnResizeForTest(Size2 size) => PostOwnResize(size);
     internal void DrainPopupRenderActionsForTest() => DrainPopupRenderActions();
     internal int OwnResizesAppliedForTest => _ownResizesApplied;
+
+    /// <summary>Test-only: queue a popup's resize + chrome op exactly as <see cref="SetPopupWindowBounds"/> does under a render thread.</summary>
+    internal void PostPopupResizeForTest(PopupWindowSlot slot, Size2 size)
+        => PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.ResizeAndChrome, slot, size, default));
 
     // F244: where the latest present turn's wall time went on THIS host (render-thread-owned; the render loop samples it through
     // SamplePresentSplit right after the turn). _splitVideoMs is DrainVideoForPresentTurn's own stamp, reset each turn.
@@ -2114,6 +2155,10 @@ public sealed partial class AppHost : IDisposable
                 // from the tick that woke us — animations and scroll poses are both evaluated THERE, not at "now".
                 double presentSec = RenderPresentSec(RenderTurnTickQpc());
                 double nowMs = presentSec * 1000.0;
+                int powerCap = Volatile.Read(ref _renderPowerCapFps);
+                _renderAnimations.CeilingPeriodMs = powerCap > 0
+                    ? (float)CadencePacing.LatticePeriodMs(1000.0 / powerCap, RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency)
+                    : 0f;
                 bool fresh = rf.PublishSeq != _lastRecordedScene;
                 if (fresh)
                 {
@@ -2172,7 +2217,9 @@ public sealed partial class AppHost : IDisposable
                 // tile pool and never composites into the primary back buffer.
                 bool direct = ChooseSubmitRoute(_isDetachedChild) == SubmitRoute.DirectOwnSwapchain;
                 bool compositeOnly = !direct && !fresh && !_renderAnimations.ChangedThisTick && !scrollNeedsRecord
-                    && _renderSlices.PosesCompatible(sceneFrame.Scene);
+                    && _renderSlices.PosesCompatible(sceneFrame.Scene)
+                    // A path-slab compaction (any host's record turn) moved what the kept slices' path bytes index.
+                    && _renderSpans.PathSlabGeneration == PathRealizationCache.Shared.Generation;
                 if (compositeOnly)
                 {
                     var composed = sceneFrame.Compose(_renderSlices);
@@ -2180,18 +2227,22 @@ public sealed partial class AppHost : IDisposable
                 }
                 else
                 {
+                    PathRealizationCache.Shared.NextFrame();   // the slab's only compaction point: before a record, never between it and its encode
                     stats = sceneFrame.Record(_renderCommands, _renderSpans, direct ? null : _renderSlices, publicationGap);
                     _lastRecordedScene = rf.PublishSeq;
                 }
                 splitRecorded = Stopwatch.GetTimestamp();
                 double recordMs = ToMs(splitRecorded - recordStart);
+                // Above the damage decision, because the publication's own region and the crossfade arm below need it.
+                float imageClockMs = RenderImageClock(rf, sceneFrame);
                 // §13.1 repaint set for THIS submit: what the recorder actually dirtied, unioned with what only the UI
                 // could see (first frame / resize / DPI / clear-color / image content / live crossfades) — which the
-                // publisher also carries forward across skipped publications. Full only for the named causes below.
+                // publisher also carries forward across skipped publications. Full only for the named causes below, and a
+                // publication's forced full only on its first submitted turn (PublicationRepaintForTurn).
                 var repaint = stats.RepaintDamage;
-                repaint.Union(rf.Submit.RepaintDamage);
-                // Above the damage decision, because the crossfade arm below needs it.
-                float imageClockMs = RenderImageClock(rf, sceneFrame);
+                repaint.Union(PublicationRepaintForTurn(rf.Submit.RepaintDamage,
+                    alreadySubmitted: !fresh && rf.PublishSeq == _publicationRepaintSubmittedSeq,
+                    crossfadesLive: sceneFrame.Images.HasCrossfades(imageClockMs)));
                 if (rf.TargetEpoch != _lastRenderedTargetEpoch)
                 {
                     // First frame on this target, or the UI re-created/resized it: nothing on the target is trustworthy.
@@ -2220,7 +2271,7 @@ public sealed partial class AppHost : IDisposable
                 // stream AND an empty repaint region, which is exactly the question ShouldSkipRenderSubmit asks. A row
                 // that DID move fails the hash compare on its own. Only image crossfades advance pixels with no bit
                 // anywhere to show for it, so they alone keep a frame owed.
-                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || _device.HasLiveFeedback;   // + a settling feedback trail (F6)
+                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs) || HasOwnLiveFeedback;   // + a settling feedback trail (F6)
                 // An armed frame capture must present (evidence-diagnostics §A.6) — no tile is invalidated: the capture shows
                 // exactly the retained pixels.
                 // Never while HELD (or when this publication is the one that releases): the held frames must submit for their uploads
@@ -2262,6 +2313,7 @@ public sealed partial class AppHost : IDisposable
                     sceneFrame.RecordPopups(_device, submit.Scale, submit.ImageClockMs);
                     _lastRenderPresentedHash = dlHash;   // §5.2 Fix A: every SUBMITTED stream becomes the elision baseline
                     _renderSubmissionContinuity.Submitted(rf.PublishSeq);
+                    _publicationRepaintSubmittedSeq = rf.PublishSeq;   // its forced full has now been carried once
                 }
                 if (!direct)   // the per-turn cost row describes a composite turn; a direct child has no slice plan to cost
                     NoteTurnCost(_renderSlices, recordMs, compositeOnly, stats.Slices.KeptAll, skip,
@@ -2742,6 +2794,8 @@ public sealed partial class AppHost : IDisposable
         _gpuBoundSampleSequence = 0;
         _gpuBoundLastSample = default;
         _gpuGovernorEngaged = false;
+        _governorCeilingFps = 0;
+        PublishRenderMotionCeiling();
     }
 
     private void RememberDeviceLostFrame(int clicks, bool keepAlive, bool resized, bool reconciled, bool layoutNeeded,
@@ -2799,9 +2853,9 @@ public sealed partial class AppHost : IDisposable
     private const int PostRecoveryThrottleFrames = 45;
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
     private bool _wasParked;                 // previous frame's parked state (minimized OR hidden) — the un-park EDGE forces a repaint
-    // Detached CHILD only: the DWM-cloak state (another virtual desktop, a shell transition), debounced by CloakParkGate and
-    // sampled once per RunFrame. A cloaked pop-out presents nothing (Present stands down) yet keeps WS_VISIBLE, so without
-    // this it kept painting + RenderMotion-presenting a window nobody can see, on the render thread shared with the main window.
+    // Any host: the DWM-cloak state (another virtual desktop, a shell transition), debounced by CloakParkGate and sampled once
+    // per RunFrame. A cloaked window presents nothing (Present stands down) yet keeps WS_VISIBLE, so without this it kept
+    // painting + RenderMotion-presenting a window nobody can see (and the primary forced an occlusion-probe repaint every 250 ms).
     private CloakParkGate _cloakGate;
     private bool _cloakParked;
     // Any host (F118, UI thread): the window is completely covered, so it parks exactly like a minimized one. Two causes feed it
@@ -2812,7 +2866,7 @@ public sealed partial class AppHost : IDisposable
     private long _occlusionEpochSeen;      // the IPlatformWindow.OcclusionEpoch the cached OS verdict was computed for (0 = never / untracked)
     private bool _occludedByWindows;       // the cached OS-level verdict: covered by the union of the windows above it
     private RectF[]? _occluderRects;       // reused buffer for IPlatformWindow.CopyOccluderRectsPx (WindowCoverPolicy.MaxOccluders)
-    // A cloak-parked child polls at this period: DWM raises no message when a window is un-cloaked, so unlike a minimized or
+    // A cloak-parked host polls at this period: DWM raises no message when a window is un-cloaked, so unlike a minimized or
     // hidden window (whose restore IS a message) nothing would ever wake a loop that blocked until one.
     private const int CloakPollMs = 250;
     // Detached CHILD only (F115, UI thread): the pop-out window was created HIDDEN and is waiting for its first present
@@ -2883,10 +2937,37 @@ public sealed partial class AppHost : IDisposable
     /// 2026-10-03; no other reference engine throttles on focus) nor for motion it guesses is "ambient".
     /// <para>While set, every frame the loop would produce for motion — cadence rows, one-shot transitions, loops,
     /// <c>FrameClock.Tick</c> subscribers, image reveals, timers — is paced to at most this rate on the vblank lattice,
-    /// uniformly, so nothing runs smooth beside something choppy (<see cref="CadencePacing.FlooredWaitMs"/>). Scroll,
-    /// drag, touch and auto-repeat are never capped (<see cref="PowerCapNeverPace"/>), and input still DISPATCHES the
-    /// moment it arrives — only frame production waits. UI thread only.</para></summary>
-    public int PowerCapFps { get; set; }
+    /// uniformly, so nothing runs smooth beside something choppy (<see cref="CadencePacing.FlooredWaitMs"/>). Motion the
+    /// render thread owns (compositor rows: a marquee, a spinner, a fade) is held to the same ceiling there, on the same
+    /// lattice (<see cref="RenderCompositorAnimations.CeilingPeriodMs"/>). The adaptive GPU governor's pace
+    /// (<c>GpuGovernorFps</c>) reaches that render-owned motion the same way while it paces the loop: the slower of the two
+    /// wins. Scroll, drag, touch and auto-repeat are never capped (<see cref="PowerCapNeverPace"/>), and input still
+    /// DISPATCHES the moment it arrives — only frame production waits. UI thread only.</para></summary>
+    public int PowerCapFps
+    {
+        get => _powerCapFps;
+        set { _powerCapFps = value; PublishRenderMotionCeiling(); }
+    }
+    private int _powerCapFps;
+    // UI->render mirror of the EFFECTIVE motion ceiling: the slower of PowerCapFps and the governor's pace while the governor
+    // paces this loop (0 = none). Render-owned compositor rows are ticked by the render thread alone and never reach
+    // RecommendedWaitMsCore, so the ceiling travels to them here (RenderCompositorAnimations.CeilingPeriodMs).
+    private int _renderPowerCapFps;
+    // The governor's half of that ceiling, as RecommendedWaitMsCore last decided it (0 = the governor is not pacing).
+    private int _governorCeilingFps;
+
+    /// <summary>Publish the effective motion ceiling to the render thread: the slower of PowerCapFps and _governorCeilingFps
+    /// where both are set, otherwise whichever one is. UI thread only; the render turn reads it with a Volatile.Read.</summary>
+    private void PublishRenderMotionCeiling()
+    {
+        int power = Math.Max(0, _powerCapFps);
+        int governor = _governorCeilingFps;
+        int ceiling = power > 0 && governor > 0 ? Math.Min(power, governor) : Math.Max(power, governor);
+        Volatile.Write(ref _renderPowerCapFps, ceiling);
+    }
+
+    /// <summary>The render thread's effective motion ceiling in fps (0 = none), as the render turn reads it. Test seam.</summary>
+    internal int RenderMotionCeilingFps => Volatile.Read(ref _renderPowerCapFps);
 
     /// <summary>The frames <see cref="PowerCapFps"/> never paces: the GPU governor's interaction set
     /// (<see cref="GpuGovernorWake.NeverPace"/>) minus the frame-clock poller bit — a per-frame subscriber is exactly the
@@ -3619,7 +3700,7 @@ public sealed partial class AppHost : IDisposable
             submitAbortHandleSink: _device.SetSubmitAbortHandle,
             ownMotion: HasOwnRenderMotion, childPaceBegin: BeginChildPaceWindow, childPaceReport: DescribeChildPace,
             presentSplit: SamplePresentSplit, preTurn: DrainVideoStructuralPreTurn, postTurn: CommitVideoTurnAfterPresent,
-            idleTrim: TrimIdleOnRenderThread)
+            idleTrim: TrimIdleOnRenderThread, tickPresented: MotionTurnPresented)
         { LedgerSink = LedgerRenderTurn };
 
     /// <summary>Test-only: give a HEADLESS primary host the force-sync render loop a windowed one would have (one
@@ -3819,7 +3900,7 @@ public sealed partial class AppHost : IDisposable
     // instant) is the phase reference: input is dispatched on every wake, but a FRAME is produced at most once per tick,
     // and the frame is stamped with that tick's vblank instant (FrameClock.FrameQpc). No present-ack handshake, no stall
     // ceiling, no slip/unpaced heuristics: the tick IS the vblank, so there is nothing to infer.
-    private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable)
+    private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable or its tick stale: never gate)
     private long _lastProducedTickSeq;     // the tick the last produced frame belongs to
     private long _productionDeclines;      // diagnostic census: RunFrames that dispatched input but produced no frame (already produced for this tick)
     private readonly IInputPacingSource? _pacingSource;   // the window's paced-wait census (FrameStats.PacedUrgentBreaks); null ⇒ 0
@@ -3861,6 +3942,19 @@ public sealed partial class AppHost : IDisposable
     internal static bool ProductionGateDeclines(long frameTickSeq, long lastProducedTickSeq, bool waitWantsDisplayClock)
         => frameTickSeq != 0 && waitWantsDisplayClock && frameTickSeq == lastProducedTickSeq;
 
+    // A tick older than this no longer describes the clock's CURRENT beat (RenderThread.TryGetDisplayTick's rule, same value):
+    // two refreshes at a 30 Hz panel, far above a live tick interval or a backstop wake on ONE missed tick.
+    private static readonly long s_gateTickMaxAgeQpc = Stopwatch.Frequency / 15;
+
+    /// <summary>The tick seq the production gate counts a frame against (0 = never gate): the sampled tick's while it is
+    /// current, 0 without a clock, before its first tick, or when its stamp is older than <paramref name="maxAgeQpc"/>. A seq
+    /// that stopped moving while the host still waits on the clock is a STALLED compositor (its waits time out, and a timeout
+    /// is never a tick), not a tick already produced for: gated on it, every backstop wake was declined, so Paint (timers, the
+    /// reactive flush, the re-render of input just dispatched) never ran until the clock ticked again. The backstop paces
+    /// production instead, which is what <see cref="TickBackstopMs"/> promises.</summary>
+    internal static long GateTickSeq(bool available, long tickSeq, long tickQpc, long nowQpc, long maxAgeQpc)
+        => available && tickQpc != 0 && nowQpc - tickQpc <= maxAgeQpc ? tickSeq : 0;
+
     /// <summary>The display clock this host paces production on. A window with a compositor clock of its own (the primary)
     /// uses it. A detached child's window has none, so it samples the PARENT render thread's clock - the same vblank source
     /// that thread presents on - while that tick is current; otherwise (no clock, parked clock) the child's own, unavailable,
@@ -3894,9 +3988,9 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Stopwatch/QPC stamp taken immediately after the last successful <c>Present()</c> returned. SUBMIT-confirmed,
     /// not vblank-confirmed — the panel had not scanned out yet. 0 before the first present.</summary>
     public long LastPresentQpc => Volatile.Read(ref _lastPresentQpc);
-    /// <summary>THIS frame's <see cref="FluentGpu.Pal.FrameClock"/> (scroll-v3-plan §5.1) — built once at the top of
-    /// <see cref="RunFrame"/>, before the input pump/dispatch. The one target time <c>IPlatformWindow.PumpScroll</c>
-    /// and the scroll frame step (<c>RunScrollFrame</c>) both consume this same frame; UI-thread read-only (no setter — RunFrame is the
+    /// <summary>THIS frame's <see cref="FluentGpu.Pal.FrameClock"/> (scroll-v3-plan §5.1) — built at the top of
+    /// <see cref="RunFrame"/> (and of a keep-alive <see cref="Paint"/>), before the input pump/dispatch. The one target time <c>IPlatformWindow.PumpScroll</c>
+    /// and the scroll frame step (<c>RunScrollFrame</c>) both consume this same frame; UI-thread read-only (no setter — BuildFrameClock is the
     /// sole writer).</summary>
     public FluentGpu.Pal.FrameClock FrameClock => _palFrameClock;
     /// <summary>Frames handed to the render seam so far (UI side). <c>PublishSequence - PresentedSequence</c> is the only
@@ -3977,7 +4071,7 @@ public sealed partial class AppHost : IDisposable
         int w = ClampWaitToTimers(raw, _lastWaitKind);
         w = ClampWaitToScrollChrome(w, _lastWaitKind);   // a scrollbar dwell (the idle hide) wakes exactly when it expires
         w = ClampWaitToOcclusionProbe(w, _lastWaitKind);   // an occluded (not parked) window still wakes to re-probe its target
-        w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked detached child wakes when its park debounce ends
+        w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked host wakes when its park debounce ends
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
@@ -4102,16 +4196,16 @@ public sealed partial class AppHost : IDisposable
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
-    /// <summary>Shorten an idle/throttled wait so a cloaked detached child reaches its park when the
+    /// <summary>Shorten an idle/throttled wait so a cloaked host reaches its park when the
     /// <see cref="CloakParkGate"/> debounce ends. The gate is sampled only inside <see cref="RunFrame"/> and a cloak posts no
     /// message, so a child whose UI is idle (render-thread-only motion does not wake the UI loop) would otherwise keep
     /// presenting into the cloaked window until something unrelated woke it. Same guards as
-    /// <see cref="ClampWaitToTimers"/>: only a detached child reads the cloak, a display-rate wait already runs the next frame
+    /// <see cref="ClampWaitToTimers"/>: a display-rate wait already runs the next frame
     /// (which samples the gate), a parked host has nothing left to debounce, and the clamp floors at 1 ms (never a spin).
     /// An uncloaked or already-parked gate reports infinity, so the wait is unchanged.</summary>
     private int ClampWaitToCloakDebounce(int w, HostWaitKind kind)
     {
-        if (!_isDetachedChild || IsDisplayRateWait(kind, w) || IsParked) return w;
+        if (IsDisplayRateWait(kind, w) || IsParked) return w;
         double untilPark = _cloakGate.MsUntilPark(_timers.NowMs);
         if (double.IsPositiveInfinity(untilPark)) return w;
         int dueIn = (int)Math.Ceiling(Math.Max(1.0, untilPark));
@@ -4175,6 +4269,15 @@ public sealed partial class AppHost : IDisposable
             return parkedWait < 0 ? dueMs : Math.Min(parkedWait, dueMs);
         }
         WakeReasons r = ComputeWakeReasons();
+        // The governor's half of the render thread's ceiling (_renderPowerCapFps), decided HERE, before the early returns below:
+        // a render-owned loop wakes no UI bit (r == None), so it would otherwise never see the governor's pace. Same gate as the
+        // governor branch further down, and the value is re-decided every call, so it clears the moment the governor releases.
+        int governorCeiling = AdaptiveGpuPacing && adaptiveGpuWaitEligible && GpuGovernorWake.MayPace(r) ? GpuGovernorFps : 0;
+        if (governorCeiling != _governorCeilingFps)
+        {
+            _governorCeilingFps = governorCeiling;
+            PublishRenderMotionCeiling();
+        }
         if (r == WakeReasons.None) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
         if ((r & ~(WakeReasons.BakedBlurPending | WakeReasons.DynamicText)) == 0)
@@ -4468,7 +4571,7 @@ public sealed partial class AppHost : IDisposable
             || _scene.OrphanCount != 0 || _scene.OverlayCount != 0 || !_scene.DragGhost.IsNull || !_scene.DragOverlay.IsNull
             || _scene.DropSpotlightActive) return NoopPublicationBlock.Overlay;
         if (_images.HasActiveCrossfades || _device.HasPendingUploads || _bakedBlurQueue.HasRunnableJob) return NoopPublicationBlock.Images;
-        if (_videoSurfaces.HasUnpublishedChanges || _swapchain.TextRepaintPending || _device.HasLiveFeedback) return NoopPublicationBlock.Device;
+        if (_videoSurfaces.HasUnpublishedChanges || _swapchain.TextRepaintPending || HasOwnLiveFeedback) return NoopPublicationBlock.Device;
         if (_anyScrollMovedThisFrame || _scrollUnsettledCount != 0 || AnyUserScrollMoving) return NoopPublicationBlock.Scroll;
         lock (_popupActionLock) { if (_popupActionsIn.Count != 0 || _ownResizePending) return NoopPublicationBlock.Overlay; }
         return NoopPublicationBlock.None;
@@ -4604,7 +4707,7 @@ public sealed partial class AppHost : IDisposable
         // A paceable per-frame clock (a visualizer) asks for frames too, but the governor may pace it (GpuGovernorWake.NeverPace).
         if (_frameClockPaceableSig.HasSubscribers) r |= WakeReasons.FrameClockPaceable;
         // A feedback trail (visualizer F6) still settling: the backend advances it on frames with no scene change.
-        if (_device.HasLiveFeedback) r |= WakeReasons.FeedbackSettle;
+        if (HasOwnLiveFeedback) r |= WakeReasons.FeedbackSettle;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
         // from playback state: a playing DComp video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
@@ -4816,6 +4919,7 @@ public sealed partial class AppHost : IDisposable
         _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
         _reconciler.OnSubtreeRemoved = _dispatcher.NotifySubtreeRemoved;
+        _reconciler.OnSlotRebound = _dispatcher.NotifySlotRebound;   // a recycled slot that held the drag source lets go of it
         _anim =new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         _scrollChrome = new ScrollBarChrome(_scene);
@@ -4830,10 +4934,12 @@ public sealed partial class AppHost : IDisposable
         // A reactive write (anywhere) requests a frame.
         _runtime.FrameRequested = WakeFrame;
         _dispatcher.RequestRerender = WakeFrame;   // virtual list crossing an item boundary on scroll
-        // Hover/press edges drive BOTH the (record-time) InteractionAnimator AND the new declarative While* resolver.
-        // The resolver is a no-op for nodes without WhileHover/WhilePressed targets — additive, no regression.
+        // Hover/press edges drive BOTH the (record-time) InteractionAnimator AND the new declarative While* resolver;
+        // focus edges drive the resolver only (no record-time focus channel). The resolver is a no-op for nodes without
+        // WhileHover/WhilePressed/WhileFocus targets — additive, no regression.
         _dispatcher.OnHoverChanged = (n, on) => { _anim.SetHover(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Hover, on); };
         _dispatcher.OnPressChanged = (n, on) => { _anim.SetPress(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Press, on); };
+        _dispatcher.OnFocusEdge = (n, on) => _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Focus, on);
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
         _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
@@ -4851,6 +4957,7 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);
         _inputHooks.MoveFocusVisual = h => _dispatcher.SetFocus(h, visual: true);   // roving arrow-key focus shows the ring (RadioButtons)
         _inputHooks.PushFocusScope = _dispatcher.PushFocusScope;     // REAL Tab trap for FocusTrap overlays (ContentDialog)
+        _inputHooks.PushModalFocusScope = _dispatcher.PushModalFocusScope;   // Modal overlays: Tab trap + chords scoped to the dialog
         _inputHooks.PopFocusScope = _dispatcher.RemoveFocusScope;    // order-independent (overlays close out of stack order)
         _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
@@ -5311,6 +5418,44 @@ public sealed partial class AppHost : IDisposable
         | (1u << (int)InputKind.KeyUp) | (1u << (int)InputKind.Char)
         | (1u << (int)InputKind.Scroll);
 
+    /// <summary>Builds the ONE frame clock into <see cref="_palFrameClock"/> and publishes it to app code
+    /// (<c>Hooks.FrameClock.FrameQpc/PresentQpc</c>). <see cref="RunFrameCore"/> calls it at the top of every frame; a
+    /// keep-alive <see cref="Paint"/> (the OS modal move/size loop and the F093 peer tick, which bypass RunFrame) calls it
+    /// too, or the scroll step, DirectManipulation and every app clock sampled on PresentQpc stood still for the whole drag
+    /// and jumped on mouse-up. <paramref name="gateProduction"/> also samples the production gate's tick
+    /// (<see cref="_frameTickSeq"/>): RunFrame only, a keep-alive repaint is never gated. Cheap: a few field reads + integer
+    /// arithmetic (RefreshLattice is pure), no allocation.</summary>
+    private void BuildFrameClock(bool gateProduction)
+    {
+        unchecked { _frameClockSeq++; }
+        if (_isHeadless)
+        {
+            long headlessFrameQpc = (long)(_frameClockMs * 1e-3 * Stopwatch.Frequency);
+            _palFrameClock = RefreshLattice.Headless(headlessFrameQpc, RefreshPeriodQpcOrDefault(), _frameClockSeq);
+        }
+        else
+        {
+            // The compositor tick this frame belongs to (§13.2): production is gated to one frame per tick, and the frame
+            // is stamped with that tick's vblank instant. Sampled ONCE here so the gate and the clock agree.
+            var display = PacingClock();
+            long sampleQpc = Stopwatch.GetTimestamp();
+            if (gateProduction)
+                _frameTickSeq = GateTickSeq(display.Available, display.TickSeq, display.TickQpc, sampleQpc, s_gateTickMaxAgeQpc);
+            _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
+                sampleQpc, _frameClockFloorQpc, _frameClockSeq, Volatile.Read(ref _maxFrameLatency));
+            _frameClockFloorQpc = _palFrameClock.FrameQpc;
+        }
+        // Publish the SAME target time to app code so app motion samples the frame's vsync-lattice time instead of a
+        // ~15.6 ms-quantized wall clock. Both paths (headless: deterministic). Two static long stores.
+        // Primary host only: a detached child (ticked right after the parent, same thread) samples the parent's value
+        // instead of overwriting it with its own off-lattice instant.
+        if (!_isDetachedChild)
+        {
+            FluentGpu.Hooks.FrameClock.FrameQpc = _palFrameClock.FrameQpc;
+            FluentGpu.Hooks.FrameClock.PresentQpc = _palFrameClock.PresentQpc;
+        }
+    }
+
     /// <summary>The frame proper (<see cref="RunFrame"/> wraps it with the frame ledger, AppHost.Ledger.cs). Every early-out
     /// stamps <see cref="_ledgerExit"/> (a plain store) so a ledgered frame says which gate stopped it.</summary>
     private FrameStats RunFrameCore()
@@ -5325,35 +5470,9 @@ public sealed partial class AppHost : IDisposable
 
         // ── ONE frame clock (scroll-v3-plan §5.1) — built HERE, before the pump/dispatch below, so a frame-aligned
         // producer's PumpScroll (Paint, after the production gate) and the scroll frame step (also Paint) both
-        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call. Cheap: a few field reads + integer
-        // arithmetic (RefreshLattice is pure), no allocation.
-        unchecked { _frameClockSeq++; }
-        if (_isHeadless)
-        {
-            long headlessFrameQpc = (long)(_frameClockMs * 1e-3 * Stopwatch.Frequency);
-            _palFrameClock = RefreshLattice.Headless(headlessFrameQpc, RefreshPeriodQpcOrDefault(), _frameClockSeq);
-        }
-        else
-        {
-            // The compositor tick this frame belongs to (§13.2): production is gated to one frame per tick, and the frame
-            // is stamped with that tick's vblank instant. Sampled ONCE here so the gate below and the clock agree.
-            var display = PacingClock();
-            _frameTickSeq = display.Available ? display.TickSeq : 0;
-            _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
-                Stopwatch.GetTimestamp(), _frameClockFloorQpc, _frameClockSeq, Volatile.Read(ref _maxFrameLatency));
-            _frameClockFloorQpc = _palFrameClock.FrameQpc;
-        }
-        // Publish the SAME target time to app code (Hooks.FrameClock.FrameQpc/PresentQpc) before anything app-visible
-        // runs this frame — input handlers, posts, timers, the Tick publish, the flush — so app motion samples the
-        // frame's vsync-lattice time instead of a ~15.6 ms-quantized wall clock. Both paths (headless: deterministic).
-        // Two static long stores.
-        // Primary host only: a detached child (ticked right after the parent, same thread) samples the parent's value
-        // instead of overwriting it with its own off-lattice instant.
-        if (!_isDetachedChild)
-        {
-            FluentGpu.Hooks.FrameClock.FrameQpc = _palFrameClock.FrameQpc;
-            FluentGpu.Hooks.FrameClock.PresentQpc = _palFrameClock.PresentQpc;
-        }
+        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call, and app code sees it before any
+        // input handler, post, timer, the Tick publish or the flush runs.
+        BuildFrameClock(gateProduction: true);
 
         long db = 0, dt = 0;
         if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt = Stopwatch.GetTimestamp(); }
@@ -5496,12 +5615,14 @@ public sealed partial class AppHost : IDisposable
             WindowStateChanged?.Invoke(windowChange);
             windowStatus = new(_window.State, _window.IsVisible);
         }
-        // A detached child whose window DWM has cloaked for a sustained period parks exactly like a hidden one (the
-        // debounce keeps a shell transition from flapping it). Sampled AFTER the relay: the app-facing WindowStateChanged
-        // reports the window's own placement/visibility, which a cloak does not change.
+        // A window DWM has cloaked for a sustained period (another virtual desktop) parks exactly like a hidden one, the primary
+        // as much as a pop-out: it presents nothing (Present stands down) yet keeps WS_VISIBLE, so unparked it kept painting,
+        // ticking UseIsActive consumers and forcing an occlusion-probe repaint every 250 ms. The debounce keeps a shell
+        // transition from flapping it. Sampled AFTER the relay: the app-facing WindowStateChanged reports the window's own
+        // placement/visibility, which a cloak does not change.
         // An unrevealed pop-out (created hidden, F115) is neither hidden-parked nor cloak-parked: its first frame has to paint into
         // the hidden window for the reveal to have anything to show.
-        if (_isDetachedChild && !_revealPending) _cloakParked = _cloakGate.Advance(_window.IsCloaked, _timers.NowMs);
+        if (!_revealPending) _cloakParked = _cloakGate.Advance(_window.IsCloaked, _timers.NowMs);
         // A window parks while other windows completely cover it (F118): the DXGI occlusion latch does not fire for a flip-model
         // composition swapchain another top-level covers, so without this it kept recording and presenting invisible frames on the
         // render thread it shares with the pop-out (a fullscreen pop-out over the primary window, or any other window over either).
@@ -5537,6 +5658,11 @@ public sealed partial class AppHost : IDisposable
         if (restoreEdge)
         {
             _frameNeeded = true;   // restored: repaint now
+            // A present that raced the park (render motion presenting into a window already iconic or cloaked) stood down, and
+            // nothing presents while parked, so the swapchain still reads occluded: render motion stays paused and WindowOccluded
+            // true. Repaint in full so this frame presents and clears it (an unchanged restore frame would be elided), as the
+            // detached reveal does - or the stale state lingers until the occlusion probe.
+            if (_swapchain.IsOccluded) RequestFullRepaintOnce();
             // Restore is a cold-start interaction edge exactly like the post-input arm above (search WarmCadenceInputMask):
             // the render thread and DM were parked through the minimize, so DM re-establishes its surfacing rhythm in
             // BURSTS. Without a hold, ComputeWakeReasons reads None in the gaps between bursts, RecommendedWaitMsCore takes
@@ -5633,7 +5759,12 @@ public sealed partial class AppHost : IDisposable
                     // paints must still let the hold's time pass, as the wall clock does under a real window, or the hold
                     // would never expire there. Here only: a turn whose decode completed falls through to Paint, which
                     // advances the clock itself.
-                    if (_isHeadless) _frameClockMs += _frameTime.NextDeltaMs();
+                    // A real window consumes the delta too and drops it: this turn's wait was the hold's display tick,
+                    // which Paint's step-up guard reads as display-rate and never resyncs, so an unconsumed delta handed
+                    // the next input's Paint the whole gap since the last painted frame (clamped to 34 ms) and every
+                    // animation that input started lurched on frame 1.
+                    float warmDtMs = _frameTime.NextDeltaMs();
+                    if (_isHeadless) _frameClockMs += warmDtMs;
                 }
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 // Genuinely idle — no active work, no completed image (the deep-idle case: streak/idleAgo in the
@@ -5772,10 +5903,10 @@ public sealed partial class AppHost : IDisposable
     }
 
     /// <summary>True when nothing of the host window is on screen: minimized (PAL <see cref="Pal.WindowState.Minimized"/>)
-    /// OR hidden (<see cref="IPlatformWindow.IsVisible"/> false — a close-to-tray app), OR (a detached child only) cloaked by
+    /// OR hidden (<see cref="IPlatformWindow.IsVisible"/> false — a close-to-tray app), OR cloaked by
     /// the OS compositor for a sustained period (<see cref="IPlatformWindow.IsCloaked"/>, debounced by
     /// <see cref="CloakParkGate"/>). A parked host produces no frames: no reconcile, layout, record or present,
-    /// <c>UseIsActive</c> reads false, and the loop blocks on messages (a cloak-parked child polls for the un-cloak) — the
+    /// <c>UseIsActive</c> reads false, and the loop blocks on messages (a cloak-parked host polls for the un-cloak) — the
     /// minimized behaviour, now shared by the hidden window (<see cref="WindowStatus.Parked"/>). The PRIMARY host also parks
     /// while a fullscreen, active pop-out covers it entirely (<see cref="WindowCoverPolicy"/>, F118) and raises
     /// <c>InputHooks.WindowOccluded</c> like any parked window. Live read of the window (the cloak and cover halves are the
@@ -5815,14 +5946,20 @@ public sealed partial class AppHost : IDisposable
     /// win-event hooks bump <see cref="IPlatformWindow.OcclusionEpoch"/> (and wake the loop) whenever the set, the Z-order or the
     /// geometry of top-level windows may have changed, so the Z-order walk and the rect test run only then; between events the
     /// cached verdict stands, so an idle covered window costs one counter read per frame. Never covered while it is not on screen
-    /// anyway (minimized, hidden, cloaked: their own park gates), while a pop-out waits for its reveal or is parked warm, or when
-    /// the backend does not track occlusion (epoch 0). Uncovering is seen on the same frame the event woke the loop.</summary>
+    /// anyway (minimized, hidden, cloaked: their own park gates), while a pop-out waits for its reveal or is parked warm, while it
+    /// holds a windowed popup (its own menus are top-level windows above it, painted by its own frames), or when the backend
+    /// does not track occlusion (epoch 0). Uncovering is seen on the same frame the event woke the loop.</summary>
     private bool OsOcclusionCovers()
     {
         var w = _window;
         long epoch = w.OcclusionEpoch;
         if (epoch == 0) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }
         if (_revealPending || _warmParked) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }   // re-evaluated on the first frame it counts
+        // This host's own windowed popups (a menu, flyout or dropdown that escaped the window) are top-level windows it owns, so
+        // they sit above it and the backend reports them as occluders. Their pixels, hover, reveal and close fade are this host's
+        // Paint, so parking under one froze it on screen and it could never close: the window stayed parked under a dead menu.
+        // Never covered while one is leased; re-evaluated on the first frame without one.
+        if (_popupWindows.Count != 0) { _occlusionEpochSeen = 0; _occludedByWindows = false; return false; }
         if (epoch == _occlusionEpochSeen) return _occludedByWindows;
         _occlusionEpochSeen = epoch;
         bool covered = false;
@@ -5980,6 +6117,11 @@ public sealed partial class AppHost : IDisposable
                 return LastStats;
             }
 
+            // A keep-alive repaint bypasses RunFrame, so it builds its own frame clock (after the idle skip: a skipped tick
+            // costs nothing). On the last RunFrame's instant a glide in flight stopped, and lyrics/progress sampled on
+            // Hooks.FrameClock.PresentQpc froze for the whole drag although the F093 peer tick repaints them.
+            if (keepAlive) BuildFrameClock(gateProduction: false);
+
             var layoutSize = LayoutSizeForFrame(keepAlive);
             PublishViewport(layoutSize);
 
@@ -6003,6 +6145,10 @@ public sealed partial class AppHost : IDisposable
                 if (staleGap || _connected.HasActive || _runtime.HasPending)
                     _frameTime.Resync();
             }
+            // Inside the modal loop the keep-alive ticks pace the frames, not a loop wait: only the FIRST may follow a stale
+            // wait, so latch it resolved. Otherwise every tick after an Idle wait resynced and NextDeltaMs returned 0 for the
+            // whole drag. RecommendedWaitMs re-latches the flag before the loop's next frame.
+            if (keepAlive) _lastWaitWasDisplayRate = true;
             float dtMs = _frameTime.NextDeltaMs();
             AdvanceImagePresentationClock(); // reconcile-time image swaps must also start from current wall time
             _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
@@ -6256,6 +6402,7 @@ public sealed partial class AppHost : IDisposable
                 reconciled = true;
                 _invalidator.RunDirty(layoutSize);
                 _scene.ClearLayoutDirty();
+                DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
             }
             long tLayoutEffects = Stopwatch.GetTimestamp();
             _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
@@ -6369,7 +6516,7 @@ public sealed partial class AppHost : IDisposable
             if (_navThrottleFrames > 0) _navThrottleFrames--;   // decay the P1b nav-burst window one frame at a time
             _scrollChrome.Tick(dtMs, _timers.NowMs);           // 7 conscious scrollbar fade/expand (chrome never touches motion; dwells on the timer clock)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
-            _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
+            _caretBlinker.Tick(_timers.NowMs);                 // 7 focused-editor caret blink (toggles TextEditState; on the timer clock: the host sleeps its NextDueMs of wall time)
             // 7 E5 edge auto-scroll (drag near an overflowing viewport edge).
             bool dragEdgeActive = _dispatcher.DragDrop.Tick(dtMs);
             // 7 E5: a reconcile ran THIS frame, so ApplyBox restored the dragged node's authored opacity/shadow/hit-test.
@@ -6450,6 +6597,9 @@ public sealed partial class AppHost : IDisposable
             // A stationary pointer emits no PointerMove while edge auto-scroll moves/recycles the rows beneath it;
             // still re-hit after the frame's realize so the nearest target and its insertion slot follow.
             if (dragEdgeActive) _dispatcher.RefreshDragDropAfterAutoScroll();
+            // Same for a wheel notch or touchpad pan given mid-drag (the hover refresh below stands down while an item-drag
+            // holds the pointer), but target-only, so it never arms edge auto-scroll against the user's own scroll.
+            else if (_anyScrollMovedThisFrame) _dispatcher.RefreshDragDropAfterScroll();
             long tRealizeCatchup = Stopwatch.GetTimestamp();
 
             // Stuck-hover fix (input-a11y.md §5.4/§15 — "hover re-resolves when content moves under a stationary pointer,
@@ -6506,6 +6656,7 @@ public sealed partial class AppHost : IDisposable
             var recordStats = _lastRecordStats;
             if (!recordOnRender)
             {
+            PathRealizationCache.Shared.NextFrame();
             recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots),
                 spans: _spanTable, spanReuseDisabled: spanDisable,
@@ -7673,7 +7824,10 @@ public sealed partial class AppHost : IDisposable
                 {
                     if (_scene.IsOrphan(c)) continue;
                     ref readonly RectF cb = ref _scene.Bounds(c);   // parent-relative — the same space the Trailing walk below reads
-                    extentH = MathF.Max(extentH, cb.Y + cb.H);
+                    // Bounds are the BORDER box, but the natural size the row was seeded with counts each child's margin
+                    // (FlexLayout's MarginMain/MarginCross): without the trailing one, a list whose items carry a bottom
+                    // margin re-aimed the row short by it and SettleRestore snapped the remainder open on the last frame.
+                    extentH = MathF.Max(extentH, cb.Y + cb.H + _scene.Layout(c).Margin.Bottom);
                 }
                 if (extentH > 0f) extentH += _scene.Layout(r).Padding.Bottom;
                 if (extentH > 0.5f && MathF.Abs(toH - extentH) >= 0.5f)
@@ -7689,7 +7843,7 @@ public sealed partial class AppHost : IDisposable
                 {
                     if (_scene.IsOrphan(c)) continue;
                     ref readonly RectF cb = ref _scene.Bounds(c);
-                    extentW = MathF.Max(extentW, cb.X + cb.W);
+                    extentW = MathF.Max(extentW, cb.X + cb.W + _scene.Layout(c).Margin.Right);
                 }
                 if (extentW > 0f) extentW += _scene.Layout(r).Padding.Right;
                 if (extentW > 0.5f && MathF.Abs(toW - extentW) >= 0.5f)
@@ -8162,7 +8316,13 @@ public sealed partial class AppHost : IDisposable
         if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
         if (DeferModalResize(keepAlive)) return false;   // pending until WM_EXITSIZEMOVE (InModalLoop cleared before Paint)
         _lastSize = s;
-        if (scale != _lastScale) _viewportScaleSig.Value = scale <= 0f ? 1f : scale;
+        if (scale != _lastScale)
+        {
+            _viewportScaleSig.Value = scale <= 0f ? 1f : scale;
+            // The cached stationary-pointer position is window DIP at the OLD scale: carry it into the new DIP space so
+            // this frame's hover refresh hits what is under the (unmoved) cursor, not what sat at the stale coordinates.
+            _dispatcher.RescalePointerPosition(_lastScale, scale);
+        }
         _lastScale = scale;
         // Viewport.Zoom ambient (display-only — the effective Scale above already contains the zoom). Value-gated
         // float compare so this per-frame path stays zero-alloc; the boxing publish happens only on an actual zoom

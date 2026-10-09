@@ -203,6 +203,17 @@ public sealed class DragDropContext
         _session.VelocityX = velocityX;
         _session.VelocityY = velocityY;
         _session.Mods = mods;
+        Retarget(hit);
+        UpdateEdgeScroll(hit, abs);
+    }
+
+    /// <summary>Content scrolled under a STATIONARY pointer (a wheel notch or touchpad pan given mid-drag): re-resolve the
+    /// target on <paramref name="hit"/>'s chain at the session's unchanged position (Enter/Leave/Over, refusal and spring,
+    /// exactly as <see cref="Move"/>) but leave edge auto-scroll alone. The pointer arms that, and re-arming it here would
+    /// scroll the list back against the user's own wheel whenever the pointer rests in a hot zone. 0-alloc.</summary>
+    internal void Retarget(NodeHandle hit)
+    {
+        if (!_active) return;
         RefreshSpotlight(force: false);
 
         var next = FindTarget(hit, out var refuser, out var refuserSpec, out var springHost, out var springSpec);
@@ -231,8 +242,6 @@ public sealed class DragDropContext
         // only when nothing on the chain accepted, in which case the caption slot is free by construction.
         UpdateRefusal(_over.IsNull ? refuser : NodeHandle.Null, _over.IsNull ? refuserSpec : null);
         UpdateSpring(springHost, springSpec);
-
-        UpdateEdgeScroll(hit, abs);
     }
 
     /// <summary>Release: when the pointer is over an accepting target, fire <c>OnDrop(session)</c> and close the
@@ -273,6 +282,17 @@ public sealed class DragDropContext
             _overSpec?.OnLeave?.Invoke(_session);
         }
         End();
+    }
+
+    /// <summary>The L2 twin of <see cref="DragController.NotifySlotRebound"/>: a Stationary session whose source sits in a
+    /// bound-list slot just rebound to another item reparents onto the scene root — the same "no in-tree source" shape
+    /// <see cref="PruneDead"/> gives a freed source — so a destination that dims the source through
+    /// <c>Session.Source</c> never dims the item the slot shows now. A Ghost session is left to the L1 abort.</summary>
+    public void NotifySlotRebound(NodeHandle slotRoot)
+    {
+        if (!_active || _lift != DragLift.Stationary || _scene.Root.IsNull || !_scene.IsLive(_session.Source)) return;
+        for (var n = _session.Source; !n.IsNull; n = _scene.Parent(n))
+            if (n == slotRoot) { _session.Source = _scene.Root; return; }
     }
 
     /// <summary>Called at dispatch start: a session whose SOURCE was freed by a reconcile ends (Leave fires on a live

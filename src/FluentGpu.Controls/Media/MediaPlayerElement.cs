@@ -1232,8 +1232,11 @@ public sealed class MediaPlayerElement : Component
             bool shift = (e.Mods & KeyModifiers.Shift) != 0;
             bool alt = (e.Mods & KeyModifiers.Alt) != 0;
             bool ctrl = (e.Mods & KeyModifiers.Ctrl) != 0;
-            if (shift) seekBar.SeekBy(e.Delta > 0f ? 10f : -10f);
-            else if (!ctrl && (alt || PresentingFullscreen)) AdjustVolume(e.Delta > 0f ? VolumeStep : -VolumeStep);
+            // Whole detents (e.Steps), not one action per event: a hi-res wheel's sub-notch packets would otherwise seek
+            // 80 s or step the volume ~8 times per detent. A packet that completes no detent is still the player's.
+            int steps = e.Steps;
+            if (shift) { if (steps != 0) seekBar.SeekBy(10f * steps); }
+            else if (!ctrl && (alt || PresentingFullscreen)) { if (steps != 0) AdjustVolume(VolumeStep * steps); }
             else return;   // not a player gesture: leave Handled=false so it bubbles (ambient scroller, or app zoom)
 
             _vis?.Activity(ChromeActivity.Pointer, Now());

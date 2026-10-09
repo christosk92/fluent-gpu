@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -283,7 +284,8 @@ public static class MotionRecipes
     /// <summary>Own-node <see cref="SoftReveal"/>: seed the blurred rise on THIS component's rendered root at mount (and
     /// re-seed when <paramref name="key"/> changes). The component-sugar counterpart to <see cref="MotionHooks.UseEntrance"/>
     /// but with the expressive curve + blur.</summary>
-    public static void UseSoftReveal(this Component c, DepKey key = default, float dy = Expressive.DistMedium, float blur = Expressive.BlurMedium)
+    public static void UseSoftReveal(this Component c, DepKey key = default, float dy = Expressive.DistMedium, float blur = Expressive.BlurMedium,
+                                     [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         // Reduced-motion is read as a VALUE — never early-return. Motion.ReducedMotion is a mutable global (a drag-resize
         // grip flips it to suppress springs), so an early-return would change THIS hook's slot count mid-life and shift
@@ -291,8 +293,8 @@ public static class MotionRecipes
         // transitions are seeded already at their end state (instant, no visible motion) so the hook order stays invariant.
         bool reduce = Motion.ReducedMotion;
         DepKey dep = key;   // default = seed once at mount
-        c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Expressive.VerySlow, Easing.SmoothOut, dep);
-        c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : dy, 0f, Expressive.VerySlow, Easing.SmoothOut, dep);
-        if (blur > 0f) c.Context.UseTransition(AnimChannel.BlurSigma, reduce ? 0f : blur, 0f, Expressive.VerySlow, Easing.SmoothOut, dep);
+        c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Expressive.VerySlow, Easing.SmoothOut, dep, __hf, __hl);
+        c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : dy, 0f, Expressive.VerySlow, Easing.SmoothOut, dep, __hf, __hl);
+        if (blur > 0f) c.Context.UseTransition(AnimChannel.BlurSigma, reduce ? 0f : blur, 0f, Expressive.VerySlow, Easing.SmoothOut, dep, __hf, __hl);
     }
 }

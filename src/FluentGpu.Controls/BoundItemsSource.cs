@@ -92,8 +92,9 @@ public sealed class BoundItemsSource<T>
     /// source snapshot (e.g. an activity-only transition upstream) resolves this slot's item once but fires ZERO
     /// downstream channel effects — the mechanism <see cref="ItemsView.CreateBound{T}"/> always uses (via
     /// <see cref="RowScope.Runtime"/>, attached by the bound realize path). <paramref name="runtime"/> is the
-    /// reconciling <see cref="ReactiveRuntime"/> the memo is owned by; construction primes the cached value
-    /// immediately (one recompute), matching every other <c>Memo&lt;T&gt;</c> in the engine.</summary>
+    /// reconciling <see cref="ReactiveRuntime"/>. Nothing owns or disposes the memo, so it is built with
+    /// <c>releaseWhenUnobserved</c>: it is linked to the slot index and the source snapshot only while a bind reads it,
+    /// so a dead slot (a re-keyed list, a trimmed pool) never stays in a longer-lived snapshot's subscriber list.</summary>
     public IReadSignal<T> BindItem(IReadSignal<int> slotIndex, ReactiveRuntime runtime, int itemStartIndex = 0, IEqualityComparer<T>? comparer = null)
     {
         ArgumentNullException.ThrowIfNull(slotIndex);
@@ -102,7 +103,7 @@ public sealed class BoundItemsSource<T>
         {
             int i = slotIndex.Value - itemStartIndex;
             return _readItem(i, tracked: true, out var item) ? item : _fallback;
-        }, comparer);
+        }, comparer, releaseWhenUnobserved: true);
     }
 
     /// <summary>Resolve the current item without subscribing. Event handlers should use this instead of capturing the

@@ -109,9 +109,18 @@ static partial class ControlsSuite
         ShelfKeyboardInvokeChecks(strings);
         ShelfLiftChecks(strings);
         BoundRowFocusChecks(strings);
+        BoundTabStopRecycleChecks(strings);
+        CurrentClampChecks(strings);
+        TypeaheadPrefixChecks(strings);
         PipsControlledChecks(strings);
         IconButtonBoundEnabledChecks(strings);
         InfoBarClosePlateChecks(strings);
+        MenuBarReopenChecks(strings);
+        FocusDepartureCloseChecks(strings);
+        SelectionUnsubscribeChecks(strings);
+        TabContentIdentityChecks(strings);
+        NavigateRequestRepeatChecks(strings);
+        DatePickerDayCountChecks(strings);
     }
 
     // ── InfoBar / toast: the close button must stay INSIDE the painted plate ─────────────────────────────────────────
@@ -784,6 +793,34 @@ static partial class ControlsSuite
             Check("gate.ctx.scrim-blocks-wheel a wheel over the covered list does not scroll while a menu is open; the same wheel scrolls it once closed",
                 !scroller.IsNull && opened && blocked && scrolls,
                 $"opened={opened} blocked={blocked}(off={afterBlocked.OffsetY:0.#}) scrolls={scrolls}(off={afterFree.OffsetY:0.#})");
+        }
+
+        // gate.ctx.menu-blocks-wheel — the scrim is a SIBLING of the menu, not an ancestor, so its OnPointerWheel never
+        // sees a wheel over the open menu itself; the containing-scroller fallback then found the list laid out beneath
+        // and scrolled it under the (non-overflowing) menu. The same wheel over a menu item must scroll nothing, and the
+        // menu stays open (WinUI's light-dismiss layer eats the wheel without dismissing).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-wheel-menu", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextWheelProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scroller = FindScroll(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(scroller, out var before);
+            Right(w, CenterOf(host.Scene, probe.Row)); RunN(host, 45);   // settle the unfold: the whole plate hit-tests
+            var items = Roles(host.Scene, AutomationRole.MenuItem);
+            var menuPt = items.Count > 0 ? CenterOf(host.Scene, items[^1]) : default;   // last row: well inside the list
+            var listRect = scroller.IsNull ? default : host.Scene.AbsoluteRect(scroller);
+            bool overList = items.Count > 0
+                && menuPt.X >= listRect.X && menuPt.X < listRect.X + listRect.W
+                && menuPt.Y >= listRect.Y && menuPt.Y < listRect.Y + listRect.H;
+            w.QueueInput(WheelEvent(menuPt, 0, 0, 240f)); RunN(host, 30);
+            host.Scene.TryGetScroll(scroller, out var after);
+            bool blocked = Near(after.OffsetY, before.OffsetY, 0.5f);
+            bool stillOpen = probe.Service!.AnyOpen;
+            Check("gate.ctx.menu-blocks-wheel a wheel over an open, non-overflowing menu does not scroll the list behind it and leaves the menu open",
+                !scroller.IsNull && overList && blocked && stillOpen,
+                $"items={items.Count} pt=({menuPt.X:0},{menuPt.Y:0}) overList={overList} blocked={blocked}(off={after.OffsetY:0.#}) open={stillOpen}");
         }
 
         // gate.ctx.touch-hold-opens — a synthetic touch down + a >500ms stationary hold fires the context request
@@ -1593,6 +1630,32 @@ static partial class ControlsSuite
             bool userWrote = text.Value == "hi" && changes >= 1 && last == "hi";   // user edit → signal round-trip + onChange
             Check("gate.ctl.bind.textbox-options TextBox via TextBoxOptions round-trips text through the signal; onChange fires on user edits (not the mount seed)",
                 mountQuiet && userWrote, $"mountQuiet={mountQuiet} text='{text.Peek()}' changes={changes} last='{last}'");
+        }
+
+        // gate.ctl.bind.textbox-seeded — the mount seed is silent for a NON-EMPTY seed too (the empty seed above never
+        // reaches the doc reset): a TextBox / PasswordBox opened on a saved value fires no onChange / OnPasswordChanged at
+        // mount, while a later programmatic write still notifies.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-tb-seed", new Size2(420, 240), 1f)); window.Show();
+            var name = new Signal<string>("My playlist");
+            var pw = new Signal<string>("hunter2");
+            int nameChanges = 0, pwChanges = 0; string last = "";
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [
+                        TextBox.Create(name, onChange: s => { nameChanges++; last = s; },
+                            new TextBox.TextBoxOptions { Placeholder = "ph", Width = 200f }),
+                        PasswordBox.Create("pw", 200f, password: pw, onChange: _ => pwChanges++),
+                    ] } });
+            host.RunFrame();
+            host.RunFrame();
+            bool mountQuiet = nameChanges == 0 && pwChanges == 0;
+            name.Value = "Renamed";
+            host.RunFrame();
+            bool programmatic = nameChanges == 1 && last == "Renamed";
+            Check("gate.ctl.bind.textbox-seeded a non-empty seed fires no onChange/OnPasswordChanged at mount; a later programmatic write still does",
+                mountQuiet && programmatic, $"nameChanges={nameChanges} pwChanges={pwChanges} last='{last}'");
         }
     }
 
@@ -6146,6 +6209,51 @@ static partial class ControlsSuite
                 lifted && shown && Near(line, 140f, 0.5f), $"lifted={lifted} shown={shown} line={line:0.#} expected=140");
         }
 
+        // e5dragdrop.reorder.stale — the list changed LENGTH under a live lift (a sync removed a row, the queue advanced, a
+        // tab closed). The projection is a permutation of the LIFT-time count, so ItemAt handed back an index past the new
+        // end (the documented `tracks[ro.ItemAt(slot)]`, and TabView's `list[ro.ItemAt(s)]`, threw), and the release
+        // committed the lift-time (from, to) against whichever row now sat there. Both the keyboard and the pointer path.
+        {
+            int commits = 0;
+            var ro = new Reorderable("stale")
+            {
+                ItemCount = 4, ItemExtent = 40f, Spacing = 0f, DwellMs = 0f, AutoDwell = false,
+                RequestRender = static () => { }, OnReorder = (_, _) => commits++,
+            };
+            var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+
+            // Keyboard: lift item 0 and move it to the end ⇒ projected [1,2,3,0]; then two rows vanish before the drop.
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));
+            for (int k = 0; k < 3; k++) item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Down));
+            bool kbProjected = ro.ItemAt(0) == 1 && ro.ItemAt(3) == 0;
+            ro.ItemCount = 2;
+            bool kbInRange = ro.ItemAt(0) == 0 && ro.ItemAt(1) == 1;
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));    // drop
+            bool kbCancelled = commits == 0 && !ro.IsLifted;
+
+            // Pointer: the same shape through the L1 lifecycle (a zero dwell, advanced once, shows the pending slot).
+            ro.ItemCount = 4;
+            var args = new DragEventArgs { TotalDy = 120f };        // item 0 past item 2's centre ⇒ slot 2
+            item.OnDragStarted?.Invoke(args);
+            item.OnDragDelta?.Invoke(args);
+            ro.Advance(0f);
+            bool ptrProjected = ro.ItemAt(2) == 0;
+            ro.ItemCount = 2;
+            bool ptrInRange = ro.ItemAt(0) == 0 && ro.ItemAt(1) == 1;
+            item.OnDragCompleted?.Invoke(args);
+            bool ptrCancelled = commits == 0 && !ro.IsLifted;
+
+            // The SAME count at release still commits (the guard is a length mismatch, not any re-render).
+            item.OnDragStarted?.Invoke(args);
+            item.OnDragDelta?.Invoke(args);
+            item.OnDragCompleted?.Invoke(args);
+            bool unchangedCommits = commits == 1;
+
+            Check("e5dragdrop.reorder.stale a lift whose list changes LENGTH mid-drag drops the projection (ItemAt stays inside the current list) and cancels on release instead of committing lift-time indices",
+                kbProjected && kbInRange && kbCancelled && ptrProjected && ptrInRange && ptrCancelled && unchangedCommits,
+                $"kb=({kbProjected},{kbInRange},{kbCancelled}) ptr=({ptrProjected},{ptrInRange},{ptrCancelled}) same={unchangedCommits} commits={commits}");
+        }
+
         // e5dragdrop.reorder.announce — the a11y channel (Primer / React-Aria): a keyboard lift has NO other feedback
         // (displacement and the insertion line are purely visual), so grab/move/drop/cancel must reach the engine's
         // live-region seam. Coalesced at ~100ms, because a held arrow key emits far more slot changes than a reader can
@@ -6198,6 +6306,56 @@ static partial class ControlsSuite
                     $"coalesced={coalesced} moveSpeaks={moveSpeaks} silent={silentByDefault}");
             }
             finally { InputHooks.Current.Default.Announce = prior; Announcer.Reset(); }
+        }
+
+        // e5dragdrop.reorder.scrolled — the same-list slot math ran on the pointer's WINDOW-space travel (TotalDy) against
+        // RESTING starts, so a list that scrolled under a held drag (the drag's own edge auto-scroll, a wheel, the page
+        // scroller around the queue) committed the row at the pointer's on-screen distance, not the slot under it; and the
+        // per-frame auto-scroll OnOver returned early for the list's own payload, so a still pointer never re-projected.
+        {
+            var scene = new SceneStore();
+            int from = -1, to = -1;
+            var ro = new Reorderable("scrolled")
+            {
+                ItemCount = 20, ItemExtent = 40f, Spacing = 0f, Scene = scene, AutoDwell = false,
+                RequestRender = static () => { }, OnReorder = (f, t) => { from = f; to = t; },
+            };
+            var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 200, Children = [ro.List(new BoxEl { Width = 200, Height = 800 })],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+
+            // Lift row 0, the page scrolls 10 rows (400 DIP) under the pointer, a 50 DIP move, release: the row under
+            // the pointer is slot 11 (a 450 DIP content-space travel), not slot 1 (the 50 DIP on-screen one).
+            item.OnDragStarted?.Invoke(new DragEventArgs { Absolute = new Point2(50f, 25f), TotalDy = 5f });
+            scene.Paint(scene.Root).LocalTransform = Affine2D.Translation(0f, -400f);
+            var moved = new DragEventArgs { Absolute = new Point2(50f, 70f), TotalDy = 50f };
+            item.OnDragDelta?.Invoke(moved);
+            int pending = ro.Core.PendingIndex;
+            item.OnDragCompleted?.Invoke(moved);
+            bool commit = pending == 11 && from == 0 && to == 11;
+
+            // A STILL pointer while the list scrolls: the engine re-runs the target's OnOver per auto-scroll frame, and
+            // that alone must carry the pending slot to the row now under the pointer.
+            scene.Paint(scene.Root).LocalTransform = Affine2D.Identity;
+            item.OnDragStarted?.Invoke(moved);
+            item.OnDragDelta?.Invoke(moved);
+            int still = ro.Core.PendingIndex;                       // 1: nothing has scrolled yet
+            var disp = new InputDispatcher(scene);
+            var at = new Point2(50f, 70f);
+            disp.DragDrop.ExternalBegin("scrolled", new ReorderPayload(ro, 0, null), at, KeyModifiers.None);
+            disp.DragDrop.Move(disp.DiagHitTest(at), at, 0f, 0f, KeyModifiers.None);
+            scene.Paint(scene.Root).LocalTransform = Affine2D.Translation(0f, -400f);
+            disp.DragDrop.Move(disp.DiagHitTest(at), at, 0f, 0f, KeyModifiers.None);
+            int followed = ro.Core.PendingIndex;
+            disp.DragDrop.Cancel();
+            item.OnDragCanceled?.Invoke();
+            bool tracks = still == 1 && followed == 11;
+
+            Check("e5dragdrop.reorder.scrolled a same-list reorder resolves its slot in CONTENT space — a list that scrolled under the held drag (edge auto-scroll, wheel, page scroller) commits the row under the pointer, and an auto-scroll frame with a still pointer re-projects it",
+                commit && tracks, $"pending={pending} commit=({from},{to}) still={still} followed={followed} expected 11/(0,11)/1/11");
         }
     }
 
@@ -7887,6 +8045,62 @@ static partial class ControlsSuite
                 mountQuiet && stepped && noEcho, $"mountQuiet={mountQuiet} stepped={stepped} val={sig.Value:0.##} changes={changes} noEcho={noEcho} buttons={buttons.Count}");
         }
 
+        // gate.ctl.numberbox.live-affix — NumberBox hands its inline spin pair + IsEnabled to a propless EditableText, so
+        // both froze at mount: an empty box that gains a value must spin, a box mounted at its Minimum must step back down
+        // to it, and a runtime disable must gate the text field + the spin pair (the editable ComboBox's text part too).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("numberbox-live-affix", new Size2(360, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var empty = new Signal<double>(double.NaN);    // CreateWithSpinners' default: an empty box
+            var atMin = new Signal<double>(0);
+            var enabled = new Signal<bool>(true);
+            var comboIdx = new Signal<int>(0);
+            string[] comboItems = ["a", "b"];
+            var spin = new NumberBox.NumberBoxOptions
+            {
+                Minimum = 0, Maximum = 10, SmallChange = 1,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Direction = 1, Gap = 8f, Padding = Edges4.All(12f), Children =
+                [
+                    NumberBox.Create(value: empty, options: spin),
+                    NumberBox.Create(value: atMin, options: spin with { IsEnabled = enabled.Value }),
+                    ComboBox.Create(comboItems, comboIdx, editable: true, isEnabled: enabled.Value),
+                ] },
+            });
+            host.RunFrame();
+            void Settle() { for (int i = 0; i < 3; i++) host.RunFrame(); }
+            // Inline spin cells in tree order: [empty up, empty down, atMin up, atMin down] (the ComboBox chevron follows).
+            void Spin(int cell)
+            {
+                var b = Roles(host.Scene, AutomationRole.Button);
+                if (b.Count >= 4) ClickNode(host, window, b[cell]);
+                Settle();
+            }
+            empty.Value = 5;                                    // the box gains a value (typing "5" + Enter writes the same signal)
+            Settle();
+            Spin(0);
+            bool emptySpins = empty.Value == 6;
+            Spin(2);                                            // up off the Minimum: 0 → 1
+            bool steppedUp = atMin.Value == 1;
+            Spin(3);                                            // down was disabled at mount (value == Minimum)
+            bool backToMin = steppedUp && atMin.Value == 0;
+            enabled.Value = false;
+            Settle();
+            var fields = Roles(host.Scene, AutomationRole.Text); // EditableText roots: [empty, atMin, combo part]
+            bool fieldGated = fields.Count >= 3 && (host.Scene.Flags(fields[1]) & NodeFlags.Disabled) != 0;
+            bool comboGated = fields.Count >= 3 && (host.Scene.Flags(fields[2]) & NodeFlags.Disabled) != 0;
+            Spin(2);                                            // a disabled box must not step
+            bool spinGated = atMin.Value == 0;
+            Check("gate.ctl.numberbox.live-affix NumberBox: the inline spin pair + IsEnabled reach the mounted field (an empty box spins once it has a value, a box mounted at Minimum steps back down, a runtime disable gates field + spins; the editable ComboBox part too)",
+                emptySpins && backToMin && fieldGated && comboGated && spinGated,
+                $"empty={empty.Value:0.##} atMin={atMin.Value:0.##} steppedUp={steppedUp} fieldGated={fieldGated} comboGated={comboGated} spinGated={spinGated} fields={fields.Count}");
+        }
+
         // gate.ctl.bind.splitview-pane — SplitView.Create(isPaneOpen: signal, onOpenChanged): light dismiss writes the
         // pane-open signal false + fires onOpenChanged once; a programmatic re-open does NOT echo onOpenChanged.
         {
@@ -8350,6 +8564,35 @@ static partial class ControlsSuite
             Check("cp3.acr3 — Expander AnimateContentResize=false: the open/close TOGGLE itself still eases (not instant)",
                 after1 < open - 10f && Near(open, 91f, 2f),
                 $"after1frame={after1:0.0} open={open:0.0}");
+            host.Dispose(); app.Dispose();
+        }
+
+        // (d) AnimateContentResize=false on an OPEN mount (Wavee's artist Discography): the COLLAPSE toggle must ease
+        // too. `transitioning` used to rise only in a passive effect keyed on `open`, which drains after the commit's
+        // FLIP, so the render that flipped `open` still committed ReflowNoResize: the clip snapped to 0 and the collapse
+        // watcher unmounted the content at once. The same snap hit every collapse after an animated open (the resize
+        // watcher clears the flag once the open leg settles).
+        {
+            var (app, host, window, clip, _, _) = Mount(animateResize: false, initiallyExpanded: true, tag: "collapse-off");
+            var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
+            var header = Child(host.Scene, card, 0);
+            ClickNode(host, window, header);                       // collapse an open-at-rest mount
+            host.RunFrame();
+            float collapse1 = host.Scene.PresentedAbsoluteRect(clip).H;
+            bool mounted1 = !host.Scene.FirstChild(clip).IsNull;
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            float closed1 = host.Scene.PresentedAbsoluteRect(clip).H;
+            ClickNode(host, window, header);                       // animated re-open; the resize watcher clears the flag at settle
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            ClickNode(host, window, header);                       // collapse again after the open leg settled
+            host.RunFrame();
+            float collapse2 = host.Scene.PresentedAbsoluteRect(clip).H;
+            bool mounted2 = !host.Scene.FirstChild(clip).IsNull;
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            float closed2 = host.Scene.PresentedAbsoluteRect(clip).H;
+            Check("cp3.acr4 — Expander AnimateContentResize=false: every COLLAPSE toggle eases (content stays mounted until it settles)",
+                collapse1 > 10f && mounted1 && Near(closed1, 0f, 1f) && collapse2 > 10f && mounted2 && Near(closed2, 0f, 1f),
+                $"collapse1={collapse1:0.0} mounted1={mounted1} closed1={closed1:0.0} collapse2={collapse2:0.0} mounted2={mounted2} closed2={closed2:0.0}");
             host.Dispose(); app.Dispose();
         }
     }

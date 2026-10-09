@@ -117,7 +117,7 @@ public struct WindowStateRelay
 }
 
 /// <summary>
-/// Debounces <see cref="IPlatformWindow.IsCloaked"/> into a park decision for a detached child host. A window is parked only
+/// Debounces <see cref="IPlatformWindow.IsCloaked"/> into a park decision for a host (the primary window or a detached pop-out). A window is parked only
 /// once it has stayed cloaked for <see cref="EnterDelayMs"/> - shell transitions (virtual-desktop slides, Alt+Tab, window
 /// animations) cloak a window for a few frames and must not flap the host between parked and live - and it un-parks the
 /// instant a sample reads uncloaked, so a window the user switches back to is never held dark. Pure and allocation-free

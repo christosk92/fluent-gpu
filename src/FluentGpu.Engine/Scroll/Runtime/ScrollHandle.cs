@@ -26,15 +26,18 @@ public readonly record struct ScrollMotionState(MotionKind Kind, float SpeedDipP
 }
 
 /// <summary>Pure latch for <see cref="ScrollHandle.Restore"/>: a restored offset is held until the extent can
-/// actually hold it (<c>extent − viewport ≥ target</c>), then applied once.</summary>
+/// actually hold it (<c>extent − viewport ≥ target</c>), then applied once. <see cref="Glide"/> marks a latched
+/// <see cref="ScrollHandle.ScrollTo"/> glide past the end: it travels on to the grown end instead of jumping.</summary>
 public struct RestoreLatch
 {
     public bool Pending { get; private set; }
     public double Target { get; private set; }
+    public bool Glide { get; private set; }
 
-    public void Arm(double target)
+    public void Arm(double target, bool glide = false)
     {
         Target = target;
+        Glide = glide;
         Pending = true;
     }
 
@@ -159,7 +162,8 @@ public sealed class ScrollHandle
     // ── binding (host) ──────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Binds the handle to a viewport slot. A pending programmatic move/restore latched while unbound is
-    /// applied once the extent arrives (<see cref="SetExtent"/>).</summary>
+    /// applied once the extent arrives (<see cref="SetExtent"/>). When all <see cref="PlanSlots.Capacity"/> slots are live
+    /// the handle stays unbound (<see cref="IsBound"/> false) and a later Bind retries.</summary>
     /// <param name="shownFloorSec">The pose floor (plan clock): the latest present time a frame has ALREADY been posed
     /// for (the render poser runs ahead of the clock by the present lead). A re-plan that starts from the live plan
     /// (a wheel notch, a glide, a key step, a contact begin) is anchored at <c>max(input time, floor)</c>: frames posed
@@ -169,13 +173,20 @@ public sealed class ScrollHandle
     {
         if (_slots is not null && !Vp.IsNone && (!ReferenceEquals(_slots, slots) || Vp != vp)) _slots.Release(Vp);
         if (Vp != vp) JumpWatch = default;   // a new viewport starts a new baseline
-        _slots = slots;
-        Vp = vp;
         _shownValid = false;
         _nowSec = nowSec;
         _shownFloorSec = shownFloorSec ?? s_noFloor;
         _horizontal = horizontal;
-        _slots.Allocate(vp, ScrollPlan.Idle(vp.Node, _lastShown, 0.0, MaxOffset, _viewport, ScrollTunables.Current.RubberBandC));
+        // Every slot live (parked KeepAlive pages keep theirs): stay UNBOUND rather than bound to no slot. Moves latch as
+        // they do before mount, and the host's ResolveScrollHandle sees !IsBound and retries until a slot frees.
+        if (!slots.Allocate(vp, ScrollPlan.Idle(vp.Node, _lastShown, 0.0, MaxOffset, _viewport, ScrollTunables.Current.RubberBandC)))
+        {
+            _slots = null;
+            Vp = ScrollViewportId.None;
+            return;
+        }
+        _slots = slots;
+        Vp = vp;
     }
 
     /// <summary>Unbinds the slot. Call on unmount. The handle keeps its last shown offset so a re-bind (a KeepAlive
@@ -218,19 +229,39 @@ public sealed class ScrollHandle
         if (!geometryChanged && !_restore.Pending && prev.Min == 0.0 && prev.Max == max && prev.ViewportExtent == viewport) return;
         MotionFeel feel = ScrollTunables.Current;
         ScrollPlan next = prev with { Min = 0.0, Max = max, ViewportExtent = viewport, RubberC = feel.RubberBandC };
+        bool glide = _restore.Glide;   // read before TryResolve clears the latch
         if (_restore.TryResolve(extent, viewport, out double restored))
-            next = PlanAuthor.Immediate(in next, _nowSec(), restored);
+            next = glide ? PlanAuthor.Glide(in next, AnchorAt(_nowSec()), restored, feel) : PlanAuthor.Immediate(in next, _nowSec(), restored);
         else if (_restore.Pending && _restore.Target > max && prev.Kind is MotionKind.Idle or MotionKind.Programmatic)
         {
-            // A latched target still past the (grown) extent chases the end: hold at the new max until it can resolve.
-            double p = prev.Eval(_nowSec(), out _, out _);
-            if (p < max - 0.5) next = PlanAuthor.Immediate(in next, _nowSec(), max);
+            if (glide)
+            {
+                // A ScrollTo/BringIntoView glide past the end already heads for today's clamp: it is re-aimed (velocity-
+                // continuous, from what is shown) only when the end grew past its destination — never cut to a jump.
+                if (prev.Dest < max - 0.5) next = PlanAuthor.Glide(in next, AnchorAt(_nowSec()), max, feel);
+            }
+            else
+            {
+                // A latched restore still past the (grown) extent chases the end: hold at the new max until it can resolve.
+                double p = prev.Eval(_nowSec(), out _, out _);
+                if (p < max - 0.5) next = PlanAuthor.Immediate(in next, _nowSec(), max);
+            }
         }
         else if (prev.Kind == MotionKind.Idle && prev.Count > 0)
         {
             // An idle plan whose hold now sits past the new max (content shrank) re-holds at the clamp.
             double p = prev.Dest;
             if (p > max || p < 0.0) next = PlanAuthor.Immediate(in next, _nowSec(), Math.Clamp(p, 0.0, max));
+        }
+        if (next.Kind is not (MotionKind.Idle or MotionKind.Drag) && next.Count > 0 && next.Dest - max >= feel.SettleEpsilonDip)
+        {
+            // A motion still heading past the new max (content shrank under it: rows measured smaller than their estimate
+            // as an End-key glide or a fling reveals them) is re-aimed at the new end from where it is. Its arcs would
+            // converge on an end the content no longer has: a blank band past the last row, and a plan the settle rule
+            // (measured against the clamped destination) never rests. A structurally settled tail rests there already.
+            double t = AnchorAt(_nowSec());
+            next.Eval(t, out _, out bool settled);
+            if (!settled) next = PlanAuthor.Reaim(in next, t, in feel);
         }
         _slots.Write(Vp, in next);
     }
@@ -275,7 +306,7 @@ public sealed class ScrollHandle
         // A destination past the extent known NOW lands at today's max and stays latched as the RAW request: the moment
         // the content grows to hold it (a late measure, a list that is still filling) SetExtent completes the move. Any
         // user input (wheel, contact, thumb, key, stop) drops the latch, so a stale request never resurrects.
-        if (offset > MaxOffset + 0.5) _restore.Arm(offset);
+        if (offset > MaxOffset + 0.5) _restore.Arm(offset, glide: move != ScrollMove.Immediate);
     }
 
     /// <summary>Moves relative to the plan's destination (so repeated ScrollBy calls accumulate) for a glide, or
@@ -315,7 +346,8 @@ public sealed class ScrollHandle
 
     /// <summary>A wheel notch (<paramref name="notches"/> signed notch units — fractional for a hi-res wheel) at device
     /// time <paramref name="tNotch"/>. The curve is anchored at the pose floor when frames have already been posed past
-    /// the stamp (<see cref="PlanAuthor.WheelNotch"/>).</summary>
+    /// the stamp (<see cref="PlanAuthor.WheelNotch"/>). Snap points never re-target a notch: the engine snaps FLINGS only (the
+    /// <c>SnapSpec</c> contract), so a notch over a snap grid travels exactly what it travels without one.</summary>
     public void Wheel(double tNotch, double notches)
     {
         if (_slots is null) return;
@@ -324,16 +356,11 @@ public sealed class ScrollHandle
         MotionFeel feel = ScrollTunables.Current;
         double floor = _shownFloorSec();
         double t0 = floor > tNotch ? floor : tNotch;
+        // Never snapped. A notch shorter than half a snap interval, re-targeted onto the NEAREST grid value, authored a
+        // zero-length plan back to where it started; that plan settles at once, so the next notch re-based instead of
+        // accumulating and a page shelf never moved however fast the wheel spun. A control that wants a wheel to REST on
+        // the grid re-snaps after the settle through the programmatic path (PagedShelf's post-settle re-snap).
         ScrollPlan next = PlanAuthor.WheelNotch(in prev, tNotch, notches, feel, ref _accel, floor);
-        if (!_snap.IsEmpty)
-        {
-            // Mandatory snap points: the notch's destination is re-targeted onto the grid in the notch's direction (WinUI
-            // ScrollView snap points), shaped by the same wheel segment rule from the same anchor.
-            double from = prev.Eval(t0, out _, out _);
-            double snapped = Math.Clamp(SnapTargets.Target(next.Dest, in _snap, impulse: false, from), next.Min, next.Max);
-            if (Math.Abs(snapped - next.Dest) > 1e-6)
-                next = next with { S0 = PlanAuthor.WheelSeg(in prev, t0, snapped, in feel) };
-        }
         Publish(in next, t0);
     }
 

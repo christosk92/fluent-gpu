@@ -97,13 +97,17 @@ internal sealed class FlipViewCore : Component
         var panOffset = UseRef(0f);
         var showButtons = UseSignal(false);      // m_showNavigationButtons — hidden by default
         var keepButtonsVisible = UseRef(false);  // m_keepNavigationButtonsVisible (pointer over a nav button)
-        var fadeDeadline = UseRef(0L);
-        var fadePending = UseSignal(false);
         var lastWheelTime = UseRef(0L);          // m_lastScrollWheelTime
         var lastWheelDelta = UseRef(0f);         // m_lastScrollWheelDelta
         var swipeAccum = UseRef(0f);             // accumulated hi-res axis travel toward the next flip
         var swipeLastMs = UseRef(0L);            // last hi-res packet time (a gap resets the accumulator)
         var swipeCooldownUntil = UseRef(0L);     // post-flip refractory deadline (inertia tail can't re-flip)
+        // The 3000ms fade-out timer (m_tpButtonsFadeOutTimer) as a host ONE-SHOT on the HostTimerQueue, never a per-frame
+        // countdown: while it runs nothing on screen changes, so it must not pin the loop at panel rate (the ToolTipClock
+        // rationale). Mount-once and armed at 0 so the mount fire lands on the first drain with the buttons already hidden
+        // (a no-op, the ScrollBar dwell idiom); every real arm is a generation-guarded RestartIn from ShowButtonsAndArmFade,
+        // so a hover move re-arms with no allocation and a superseded deadline can never hide the buttons.
+        var fadeTimer = UseTimeout(FadeButtons, 0f, DepKey.Empty);
 
         var p = props;
         int count = p?.Items.Count ?? 0;
@@ -172,12 +176,15 @@ internal sealed class FlipViewCore : Component
         void ShowButtonsAndArmFade()
         {
             showButtons.Value = true;
-            fadeDeadline.Value = Environment.TickCount64 + (long)ButtonsShowDurationMs;
-            fadePending.Value = true;
+            fadeTimer.RestartIn(ButtonsShowDurationMs);
         }
         void HideButtonsImmediately()
         {
-            fadePending.Value = false;
+            fadeTimer.Cancel();
+            FadeButtons();
+        }
+        void FadeButtons()
+        {
             if (!keepButtonsVisible.Value) showButtons.Value = false;   // pointer over a button keeps them (:1904-1908)
         }
 
@@ -185,6 +192,8 @@ internal sealed class FlipViewCore : Component
         //    (FlipView::OnPointerWheelChanged, FlipView_Partial.cpp:650-749). Generalized to the DOMINANT axis so a
         //    horizontal wheel / two-finger swipe (e.DeltaX) pages too, plus a hi-res accumulation path for the sub-notch
         //    packet stream that the dispatcher's no-scroller wheel fallback (InputDispatcher §A) now delivers.
+        //    Sign: WheelEventArgs is "positive = toward the content end" (wheel toward the user / tilt right), i.e. WinUI's
+        //    MouseWheelDelta negated, so WinUI's "delta < 0 = next" is "axis > 0 = next" here.
         void OnWheel(WheelEventArgs e)
         {
             if (e.Handled || count == 0) return;
@@ -206,7 +215,7 @@ internal sealed class FlipViewCore : Component
                 lastWheelTime.Value = now;
                 if (canFlip)
                 {
-                    bool moved = axis < 0f ? MoveNext() : MovePrevious();   // axis<0 = next (:719-726)
+                    bool moved = axis > 0f ? MoveNext() : MovePrevious();   // toward the content end = next (:719-726)
                     if (moved)
                     {
                         lastWheelDelta.Value = axis;
@@ -230,7 +239,7 @@ internal sealed class FlipViewCore : Component
             swipeAccum.Value += axis;
             if (MathF.Abs(swipeAccum.Value) >= SwipeFlipDip)
             {
-                bool moved = swipeAccum.Value < 0f ? MoveNext() : MovePrevious();
+                bool moved = swipeAccum.Value > 0f ? MoveNext() : MovePrevious();
                 swipeAccum.Value = 0f;
                 swipeCooldownUntil.Value = now + (long)SwipeCooldownMs;
                 if (moved) e.Handled = true;
@@ -324,6 +333,16 @@ internal sealed class FlipViewCore : Component
             }
         }
 
+        void CancelPan()   // the gesture died with no release (capture loss / window blur / touch cancel): commit nothing
+        {
+            if (!panning.Value) return;
+            panning.Value = false;
+            // PanMove pinned the strip with a hold keyframe and no OnClick will come, so spring back to the resting page
+            // from the live pan offset (no velocity projection — a lost contact is not a flick).
+            if (!stripRef.Value.IsNull)
+                Context.Anim?.Animate(stripRef.Value, ch, panOffset.Value, -cur * extent, Motion.ControlFast, Easing.FluentPopOpen);
+        }
+
         // ── Pointer presence: non-touch shows + re-arms the fade, touch hides immediately
         //    (OnPointerEntered/OnPointerMoved, FlipView_Partial.cpp:755-803).
         void OnPressed(PointerEventArgs pe)
@@ -384,9 +403,8 @@ internal sealed class FlipViewCore : Component
             };
         }
 
-        // ── Assembly: ZStack — item strip, then the conditional nav bars, then the invisible fade ticker.
+        // ── Assembly: ZStack — item strip, then the conditional nav bars.
         bool buttonsVisible = showButtons.Value;
-        bool fadeTicking = fadePending.Value;
 
         var items = p?.Items;
         var cells = new Element[count];
@@ -397,7 +415,7 @@ internal sealed class FlipViewCore : Component
 
         // Keyed children: the bars mount/unmount, and the strip must survive those diffs (it carries the live
         // translate track) — the keyed reconciler matches by key, never by position.
-        var children = new List<Element>(4)
+        var children = new List<Element>(3)
         {
             new BoxEl
             {
@@ -416,14 +434,6 @@ internal sealed class FlipViewCore : Component
             if (cur > 0) children.Add(NavBar(next: false) with { Key = "fv-prev" });
             if (cur < count - 1) children.Add(NavBar(next: true) with { Key = "fv-next" });
         }
-        if (fadeTicking)
-            // The 3000ms fade-out timer (m_tpButtonsFadeOutTimer), as the engine-idiomatic deadline ticker.
-            children.Add(Embed.Comp(() => new DebounceTicker
-            {
-                DeadlineMs = fadeDeadline,
-                Pending = fadePending,
-                Fire = HideButtonsImmediately,
-            }) with { Key = "fv-buttons-fade" });
 
         return new BoxEl
         {
@@ -447,6 +457,7 @@ internal sealed class FlipViewCore : Component
             // deterministic and unifies the touch commit on the arena's velocity.)
             DragYieldsToPan = true,
             OnClick = CommitPan,
+            OnDragCanceled = CancelPan,   // capture loss has no release edge — the strip must not stay between two pages
             OnFocusChanged = focused => { if (focused) ShowButtonsAndArmFade(); },   // keyboard focus shows buttons (:1471-1473)
             Children = children.ToArray(),
         };

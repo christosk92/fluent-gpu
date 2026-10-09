@@ -270,6 +270,15 @@ internal sealed class SceneRecordingContext
     private readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
     private int _publishedVideoRectCount;
 
+    // The vacated extent of a SPAN-LESS node (a top band: the drag ghost, connected overlays, the drag chip, and rootless
+    // orphans), indexed by node index. Those walks have no span table to recover a prior from, so each one stamps the
+    // window-space extent it presented at, with its generation and the host pass that wrote it. A slot is only trusted
+    // from the immediately preceding host pass (TryBandPriorExtent); anything else falls back to the forced-full repaint.
+    private RectF[] _bandPriorRect = [];
+    private uint[] _bandPriorGen = [];
+    private uint[] _bandPriorPass = [];
+    private uint _bandPass;
+
     // F070: the same turn's holes as the video placement must follow them (unclipped posed rect + the clip that cut it, per registry
     // token). Written by Record / Compose on the thread that records, read by that thread's present turn right after - the render
     // thread's VideoPlacementApplier moves the video by each hole's travel since the UI published, so it lands under the hole of
@@ -397,11 +406,16 @@ internal sealed class SceneRecordingContext
         // index). Self* = the pending slice-root walk the containing cut handed over (consumed by WalkCore).
         public SliceRecorder? Slices;
         /// <summary>How many enclosing <see cref="Walk"/> frames of the CURRENT arena are inside an additive subtree
-        /// (BoxEl.Blend). Saved and zeroed at every slice cut, restored after it.</summary>
+        /// (BoxEl.Blend). Saved at every slice cut and restored after it; zeroed for the cut's arena unless the cut carries
+        /// the bracket (<see cref="SelfAdditive"/>), which then counts as one.</summary>
         public int AdditiveDepth;
         public bool Slicing;
         public int CurSlot;
         public ulong CurGen, PriorGen;
+        /// <summary>The lineage of the walking node's prior bytes (<see cref="SpanTable.Relocation"/>): lets a clean
+        /// descendant copy out of the prior buffer although an earlier exact copy of an ancestor left its row on the retired
+        /// buffer it was recorded into. Set per walked node, restored when its walk returns.</summary>
+        public SpanReloc Reloc;
         public float CurDx, CurDy;
         public float SliceOwnDx, SliceOwnDy;
         // The composite clip (WINDOW space) of the current slice chain: a translation slice records under an unbounded
@@ -421,13 +435,17 @@ internal sealed class SceneRecordingContext
         // The pending slice-root walk carries its node's .StickyClip as a COMPOSITE-TIME clip on its marker
         // (CompositeSliceFlags.StickyClip): that walk leaves NodePaint.ClipRect out of every byte it records.
         public bool SelfStickyClip;
+        // The pending slice-root walk re-opens the additive bracket its cut fell inside (BoxEl.Blend): EnterSlice sets it
+        // for a cut that would record inside that bracket when folded inline, WalkCore emits the pair inside the root's span.
+        public bool SelfAdditive;
         // The walk records into slice arenas that composite through retained tiles (the host's pass — every band of it,
         // top bands included), as opposed to a standalone stream a backend replays whole (where an inline acrylic layer
         // composites at push time).
         public bool CompositeArenas;
-        // Open INLINE group layers (opacity / self-blur / edge fade, including a folded one) in the arena being written: a
-        // tile replay skips a child slice's marker, so an inline group wrapped around one would wrap NOTHING (the child
-        // composites unfaded / unblurred / unfeathered). While > 0 no slice is cut: everything records inline, poses baked.
+        // Open INLINE group layers (opacity / self-blur / edge fade, including a folded one) and stencil (path) clips in the
+        // arena being written: a tile replay skips a child slice's marker, so an inline group wrapped around one would wrap
+        // NOTHING (the child composites unfaded / unblurred / unfeathered) and a stencil clip would clip nothing (the child
+        // composites as its marker's rectangle). While > 0 no slice is cut: everything records inline, poses baked.
         public int InlineLayerDepth;
         public int KeepDenySlot;
 #pragma warning disable CS0649 // Retained AppHost settle-latch pair; softness made the increment a lie (always 0).
@@ -630,6 +648,17 @@ internal sealed class SceneRecordingContext
         // slice recorder (the host's), the scene records into the slice arenas and `dl` stays empty: the composite plan
         // (SliceRecorder.Place → BuildComposite) is what every backend consumes.
         bool standalone = slices is null;
+        if (!standalone)
+        {
+            _bandPass++;   // the pass that stamps the band slots this record writes (TryBandPriorExtent)
+            // Sized here, before the node walk, so StoreBandPriorExtent only indexes and never allocates mid-walk.
+            if (_bandPriorGen.Length < scene.Capacity)
+            {
+                Array.Resize(ref _bandPriorRect, scene.Capacity);
+                Array.Resize(ref _bandPriorGen, scene.Capacity);
+                Array.Resize(ref _bandPriorPass, scene.Capacity);
+            }
+        }
         slices ??= _ownSlices ??= new SliceRecorder();
         dl.Reset();
         if (scene.Root.IsNull) return default;
@@ -660,7 +689,9 @@ internal sealed class SceneRecordingContext
         // re-touches that band, so a region-aware repaint would freeze last frame's pixels there. The span table holds the
         // EXACT extent it presented at (halos folded in) under its pre-free (index, gen), in the space of the slice it was
         // recorded into — mapped into the window by that slice's offset; the scene's ledger holds the model rect as the
-        // fallback. Neither ⇒ the vacated band is unknown ⇒ full. Record is the ledger's only consumer, so it drains it here.
+        // fallback. Neither ⇒ the vacated band is unknown ⇒ full — unless the node was freed inside a collapsed or parked
+        // subtree: the walk never reaches it there, so it presents nothing now and its slice may have retired with it.
+        // Record is the ledger's only consumer, so it drains it here.
         var removals = scene.PendingRemovalExtents;
         if (scene.PendingRemovalOverflow) stats.Repaint.ForceFull(RepaintFullReason.StructuralInvalidation);
         for (int i = 0; i < removals.Length; i++)
@@ -673,14 +704,17 @@ internal sealed class SceneRecordingContext
                 int slot = spans!.SliceSlotOf(removals[i].NodeIndex, removals[i].Gen);
                 if (slices.TryPresentedDelta(slot, out float rdx, out float rdy))
                     stats.AddRepaintWindow(RepaintBand(SliceRecorder.Offset(in presented, rdx, rdy)));
-                else stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);
+                else if (!removals[i].Hidden) stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);
             }
             else if (!removals[i].ModelRect.IsEmpty)
                 stats.AddRepaintWindow(RepaintBand(removals[i].ModelRect, RepaintUnknownHaloDip));
-            else stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);   // never presented AND no model rect
+            else if (!removals[i].Hidden)
+                stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);   // never presented AND no model rect
         }
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
+        // A path-slab compaction moved every realization that the prior bytes' FillPath/StrokePath/PushStencilClip index.
+        if (spans is not null && spans.SyncPathSlab(PathRealizationCache.Shared.Generation)) disabledReasons |= SpanReuseDisabledReason.PathSlab;
         // PopupWindows/Overlays/Orphans/Detached are now SPATIALLY SCOPED (scene-memory.md): rather than killing span reuse
         // + the off-screen cull for the WHOLE tree while a flyout/fly/exit is in flight, we block ONLY the ancestor chains
         // of each special-cased visual (BlockSpecials below). The bits are still recorded for diagnostics; they no longer
@@ -712,7 +746,7 @@ internal sealed class SceneRecordingContext
         const SpanReuseDisabledReason GlobalReuseKill =
             SpanReuseDisabledReason.FirstRecord | SpanReuseDisabledReason.SceneChanged | SpanReuseDisabledReason.Layout |
             SpanReuseDisabledReason.Resize | SpanReuseDisabledReason.ModalPaint | SpanReuseDisabledReason.DragGhost |
-            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight;
+            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight | SpanReuseDisabledReason.PathSlab;
         bool spanReuseOff = spans is null || (disabledReasons & GlobalReuseKill) != 0;
         // The span STORE stays alive under EVERY reason, global ones included (blocked nodes self-gate via IsBlocked, so
         // the off-screen cull survives for the unblocked rest of the tree). A pass that stored nothing would leave every
@@ -871,6 +905,12 @@ internal sealed class SceneRecordingContext
         // still clearing the inner rail scissor so the cover isn't cut off). Its LocalTransform carries the animated fly
         // translate+scale (set by ConnectedAnimation); AbsoluteRect strips only the node's own bounds offset + translate.
         RectF overlayClip = scene.OverlayClip;
+        // The walk only CULLS against its clip argument (WalkCore treats it as the scissor already in effect and skips a
+        // node push equal to it), so a finite band clip is pushed here, as RecordDetachedNode brackets the detached fly:
+        // without it a cover straddling the region's edge drew whole over the sidebar / window chrome.
+        ulong overlayKey = (ulong)((1 << 16) | 1) << 32;
+        bool overlayClipped = overlayCount != 0 && !overlayClip.IsInfinite;
+        if (overlayClipped) rootDl.PushClip(overlayClip, overlayKey);
         for (int i = 0; i < overlayCount; i++)
         {
             var ov = scene.OverlayAt(i);
@@ -883,6 +923,7 @@ internal sealed class SceneRecordingContext
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
         }
+        if (overlayClipped) rootDl.PopClip(overlayKey);
         // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
         // AFTER the connected-animation overlays, so the drag chip is the topmost thing in the frame. Unclipped, at
         // parent opacity 1 (the chip owns its own alpha), with the popup skipRoots threaded like every other band.
@@ -1188,11 +1229,28 @@ internal sealed class SceneRecordingContext
             ref readonly NodePaint cp = ref scene.Paint(c);
             if (cp.VisualKind != VisualKind.Box) continue;
             if (cp.Fill.A < 1f || cp.Opacity < 1f) continue;     // must paint FULLY opaque to overwrite
+            // ...and stay opaque under the pointer: a hover/press opacity (eased by its own or an ancestor's progress, or
+            // stepped by the bare Hovered/Pressed flags) or a translucent hover/press fill lets the parent show through.
+            // Static props, so the cull never depends on a hover flip that does not re-record this parent.
+            if (cp.HoverOpacity < 1f || cp.PressedOpacity < 1f) continue;   // NaN (unset) compares false
+            if ((cp.HoverFill.A is > 0f and < 1f) || (cp.PressedFill.A is > 0f and < 1f)) continue;
             // Fill is the BrushTransition TARGET: mid-fade the child draws LerpLinear(FillFrom, Fill, T), which is not the
             // opaque cover its target claims — culling the parent then would show a hole for the whole fade.
             if ((cf & NodeFlags.SparsePaint) != 0 && scene.TryGetBrushAnim(c, out var cba)
                 && (cba.Channels & BrushAnim.FillBit) != 0 && cba.T < 1f) continue;
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
+            // A clip-rect (an AnimChannel.ClipL/T/R/B reveal, a .StickyClip pose, a collapse cut) is pushed BEFORE the
+            // child's own fill, so it scissors that fill too: the child covers only the clipped part of its bounds. A
+            // sticky clip is a pose written without a re-record, so it is rejected even while it reads released.
+            if (!cp.ClipRect.IsInfinite) continue;
+            if (slices is not null && slices.IsStickyClipNode((int)c.Raw.Index)) continue;
+            // A fill that does not REPLACE the pixels under it needs the parent's fill beneath it: additive paint adds onto
+            // it, a Screen boundary screens onto it, an acrylic surface frosts it (and drops its Fallback fill where the
+            // layer runs), an edge fade feathers it to transparent along its edges.
+            if ((cf & NodeFlags.SparsePaint) != 0
+                && (scene.PaintBlendOf(c) != PaintBlend.SrcOver || scene.LayerBlendOf(c) != LayerBlend.SrcOver
+                    || scene.TryGetAcrylic(c, out _) || (scene.TryGetEdgeFade(c, out EdgeFadeSpec cef) && !cef.IsNone)))
+                continue;
             if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
             // Rounded opaque children may occlude if the VISIBLE rect lies inside the child's bounds deflated by each
@@ -1246,8 +1304,9 @@ internal sealed class SceneRecordingContext
             markersBefore = dl.OpcodeStats.CompositeSlice;
         }
         // BoxEl.Blend: an additive subtree is bracketed by a balanced SetBlend pair INSIDE this node's span-index entry, so a
-        // clean-span copy carries both ends. Nested additive subtrees emit nothing (depth-counted, per arena: a slice cut
-        // starts its own arena at depth 0, so the bracket never reaches across a RepaintBoundary).
+        // clean-span copy carries both ends. Nested additive subtrees emit nothing (depth-counted, per arena: a repaint
+        // boundary starts its own arena at depth 0, so the bracket never reaches across it; a cut that can fold back
+        // inline re-opens the bracket in its own arena, see EnterSlice).
         bool additive = scene.PaintBlendOf(node) == PaintBlend.Additive;
         bool opened = additive && stats.AdditiveDepth++ == 0;
         if (opened) dl.SetBlend(PaintBlend.Additive);
@@ -1299,14 +1358,19 @@ internal sealed class SceneRecordingContext
         stats.AdditiveDepth = c.AdditiveDepth;
     }
 
-    private static void EnterSlice(ref RecordAccumulator stats, SliceRecorder sl, int slot, float ownDx, float ownDy)
+    private static void EnterSlice(ref RecordAccumulator stats, SliceRecorder sl, int slot, float ownDx, float ownDy,
+        bool carryAdditive = false)
     {
         stats.CurSlot = slot;
         stats.CurDx += ownDx; stats.CurDy += ownDy;
         stats.SliceOwnDx = ownDx; stats.SliceOwnDy = ownDy;
         stats.SliceDepth = 0;
         stats.GeomCovered = false;
-        stats.AdditiveDepth = 0;   // a child arena opens its own SetBlend brackets
+        // A child arena opens its own SetBlend brackets. A cut that records inline once the effect budget is spent (or
+        // inside an inline group layer) would paint inside an open additive bracket there, so it re-opens that bracket
+        // in its own walk: cut or folded, the subtree adds light alike. A repaint boundary starts source-over.
+        stats.SelfAdditive = carryAdditive && stats.AdditiveDepth > 0;
+        stats.AdditiveDepth = stats.SelfAdditive ? 1 : 0;
         stats.CurGen = sl.CurGen(slot);
         stats.PriorGen = sl.PriorGen(slot);
     }
@@ -1417,7 +1481,7 @@ internal sealed class SceneRecordingContext
         stats.SelfPose = pose;
         stats.SelfAcrylic = false;
         stats.SelfStickyClip = false;   // a translation root's sticky clip (a nonsensical .Sticky().StickyClip()) records baked
-        EnterSlice(ref stats, sl, slot, ownDx, ownDy);
+        EnterSlice(ref stats, sl, slot, ownDx, ownDy, carryAdditive: true);
         SpanRecordResult res;
         try
         {
@@ -1453,7 +1517,7 @@ internal sealed class SceneRecordingContext
         // records into the slice's own arena — KEPT whole when its root is clean (zero bytes), else swapped + walked.
         bool isSliceSelf = !stats.SelfNode.IsNull && stats.SelfNode == node;
         int selfSlot = -1;
-        bool selfHasLocal = false, omitLayer = false, acrylicCut = false, selfSticky = false;
+        bool selfHasLocal = false, omitLayer = false, acrylicCut = false, selfSticky = false, selfAdditive = false;
         Affine2D selfLocal = default;
         SliceRecorder.PoseKind selfPose = SliceRecorder.PoseKind.None;
         if (isSliceSelf)
@@ -1465,9 +1529,11 @@ internal sealed class SceneRecordingContext
             selfPose = stats.SelfPose;
             acrylicCut = stats.SelfAcrylic;
             selfSticky = stats.SelfStickyClip;
+            selfAdditive = stats.SelfAdditive;
             stats.SelfNode = NodeHandle.Null;
             stats.SelfAcrylic = false;
             stats.SelfStickyClip = false;
+            stats.SelfAdditive = false;
         }
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
@@ -1713,11 +1779,17 @@ internal sealed class SceneRecordingContext
                         default, group ? groupLayer : default, new ClipCmd(groupSourceClip), deviceBounds, key, key);
                     if (selfLayerCut)
                     {
-                        // This slice's stream is the Layer marker alone: KEEP it whole when nothing below changed and the
-                        // marker is the one it already holds (else swap its arena and write the marker afresh).
+                        // This slice's stream is the Layer marker alone: KEEP it whole when nothing below changed, the
+                        // marker is the one it already holds AND the Layer's content was recorded under the same inputs (else
+                        // swap its arena and write the marker afresh). The marker carries no opacity for a bare acrylic and
+                        // no inherited state / focus / text-edit / scroll colours for any layer, and record-dirty only rises:
+                        // a parent's fade, hover or theme reaches this clean subtree only through the span input signature.
+                        ulong layerSig = ComputeSpanInputSig(scene, node, flags, depth, in clip, in world, opacity,
+                            parentScaleX, parentScaleY, childScaleX, childScaleY, pw, ph, inMotion, inherited, in focus, in textEdit,
+                            scrollThumb, scrollTrack, clipComposite: stickyCut);
                         bool clean = spans is not null && !spanReuseDisabled && scene.RecordDirtyBits(node) == 0
                             && !spans.IsBlocked((int)node.Raw.Index, spanFrame) && stats.KeepDenySlot != selfSlot;
-                        if (clean && sl.HoldsOnlyMarker(selfSlot, in cmd))
+                        if (clean && sl.HoldsOnlyMarker(selfSlot, in cmd, layerSig))
                         {
                             sl.Keep(selfSlot);
                             stats.NodesVisited--;
@@ -1731,6 +1803,7 @@ internal sealed class SceneRecordingContext
                             spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame), scene.RecordDirtyBits(node),
                             stats.KeepDenySlot == selfSlot, selfSlot == SliceRecorder.RootSlot, missClass: 2, wholeArena: true, out uint lwhyDetail);
                         sl.BeginWalk(selfSlot, lwhy, lwhyDetail);
+                        sl.SetLayerInputSig(selfSlot, layerSig);
                         stats.CurGen = sl.CurGen(selfSlot);
                         stats.PriorGen = sl.PriorGen(selfSlot);
                     }
@@ -1751,7 +1824,7 @@ internal sealed class SceneRecordingContext
                     stats.SelfPose = SliceRecorder.PoseKind.None;
                     stats.SelfAcrylic = isAcrylic;
                     stats.SelfStickyClip = stickyCut;
-                    EnterSlice(ref stats, sl, slot, 0f, 0f);
+                    EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: true);
                     SpanRecordResult res;
                     try
                     {
@@ -1840,7 +1913,7 @@ internal sealed class SceneRecordingContext
                 stats.SelfPose = posed ? SliceRecorder.PoseKind.Posed : SliceRecorder.PoseKind.None;
                 stats.SelfAcrylic = false;
                 stats.SelfStickyClip = stickyCut;
-                EnterSlice(ref stats, sl, slot, 0f, 0f);
+                EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: stickyCut);
                 SpanRecordResult res;
                 try
                 {
@@ -1883,6 +1956,7 @@ internal sealed class SceneRecordingContext
         // so its stored bytes could be stale. Deny reuse AND skip the store (the not-store-while-blocked safety property) —
         // its children that are NOT on a blocked chain still reuse/store normally, so only the chain re-records.
         bool blocked = spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame);
+        SpanReloc parentReloc = stats.Reloc;
         bool spanTracking = spans is not null && spanStoreEnabled && !blocked;
         if (spans is not null)
         {
@@ -1962,7 +2036,7 @@ internal sealed class SceneRecordingContext
             // signature (world, clip, opacity, inherited state, viewport chrome…). A span carrying child slice markers is
             // copied only when every one of those slices can be kept (they are re-registered in stream order).
             else if (!spanReuseDisabled && !blocked && recordDirtyBits == 0
-                && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, spanInputSig, out var span)
+                && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, stats.CurSlot, in parentReloc, spanInputSig, out var span)
                 && span.ClipComplete
                 && IsClipComplete(span.SubtreeBounds, in clip)
                 && dl.CanCopyPriorSpan(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount)
@@ -1979,6 +2053,8 @@ internal sealed class SceneRecordingContext
                 if (stats.Slicing && stats.SliceDepth >= 0 && stats.SliceDepth < SliceRecorder.SpanIndexDepth)
                     stats.Slices!.CopyIndexFromPrior(stats.CurSlot, span.ByteStart, span.ByteLength, span.SortStart,
                         copiedByteStart, copiedSortStart, stats.SliceDepth);
+                // …and the baked poses inside it: their nodes are not walked, but their bytes still need watching
+                if (stats.Slicing) stats.Slices!.CopyBakedFromPrior(stats.CurSlot, span.ByteStart, span.ByteLength, copiedByteStart);
                 var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world };
                 spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, in currentSpan, stats.CurGen, stats.CurSlot);
                 stats.SpansReused++;
@@ -1993,13 +2069,16 @@ internal sealed class SceneRecordingContext
             // attribute WHY, and only for a span that already missed reuse.
             if (!spanReuseDisabled && !blocked && recordDirtyBits == 0 && !isSliceSelf)
             {
-                if (!spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, spanInputSig, out var exactMiss))
+                if (!spans.TryGet((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, stats.CurSlot, in parentReloc, spanInputSig, out var exactMiss))
                     stats.SpanMissExactKey++;
                 else if (!exactMiss.ClipComplete || !IsClipComplete(exactMiss.SubtreeBounds, in clip))
                     stats.SpanMissExactClip++;
                 else if (!dl.CanCopyPriorSpan(exactMiss.ByteStart, exactMiss.ByteLength, exactMiss.SortStart, exactMiss.SortCount))
                     stats.SpanMissExactCapacity++;
             }
+
+            // This node re-records: its children copy out of the bytes it held, wherever an earlier exact copy put them.
+            stats.Reloc = spans.Relocation((int)node.Raw.Index, node.Raw.Gen, stats.PriorGen, stats.CurSlot, in parentReloc);
 
             if (spanTracking)
             {
@@ -2016,6 +2095,9 @@ internal sealed class SceneRecordingContext
             stats.CurGen = sl.CurGen(selfSlot);
             stats.PriorGen = sl.PriorGen(selfSlot);
         }
+        // The additive bracket a carrying cut re-opens (EnterSlice): inside the root's span, so a kept arena holds both ends
+        // (the carried depth is already in the span signature).
+        if (selfAdditive) dl.SetBlend(PaintBlend.Additive);
 
         // -- Geometry damage decision (retained tiles) --
         // A node that re-records WITHOUT a paint change of its own (clean itself, or only layout / structure dirty) damages
@@ -2182,6 +2264,9 @@ internal sealed class SceneRecordingContext
                     dl.PushStencilClip(childClip, cfr, (byte)cps.Rule, clipWorld, key);
                     pushedClip = true; pushedStencil = true;
                     stencilClipRef = cfr; stencilClipWorld = clipWorld;
+                    // A child slice's marker carries only rectangular / rounded clips to the composite: cut inside the
+                    // scope it would composite as the silhouette's AABB. Nothing below is cut (see InlineLayerDepth).
+                    stats.InlineLayerDepth++;
                 }
             }
         }
@@ -2254,8 +2339,11 @@ internal sealed class SceneRecordingContext
         bool drawSelf = hasOwnVisual && ownVisible;
         // Occlusion cull (always on): drop this node's own fill when a later opaque square child fully covers it. Only when
         // the node has NO border — the SDF border ring straddles the edge (extends ~stroke/2 OUTSIDE deviceBounds), which a
-        // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe.
-        if (drawSelf && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f
+        // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe. Never inside
+        // an additive bracket (this node's own Blend or an enclosing one in this arena): its children ADD onto its fill.
+        // Never under a partial NON-group opacity (its own, e.g. an Enter fade, or inherited): the child then draws at that
+        // same alpha, so it no longer overwrites the fill beneath it (a group has already reset `opacity` to 1 here).
+        if (drawSelf && opacity >= 0.999f && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f && stats.AdditiveDepth == 0
             && IsOccludedByOpaqueChild(scene, node, in world, p.ChildShiftX, p.ChildShiftY, in deviceBounds, in recordClip, inMotion,
                 stats.Slicing ? stats.Slices : null))
             drawSelf = false;
@@ -2557,6 +2645,8 @@ internal sealed class SceneRecordingContext
                 // node's image fades in over it on the SAME window with a transparent placeholder — a dissolve between
                 // two real pictures, never a placeholder frame. Both draws bake the window, so a reused span keeps
                 // animating against the replay clock and the outgoing resolves to nothing once the window has passed.
+                // A cut (the SAME picture at another decode size) keeps the outgoing under it the same way, with no fade-in:
+                // the incoming draws at once wherever its pixels are drawable, and lets the held picture show where not yet.
                 if (ready && images is not null && effects.SwapOutgoingId != 0 && effects.SwapMs > 0f
                     && images.StateOf(new ImageHandle(effects.SwapOutgoingId)) == ImageState.Ready)
                 {
@@ -2567,9 +2657,12 @@ internal sealed class SceneRecordingContext
                         effects.SwapMs, ImageCache.SwapOutgoingEasing, key | 0x1, effects.Overlay, (int)mask.Edges,
                         mask.BandLeft, mask.BandTop, mask.BandRight, mask.BandBottom, (int)mask.Falloff, mask.Intensity,
                         saturation);
-                    fadeStart = effects.SwapStartMs;
-                    fadeDur = effects.SwapMs;
-                    fadeEase = (int)ImageCache.SwapCrossfadeEasing;
+                    if (!effects.SwapCut)
+                    {
+                        fadeStart = effects.SwapStartMs;
+                        fadeDur = effects.SwapMs;
+                        fadeEase = (int)ImageCache.SwapCrossfadeEasing;
+                    }
                     placeholder = default;
                 }
                 dl.DrawImage(drawRect, p.Corners, imageId, ready, placeholder, world, opacity, uv, fadeStart, fadeDur,
@@ -2805,12 +2898,15 @@ internal sealed class SceneRecordingContext
                 dl.PushClip(itemBandClipInline, key);
                 if (contentSlice) stats.Slices!.MarkPoseLocked(selfSlot);
             }
+            // The exiting rows record into THIS stream, so they cull and build their nested clips against the band line in
+            // the stream's own (pose-free) space: a clipping row's push replaces the band scissor, and the viewport-space
+            // line sits SliceOwnDy away from it (above it on a list scrolled down: the row painted over the sticky header).
             for (int i = 0; i < exitingChildren.Count; i++)
             {
                 var exiting = exitingChildren[i];
                 if (!scene.IsLive(exiting)) continue;
                 var exitResult = Walk(scene, dl, images, exiting, childWorld, opacity, depth + 1,
-                    hasItemBand ? itemBandClip : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    hasItemBand ? itemBandClipInline : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(exitResult);
             }
@@ -2907,11 +3003,13 @@ internal sealed class SceneRecordingContext
                 }
                 int ordinal = childOrdinal;
                 // The band's viewport-fixed clip culls a suffix row only where it is RECORDED with the rows: inline (the
-                // slice is then pose-locked, so the record pose is the present pose). A band SLICE carries that clip on
-                // its marker and the composite applies it at the live pose, while the rows' recording is reused at every
-                // pose inside coverage — culling them against the record-time line lost every row whose content-local
-                // top sat above it (the rows above a re-centred arrange origin: RCA 2026-09-25 G, the blank playlist).
-                RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClip : childClip;
+                // slice is then pose-locked, so the record-time offset is the present one), as the line in the stream's
+                // own space (itemBandClipInline: pose-locking freezes SliceOwnDy, it does not make it 0). A band SLICE
+                // carries that clip on its marker and the composite applies it at the live pose, while the rows' recording
+                // is reused at every pose inside coverage — culling them against the record-time line lost every row whose
+                // content-local top sat above it (the rows above a re-centred arrange origin: RCA 2026-09-25 G, the blank
+                // playlist).
+                RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix && bandSlot < 0 ? itemBandClipInline : childClip;
                 Affine2D activeChildWorld = childWorld;
                 bool flowScissor = false;
                 if (flow.Active)
@@ -3031,14 +3129,6 @@ internal sealed class SceneRecordingContext
                         pinnedShift = pinnedFlow.Step(pinnedOrdinal, scene.Bounds(c).Y, scene.Paint(c).FlowDelta, out pinnedClipTop, out pinnedClipBottom);
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
                     {
-                        RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
-                        Affine2D pinnedWorld = childWorld;
-                        if (pinnedShift != 0f) pinnedWorld = pinnedWorld.Translate(0f, pinnedShift);
-                        RectF pinnedUnclipped = pinnedClip;
-                        if (!float.IsNaN(pinnedClipTop))
-                            pinnedClip = pinnedClip.Intersect(childWorld.TransformBounds(new RectF(0f, pinnedClipTop,
-                                MathF.Max(1f, scene.Bounds(node).W), MathF.Max(0f, pinnedClipBottom - pinnedClipTop))));
-                        bool pinnedScissor = pinnedClip != pinnedUnclipped && !pinnedClip.IsEmpty;   // as in the main loop: glyphs need the scissor
                         if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed && pinnedSlot < 0
                             && itemBandClipChanged && !itemBandClip.IsEmpty)
                         {
@@ -3065,6 +3155,17 @@ internal sealed class SceneRecordingContext
                                 pinnedBandPushed = true;
                             }
                         }
+                        // Like the band rows: a PinnedBand slice carries the band line on its marker at the live pose, so its rows
+                        // walk under the incoming clip; recorded inline (pose-locked) they cull and nest their clips against the
+                        // line in the stream's own space (the viewport-space line sits SliceOwnDy away from it).
+                        RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix && pinnedSlot < 0 ? itemBandClipInline : childClip;
+                        Affine2D pinnedWorld = childWorld;
+                        if (pinnedShift != 0f) pinnedWorld = pinnedWorld.Translate(0f, pinnedShift);
+                        RectF pinnedUnclipped = pinnedClip;
+                        if (!float.IsNaN(pinnedClipTop))
+                            pinnedClip = pinnedClip.Intersect(childWorld.TransformBounds(new RectF(0f, pinnedClipTop,
+                                MathF.Max(1f, scene.Bounds(node).W), MathF.Max(0f, pinnedClipBottom - pinnedClipTop))));
+                        bool pinnedScissor = pinnedClip != pinnedUnclipped && !pinnedClip.IsEmpty;   // as in the main loop: glyphs need the scissor
                         if (pinnedClip.IsEmpty) continue;
                         if (pinnedScissor) childDl.PushClip(pinnedClip, key);
                         var childResult = Walk(scene, childDl, images, c, pinnedWorld, opacity, depth + 1,
@@ -3103,7 +3204,7 @@ internal sealed class SceneRecordingContext
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip)
         {
-            if (pushedStencil) dl.PopStencilClip(childClip, stencilClipRef, stencilClipWorld, key);
+            if (pushedStencil) { dl.PopStencilClip(childClip, stencilClipRef, stencilClipWorld, key); stats.InlineLayerDepth--; }
             else dl.PopClip(key);
         }
 
@@ -3210,14 +3311,14 @@ internal sealed class SceneRecordingContext
             {
                 // The card was parked in its own slice's space (a scrolled shelf's content). Re-base it into this one at
                 // the RECORD-time offset between the two, and pin the slices in between to it: a later move of that
-                // content re-records this hoist instead of compositing it (retained tiles: pose-locked).
+                // content re-records this hoist instead of compositing it (retained tiles: pose-locked). The pin holds
+                // at a ZERO offset too (a shelf resting at page 0): the lock compares the slice's live offset with the
+                // recorded one, so the first pan still re-records rather than sliding the row out from under the card.
                 Affine2D hw = stats.PendingElevateWorld;
                 float rdx = stats.PendingElevateDx - stats.CurDx, rdy = stats.PendingElevateDy - stats.CurDy;
                 if (rdx != 0f || rdy != 0f)
-                {
                     hw = new Affine2D(hw.M11, hw.M12, hw.M21, hw.M22, hw.Dx + rdx, hw.Dy + rdy);
-                    stats.Slices?.MarkPoseLockedChain(stats.PendingElevateSlot, stats.CurSlot);
-                }
+                stats.Slices?.MarkPoseLockedChain(stats.PendingElevateSlot, stats.CurSlot);
                 var hoistResult = Walk(scene, dl, images, hoist, hw, stats.PendingElevateOpacity,
                     stats.PendingElevateDepth, hoistClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
@@ -3263,11 +3364,16 @@ internal sealed class SceneRecordingContext
                 {
                     stats.AddRepaint(RepaintBand(result.SubtreeBounds, blurHalo));
                     // old ∪ new: the band the node VACATED repaints too. A brand-new node never presented, so its current
-                    // extent is the whole truth. With no span table at all there is no prior to recover and a move leaves
-                    // an unknown vacated band ⇒ full.
+                    // extent is the whole truth. With a span table the prior comes from there. A span-less node (a top band:
+                    // drag ghost, connected overlays, drag chip) takes it from its band slot, stamped by the host pass it
+                    // presented at. It must be repainted EXPLICITLY: a transparent root has nothing under the band to
+                    // re-raster, so the tiles it left do not carry the vacated pixels into the Present set. No trusted
+                    // prior (a first presentation, or not walked last pass) ⇒ the move is unknown ⇒ full.
                     if (spans is null)
                     {
-                        if (movedNode) stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
+                        if (stats.CompositeArenas && TryBandPriorExtent((int)node.Raw.Index, node.Raw.Gen, out RectF bandPrior))
+                            stats.AddRepaintWindow(RepaintBand(in bandPrior, blurHalo));
+                        else if (movedNode) stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
                     }
                     else if (spans.TryGetPriorExtent((int)node.Raw.Index, node.Raw.Gen, spanFrame, out RectF priorExtent, out _))
                     {
@@ -3279,6 +3385,13 @@ internal sealed class SceneRecordingContext
                 }
             }
         }
+
+        // A span-less composite walk stamps the extent it presented at for the next pass's vacated band. Stored after the
+        // repaint block above, which reads the previous extent first; an empty extent when nothing was drawn.
+        if (spans is null && stats.CompositeArenas)
+            StoreBandPriorExtent(node, result.HasBounds ? result.SubtreeBounds : default);
+
+        if (selfAdditive) dl.SetBlend(PaintBlend.SrcOver);
 
         if (spanTracking)
         {
@@ -3297,8 +3410,34 @@ internal sealed class SceneRecordingContext
             stats.SpansReRecorded++;
         }
         if (isSliceSelf) stats.Slices!.EndWalk(selfSlot, result.HasBounds ? result.SubtreeBounds : default);
+        stats.Reloc = parentReloc;
 
         return result;
+    }
+
+    /// <summary>The window-space extent a span-less node presented at on the last host pass that walked it, for the repaint of
+    /// the band it vacated. Trusted only from the IMMEDIATELY preceding host pass: a node not walked there was not presented
+    /// there, so the caller falls back to the forced-full repaint.</summary>
+    private bool TryBandPriorExtent(int nodeIndex, uint gen, out RectF prior)
+    {
+        prior = default;
+        if ((uint)nodeIndex >= (uint)_bandPriorGen.Length) return false;
+        uint stamp = _bandPriorPass[nodeIndex];
+        if (stamp == 0 || stamp + 1 != _bandPass || _bandPriorGen[nodeIndex] != gen) return false;
+        prior = _bandPriorRect[nodeIndex];
+        return true;
+    }
+
+    /// <summary>Stamps the extent a span-less node presented at during this host pass (empty when it drew nothing).</summary>
+    private void StoreBandPriorExtent(NodeHandle node, in RectF extent)
+    {
+        int nodeIndex = (int)node.Raw.Index;
+        // Sized by Record before the walk; an index past it is left unstamped, so TryBandPriorExtent falls back to the
+        // forced-full repaint rather than allocating here.
+        if ((uint)nodeIndex >= (uint)_bandPriorGen.Length) return;
+        _bandPriorRect[nodeIndex] = extent;
+        _bandPriorGen[nodeIndex] = node.Raw.Gen;
+        _bandPriorPass[nodeIndex] = _bandPass;
     }
 
     private static void CountGroups(ref RecordAccumulator stats, bool edgeFade, bool blurCandidate, bool blurGroup)

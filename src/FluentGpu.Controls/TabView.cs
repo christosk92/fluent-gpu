@@ -22,7 +22,9 @@ public enum TabViewCloseButtonOverlayMode : byte { Auto = 0, OnPointerOver = 1, 
 /// in the content area while this tab is selected.</summary>
 public sealed record TabViewItem
 {
-    /// <summary>Stable reconciliation identity for hosts whose collection can reorder. Null falls back to the item index.</summary>
+    /// <summary>Stable identity of this tab's <see cref="Content"/>: selecting a tab with a different identity remounts
+    /// the content (a fresh instance and fresh state), and the same tab across re-renders and reorders updates in place.
+    /// Null falls back to this <see cref="TabViewItem"/> instance (reference identity, not record equality).</summary>
     public string? Key { get; init; }
     public string Header { get; init; } = "";
     /// <summary>Segoe Fluent Icons glyph (the IconSource analog): 16px, 10px right margin, foreground follows the
@@ -167,6 +169,10 @@ public sealed class TabView : Component
         // The control-owned live collection (WinUI TabItems, TabView.idl:135) — seeded once, mutated by
         // close/add/reorder; the version signal re-renders consumers of the mutation.
         var list = UseMemo(SeedItems, DepKey.Empty);
+        // Content identity for tabs without an author Key (see ContentKey): a control-assigned id per TabViewItem
+        // REFERENCE. Reference identity, not record equality: two look-alike tabs are still two tabs.
+        var contentIds = UseMemo(() => new Dictionary<TabViewItem, string>(ReferenceEqualityComparer.Instance), DepKey.Empty);
+        var nextContentId = UseRef(0);
         var itemsVersion = UseSignal(0);
         int version = itemsVersion.Value;   // subscribe
 
@@ -342,6 +348,7 @@ public sealed class TabView : Component
             OnTabCloseRequested?.Invoke(idx);   // TabCloseRequested first (RequestCloseTab, TabView.cpp:1017)
             // The collection is control-owned (WinUI TabItems): WinUI's handler removes; here the control commits
             // the removal itself so closing works without app wiring.
+            contentIds.Remove(list[idx]);   // a closed tab's id (and the Content closure its item holds) is not kept alive
             list.RemoveAt(idx);
             int s = selSig.Peek();
             if (list.Count > 0)
@@ -830,7 +837,18 @@ public sealed class TabView : Component
 
         // ── content (TabContentPresenter, TabView.xaml:45) ───────────────────────────────────────────────────────
 
-        Element? body = sel >= 0 ? list[sel].Content?.Invoke() : null;
+        // The body is KEYED by its tab. The content slot pairs old and new children by key, so selecting (or closing into)
+        // a different tab REMOUNTS its content. Unkeyed, a same-type body (an editor component per tab) paired by
+        // position and updated in place: the new tab showed the previous tab's instance and state, and its own factory
+        // never ran. The same tab keeps its key across re-renders and reorders (the selection follows its tab), so it updates.
+        string ContentKey(TabViewItem it)
+        {
+            if (it.Key is { } k) return "key:" + k;   // author identity, prefixed so it never equals a generated id
+            if (!contentIds.TryGetValue(it, out var id)) contentIds[it] = id = "#" + nextContentId.Value++;
+            return id;
+        }
+        Element? body = null;
+        if (sel >= 0 && list[sel].Content is { } make) body = make() with { Key = ContentKey(list[sel]) };
         var content = new BoxEl
         {
             Grow = 1f,

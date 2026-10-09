@@ -331,6 +331,15 @@ public sealed class DatePicker : Component
             int month = Math.Clamp(tentMonth, 0, 11) + 1;
             int daysInMonth = DateTime.DaysInMonth(year, month);
 
+            // A month/year spin can strand the tentative day past the new month's end (Jan 31 → February): clamp it so the
+            // highlighted day is the one Accept commits (WinUI re-clamps its day selector the same way). Eager, so the write
+            // drains in the same flush as the month change — no frame shows the stranded day.
+            UseSignalEffect(() =>
+            {
+                int max = DateTime.DaysInMonth(FirstYear + Math.Clamp(TentYear.Value, 0, YearCount - 1), Math.Clamp(TentMonth.Value, 0, 11) + 1);
+                if (TentDay.Peek() >= max) TentDay.Value = max - 1;
+            });
+
             // Build the option lists.
             var days = new string[daysInMonth];
             for (int i = 0; i < daysInMonth; i++) days[i] = (i + 1).ToString(CultureInfo.CurrentCulture);
@@ -488,7 +497,9 @@ internal sealed class DateTimeLoopColumn : Component
     public static Element Create(string[] options, Signal<int> tentative, FlexJustify align, float weight,
                                  Action<NodeHandle>? onRealized = null, Action<int>? onMoveColumn = null,
                                  Action? onCommit = null)
-        => Embed.Comp(() => new DateTimeLoopColumn
+        // The option list rides the props channel: a reused column never re-runs this factory, so the field alone froze
+        // the list at mount (the DatePicker day column must follow the spun month's 28–31 days live).
+        => Embed.Comp(options, () => new DateTimeLoopColumn
         {
             Options = options, Tentative = tentative, Align = align, Weight = weight,
             OnColumnRealized = onRealized, OnMoveColumn = onMoveColumn, OnCommit = onCommit,
@@ -496,7 +507,9 @@ internal sealed class DateTimeLoopColumn : Component
 
     public override Element Render()
     {
-        int n = Options.Length;
+        // The live option list (re-pushed by Create); the frozen field is the fallback for a direct propless mount.
+        var options = UsePropsOrDefault<string[]>() ?? Options;
+        int n = options.Length;
         if (n == 0) return new BoxEl { Grow = Weight };
 
         int sel = ((Tentative.Value % n) + n) % n;   // subscribe + normalize
@@ -542,7 +555,7 @@ internal sealed class DateTimeLoopColumn : Component
                         OnHoverMove = hoverOn, OnPointerExit = hoverOff,
                         Children =
                         [
-                            new TextEl(Options[idx])
+                            new TextEl(options[idx])
                             {
                                 Size = 14f,
                                 Color = isCenter ? Tok.TextOnAccentPrimary : Tok.TextPrimary,

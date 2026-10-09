@@ -6,7 +6,7 @@ using FluentGpu.Signals;
 namespace FluentGpu.Reconciler;
 
 // P1 (Operation ultra-fast GPU engine, layout.md §4.7): Element.Visible : Prop<bool> — the presence channel. Two
-// writers feed the SAME scene-level state (SceneStore._aux.Collapsed, mirrored onto NodeFlags.Visible|HitTestVisible):
+// writers feed the SAME scene-level state (SceneStore._aux.Collapsed, mirrored onto NodeFlags.Visible; HitTestVisible stays the element's own):
 //   • WriteColumns' generic (every-element-type) section calls ApplyPresenceStatic for an UNBOUND Visible — equality-
 //     gated via SceneStore.SetCollapsedIfChanged so an identical re-render marks nothing (gate.hooks.layout-dirty-
 //     identical-tree stays green).
@@ -50,6 +50,7 @@ public sealed partial class TreeReconciler
             NodeBindingWriteCount++;
             _scene.SetCollapsed(node, nowCollapsed);
             SetSubtreeHidden(node, nowCollapsed);
+            RemirrorAncestors(node);   // a component's root (or a bound anchor): the boundary above leaves/rejoins flow too
             // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
             // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
             // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
@@ -57,7 +58,7 @@ public sealed partial class TreeReconciler
             if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion
                 && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
             {
-                anim.SeedEnter(node, dt.Enter, dt);
+                anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
                 if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
                 else if (dt.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
             }
@@ -70,8 +71,19 @@ public sealed partial class TreeReconciler
     /// presence collapse pauses timers (<c>UseInterval</c>, which already gates on <c>UseIsActive()</c>) WITHOUT
     /// suspending the component's own re-renders, unlike KeepAlive parking. <c>UseTimeout</c>/<c>UseKeyframes</c>
     /// have no active-gating at all today (neither for Parked nor Hidden) — see the P1 progress notes for that
-    /// follow-up.</summary>
+    /// follow-up. A reveal only clears Hidden where no collapsed node remains on the chain: it is a no-op under a
+    /// still-collapsed ancestor and skips nested collapsed subtrees.</summary>
     private void SetSubtreeHidden(NodeHandle node, bool hidden)
+    {
+        // Hidden means "some node on my ancestor chain is collapsed", not "the node that just flipped is". A reveal
+        // under a still-collapsed ancestor changes nothing below it (the mount seed walks the same chain).
+        if (!hidden)
+            for (var a = _scene.Parent(node); !a.IsNull; a = _scene.Parent(a))
+                if (_scene.IsCollapsed(a)) return;
+        WriteSubtreeHidden(node, hidden);
+    }
+
+    private void WriteSubtreeHidden(NodeHandle node, bool hidden)
     {
         if (!_scene.IsLive(node)) return;
         if (_comps.TryGetValue(node, out var entry))
@@ -80,6 +92,10 @@ public sealed partial class TreeReconciler
             if (entry.ActiveSig is { } sig) sig.Value = !entry.Parked && !entry.Hidden;
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
-            SetSubtreeHidden(c, hidden);
+        {
+            // A reveal stops at a nested collapsed node: its subtree stays hidden under its own Visible=false.
+            if (!hidden && _scene.IsCollapsed(c)) continue;
+            WriteSubtreeHidden(c, hidden);
+        }
     }
 }

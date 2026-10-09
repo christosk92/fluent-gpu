@@ -2449,6 +2449,49 @@ static class TouchSuite
                 flickNavigated && slowSprungBack,
                 $"flick→idx={afterFlick} (want 1) slow→idx={afterSlow} (want {afterFlick}, sprung-back)");
         }
+
+        // gate.arena.flipview-cancel-restores: a FlipView pan that dies with no release — a per-id touch PointerCancel (the
+        // OS took the contact / WM_POINTERCAPTURECHANGED) or a WindowBlur mid mouse-drag — commits nothing and springs the
+        // strip back to the resting page through OnDragCanceled (it used to stay pinned showing half of two pages).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("flip-cancel", new Size2(420, 280), 1f)); window.Show();
+            var probe = new FlipFlickProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var center = CenterOf(scene, scene.Root);
+
+            // (1) Touch: a slow 160px (40%) drag left, then the contact is cancelled.
+            uint t = 900_000;
+            window.QueueInput(Touch(InputKind.PointerDown, center, t, 71)); host.RunFrame();
+            for (int i = 1; i <= 8; i++)
+            {
+                t += 40;
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(center.X - 20f * i, center.Y), t, 71));
+                host.RunFrame();
+            }
+            float touchHeld = MaxAbsTrackX(host, scene.Root);
+            window.QueueInput(Touch(InputKind.PointerCancel, new Point2(center.X - 160f, center.Y), t + 16, 71));
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            float touchAfter = MaxAbsTrackX(host, scene.Root);
+
+            // (2) Mouse: the same 40% drag, then the window loses activation mid-drag.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0)); host.RunFrame();
+            for (int i = 1; i <= 8; i++)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(center.X - 20f * i, center.Y), 0, 0));
+                host.RunFrame();
+            }
+            float mouseHeld = MaxAbsTrackX(host, scene.Root);
+            window.QueueInput(new InputEvent(InputKind.WindowBlur, default, 0, 0));
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            float mouseAfter = MaxAbsTrackX(host, scene.Root);
+
+            Check("gate.arena.flipview-cancel-restores a FlipView pan lost to a per-id touch PointerCancel or a WindowBlur mid mouse-drag commits nothing and springs the strip back to the resting page (OnDragCanceled), instead of freezing between two pages",
+                touchHeld > 100f && touchAfter < 1f && mouseHeld > 100f && mouseAfter < 1f && probe.Selected == 0,
+                $"touch held={touchHeld:0.#}->{touchAfter:0.##} mouse held={mouseHeld:0.#}->{mouseAfter:0.##} idx={probe.Selected} (want 0)");
+        }
     }
 
     static void ArenaDeterminismChecks(StringTable strings)

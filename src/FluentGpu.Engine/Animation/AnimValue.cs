@@ -62,7 +62,7 @@ public enum AnimFlags : ushort
     Hold          = 1 << 14,  // AnimEngine.SetHeld: the row's VALUE stays where it stands (on the render thread, the value it
                               // last posed) while its time runs on; released, it resumes at the phase the clock reached.
                               // No re-seed, no frames requested while held. Cleared by a re-seed (AnimEngine.Get).
-    Paused        = 1 << 15,  // AnimEngine.SetPaused: a Hold whose TIME stands still too (always set with Hold): released, the
+    Paused        = 1 << 15,  // AnimEngine.SetPaused: a Hold whose TIME stands still too (its own bit: Hold is SetHeld's alone, and either freezes the value): released, the
                               // row resumes from the exact phase it stopped at, so an ambient loop paused for minutes does not
                               // jump to wherever its clock would have run. Cleared by a re-seed (AnimEngine.Get).
 }

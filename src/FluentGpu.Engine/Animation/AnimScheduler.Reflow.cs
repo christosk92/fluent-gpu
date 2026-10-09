@@ -66,6 +66,9 @@ public sealed partial class AnimEngine
     public void SeedEnterReflow(NodeHandle node, bool horizontal, float toW, float toH)
     {
         if (!TryGetTransition(node, out var spec)) return;
+        // The enter's own delay (EnterExit.DelayMs, which carries a parent's Stagger) holds the size leg too, so the slot
+        // opens with its fade instead of ahead of it.
+        if (spec.Enter.DelayMs > 0f) spec = spec with { DelayMs = spec.DelayMs + spec.Enter.DelayMs };
         AnimChannel ch;
         if (horizontal) { if (toW <= 0.5f) return; ch = AnimChannel.LayoutW; ReflowSize(node, ch, 0f, toW, spec); }
         else { if (toH <= 0.5f) return; ch = AnimChannel.LayoutH; ReflowSize(node, ch, 0f, toH, spec); }
@@ -91,7 +94,11 @@ public sealed partial class AnimEngine
         int ex = Find(node, ch);
         if (dyn.Kind == DynamicsKind.Tween && dyn.DurationMs <= 1f && spec.DelayMs <= 0f)
         {
-            if (ex >= 0) Cancel(node, ch);
+            // A snap must still SETTLE an in-flight row: the track wrote its interp into this very LayoutInput column,
+            // and SettleRestore is the only writer of the declared RestoreTo back (as in SnapStructuralToLayout). A bare
+            // Cancel froze the node at its mid-flight size, unclipped: a reduced-motion projection's 1ms tween landing
+            // on a still-revealing enter reflow that a sibling's commit had only moved.
+            if (ex >= 0) { SettleRestore(ex); FreeSlot(ex); }
             if (_scene.IsLive(node))
             {
                 ref NodePaint p = ref _scene.Paint(node);
@@ -195,14 +202,24 @@ public sealed partial class AnimEngine
 
         if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
         TransitionDynamics dyn = Normalize(to < from && spec.ExitDynamics is { } ed ? ed : spec.Dynamics);
-        // No delay on a retarget: the spec's DelayMs is the ENTRY stagger and has already been served by the seed.
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: from);
         else
             Animate(node, ch, from, to, dyn.DurationMs, dyn.Easing);
 
         int s = FinishReflowRow(node, ch, declared, in spec, hadRow: true, carried);
-        if (s >= 0 && natural) _slab.At(s).Flags |= AnimFlags.NaturalTarget;
+        if (s < 0) return;
+        if (natural) _slab.At(s).Flags |= AnimFlags.NaturalTarget;
+        // A row still in its start delay (the enter's stagger, which SeedEnterReflow folds in) keeps what is LEFT of it:
+        // Spring's retarget zeroes the delay and Animate takes none, so async content landing during the stagger opened
+        // the slot ahead of its own delayed fade. The row has already been presented at its held start, so the reseed's
+        // seed-frame hold is dropped too: it would lengthen the stagger by a frame.
+        if (cur.DelayRemainingMs > 0f)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            r.DelayRemainingMs = cur.DelayRemainingMs;
+            r.Flags &= ~AnimFlags.JustSeeded;
+        }
     }
 
     /// <summary>The reconciler's hand-off for a node whose main-axis size is owned by a LIVE reflow row: record what
@@ -234,7 +251,15 @@ public sealed partial class AnimEngine
     {
         if (!_slab.NodeHasRows((int)node.Raw.Index)) return false;   // O(1) — the common case, per reconciled node
         int s = Find(node, ch);
-        if (s < 0) return false;
+        if (s < 0)
+        {
+            // SizeMode.Relayout keeps its declared shadow on the SizeW/SizeH row (the host pins this column to the interp
+            // each tick). File the re-declaration there so a retarget carries ground truth, but still answer false: the
+            // reconciler must write the column so this commit's layout solves the destination AnimateBounds aims at.
+            int rs = Find(node, ch == AnimChannel.LayoutW ? AnimChannel.SizeW : AnimChannel.SizeH);
+            if (rs >= 0 && _slab.At(rs).Has(AnimFlags.RestoreLayout)) _slab.At(rs).RestoreTo = declared;
+            return false;
+        }
 
         _slab.At(s).RestoreTo = declared;
         // NaN ("auto"): nothing to re-aim and nothing to clear — the seed owns NaturalTarget (see the note above).
@@ -331,7 +356,8 @@ public sealed partial class AnimEngine
     /// <para>Gesture-owned Translate rows (a <c>WhileHover</c> Offset) are skipped for the same reason
     /// <see cref="SnapStructuralToLayout"/> skips them: those are the authored REST pose, not a FLIP leftover, and
     /// wiping them parks the node at the origin until the next hover edge. Only the TRANSLATION component of
-    /// <c>LocalTransform</c> is zeroed — an authored/animated scale or rotation on the same node survives.</para></summary>
+    /// <c>LocalTransform</c> is reset to the authored offset — an authored/animated scale or rotation on the same node
+    /// survives.</para></summary>
     public void SnapPositionToLayout(NodeHandle node)
     {
         int idx = (int)node.Raw.Index;
@@ -357,8 +383,9 @@ public sealed partial class AnimEngine
         if (!freedAny || !live) return;
         ref NodePaint p = ref _scene.Paint(node);
         Affine2D tf = p.LocalTransform;
-        if (tf.Dx == 0f && tf.Dy == 0f) return;   // already at rest — don't dirty a node for nothing
-        p.LocalTransform = tf with { Dx = 0f, Dy = 0f };
+        Affine2D rest = RestTransformOf(idx);   // land on the AUTHORED offset, not 0
+        if (tf.Dx == rest.Dx && tf.Dy == rest.Dy) return;   // already at rest — don't dirty a node for nothing
+        p.LocalTransform = tf with { Dx = rest.Dx, Dy = rest.Dy };
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
@@ -468,8 +495,8 @@ public sealed partial class AnimEngine
     /// change must NOT start a projection) and (b) a real-resize frame (an in-flight track is guaranteed-stale). Each
     /// size/reflow row settle-restores FIRST (declared LayoutInput back — usually NaN — plus PresentedW/H → NaN, the
     /// Relayouting flag cleared, child-shift zeroed) so SizeMode.Relayout leaves no li.Width/Height poisoned with a
-    /// stale PresentedW; the FLIP position/scale rows drop and the composited transform resets to identity so no stale
-    /// translate/scale survives to draw the node at slot+staleOffset. Gesture-owned Translate/Scale (WhileHover Offset
+    /// stale PresentedW; the FLIP position/scale rows drop and the composited transform resets to the authored static
+    /// pose so no stale translate/scale survives to draw the node at slot+staleOffset. Gesture-owned Translate/Scale (WhileHover Offset
     /// on a Fold cover) are skipped — those are the authored rest pose, not a FLIP leftover; wiping them to identity
     /// stacked covers at the origin until the next hover. Interaction/brush/opacity/blur rows are left running.
     /// Zero-alloc POD-slab walk (no LINQ/enumerator); the caller runs it BEFORE layout so bounds land clean.</summary>
@@ -503,11 +530,13 @@ public sealed partial class AnimEngine
         }
         if (s_motionDiag) Console.Error.WriteLine($"[motion-diag]   SnapStructuralToLayout node={idx} freedStructuralRows={freed} live={live}");
         // The freed FLIP rows no longer re-compose, so the last-written translate/scale would persist in NodePaint —
-        // reset to identity (rotation, if any live row still drives it, re-folds from FromPaint next tick).
+        // reset to the node's AUTHORED static pose (identity unless OffsetX/Y/Rotation/Scale or a matrix is authored;
+        // identity used to drop an authored Rotation/Offset until the next reconcile). A live rotation row re-folds
+        // from FromPaint next tick.
         if (resetTransform && live)
         {
             ref NodePaint p = ref _scene.Paint(node);
-            p.LocalTransform = Affine2D.Identity;
+            p.LocalTransform = RestTransformOf(idx);
             _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
         }
     }

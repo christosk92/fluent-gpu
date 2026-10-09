@@ -123,10 +123,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// cancel races a claimed decode or its completed-but-unapplied pixels, and is reclaimed by the Pump drain. A
     /// queued-then-canceled request leaves none. (Census cadence only: Count takes the bucket locks.)</summary>
     public int CanceledPending => _canceled.Count;
-    /// <summary>Requests enqueued in the priority lanes but not yet claimed by a worker — O(1) census. NOTE: not
-    /// decremented for a cancel-before-claim id (TryClaim dequeues-and-skips it without a successful claim), so this
-    /// over-counts after queued cancels until those lane entries are skipped — soft-backpressure heuristic only, never
-    /// a drain/idle condition.</summary>
+    /// <summary>Requests enqueued in the priority lanes but not yet claimed or canceled — O(1) census of <c>_reqs</c>
+    /// membership: Begin increments, and whichever of a worker's claim or <see cref="Cancel"/> removes the request
+    /// decrements. Stale lane entries (a promotion's duplicate, a canceled id) are not counted. It feeds the off-screen
+    /// backpressure gate in <see cref="Begin"/>.</summary>
     public int QueueDepth => Volatile.Read(ref _queued);
     /// <summary>Pending request descriptors awaiting claim — census of the <c>_reqs</c> map (bucket-locked Count).</summary>
     public int RequestCount => _reqs.Count;
@@ -160,6 +160,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// i.e. exactly inside the window a racing <see cref="Cancel"/> must survive. Null (and free) in production.</summary>
     internal Action? ClaimBarrier;
 
+    /// <summary>Test-only hook invoked on the calling thread between <see cref="Prioritize"/>'s read of the queued
+    /// request and its write — the window a racing worker claim must not be able to undo. Null (and free) in production.</summary>
+    internal Action? PrioritizeBarrier;
+
     /// <summary>Test-only: run one <c>TryClaim</c> on the calling thread and report the claimed id.</summary>
     internal bool TryClaimForTest(out int id)
     {
@@ -191,6 +195,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         if (_reqs.TryRemove(id, out _))
         {
+            // This TryRemove and TryClaim's are the only two ways out of _reqs, and exactly one of them wins an id, so
+            // each pays back Begin's increment. Without it every row recycled before a worker claimed it leaked +1 into
+            // _queued until the backpressure gate refused every off-screen request for the rest of the session.
+            Interlocked.Decrement(ref _queued);
             Complete(id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0);
             return;
         }
@@ -203,7 +211,12 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         if (_reqs.TryGetValue(id, out var r) && priority < r.Priority)   // raise urgency only (lower enum = higher)
         {
-            _reqs[id] = r with { Priority = priority };
+            PrioritizeBarrier?.Invoke();   // test-only: the read/write race window, made deterministic
+            // TryUpdate against the value read, never the indexer: a worker may claim the id (TryClaim's TryRemove)
+            // between the read and the write, and the indexer would put the claimed request BACK — the promoted lane
+            // copy then lets a second worker claim it too, so the image decodes twice and lands two ok completions.
+            // A failed update means the request is no longer queued: nothing to promote.
+            if (!_reqs.TryUpdate(id, r with { Priority = priority }, r)) return;
             _lanes[(int)priority].Enqueue(id);   // a higher-lane copy; the lower-lane copy becomes a no-op (claim dedup)
             _signal.Release();
         }

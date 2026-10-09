@@ -93,12 +93,12 @@ public sealed class ColdMaintenanceTests
         f.Host.AdvanceFrameClockForTest(HiddenMemoryBudget.DefaultShallowDelayMs);
         Assert.False(f.Host.RunFrame().Rendered);
         Assert.Equal(HiddenStage.Shallow, f.Host.HiddenStageForTest);
-        int second = f.Host.RecommendedWaitMs();
-        Assert.True(second == -1 || second > 2_000, $"after the stage the wait returns to the cold deadline, not another stage wake (got {second})");
+        Assert.Equal(30_000, f.Host.RecommendedWaitMs());   // after the stage the wait returns to the cold deadline, not another stage wake
 
         f.Now = 30_000;
         Assert.False(f.Host.RunFrame().Rendered);
-        Assert.Equal(-1, f.Host.RecommendedWaitMs());   // and once both ran, the loop blocks
+        Assert.Equal(1, f.Host.ColdMaintenanceRuns);
+        Assert.Equal((int)(HiddenMemoryBudget.DefaultDeepDelayMs - HiddenMemoryBudget.DefaultShallowDelayMs), f.Host.RecommendedWaitMs());   // and once both ran, only the Deep stage's one wake is left (HiddenDeepHostTests)
     }
 
     [Fact]
