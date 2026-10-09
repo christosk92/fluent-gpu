@@ -1230,7 +1230,9 @@ public sealed partial class SliceRecorder
                         // full-window plate makes its segment hold a window of empty tiles. Its bytes stay in the stream and
                         // its content scan below is unchanged; the day it becomes visible its bytes change and it is scanned in.
                         if (!b.IsEmpty && !InvisibleFill(op, p)) segBounds = Union(segBounds, b);
-                        if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && OpaqueFill(op, p, in top, out RectF o)
+                        // An ADDITIVE fill (SetBlend, colour ONE/ONE, alpha ZERO/ONE) leaves the tile's alpha as it found it:
+                        // over the transparent clear it composites as page + glow, so it hides nothing beneath it.
+                        if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && !_cBlendAdditive && OpaqueFill(op, p, in top, out RectF o)
                             && o.W * o.H > segOpaque.W * segOpaque.H)
                             segOpaque = o;
                         ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread);
@@ -2514,7 +2516,7 @@ public sealed partial class SliceRecorder
     /// <summary>A <see cref="DrawOp.FillRoundRect"/> that paints its whole rect FULLY OPAQUE: a solid colour of alpha 1 at
     /// opacity 1, square corners, under a translation-only transform. <paramref name="rect"/> = that rect (slot space DIP)
     /// cut by the open rectangular <paramref name="clip"/>. Its edges may be anti-aliased: the composite shrinks the rect
-    /// to whole pixels before trusting it.</summary>
+    /// to whole pixels before trusting it. The caller also skips it under the Additive paint blend.</summary>
     private static bool OpaqueFill(DrawOp op, ReadOnlySpan<byte> payload, in RectF clip, out RectF rect)
     {
         rect = default;
