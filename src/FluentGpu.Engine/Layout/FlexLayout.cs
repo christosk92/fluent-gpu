@@ -1317,13 +1317,14 @@ public sealed partial class FlexLayout
         {
             // Snapshot the child's layout inputs BEFORE any re-measure below: a ref into the SoA column must not be
             // held across a call that can touch the store.
-            float mL, mT, mR, mB, declW, declH;
+            float mL, mT, mR, mB, declW, declH, minW, maxW, minH, maxH;
             FlexAlign align, justify;
             bool unboundedW;
             {
                 ref LayoutInput cli = ref _scene.Layout(c);
                 mL = cli.Margin.Left; mT = cli.Margin.Top; mR = cli.Margin.Right; mB = cli.Margin.Bottom;
                 declW = cli.Width; declH = cli.Height;
+                minW = cli.MinW; maxW = cli.MaxW; minH = cli.MinH; maxH = cli.MaxH;
                 unboundedW = cli.MeasureUnboundedWidth;
                 // A ZStack has no main axis, so BOTH axes are alignment (the WinUI overlay-Grid model):
                 //   vertical   = AlignSelf, falling back to the stack's AlignItems
@@ -1337,8 +1338,11 @@ public sealed partial class FlexLayout
 
             float slotW = MathF.Max(0f, innerW - mL - mR);   // the child's slot: the stack minus its own margin
             float slotH = MathF.Max(0f, innerH - mT - mB);
-            float cw = float.IsNaN(declW) ? slotW : declW;   // explicit child size, else fill the slot
-            float ch = float.IsNaN(declH) ? slotH : declH;
+            // Explicit child size, else fill the slot, then the layer's own Min/Max, as a flex parent applies them
+            // (ClampMain/ClampCross). Without the clamp a capped fill layer (a MaxWidth caption pill or dialog card)
+            // spans the whole stack, and a MinWidth layer is squeezed below its floor when the stack is narrower.
+            float cw = Clamp(float.IsNaN(declW) ? slotW : declW, minW, maxW);
+            float ch = Clamp(float.IsNaN(declH) ? slotH : declH, minH, maxH);
 
             // An AUTO-sized child that is CENTERED or END-aligned takes its DESIRED extent on that axis — the CSS /
             // XAML rule that only a stretched child fills. Without it, alignment is silently inert on an auto-sized
