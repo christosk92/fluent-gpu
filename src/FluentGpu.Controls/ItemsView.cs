@@ -856,7 +856,6 @@ public sealed class ItemsView : Component
         var current = UseSignal(-1);                       // CurrentItemIndex (idl:46-47, default −1)
         var viewportNode = UseRef(NodeHandle.Null);        // the VirtualListEl scene node (OnRealized capture)
         var ownHandle = UseMemo(static () => new ScrollHandle(), DepKey.Empty);   // the viewport's handle when the app supplies none
-        var subscribed = UseRef<SelectionModel?>(null);
         var typeBuffer = UseRef(new System.Text.StringBuilder());
         var typeLastMs = UseRef(0L);
         var pendingFocus = UseRef(-1);
@@ -906,11 +905,16 @@ public sealed class ItemsView : Component
                 Disclosure.OnExpandSettled is { } onSettled ? () => onSettled(preparedRange) : null);
                                                            //   (crosses the frozen-ComponentEl boundary; the only re-render trigger here)
 
-        if (!ReferenceEquals(subscribed.Value, model))     // forward the model's event once per model instance
+        // Forward the model's event for the life of this mount and take the forwarder off again on unmount (or a model
+        // swap): an app-owned SelectionModel outlives a re-keyed list, and a forwarder left on it pins the dead ItemsView
+        // and raises OnChange once more per remount. Each mount removes only its OWN delegate, so a keyed swap mounting
+        // the successor before this cleanup runs is harmless.
+        UseEffect(() =>
         {
-            subscribed.Value = model;
-            model.SelectionChanged += () => SelectionChanged?.Invoke();
-        }
+            Action forward = () => SelectionChanged?.Invoke();
+            model.SelectionChanged += forward;
+            return () => model.SelectionChanged -= forward;
+        }, DepKey.FromRef(model));
 
         // Resolve the layout spec → a (hoisted) IVirtualLayout. Stateful layout objects must be stable across
         // renders, so the instance is memoized on the spec's identity fields.
