@@ -278,7 +278,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Win32 ABI constants (stable; defined locally to avoid TerraFX's per-prefix constant classes).
     private const uint WM_NCCREATE = 0x0081, WM_DESTROY = 0x0002, WM_CLOSE = 0x0010, WM_SIZE = 0x0005,
                        WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
-                       WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
+                       WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105, WM_SYSCHAR = 0x0106,
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
                        // Sent when the OS is about to run something that must own input exclusively (a system modal
                        // dialog, a menu/scrollbar tracking loop it starts itself, drag-drop) — the one loss signal
@@ -2161,6 +2161,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // InputDispatcher joins the surrogate pair). Editing/navigation keys still arrive via WM_KEYDOWN.
                 _queue.Enqueue(new InputEvent(InputKind.Char, default, 0, (int)(nuint)wParam, Mods: Mods(), TimestampMs: Now()));
                 return true;
+            case WM_SYSCHAR:
+                // TranslateMessage also turns the Alt+character WM_SYSKEYDOWN consumed above into WM_SYSCHAR. DefWindowProc
+                // would answer it with SC_KEYMENU, and with no menu bar the system-menu tracker finds no mnemonic and plays
+                // the default beep on every access key / Alt+Enter. The keydown already carried the chord, so consume it,
+                // except Alt+Space, which still opens the system menu.
+                return (int)(nuint)wParam != ' ';
             case WM_ACTIVATE:
                 _active = ((nuint)wParam & 0xFFFF) != 0;
                 _queue.Enqueue(new InputEvent(_active ? InputKind.WindowFocus : InputKind.WindowBlur, default, 0, 0, TimestampMs: Now()));
