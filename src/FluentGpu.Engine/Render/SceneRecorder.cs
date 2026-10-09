@@ -1195,6 +1195,18 @@ internal sealed class SceneRecordingContext
             if ((cf & NodeFlags.SparsePaint) != 0 && scene.TryGetBrushAnim(c, out var cba)
                 && (cba.Channels & BrushAnim.FillBit) != 0 && cba.T < 1f) continue;
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
+            // A clip-rect (an AnimChannel.ClipL/T/R/B reveal, a .StickyClip pose, a collapse cut) is pushed BEFORE the
+            // child's own fill, so it scissors that fill too: the child covers only the clipped part of its bounds. A
+            // sticky clip is a pose written without a re-record, so it is rejected even while it reads released.
+            if (!cp.ClipRect.IsInfinite) continue;
+            if (slices is not null && slices.IsStickyClipNode((int)c.Raw.Index)) continue;
+            // A fill that does not REPLACE the pixels under it needs the parent's fill beneath it: additive paint adds onto
+            // it, a Screen boundary screens onto it, an acrylic surface frosts it (and drops its Fallback fill where the
+            // layer runs).
+            if ((cf & NodeFlags.SparsePaint) != 0
+                && (scene.PaintBlendOf(c) != PaintBlend.SrcOver || scene.LayerBlendOf(c) != LayerBlend.SrcOver
+                    || scene.TryGetAcrylic(c, out _)))
+                continue;
             if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
             // Rounded opaque children may occlude if the VISIBLE rect lies inside the child's bounds deflated by each
@@ -2256,8 +2268,9 @@ internal sealed class SceneRecordingContext
         bool drawSelf = hasOwnVisual && ownVisible;
         // Occlusion cull (always on): drop this node's own fill when a later opaque square child fully covers it. Only when
         // the node has NO border — the SDF border ring straddles the edge (extends ~stroke/2 OUTSIDE deviceBounds), which a
-        // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe.
-        if (drawSelf && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f
+        // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe. Never inside
+        // an additive bracket (this node's own Blend or an enclosing one in this arena): its children ADD onto its fill.
+        if (drawSelf && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f && stats.AdditiveDepth == 0
             && IsOccludedByOpaqueChild(scene, node, in world, p.ChildShiftX, p.ChildShiftY, in deviceBounds, in recordClip, inMotion,
                 stats.Slicing ? stats.Slices : null))
             drawSelf = false;
