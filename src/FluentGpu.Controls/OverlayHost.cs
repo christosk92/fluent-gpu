@@ -211,7 +211,7 @@ internal sealed class OverlayEntry
 {
     public int Id;
     public required Func<NodeHandle> Anchor;
-    public Func<RectF>? AnchorRect;   // rect-anchored open (pointer placement) — wins over Anchor when set
+    public Func<RectF>? AnchorRect;   // rect-anchored open (derived/pointer rect, live-followed) — wins over Anchor when set
     public required Func<Element> Content;
     public FlyoutPlacement Placement;
     public required OverlayHandle Handle;
@@ -688,10 +688,20 @@ internal sealed class OverlayServiceImpl : IOverlayService
         for (int i = 0; i < Entries.Count; i++)
         {
             var e = Entries[i];
-            // Node-anchored, open, in-tree entries only: rect-thunk anchors are pointer placements (no live target),
-            // Modal centers on the viewport, a Closing entry keeps its last placement while it fades.
-            if (e.Phase == OverlayPhase.Closing || e.Chrome == PopupChrome.Modal || e.AnchorRect is not null) continue;
+            // Open, in-tree entries: Modal centers on the viewport, a Closing entry keeps its last placement while it fades.
+            // Rect-thunk anchors follow too: the non-editable ComboBox carousel, the pickers, ToolTip, TeachingTip's
+            // margin/center forms and OpenAtLocal all derive their rect from a LIVE node on every call, so a resize or reflow
+            // that moves the target must re-place them like a node anchor (OverlayHost does not re-render on resize).
+            // A constant rect never drifts, so it stays silent.
+            if (e.Phase == OverlayPhase.Closing || e.Chrome == PopupChrome.Modal) continue;
             if (e.WrapperNode.IsNull || !scene.IsLive(e.WrapperNode) || e.MeasuredW <= 0f) continue;
+            if (e.AnchorRect is not null)
+            {
+                // A rect entry whose owner died or parked holds its last placement: its thunk degrades to a synthetic
+                // near-origin rect (not the origin ghost), and the prune above closes it unless a ClosingAction vetoed.
+                var owner = e.Anchor();
+                if (!owner.IsNull && (!scene.IsLive(owner) || (scene.Flags(owner) & NodeFlags.Parked) != 0)) continue;
+            }
             var resolve = ResolveAnchor(e, scene, out var aRect);
             if (resolve == AnchorResolve.Dead)
             {
