@@ -115,7 +115,7 @@ public sealed class CommandBar : Component
             open.Value = true;
             OnOpenChanged?.Invoke(true);
             if (!hasSecondary) return;
-            handle.Value = svc.Open(
+            var opened = handle.Value = svc.Open(
                 () => moreAnchor.Value,
                 BuildOverflow,
                 // The overflow drops under the … button, right edges aligned (the WinUI overflow alignment);
@@ -125,8 +125,9 @@ public sealed class CommandBar : Component
                     DismissBehavior: IsSticky ? DismissBehavior.None : DismissBehavior.LightDismiss,
                     Chrome: PopupChrome.Flyout)
                 { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () =>
+            opened.ClosedAction = () =>
             {
+                if (!ReferenceEquals(handle.Value, opened)) return;   // reopened inside the close fade: the newer overflow owns the bar
                 handle.Value = null;
                 if (open.Peek()) { open.Value = false; OnOpenChanged?.Invoke(false); }   // light-dismiss closes the BAR too
             };

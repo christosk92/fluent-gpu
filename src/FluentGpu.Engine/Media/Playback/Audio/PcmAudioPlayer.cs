@@ -2429,8 +2429,12 @@ public sealed partial class PcmAudioSession : IMediaSession
         && _state is PlaybackState.Paused or PlaybackState.Ended or PlaybackState.Ready;
 
     /// <summary>The listener wants sound: play was requested or the session is playing. The device controller keeps a slow
-    /// retry going past its ladder while this holds.</summary>
+    /// retry going past its ladder while this holds and <see cref="OutputLive"/> does not.</summary>
     internal bool WantsOutput => _playRequested || _state == PlaybackState.Playing;
+
+    /// <summary>The kept sink can still play: its endpoint opened and has not been invalidated since. False for a session
+    /// built without an endpoint (liveness unknown). A volatile read through <see cref="IAudioEndpoint.IsReady"/>.</summary>
+    internal bool OutputLive => _endpoint is IAudioEndpoint { IsReady: true };
 
     /// <summary>M4 RT feed callback (spec §7.9): if Playing, render+present exactly one block through the published graph
     /// (lock-free consume + quarantine) reading pre-decoded PCM from the voice rings — copy+mix ONLY, alloc/lock/syscall-free

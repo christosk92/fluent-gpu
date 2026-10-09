@@ -495,6 +495,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_extents.Count != 0) _extents.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
         if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
+        if (_wheelOccludes.Count != 0) _wheelOccludes.Remove(idx);   // only a BoxEl rewrites it: a reused slot must not stay opaque
         // Scroll-linked effect rows are index-keyed: a freed slot must not hand its effects (or its engaged signals) to
         // the next node that reuses the index.
         if (_scrollEffects.Count != 0) _scrollEffects.Remove(idx);
@@ -604,8 +605,10 @@ public sealed partial class SceneStore : ISceneBackend
 
     /// <summary>One unmounted node's identity + its model extent at free time (see <see cref="PendingRemovalExtents"/>).
     /// The recorder prefers the span table's stored SubtreeBounds for this (index, gen) — which folds in every halo —
-    /// and falls back to <paramref name="ModelRect"/> when the node presented under no stored span.</summary>
-    public readonly record struct RemovedNodeExtent(int NodeIndex, uint Gen, RectF ModelRect);
+    /// and falls back to <paramref name="ModelRect"/> when the node presented under no stored span. <paramref name="Hidden"/>:
+    /// at free time the node sat in a collapsed (<see cref="InCollapsedSubtree"/>) or KeepAlive-parked subtree, which the
+    /// recorder never reaches, so whatever it once presented was vacated when the subtree hid.</summary>
+    public readonly record struct RemovedNodeExtent(int NodeIndex, uint Gen, RectF ModelRect, bool Hidden);
 
     private readonly RemovedNodeExtent[] _removedExtents = new RemovedNodeExtent[RemovalLedgerCap];
     private readonly ulong[] _removedStamp = new ulong[RemovalLedgerCap];
@@ -651,8 +654,10 @@ public sealed partial class SceneStore : ISceneBackend
         float pw = float.IsNaN(p.PresentedW) ? abs.W : p.PresentedW;   // presented (Reveal) extent may exceed the model box
         float ph = float.IsNaN(p.PresentedH) ? abs.H : p.PresentedH;
         // A degenerate rect is recorded too (not skipped): the recorder needs to see the entry so it can tell "this node
-        // never presented anything" from "it presented and we lost the extent" (⇒ MissingRemovalExtent).
-        _removedStamp[_removedCount] = _publishSeq + 1; _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph));
+        // never presented anything" from "it presented and we lost the extent" (⇒ MissingRemovalExtent). A node mounted
+        // under a collapsed or parked ancestor is never laid out or walked: no span, a 0x0 box, and nothing to vacate.
+        bool hidden = (_flags[(int)node.Raw.Index] & NodeFlags.Parked) != 0 || InCollapsedSubtree(node);
+        _removedStamp[_removedCount] = _publishSeq + 1; _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph), hidden);
     }
 
     public void AppendChild(NodeHandle parent, NodeHandle child)
@@ -1214,8 +1219,10 @@ public sealed partial class SceneStore : ISceneBackend
         slot.Count = rects.Length;
     }
 
-    /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).</summary>
-    public NodeHandle FindAccelerator(int key, KeyModifiers mods)
+    /// <summary>First live, enabled, visible, attached node whose keyboard-accelerator chord matches — cold keydown path, O(high).
+    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible. A non-empty
+    /// <paramref name="within"/> (an open modal and the overlays stacked above it) also requires the owner under one of those roots.</summary>
+    public NodeHandle FindAccelerator(int key, KeyModifiers mods, ReadOnlySpan<NodeHandle> within = default)
     {
         for (int i = 1; i < _high; i++)
         {
@@ -1223,13 +1230,18 @@ public sealed partial class SceneStore : ISceneBackend
             var h = new NodeHandle(new Handle((uint)i, _gen[i]));
             if (!IsLive(h)) continue;
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (!IsAttachedToRoot(i)) continue;
+            if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
+            if (!InAnyScope(i, within)) continue;   // a modal dialog is open: the page behind it gets no chords
             return h;
         }
         return NodeHandle.Null;
     }
 
-    /// <summary>First live, enabled, visible node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).</summary>
-    public NodeHandle FindAccessKey(char key)
+    /// <summary>First live, enabled, visible, attached node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).
+    /// A node under a presence-collapsed ancestor (<see cref="InCollapsedSubtree"/>) does not count as visible. A non-empty
+    /// <paramref name="within"/> (an open modal and the overlays stacked above it) also requires the owner under one of those roots.</summary>
+    public NodeHandle FindAccessKey(char key, ReadOnlySpan<NodeHandle> within = default)
     {
         for (int i = 1; i < _high; i++)
         {
@@ -1237,9 +1249,35 @@ public sealed partial class SceneStore : ISceneBackend
             var h = new NodeHandle(new Handle((uint)i, _gen[i]));
             if (!IsLive(h)) continue;
             if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (!IsAttachedToRoot(i)) continue;
+            if (InCollapsedSubtree(h)) continue;   // a collapsed ancestor clears only its own Visible bit
+            if (!InAnyScope(i, within)) continue;   // a modal dialog is open: the page behind it gets no chords
             return h;
         }
         return NodeHandle.Null;
+    }
+
+    /// <summary>Is this chord owner linked under <see cref="Root"/>? A KeepAlive-parked page, a parked virtual-list slot and
+    /// an exit orphan stay live with their handlers but are detached, so without this a hidden page's Ctrl+R (lower slot
+    /// index, first match) shadows the shown page's same chord.</summary>
+    private bool IsAttachedToRoot(int idx) => IsAttachedUnder(idx, (int)Root.Raw.Index);
+
+    private bool IsAttachedUnder(int idx, int ancestor)
+    {
+        if (ancestor == 0) return false;
+        for (int n = idx; n != 0; n = _parent[n])
+            if (n == ancestor) return true;
+        return false;
+    }
+
+    /// <summary>Empty <paramref name="within"/> = no restriction; else the node sits under one of its LIVE roots (a dead
+    /// root's slot may already belong to another node).</summary>
+    private bool InAnyScope(int idx, ReadOnlySpan<NodeHandle> within)
+    {
+        if (within.IsEmpty) return true;
+        foreach (var r in within)
+            if (IsLive(r) && IsAttachedUnder(idx, (int)r.Raw.Index)) return true;
+        return false;
     }
 
     public bool HasDynamicText => _dynamicTextCount > 0;
@@ -1449,11 +1487,12 @@ public sealed partial class SceneStore : ISceneBackend
             if (!IsLive(h)) continue;
             _flags[h.Raw.Index] &= ~NodeFlags.LayoutDirty;
             NoteCaptureChanged((int)h.Raw.Index);   // P8: _flags is a captured column
-            // P4: mirror the SET-side chain walk in Mark() so AuxFlags.SubtreeLayoutDirty tracks exactly "some node
-            // in this subtree is layout-dirty THIS frame" — see SceneStore.Aux.cs for the full invariant.
-            ClearSubtreeLayoutDirtyChain((int)h.Raw.Index);
         }
         _layoutDirty.Clear();
+        // P4: clear every AuxFlags.SubtreeLayoutDirty bit Mark() set this frame, from the set-list rather than by walking
+        // up from the worklist entries. A freed or detached dirty node has no path back to its former ancestors - see
+        // SceneStore.Aux.cs.
+        ClearSubtreeLayoutDirtyBits();
     }
 
     // Frame-scoped transform-motion worklist (mirrors _layoutDirty): the nodes whose transform was written THIS frame
@@ -2291,7 +2330,7 @@ public sealed partial class SceneStore : ISceneBackend
     }
 
     /// <summary>Can the hit-test reach <paramref name="h"/> at all? Mirrors the dispatcher's subtree prune: one cleared
-    /// <see cref="NodeFlags.HitTestVisible"/> anywhere on the ancestor chain (or on the node itself) makes every node
+    /// <see cref="NodeFlags.Visible"/> or <see cref="NodeFlags.HitTestVisible"/> anywhere on the ancestor chain (or on the node itself) makes every node
     /// below it unhittable, and therefore an impossible drop destination.
     /// <para>Reachability is proved by TERMINATION AT <see cref="Root"/>, not by running out of ancestors. The hit test
     /// descends from <c>Root</c> and nowhere else (<c>InputDispatcher.HitTest</c>), so a subtree that is live but no
@@ -2312,7 +2351,8 @@ public sealed partial class SceneStore : ISceneBackend
             // replaces was unreachable code), and a throw here escapes RefreshDropSpotlight into DragDropContext.Move,
             // killing the whole gesture instead of filtering one target. Dead ⇒ unreachable, which is what we return.
             if (!IsLive(n)) return false;
-            if ((_flags[n.Raw.Index] & NodeFlags.HitTestVisible) == 0) return false;
+            // Both bits, exactly the dispatcher's prune: a presence collapse clears only Visible (SetCollapsed).
+            if ((_flags[n.Raw.Index] & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible)) return false;
             last = n;
         }
         return last == Root;

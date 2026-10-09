@@ -27,10 +27,10 @@ public enum ImageFailureKind : byte
 {
     None = 0,
     Network = 1,      // transient: connection reset / DNS / socket — retried
-    Timeout = 2,      // transient: slow internet exceeded the per-request deadline — retried
-    ServerError = 3,  // transient: HTTP 5xx — retried
+    Timeout = 2,      // transient: slow internet exceeded the per-request deadline, or HTTP 408 — retried
+    ServerError = 3,  // transient: HTTP 5xx or 429 (throttled) — retried
     NotFound = 4,     // permanent: HTTP 404/410 — not retried
-    HttpError = 5,    // permanent: other 4xx — not retried
+    HttpError = 5,    // permanent: other 4xx (not 408/429) — not retried
     Decode = 6,       // bytes fetched but not decodable — retried while visible (stale disk poison / CDN glitch)
     Canceled = 7,     // request was canceled (row recycled / unmounted) before completion
     GpuResourceExhausted = 8, // transient across a later remount: backend could not admit another resident texture/SRV
@@ -1653,9 +1653,10 @@ public sealed class ImageCache
         }
         QueueSourceDependents(id, ok);
         // A decode the hidden window requested that lands while Deep (a pop-out's pump, a prefetch): accept it, then release it
-        // at once - nothing shows it, and the restore re-requests whatever something holds.
+        // at once - nothing shows it, and the restore re-requests whatever something holds. A visible pop-out's image
+        // (HiddenChildHeld) stays: RestartDecode let it restart for that pop-out, so re-parking it would evict what it shows.
         if (ok && HiddenStage == FluentGpu.Hosting.HiddenStage.Deep && !HiddenKeepLandings && !e.Derived && e.KeepRefs == 0
-            && e.State == ImageState.Ready && !HasPendingDependent(id))
+            && e.State == ImageState.Ready && !HasPendingDependent(id) && !(HiddenChildHeld?.Contains(id) ?? false))
             DropToNone(id, e, park: true, evict: true);
     }
 
@@ -2044,6 +2045,10 @@ public sealed class ImageCache
         if (e.Parked) { e.Parked = false; _parkedCount--; }
         if (e.RestoreTracked) { e.RestoreTracked = false; _restorePending--; }
         _byId.Remove(id);
+        // A tombstone can still own a texture: the blur-hash LQIP Request uploads under the id survives a Canceled / failed
+        // completion (kept on purpose, so a re-pin shows it again), and Bytes==0 keeps it out of every budget. Nothing holds
+        // the id any more and ids are never reused, so this is the last chance to free it; a no-op in the store when evicted.
+        _evictSink(id);
         NoteRecordingInputChanged();   // a snapshot that held this id must not be reused as-is
     }
 

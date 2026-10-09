@@ -84,7 +84,7 @@ public sealed class HiddenStageHostTests : IDisposable
         Assert.Equal(tiles, rig.Device.TrimmedTileSlots);                                // every tile's texture handed back
         Assert.False(rig.Device.ResidentImages.ContainsKey(loose.Id));               // unpinned: released
         Assert.Equal(residentBefore - 1, rig.Device.ResidentImages.Count);           // the pinned cover stays
-        Assert.Equal(-1, rig.Host.RecommendedWaitMs());                              // and the parked loop blocks again
+        Assert.Equal((int)(HiddenMemoryBudget.DefaultDeepDelayMs - 2_500), rig.Host.RecommendedWaitMs());   // and the parked loop sleeps until Deep (HiddenDeepHostTests), no sooner
     }
 
     [Fact]

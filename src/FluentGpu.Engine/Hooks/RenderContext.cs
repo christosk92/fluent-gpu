@@ -145,7 +145,8 @@ internal sealed class LoadableCell<T> : HookCell
 
 /// <summary>Tuning for <see cref="RenderContext.UseResource{T}"/>. <see cref="StaleTimeMs"/> = how long a freshly-loaded
 /// value is considered fresh (0 = stale immediately on Ready); <see cref="KeepPreviousData"/> = on a deps change, keep
-/// showing the previous <c>Ready</c> value while the new identity loads (instead of resetting to <c>Pending(seed)</c>).</summary>
+/// showing the previous <c>Ready</c> value while the new identity loads (instead of resetting to <c>Pending(seed)</c>);
+/// if that load fails the resource goes <c>Failed</c>, it never presents the previous identity's value as the new one's).</summary>
 public sealed record ResourceOptions
 {
     public float StaleTimeMs { get; init; }
@@ -211,6 +212,9 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
     public Action<Action> Post = null!;                       // UI-thread marshal for completions
     public FluentGpu.Hosting.HostTimerQueue? Queue;           // drives the stale-time flip (UI cadence; NOT the media clock)
     public Exception? LastError { get; private set; }
+    // True while the visible Ready value is the PREVIOUS deps identity's, kept by a KeepPreviousData re-key. A failure
+    // must then surface Failed: that value is a placeholder for the new identity, not a stale copy of it.
+    private bool _keptForeign;
     private readonly Action<long> _staleFire;
 
     public ResourceCell() => _staleFire = OnStaleFire;
@@ -255,7 +259,9 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
                 T v = await loader(token).ConfigureAwait(false);
                 post(() => Settle(epoch, v, null));
             }
-            catch (OperationCanceledException) { /* cancelled — a fresher load owns the epoch */ }
+            // Only OUR cancel (a fresher load / unmount owns the epoch) is dropped; a loader's own timeout or deadline
+            // is a failure and must settle, or the resource stays Pending with IsFetching=true forever.
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { /* cancelled — a fresher load owns the epoch */ }
             catch (Exception ex) { post(() => Settle(epoch, default!, ex)); }
         });
     }
@@ -269,15 +275,17 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         if (error is null)
         {
             LastError = null;
+            _keptForeign = false;
             Loadable.SetReady(value);
             ArmStale();
         }
         else
         {
             LastError = error;
-            // A refresh/revalidation failure keeps the prior Ready value (stale-while-revalidate); only surface Failed
-            // when there is no prior data to keep.
-            if (!Loadable.IsReady) Loadable.SetFailed(error);
+            // A refresh/revalidation failure keeps the prior Ready value (stale-while-revalidate); surface Failed when
+            // there is no prior data to keep, or when the kept data belongs to the previous deps identity (a re-key).
+            if (_keptForeign) { _keptForeign = false; Loadable.Value.Value = Seed; Loadable.SetFailed(error); }
+            else if (!Loadable.IsReady) Loadable.SetFailed(error);
         }
     }
 
@@ -288,7 +296,8 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         long epoch = Advance();
         StaleGen++;
         IsStaleSig.Value = false;
-        if (!keepPrevious || !Loadable.IsReady) Loadable.SetPending(Seed);
+        _keptForeign = keepPrevious && Loadable.IsReady;
+        if (!_keptForeign) Loadable.SetPending(Seed);
         Launch(epoch);
     }
 
@@ -307,6 +316,7 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         StaleGen++;
         IsStaleSig.Value = false;
         LastError = null;
+        _keptForeign = false;            // the optimistic value belongs to the current identity
         Loadable.SetReady(optimistic);   // (2) optimistic write, visible immediately
         if (refresh) Launch(epoch);      // (3) revalidate on this epoch (keeps Ready(optimistic) visible until it lands)
         else { IsFetchingSig.Value = false; ArmStale(); }
@@ -364,7 +374,7 @@ public sealed class Ref<T>
 
 /// <summary>Persistent backing for one <see cref="RenderContext.UseGesture"/> declaration (input-a11y.md §13). Created
 /// once (held in a <see cref="Ref{T}"/> cell), so its <see cref="Register"/> effect delegate + the installed forwarder
-/// are stable instances — the layout-effect registers only at mount / kind-change and the steady render allocates
+/// are stable instances — the layout-effect registers only at mount / kind-change / when a root-type change remounts the host node and the steady render allocates
 /// nothing. The forwarder dispatches to the LATEST <see cref="Handler"/> (overwritten each render), so the call site
 /// may pass a fresh lambda without re-registering.</summary>
 internal sealed class GestureHookState
@@ -390,10 +400,15 @@ internal sealed class GestureHookState
     {
         var node = _ctx.HostNode;
         var scene = _ctx.Scene;
-        if (scene is null || node.IsNull || !scene.IsLive(node)) return;
-        // Re-target: a kind-change effect re-run (or a node swap) clears the prior install before the new one.
-        if (!_registeredNode.IsNull && _registeredNode != node && scene.IsLive(_registeredNode))
-            scene.SetGestureHandler(_registeredNode, _kind, null);
+        if (scene is null) return;
+        // Re-target: a kind-change re-run or a root-node swap (RenderContext.SetHostNode re-runs this) clears the prior
+        // install before the new one, also when the new root is empty.
+        if (!_registeredNode.IsNull && _registeredNode != node)
+        {
+            if (scene.IsLive(_registeredNode)) scene.SetGestureHandler(_registeredNode, _kind, null);
+            _registeredNode = default;
+        }
+        if (node.IsNull || !scene.IsLive(node)) return;
         scene.SetGestureHandler(node, _kind, _forward);
         _registeredNode = node;
     }
@@ -449,6 +464,20 @@ public sealed partial class RenderContext
     /// commit the backing mutation, then remap surviving slot indices without remounting them.</summary>
     public Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? BeginVirtualRemoval;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
+    private List<Action>? _hostBound;           // registrations installed ON HostNode (UseMeasuredBounds/Width, UseGesture)
+
+    /// <summary>Reconciler seam: publish this component's rendered root after a render. A root-TYPE change remounts
+    /// that node, so every registration installed on the old one is re-run at phase 6.5 to move onto the new one
+    /// (each is idempotent on an unchanged node). Unchanged root: a struct compare, nothing enqueued.</summary>
+    internal void SetHostNode(NodeHandle node)
+    {
+        if (HostNode == node) return;
+        HostNode = node;
+        if (_hostBound is { } hb)
+            for (int i = 0; i < hb.Count; i++) EnqueueEffect(PendingLayoutEffects, hb[i]);
+    }
+
+    internal void AddHostBound(Action register) => (_hostBound ??= new()).Add(register);
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
     public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
@@ -544,6 +573,11 @@ public sealed partial class RenderContext
     {
         private readonly RenderContext _ctx;
         private readonly Context<T> _context;
+        // Last-resolved provider signal, the per-cell twin of _ctxResolveCache. A bind (or tracked effect) reading this
+        // while its subtree is KeepAlive-parked runs DETACHED: the resolve walk stops at the page root and finds no
+        // provider. Without this it would read the context Default AND drop the provider from its dependencies, so the
+        // bound value stays wrong after re-activation. The providers above a parked subtree don't change while parked.
+        private Signal<object?>? _last;
 
         public ContextReadSignal(RenderContext ctx, Context<T> context)
         {
@@ -555,15 +589,22 @@ public sealed partial class RenderContext
         {
             get
             {
-                var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+                var sig = Resolve();
                 return sig is not null && sig.Value is T tv ? tv : _context.Default;
             }
         }
 
         public T Peek()
         {
-            var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+            var sig = Resolve();
             return sig is not null && sig.Peek() is T tv ? tv : _context.Default;
+        }
+
+        private Signal<object?>? Resolve()
+        {
+            var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+            if (sig is not null) _last = sig;   // attached: refresh the last-resolved provider
+            return sig ?? _last;                // detached/parked: reuse it (providers above are unchanged)
         }
     }
 
@@ -746,6 +787,7 @@ public sealed partial class RenderContext
     // parked re-render (triggered by a signal it still subscribes to, like a store's Version) would resolve to the
     // context Default and overwrite its cached content with the empty fallback — the "History tab goes blank after
     // switching tabs" bug. The normal (attached) path is unchanged: resolution succeeds and refreshes the cache.
+    // ContextReadSignal keeps the same fallback per cell (its `_last`), so a parked UseContextSignal bind keeps its provider.
     Dictionary<object, Signal<object?>>? _ctxResolveCache;
 
     /// <summary>Read the nearest provided value of <paramref name="context"/> (or its default), subscribing this
@@ -895,11 +937,13 @@ public sealed partial class RenderContext
     /// <see cref="Reactive.Untrack"/> (a callback's signal reads do not subscribe the effect).</summary>
     public void UseActivation(Action? onActivated = null, Action? onDeactivated = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var cb = UseRef<(Action? On, Action? Off)>(default);
+        // Every cell (the refs, the activation memo, the effect) is keyed to the CALLER's call site, so a conditionally
+        // skipped UseActivation never hands its cells to the next one.
+        var cb = UseRef<(Action? On, Action? Off)>(default, __hf, __hl);
         cb.Value = (onActivated, onDeactivated);     // always route to the latest closures
-        var active = UseIsActive();
-        var prev = UseRef(true);
-        var started = UseRef(false);
+        var active = UseIsActive(__hf, __hl);
+        var prev = UseRef(true, __hf, __hl);
+        var started = UseRef(false, __hf, __hl);
 
         int idx = LookupCell(__hf, __hl, out var __k);
         if (idx < 0)
@@ -979,39 +1023,48 @@ public sealed partial class RenderContext
 
     // ── Declarative animation (seed/retarget engine tracks on this component's node; composited, no re-render/frame) ──
     // DepKey-gated only — the retained-anim hooks re-seed when their key changes (DepKey.Empty = seed once at mount).
+    // Each is keyed to the CALLER's call site: a skipped UseSpring(ScaleX) must not hand its stored deps to the next one.
 
-    public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps);
-    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
+    public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps, __hf, __hl);
+    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps, __hf, __hl);
     /// <summary><paramref name="cadence"/> is the row's own frame rate (see <c>AnimEngine.Keyframes</c>): <c>null</c>
     /// = display rate, one-shot or <paramref name="loop"/>. <paramref name="snapToDevicePixels"/>: a ScaleX/ScaleY track poses
     /// whole device pixels of the host node's extent (<c>AnimFlags.SnapDevicePx</c>).</summary>
     public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null,
-                             bool snapToDevicePixels = false)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, snapToDevicePixels: snapToDevicePixels); }, deps);
-    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
+                             bool snapToDevicePixels = false, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop, cadence: cadence, snapToDevicePixels: snapToDevicePixels); }, deps, __hf, __hl);
+    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseLayoutEffect(() =>
+        {
+            if (Anim is not { } a || HostNode.IsNull) return null;
+            int src = a.Clocks.Register(source);
+            a.Drive(HostNode, channel, keys, src, min, max);
+            return () => a.Clocks.Unregister(src);   // re-seed / unmount: release the source closure, reuse its index
+        }, deps, __hf, __hl);
 
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13 <c>UseGesture</c>). Config-only:
     /// enrolls a gesture-arena member on <see cref="HostNode"/> (via the <c>SceneStore</c> gesture column — the
     /// Hooks⇄Input seam) and routes the arena winner's event to <paramref name="handler"/>. No render output, no
     /// re-render. Zero per-render allocation after mount: the latest handler is stashed in a persistent cell (a field
     /// write each render) and a STABLE forwarder is installed ONCE via a phase-6.5 layout-effect keyed by the kind (so
-    /// it only (re)registers at mount / kind-change, reading the valid mounted node). The forwarder dispatches to the
+    /// it only (re)registers at mount / kind-change / root-node swap, reading the valid mounted node). The forwarder dispatches to the
     /// current cell handler, so a fresh lambda each render needs no re-registration. On unmount the freed node drops the
     /// column (SceneStore); a kind-change re-target clears the prior install.</summary>
-    public void UseGesture(GestureType kind, Action<GestureEventArgs> handler)
+    public void UseGesture(GestureType kind, Action<GestureEventArgs> handler, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         // Persistent per-call cell: holds the latest user handler + the once-allocated stable forwarder/effect/cleanup
-        // (so nothing here allocates on a steady re-render — only the handler field is overwritten).
-        var cell = UseRef<GestureHookState?>(null);
-        var st = cell.Value ??= new GestureHookState(this, kind);
+        // (so nothing here allocates on a steady re-render — only the handler field is overwritten). Keyed to the
+        // CALLER's call site: a skipped UseGesture(Hold) must not hand its state (kind frozen) to the next call.
+        var cell = UseRef<GestureHookState?>(null, __hf, __hl);
+        var st = cell.Value;
+        if (st is null) { cell.Value = st = new GestureHookState(this, kind); AddHostBound(st.Register); }
         st.Handler = handler;   // always route to the latest closure (no re-registration needed)
         // Mount-once registration (re-runs only if the kind changes): install the stable forwarder on the node. The
         // cached effect/cleanup delegates make this a no-alloc layout-effect on a steady render (the effect closure is
         // the SAME instance every render, so EffectImpl adds it only when deps change). HostNode is valid at 6.5.
-        UseLayoutEffect(st.Register, st.KindDep);
+        UseLayoutEffect(st.Register, st.KindDep, __hf, __hl);
     }
 
     /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to that

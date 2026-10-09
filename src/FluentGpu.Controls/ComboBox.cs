@@ -183,6 +183,9 @@ public sealed class ComboBox : Component
         var text = Text ?? fallbackText;
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
+        // The editable TextBox part is a propless Embed.Comp (its IsEnabled froze at mount): forward the live flag so a
+        // runtime disable gates the text field too, not only the outer chrome.
+        UseEffect(() => _edit?.SetEnabled(IsEnabled), IsEnabled);
 
         // ── Editable-mode search state (ComboBox_Partial.cpp m_searchResultIndex/m_searchResultIndexSet) ────────
         var searchIdx = UseRef(-1);
@@ -290,8 +293,12 @@ public sealed class ComboBox : Component
                     new PopupOptions(FocusTrap: true, Chrome: PopupChrome.Dropdown) { ConstrainToRootBounds = false, SeamOffsetY = seamY },
                     owner: anchorOf);
             }
-            handle.Value.ClosedAction = () =>
+            var opened = handle.Value;
+            opened.ClosedAction = () =>
             {
+                // Choose/Close null the cell before this runs; a NEWER handle there means the list was reopened inside
+                // the 167 ms close: that open owns the cell, the highlight and the commit now.
+                if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;
                 handle.Value = null;
                 highlight.Value = -1;
                 openVer.Value = openVer.Peek() + 1;
@@ -623,10 +630,17 @@ public sealed class ComboBox : Component
                             {
                                 bool wasCancel = cancelling.Value;
                                 cancelling.Value = false;
-                                // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391). Focus moving
-                                // INTO the open popup (a row click in flight) is not a departure — the click /
-                                // popup-close path commits instead.
-                                if (!wasCancel && handle.Value is not { IsOpen: true }) CommitSearch();
+                                if (handle.Value is { IsOpen: true } h)
+                                {
+                                    // Focus left for another control (Tab, a programmatic move) with the dropdown open:
+                                    // close it like WinUI FocusChanged (cpp:2183–2195); the close commits through
+                                    // ClosedAction (the light-dismiss path), so the search is committed exactly once.
+                                    // Focus moving INTO the open popup (a row press in flight) is not a departure — the
+                                    // click commits.
+                                    if (h.IsFocusOutside) Close();
+                                }
+                                // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391).
+                                else if (!wasCancel) CommitSearch();
                             }
                         },
                     };

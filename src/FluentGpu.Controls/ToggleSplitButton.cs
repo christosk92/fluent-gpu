@@ -69,13 +69,14 @@ public sealed class ToggleSplitButton : Component
         {
             if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
             // FocusTrap (Tab roves the menu) + light dismiss (Escape / click-outside); overlay captures + restores focus.
-            handle.Value = svc.Open(
+            var opened = handle.Value = svc.Open(
                 () => anchor.Value,
                 () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,                 // FlyoutShowOptions Placement = BottomEdgeAlignedLeft (SplitButton.cpp OpenFlyout)
                 // WinUI menus are windowed popups (FlyoutBase SetIsWindowedPopup) — may escape the window.
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () => { handle.Value = null; open.Value = false; };
+            // A reopen during this menu's close fade owns the cell and the open state now: a stale close leaves both.
+            opened.ClosedAction = () => { if (!ReferenceEquals(handle.Value, opened)) return; handle.Value = null; open.Value = false; };
             open.Value = true;
         }
 

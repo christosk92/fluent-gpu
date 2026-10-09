@@ -122,7 +122,12 @@ internal static class SkeletonDeriver
                 return Bar(s, sf.Width, sf.Height, sf.Grow, default, default, FlexAlign.Auto);
 
             case ScrollEl sc:
-                return sc with { Content = Derive(sc.Content, s) };
+                // The shimmer viewport is a stand-in, not the content's identity. A copied ScrollKey would restore the
+                // remembered offset into the short shimmer (clamped to ITS extent), and the shimmer's unmount on the Ready
+                // swap would save that clamped offset back over the remembered one before the real viewport restores it.
+                // A copied Handle would be authored on two live viewports (the exiting shimmer and the real one) that the
+                // host rebinds back and forth, and OnRealized would hand a composing control the shimmer node.
+                return sc with { Content = Derive(sc.Content, s), ScrollKey = null, Handle = null, OnRealized = null };
 
             case SkelRegionEl region:
                 // A content(seed) subtree may itself contain an async region (Wavee's detail track list is the

@@ -95,6 +95,8 @@ public sealed class Reorderable
     private bool _crossOver;             // a foreign session is hovering this list
     private int _crossInsert = -1;       // its current insertion slot (0..ItemCount)
     private bool _selfDrop;              // this gesture was RELEASED over this list (see RequireDropOnList)
+    private float _liftOrigin;           // list content origin (window space, main axis) at lift — scroll baseline
+    private float _pointerDelta;         // latest pointer main-axis travel since the press (window space)
 
     public Reorderable(string kind)
     {
@@ -283,14 +285,20 @@ public sealed class Reorderable
     /// <summary>The resting geometry table currently describes THIS list (same item count).</summary>
     private bool Sampled => Core.Count > 0 && Core.Count == Math.Max(0, ItemCount);
 
+    /// <summary>The list changed LENGTH under a live lift (a sync removed a row, the queue advanced, a tab closed): the
+    /// projection and the lift-time (from, to) describe a list that no longer exists, so <see cref="ItemAt"/> falls back
+    /// to identity and the drop cancels instead of moving whichever row now sits at the old index.</summary>
+    private bool Stale => Core.IsActive && Core.Count != Math.Max(0, ItemCount);
+
     /// <summary>The ORIGINAL item index shown at <paramref name="slot"/> under the current projection (identity when
     /// idle): render slot s with the item at <c>ItemAt(s)</c> and the item's STABLE key — mid-drag the dragged item
     /// occupies the dwell-committed slot and the keyed diff + FLIP animate the displaced siblings. With
     /// <see cref="LiveProject"/> off this stays identity while lifted (virtual-list mode — the insertion line is the
-    /// feedback; the commit reorders the model itself).</summary>
+    /// feedback; the commit reorders the model itself). A list whose <see cref="ItemCount"/> changed under the lift drops
+    /// the projection (identity), so the result is always an index of the CURRENT list.</summary>
     public int ItemAt(int slot)
     {
-        if (!Core.IsActive || !LiveProject) return slot;
+        if (!Core.IsActive || !LiveProject || Stale) return slot;
         EnsureOrder();
         return (uint)slot < (uint)Core.Count ? _order[slot] : slot;
     }
@@ -338,7 +346,7 @@ public sealed class Reorderable
             },
             OnDragStarted = _ => BeginGesture(index),
             OnDragDelta = OnDelta,
-            OnDragCompleted = _ => CompleteGesture(),
+            OnDragCompleted = e => { Track(Horizontal ? e.TotalDx : e.TotalDy); CompleteGesture(); },
             OnDragCanceled = CancelGesture,
             OnKeyDown = e => OnItemKey(index, e),
             OnFocusChanged = got => { if (!got && _kbLifted == index) KbCancel(); },   // rbd: losing focus drops the lift
@@ -394,20 +402,36 @@ public sealed class Reorderable
         _crossConsumed = false;
         _selfDrop = false;
         _lastDeltaWallMs = Environment.TickCount64;
+        _pointerDelta = 0f;
+        _liftOrigin = ContentOrigin();
         BeginCore(index);
         Announce(ReorderAnnounceKind.Grab, index);
         InvalidateOrder();   // projection starts as identity (target == dragged) — no render needed yet
     }
 
-    private void OnDelta(DragEventArgs e)
+    private void OnDelta(DragEventArgs e) => Follow(Horizontal ? e.TotalDx : e.TotalDy);
+
+    /// <summary>Re-run the slot math for the pointer's travel since the press, plus the dwell advance.</summary>
+    private void Follow(float pointerDelta)
     {
-        bool pendingChanged = Core.Update(Horizontal ? e.TotalDx : e.TotalDy);
-        if (pendingChanged && !LiveProject) RequestRender?.Invoke();   // the insertion line tracks the pending slot
+        Track(pointerDelta);
         if (!AutoDwell) return;
         long now = Environment.TickCount64;
         float dt = _lastDeltaWallMs == 0 ? 0f : Math.Clamp(now - _lastDeltaWallMs, 0, 1000);
         _lastDeltaWallMs = now;
         Advance(dt);
+    }
+
+    /// <summary>The pending slot for <paramref name="pointerDelta"/>, measured in CONTENT space: a scroll since the lift
+    /// (the drag's own edge auto-scroll, a wheel notch, an ancestor page scroll) carried the rows under a pointer that
+    /// may not have moved at all, so it counts as travel — the slot is the one under the pointer, not the one the
+    /// pointer's on-screen distance would reach in an unscrolled list.</summary>
+    private void Track(float pointerDelta)
+    {
+        if (!Core.IsActive || _kbLifted >= 0) return;
+        _pointerDelta = pointerDelta;
+        bool pendingChanged = Core.Update(pointerDelta + _liftOrigin - ContentOrigin());
+        if (pendingChanged && !LiveProject) RequestRender?.Invoke();   // the insertion line tracks the pending slot
     }
 
     private void CompleteGesture()
@@ -417,6 +441,12 @@ public sealed class Reorderable
             // The item was deposited into ANOTHER Reorderable — its OnCrossCommit mutated both models; committing
             // the local move too would double-apply. Drop the hints only.
             _crossConsumed = false;
+            AnnounceEnd(ReorderAnnounceKind.Cancel);
+            Core.Cancel();
+        }
+        else if (Stale)
+        {
+            // The list changed length mid-drag: the lift-time (from, to) would move whichever row now sits at `from`.
             AnnounceEnd(ReorderAnnounceKind.Cancel);
             Core.Cancel();
         }
@@ -543,8 +573,16 @@ public sealed class Reorderable
     private void KbDrop()
     {
         _kbLifted = -1;
-        AnnounceEnd(ReorderAnnounceKind.Drop);   // before Complete() resets the slot state
-        Core.Complete();   // commits at the shown slot (pending == target in keyboard mode)
+        if (Stale)
+        {
+            AnnounceEnd(ReorderAnnounceKind.Cancel);   // the list changed length under the lift: never commit stale indices
+            Core.Cancel();
+        }
+        else
+        {
+            AnnounceEnd(ReorderAnnounceKind.Drop);   // before Complete() resets the slot state
+            Core.Complete();   // commits at the shown slot (pending == target in keyboard mode)
+        }
         Changed();
     }
 
@@ -586,7 +624,13 @@ public sealed class Reorderable
 
     private void OnTargetOver(DragSession s)
     {
-        if (IsOwnPayload(s.Payload)) return;   // same-list: displacement, no line
+        if (IsOwnPayload(s.Payload))
+        {
+            // Same-list: displacement, no line. The engine re-runs OnOver every frame of an edge auto-scroll with the
+            // pointer still, so re-project the last pointer travel against the content that scrolled under it.
+            if (Core.IsActive && _kbLifted < 0) Follow(_pointerDelta);
+            return;
+        }
         int slot = SlotFromPosition(s.Position);
         // Captioned per move, not per slot change: the engine clears Session.Caption on every target change, so a
         // caption published only on the slot edge would vanish the moment the pointer re-entered from a sibling target.
@@ -661,6 +705,15 @@ public sealed class Reorderable
         float within = main - item * pitch;
         int slot = within > ItemExtent * 0.5f ? item + 1 : item;   // past the midpoint ⇒ insert AFTER the item
         return Math.Clamp(slot, 0, count);
+    }
+
+    /// <summary>Window-space main-axis position of the list's content origin: the wrapper's absolute start (which
+    /// carries every ANCESTOR scroll) minus the offset of a scroll viewport inside it. 0 without <see cref="Scene"/>.</summary>
+    private float ContentOrigin()
+    {
+        if (Scene is not { } scene || _listNode.IsNull || !scene.IsLive(_listNode)) return 0f;
+        var r = scene.AbsoluteRect(_listNode);
+        return (Horizontal ? r.X : r.Y) - ViewportScrollOffset();
     }
 
     private float ViewportScrollOffset()

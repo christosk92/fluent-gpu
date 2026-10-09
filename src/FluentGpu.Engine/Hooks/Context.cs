@@ -51,7 +51,7 @@ public static class FrameClock
     /// units — the <c>Stopwatch.GetTimestamp()</c> domain): the host's <see cref="FluentGpu.Pal.FrameClock.FrameQpc"/>,
     /// the same target time the scroll frame step and DirectManipulation consume. Monotone frame to frame within one host
     /// (never rewinds; see the multi-window note below for the cross-host caveat).
-    /// <para>Set by the host at the very top of <c>AppHost.RunFrame</c> — before the input pump, cross-thread posts,
+    /// <para>Set by the host at the very top of <c>AppHost.RunFrame</c> (and of a keep-alive <c>Paint</c>) — before the input pump, cross-thread posts,
     /// timers, the <see cref="Tick"/> publish and the reactive flush — so every handler, effect, render and bind thunk
     /// that runs inside a frame reads THIS frame's value. <c>0</c> before the first frame. Headless
     /// (<c>RefreshLattice.Headless</c>) it is the deterministic accumulated frame time instead of a QPC read, so it
@@ -62,8 +62,8 @@ public static class FrameClock
     /// after another on the same thread) writes it at the top of its OWN <c>RunFrame</c>, so it is last-writer: inside
     /// a host's frame it is that host's clock (each host snaps to its own display lattice and frame latency, so from
     /// one host's frame to the next host's the value may differ, even step back; code outside any frame sees whichever
-    /// host ran last). A repaint that bypasses <c>RunFrame</c> (the OS modal move/size keep-alive <c>Paint</c>) does
-    /// not rebuild the clock and keeps the last frame's value.</para></summary>
+    /// host ran last). A repaint that bypasses <c>RunFrame</c> (the OS modal move/size keep-alive <c>Paint</c>, the modal-loop
+    /// peer tick) builds and publishes its own frame clock, so motion keeps advancing during a window drag.</para></summary>
     public static long FrameQpc { get; internal set; }
 
     /// <summary>The PREDICTED vblank this frame's pixels land on, in QPC ticks (<see cref="System.Diagnostics.Stopwatch.Frequency"/>
@@ -74,7 +74,7 @@ public static class FrameClock
     /// <c>SchedulerBinding.currentFrameTimeStamp</c>; Chromium animates on <c>BeginFrameArgs.frame_time</c>.) Never
     /// sample <c>Environment.TickCount64</c> for motion — its ~15.6 ms quanta step visibly at display rate.
     /// <para>Seconds: <c>FrameClock.PresentQpc / (double)Stopwatch.Frequency</c>. Same lifecycle as
-    /// <see cref="FrameQpc"/>: set at the top of <c>AppHost.RunFrame</c> on every path (headless included —
+    /// <see cref="FrameQpc"/>: set at the top of <c>AppHost.RunFrame</c> and of a keep-alive <c>Paint</c> on every path (headless included —
     /// deterministic there: frame time + one refresh period), <c>0</c> before the first frame, UI-thread,
     /// last-writer across multiple hosts.</para></summary>
     public static long PresentQpc { get; internal set; }
@@ -283,6 +283,10 @@ public sealed class InputHooks
     /// (WinUI TabFocusNavigation=Cycle - the ContentDialog/flyout focus trap). Host-wired to
     /// <c>InputDispatcher.PushFocusScope</c>.</summary>
     public Action<NodeHandle>? PushFocusScope;
+    /// <summary>Push a MODAL focus scope (DismissBehavior.Modal): the Tab trap of <see cref="PushFocusScope"/>, and keyboard
+    /// accelerators / access keys resolve only inside it (and overlays stacked above it) until popped by <see cref="PopFocusScope"/>.
+    /// Host-wired to <c>InputDispatcher.PushModalFocusScope</c>.</summary>
+    public Action<NodeHandle>? PushModalFocusScope;
     /// <summary>Remove the focus scope previously pushed for this root (order-independent - overlays can close out of
     /// stack order). Host-wired to <c>InputDispatcher.RemoveFocusScope</c>.</summary>
     public Action<NodeHandle>? PopFocusScope;

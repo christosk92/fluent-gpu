@@ -85,6 +85,10 @@ public sealed class PathRealizationCache
     private int _vtxCursor, _idxCursor;
 
     private ulong _currentFrame;
+    // The slab size the NEXT compaction waits for: twice what the last one kept (0 until the first). A span-copied or
+    // kept-slice draw never re-stamps LastUsedFrame, so a compaction also drops LIVE entries, and every host re-records
+    // and re-tessellates them (see Generation). Without this, a live set near the budget would pay that every few frames.
+    private long _compactAtBytes;
 
     /// <summary>Total <see cref="PathTessellator"/> invocations that actually ran (cache MISSES only — a hit never
     /// re-tessellates). Always-on plain counter (NOT <c>[Conditional]</c>) — a Release build's zero-re-tessellation
@@ -96,19 +100,30 @@ public sealed class PathRealizationCache
     public long SlabBytes => (long)_vtxCursor * Unsafe.SizeOf<PathVertex>() + (long)_idxCursor * sizeof(uint);
     /// <summary>Total entries dropped by LRU compaction across the process lifetime.</summary>
     public int EvictionCount { get; private set; }
+    /// <summary>Bumped by every compaction that dropped an entry, and so relocated the survivors. Recorded
+    /// FillPath/StrokePath/PushStencilClip bytes carry RAW slab offsets. Bytes recorded under an older generation (a copied
+    /// span, or a kept slice arena a tile re-rasters from) index the wrong triangles or run past the slab's end. A SpanTable
+    /// recorded under another generation therefore forgets its spans (<see cref="SpanTable.SyncPathSlab"/>), and the host
+    /// refuses a composite-only turn until it has re-recorded.</summary>
+    public ulong Generation { get; private set; }
 
     public ReadOnlySpan<PathVertex> Vertices => _vtxSlab.AsSpan(0, _vtxCursor);
     public ReadOnlySpan<uint> Indices => _idxSlab.AsSpan(0, _idxCursor);
 
     /// <summary>Frame-boundary hook: advances the current frame index and, ONLY if the slab is currently over
-    /// <see cref="GpuProfile.PathSlabBudgetBytes"/>, compacts out every entry outside the quarantine window (see type
-    /// doc). Never runs mid-frame; the read path (<see cref="TryRealizeFill"/>/<see cref="TryRealizeStroke"/>) never
-    /// triggers it.</summary>
+    /// <see cref="GpuProfile.PathSlabBudgetBytes"/> and over twice what the last compaction kept, compacts out every entry
+    /// outside the quarantine window (see type doc). Never runs mid-frame; the read path
+    /// (<see cref="TryRealizeFill"/>/<see cref="TryRealizeStroke"/>) never triggers it.</summary>
     public void BeginFrame(ulong frameIndex)
     {
         _currentFrame = frameIndex;
-        if (SlabBytes > GpuProfile.PathSlabBudgetBytes) CompactEvictingStale();
+        if (SlabBytes > Math.Max(GpuProfile.PathSlabBudgetBytes, _compactAtBytes)) CompactEvictingStale();
     }
+
+    /// <summary>The engine's record-turn hook: <see cref="BeginFrame"/> at the next frame index. The host calls it immediately
+    /// before every scene record, on the thread that records (the render thread, or the UI thread when there is none).
+    /// A compaction therefore never lands between a record and the encode that copies its realizations out of the slab.</summary>
+    public void NextFrame() => BeginFrame(_currentFrame + 1);
 
     public bool TryRealizeFill(PathData path, FillRule rule, float deviceScale, out PathRef pathRef)
     {
@@ -230,15 +245,15 @@ public sealed class PathRealizationCache
     {
         ulong protectFrom = _currentFrame > QuarantineFrames ? _currentFrame - QuarantineFrames : 0;
 
-        var keep = new List<(PathRealizationKey Key, PathRef Value, ulong LastUsed)>(_occupied);
         int evicted = 0;
         for (int i = 0; i < _slots.Length; i++)
-        {
-            if (_slots[i].State != SlotState.Occupied) continue;
-            if (_slots[i].LastUsedFrame >= protectFrom) keep.Add((_slots[i].Key, _slots[i].Value, _slots[i].LastUsedFrame));
-            else evicted++;
-        }
-        if (evicted == 0) return;
+            if (_slots[i].State == SlotState.Occupied && _slots[i].LastUsedFrame < protectFrom) evicted++;
+        if (evicted == 0) return;   // over budget but all quarantined: a per-frame scan, never an allocation
+
+        var keep = new List<(PathRealizationKey Key, PathRef Value, ulong LastUsed)>(_occupied - evicted);
+        for (int i = 0; i < _slots.Length; i++)
+            if (_slots[i].State == SlotState.Occupied && _slots[i].LastUsedFrame >= protectFrom)
+                keep.Add((_slots[i].Key, _slots[i].Value, _slots[i].LastUsedFrame));
 
         // Preserve relative slab order (stable sort by old VtxStart) so a re-realized neighbor set stays contiguous
         // rather than shuffled — purely cosmetic for correctness, but keeps the slab's locality sane.
@@ -265,5 +280,7 @@ public sealed class PathRealizationCache
         for (int i = 0; i < rebuilt.Length; i++) InsertRaw(rebuilt[i].Key, rebuilt[i].Value, rebuilt[i].LastUsed);
 
         EvictionCount += evicted;
+        Generation++;
+        _compactAtBytes = 2 * SlabBytes;
     }
 }

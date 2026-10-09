@@ -179,6 +179,9 @@ public sealed partial class SliceRecorder
         public RectF AcrylicRect;
         public CornerRadius4 AcrylicRadii;
         public float AcrylicAlpha;
+        // a slice root whose stream is its Layer marker alone: the span input signature (opacity, inherited state, focus /
+        // text-edit / scroll colours…) its last walk recorded that marker and the Layer's content under
+        public ulong LayerInputSig;
         // a COMPOSITE-TIME sticky clip (CompositeSliceFlags.StickyClip): the node's world in its own walk's space, with
         // which its current NodePaint.ClipRect (the ClipTop pose) becomes the slice's half-plane clip at placement
         public bool Sticky;
@@ -199,7 +202,8 @@ public sealed partial class SliceRecorder
         public readonly int NodeIndex;
         public readonly uint Gen;
         public readonly Affine2D Local;
-        public Baked(int nodeIndex, uint gen, in Affine2D local) { NodeIndex = nodeIndex; Gen = gen; Local = local; }
+        public readonly int ByteStart;   // where the node's walk stood in the slot's arena: a span copy carries the entry along
+        public Baked(int nodeIndex, uint gen, in Affine2D local, int byteStart) { NodeIndex = nodeIndex; Gen = gen; Local = local; ByteStart = byteStart; }
     }
 
     private Rec[] _recs = new Rec[32];
@@ -213,8 +217,13 @@ public sealed partial class SliceRecorder
     // the scene, never of which subtrees happened to be copied.
     private SliceSpan[][] _indexPrior = new SliceSpan[32][];
     private int[] _indexPriorCount = new int[32];
+    // The baked poses a slot's stream holds, double-buffered like the index: a clean span copied out of the prior buffer
+    // carries the baked bytes of every scaled / folded effect under it, so it carries their entries too (the effect node's
+    // own walk, which adds them, never runs).
     private Baked[][] _baked = new Baked[32][];
     private int[] _bakedCount = new int[32];
+    private Baked[][] _bakedPrior = new Baked[32][];
+    private int[] _bakedPriorCount = new int[32];
     private int _slotCount;   // high-water of used slots
 
     private uint _frame;
@@ -236,7 +245,7 @@ public sealed partial class SliceRecorder
 
     public SliceRecorder()
     {
-        for (int i = 0; i < _index.Length; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; }
+        for (int i = 0; i < _index.Length; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; _bakedPrior[i] = new Baked[4]; }
     }
 
     // ── census ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -304,7 +313,9 @@ public sealed partial class SliceRecorder
         Array.Resize(ref _indexPriorCount, n);
         Array.Resize(ref _baked, n);
         Array.Resize(ref _bakedCount, n);
-        for (int i = old; i < n; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; }
+        Array.Resize(ref _bakedPrior, n);
+        Array.Resize(ref _bakedPriorCount, n);
+        for (int i = old; i < n; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; _bakedPrior[i] = new Baked[4]; }
     }
 
     /// <summary>The slot for (node, gen, role), created when absent. −1 when that slice was already registered THIS
@@ -329,6 +340,7 @@ public sealed partial class SliceRecorder
         _indexCount[s] = 0;
         _indexPriorCount[s] = 0;
         _bakedCount[s] = 0;
+        _bakedPriorCount[s] = 0;
         _recs[s] = new Rec
         {
             Live = true, NodeIndex = nodeIndex, Gen = gen, Role = (int)role, Kind = kind, Parent = -1,
@@ -360,6 +372,8 @@ public sealed partial class SliceRecorder
         (_index[slot], _indexPrior[slot]) = (_indexPrior[slot], _index[slot]);
         _indexPriorCount[slot] = _indexCount[slot];
         _indexCount[slot] = 0;
+        (_baked[slot], _bakedPrior[slot]) = (_bakedPrior[slot], _baked[slot]);
+        _bakedPriorCount[slot] = _bakedCount[slot];
         _bakedCount[slot] = 0;
         _walked++;
         CountBudget(in r);
@@ -389,11 +403,17 @@ public sealed partial class SliceRecorder
 
     internal RectF BoundsOf(int slot) => _recs[slot].Bounds;
 
-    /// <summary>Does <paramref name="slot"/>'s arena hold exactly ONE op — the marker <paramref name="cmd"/>, byte for byte?
-    /// (A slice root whose stream is its nested Layer slice's marker alone keeps whole on that.)</summary>
-    internal bool HoldsOnlyMarker(int slot, in CompositeSliceCmd cmd)
+    /// <summary>The span input signature the walk that just swapped <paramref name="slot"/>'s arena records its Layer marker
+    /// (and so its Layer slice's content) under — what <see cref="HoldsOnlyMarker"/> keeps the slice whole on.</summary>
+    internal void SetLayerInputSig(int slot, ulong inputSig) => _recs[slot].LayerInputSig = inputSig;
+
+    /// <summary>Does <paramref name="slot"/>'s arena hold exactly ONE op — the marker <paramref name="cmd"/>, byte for byte —
+    /// written by a walk under span input signature <paramref name="inputSig"/> (<see cref="SetLayerInputSig"/>)? (A slice
+    /// root whose stream is its nested Layer slice's marker alone keeps whole on that.)</summary>
+    internal bool HoldsOnlyMarker(int slot, in CompositeSliceCmd cmd, ulong inputSig)
     {
-        if (!_recs[slot].Live || _arenas[slot] is not { } dl || _recs[slot].FirstChild < 0) return false;
+        if (!_recs[slot].Live || _arenas[slot] is not { } dl || _recs[slot].FirstChild < 0
+            || _recs[slot].LayerInputSig != inputSig) return false;
         ReadOnlySpan<byte> bytes = dl.Bytes;
         int body = Unsafe.SizeOf<CompositeSliceCmd>();
         if (bytes.Length != sizeof(int) + body || (DrawOp)MemoryMarshal.Read<int>(bytes) != DrawOp.CompositeSlice) return false;
@@ -568,12 +588,33 @@ public sealed partial class SliceRecorder
     }
 
     internal void AddBaked(int slot, NodeHandle node, in Affine2D local)
+        => AppendBaked(slot, new Baked((int)node.Raw.Index, node.Raw.Gen, local, _arenas[slot]!.BytePosition));
+
+    private void AppendBaked(int slot, in Baked b)
     {
         int n = _bakedCount[slot];
         ref Baked[] arr = ref _baked[slot];
         if (n == arr.Length) Array.Resize(ref arr, arr.Length * 2);
-        arr[n] = new Baked((int)node.Raw.Index, node.Raw.Gen, local);
+        arr[n] = b;
         _bakedCount[slot] = n + 1;
+    }
+
+    /// <summary>A clean span was copied out of the slot's prior buffer (<paramref name="priorByteStart"/>,
+    /// <paramref name="byteLength"/>) to <paramref name="byteStart"/>: carry along the baked poses recorded inside it,
+    /// shifted, so a later move of one still re-records the slice (<see cref="CollectPoseMismatches"/>).</summary>
+    internal void CopyBakedFromPrior(int slot, int priorByteStart, int byteLength, int byteStart)
+    {
+        int count = _bakedPriorCount[slot];
+        if (count == 0 || byteLength <= 0) return;
+        Baked[] prior = _bakedPrior[slot];
+        int lo = 0, hi = count;   // first entry at or after priorByteStart (entries are in walk order: sorted by start)
+        while (lo < hi) { int mid = (lo + hi) >> 1; if (prior[mid].ByteStart < priorByteStart) lo = mid + 1; else hi = mid; }
+        int end = priorByteStart + byteLength, db = byteStart - priorByteStart;
+        for (int i = lo; i < count && prior[i].ByteStart < end; i++)
+        {
+            ref readonly Baked b = ref prior[i];
+            AppendBaked(slot, new Baked(b.NodeIndex, b.Gen, in b.Local, b.ByteStart + db));
+        }
     }
 
     /// <summary>Where the slot's space was last PRESENTED (the last placement's accumulated offset; before any, its
@@ -650,7 +691,7 @@ public sealed partial class SliceRecorder
             _arenas[RootSlot]!.Reset();
             _curGen[RootSlot] = NewGen();
             _priorGen[RootSlot] = 0;
-            _indexCount[RootSlot] = _indexPriorCount[RootSlot] = _bakedCount[RootSlot] = 0;
+            _indexCount[RootSlot] = _indexPriorCount[RootSlot] = _bakedCount[RootSlot] = _bakedPriorCount[RootSlot] = 0;
             _recs[RootSlot] = new Rec
             {
                 Live = true, NodeIndex = (int)root.Raw.Index, Gen = root.Raw.Gen, Role = 0, Kind = SliceKind.Static,
@@ -752,6 +793,10 @@ public sealed partial class SliceRecorder
                 _clipBaked.RemoveAt(_clipBaked.Count - 1);
                 continue;
             }
+            // Collapsed (itself or under a collapsed ancestor): the walk returns before it can re-bake the node, and the
+            // node paints nothing, so a moved clip is no reason to re-record its chain. Kept, not purged: a span stored
+            // before the collapse still carries the baked bytes, so the watch resumes the pass it shows again.
+            if (!PaintReachable(scene, h)) continue;
             if (scene.Paint(h).ClipRect != _clipBakedRect[idx])
             {
                 _clipChangedFrame[idx] = _frame;
@@ -798,6 +843,14 @@ public sealed partial class SliceRecorder
                 if (ChromeSig(in sc, ShownOffset(scene, vp, in sc)) != r.ChromeSig) _mustRewalk.Add(vp);
             }
         }
+    }
+
+    // The record walk's presence cut (SceneRecorder.Walk): a node is reached only when it and every ancestor are Visible.
+    private static bool PaintReachable(SceneRecordingSnapshot scene, NodeHandle node)
+    {
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if ((scene.Flags(n) & NodeFlags.Visible) == 0) return false;
+        return true;
     }
 
     /// <summary>Close the pass: retire every slice not registered in it (its arena returns to the pool).</summary>
@@ -1146,6 +1199,10 @@ public sealed partial class SliceRecorder
         int stencils = 0;   // stencil (path) clips open: nothing inside them is a known opaque rect
         RectF top = RectF.Infinite, round = default;
         float roundR = 0f;
+        // The span-index entries open at each op (pre-order, properly nested, at most SpanIndexDepth deep): every footprint
+        // below grows them, so the per-tile replay's entry cull keeps whatever a tile's want counted (GrowIndex).
+        Span<int> openEntries = stackalloc int[SpanIndexDepth];
+        int openCount = 0, nextEntry = 0;
         while (pos + sizeof(int) <= bytes.Length)
         {
             var op = (DrawOp)MemoryMarshal.Read<int>(bytes[pos..]);
@@ -1155,6 +1212,7 @@ public sealed partial class SliceRecorder
             ulong oh = FluentGpu.Render.Evidence.TileContentHash.OpHash(bytes.Slice(pos, sizeof(int) + body));
             whole = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, oh);
             bool layerPush = false, layerSpread = false;
+            float layerReach = 0f;
             switch (op)
             {
                 case DrawOp.PushClip:
@@ -1176,6 +1234,7 @@ public sealed partial class SliceRecorder
                     layerPush = true;
                     // a blurred group composites each pixel from its content AROUND it: no sub-tile repaint bounds it
                     layerSpread = (kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && lc.BlurSigma > 0f;
+                    if (layerSpread) layerReach = SelfBlurRegion.TapRadius(lc.BlurSigma);
                     goto default;
                 }
                 case DrawOp.PushStencilClip:
@@ -1229,11 +1288,17 @@ public sealed partial class SliceRecorder
                         // transparent hit plate) paints nothing: it must not stretch the segment's painted bounds, or a
                         // full-window plate makes its segment hold a window of empty tiles. Its bytes stay in the stream and
                         // its content scan below is unchanged; the day it becomes visible its bytes change and it is scanned in.
-                        if (!b.IsEmpty && !InvisibleFill(op, p)) segBounds = Union(segBounds, b);
-                        if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && OpaqueFill(op, p, in top, out RectF o)
+                        if (!b.IsEmpty && !InvisibleFill(op, p))
+                        {
+                            segBounds = Union(segBounds, b);
+                            GrowIndex(s, pos, in b, openEntries, ref openCount, ref nextEntry);
+                        }
+                        // An ADDITIVE fill (SetBlend, colour ONE/ONE, alpha ZERO/ONE) leaves the tile's alpha as it found it:
+                        // over the transparent clear it composites as page + glow, so it hides nothing beneath it.
+                        if (layers.Depth == 0 && stencils == 0 && roundR <= 0f && !_cBlendAdditive && OpaqueFill(op, p, in top, out RectF o)
                             && o.W * o.H > segOpaque.W * segOpaque.H)
                             segOpaque = o;
-                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread);
+                        ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread, reach: layerReach);
                         // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
                         // own DrawVideo is added below, after this, and never counts against itself).
                         if (!b.IsEmpty)
@@ -1272,7 +1337,7 @@ public sealed partial class SliceRecorder
                             }
                         }
                     }
-                    else if (layerPush) ContentScanOp(s, pos, in top, oh, scope: true, spread: layerSpread);   // an extent-unknown layer: all it encloses
+                    else if (layerPush) ContentScanOp(s, pos, in top, oh, scope: true, spread: layerSpread, reach: layerReach);   // an extent-unknown layer: all it encloses
                     break;
             }
             cmds++;
@@ -1286,6 +1351,26 @@ public sealed partial class SliceRecorder
         _scanVideoCount[s] = videos;
         _scanFadeCount[s] = fades;
         _scanInline[s] = inline;
+    }
+
+    /// <summary>Grow every span-index entry of slot <paramref name="s"/> holding the op at <paramref name="pos"/> by its
+    /// footprint <paramref name="b"/>. An entry is recorded with its subtree's BOXES, but a tile's want counts each op by
+    /// its <see cref="SliceOpBounds"/> footprint — a glyph run's reaches a whole halo past its node box — and the per-tile
+    /// replay skips an entry that misses the tile: an entry short of a footprint drops a run the tile counted and freezes
+    /// the cut-off ink into a tile marked valid. Pre-order entries nest, so the ones open at <paramref name="pos"/> are a
+    /// stack (<paramref name="open"/>) the ascending scan pops and pushes.</summary>
+    private void GrowIndex(int s, int pos, in RectF b, Span<int> open, ref int openCount, ref int next)
+    {
+        SliceSpan[] index = _index[s];
+        int count = _indexCount[s];
+        while (openCount > 0 && index[open[openCount - 1]].ByteStart + index[open[openCount - 1]].ByteLength <= pos) openCount--;
+        for (; next < count && index[next].ByteStart <= pos; next++)
+            if (index[next].ByteStart + index[next].ByteLength > pos && openCount < open.Length) open[openCount++] = next;
+        for (int k = 0; k < openCount; k++)
+        {
+            ref SliceSpan en = ref index[open[k]];
+            en = en with { Bounds = Union(en.Bounds, b) };
+        }
     }
 
     /// <summary>How far past a clip's DIP rect the backend's scissor can reach: it rounds the clip OUT to whole device px
@@ -1714,6 +1799,31 @@ public sealed partial class SliceRecorder
 
     private static RectF ClipAnd(in RectF clip, in RectF r) => clip.IsInfinite ? r : clip.Intersect(r);
 
+    /// <summary>The video holes of a slice the band line cut away whole, and of every slice below it, posed under the clip that cut
+    /// them (window DIP) with no erase: nothing of the subtree composites, but the video placement follows <see cref="PosedHoles"/>,
+    /// and a token missing there leaves the video at the UI's published rect, whose viewport knows only ClipsToBounds ancestors.</summary>
+    private void PoseCutHoles(int slot, SceneRecordingSnapshot scene, float accDx, float accDy, float parentAccDx, float parentAccDy, in RectF clip)
+    {
+        ScanSlot(slot);
+        for (int v = 0; v < _scanVideoCount[slot]; v++)
+        {
+            ref ScanVideo sv = ref _scanVideos[slot][v];
+            if (sv.SurfaceId <= 0 || _posedHoleCount >= _posedHoles.Length) continue;
+            int at = _posedHoleCount++;
+            _posedHoles[at] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = clip };
+            _posedMeta[at] = new PosedMeta { PlanIdx = -1, Slot = slot, Seg = sv.Seg, After = Offset(sv.After, accDx, accDy), Inline = sv.Order == VideoEraseOrder.AfterSegment };
+        }
+        int marks = _scanMarkCount[slot];
+        for (int k = 0; k < marks; k++)
+        {
+            CompositeSliceCmd m = _scanMarks[slot][k].Cmd;
+            int child = Find(m.NodeIndex, m.Gen, m.Sub);
+            if (child < 0 || _recs[child].Visited) continue;
+            ChildGeometry(child, in m, scene, accDx, accDy, parentAccDx, parentAccDy, in clip, out float cdx, out float cdy, out _, out _, out RectF cc);
+            PoseCutHoles(child, scene, cdx, cdy, accDx, accDy, in cc);
+        }
+    }
+
     private static RectF GrowTop(in RectF r, float by) => new(r.X, r.Y - by, r.W, r.H + by);
 
     private void PlaceChild(int parentSlot, in ScanMark mark, SceneRecordingSnapshot scene, float accDx, float accDy,
@@ -1785,8 +1895,9 @@ public sealed partial class SliceRecorder
         c.LastStickyWc = stickyWc;
         // Fully cut away (the band line has passed the slice's far edge, its own or an enclosing sticky group's): nothing of
         // it composites this turn, exactly as the paint route culled the subtree an empty clip left nothing of.
-        if (sticky && (childClip.IsEmpty || placed.Intersect(childClip).IsEmpty)) return;
-        if (!cull.IsInfinite && placed.Intersect(cull).IsEmpty) return;
+        // Its video holes are still posed under the clip that cut them (PosedHoles): the video behind them must hide at the line too.
+        if (sticky && (childClip.IsEmpty || placed.Intersect(childClip).IsEmpty)) { PoseCutHoles(child, scene, cdx, cdy, accDx, accDy, in childClip); return; }
+        if (!cull.IsInfinite && placed.Intersect(cull).IsEmpty) { PoseCutHoles(child, scene, cdx, cdy, accDx, accDy, ClipAnd(childClip, cull)); return; }
 
         // The marker's group layer, translated to its posed offset. A WhileStuck fade (CompositeSliceFlags.FadeWhileStuck)
         // exists only on a turn whose sticky clip is engaged: released, the slice places with no layer at all.
@@ -1841,8 +1952,13 @@ public sealed partial class SliceRecorder
             MixRect(ref _compositeHash, layer.Layer.DeviceRect);
             Mix(ref _compositeHash, cdx); Mix(ref _compositeHash, cdy); MixDist(ref _compositeHash, in dist);
             bool liftThumbs = ChromeOverLayer(in layer.Layer) && ThumbsTrail(child);
+            int posedFrom = _posedHoleCount;
             PlaceSlot(child, scene, cdx, cdy, accDx, accDy, clip, clip, float.NaN, 0f,
                 sticky ? ClipAnd(cull, Offset(stickyWc, cdx, cdy)) : cull, round, roundR, default, default, default, liftThumbs, ref repaint);
+            // The group's band line cuts its surface where it is drawn, so every hole it encloses shows only below it: the video
+            // behind each takes the line too (its erase stays unclipped by it, inside the surface).
+            if (sticky)
+                for (int h = posedFrom; h < _posedHoleCount; h++) _posedHoles[h].EffClip = ClipAnd(_posedHoles[h].EffClip, childClip);
             ref Plan gc = ref NewPlan(PlanKind.GroupClose);
             gc.Slot = child;
             if (liftThumbs) PlaceTrailingThumbs(child, scene, cdx, cdy, accDx, accDy, in childClip, in cull, in round, roundR, in dist, ref repaint);
@@ -2514,7 +2630,7 @@ public sealed partial class SliceRecorder
     /// <summary>A <see cref="DrawOp.FillRoundRect"/> that paints its whole rect FULLY OPAQUE: a solid colour of alpha 1 at
     /// opacity 1, square corners, under a translation-only transform. <paramref name="rect"/> = that rect (slot space DIP)
     /// cut by the open rectangular <paramref name="clip"/>. Its edges may be anti-aliased: the composite shrinks the rect
-    /// to whole pixels before trusting it.</summary>
+    /// to whole pixels before trusting it. The caller also skips it under the Additive paint blend.</summary>
     private static bool OpaqueFill(DrawOp op, ReadOnlySpan<byte> payload, in RectF clip, out RectF rect)
     {
         rect = default;

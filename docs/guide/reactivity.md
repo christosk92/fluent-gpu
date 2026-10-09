@@ -105,7 +105,7 @@ per-row re-read of the signal), diffs the rows by `key`, and preserves each row'
 state — across insert/move/remove. The `key` must be a stable, unique per-item id: **never the index** (a reorder would
 otherwise reassign state to the wrong row). A duplicate key trips a DEBUG tripwire. Overloads accept a
 `Func<IReadOnlyList<T>>` or the collection signal directly, and a `(item)` or `(item, index)` row builder. A parent
-re-render that rebuilds the `Flow.For` re-points the row closures in place (they never freeze at first mount).
+re-render that rebuilds the `Flow.For` re-points the row closures in place (they never freeze at first mount). The list is layout-transparent: its rows flow on the enclosing container's axis with its `Gap`, `Wrap` and `AlignItems`, so `HStack(gap: 4, Flow.For(...))` lays the rows out side by side 4 DIP apart (a `GridEl` still places the whole list in one cell).
 
 ### 4. Async data — `UseResource` (stale-while-revalidate)
 `UseResource` kicks an async `loader` at mount, reloads when its `DepKey deps` change, and returns a `Resource<T>` — a
@@ -194,6 +194,8 @@ cells (the failure mode of the old positional model). Two caveats: put loop hook
 stays aligned by ordinal when the count changes (append/remove at the end — reordering the middle re-associates state,
 same as a keyed list without a `keyOf`); and don't write **two** `Use*` calls on one physical source line behind a
 conditional (they share a line and would swap cell types). `FGRP005` remains as a compatibility lint, not a hard rule.
+The composite hooks `UseField`, `UseGesture`, `UseActivation` and `UseVideo`, the animation hooks `UseSpring`, `UseTransition`, `UseKeyframes` and `UseDrivenAnimation`, and the motion sugar `UseEntrance`, `UseHoverScale` and `UseSoftReveal` take the caller's call site too and key every inner cell to it, so they are just as legal behind a conditional. `UseField` therefore takes up to four inline rules; pass
+an array (`UseField(sig, [r1, r2, r3, r4, r5])`) for more.
 
 ## One component model — run-once is inferred, not a mode
 

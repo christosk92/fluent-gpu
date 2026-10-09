@@ -708,6 +708,13 @@ internal sealed class SwipeControlCore : Component
             UpdateButtons(s, s * clusterW, cfg, clusterW, controlW);   // land fully revealed (also disarms the morph)
         }
 
+        void CancelPan()   // the gesture died with no release (touch cancel / capture loss / window blur): commit nothing
+        {
+            if (!panning.Value) return;
+            panning.Value = false;
+            Close();   // settle home instead of stranding a half-revealed row under a lifted finger
+        }
+
         void CommitExecute()
         {
             if (p is null || !isOpen.Peek()) return;
@@ -980,6 +987,7 @@ internal sealed class SwipeControlCore : Component
             // root box is a row (Direction default 0) ⇒ the dispatcher locks the swipe to the X axis.
             DragYieldsToPan = true,
             OnClick = ReleaseOrTap,
+            OnDragCanceled = CancelPan,   // a per-pointer cancel has no release edge (WindowBlur also closes via the observer)
             // Got/LostFocus is routed through ancestors. Moving focus within the swipe keeps it open; leaving the
             // subtree closes it, so a keyboard/touch interaction elsewhere never strands a translated row.
             OnFocusChanged = got => { if (!got) Close(); },

@@ -258,6 +258,15 @@ public abstract class Computation : IDisposable
         finally { Tracking.Current = prevC; State = Clean; }
     }
 
+    /// <summary>Drop every upstream link and go DIRTY, so the next pull recomputes (and re-links) from scratch: the
+    /// release half of <see cref="Memo{T}"/>'s <c>releaseWhenUnobserved</c>. Never called from inside a notify loop (only
+    /// from a read, or from a reader's unlink at its re-run or dispose), so no <c>_subs</c> walk sees it.</summary>
+    private protected void ReleaseSources()
+    {
+        UnlinkSources();
+        State = Dirty;
+    }
+
     private void UnlinkSources()
     {
         for (int i = 0; i < _sources.Count; i++) _sources[i].Unsubscribe(this);

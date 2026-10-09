@@ -83,6 +83,10 @@ public sealed class RenderThread : IDisposable
     private readonly Action? _childPaceBegin;
     private readonly Func<string?>? _childPaceReport;
     private readonly Action? _tick;            // motion re-present of the retained scene (AppHost.RenderMotion)
+    // Whether the motion turn just run reached the swapchain (AppHost.MotionTurnPresented). False = the host found every pose
+    // unchanged and elided the record AND the present (or motion ended in the slot wait): nothing reached the glass and the
+    // credit the turn took is still held. Null => every motion turn presents (tests / hosts without elision).
+    private readonly Func<bool>? _tickPresented;
     // The refresh period (QPC ticks): the motion fallback period when no display clock exists, and the tick backstop.
     private readonly Func<long>? _tickPeriod;
     // Present-slot pacing (IGpuDevice.TryTakePresentSlot): take the swapchain's present-queue credit BEFORE choosing
@@ -107,6 +111,9 @@ public sealed class RenderThread : IDisposable
     // The display clock's TickSeq of the last present (PresentCadenceInput.LastPresentedTickSeq). 0 = none yet, AND the
     // sentinel IRenderDisplayClock.TickSeq returns when it cannot say — PresentCadence never gates on 0.
     private long _lastPresentedTickSeq;
+    // The display tick whose motion turn was ELIDED (presented nothing). A fresh publication landing later in that tick presents
+    // at once instead of a tick later; a bare re-wake on it skips (it would only elide again). 0 = none.
+    private long _elidedTickSeq;
     private bool _lastPresentWasMotion;
     private long _raceTickSeq;   // the tick a race hit was last charged to (one per tick)
     // Always-on pacing evidence (render thread writes, UI reads cumulative totals): which presents were fresh
@@ -234,7 +241,7 @@ public sealed class RenderThread : IDisposable
                         Action<nint>? submitAbortHandleSink = null, Func<bool>? ownMotion = null,
                         Action? childPaceBegin = null, Func<string?>? childPaceReport = null,
                         Func<PresentSplit>? presentSplit = null, Action? preTurn = null, Action? postTurn = null,
-                        Func<long, int>? idleTrim = null)
+                        Func<long, int>? idleTrim = null, Func<bool>? tickPresented = null)
     {
         _idleTrim = idleTrim;
         _idleTrimWaitMs = idleTrim is null ? -1 : 0;   // due at once: the first clean-idle wait times out into the first pass
@@ -253,6 +260,7 @@ public sealed class RenderThread : IDisposable
         _extraDrain = extraDrain;
         _needsTick = needsTick;
         _tick = tick;
+        _tickPresented = tickPresented;
         _tickPeriod = tickPeriod;
         _takePresentSlot = takePresentSlot;
         _displayClock = displayClock;
@@ -481,6 +489,17 @@ public sealed class RenderThread : IDisposable
         bool clockPaced = ownMotion && _displayClock?.IsAvailable == true;
         long tickSeq = clockPaced ? _displayClock!.TickSeq : 0;
         long tickQpc = clockPaced ? _displayClock!.TickQpc : 0;
+        // A stamp older than s_tickMaxAgeQpc is not this turn's vblank, and its seq is no tick this turn may find spent
+        // (TryGetDisplayTick's rule, and the UI production gate's: AppHost.GateTickSeq). Either the clock STALLED (its waits
+        // time out, a timeout is never a tick, so the seq freezes while the loop keeps waking on BackstopMs), or the loop
+        // disarmed it while no motion was live and its last tick is from before that park. A FRESH publication pending must
+        // not wait on that frozen seq: gated on it, the UI's backstop-paced frames (input feedback, timers) never reached the
+        // glass until the clock ticked again. Such a turn runs unpaced (the credit's liveness take bounds it, as with no
+        // clock), and its poses anchor on now: a row whose motion just came back (an unpark or un-occlusion:
+        // HasOwnRenderMotion re-anchors every row at now) must not be posed at its anchor from the old stamp (a loop at
+        // phase 0, a fade rewound). With no fresh publication the seq stays in force: a clock that stops mid-motion presents
+        // nothing more for the tick it already spent, so the stale stamp alone never re-presents motion on every backstop wake.
+        if (tickQpc != 0 && turnStart - tickQpc > s_tickMaxAgeQpc) { if (_publisher.HasPendingFrame) tickSeq = 0; tickQpc = 0; }
         bool fresh = _publisher.HasPendingFrame;
         if (!fresh && !ownMotion) return motion;   // bare wake (child drain, quiesce nudge) or child-only motion: nothing for the parent, no slot reserved (extraDrain already ran, before this decision)
         // This tick has already been presented for: the work waits for the next tick. Decided BEFORE the slot wait so
@@ -502,6 +521,10 @@ public sealed class RenderThread : IDisposable
         // re-run is not a new busy tick — it would back off for a second on every such wake), or, near the end of the
         // tick, open the slot just after the next vblank and present THIS tick's frame there: the late phase the skip escaped.
         if (tickSeq != 0 && tickSeq == _catchUpTickSeq) { _turnKind = LedgerTurnKind.CatchUp; return motion; }
+        // This tick's motion turn was ELIDED: nothing reached the glass and the credit it took is still held. Only a fresh
+        // publication has anything to show on this vblank (a hover or keystroke landing mid-tick presents now, not a tick later);
+        // a bare re-wake would re-pose the same tick into the same bytes and elide again.
+        if (tickSeq != 0 && tickSeq == _elidedTickSeq && !fresh) { _turnKind = LedgerTurnKind.TickSpent; return motion; }
         _turnTickQpc = tickQpc;
         _turnLedgerTickSeq = tickSeq;
         _turnLedgerTickQpc = tickQpc;
@@ -561,7 +584,7 @@ public sealed class RenderThread : IDisposable
             HasFreshPublication = _publisher.HasPendingFrame, MotionDue = ownMotion,
             CreditHeld = true, Unpaced = tickSeq == 0,
         });
-        bool presented = false;
+        bool presented = false, motionElided = false;
         ulong freshSeq = 0;
         if (verdict == PresentVerdict.PresentFresh)
         {
@@ -590,6 +613,7 @@ public sealed class RenderThread : IDisposable
             Volatile.Write(ref _motionPresents, _motionPresents + 1);
             if (longWait) Volatile.Write(ref _motionLongWaits, _motionLongWaits + 1);
             _tick?.Invoke();
+            motionElided = _tickPresented?.Invoke() == false;
             _lastPresentWasMotion = true;
             presented = true;
             _turnKind = LedgerTurnKind.Motion;
@@ -601,7 +625,10 @@ public sealed class RenderThread : IDisposable
             if (missed > 0) Volatile.Write(ref _missedMotionTicks, _missedMotionTicks + missed);
             _turnDoneQpc = done;
             _turnMissed = (int)Math.Min(missed, int.MaxValue);
-            _lastPresentedTickSeq = tickSeq;
+            // An elided motion turn serviced the tick (the run above is charged) but did not SPEND it: the vblank stays open for a
+            // fresh publication (the gate at the top). A real present spends it.
+            if (motionElided && tickSeq != 0) _elidedTickSeq = tickSeq;
+            else _lastPresentedTickSeq = tickSeq;
             long tickBase = tickQpc != 0 && tickQpc <= turnStart ? tickQpc : turnStart;
             long lag = done - tickBase;
             ulong doneCycles = FluentGpu.Foundation.ThreadCycles.Read();

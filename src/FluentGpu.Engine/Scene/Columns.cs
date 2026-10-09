@@ -19,6 +19,9 @@ public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Over
     public float SwapStartMs { get; init; } = float.NaN;
     /// <summary>Swap window length (<c>ImageCache.SwapCrossfadeMs</c>); 0 = no swap.</summary>
     public float SwapMs { get; init; }
+    /// <summary>The swap is a hard cut (the SAME picture at another decode size): this node's image draws at once with no
+    /// fade-in, and the outgoing only backs it while the new pixels may not be drawable on the GPU yet.</summary>
+    public bool SwapCut { get; init; }
 }
 
 /// <summary>One measured (text, style, availWidth) → size result, plus the face decoration metrics from the same

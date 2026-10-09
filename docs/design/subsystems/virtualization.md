@@ -671,8 +671,10 @@ would otherwise cause, **subordinate to one hard safety invariant**:
   budget-starved frame, a deceleration or a direction reversal recycles slots across the halo instead of shrinking the
   window and cold-mounting the same rows a few frames later; at rest the clip shrinks to the desired window as before.
   The pad never adds an unrealized row, never exceeds the pool and never changes the "overscan owed" verdict, so the
-  visible-exemption invariant and the E4/E4b refill-rate contract are untouched. Scope: the default bound path and its
-  persistent-prefix wrapper; the extended keep-alive/content-type recycler keeps its own park/rebuild rules. Gates:
+  visible-exemption invariant and the E4/E4b refill-rate contract are untouched. Scope: every bound path. The extended
+  keep-alive/content-type recycler parks its surplus and cross-type leaving rows in the same pool and takes a spare only
+  for a row of the type its subtree was built for (the bound then holds per content type); keep-alive rows still park in
+  their own bucket. Gates:
   `gate.virt.slotPoolGrowShrinkGrow`, `gate.virt.slotPoolParkedInvisibleUnfocusable`,
   `gate.virt.slotPoolTrimsOnIdleCountShrink`, `gate.virt.slotPoolReversalNoColdMounts`,
   `gate.virt.slotPoolFlingAllocCeiling` (`ScrollSuite.SlotPoolChecks`).

@@ -33,7 +33,8 @@ public sealed class AsyncCommand
 
     /// <summary>Start <paramref name="op"/>. NO-OP if a run is already in flight (the re-entry guard / "block the
     /// command"). <paramref name="op"/> receives a token cancelled by <see cref="Cancel"/> / a superseding
-    /// <see cref="Restart"/>.</summary>
+    /// <see cref="Restart"/>. <paramref name="onError"/> gets every failure except that cancellation — an op that
+    /// times out on its own (an <see cref="OperationCanceledException"/> while the token is live) is a failure.</summary>
     public void Run(Func<CancellationToken, Task> op, Action<Exception>? onError = null)
     {
         if (_running.Peek()) return;
@@ -58,7 +59,7 @@ public sealed class AsyncCommand
     private async Task Core(Func<CancellationToken, Task> op, Action<Exception>? onError, CancellationTokenSource cts)
     {
         try { await op(cts.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) { /* cancelled / superseded */ }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* cancelled / superseded */ }
         catch (Exception ex) { if (onError is not null && !cts.IsCancellationRequested) _post(() => onError(ex)); }
         finally
         {
@@ -117,7 +118,7 @@ public sealed class AsyncCommandSet<TKey> where TKey : notnull
     private async Task Core(TKey key, Func<CancellationToken, Task> op, Action<Exception>? onError, CancellationTokenSource cts)
     {
         try { await op(cts.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* cancelled */ }
         catch (Exception ex) { if (onError is not null && !cts.IsCancellationRequested) _post(() => onError(ex)); }
         finally
         {

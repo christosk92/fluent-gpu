@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
@@ -26,6 +27,7 @@ public static class GestureHooks
     /// <summary>Declare a gesture handler on this component's node (§13). Stable call order (hook); config-only — no
     /// render output, no re-render, no per-render allocation. The latest <paramref name="handler"/> is always the one
     /// invoked (held in a ref cell), so the call site may pass a fresh lambda each render.</summary>
-    public static void UseGesture(this Component c, GestureType kind, Action<GestureEventArgs> handler)
-        => c.Context.UseGesture(kind, handler);
+    public static void UseGesture(this Component c, GestureType kind, Action<GestureEventArgs> handler,
+                                  [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => c.Context.UseGesture(kind, handler, __hf, __hl);
 }

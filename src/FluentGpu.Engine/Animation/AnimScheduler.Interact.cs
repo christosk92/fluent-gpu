@@ -26,6 +26,7 @@ public sealed partial class AnimEngine
         public MotionTarget Rest;                       // the node's AUTHORED pose (see the rest-relative contract)
         public MotionTokenDef Motion;
         public bool IsHovered, IsPressed, IsFocused;
+        public uint Channels;                           // gesture channels any While* target has driven (SeedTargetOver mask)
     }
 
     private readonly Dictionary<int, InteractTargets> _interactTargets = new();
@@ -41,17 +42,59 @@ public sealed partial class AnimEngine
         if (hover is null && press is null && focus is null) { _interactTargets.Remove(nodeIndex); return; }
         InteractTargets t = _interactTargets.TryGetValue(nodeIndex, out var ex) ? ex : default;
         t.Hover = hover; t.Press = press; t.Focus = focus; t.Rest = rest; t.Motion = motion;
+        // Unioned, never reset while the row lives: a leg dropped by a re-render still releases its channel to rest.
+        t.Channels |= GestureChannelsOf(hover) | GestureChannelsOf(press) | GestureChannelsOf(focus);
         _interactTargets[nodeIndex] = t;
     }
 
     internal void ClearInteractTargets(int nodeIndex) => _interactTargets.Remove(nodeIndex);
 
+    /// <summary>Re-pose an ENGAGED gesture state over the static columns a re-render just re-wrote. WriteColumns
+    /// re-asserts the authored rest transform, opacity and blur on every changed-props reconcile, which is right at rest
+    /// but wipes a hover/press/focus pose whose rows have settled: a settle leaves its value in paint and frees the row,
+    /// so nothing re-posed it and a hovered cover fan (or a While* dim/blur) snapped to rest under a pointer that never
+    /// left, until the next edge. Lands the active target over the re-stashed rest at once, on the gesture channels no
+    /// live row owns; a live row replace-folds its own value on the next tick. No-op at rest or without stashed targets.</summary>
+    internal void ReassertEngagedPose(NodeHandle node)
+    {
+        if (!_interactTargets.TryGetValue((int)node.Raw.Index, out var t) || !_scene.IsLive(node)) return;
+        MotionTarget? engaged =
+            t.IsPressed && t.Press is { } p ? p :
+            t.IsFocused && t.Focus is { } f ? f :
+            t.IsHovered && t.Hover is { } h ? h :
+            null;
+        if (engaged is not { } d) return;
+        var acc = Accum.FromPaint(in _scene.Paint(node));
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.ScaleX,     t.Rest.Scale    * d.Scale);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.ScaleY,     t.Rest.Scale    * d.Scale);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.Opacity,    t.Rest.Opacity  * d.Opacity);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.TranslateX, t.Rest.OffsetX  + d.OffsetX);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.TranslateY, t.Rest.OffsetY  + d.OffsetY);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.Rotation,   t.Rest.Rotation + d.Rotation);
+        LandUnowned(ref acc, node, t.Channels, AnimChannel.BlurSigma,  t.Rest.Blur     + d.Blur);
+        Compose(node, in acc);
+    }
+
+    // SeedTargetOver's composition (offset/rotation/blur ADD, scale/opacity MULTIPLY), landed instead of seeded.
+    private void LandUnowned(ref Accum acc, NodeHandle node, uint channels, AnimChannel ch, float v)
+    {
+        if (Drives(channels, ch) && Find(node, ch) < 0) acc.Fold(ch, v, replace: true);
+    }
+
     /// <summary>On an input hover/press/focus edge: update the state, resolve the active target by fixed priority
     /// (press &gt; focus &gt; hover &gt; rest), and spring the gesture channels to it. Releasing the top state animates
     /// to the next writer's target — or, with nothing active, back to the node's AUTHORED rest pose (never identity;
-    /// see <see cref="MotionTarget"/>'s rest-pose-relative contract). No-op for a node without stashed targets.</summary>
+    /// see <see cref="MotionTarget"/>'s rest-pose-relative contract). No-op for a node without stashed targets.
+    /// <para>A hover edge reads the node's EFFECTIVE hover, the same guard <see cref="SetHover"/> applies: the dispatcher
+    /// fires a leaf-off edge on a card whose pointer moved onto its own nested button (the card is still HoverWithin),
+    /// and an off edge for the HoverWithin→Hovered handoff when the pointer moves back up onto the card. Neither left the
+    /// card, so neither may spring its While* pose back to rest.</para></summary>
     public void ApplyInteractionEdge(NodeHandle node, InteractKind kind, bool on)
-        => ApplyInteractionEdgeSelf(node, kind, on);
+    {
+        if (kind == InteractKind.Hover && !on && !node.IsNull && _scene.IsLive(node)
+            && (_scene.Flags(node) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0) on = true;
+        ApplyInteractionEdgeSelf(node, kind, on);
+    }
 
     /// <summary>The worker behind <see cref="ApplyInteractionEdge"/> — split out so the hover cascade
     /// (<c>AnimScheduler.Hover.SetHoverDescendants</c>) can drive a non-boundary descendant's own While* row directly,
@@ -73,7 +116,23 @@ public sealed partial class AnimEngine
             t.IsFocused && t.Focus is { } f ? f :
             t.IsHovered && t.Hover is { } h ? h :
             new MotionTarget();                          // identity DELTA ⇒ animate back to the AUTHORED pose
-        SeedTargetOver(node, in t.Rest, in delta, in t.Motion);
+        SeedTargetOver(node, in t.Rest, in delta, in t.Motion, t.Channels);   // only the declared channels (see Channels)
+    }
+
+    /// <summary>The gesture channels a While* target moves off rest (<see cref="SeedTargetOver"/>'s mask). An identity
+    /// field contributes nothing, so a press-only Scale target never seeds Opacity: the seeded row would own the channel
+    /// outright (PASS2 replace-folds it) and park a BOUND Opacity — rest 1, the bind owns it — at 1 after the settle.</summary>
+    private static uint GestureChannelsOf(MotionTarget? t)
+    {
+        if (t is not { } v) return 0u;
+        uint m = 0u;
+        if (v.Scale != 1f) m |= 1u << (int)AnimChannel.ScaleX | 1u << (int)AnimChannel.ScaleY;
+        if (v.Opacity != 1f) m |= 1u << (int)AnimChannel.Opacity;
+        if (v.OffsetX != 0f) m |= 1u << (int)AnimChannel.TranslateX;
+        if (v.OffsetY != 0f) m |= 1u << (int)AnimChannel.TranslateY;
+        if (v.Rotation != 0f) m |= 1u << (int)AnimChannel.Rotation;
+        if (v.Blur != 0f) m |= 1u << (int)AnimChannel.BlurSigma;
+        return m;
     }
 
     /// <summary>Cancel While* transform tracks and land the node on its authored rest pose immediately. KeepAlive

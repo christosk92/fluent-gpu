@@ -1729,7 +1729,7 @@ sealed class StatePage_ForHost : Component
                         Button.Standard("Reverse", () => Mutate(l => l.Reverse())),
                     ],
                 },
-                Flow.For<string>(() => items.Value, s => s, (s, i) => Row(s))),
+                new BoxEl { Direction = 1, Gap = 4f, Children = [Flow.For<string>(() => items.Value, s => s, (s, i) => Row(s))] }),
             description: "Flow.For diffs its rows by key when the list signal changes: adds mount, removes unmount, moves reorder — row state is preserved by key, and the host never re-renders.",
             output: VStack(4, GalleryPage.LiveText(() => $"{items.Value.Count} items"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
@@ -1747,7 +1747,7 @@ sealed class StatePage_ForHost : Component
     static Element Row(string label) => new BoxEl
     {
         Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, MinHeight = 32f, MaxWidth = 280f,
-        Padding = new Edges4(12, 4, 12, 4), Margin = new Edges4(0, 0, 0, 4), Corners = Radii.ControlAll,
+        Padding = new Edges4(12, 4, 12, 4), Corners = Radii.ControlAll,
         Fill = Tok.FillControlDefault, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f,
         Children =
         [

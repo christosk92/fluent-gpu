@@ -211,6 +211,7 @@ public sealed partial class FlexLayout
         ref LayoutInput li = ref _scene.Layout(node);
         ulong h = 14695981039346656037UL;
         MixU(ref h, (uint)_scene.Flags(node));
+        MixU(ref h, _scene.IsMirrorCollapsed(node) ? 1u : 0u);   // an anchor's flow removal leaves Flags untouched
         MixU(ref h, li.Direction);
         MixF(ref h, li.Gap);
         MixE(ref h, in li.Padding);
@@ -290,7 +291,8 @@ public sealed partial class FlexLayout
     }
 
     /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
-    /// LayoutInput size if set — a SizeMode.Relayout animation writes the interpolated width there each tick). The parent
+    /// LayoutInput size if set — a SizeMode.Relayout animation writes the interpolated width there each tick — except
+    /// under a grid / virtual list, which place it in their own slot). The parent
     /// already placed this node, so this cannot propagate upward — a scoped, per-frame-affordable relayout for live reflow.</summary>
     public void RunSubtree(NodeHandle node)
     {
@@ -309,7 +311,19 @@ public sealed partial class FlexLayout
         // (minus this node's margin): a parent-determined boundary can never legitimately exceed its parent. Explicit
         // li.Width/Height (incl. a SizeMode.Relayout animation writing the interpolated size) are honoured untouched.
         var parent = _scene.Parent(node);
-        if (!parent.IsNull)
+        uint ni = node.Raw.Index;
+        if (!parent.IsNull && PlacesChildInSlot(parent) && (_scene.Flags(node) & NodeFlags.Relayouting) == 0
+            && ni < (uint)_arranged.Length && _scene.IsArrangedValid(node))
+        {
+            // A grid cell / virtual row: the parent arranges it at a SLOT it computes (ArrangeGrid's colW×rowH,
+            // ArrangeVirtual's ItemRect) and ignores its explicit Width/Height, so the authored size is NOT the box a full
+            // layout gives it. Re-solve at the box the parent last placed it in — else a change inside a fixed-size
+            // ClipToBounds card narrows that one tile to its authored 160 in a 240 track until the next full layout.
+            // A SizeMode.Relayout animation (Relayouting) still re-solves at the size it wrote into li.Width/Height.
+            ref RectF slot = ref _arranged[ni];
+            w = slot.W; h = slot.H;
+        }
+        else if (!parent.IsNull)
         {
             ref RectF pb = ref _scene.Bounds(parent);
             ref LayoutInput pli = ref _scene.Layout(parent);
@@ -322,6 +336,17 @@ public sealed partial class FlexLayout
         VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
     }
 
+    /// <summary>A parent that arranges each child at a slot it computes itself and ignores the child's explicit
+    /// Width/Height: a grid (column track × row height) or a virtual list's content node (ItemRect / extent slot).</summary>
+    private bool PlacesChildInSlot(NodeHandle parent)
+    {
+        if (_scene.HasGrid(parent)) return true;
+        var viewport = _scene.Parent(parent);
+        if (viewport.IsNull || !_scene.HasScroll(viewport)) return false;
+        ref readonly ScrollState sc = ref _scene.ScrollRow(viewport);
+        return sc.ItemCount > 0 && sc.ContentNode == parent;
+    }
+
     // P1 presence (layout.md §4.7): a collapsed node (Element.Visible resolved false) is out of layout flow. This
     // reads the DEDICATED SceneStore.AuxFlags.Collapsed bit, not NodeFlags.Visible: NodeFlags.Visible is also
     // toggled directly by callers that only want to cull PAINT/record reachability without leaving layout flow
@@ -329,9 +354,9 @@ public sealed partial class FlexLayout
     // whose contract is "layout still runs, it ignores the flag"). Collapsing layout on every NodeFlags.Visible
     // clear broke that contract (gate.shelf.binding.measurement regressed to heights=68->68->68 — the probe never
     // measured because its cells were laid out at 0x0 while record-culled). SetCollapsed still mirrors the aux bit
-    // onto NodeFlags.Visible/HitTestVisible for the recorder/hit-test/LayoutSig readers, so a presence flip is still
+    // onto NodeFlags.Visible for the recorder/hit-test/LayoutSig readers, so a presence flip is still
     // seen there for free — only the LAYOUT collapse decision itself must key off the dedicated bit.
-    private bool Collapsed(NodeHandle h) => _scene.IsCollapsed(h);
+    private bool Collapsed(NodeHandle h) => _scene.IsLayoutCollapsed(h);
 
     // FirstVisibleChild/NextVisibleSibling: the ONE substitution point that makes every Flex/Wrap/ZStack child loop
     // skip a collapsed child ENTIRELY (no box, no margin, no gap slot — true CSS display:none, not visibility:hidden)
@@ -617,6 +642,7 @@ public sealed partial class FlexLayout
                 }
 
                 float main = 0f, cross = 0f;
+                float baseUsed = 0f, totalShrinkScaled = 0f;   // Arrange's first pass, mirrored for the shrink re-measure below
                 int n = 0;
                 for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
                 {
@@ -648,11 +674,38 @@ public sealed partial class FlexLayout
                             ? MathF.Max(cli.FlexBasis, cMain)
                             : cli.FlexBasis;
                     }
+                    float baseMain = ClampMain(cli, row, cMain);
+                    baseUsed += baseMain + MarginMain(cli, row);
+                    totalShrinkScaled += cli.FlexShrink * baseMain;
                     cMain += MarginMain(cli, row);
                     cCross += MarginCross(cli, row);
                     main += cMain;
                     cross = MathF.Max(cross, cCross);
                     n++;
+                }
+                // A row that overflows its definite width hands the deficit to its Shrink children in Arrange, which
+                // re-measures each at its narrower main size — where wrapped text gains lines. Take the cross from THAT
+                // measure: otherwise the row reserves the one-line height its parent already stacked against, and the
+                // extra line paints over the next sibling (or is clipped by a Stretch row). Same distribution as
+                // Arrange's; the child's base W/H is put back after, since Arrange reads its base main from Bounds.
+                if (row && !float.IsInfinity(childAvail) && totalShrinkScaled > 0f)
+                {
+                    float free = childAvail - baseUsed - (n > 1 ? li.Gap * (n - 1) : 0f);
+                    if (free < 0f)
+                    {
+                        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
+                        {
+                            ref LayoutInput cli = ref _scene.Layout(c);
+                            if (cli.FlexShrink <= 0f) continue;
+                            ref RectF cb = ref _scene.Bounds(c);
+                            float baseMain = ClampMain(cli, row, !float.IsNaN(cli.FlexBasis) ? cli.FlexBasis : cb.W);
+                            float fm = MathF.Max(0f, ClampMain(cli, row, baseMain + free * (cli.FlexShrink * baseMain / totalShrinkScaled)));
+                            if (fm <= 0f || fm >= cb.W) continue;   // not narrower than its measure ⇒ same height
+                            float bw = cb.W, bh = cb.H;
+                            cross = MathF.Max(cross, Measure(c, fm).Height + MarginCross(cli, row));
+                            WriteMeasuredBounds(c, bw, bh);
+                        }
+                    }
                 }
                 // A SizeMode.Reflow exit orphan is detached (FirstVisibleChild skips it) but still owns the closing
                 // height: without this add, a measured virtual row snaps to the without-child extent on the remove
@@ -671,22 +724,7 @@ public sealed partial class FlexLayout
         if (!float.IsNaN(li.Width)) w = li.Width;
         if (!float.IsNaN(li.Height)) h = li.Height;
 
-        // Aspect-ratio (CSS aspect-ratio): derive the missing extent for a fluid leaf. Explicit Width+Height both set
-        // wins (aspect ignored). When both are fluid, take the offered width constraint as the box width and derive the
-        // height — the parent's cross-stretch then arranges that same width, and this measured height rides along as the
-        // main size (re-measured against the final cross size in Arrange, so measure↔arrange stay square).
-        float ar = li.AspectRatio;
-        if (!float.IsNaN(ar) && ar > 0f)
-        {
-            bool defW = !float.IsNaN(li.Width), defH = !float.IsNaN(li.Height);
-            if (defW && !defH) h = w / ar;
-            else if (defH && !defW) w = h * ar;
-            else if (!defW && !defH && !float.IsInfinity(availW))
-            {
-                w = MathF.Max(0f, availW - li.Padding.Horizontal);
-                h = w / ar;
-            }
-        }
+        ApplyAspect(in li, availW, ref w, ref h);
 
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
@@ -695,6 +733,29 @@ public sealed partial class FlexLayout
         var result = new Size2(w, h);
         StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
         return StoreMemo(node, availW, result);
+    }
+
+    /// <summary>Aspect-ratio (CSS aspect-ratio): derive the missing extent for a fluid box. Explicit Width+Height both
+    /// set wins (aspect ignored). When both are fluid, take the offered width constraint as the box width and derive the
+    /// height — the parent's cross-stretch then arranges that same width, and this measured height rides along as the
+    /// main size (re-measured against the final cross size in Arrange, so measure↔arrange stay square). Shared by the
+    /// general path and <see cref="MeasureZStack"/>: a ZStack used to return its tallest layer and drop the ratio.</summary>
+    private static void ApplyAspect(in LayoutInput li, float availW, ref float w, ref float h)
+    {
+        float ar = li.AspectRatio;
+        if (float.IsNaN(ar) || ar <= 0f) return;
+        // The ratio-determining axis is clamped by its OWN min/max BEFORE the other extent is derived (CSS transfers
+        // min/max through the ratio): a stretched Ui.AspectRatio(1, cover) { MaxWidth = 300 } in a 1000-wide column
+        // derived h from the unclamped 1000 and was arranged as a 300x1000 strip. The derived axis keeps its own
+        // clamp in the caller.
+        bool defW = !float.IsNaN(li.Width), defH = !float.IsNaN(li.Height);
+        if (defW && !defH) { w = Clamp(w, li.MinW, li.MaxW); h = w / ar; }
+        else if (defH && !defW) { h = Clamp(h, li.MinH, li.MaxH); w = h * ar; }
+        else if (!defW && !defH && !float.IsInfinity(availW))
+        {
+            w = Clamp(MathF.Max(0f, availW - li.Padding.Horizontal), li.MinW, li.MaxW);
+            h = w / ar;
+        }
     }
 
     /// <summary>Fold the main/cross size of a parent's REFLOWING exit orphans into its Measure. Allocation-free: walks
@@ -1013,14 +1074,16 @@ public sealed partial class FlexLayout
         {
             int index = VirtualIndex(in sc, ord);
             if ((uint)index >= (uint)sc.ItemCount) continue;
-            var rect = layout.ItemRect(index, cross);
             ref LayoutInput rli = ref _scene.Layout(row);
-            float measureW = horizontal
-                ? MathF.Max(0f, rect.H - rli.Margin.Top - rli.Margin.Bottom)
-                : MathF.Max(0f, rect.W - rli.Margin.Left - rli.Margin.Right);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            // Commit EXACTLY what ArrangeVirtual pass 1 commits (the margin box, measured at the same availW): the two
+            // write one shared table, and a margin-less write here shrank the natural viewport by every row's margin
+            // while arrange grew the content back — clipped bottom rows and an inner scroll that never healed.
+            float measureW = horizontal ? float.PositiveInfinity
+                           : MathF.Max(0f, layout.ItemRect(index, cross).W - mL - mR);
             if (measureW <= 0f) continue;                    // same rule per row: a margin-eaten slot is not a measurement
             var measured = Measure(row, measureW);
-            layout.SetMeasured(index, horizontal ? measured.Width : measured.Height, cross);
+            layout.SetMeasured(index, horizontal ? measured.Width + mL + mR : measured.Height + mT + mB, cross);
         }
     }
 
@@ -1121,29 +1184,43 @@ public sealed partial class FlexLayout
         if (content.IsNull || sc.Extent is not { } ext) return (0f, 0f);
         var layout = sc.Layout;
         float cross = horizontal ? innerH : innerW;
+        if (ext.Count != sc.ItemCount) ext.Resize(sc.ItemCount);
+        int anchorIndex = Math.Clamp(sc.AnchorIndex, 0, Math.Max(0, sc.ItemCount - 1));
+        // A cross-size change reflows a layout that places items off it (a responsive grid's column count, a lined flow's
+        // re-wrap, an aspect grid's row height): the anchor item moves to another row with no plan shift, so the same offset
+        // shows other items. Take the anchor's offset at the cross the last arrange used, BEFORE the reflow below; pass 0
+        // shifts the frame by how far it moved. A list resting at the top keeps no anchor, and a viewport not arranged yet
+        // (the mount realizes at a hint cross) has no position on screen to keep.
+        float arrangedCross = horizontal ? sc.ContentH : sc.ContentW;
+        double reflowFrom = double.NaN;
+        if (!Verifying && ext is VirtualLayoutExtent { Cross: > 0f } reflowing && reflowing.Cross == arrangedCross
+            && cross > 0f && cross != arrangedCross && sc.Offset > 0.0)
+            reflowFrom = ext.OffsetOf(anchorIndex);
         if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
         if (ext is VirtualLayoutExtent vle && cross > 0f) vle.Cross = cross;
-        if (ext.Count != sc.ItemCount) ext.Resize(sc.ItemCount);
         _ = ext.Total;   // a lazily-tabled measured layout must own its table BEFORE the first SetMeasured below
 
         GridVirtualLayout? measuredGrid = layout is GridVirtualLayout { IsMeasured: true } grid ? grid : null;
         measuredGrid?.ResetMeasurePass(sc.ItemCount, cross);
         bool measured = ext is MeasuredExtent || layout is IMeasuredVirtualLayout;
-        int anchorIndex = Math.Clamp(sc.AnchorIndex, 0, Math.Max(0, sc.ItemCount - 1));
         var vpId = new ScrollViewportId((int)node.Raw.Index, node.Raw.Gen);
         var slots = _scene.PlanSlots;
 
-        // Pass 0 — an out-of-band extent rewrite since the last pass (a wholesale reseed, IAnchoredReseedLayout) moved the
-        // rows above the anchor with no plan shift: anchor it here, in the same call as this pass's measured corrections, so
-        // the reseed and the re-measure that corrects it net to the anchor row staying where the user sees it.
+        // Pass 0 — an out-of-band extent rewrite since the last pass (a wholesale reseed, IAnchoredReseedLayout) or the
+        // cross-size reflow above moved the rows above the anchor with no plan shift: anchor it here, in the same call as this
+        // pass's measured corrections, so the rewrite and the re-measure that corrects it net to the anchor row staying
+        // where the user sees it.
         double shift = 0.0;
+        double rebase = double.IsNaN(reflowFrom) ? 0.0 : ext.OffsetOf(anchorIndex) - reflowFrom;
         if (!Verifying && layout is IAnchoredReseedLayout reseeded
-            && reseeded.TakeReseedShift(anchorIndex, out double reseedDelta) && reseedDelta != 0.0)
+            && reseeded.TakeReseedShift(anchorIndex, out double reseedDelta))
+            rebase += reseedDelta;
+        if (rebase != 0.0)
         {
-            bool anchored = slots is not null && slots.Shift(vpId, reseedDelta);
-            shift += reseedDelta;
+            bool anchored = slots is not null && slots.Shift(vpId, rebase);
+            shift += rebase;
             if (FluentGpu.Scroll.Diag.ScrollProbe.Level != FluentGpu.Scroll.Diag.ProbeLevel.Off)
-                FluentGpu.Scroll.Diag.ScrollProbe.Extent((int)node.Raw.Index, 0, anchorIndex, reseedDelta, anchored,
+                FluentGpu.Scroll.Diag.ScrollProbe.Extent((int)node.Raw.Index, 0, anchorIndex, rebase, anchored,
                     FluentGpu.Scroll.Diag.ProbeExtentCause.Structural);
         }
 
@@ -1253,6 +1330,8 @@ public sealed partial class FlexLayout
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
         float h = float.IsNaN(li.Height) ? maxH + li.Padding.Vertical : li.Height;
+        // The ratio owns the box like any other: without it a square ZStack tile measured to its tallest layer.
+        ApplyAspect(in li, availW, ref w, ref h);
         w = Clamp(w, li.MinW, li.MaxW); h = Clamp(h, li.MinH, li.MaxH);
         WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
@@ -1275,13 +1354,14 @@ public sealed partial class FlexLayout
         {
             // Snapshot the child's layout inputs BEFORE any re-measure below: a ref into the SoA column must not be
             // held across a call that can touch the store.
-            float mL, mT, mR, mB, declW, declH;
+            float mL, mT, mR, mB, declW, declH, minW, maxW, minH, maxH;
             FlexAlign align, justify;
             bool unboundedW;
             {
                 ref LayoutInput cli = ref _scene.Layout(c);
                 mL = cli.Margin.Left; mT = cli.Margin.Top; mR = cli.Margin.Right; mB = cli.Margin.Bottom;
                 declW = cli.Width; declH = cli.Height;
+                minW = cli.MinW; maxW = cli.MaxW; minH = cli.MinH; maxH = cli.MaxH;
                 unboundedW = cli.MeasureUnboundedWidth;
                 // A ZStack has no main axis, so BOTH axes are alignment (the WinUI overlay-Grid model):
                 //   vertical   = AlignSelf, falling back to the stack's AlignItems
@@ -1295,8 +1375,11 @@ public sealed partial class FlexLayout
 
             float slotW = MathF.Max(0f, innerW - mL - mR);   // the child's slot: the stack minus its own margin
             float slotH = MathF.Max(0f, innerH - mT - mB);
-            float cw = float.IsNaN(declW) ? slotW : declW;   // explicit child size, else fill the slot
-            float ch = float.IsNaN(declH) ? slotH : declH;
+            // Explicit child size, else fill the slot, then the layer's own Min/Max, as a flex parent applies them
+            // (ClampMain/ClampCross). Without the clamp a capped fill layer (a MaxWidth caption pill or dialog card)
+            // spans the whole stack, and a MinWidth layer is squeezed below its floor when the stack is narrower.
+            float cw = Clamp(float.IsNaN(declW) ? slotW : declW, minW, maxW);
+            float ch = Clamp(float.IsNaN(declH) ? slotH : declH, minH, maxH);
 
             // An AUTO-sized child that is CENTERED or END-aligned takes its DESIRED extent on that axis — the CSS /
             // XAML rule that only a stretched child fills. Without it, alignment is silently inert on an auto-sized
@@ -1368,6 +1451,11 @@ public sealed partial class FlexLayout
         return lo;
     }
 
+    // A grid cell's slot holds its MARGIN box (CSS grid; the ArrangeVirtual slot rule): an Auto track and an auto row
+    // count the margin, and the cell is measured and placed inset by it. A collapsed cell keeps its track but sizes 0×0,
+    // so it contributes no margin either.
+    private Edges4 GridCellMargin(NodeHandle c) => Collapsed(c) ? default : _scene.Layout(c).Margin;
+
     private Size2 MeasureGrid(NodeHandle node, in LayoutInput li, float availW)
     {
         _scene.TryGetGrid(node, out var g);
@@ -1375,9 +1463,13 @@ public sealed partial class FlexLayout
         // Border-box width: explicit, else the width the parent will stretch us to (availW). A CSS grid is block-level —
         // it fills the available inline size, and star tracks NEED that concrete width to divide. Without availW a
         // stretch-width grid measured to height 0, so the parent column stacked the next sibling over its overflow.
-        float w = !float.IsNaN(li.Width) ? li.Width
+        // Clamped by MinWidth/MaxWidth BEFORE the tracks resolve: the parent arranges us at the clamped width
+        // (ClampCross/ClampMain) and ArrangeGrid counts columns there. Resolving at the raw width and clamping after
+        // measured a different row count: a MaxWidth grid painted its last row over the next sibling, a MinWidth one
+        // left an empty band (the TryWrapMainLimit rule, for grids).
+        float w = Clamp(!float.IsNaN(li.Width) ? li.Width
                 : float.IsInfinity(availW) ? 0f
-                : MathF.Max(0f, availW);
+                : MathF.Max(0f, availW), li.MinW, li.MaxW);
         int count = GridColCount(in g, w - padH);   // auto-fill resolves the count from the (now known) width
         float h;
         if (w > 0f && count > 0)
@@ -1387,7 +1479,6 @@ public sealed partial class FlexLayout
             h = GridContentHeight(node, in g, count, colW) + padV;
         }
         else h = float.IsNaN(li.Height) ? 0f : li.Height;
-        w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
         WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
@@ -1419,11 +1510,18 @@ public sealed partial class FlexLayout
 
             float rowH = autoRow ? 0f : g.RowHeight;
             if (autoRow)
-                for (int j = 0; j < n; j++) { var cs = Measure(rowKids[j], colW[j]); rowH = MathF.Max(rowH, cs.Height); }
+                for (int j = 0; j < n; j++)
+                {
+                    var m = GridCellMargin(rowKids[j]);
+                    var cs = Measure(rowKids[j], MathF.Max(0f, colW[j] - m.Horizontal));
+                    rowH = MathF.Max(rowH, cs.Height + m.Vertical);
+                }
             for (int j = 0; j < n; j++)
             {
-                if (!autoRow) Measure(rowKids[j], colW[j]);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
-                Arrange(rowKids[j], colX[j], rowTop, colW[j], rowH);
+                var m = GridCellMargin(rowKids[j]);
+                float cw = MathF.Max(0f, colW[j] - m.Horizontal);
+                if (!autoRow) Measure(rowKids[j], cw);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
+                Arrange(rowKids[j], colX[j] + m.Left, rowTop + m.Top, cw, MathF.Max(0f, rowH - m.Vertical));
             }
             rowTop += rowH + g.RowGap;
             child = c;
@@ -1461,7 +1559,7 @@ public sealed partial class FlexLayout
             for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
             {
                 int col = k % count;
-                if (g.Columns[col].Kind == TrackKind.Auto) { var cs = Measure(c); autoW[col] = MathF.Max(autoW[col], cs.Width); }
+                if (g.Columns[col].Kind == TrackKind.Auto) { var cs = Measure(c); autoW[col] = MathF.Max(autoW[col], cs.Width + GridCellMargin(c).Horizontal); }
             }
         }
 
@@ -1504,8 +1602,9 @@ public sealed partial class FlexLayout
         float sumRowH = 0f, rowH = 0f; int k = 0;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
         {
-            var cs = Measure(c, colW[k % count]);   // at the track width, so wrapping text reports its wrapped height
-            rowH = MathF.Max(rowH, cs.Height);
+            var m = GridCellMargin(c);
+            var cs = Measure(c, MathF.Max(0f, colW[k % count] - m.Horizontal));   // at the track width less the margin, so wrapping text reports its wrapped height
+            rowH = MathF.Max(rowH, cs.Height + m.Vertical);
             if (k % count == count - 1) { sumRowH += rowH; rowH = 0f; }
         }
         if (k % count != 0) sumRowH += rowH;   // trailing partial row
@@ -1513,23 +1612,22 @@ public sealed partial class FlexLayout
     }
 
     // Wrap: main axis is finite (explicit size or parent-provided row width); children flow onto multiple lines.
+    // The limit is clamped by the main-axis Min/Max, the same clamp Measure's tail applies to the box and the parent's
+    // arrange (ClampCross/ClampMain) gives it. Breaking lines at the raw offered width while ArrangeWrap breaks at the
+    // clamped one counted a different number of lines: a MaxWidth chip row measured one line at 1000 and painted three at
+    // 400 over the next sibling (MinWidth the other way: a measured line too many, an empty band below).
     private static bool TryWrapMainLimit(in LayoutInput li, bool row, float availW, out float mainLimit)
     {
         float explicitMain = row ? li.Width : li.Height;
-        if (!float.IsNaN(explicitMain))
+        float limit = !float.IsNaN(explicitMain) ? explicitMain : (row ? availW : float.PositiveInfinity);
+        if (float.IsInfinity(limit))
         {
-            mainLimit = MathF.Max(0f, explicitMain);
-            return true;
+            mainLimit = 0f;
+            return false;
         }
 
-        if (row && !float.IsInfinity(availW))
-        {
-            mainLimit = MathF.Max(0f, availW);
-            return true;
-        }
-
-        mainLimit = 0f;
-        return false;
+        mainLimit = MathF.Max(0f, ClampMain(in li, row, limit));
+        return true;
     }
 
     private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)
@@ -1569,6 +1667,12 @@ public sealed partial class FlexLayout
     // including the last), so a wrapped row fills edge-to-edge instead of leaving a ragged gap. A line with no grow child
     // (pill/chip rows, FlexGrow 0) yields growUnit 0 and is placed at base size byte-for-byte as before. Allocation-free:
     // two linked-list walks per line, no per-line buffer.
+    // Within each line, items are then placed exactly like the single-line path: the line's leftover main goes through
+    // Distribute(li.Justify) (zero when a grow child took it), and each item's cross placement follows AlignSelf ?? AlignItems
+    // against the LINE's cross size (its tallest item + margins): Stretch fills it unless the item has an explicit cross
+    // size, Center/End offset it. Line breaking and the measured height are untouched (alignment only moves items inside a
+    // line whose cross size is already fixed), so measure and arrange still agree on every line. No AlignContent: a line is
+    // as tall as its content.
     // BASE SIZES COME FROM Measure, NEVER FROM scene.Bounds. A wrap container that hits the cross-pass measure ring (or the
     // within-pass memo) returns its size WITHOUT visiting its children (Measure, P4), so each child's Bounds still hold its
     // LAST ARRANGED rect — a Grow child stretched to fill the previous, wider line. Breaking lines on those stretched widths
@@ -1590,7 +1694,7 @@ public sealed partial class FlexLayout
         {
             // Pass 1 — gather one line: the children that fit, their base-main extent (bases + margins + gaps), total grow.
             // The break condition mirrors MeasureWrap exactly, so arrange's line count matches the measured cross height.
-            float usedMain = 0f, totalGrow = 0f;
+            float usedMain = 0f, totalGrow = 0f, lineCross = 0f;
             int count = 0;
             for (var c = lineStart; !c.IsNull; c = NextVisibleSibling(c))
             {
@@ -1600,11 +1704,15 @@ public sealed partial class FlexLayout
                 float next = usedMain + (count > 0 ? li.Gap : 0f) + oMain;
                 if (count > 0 && next > availMain + 0.01f) break;   // CSS: always ≥1 item per line
                 usedMain = next; totalGrow += cli.FlexGrow; count++;
+                lineCross = MathF.Max(lineCross, (row ? cs.Height : cs.Width) + MarginCross(cli, row));   // the line's cross size, known before placement
             }
 
-            // Pass 2 — share this line's free main across its grow children (0 grow ⇒ growUnit 0 ⇒ base size), place L→R.
-            float growUnit = totalGrow > 0f ? MathF.Max(0f, availMain - usedMain) / totalGrow : 0f;
-            float cursor = padMainStart, lineCross = 0f;
+            // Pass 2 — share this line's free main across its grow children (0 grow ⇒ growUnit 0 ⇒ base size), then justify
+            // what is left (nothing when a grow child took it) and align each item on the line's cross size, like Arrange.
+            float freeMain = MathF.Max(0f, availMain - usedMain);
+            float growUnit = totalGrow > 0f ? freeMain / totalGrow : 0f;
+            (float lead, float between) = Distribute(li.Justify, totalGrow > 0f ? 0f : freeMain, count);
+            float cursor = padMainStart + lead;
             var cc = lineStart;
             for (int i = 0; i < count; i++, cc = NextVisibleSibling(cc))
             {
@@ -1612,14 +1720,28 @@ public sealed partial class FlexLayout
                 ref LayoutInput cli = ref _scene.Layout(cc);
                 float baseMain = row ? cs.Width : cs.Height, baseCross = row ? cs.Height : cs.Width;
                 float mainSize = baseMain + cli.FlexGrow * growUnit;
-                if (i > 0) cursor += li.Gap;
+                if (i > 0) cursor += li.Gap + between;
+
+                FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
+                float crossMargin = MarginCross(cli, row);
+                bool hasExplicitCross = !float.IsNaN(row ? cli.Height : cli.Width);
+                float crossSize = (align == FlexAlign.Stretch && !hasExplicitCross)
+                    ? ClampCross(cli, row, lineCross - crossMargin)
+                    : baseCross;
+                float crossFree = lineCross - (crossSize + crossMargin);
+                float crossOff = align switch
+                {
+                    FlexAlign.Center => crossFree / 2f,
+                    FlexAlign.End => crossFree,
+                    _ => 0f,   // Start / Stretch
+                };
+
                 float childMainPos = cursor + MarginMainStart(cli, row);
-                float childCrossPos = lineTop + MarginCrossStart(cli, row);
+                float childCrossPos = lineTop + crossOff + MarginCrossStart(cli, row);
                 float cx = row ? childMainPos : childCrossPos;
                 float cy = row ? childCrossPos : childMainPos;
-                Arrange(cc, cx, cy, row ? mainSize : baseCross, row ? baseCross : mainSize);
+                Arrange(cc, cx, cy, row ? mainSize : crossSize, row ? crossSize : mainSize);
                 cursor += MarginMain(cli, row) + mainSize;
-                lineCross = MathF.Max(lineCross, baseCross + MarginCross(cli, row));
             }
             lineTop += lineCross + li.Gap;
             lineStart = cc;   // cc walked exactly `count` siblings ⇒ first child of the next line (or Null)

@@ -7,8 +7,9 @@ namespace FluentGpu.Render.Evidence;
 
 /// <summary>One recorded op of a slice arena as the tile content hash sees it: its byte offset in the arena, its
 /// EFFECTIVE footprint (slice-space window DIP — a primitive's <see cref="SliceOpBounds"/> footprint cut by the in-stream
-/// clip open around it, a scope push's own rect), its content hash, and whether it opens a scope (clip / stencil clip /
-/// inline layer) the ops after it are drawn inside.</summary>
+/// clip open around it, a clip push's own rect, an inline layer push's own rect grown by every footprint it encloses: it
+/// composites them at its alpha), its content hash, and whether it opens a scope (clip / stencil clip / inline layer) the
+/// ops after it are drawn inside.</summary>
 public struct TileOp
 {
     public int Pos;

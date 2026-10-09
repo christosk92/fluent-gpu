@@ -173,6 +173,10 @@ internal sealed class GestureArena
         return false;
     }
 
+    /// <summary>A Hold member still counting down to its long-press (vote <see cref="ArenaVote.Pending"/>): it wins only on
+    /// its timer's <see cref="ArenaVote.EagerAccept"/>, never by default. <paramref name="memberSlot"/> is a GLOBAL slot.</summary>
+    private bool AwaitsDeadline(int memberSlot) => _members[memberSlot].Kind == GestureKind.Hold && _members[memberSlot].Vote == ArenaVote.Pending;
+
     // ── opening / enrolling ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Open an arena for <paramref name="pointerId"/> (§7A.1, on PointerDown). Returns the arena slot, or -1
@@ -282,7 +286,7 @@ internal sealed class GestureArena
     /// the rest (a Drag crossing slop, a Pinch's second contact) — resolves mid-stream, no PointerUp wait.</item>
     /// <item><b>First-accept:</b> with no eager-win, the first <see cref="ArenaVote.Accept"/> wins ONLY once the arena is
     /// <see cref="GestureArenaState.Closed"/> and no member ahead of it is still Pending; ties by <see cref="ArenaMember.Priority"/>.</item>
-    /// <item><b>Last-standing:</b> if all-but-one rejected, the survivor wins (even still Pending) unless <see cref="GestureArenaState.Held"/>.</item>
+    /// <item><b>Last-standing:</b> if all-but-one rejected, the survivor wins (even still Pending) unless <see cref="GestureArenaState.Held"/> or it is a Hold still awaiting its long-press deadline (<see cref="AwaitsDeadline"/>).</item>
     /// </list>
     /// Rule 4 (pointer-up sweep) and rule 5 (hold release) are <see cref="ResolveUp"/> / <see cref="ResolveHoldRelease"/>.
     /// Returns the winning member slot (resolved this step) or -1 (stay open). Idempotent once resolved.
@@ -315,7 +319,9 @@ internal sealed class GestureArena
         if (alive == 1 && !a.Held)
         {
             int win = LastAliveEntry(arenaSlot, members, hasTeams);
-            if (win >= 0) { Sweep(ref a, members, winner: win); return a.WinnerSlot; }
+            // A lone Hold still counting down is NOT a default winner (AwaitsDeadline): a sub-slop jitter move would
+            // otherwise fire the long-press the instant the finger lands. Its timer EagerAccept resolves it via rule 1.
+            if (win >= 0 && !AwaitsDeadline(win)) { Sweep(ref a, members, winner: win); return a.WinnerSlot; }
         }
 
         return -1;   // stay open; wait for the next PointerMove vote, the up-sweep, or the hold timer
@@ -324,7 +330,7 @@ internal sealed class GestureArena
     /// <summary>Pointer-up sweep (§7A.2 rule 4): on PointerUp with no winner, force-sweep — the highest-priority member
     /// still Accept/Pending wins, everyone else is rejected. This is where a clean tap (no slop crossed) resolves to the
     /// Tap recognizer. A held arena is NOT swept here (rule 5 keeps it open across the inter-tap window). Returns the
-    /// winner slot or -1 (held / no viable member).</summary>
+    /// winner slot or -1 (held / no viable member). A Hold still Pending is skipped (<see cref="AwaitsDeadline"/>) — it wins only on its timer.</summary>
     public int ResolveUp(int arenaSlot)
     {
         ref GestureArenaState a = ref _arenas[arenaSlot];
@@ -342,6 +348,7 @@ internal sealed class GestureArena
             int gs = a.MemberOffset + i;
             if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;   // represented by the captain
             if (EffectiveVote(arenaSlot, gs, hasTeams) == ArenaVote.Reject) continue;
+            if (AwaitsDeadline(gs)) continue;   // a Pending Hold never wins by default (its win IS the long-press fire)
             if (members[i].Priority < bestPri) { bestPri = members[i].Priority; best = gs; }   // Accept/Pending, highest priority
         }
         if (best < 0) return -1;
@@ -362,8 +369,8 @@ internal sealed class GestureArena
     }
 
     /// <summary>PointerCaptureLost force-close (§7A.5, OS WM_POINTERCAPTURECHANGED): the current provisional winner (if
-    /// any) wins by default, all others are rejected; if none has won, the highest-priority non-rejected member wins.
-    /// Always closes the arena. Returns the winner slot or -1 (no viable member — pure cleanup).</summary>
+    /// any) wins by default, all others are rejected; if none has won, the highest-priority non-rejected member wins
+    /// (never a Hold still awaiting its deadline — a capture loss is not a long-press). Always closes the arena. Returns the winner slot or -1 (no viable member — pure cleanup).</summary>
     public int ForceClose(int arenaSlot)
     {
         ref GestureArenaState a = ref _arenas[arenaSlot];

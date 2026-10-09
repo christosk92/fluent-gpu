@@ -141,7 +141,7 @@ static class VisualContinuityChecks
     {
         // A cover REMOUNTED by a structural change (a new keyed wrapper) asking for a new decode bucket: hold-last-good
         // has no old node to hold, so the resident rendition of the same source stands in — the picture, never a grey
-        // tile — and the exact decode hard-cuts in (same picture, sharper).
+        // tile — and the exact decode hard-cuts in (same picture, sharper), the stand-in backing it for the swap window.
         var dec = new SelectiveIdDecoder();
         var cache = new ImageCache(dec);
         using var app = new HeadlessPlatformApp();
@@ -179,10 +179,19 @@ static class VisualContinuityChecks
 
         dec.Release(id128);
         host.RunFrame();
-        bool hardCut = device.LastImages.Count == 1 && device.LastImages[0].ImageId == id128 && device.LastImages[0].Ready == 1
-            && cache.CrossFadeOf(new ImageHandle(id128)) >= 0.999f && cache.RefsOf(new ImageHandle(id64)) == 0;
-        Check("continuity.image-standin a remounted cover shows the resident rendition of its source while the new decode size lands, then hard-cuts to it",
-            standIn && hardCut, $"standIn={standIn} hardCut={hardCut} id64={id64} id128={id128} draws={imgs.Count}");
+        var cut = device.LastImages;
+        bool hardCut = cut.Count == 2
+            && cut[0].ImageId == id64 && cut[0].Ready == 1 && cut[0].FadeEasing == ImageCache.SwapOutgoingEasing
+            && cut[1].ImageId == id128 && cut[1].Ready == 1 && cut[1].Placeholder.A == 0f
+            && (float.IsNaN(cut[1].FadeStartMs) || cut[1].FadeDurationMs <= 0f)
+            && cache.CrossFadeOf(new ImageHandle(id128)) >= 0.999f;
+        int cutDraws = cut.Count;
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        bool released = device.LastImages.Count == 1 && device.LastImages[0].ImageId == id128
+            && cache.RefsOf(new ImageHandle(id64)) == 0;
+        Check("continuity.image-standin a remounted cover shows the resident rendition of its source while the new decode size lands, then hard-cuts to it with the stand-in under it for the swap window",
+            standIn && hardCut && released,
+            $"standIn={standIn} hardCut={hardCut} released={released} id64={id64} id128={id128} draws={imgs.Count}/{cutDraws}");
     }
 
     static void ScrollAnchorChecks(StringTable strings)
