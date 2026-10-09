@@ -160,6 +160,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// i.e. exactly inside the window a racing <see cref="Cancel"/> must survive. Null (and free) in production.</summary>
     internal Action? ClaimBarrier;
 
+    /// <summary>Test-only hook invoked on the calling thread between <see cref="Prioritize"/>'s read of the queued
+    /// request and its write — the window a racing worker claim must not be able to undo. Null (and free) in production.</summary>
+    internal Action? PrioritizeBarrier;
+
     /// <summary>Test-only: run one <c>TryClaim</c> on the calling thread and report the claimed id.</summary>
     internal bool TryClaimForTest(out int id)
     {
@@ -203,7 +207,12 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         if (_reqs.TryGetValue(id, out var r) && priority < r.Priority)   // raise urgency only (lower enum = higher)
         {
-            _reqs[id] = r with { Priority = priority };
+            PrioritizeBarrier?.Invoke();   // test-only: the read/write race window, made deterministic
+            // TryUpdate against the value read, never the indexer: a worker may claim the id (TryClaim's TryRemove)
+            // between the read and the write, and the indexer would put the claimed request BACK — the promoted lane
+            // copy then lets a second worker claim it too, so the image decodes twice and lands two ok completions.
+            // A failed update means the request is no longer queued: nothing to promote.
+            if (!_reqs.TryUpdate(id, r with { Priority = priority }, r)) return;
             _lanes[(int)priority].Enqueue(id);   // a higher-lane copy; the lower-lane copy becomes a no-op (claim dedup)
             _signal.Release();
         }
