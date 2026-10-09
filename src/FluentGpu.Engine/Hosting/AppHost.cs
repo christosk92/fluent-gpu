@@ -1999,7 +1999,14 @@ public sealed partial class AppHost : IDisposable
                     if (!a.Slot!.Retired) CreatePopupSwapchainOnRender(a.Slot!, a.Desc);   // closed again before this turn: nothing to build
                     break;
                 case PopupRenderOp.ResizeAndChrome:
-                    if (a.Slot!.Swapchain is { } resized) { resized.Resize(a.Size); resized.ConfigurePopupChrome(a.Chrome); }
+                    // ResizeBuffers throws on a removed device, and every caller of this drain but the recover gate runs outside any
+                    // catch on the render thread: a recorded loss skips the resize as the own resize above does (RecoverDevice rebuilds
+                    // every swapchain, the next placement re-posts the size) and the rest of the queue still runs. Anything else rethrows.
+                    if (a.Slot!.Swapchain is { } resized)
+                    {
+                        try { resized.Resize(a.Size); resized.ConfigurePopupChrome(a.Chrome); }
+                        catch (Exception) when (_device.NoteIfDeviceLost()) { }
+                    }
                     break;
                 case PopupRenderOp.AnimateClose:
                     a.Slot!.Swapchain?.AnimatePopupClose();
@@ -2061,6 +2068,10 @@ public sealed partial class AppHost : IDisposable
     internal void PostOwnResizeForTest(Size2 size) => PostOwnResize(size);
     internal void DrainPopupRenderActionsForTest() => DrainPopupRenderActions();
     internal int OwnResizesAppliedForTest => _ownResizesApplied;
+
+    /// <summary>Test-only: queue a popup's resize + chrome op exactly as <see cref="SetPopupWindowBounds"/> does under a render thread.</summary>
+    internal void PostPopupResizeForTest(PopupWindowSlot slot, Size2 size)
+        => PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.ResizeAndChrome, slot, size, default));
 
     // F244: where the latest present turn's wall time went on THIS host (render-thread-owned; the render loop samples it through
     // SamplePresentSplit right after the turn). _splitVideoMs is DrainVideoForPresentTurn's own stamp, reset each turn.
