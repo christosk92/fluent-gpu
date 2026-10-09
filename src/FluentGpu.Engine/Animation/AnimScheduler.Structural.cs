@@ -193,6 +193,30 @@ public sealed partial class AnimEngine
         MarkStartPending(node);
     }
 
+    /// <summary>Cancel the channels a page Enter/Exit drives and land <paramref name="rest"/> in paint at once. A KeepAlive
+    /// page parks holding whatever its exit composed (or the mid-flight value of the enter that exit cut off): neither a
+    /// settle nor a cancel writes opacity or transform back. The reconciler calls this when it brings a parked or
+    /// exiting page back, so an Enter that names fewer channels (a fade after a slide), or none (reduced motion), cannot
+    /// show the leftover pose.</summary>
+    internal void LandEnterRest(NodeHandle node, in EnterRest rest)
+    {
+        Cancel(node, AnimChannel.Opacity);
+        Cancel(node, AnimChannel.TranslateX);
+        Cancel(node, AnimChannel.TranslateY);
+        Cancel(node, AnimChannel.ScaleX);
+        Cancel(node, AnimChannel.ScaleY);
+        Cancel(node, AnimChannel.BlurSigma);
+        if (!_scene.IsLive(node)) return;
+        var acc = Accum.FromPaint(in _scene.Paint(node));
+        acc.Fold(AnimChannel.Opacity, rest.Opacity, replace: true);
+        acc.Fold(AnimChannel.TranslateX, rest.OffsetX, replace: true);
+        acc.Fold(AnimChannel.TranslateY, rest.OffsetY, replace: true);
+        acc.Fold(AnimChannel.ScaleX, rest.ScaleX, replace: true);
+        acc.Fold(AnimChannel.ScaleY, rest.ScaleY, replace: true);
+        acc.Fold(AnimChannel.BlurSigma, rest.Blur, replace: true);
+        Compose(node, in acc);
+    }
+
     /// <summary>A removed (now-Exiting) node animates FROM its current state TO the exit terminal; the host reclaims it
     /// when its rows settle. (Under the full rework this routes through the DetachedAnimSlab — Phase 5.)</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)

@@ -1800,6 +1800,9 @@ public sealed partial class TreeReconciler
             entry.Token = token;
             entry.Cacheable = cacheable;
             entry.LastUsed = state.Clock;
+            // A parked or still-exiting page holds the pose its exit left on the root (read before the branches below
+            // reattach it / clear ExitingKey).
+            bool reclaimed = !entry.Attached || state.ExitingKey == key;
             if (!entry.Attached)
                 ReactivateKeepAliveEntry(node, entry, options);
             else if (state.ExitingKey == key)
@@ -1819,6 +1822,9 @@ public sealed partial class TreeReconciler
             {
                 Update(entry.Root, desired, entry.El);
                 entry.El = desired;
+                // Land the authored pose before any Enter seeds over it: an Enter that names fewer channels than the
+                // exit did, or none (reduced motion), would otherwise show the page faded out or offset.
+                if (reclaimed) Anim?.LandEnterRest(entry.Root, EnterRestOf(entry.El));
             }
             else
             {
