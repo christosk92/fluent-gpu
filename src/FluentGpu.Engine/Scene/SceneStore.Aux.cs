@@ -16,7 +16,7 @@ public sealed partial class SceneStore
         None = 0,
         /// <summary>Element.Visible resolved to false (P1 presence channel): the node is out of layout flow AND
         /// paint AND hit-test — a collapsed box, not merely an invisible one. Mirrored onto
-        /// <see cref="NodeFlags.Visible"/>/<see cref="NodeFlags.HitTestVisible"/> by <see cref="SetCollapsed"/> so
+        /// <see cref="NodeFlags.Visible"/> by <see cref="SetCollapsed"/> (HitTestVisible stays the element's own) so
         /// every existing Visible-gated reader (paint reachability, hit-test, the layout-signature hash) sees it for
         /// free with no new column read.</summary>
         Collapsed = 1 << 0,
@@ -100,8 +100,11 @@ public sealed partial class SceneStore
         return true;
     }
 
-    /// <summary>Set the node's collapsed state (P1 presence). Composes <see cref="NodeFlags.Visible"/> and
-    /// <see cref="NodeFlags.HitTestVisible"/> directly (collapsed ⇒ both cleared; else both set) so the recorder's
+    /// <summary>Set the node's collapsed state (P1 presence). Composes <see cref="NodeFlags.Visible"/> directly
+    /// (collapsed ⇒ cleared; else set) and leaves <see cref="NodeFlags.HitTestVisible"/> to the element that authored it:
+    /// every hit walk already requires BOTH bits, so clearing Visible is enough to make a collapsed node unhittable, and
+    /// setting HitTestVisible on reveal would override a layer authored (or bound) HitTestVisible=false until its next
+    /// re-render — a bound-Visible flip runs no WriteColumns to put it back. The recorder's
     /// paint-reachability skip (<c>SceneRecorder</c>, gated on <c>NodeFlags.Visible</c>), the hit-test walk
     /// (<c>InputDispatcher</c>) and the layout-signature hash (<c>FlexLayout.LayoutSig</c>, which already mixes
     /// <c>Flags(node)</c>) all see the flip with NO new read. Marks the node LayoutDirty+PaintDirty and the PARENT
@@ -115,7 +118,7 @@ public sealed partial class SceneStore
         _aux[idx] = (byte)(collapsed ? (cur | AuxFlags.Collapsed) : (cur & ~AuxFlags.Collapsed));
         if (collapsed)
         {
-            Unmark(h, NodeFlags.Visible | NodeFlags.HitTestVisible);
+            Unmark(h, NodeFlags.Visible);
             // Zero immediately rather than waiting for a layout pass to reach it: a Flex/Wrap/ZStack parent's
             // FirstVisibleChild/NextVisibleSibling walk (FlexLayout.cs) SKIPS a collapsed child entirely — true flow
             // removal, not merely an invisible box — so it never calls Measure/Arrange on this node again while
@@ -124,7 +127,7 @@ public sealed partial class SceneStore
             ref RectF b = ref _bounds[idx];
             b = new RectF(b.X, b.Y, 0f, 0f);
         }
-        else Mark(h, NodeFlags.Visible | NodeFlags.HitTestVisible);
+        else Mark(h, NodeFlags.Visible);
         Mark(h, NodeFlags.LayoutDirty | NodeFlags.PaintDirty);
         var parent = Parent(h);
         if (!parent.IsNull && IsLive(parent)) Mark(parent, NodeFlags.LayoutDirty);

@@ -324,7 +324,7 @@ public sealed partial class FlexLayout
     // whose contract is "layout still runs, it ignores the flag"). Collapsing layout on every NodeFlags.Visible
     // clear broke that contract (gate.shelf.binding.measurement regressed to heights=68->68->68 — the probe never
     // measured because its cells were laid out at 0x0 while record-culled). SetCollapsed still mirrors the aux bit
-    // onto NodeFlags.Visible/HitTestVisible for the recorder/hit-test/LayoutSig readers, so a presence flip is still
+    // onto NodeFlags.Visible for the recorder/hit-test/LayoutSig readers, so a presence flip is still
     // seen there for free — only the LAYOUT collapse decision itself must key off the dedicated bit.
     private bool Collapsed(NodeHandle h) => _scene.IsLayoutCollapsed(h);
 
@@ -666,22 +666,7 @@ public sealed partial class FlexLayout
         if (!float.IsNaN(li.Width)) w = li.Width;
         if (!float.IsNaN(li.Height)) h = li.Height;
 
-        // Aspect-ratio (CSS aspect-ratio): derive the missing extent for a fluid leaf. Explicit Width+Height both set
-        // wins (aspect ignored). When both are fluid, take the offered width constraint as the box width and derive the
-        // height — the parent's cross-stretch then arranges that same width, and this measured height rides along as the
-        // main size (re-measured against the final cross size in Arrange, so measure↔arrange stay square).
-        float ar = li.AspectRatio;
-        if (!float.IsNaN(ar) && ar > 0f)
-        {
-            bool defW = !float.IsNaN(li.Width), defH = !float.IsNaN(li.Height);
-            if (defW && !defH) h = w / ar;
-            else if (defH && !defW) w = h * ar;
-            else if (!defW && !defH && !float.IsInfinity(availW))
-            {
-                w = MathF.Max(0f, availW - li.Padding.Horizontal);
-                h = w / ar;
-            }
-        }
+        ApplyAspect(in li, availW, ref w, ref h);
 
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
@@ -690,6 +675,29 @@ public sealed partial class FlexLayout
         var result = new Size2(w, h);
         StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
         return StoreMemo(node, availW, result);
+    }
+
+    /// <summary>Aspect-ratio (CSS aspect-ratio): derive the missing extent for a fluid box. Explicit Width+Height both
+    /// set wins (aspect ignored). When both are fluid, take the offered width constraint as the box width and derive the
+    /// height — the parent's cross-stretch then arranges that same width, and this measured height rides along as the
+    /// main size (re-measured against the final cross size in Arrange, so measure↔arrange stay square). Shared by the
+    /// general path and <see cref="MeasureZStack"/>: a ZStack used to return its tallest layer and drop the ratio.</summary>
+    private static void ApplyAspect(in LayoutInput li, float availW, ref float w, ref float h)
+    {
+        float ar = li.AspectRatio;
+        if (float.IsNaN(ar) || ar <= 0f) return;
+        // The ratio-determining axis is clamped by its OWN min/max BEFORE the other extent is derived (CSS transfers
+        // min/max through the ratio): a stretched Ui.AspectRatio(1, cover) { MaxWidth = 300 } in a 1000-wide column
+        // derived h from the unclamped 1000 and was arranged as a 300x1000 strip. The derived axis keeps its own
+        // clamp in the caller.
+        bool defW = !float.IsNaN(li.Width), defH = !float.IsNaN(li.Height);
+        if (defW && !defH) { w = Clamp(w, li.MinW, li.MaxW); h = w / ar; }
+        else if (defH && !defW) { h = Clamp(h, li.MinH, li.MaxH); w = h * ar; }
+        else if (!defW && !defH && !float.IsInfinity(availW))
+        {
+            w = Clamp(MathF.Max(0f, availW - li.Padding.Horizontal), li.MinW, li.MaxW);
+            h = w / ar;
+        }
     }
 
     /// <summary>Fold the main/cross size of a parent's REFLOWING exit orphans into its Measure. Allocation-free: walks
@@ -1247,6 +1255,8 @@ public sealed partial class FlexLayout
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
         float h = float.IsNaN(li.Height) ? maxH + li.Padding.Vertical : li.Height;
+        // The ratio owns the box like any other: without it a square ZStack tile measured to its tallest layer.
+        ApplyAspect(in li, availW, ref w, ref h);
         w = Clamp(w, li.MinW, li.MaxW); h = Clamp(h, li.MinH, li.MaxH);
         WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
@@ -1507,23 +1517,22 @@ public sealed partial class FlexLayout
     }
 
     // Wrap: main axis is finite (explicit size or parent-provided row width); children flow onto multiple lines.
+    // The limit is clamped by the main-axis Min/Max, the same clamp Measure's tail applies to the box and the parent's
+    // arrange (ClampCross/ClampMain) gives it. Breaking lines at the raw offered width while ArrangeWrap breaks at the
+    // clamped one counted a different number of lines: a MaxWidth chip row measured one line at 1000 and painted three at
+    // 400 over the next sibling (MinWidth the other way: a measured line too many, an empty band below).
     private static bool TryWrapMainLimit(in LayoutInput li, bool row, float availW, out float mainLimit)
     {
         float explicitMain = row ? li.Width : li.Height;
-        if (!float.IsNaN(explicitMain))
+        float limit = !float.IsNaN(explicitMain) ? explicitMain : (row ? availW : float.PositiveInfinity);
+        if (float.IsInfinity(limit))
         {
-            mainLimit = MathF.Max(0f, explicitMain);
-            return true;
+            mainLimit = 0f;
+            return false;
         }
 
-        if (row && !float.IsInfinity(availW))
-        {
-            mainLimit = MathF.Max(0f, availW);
-            return true;
-        }
-
-        mainLimit = 0f;
-        return false;
+        mainLimit = MathF.Max(0f, ClampMain(in li, row, limit));
+        return true;
     }
 
     private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)

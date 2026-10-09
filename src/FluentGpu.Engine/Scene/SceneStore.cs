@@ -499,6 +499,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_extents.Count != 0) _extents.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
         if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
+        if (_wheelOccludes.Count != 0) _wheelOccludes.Remove(idx);   // only a BoxEl rewrites it: a reused slot must not stay opaque
         // Scroll-linked effect rows are index-keyed: a freed slot must not hand its effects (or its engaged signals) to
         // the next node that reuses the index.
         if (_scrollEffects.Count != 0) _scrollEffects.Remove(idx);
@@ -2279,7 +2280,7 @@ public sealed partial class SceneStore : ISceneBackend
     }
 
     /// <summary>Can the hit-test reach <paramref name="h"/> at all? Mirrors the dispatcher's subtree prune: one cleared
-    /// <see cref="NodeFlags.HitTestVisible"/> anywhere on the ancestor chain (or on the node itself) makes every node
+    /// <see cref="NodeFlags.Visible"/> or <see cref="NodeFlags.HitTestVisible"/> anywhere on the ancestor chain (or on the node itself) makes every node
     /// below it unhittable, and therefore an impossible drop destination.
     /// <para>Reachability is proved by TERMINATION AT <see cref="Root"/>, not by running out of ancestors. The hit test
     /// descends from <c>Root</c> and nowhere else (<c>InputDispatcher.HitTest</c>), so a subtree that is live but no
@@ -2300,7 +2301,8 @@ public sealed partial class SceneStore : ISceneBackend
             // replaces was unreachable code), and a throw here escapes RefreshDropSpotlight into DragDropContext.Move,
             // killing the whole gesture instead of filtering one target. Dead ⇒ unreachable, which is what we return.
             if (!IsLive(n)) return false;
-            if ((_flags[n.Raw.Index] & NodeFlags.HitTestVisible) == 0) return false;
+            // Both bits, exactly the dispatcher's prune: a presence collapse clears only Visible (SetCollapsed).
+            if ((_flags[n.Raw.Index] & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible)) return false;
             last = n;
         }
         return last == Root;

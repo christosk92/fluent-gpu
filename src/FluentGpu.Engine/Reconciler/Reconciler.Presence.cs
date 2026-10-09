@@ -6,7 +6,7 @@ using FluentGpu.Signals;
 namespace FluentGpu.Reconciler;
 
 // P1 (Operation ultra-fast GPU engine, layout.md §4.7): Element.Visible : Prop<bool> — the presence channel. Two
-// writers feed the SAME scene-level state (SceneStore._aux.Collapsed, mirrored onto NodeFlags.Visible|HitTestVisible):
+// writers feed the SAME scene-level state (SceneStore._aux.Collapsed, mirrored onto NodeFlags.Visible; HitTestVisible stays the element's own):
 //   • WriteColumns' generic (every-element-type) section calls ApplyPresenceStatic for an UNBOUND Visible — equality-
 //     gated via SceneStore.SetCollapsedIfChanged so an identical re-render marks nothing (gate.hooks.layout-dirty-
 //     identical-tree stays green).
