@@ -4356,7 +4356,8 @@ static class ScrollSuite
             int b0 = probe.Builds;
             ScrollTo(host, window, vp, 42 * 40f);
             int sameTypeBuilds = probe.Builds - b0;
-            // A 1-row jump retains every overlap exactly; only the one entering row can require a rebuild.
+            // A 1-row jump retains every overlap exactly; only the one entering row can require a rebuild, and none when
+            // the slot pool already parks a row of its type (the mount-time over-realize parks rows of both parities).
             int b1 = probe.Builds;
             ScrollTo(host, window, vp, 43 * 40f);
             int crossTypeBuilds = probe.Builds - b1;
@@ -4371,8 +4372,8 @@ static class ScrollSuite
                 var frame = host.RunFrame();
                 if (frame.HotPhaseAllocBytes > worstSteadyAlloc) worstSteadyAlloc = frame.HotPhaseAllocBytes;
             }
-            Check("gate.list.contenttype-pools overlap rows retain their logical roots; a type-preserving shift rebuilds 0 rows and a type-incompatible entering row rebuilds exactly once",
-                windowRows % 2 == 1 && sameTypeBuilds == 0 && crossTypeBuilds == 1 && worstSteadyAlloc == 0,
+            Check("gate.list.contenttype-pools overlap rows retain their logical roots; a type-preserving shift rebuilds 0 rows and a type-incompatible entering row rebuilds at most once (0 from a parked slot of its type)",
+                windowRows % 2 == 1 && sameTypeBuilds == 0 && crossTypeBuilds <= 1 && worstSteadyAlloc == 0,
                 $"windowRows={windowRows} sameTypeBuilds={sameTypeBuilds} crossTypeBuilds={crossTypeBuilds} worstSteadyAlloc={worstSteadyAlloc}B");
         }
 

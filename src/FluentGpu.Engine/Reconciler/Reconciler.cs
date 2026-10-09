@@ -87,7 +87,7 @@ public sealed partial class TreeReconciler
         // parked row through the rebind flush (fires, writes, the template's own formatting allocations) for rows
         // nobody can see, and the same rows are the first to come back on the next flutter/reversal, where an exact
         // index match makes the take a zero-write re-attach. Slots.Count + Spare.Count never exceeds the widest window
-        // this list has realized.
+        // this list has realized (per content type for a ContentType list: a spare is only taken by a row of its type).
         public List<BoundSlot>? Spare;
         // ── extended bound-realize state (research adjustments #5 keep-alive + #16 content-type) — allocated ONLY when
         //    ve.KeepAlive or ve.ContentType is set (the default RealizeBoundWindow leaves both null; byte-identical path).
@@ -156,6 +156,27 @@ public sealed partial class TreeReconciler
         }
         slot = default;
         return false;
+    }
+
+    /// <summary>Content-type pool take (the extended recycler): a parked slot whose frozen subtree was built for
+    /// <paramref name="contentType"/>, preferring one still bound to exactly <paramref name="index"/> (no signal write).
+    /// With <paramref name="exactOnly"/> only that exact match qualifies. False when no spare has the shape.</summary>
+    private bool TryTakeSpareSlotOfType(VirtualEntry entry, NodeHandle content, int index, int contentType, bool exactOnly,
+                                        out BoundSlot slot)
+    {
+        var spare = entry.Spare;
+        int pick = -1;
+        if (spare is { Count: > 0 })
+            for (int i = spare.Count - 1; i >= 0; i--)
+            {
+                // A dead spare is skipped, not removed: removing would shift `pick`. FreeSpareSlots drops it later.
+                if (spare[i].ContentType != contentType || !_scene.IsLive(spare[i].Root)) continue;
+                if (spare[i].Index.Peek() == index) { pick = i; break; }
+                if (!exactOnly && pick < 0) pick = i;
+            }
+        if (pick < 0) { slot = default; return false; }
+        slot = TakeSpareSlotAt(entry, content, pick, index);
+        return true;
     }
 
     /// <summary>Free parked slots beyond <paramref name="keep"/>: the pool trim (ItemCount fell below the pool and the
@@ -3769,8 +3790,8 @@ public sealed partial class TreeReconciler
     /// quiesces its render-effects/animations — the same mechanics as <c>Flow.KeepAlive</c>), keeping its live state until
     /// the item re-enters the window (reactivate) or the bucket evicts the least recently parked row beyond its cap.</item>
     /// <item><b>Content-type pools (#16):</b> a slot only cheap-rebinds to an index whose <c>ContentType(index)</c> matches
-    /// the type its frozen subtree was built for; a cross-type reuse REBUILDS the slot (fresh subtree) instead. Homogeneous
-    /// lists (all one type) rebind exactly as the default path does.</item>
+    /// the type its frozen subtree was built for; a cross-type entering row takes a parked spare of its type, and only
+    /// without one builds a fresh subtree. Homogeneous lists (all one type) rebind exactly as the default path does.</item>
     /// </list>
     /// Scratch storage is retained at the viewport high-water mark. Equal-size contiguous content-type windows rotate
     /// roots in place; cold grow/shrink and keep-alive repair use the retained slow-path scratch.
@@ -3881,10 +3902,17 @@ public sealed partial class TreeReconciler
                 newSlots[ord] = slots[i];
                 break;
             }
+
+            // A slot parked from this very row (the window flutter / reversal case) returns with zero writes.
+            if (newSlots[ord].Index is null && TryTakeSpareSlotOfType(entry, content, item, dtype, exactOnly: true, out var back))
+            {
+                newSlots[ord] = back;
+                structural = true;
+            }
         }
 
-        // PHASE 3 — fill entering gaps from leaving slots of the same content type. Cross-type leftovers rebuild exactly
-        // that entering row; overlapping logical items above never rebuild merely because their screen ordinal changed.
+        // PHASE 3 — fill entering gaps from leaving slots of the same content type, then from parked spares of that type;
+        // only a row with neither builds. Overlapping logical items above never rebuild merely because their ordinal changed.
         for (int ord = 0; ord < wCap; ord++)
         {
             if (newSlots[ord].Index is not null) continue;
@@ -3903,15 +3931,14 @@ public sealed partial class TreeReconciler
                 continue;
             }
 
-            // No compatible leaving root. Consume one incompatible root so it cannot leak, then build the correct shape.
-            for (int i = 0; i < n0; i++)
-                if (!consumed[i])
-                {
-                    consumed[i] = true;
-                    if (_scene.IsLive(slots[i].Root)) Remove(slots[i].Root);
-                    structural = true;
-                    break;
-                }
+            // No compatible leaving root: a parked slot of this shape (an earlier shrink, a header leaving a while ago)
+            // re-attaches before anything cold-mounts. An incompatible leaving root stays unconsumed and parks below.
+            if (TryTakeSpareSlotOfType(entry, content, item, dtype, exactOnly: false, out var taken))
+            {
+                newSlots[ord] = taken;
+                structural = true;
+                continue;
+            }
 
             var nsig = new Signal<int>(item);
             Element nel = rowBind(nsig);
@@ -3925,11 +3952,12 @@ public sealed partial class TreeReconciler
             _realizeProgress = true;
         }
 
-        // Shrink any unused plain leaving roots.
+        // Surplus and cross-type leaving roots are parked, not removed (the default path's slot pool, per content
+        // type): the next grow or the next row of their type takes them back instead of a rowBind + Mount.
         for (int i = 0; i < n0; i++)
             if (!consumed[i] && _scene.IsLive(slots[i].Root))
             {
-                Remove(slots[i].Root);
+                ParkSpareSlot(entry, slots[i]);
                 structural = true;
             }
 
