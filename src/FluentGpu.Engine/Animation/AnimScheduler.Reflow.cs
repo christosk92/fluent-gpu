@@ -202,14 +202,24 @@ public sealed partial class AnimEngine
 
         if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
         TransitionDynamics dyn = Normalize(to < from && spec.ExitDynamics is { } ed ? ed : spec.Dynamics);
-        // No delay on a retarget: the start delay (incl. the enter's stagger) has already been served by the seed.
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: from);
         else
             Animate(node, ch, from, to, dyn.DurationMs, dyn.Easing);
 
         int s = FinishReflowRow(node, ch, declared, in spec, hadRow: true, carried);
-        if (s >= 0 && natural) _slab.At(s).Flags |= AnimFlags.NaturalTarget;
+        if (s < 0) return;
+        if (natural) _slab.At(s).Flags |= AnimFlags.NaturalTarget;
+        // A row still in its start delay (the enter's stagger, which SeedEnterReflow folds in) keeps what is LEFT of it:
+        // Spring's retarget zeroes the delay and Animate takes none, so async content landing during the stagger opened
+        // the slot ahead of its own delayed fade. The row has already been presented at its held start, so the reseed's
+        // seed-frame hold is dropped too: it would lengthen the stagger by a frame.
+        if (cur.DelayRemainingMs > 0f)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            r.DelayRemainingMs = cur.DelayRemainingMs;
+            r.Flags &= ~AnimFlags.JustSeeded;
+        }
     }
 
     /// <summary>The reconciler's hand-off for a node whose main-axis size is owned by a LIVE reflow row: record what

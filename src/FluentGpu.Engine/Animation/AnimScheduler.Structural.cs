@@ -332,7 +332,10 @@ public sealed partial class AnimEngine
                 float uiBase = _slab.At(ex).Position;
                 float start = uiBase + delta;   // shift the coordinate frame by the move, as the spring does
                 float remaining = MathF.Max(1f, _slab.At(ex).Gen.DurationMs - _slab.At(ex).ElapsedMs);
-                Animate(node, ch, start, rest, remaining, dyn.Easing);   // no delay: the entry stagger was already served
+                // A row still in its start delay (a staggered enter) keeps what is left of it, as the spring rebase
+                // above does: the move must not start while the node's delayed fade still holds it invisible.
+                float pendingDelay = _slab.At(ex).DelayRemainingMs;
+                Animate(node, ch, start, rest, remaining, dyn.Easing, delayMs: pendingDelay);
                 int s = Find(node, ch);
                 // A retarget keeps MOVING — clear the seed-frame hold, exactly as Spring's rebase branch does. Leaving
                 // it set would freeze the row outright here, because a per-tick shove would re-seed the hold every
