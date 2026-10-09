@@ -609,9 +609,10 @@ public sealed partial class TreeReconciler
     /// <summary>Set by the host; bumped on any image status change so <c>UseImage</c> consumers re-render granularly.</summary>
     /// <summary>Set by the host; clears input/focus state when a retained subtree is parked off the live scene chain.</summary>
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
-    /// <summary>Set by the host; called at the top of <see cref="Remove"/>, while the subtree's parent chain is still
-    /// walkable, so the dispatcher can run the hover exit and the focus leave (LostFocus on the node and its ancestors)
-    /// for a subtree that is about to orphan or free. NOT the deactivation hook: a removal ends no captured gesture and
+    /// <summary>Set by the host; called at the top of <see cref="Remove"/> and for each realized row
+    /// <c>BeginVirtualRemoval</c> retires, while the subtree's parent chain is still walkable, so the dispatcher can run
+    /// the hover exit and the focus leave (LostFocus on the node and its ancestors) for a subtree that is about to orphan
+    /// or free. NOT the deactivation hook: a removal ends no captured gesture and
     /// must not clear press/drag.</summary>
     public Action<NodeHandle>? OnSubtreeRemoved { get; set; }
     /// <summary>Set by the host; called when a virtual-list recycle (a bound slot's index write, or a keyed RenderItem
@@ -4842,6 +4843,10 @@ public sealed partial class TreeReconciler
             ve.OnItemClearing?.Invoke(index);
             var root = slot.Root;
             if (root.IsNull || !_scene.IsLive(root)) return;
+            // The removal hook Remove() runs, while the slot is still attached: the hover exit and the focus leave
+            // (LostFocus, IME/SIP teardown) reach the row and its ancestors. An exit orphan stays LIVE, so without it a
+            // focused row kept focus through its fade and Enter re-fired it on an index that now names another item.
+            OnSubtreeRemoved?.Invoke(root);
             UnmountSubtree(root);
             if (animate)
             {
