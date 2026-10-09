@@ -225,7 +225,9 @@ public sealed partial class RenderContext
                     _validating.Value = false;
                 });
             }
-            catch (OperationCanceledException) { /* superseded by a newer keystroke */ }
+            // Only OUR cancel (a newer keystroke / unmount) is dropped; a check that times out on its own deadline
+            // must still clear the validating flag.
+            catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* superseded by a newer keystroke */ }
             catch { _post(() => _validating.Value = false); }
         }
 

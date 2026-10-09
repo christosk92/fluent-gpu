@@ -255,7 +255,9 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
                 T v = await loader(token).ConfigureAwait(false);
                 post(() => Settle(epoch, v, null));
             }
-            catch (OperationCanceledException) { /* cancelled — a fresher load owns the epoch */ }
+            // Only OUR cancel (a fresher load / unmount owns the epoch) is dropped; a loader's own timeout or deadline
+            // is a failure and must settle, or the resource stays Pending with IsFetching=true forever.
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { /* cancelled — a fresher load owns the epoch */ }
             catch (Exception ex) { post(() => Settle(epoch, default!, ex)); }
         });
     }
