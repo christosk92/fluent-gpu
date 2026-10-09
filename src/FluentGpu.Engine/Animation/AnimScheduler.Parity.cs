@@ -27,6 +27,9 @@ public sealed partial class AnimEngine
     // Per-node layout-transition spec, keyed by node INDEX (slot reuse self-cleans; bounded by the slab size). The
     // reconciler Set/Clears it from BoxEl.Animate/Layout each reconcile; FLIP capture/apply read it.
     private readonly Dictionary<int, LayoutTransition> _transitions = new();
+    // node index -> the AUTHORED static transform WriteColumns wrote (OffsetX/Y·Rotation·Scale or the unbound matrix):
+    // the rest a position FLIP settles on and a structural snap lands back on. Absent => identity.
+    private readonly Dictionary<int, Affine2D> _restTransforms = new();
 
     // ── census (read by the MemCensus sampler / wake diagnostics) ─────────────────────────────────
     /// <summary>Active rows, all channels — O(1).</summary>
@@ -226,13 +229,32 @@ public sealed partial class AnimEngine
     // ── layout-transition side-table (node index → spec) ──────────────────────────────────────────
     public void SetTransition(NodeHandle node, in LayoutTransition t) => _transitions[(int)node.Raw.Index] = t;
     public bool TryGetTransition(NodeHandle node, out LayoutTransition t) => _transitions.TryGetValue((int)node.Raw.Index, out t);
-    public void ClearTransition(NodeHandle node) => _transitions.Remove((int)node.Raw.Index);
+    public void ClearTransition(NodeHandle node)
+    {
+        _transitions.Remove((int)node.Raw.Index);
+        _restTransforms.Remove((int)node.Raw.Index);
+    }
+
+    /// <summary>Stash a transition node's AUTHORED static transform (the reconciler calls this beside SetTransition).
+    /// WHY, like <see cref="SeedEnterOver"/>: the FLIP's TranslateX/Y rows replace-fold over paint and a settle leaves
+    /// their last value there, so a FLIP springing to 0 erased an authored OffsetY until the node's next reconcile.
+    /// Identity is not stored.</summary>
+    internal void SetRestTransform(NodeHandle node, in Affine2D rest)
+    {
+        int idx = (int)node.Raw.Index;
+        if (rest == Affine2D.Identity || rest == default) _restTransforms.Remove(idx);
+        else _restTransforms[idx] = rest;
+    }
+
+    private Affine2D RestTransformOf(int nodeIndex)
+        => _restTransforms.TryGetValue(nodeIndex, out Affine2D m) ? m : Affine2D.Identity;
     /// <summary>Symmetric teardown when a scene slot is FREED (wired to SceneStore.OnFreeIndex): drop the index-keyed
     /// spec so a freed node leaves no dormant spec the next node reusing the slot inherits. In-flight rows are
     /// gen-checked and self-prune at the next tick's IsLive guard.</summary>
     public void ClearForIndex(int index)
     {
         _transitions.Remove(index);
+        _restTransforms.Remove(index);
         ClearInteractTargets(index);
         // A forced orphan reclaim runs after Tick. Render-owned rows cannot rely on another UI tick
         // to notice the dead node: those rows intentionally do not request one. Retire them with the node.

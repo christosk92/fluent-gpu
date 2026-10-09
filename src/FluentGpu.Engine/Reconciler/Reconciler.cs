@@ -290,6 +290,12 @@ public sealed partial class TreeReconciler
     private readonly Dictionary<int, ForElBase> _forEl = new();                       // latest ForElBase per boundary node (parent re-renders replace it — see UpdateFor)
     private readonly Dictionary<int, Effect> _forEffect = new();                      // the For boundary effect, rescheduled by UpdateFor
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
+    // Element.Stagger's index base for the child diff in flight: a diff mounts every NEW child after ALL of the parent's
+    // existing children (the unmatched old ones are removed only afterwards), so an entering child's live sibling index
+    // counts surviving AND departing siblings. StaggerDelayMs subtracts the base for that parent → the ordinal among the
+    // children entering in this pass. Saved/restored around nested diffs.
+    private NodeHandle _staggerDiffParent;
+    private int _staggerDiffBase;
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
     private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
     private readonly Dictionary<int, string> _relativeKey = new();                    // follower node → the MorphId key it FLIPs relative to (Element.RelativeTo)
@@ -971,6 +977,7 @@ public sealed partial class TreeReconciler
         if (newEl is ScrollEl nse)
         {
             WriteColumns(node, nse, isMount: false);
+            RewireBinds(node, nse);   // a re-render that binds Visible with a new thunk/signal re-points the mount bind
             var oldContent = (oldEl as ScrollEl)?.Content;
             var content = _scene.FirstChild(node);
             if (content.IsNull)
@@ -999,6 +1006,7 @@ public sealed partial class TreeReconciler
         if (newEl is VirtualListEl nve)
         {
             WriteColumns(node, nve, isMount: false);
+            RewireBinds(node, nve);
             RealizeWindow(node, nve);
             return;
         }
@@ -1007,6 +1015,7 @@ public sealed partial class TreeReconciler
         {
             // Parent re-renders replace the stored ShowEl and reschedule the boundary effect (mirrors
             // UpdateSkeletonRegion), so the new Then/Else children — and the new When thunk's deps — take hold.
+            WriteAnchorColumns(node, nsh, oldEl);
             UpdateShow(node, nsh);
             return;
         }
@@ -1016,23 +1025,28 @@ public sealed partial class TreeReconciler
             // Parent re-renders replace the stored ForElBase and reschedule the boundary effect (mirrors UpdateShow),
             // so the fresh Items/KeyOf/Row closures take hold instead of freezing at first mount (the Show-parity fix —
             // ForEl.Update used to be a no-op, which froze rows built from parent render state).
+            WriteAnchorColumns(node, nfe, oldEl);
             UpdateFor(node, nfe);
             return;
         }
 
-        if (newEl is KeepAliveEl)
+        if (newEl is KeepAliveEl nka)
         {
-            return;   // autonomous retained-page boundary
+            WriteAnchorColumns(node, nka, oldEl);   // the boundary's own base-Element props; its pages stay autonomous
+            return;
         }
 
         if (newEl is SkelRegionEl nskr)
         {
+            WriteAnchorColumns(node, nskr, oldEl);
+            ApplySkeletonSmoothResize(node, nskr);
             UpdateSkeletonRegion(node, nskr);
             return;
         }
 
         if (newEl is ContextProviderEl np)
         {
+            WriteAnchorColumns(node, np, oldEl);
             int idx = (int)node.Raw.Index;
             if (_providerSig.TryGetValue(idx, out var e) && ReferenceEquals(e.Channel, np.Channel))
                 e.Sig.Value = np.Value;                                  // notify consumers iff changed
@@ -1315,6 +1329,7 @@ public sealed partial class TreeReconciler
     private void MountProvider(NodeHandle node, ContextProviderEl cp)
     {
         _providerSig[(int)node.Raw.Index] = (cp.Channel, new Signal<object?>(cp.Value));
+        WriteAnchorColumns(node, cp, old: null);   // base-Element props on the boundary itself, before its child mounts
         var child = _scene.CreateNode(cp.Child.ElementTypeId);
         _scene.AppendChild(node, child);
         Mount(child, cp.Child);
@@ -1417,6 +1432,7 @@ public sealed partial class TreeReconciler
         int mountIdx = (int)node.Raw.Index;
         _showState[mountIdx] = null;
         _showEl[mountIdx] = se;
+        WriteAnchorColumns(node, se, old: null);   // before the first branch mounts (mirrors MountComponent)
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
@@ -1450,11 +1466,29 @@ public sealed partial class TreeReconciler
         _skelEl[mountIdx] = se;
         if (se.Group is { } grp) SkelGroupCoordinator.Register(grp, mountIdx);
 
+        WriteAnchorColumns(node, se, old: null);
+        ApplySkeletonSmoothResize(node, se);
+
+        var eff = new Effect(Runtime, () =>
+        {
+            int idx = (int)node.Raw.Index;
+            bool force = _skelForce.Remove(idx);
+            ReconcileSkeletonRegion(node, force);
+        }, owner: null, runNow: false);
+        _skelEffect[mountIdx] = eff;
+        AddBinding(node, eff);
+        eff.RunNow();
+    }
+
+    /// <summary>Smooth-resize (see the block comment inside): an authored Enter/Exit/Layout on the region
+    /// (<see cref="WriteAnchorColumns"/>) owns the node's transition and wins over it.</summary>
+    private void ApplySkeletonSmoothResize(NodeHandle node, SkelRegionEl se)
+    {
         // Smooth-resize: mark the region BoundsAnimated with a SizeMode.Reflow transition so a branch swap whose new
         // content has a DIFFERENT height eases the region's layout size — the host re-solves the parent boundary each
         // tick, so SURROUNDING content (the sibling below a failed/shorter section) reflows smoothly instead of snapping.
         // Skipped under reduced motion (the swap snaps). The FLIP deadband makes a same-height swap a no-op.
-        if (se.SmoothResize && !Motion.ReducedMotion && Anim is { } sa)
+        if (se.SmoothResize && !Motion.ReducedMotion && Anim is { } sa && !sa.TryGetTransition(node, out _))
         {
             // HEIGHT ONLY. `LayoutTransition.Axes` defaults to SizeAxes.Both, but the region's smooth resize exists to
             // ease the BRANCH HEIGHT difference; its width is parent-owned (a page section fills its column) and easing
@@ -1467,16 +1501,6 @@ public sealed partial class TreeReconciler
                 Axes: SizeAxes.Height));
             _scene.Mark(node, NodeFlags.BoundsAnimated);
         }
-
-        var eff = new Effect(Runtime, () =>
-        {
-            int idx = (int)node.Raw.Index;
-            bool force = _skelForce.Remove(idx);
-            ReconcileSkeletonRegion(node, force);
-        }, owner: null, runNow: false);
-        _skelEffect[mountIdx] = eff;
-        AddBinding(node, eff);
-        eff.RunNow();
     }
 
     private void UpdateSkeletonRegion(NodeHandle node, SkelRegionEl next)
@@ -1616,6 +1640,7 @@ public sealed partial class TreeReconciler
         // mount-time capture), so a parent re-render can re-point the closures (UpdateFor) — exactly like MountShow.
         int mountIdx = (int)node.Raw.Index;
         _forEl[mountIdx] = fe;
+        WriteAnchorColumns(node, fe, old: null);   // before the first rows mount: a Stagger must be on record for them
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
@@ -1649,6 +1674,7 @@ public sealed partial class TreeReconciler
         int idx = (int)node.Raw.Index;
         var state = new KeepAliveState { Boundary = node };
         _keepAliveState[idx] = state;
+        WriteAnchorColumns(node, ka, old: null);
 
         var eff = new Effect(Runtime, () =>
         {
@@ -1656,7 +1682,16 @@ public sealed partial class TreeReconciler
 
             object token = ka.Active();
             bool cacheable = ka.Options.ShouldCache?.Invoke(token) ?? true;
-            string key = cacheable ? ka.KeyOf(token) : "__transient:" + (++state.TransientSeq).ToString();
+            // A transient (non-cached) page gets a fresh key per ACTIVATION, not per run: a re-run that did not move the
+            // token (RethemeAll schedules every boundary; a signal read inside View) keeps the active transient entry and
+            // updates it in place. Minting a new key here unmounted the live page and mounted a copy (state lost, Enter
+            // replayed). Leaving and coming back still remounts: ActiveKey is then the other route's key.
+            string key = !cacheable
+                && state.ActiveKey is { } activeKey
+                && state.Entries.TryGetValue(activeKey, out var activeEntry)
+                && !activeEntry.Cacheable && Equals(activeEntry.Token, token)
+                ? activeKey
+                : cacheable ? ka.KeyOf(token) : "__transient:" + (++state.TransientSeq).ToString();
             Element desired = ka.View(token) with { Key = key };
 
             ReconcileKeepAlive(node, state, ka.Options, key, token, desired, cacheable);
@@ -3017,6 +3052,8 @@ public sealed partial class TreeReconciler
     private void MountScroll(NodeHandle node, ScrollEl se)
     {
         WriteColumns(node, se, isMount: true);
+        // WriteColumns skips a BOUND Visible (BindPresence owns it) — wire it here, Mount's WriteColumns-then-BindNode pair.
+        BindNode(node, se);
         var content = _scene.CreateNode(se.Content.ElementTypeId);
         _scene.AppendChild(node, content);
         Mount(content, se.Content);
@@ -3124,6 +3161,7 @@ public sealed partial class TreeReconciler
     private void MountVirtual(NodeHandle node, VirtualListEl ve)
     {
         WriteColumns(node, ve, isMount: true);
+        BindNode(node, ve);   // bound Visible (see MountScroll)
         var content = _scene.CreateNode(1);
         _scene.AppendChild(node, content);
         _scene.ScrollRef(node).ContentNode = content;
@@ -4285,6 +4323,10 @@ public sealed partial class TreeReconciler
         // touching node lifecycle ordering at all. (An earlier note here blamed gate.arena.alloc-zero for the same
         // conclusion — that was a stale-incremental-build false positive, the one ops/diag/README.md warns about for
         // exactly that gate. On a clean build the reordering passes it 3/3. e4popup.3 is the real constraint.)
+        NodeHandle outerStaggerParent = _staggerDiffParent;
+        int outerStaggerBase = _staggerDiffBase;
+        _staggerDiffParent = node;
+        _staggerDiffBase = oldN;   // every old child is still attached here: new ones land after them
         for (int i = 0; i < newN; i++)
         {
             if (!newNodes[i].IsNull) continue;
@@ -4299,6 +4341,8 @@ public sealed partial class TreeReconciler
             newNodes[i] = child;
             structural = true;
         }
+        _staggerDiffParent = outerStaggerParent;
+        _staggerDiffBase = outerStaggerBase;
 
         for (int j = 0; j < oldN; j++)
             if (!used[j]) { Remove(oldNodes[j]); structural = true; }
@@ -4481,8 +4525,10 @@ public sealed partial class TreeReconciler
     /// reuse branch (<paramref name="old"/> = the previous <see cref="ComponentEl"/>, used only to derive
     /// <c>isMount</c> — a reused anchor never changes identity, so there is no BoxEl-style "declared→identity" hand-off
     /// to detect here). Zero-alloc on the steady (no-op) path: every write below is either a no-op TryGetValue/flag
-    /// check or a scalar column write, exactly like the analogous WriteColumns lines it mirrors.</summary>
-    private void WriteAnchorColumns(NodeHandle node, ComponentEl ce, ComponentEl? old)
+    /// check or a scalar column write, exactly like the analogous WriteColumns lines it mirrors.
+    /// Also applied to the other layout-transparent boundary kinds Mount routes past WriteColumns (Show / For / KeepAlive /
+    /// SkelRegion / Ctx.Provide), which dropped the same props for the same reason.</summary>
+    private void WriteAnchorColumns(NodeHandle node, Element ce, Element? old)
     {
         bool isMount = old is null;
         _scene.NoteCaptureChanged((int)node.Raw.Index);
@@ -4836,22 +4882,23 @@ public sealed partial class TreeReconciler
     private LayoutTransition? SynthesizeDeclarative(NodeHandle node, Element el)
     {
         bool hasEnter = el.Enter is not null, hasExit = el.Exit is not null;
-        float stagger = hasEnter ? StaggerDelayMs(node) : 0f;   // a parent's Stagger delays this child's Enter
+        // A parent's Stagger delays this child's ENTER only, so it rides EnterExit.DelayMs (enter-only). Baked into
+        // LayoutTransition.DelayMs it also held every later Exit (SeedExit) and FLIP move (AnimateBounds) by index × stagger.
+        EnterExit enter = default;
+        if (el.Enter is { } e) enter = e with { Active = true, DelayMs = e.DelayMs + StaggerDelayMs(node) };
         if (el.Layout is { } lt)
             return (!hasEnter && !hasExit) ? lt
                  : lt with
                    {
-                       Enter = hasEnter ? (el.Enter!.Value with { Active = true }) : lt.Enter,
+                       Enter = hasEnter ? enter : lt.Enter,
                        Exit = hasExit ? (el.Exit!.Value with { Active = true }) : lt.Exit,
-                       DelayMs = lt.DelayMs + stagger,
                    };
         if (!hasEnter && !hasExit) return null;
         TransitionDynamics dyn = el.Transition is { } m ? m.ToDynamics() : TransitionDynamics.Default;
         return new LayoutTransition(
             TransitionChannels.Opacity, dyn, SizeMode.Auto,
-            Enter: hasEnter ? (el.Enter!.Value with { Active = true }) : default,
-            Exit: hasExit ? (el.Exit!.Value with { Active = true }) : default,
-            DelayMs: stagger);
+            Enter: enter,
+            Exit: hasExit ? (el.Exit!.Value with { Active = true }) : default);
     }
 
     /// <summary>The authored static pose an Enter settles on (<see cref="EnterRest"/>): a BoxEl's unbound Opacity,
@@ -4870,15 +4917,18 @@ public sealed partial class TreeReconciler
         return new EnterRest(b.OffsetX, b.OffsetY, b.ScaleX, b.ScaleY, op, b.Blur);
     }
 
-    /// <summary>A parent's <see cref="FluentGpu.Dsl.Element.Stagger"/> delays each child's ENTER by (sibling index ×
-    /// stagger ms) — a list/shelf whose items reveal in sequence. O(siblings) at mount (not the hot path); returns 0
-    /// when no parent staggers.</summary>
+    /// <summary>A parent's <see cref="FluentGpu.Dsl.Element.Stagger"/> delays each ENTERING child's Enter by (its ordinal
+    /// among the children entering in that diff × stagger ms): a list/shelf whose new items reveal in sequence. A diff
+    /// appends new children after every old one (removal comes later), so inside the diff in flight the walk is rebased
+    /// past the old children; a first mount appends in order, where the live index already is that ordinal. O(siblings)
+    /// at mount (not the hot path); returns 0 when no parent staggers.</summary>
     private float StaggerDelayMs(NodeHandle node)
     {
         NodeHandle parent = _scene.Parent(node);
         if (parent.IsNull || !_childStagger.TryGetValue((int)parent.Raw.Index, out float per) || per <= 0f) return 0f;
         int i = 0;
         for (var c = _scene.FirstChild(parent); !c.IsNull && c.Raw.Index != node.Raw.Index; c = _scene.NextSibling(c)) i++;
+        if (parent == _staggerDiffParent && i >= _staggerDiffBase) i -= _staggerDiffBase;
         return i * per;
     }
 
@@ -5089,9 +5139,11 @@ public sealed partial class TreeReconciler
                 bool staticDecomposed = tfUnbound
                     && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f);
                 AssertSingleTransformOwner(b, staticMatrix, staticDecomposed);
+                Affine2D restTf = Affine2D.Identity;   // the authored pose a position FLIP settles on (AnimEngine.SetRestTransform)
                 if (staticMatrix)
                 {
-                    paint.LocalTransform = b.Transform.Value;
+                    restTf = b.Transform.Value;
+                    paint.LocalTransform = restTf;
                 }
                 else if (staticDecomposed)
                 {
@@ -5099,6 +5151,7 @@ public sealed partial class TreeReconciler
                     if (b.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(b.Rotation * (MathF.PI / 180f)));
                     if (b.ScaleX != 1f || b.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(b.ScaleX, b.ScaleY));
                     paint.LocalTransform = tf;
+                    restTf = tf;
                 }
                 // Static→identity hand-off: when the PREVIOUS element declared a static transform and this one
                 // declares none, clear the stale static — the in-place differ can morph e.g. a rail (OffsetY=14)
@@ -5203,6 +5256,7 @@ public sealed partial class TreeReconciler
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);
+                    anim.SetRestTransform(node, restTf);
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
                     if (isMount && at.Enter.Active)
                     {
@@ -5220,6 +5274,7 @@ public sealed partial class TreeReconciler
                 if (b.Animate is null && Anim is { } danim && SynthesizeDeclarative(node, el) is { } dt)
                 {
                     danim.SetTransition(node, dt);
+                    danim.SetRestTransform(node, restTf);
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
                     if (isMount && dt.Enter.Active)
                     {
