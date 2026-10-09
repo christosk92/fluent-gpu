@@ -4708,6 +4708,10 @@ public sealed partial class TreeReconciler
         var anim = Anim;
         var motionDef = MotionTok.Get(motion);
         bool animate = exit.Active && anim is not null;
+        // The stagger deals the rows that actually exit, in index order. Ranked against the whole removed set, a row
+        // scrolled deep into the list waited behind every unseen removed item above it: seconds at full opacity over the
+        // survivors sliding up, then the 2 s orphan backstop cut it with no exit at all. Collected before any detach.
+        int[]? dealt = animate && staggerMs > 0f ? RealizedRemoved(entry, removed) : null;
 
         void Retire(in BoundSlot slot)
         {
@@ -4720,7 +4724,7 @@ public sealed partial class TreeReconciler
             {
                 anim!.CancelAll(root);
                 _scene.Orphan(root);
-                anim!.SeedExit(root, exit, in motionDef, MathF.Max(0f, staggerMs) * RemovedRank(index, removed));
+                anim!.SeedExit(root, exit, in motionDef, dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
             }
             else _scene.FreeSubtree(root);
             _reconciled = true;
@@ -4879,6 +4883,30 @@ public sealed partial class TreeReconciler
         return lo;
     }
 
+    /// <summary>The removed indices that hold a realized slot (window + retained prefix), sorted: the rows a removal
+    /// stagger deals over. Unseen removed items take no turn.</summary>
+    private static int[] RealizedRemoved(VirtualEntry entry, IReadOnlyList<int> removed)
+    {
+        int n = Collect(entry.Slots, removed, null, 0) + Collect(entry.PrefixSlots, removed, null, 0);
+        if (n == 0) return Array.Empty<int>();
+        var dealt = new int[n];
+        Collect(entry.PrefixSlots, removed, dealt, Collect(entry.Slots, removed, dealt, 0));
+        Array.Sort(dealt);
+        return dealt;
+
+        static int Collect(List<BoundSlot>? slots, IReadOnlyList<int> removed, int[]? into, int at)
+        {
+            if (slots is null) return at;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                int index = slots[i].Index.Peek();
+                if (!ContainsRemoved(index, removed)) continue;
+                if (into is not null) into[at] = index;
+                at++;
+            }
+            return at;
+        }
+    }
 
     /// <summary>Build a LayoutTransition from the new declarative Element fields (Enter/Exit/Transition/Layout/Stagger)
     /// so the rework's authoring surface routes through the existing FLIP/enter/exit seed lifecycle. Null when the node
