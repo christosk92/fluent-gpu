@@ -117,6 +117,7 @@ static partial class ControlsSuite
         InfoBarClosePlateChecks(strings);
         MenuBarReopenChecks(strings);
         FocusDepartureCloseChecks(strings);
+        AutoSuggestChromeChecks(strings);
         SelectionUnsubscribeChecks(strings);
         TabContentIdentityChecks(strings);
         NavigateRequestRepeatChecks(strings);

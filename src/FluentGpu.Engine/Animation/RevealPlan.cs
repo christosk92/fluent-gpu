@@ -33,6 +33,18 @@ public static class RevealPlan
         return false;
     }
 
+    /// <summary>The visible span (<see cref="Scene.RevealBand.Visible"/>) a band records when it is armed over a move whose clamped
+    /// spring runs [<paramref name="from"/>, <paramref name="to"/>]: the larger end. A REVERSE of a live band (<paramref name="prior"/>
+    /// = its recorded span, NaN / &lt;= 0 = the whole <paramref name="extent"/>) keeps at least that span: the reversed move's
+    /// own larger end is only the live value, and shrinking the span to it would drop the rows by the whole difference in one
+    /// frame (their slide is min(0, presented - visible)).</summary>
+    public static float VisibleSpan(float prior, float from, float to, float extent)
+    {
+        float v = MathF.Max(from, to);
+        if (!float.IsNaN(prior)) v = MathF.Max(v, prior <= 0f ? extent : MathF.Min(prior, extent));
+        return MathF.Min(v, extent);
+    }
+
     /// <summary>True when a region at <paramref name="regionTop"/> stays wholly above the view's top edge
     /// <paramref name="viewTop"/> through the whole move <paramref name="p0"/> → <paramref name="p1"/>. The reveal then
     /// snaps, and the caller shifts the scroll frame by the change so the content being read stays put (scroll anchoring).</summary>

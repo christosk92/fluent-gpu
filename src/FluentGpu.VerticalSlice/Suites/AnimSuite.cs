@@ -3848,6 +3848,41 @@ static class AnimSuite
             Check("gate.anim.while.snapRestoresAuthoredPose", wasFan && flipKeptRest && atRest,
                 $"wasFan={wasFan} txFan={txFan:0.0} flipTx={txAfterFlipSnap:0.0} rest rot={rotRest:0.0} tx={txRest:0.0} ty={tyRest:0.0}");
         }
+
+        // gate.anim.loop.survivesActivationSnap — the same KeepAlive un-park snap must leave an authored LOOP row alone (the
+        // now-playing meter's ScaleY track): it used to free the render-thread loop and freeze the bars. A finite scale row
+        // on a sibling is still snapped.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            NodeHandle loopNode = default, finiteNode = default;
+            recon.ReconcileRoot(new BoxEl
+            {
+                Children =
+                [
+                    new BoxEl { Width = 4, Height = 40, OnRealized = n => loopNode = n },
+                    new BoxEl { Width = 4, Height = 40, OnRealized = n => finiteNode = n },
+                ],
+            }, null);
+            var flat = new[] { new Keyframe(0f, 0.9f, Easing.Linear), new Keyframe(1f, 0.9f, Easing.Linear) };
+            engine.Keyframes(loopNode, AnimChannel.ScaleY, flat, 850f, loop: true);
+            engine.Keyframes(finiteNode, AnimChannel.ScaleY, flat, 5000f);
+            for (int i = 0; i < 4; i++) engine.Tick(16f);
+            bool seeded = Near(scene.Paint(loopNode).LocalTransform.M22, 0.9f, 0.01f)
+                          && Near(scene.Paint(finiteNode).LocalTransform.M22, 0.9f, 0.01f);
+
+            engine.SnapStructuralToLayout(loopNode);
+            engine.SnapStructuralToLayout(finiteNode);
+            engine.Tick(16f);
+            float loopScale = scene.Paint(loopNode).LocalTransform.M22;
+            float finiteScale = scene.Paint(finiteNode).LocalTransform.M22;
+            bool loopKept = engine.LoopCount == 1 && Near(loopScale, 0.9f, 0.01f);
+            bool finiteSnapped = Near(finiteScale, 1f, 0.01f);
+
+            Check("gate.anim.loop.survivesActivationSnap", seeded && loopKept && finiteSnapped,
+                $"seeded={seeded} loops={engine.LoopCount} loopScale={loopScale:0.00} finiteScale={finiteScale:0.00}");
+        }
     }
 
     static void RotationCurrentValueChecks(StringTable strings)

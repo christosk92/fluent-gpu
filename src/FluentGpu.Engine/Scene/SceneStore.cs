@@ -1711,15 +1711,16 @@ public sealed partial class SceneStore : ISceneBackend
         return true;
     }
 
-    /// <summary>Arm or retarget band <paramref name="slot"/> of a vertical virtual viewport.</summary>
-    public bool SetRevealBand(NodeHandle viewport, int slot, int first, int count, float top, float extent, bool opening, float presented)
+    /// <summary>Arm or retarget band <paramref name="slot"/> of a vertical virtual viewport. <paramref name="visible"/> is the
+    /// span the clamped spring drives (<see cref="RevealBand.Visible"/>; NaN = the whole extent).</summary>
+    public bool SetRevealBand(NodeHandle viewport, int slot, int first, int count, float top, float extent, bool opening, float presented, float visible = float.NaN)
     {
         if ((uint)slot >= RevealBands.Capacity || viewport.IsNull || !IsLive(viewport) || first < 0 || count <= 0
             || !float.IsFinite(top) || !(extent > 0f) || !_scroll.TryGet((int)viewport.Raw.Index, out var snap)
             || snap.Orientation != 0 || snap.ContentNode.IsNull || !IsLive(snap.ContentNode)) return false;
         ref ScrollState sc = ref ScrollRef(viewport);
         bool wasAny = sc.BandMask != 0;
-        sc.Bands.Set(slot, new RevealBand { First = first, Count = count, Top = top, Extent = extent, Opening = opening, Presented = presented });
+        sc.Bands.Set(slot, new RevealBand { First = first, Count = count, Top = top, Extent = extent, Opening = opening, Presented = presented, Visible = visible });
         sc.BandMask |= (byte)(1 << slot);
         if (!wasAny) _revealBandViewports.Add(viewport);
         Mark(sc.ContentNode, NodeFlags.PaintDirty);
@@ -1758,6 +1759,20 @@ public sealed partial class SceneStore : ISceneBackend
         band.Committed = true;
         band.CommitCount = sc.ItemCount;
         band.Presented = 0f;
+        sc.Bands.Set(slot, in band);
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>A COMMITTED band whose rows are known gone stops presenting at once, whatever the viewport's item count is
+    /// (<see cref="RevealBand.CommitCount"/> = int.MinValue never matches, so <see cref="RevealBand.Presents"/> is false): a
+    /// commit that inserts rows elsewhere lands at an UNCHANGED count, where the count-based handoff would keep clipping and
+    /// shifting the survivors until the owner's layout effect releases the slot. No-op for a band that is not committed.
+    /// Idempotent; <see cref="ClearRevealBand"/> still releases the slot.</summary>
+    public void RetireRevealBand(NodeHandle viewport, int slot)
+    {
+        if (!TryGetRevealBand(viewport, slot, out var band) || !band.Committed || band.CommitCount == int.MinValue) return;
+        ref ScrollState sc = ref ScrollRef(viewport);
+        band.CommitCount = int.MinValue;
         sc.Bands.Set(slot, in band);
         if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
     }

@@ -172,6 +172,77 @@ public static class TitleBarSuite
                 enabledAtStart && disabled && reenabled,
                 $"start={enabledAtStart} disabled={disabled} reenabled={reenabled}");
         }
+
+        PaneToggleFlipChecks(strings);
+    }
+
+    /// <summary>The root's children are conditional (the pane toggle comes and goes with the nav style), so they are
+    /// KEYED: adding or removing the toggle must not re-pair the tabs / centre / trailing nodes with the captured part
+    /// handles. After every flip the report still matches the live nodes, and the toggle region exists iff shown.</summary>
+    static void PaneToggleFlipChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("titlebar-pane-flip", new Size2((int)BarW, 300), 1f));
+        window.Show();
+        var probe = new PaneFlipProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+        void Settle(int n = 8) { for (int i = 0; i < n; i++) host.RunFrame(); }
+        Settle();
+
+        RectF NodeRect(ColorF ink)
+        {
+            RectF found = default;
+            void Walk(NodeHandle n)
+            {
+                if (n.IsNull || found.W > 0f) return;
+                if (host.Scene.Paint(n).VisualKind == VisualKind.Box && host.Scene.Paint(n).Fill == ink) { found = host.Scene.AbsoluteRect(n); return; }
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Walk(c);
+            }
+            Walk(host.Scene.Root);
+            return found;
+        }
+        // The Client region whose X/W match a live node (-1 when none does).
+        int RegionFor(RectF node)
+        {
+            var regs = window.LastTitleBarRegions;
+            for (int i = 0; i < regs.Length; i++)
+                if (regs[i].Hit == TitleBarHit.Client && Near(regs[i].RectDip.X, node.X, 0.5f) && Near(regs[i].RectDip.W, node.W, 0.5f)) return i;
+            return -1;
+        }
+
+        string Phase(string name, bool pane)
+        {
+            Settle();
+            var tabs = NodeRect(PaneFlipProbe.TabsInk);
+            var trailing = NodeRect(PaneFlipProbe.TrailingInk);
+            var toggle = FindPaneToggle(host.Scene, host.Scene.Root);
+            bool toggleLive = !toggle.IsNull;
+            bool tabsOk = tabs.W > 0f && RegionFor(tabs) >= 0;
+            bool trailingOk = trailing.W > 0f && RegionFor(trailing) >= 0;
+            bool paneOk = pane
+                ? toggleLive && RegionFor(host.Scene.AbsoluteRect(toggle)) >= 0
+                : !toggleLive && !HasLeftToggleRegion(window.LastTitleBarRegions);
+            return tabsOk && trailingOk && paneOk ? "" : $"{name}: tabs={tabsOk} trailing={trailingOk} pane={paneOk}(live={toggleLive}) ";
+        }
+
+        string fails = Phase("start", false);
+        probe.Bar!.ShowPaneToggle = true; probe.Version.Value++;
+        fails += Phase("shown", true);
+        probe.Bar!.ShowPaneToggle = false; probe.Version.Value++;
+        fails += Phase("hidden", false);
+        probe.Bar!.ShowPaneToggle = true; probe.Version.Value++;
+        fails += Phase("shown-again", true);
+
+        Check("gate.titlebar.pane-toggle.flip-keeps-regions toggling the pane button keeps the tabs / trailing / toggle regions on their own nodes",
+            fails.Length == 0, fails.Length == 0 ? "ok" : fails);
+    }
+
+    /// <summary>A Client region left of the tabs island that is toggle-sized (36-52 wide inside the leading 96 DIP).</summary>
+    static bool HasLeftToggleRegion(TitleBarRegion[] regions)
+    {
+        foreach (var r in regions)
+            if (r.Hit == TitleBarHit.Client && r.RectDip.X < 96f && r.RectDip.W is >= 36f and <= 52f) return true;
+        return false;
     }
 
     /// <summary>The pane toggle: the first Button-role node inside the bar's left 96 DIP that is 36-52 wide.</summary>
@@ -356,6 +427,37 @@ sealed class MergedCenterIsland : Component
         Width = Expanded is { } e && e.Value ? 420f : 180f,
         Height = 32f,
         Fill = Ink,
+    };
+}
+
+/// <summary>A merged bar (tabs + centre + trailing) whose pane toggle is flipped at runtime through the live
+/// <see cref="Bar"/> instance (the real shell flips it with the nav style).</summary>
+sealed class PaneFlipProbe : Component
+{
+    public static readonly ColorF TabsInk = ColorF.FromRgba(0x31, 0x41, 0x59, 0xFF);
+    public static readonly ColorF TrailingInk = ColorF.FromRgba(0x27, 0x18, 0x28, 0xFF);
+    public readonly Signal<int> Version = new(0);
+    public TitleBar? Bar;
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            Embed.Comp(() => Bar = new TitleBar
+            {
+                Title = "flip",
+                ShowPaneToggle = false,
+                PaneToggleToolTip = () => "Toggle navigation",
+                Tabs = () => new BoxEl { Width = 220f, Height = 40f, Fill = TabsInk },
+                TabsVersion = () => Version.Value,
+                CenterContent = _ => new BoxEl { Width = 180f, Height = 32f, Fill = ColorF.FromRgba(0x22, 0x22, 0x22) },
+                Trailing = () => new BoxEl { Width = 64f, Height = 32f, Fill = TrailingInk },
+                ContentVersion = () => Version.Value,
+                ShowCaptionButtons = true,
+            }),
+            new BoxEl { Grow = 1f },
+        ],
     };
 }
 
