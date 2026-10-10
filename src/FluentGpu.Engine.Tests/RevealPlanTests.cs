@@ -60,6 +60,21 @@ public sealed class RevealPlanTests
     }
 
     [Fact]
+    public void VisibleSpan_IsTheLargerClampEnd_AndAReverseKeepsTheLiveSpan()
+    {
+        // Fresh arm: the larger end of the clamped move (a collapse 1200 -> 0 clamped to a 278 DIP view, an expand 0 -> 80).
+        Assert.Equal(278f, RevealPlan.VisibleSpan(float.NaN, 278f, 0f, 1200f));
+        Assert.Equal(80f, RevealPlan.VisibleSpan(float.NaN, 0f, 80f, 80f));
+        // Reverse of an expand into a collapse at presented 40 (80 DIP band): from = live 40, to = 0. The span stays 80, so the
+        // rows' slide min(0, presented - visible) does not jump from 40 - 80 to 0.
+        Assert.Equal(80f, RevealPlan.VisibleSpan(80f, 40f, 0f, 80f));
+        Assert.Equal(278f, RevealPlan.VisibleSpan(278f, 150f, 0f, 1200f));
+        // NaN / <= 0 prior = the whole extent; never above the extent.
+        Assert.Equal(80f, RevealPlan.VisibleSpan(0f, 40f, 0f, 80f));
+        Assert.Equal(80f, RevealPlan.VisibleSpan(500f, 40f, 0f, 80f));
+    }
+
+    [Fact]
     public void ParallaxShift_LeadsByADampedShareCappedAt24()
     {
         Assert.Equal(0f, RevealPlan.ParallaxShift(100f, 100f));

@@ -349,7 +349,8 @@ public sealed partial class AnimEngine
     /// [<paramref name="first"/>, +<paramref name="count"/>) — the model must already hold the rows laid out (an expand
     /// inserts them first; a collapse keeps them until its commit). Springs the presented height toward the rows' extent
     /// (<paramref name="opening"/>) or 0 under MotionTok.Reveal, from the live value with its velocity, clamped to the
-    /// visible span; snaps (and reports settled) under reduced motion or when nothing of it is visible. False when the
+    /// visible span; snaps (and reports settled) under reduced motion or when nothing of it is visible. The band records the
+    /// visible span its rows slide by (<see cref="RevealBand.Visible"/>). False when the
     /// viewport cannot carry a band (not a vertical virtual list, or the range is out of its model).</summary>
     public bool BeginRevealBand(NodeHandle viewport, int slot, int first, int count, bool opening)
     {
@@ -387,7 +388,10 @@ public sealed partial class AnimEngine
             QueueSettled(viewport, ch);
             return true;
         }
-        if (!_scene.SetRevealBand(viewport, slot, first, count, top, extent, opening, ex >= 0 ? cur : from)) return false;
+        // The span the rows slide by: a fresh arm's larger clamp end; a reverse keeps the live band's span (see VisibleSpan).
+        float prior = ex >= 0 && _scene.TryGetRevealBand(viewport, slot, out var live) ? live.Visible : float.NaN;
+        float visible = RevealPlan.VisibleSpan(prior, from, to, extent);
+        if (!_scene.SetRevealBand(viewport, slot, first, count, top, extent, opening, ex >= 0 ? cur : from, visible)) return false;
         var spring = MotionTok.Reveal.Spring;
         if (ex >= 0 && MathF.Abs(from - cur) < 0.5f) Spring(viewport, ch, to, spring);   // reverse: live value + velocity
         else

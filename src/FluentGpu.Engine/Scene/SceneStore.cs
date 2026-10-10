@@ -1711,15 +1711,16 @@ public sealed partial class SceneStore : ISceneBackend
         return true;
     }
 
-    /// <summary>Arm or retarget band <paramref name="slot"/> of a vertical virtual viewport.</summary>
-    public bool SetRevealBand(NodeHandle viewport, int slot, int first, int count, float top, float extent, bool opening, float presented)
+    /// <summary>Arm or retarget band <paramref name="slot"/> of a vertical virtual viewport. <paramref name="visible"/> is the
+    /// span the clamped spring drives (<see cref="RevealBand.Visible"/>; NaN = the whole extent).</summary>
+    public bool SetRevealBand(NodeHandle viewport, int slot, int first, int count, float top, float extent, bool opening, float presented, float visible = float.NaN)
     {
         if ((uint)slot >= RevealBands.Capacity || viewport.IsNull || !IsLive(viewport) || first < 0 || count <= 0
             || !float.IsFinite(top) || !(extent > 0f) || !_scroll.TryGet((int)viewport.Raw.Index, out var snap)
             || snap.Orientation != 0 || snap.ContentNode.IsNull || !IsLive(snap.ContentNode)) return false;
         ref ScrollState sc = ref ScrollRef(viewport);
         bool wasAny = sc.BandMask != 0;
-        sc.Bands.Set(slot, new RevealBand { First = first, Count = count, Top = top, Extent = extent, Opening = opening, Presented = presented });
+        sc.Bands.Set(slot, new RevealBand { First = first, Count = count, Top = top, Extent = extent, Opening = opening, Presented = presented, Visible = visible });
         sc.BandMask |= (byte)(1 << slot);
         if (!wasAny) _revealBandViewports.Add(viewport);
         Mark(sc.ContentNode, NodeFlags.PaintDirty);
