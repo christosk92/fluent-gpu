@@ -34,12 +34,16 @@ public sealed record AutoSuggestBoxPresenterContext(
 /// <summary>
 /// Optional rich-suggestion presenter. This is deliberately narrower than templating the whole control: consumers can
 /// render artwork and typed result models without replacing the FluentGpu AutoSuggestBox field or overlay mechanics.
+/// <para><paramref name="Chrome"/> picks the popup's open/close motion. The default <see cref="PopupChrome.Static"/> is
+/// the WinUI behaviour (the suggestion list appears and disappears instantly); a rich presenter whose list is a card
+/// can choose <see cref="PopupChrome.Dropdown"/> to get the animated exit leg instead.</para>
 /// </summary>
 public sealed record AutoSuggestBoxPresenter(
     Func<AutoSuggestBoxPresenterContext, Element> Build,
     Action<int>? MoveSelection = null,
     Func<bool>? SubmitSelection = null,
-    Action? ResetSelection = null);
+    Action? ResetSelection = null,
+    PopupChrome Chrome = PopupChrome.Static);
 
 /// <summary>
 /// A WinUI AutoSuggestBox: an <see cref="EditableText"/> field whose filtered suggestions are hosted in a light-dismiss
@@ -342,7 +346,8 @@ public sealed class AutoSuggestBox : Component
                 // suggestion list appears/disappears instantly. The surface still carries the SuggestionsContainer
                 // chrome (AcrylicBackgroundFillColorDefault + 1px border + OverlayCornerRadius + 0,2 padding,
                 // AutoSuggestBox_themeresources.xaml:283 + generic.xaml:119).
-                new PopupOptions(Chrome: PopupChrome.Static));
+                // A rich presenter may opt into another chrome (AutoSuggestBoxPresenter.Chrome); the stock list stays Static.
+                new PopupOptions(Chrome: Presenter?.Chrome ?? PopupChrome.Static));
             opened.ClosedAction = () =>
             {
                 if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;   // reopened before this close finalized
