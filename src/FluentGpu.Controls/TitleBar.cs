@@ -75,6 +75,11 @@ public sealed record TitleBarOptions
 /// (first match wins in WM_NCHITTEST). Window activation/placement changes arrive via the host-bumped
 /// <see cref="InputHooks.WindowChromeEpoch"/> signal: deactivation dims title→tertiary, icon/content→50% opacity,
 /// caption glyphs→disabled (the WinUI Deactivated visual state); maximize re-glyphs max↔restore.
+///
+/// Every root slot is KEYED (<c>tb-back</c>, <c>tb-pane</c>, <c>tb-tabs</c>, …): the root's children are conditional
+/// (back, pane toggle, icon, title, …), so ordinal pairing would re-pair the siblings of a toggled child onto the
+/// wrong nodes and the captured part handles would point at recycled slots. Keys keep each part on its own node, and
+/// the region push additionally only measures handles that are still live.
 /// </summary>
 public sealed class TitleBar : Component
 {
@@ -326,6 +331,7 @@ public sealed class TitleBar : Component
             var applied = Parts.Apply(PartBackButton, back);
             kids.Add(applied with
             {
+                Key = "tb-back",
                 OnClick = back.OnClick, Role = AutomationRole.Button, Children = back.Children,
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _back = h, applied.OnRealized),
             });
@@ -340,10 +346,11 @@ public sealed class TitleBar : Component
                 OnClick = pane.OnClick, Role = AutomationRole.Button, Children = pane.Children,
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _pane = h, applied.OnRealized),
             };
-            kids.Add(paneTip.Length > 0 ? ToolTip.Wrap(paneEl, paneTip) : paneEl);
+            // The Key rides the element actually ADDED to kids (the tooltip wrapper when there is one).
+            kids.Add((paneTip.Length > 0 ? ToolTip.Wrap(paneEl, paneTip) : paneEl) with { Key = "tb-pane" });
         }
 
-        kids.Add(new BoxEl { Width = LeftHeaderPad });
+        kids.Add(new BoxEl { Key = "tb-lead-pad", Width = LeftHeaderPad });
 
         if (IconGlyph.Length > 0)
         {
@@ -355,27 +362,29 @@ public sealed class TitleBar : Component
                 Opacity = active ? 1f : 0.5f,
                 Children = [Ui.Icon(IconGlyph, IconSize).Foreground(IconColor)],
             };
-            kids.Add(Parts is null ? icon : Parts.Apply(PartIcon, icon) with { Children = icon.Children });
-            kids.Add(new BoxEl { Width = 16f });                  // WinUI icon margin-right
+            kids.Add((Parts is null ? icon : Parts.Apply(PartIcon, icon) with { Children = icon.Children }) with { Key = "tb-icon" });
+            kids.Add(new BoxEl { Key = "tb-icon-gap", Width = 16f });                  // WinUI icon margin-right
         }
 
         if (Title.Length > 0)
         {
             kids.Add(Parts.Apply(PartTitle, new TextEl(Title)
             {
+                Key = "tb-title",
                 Size = 12f,                                        // CaptionTextBlockStyle
                 Color = active ? Tok.TextPrimary : Tok.TextTertiary,   // TitleBar(Deactivated)ForegroundBrush
             }));
-            kids.Add(new BoxEl { Width = 8f });                   // WinUI title margin-right
+            kids.Add(new BoxEl { Key = "tb-title-gap", Width = 8f });                   // WinUI title margin-right
         }
         if (Subtitle.Length > 0)
         {
             kids.Add(Parts.Apply(PartSubtitle, new TextEl(Subtitle)
             {
+                Key = "tb-subtitle",
                 Size = 12f,
                 Color = active ? Tok.TextSecondary : Tok.TextTertiary, // TitleBarSubtitle(Deactivated)ForegroundBrush
             }));
-            kids.Add(new BoxEl { Width = 16f });                  // WinUI subtitle margin-right
+            kids.Add(new BoxEl { Key = "tb-subtitle-gap", Width = 16f });   // WinUI subtitle margin-right
         }
 
         bool merged = Merged;
@@ -400,6 +409,7 @@ public sealed class TitleBar : Component
         BoxEl TabsIsland(Func<Element> f) => new()
         {
             Direction = 0, AlignItems = FlexAlign.Stretch,
+            Key = "tb-tabs",
             Shrink = 1, MinWidth = 0f, Height = ExpandedHeight,
             ClipToBounds = true,
             Opacity = active ? 1f : 0.5f,
@@ -416,7 +426,7 @@ public sealed class TitleBar : Component
             // cluster and the START of the right cluster. (That is NOT the window centre unless the two clusters are
             // the same width; an app that needs true window-centring pads the lighter side inside its own islands.)
             if (Tabs is { } mergedTabs) kids.Add(TabsIsland(mergedTabs));
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, 1f, 1f) with { Key = "tb-band-l" });
 
             float centerAvail = _availDip.Value;                   // subscribe: re-render when the column is re-measured
             // The interactive island is the INNER box that HUGS its content — never the flexible column, whose empty
@@ -434,6 +444,7 @@ public sealed class TitleBar : Component
                 // TabsElasticLane hands both jobs to the tabs island instead: the flanking drag bands take the free
                 // space (keeping this island centred between the clusters) and the tab viewport takes the overflow, so
                 // an app-sized search field is never squeezed by a long tab strip.
+                Key = "tb-center",
                 Grow = TabsElasticLane ? 0f : 1f, Shrink = TabsElasticLane ? 0f : 1, MinWidth = 0f, Direction = 0,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Height = ExpandedHeight,
@@ -447,13 +458,14 @@ public sealed class TitleBar : Component
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _centerCol = h, appliedCenter.OnRealized),
             });
 
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, 1f, 1f) with { Key = "tb-band-r" });
 
             if (Trailing is { } trailingFunc)
             {
                 // Hugs: its laid-out rect is reported wholesale as Client, so any slack inside it is dead drag space.
                 var trailingIsland = new BoxEl
                 {
+                    Key = "tb-trailing",
                     Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
                     Opacity = active ? 1f : 0.5f,
                     Children = [trailingFunc()],
@@ -470,7 +482,7 @@ public sealed class TitleBar : Component
         {
             kids.Add(TabsIsland(tabsFunc));
             // Notepad carries the TabView bottom hairline through its TabStripFooter/caption drag band.
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, 1f, 1f) with { Key = "tb-tabs-band" });
         }
         else
         {
@@ -494,6 +506,7 @@ public sealed class TitleBar : Component
                 // overflow — the fixed caption cluster after it never moves or clips (the WinUI sizing contract), and
                 // the arranged width PushRegions feeds back is the honest available space even on resize-down (without
                 // Shrink the column could only track the viewport UP and _availDip would floor at the content's width).
+                Key = "tb-content",
                 Grow = 1, Shrink = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Height = ExpandedHeight,
                 Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
@@ -510,14 +523,15 @@ public sealed class TitleBar : Component
         // The guaranteed-grabbable drag strip. It stays FIXED even under TabsElasticLane: a CaptionLeading control is
         // already flush against Minimize with the strip at full width, so shrinking it would trade real drag space for
         // nothing.
-        kids.Add(Tabs is not null || merged
+        kids.Add((Tabs is not null || merged
             ? Band(MinDragStrip, 0f, 0f)
-            : new BoxEl { Width = MinDragStrip });
+            : new BoxEl { Width = MinDragStrip }) with { Key = "tb-drag" });
 
         if (CaptionLeading is { } captionLeadingFunc)
         {
             var captionLeading = new BoxEl
             {
+                Key = "tb-caption-leading",
                 Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
                 Opacity = active ? 1f : 0.5f,
                 Children = [captionLeadingFunc()],
@@ -533,17 +547,17 @@ public sealed class TitleBar : Component
         if (ShowCaptionButtons)
         {
             string maxGlyph = maximized ? Icons.ChromeRestore : Icons.ChromeMaximize;
-            kids.Add(Caption(PartCaptionMin, Icons.ChromeMinimize, () => hooks.WindowMinimize?.Invoke(),
+            kids.Add(Caption("tb-min", PartCaptionMin, Icons.ChromeMinimize, () => hooks.WindowMinimize?.Invoke(),
                              CaptionButton.MinMax, active, h => _min = h));
-            kids.Add(Caption(PartCaptionMax, maxGlyph, () => hooks.WindowToggleMaximize?.Invoke(),
+            kids.Add(Caption("tb-max", PartCaptionMax, maxGlyph, () => hooks.WindowToggleMaximize?.Invoke(),
                              CaptionButton.MinMax, active, h => _max = h));
-            kids.Add(Caption(PartCaptionClose, Icons.ChromeClose, () => hooks.WindowClose?.Invoke(),
+            kids.Add(Caption("tb-close", PartCaptionClose, Icons.ChromeClose, () => hooks.WindowClose?.Invoke(),
                              CaptionButton.Close, active, h => _close = h));
         }
         else
         {
             // Standard OS frame: keep the bar's content clear of the shell-drawn caption buttons.
-            kids.Add(new BoxEl { Width = 140f });
+            kids.Add(new BoxEl { Key = "tb-caption-spacer", Width = 140f });
         }
 
         var root = new BoxEl
@@ -564,7 +578,7 @@ public sealed class TitleBar : Component
         return result;
     }
 
-    BoxEl Caption(string part, string glyph, Action onClick, CaptionButton.Style style, bool active,
+    BoxEl Caption(string key, string part, string glyph, Action onClick, CaptionButton.Style style, bool active,
                   Action<NodeHandle> capture)
     {
         var b = CaptionButton.Create(glyph, onClick, style, active);
@@ -574,6 +588,7 @@ public sealed class TitleBar : Component
             glyphs = [g with { Color = Prop.Of(ink) }];     // the app's own backdrop: the rest ink is a live bind
         return applied with
         {
+            Key = key,
             OnClick = onClick, Role = AutomationRole.Button, Children = glyphs,
             OnRealized = TemplateParts.Chain(capture, applied.OnRealized),
         };
@@ -585,34 +600,37 @@ public sealed class TitleBar : Component
     void PushRegions(InputHooks hooks)
     {
         if (hooks.GetNodeRect is not { } rectOf) return;
+        // A captured handle outlives its node when the part is removed (the pane toggle hidden, a tab strip swapped):
+        // only a LIVE handle may be measured, or the region report describes a recycled slot.
+        bool Live(NodeHandle h) => !h.IsNull && (Context.Scene is not { } s || s.IsLive(h));
         // Grow=1 + Shrink=1 ⇒ the column's laid-out width IS the available content space, tracking the viewport in
         // BOTH directions. Equality-gated signal write: re-renders (and re-pushes) only when the measurement
         // actually changed (e.g. a window resize).
         // Merged mode measures the CENTRE column (the merged row's single flexible child); the classic bar measures its
         // content column. Exactly one of the two is ever realized, so this picks the live one.
-        var flexCol = !_centerCol.IsNull ? _centerCol : _contentCol;
-        if (!flexCol.IsNull)
+        var flexCol = Live(_centerCol) ? _centerCol : _contentCol;
+        if (Live(flexCol))
         {
             float w = rectOf(flexCol).W;
             if (MathF.Abs(w - _availDip.Peek()) > 0.5f) _availDip.Value = w;
         }
         if (hooks.SetTitleBarRegions is not { } push) return;
         int n = 0;
-        if (ShowBackButton && !_back.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_back), TitleBarHit.Client);
-        if (ShowPaneToggle && !_pane.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_pane), TitleBarHit.Client);
-        if (Tabs is not null && !_tabs.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_tabs), TitleBarHit.Client);
-        if (Content is not null && !_content.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_content), TitleBarHit.Client);
+        if (ShowBackButton && Live(_back)) _regions[n++] = new TitleBarRegion(rectOf(_back), TitleBarHit.Client);
+        if (ShowPaneToggle && Live(_pane)) _regions[n++] = new TitleBarRegion(rectOf(_pane), TitleBarHit.Client);
+        if (Tabs is not null && Live(_tabs)) _regions[n++] = new TitleBarRegion(rectOf(_tabs), TitleBarHit.Client);
+        if (Content is not null && Live(_content)) _regions[n++] = new TitleBarRegion(rectOf(_content), TitleBarHit.Client);
         // Merged islands, LEFT-to-RIGHT and before the buttons (first match wins in WM_NCHITTEST).
-        if (CenterContent is not null && !_center.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_center), TitleBarHit.Client);
-        if (Trailing is not null && !_trailing.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_trailing), TitleBarHit.Client);
-        if (CaptionLeading is not null && !_captionLeading.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_captionLeading), TitleBarHit.Client);
+        if (CenterContent is not null && Live(_center)) _regions[n++] = new TitleBarRegion(rectOf(_center), TitleBarHit.Client);
+        if (Trailing is not null && Live(_trailing)) _regions[n++] = new TitleBarRegion(rectOf(_trailing), TitleBarHit.Client);
+        if (CaptionLeading is not null && Live(_captionLeading)) _regions[n++] = new TitleBarRegion(rectOf(_captionLeading), TitleBarHit.Client);
         if (ShowCaptionButtons)
         {
-            if (!_min.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_min), TitleBarHit.MinButton);
-            if (!_max.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_max), TitleBarHit.MaxButton);
-            if (!_close.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_close), TitleBarHit.CloseButton);
+            if (Live(_min)) _regions[n++] = new TitleBarRegion(rectOf(_min), TitleBarHit.MinButton);
+            if (Live(_max)) _regions[n++] = new TitleBarRegion(rectOf(_max), TitleBarHit.MaxButton);
+            if (Live(_close)) _regions[n++] = new TitleBarRegion(rectOf(_close), TitleBarHit.CloseButton);
         }
-        if (!_root.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_root), TitleBarHit.Caption);
+        if (Live(_root)) _regions[n++] = new TitleBarRegion(rectOf(_root), TitleBarHit.Caption);
         push(_regions, n);
     }
 }
