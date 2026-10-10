@@ -52,6 +52,11 @@ public sealed record TitleBarOptions
     /// <summary>False suppresses the 1px rail seam drawn through the title bar's drag bands (the drag bands stay).</summary>
     public bool ShowRailBaseline { get; init; } = true;
     public bool ShowCaptionButtons { get; init; } = true;
+    /// <summary>Lets an app paint the caption glyphs over its own backdrop: when set, the min/max/close glyphs' rest colour (and the
+    /// pane toggle's and back button's, the bar's other own glyphs) is a live bind of this thunk (read at paint rate, so it can
+    /// cross-fade) while the window is active. Hover/pressed colours and the Close red ramp are unchanged. Null = the
+    /// <see cref="CaptionButton.Style"/> and nav-button tokens.</summary>
+    public Func<ColorF>? CaptionInk { get; init; }
     public TemplateParts? Parts { get; init; }
 }
 
@@ -201,6 +206,20 @@ public sealed class TitleBar : Component
     public bool ShowRailBaseline = true;
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
+    /// <summary>See <see cref="TitleBarOptions.CaptionInk"/>. Bound, not part of the render memo key: a changing ink never rebuilds the bar.</summary>
+    public Func<ColorF>? CaptionInk;
+    TemplateParts? _inkParts;
+    /// <summary>The nav buttons' glyph part carrying <see cref="CaptionInk"/> (null when unset or the window is inactive).</summary>
+    TemplateParts? InkParts(bool active)
+    {
+        if (CaptionInk is not { } ink || !active) return null;
+        if (_inkParts is null)
+        {
+            _inkParts = new TemplateParts();
+            _inkParts.Set<TextEl>(IconButton.PartGlyph, g => g with { Color = Prop.Of(ink) });
+        }
+        return _inkParts;
+    }
     public TemplateParts? Parts;
 
     /// <summary>Merged mode = at least one of the merged-row slots is present. Mount-time (both fields freeze at mount),
@@ -227,7 +246,7 @@ public sealed class TitleBar : Component
                 Trailing = options.Trailing, CaptionLeading = options.CaptionLeading,
                 ContentVersion = options.ContentVersion,
                 ShowRailBaseline = options.ShowRailBaseline,
-                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
+                ShowCaptionButtons = options.ShowCaptionButtons, CaptionInk = options.CaptionInk, Parts = options.Parts,
             };
             if (options.IconColor is { } ic) tb.IconColor = ic;
             if (options.Content is { } content) tb.Content = _ => content(tb.ContentAvail);
@@ -302,7 +321,7 @@ public sealed class TitleBar : Component
 
         if (ShowBackButton)
         {
-            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: backEnabled)
+            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: backEnabled, parts: InkParts(active))
                 with { Margin = navMargin };
             var applied = Parts.Apply(PartBackButton, back);
             kids.Add(applied with
@@ -313,7 +332,7 @@ public sealed class TitleBar : Component
         }
         if (ShowPaneToggle)
         {
-            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle, isEnabled: paneEnabled)
+            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle, isEnabled: paneEnabled, parts: InkParts(active))
                 with { Margin = navMargin };
             var applied = Parts.Apply(PartPaneToggle, pane);
             Element paneEl = applied with
@@ -550,9 +569,12 @@ public sealed class TitleBar : Component
     {
         var b = CaptionButton.Create(glyph, onClick, style, active);
         var applied = Parts.Apply(part, b);
+        var glyphs = b.Children;
+        if (CaptionInk is { } ink && active && glyphs is [TextEl g])
+            glyphs = [g with { Color = Prop.Of(ink) }];     // the app's own backdrop: the rest ink is a live bind
         return applied with
         {
-            OnClick = onClick, Role = AutomationRole.Button, Children = b.Children,
+            OnClick = onClick, Role = AutomationRole.Button, Children = glyphs,
             OnRealized = TemplateParts.Chain(capture, applied.OnRealized),
         };
     }

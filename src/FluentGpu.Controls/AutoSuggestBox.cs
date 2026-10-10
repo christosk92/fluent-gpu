@@ -189,6 +189,11 @@ public sealed class AutoSuggestBox : Component
     /// not focused, the caret is not at the end, a suggestion is highlighted, or the completion does not start with
     /// the live document.</summary>
     public IReadSignal<string>? Completion;
+    /// <summary>LIVE ink for the typed text and the placeholder (<see cref="EditableText.ForegroundInk"/> /
+    /// <see cref="EditableText.PlaceholderInk"/>): lets an app paint the field over its own backdrop and cross-fade it at paint
+    /// rate. Null = the theme's tokens. The ghost completion stays on <see cref="Tok.TextTertiary"/>: it paints only while the
+    /// editor is focused, where the field is on the theme's own plate.</summary>
+    public Func<ColorF>? TextInk, PlaceholderInk;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -217,7 +222,9 @@ public sealed class AutoSuggestBox : Component
         AutoSuggestBoxPresenter? presenter = null,
         AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard,
         AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup,
-        IReadSignal<string>? completion = null)
+        IReadSignal<string>? completion = null,
+        Func<ColorF>? textInk = null,
+        Func<ColorF>? placeholderInk = null)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
@@ -229,7 +236,7 @@ public sealed class AutoSuggestBox : Component
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
             Presenter = presenter, Chrome = chrome, SuggestionPresentation = suggestionPresentation,
-            Completion = completion,
+            Completion = completion, TextInk = textInk, PlaceholderInk = placeholderInk,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -530,6 +537,7 @@ public sealed class AutoSuggestBox : Component
                 Text = query, Width = width - iconCol, WidthSignal = innerWidth,
                 Height = editorH,
                 Placeholder = Placeholder,
+                ForegroundInk = TextInk, PlaceholderInk = PlaceholderInk,
                 Chromeless = true,
                 OnCommit = OnEnter, OnCancel = OnEscape,
                 PreviewKeyDown = TryAcceptCompletion,

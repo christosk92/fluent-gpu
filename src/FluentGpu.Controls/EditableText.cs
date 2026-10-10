@@ -116,6 +116,11 @@ public sealed class EditableText : Component
     private ColorF? _foreground;
     /// <summary>Explicit text color, or the live theme text token when left unset.</summary>
     public ColorF Foreground { get => _foreground ?? Tok.TextPrimary; set => _foreground = value; }
+    /// <summary>LIVE text ink — wins over <see cref="Foreground"/> for the typed text while enabled. Read at paint rate (inside
+    /// the colour bind), so an app painting the field over its own backdrop can cross-fade it with no re-render. Null = <see cref="Foreground"/>.</summary>
+    public Func<ColorF>? ForegroundInk;
+    /// <summary>LIVE placeholder ink, like <see cref="ForegroundInk"/> but for the empty-field placeholder. Null = the secondary text token.</summary>
+    public Func<ColorF>? PlaceholderInk;
     // WinUI TextControlForegroundDisabled = TemporaryTextFillColorDisabled #5DFEFEFE dark / #5C010101 light
     // (TextBox_themeresources.xaml:22/34 + :129/141) — distinct from the disabled PLACEHOLDER (TextFillColorDisabled).
     private ColorF? _disabledForeground;
@@ -969,7 +974,8 @@ public sealed class EditableText : Component
         if (!IsEnabled) return placeholder ? Tok.TextDisabled : DisabledForeground;
         // Placeholder = TextControlPlaceholderForeground(/PointerOver/Focused) — ALL TextFillColorSecondary
         // (TextBox_themeresources.xaml:35–37), so one static color covers rest/hover/focused exactly.
-        return placeholder ? Tok.TextSecondary : Foreground;
+        if (placeholder) return PlaceholderInk is { } pi ? pi() : Tok.TextSecondary;
+        return ForegroundInk is { } fi ? fi() : Foreground;
     }
 
     // ── display text + Mask index mapping (docIndex ↔ displayIndex; rebuilt per doc version — user-rate alloc) ──────
