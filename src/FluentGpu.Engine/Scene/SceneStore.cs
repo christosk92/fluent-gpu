@@ -1762,6 +1762,20 @@ public sealed partial class SceneStore : ISceneBackend
         if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
     }
 
+    /// <summary>A COMMITTED band whose rows are known gone stops presenting at once, whatever the viewport's item count is
+    /// (<see cref="RevealBand.CommitCount"/> = int.MinValue never matches, so <see cref="RevealBand.Presents"/> is false): a
+    /// commit that inserts rows elsewhere lands at an UNCHANGED count, where the count-based handoff would keep clipping and
+    /// shifting the survivors until the owner's layout effect releases the slot. No-op for a band that is not committed.
+    /// Idempotent; <see cref="ClearRevealBand"/> still releases the slot.</summary>
+    public void RetireRevealBand(NodeHandle viewport, int slot)
+    {
+        if (!TryGetRevealBand(viewport, slot, out var band) || !band.Committed || band.CommitCount == int.MinValue) return;
+        ref ScrollState sc = ref ScrollRef(viewport);
+        band.CommitCount = int.MinValue;
+        sc.Bands.Set(slot, in band);
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
+
     /// <summary>Move a band to the rows it covers now (its owner's model moved under it).</summary>
     public void SetRevealBandRange(NodeHandle viewport, int slot, int first, int count)
     {

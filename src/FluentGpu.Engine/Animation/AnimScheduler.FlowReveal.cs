@@ -421,6 +421,15 @@ public sealed partial class AnimEngine
         _scene.CommitRevealBand(viewport, slot);
     }
 
+    /// <summary>A committed band's rows are gone (the owner's render saw it): it stops presenting before the layout pass, even
+    /// at an unchanged item count (<see cref="SceneStore.RetireRevealBand"/>). Its row (if a stray one is left) goes too.</summary>
+    public void RetireRevealBand(NodeHandle viewport, int slot)
+    {
+        if ((uint)slot >= RevealBands.Capacity || viewport.IsNull) return;
+        Cancel(viewport, RevealBandChannel(slot));
+        _scene.RetireRevealBand(viewport, slot);
+    }
+
     // A viewport's bands, folded into its content's flow: the laid-out geometry refreshed from the layout (rows above may
     // have opened or closed, realized rows report measured extents), Σ(presented − extent) onto the content, the overscan.
     // A committed band whose rows already left the model contributes nothing: this is the zero-delta handoff, made at 6.3
