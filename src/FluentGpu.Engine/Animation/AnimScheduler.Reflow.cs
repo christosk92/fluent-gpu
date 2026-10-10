@@ -357,7 +357,9 @@ public sealed partial class AnimEngine
     /// <see cref="SnapStructuralToLayout"/> skips them: those are the authored REST pose, not a FLIP leftover, and
     /// wiping them parks the node at the origin until the next hover edge. Only the TRANSLATION component of
     /// <c>LocalTransform</c> is reset to the authored offset — an authored/animated scale or rotation on the same node
-    /// survives.</para></summary>
+    /// survives.</para>
+    /// <para>A looping row (<see cref="AnimFlags.Loop"/>) is skipped too: it is authored continuous motion, not a stale
+    /// projection.</para></summary>
     public void SnapPositionToLayout(NodeHandle node)
     {
         int idx = (int)node.Raw.Index;
@@ -369,7 +371,8 @@ public sealed partial class AnimEngine
         {
             int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
             AnimChannel ch = _slab.At(s).Channel;
-            if ((ch is AnimChannel.TranslateX or AnimChannel.TranslateY) && !IsGestureOwnedTransform(idx, ch))
+            if ((ch is AnimChannel.TranslateX or AnimChannel.TranslateY) && !IsGestureOwnedTransform(idx, ch)
+                && !_slab.At(s).Has(AnimFlags.Loop))
             {
                 // Ghost-band damage, same contract as SnapStructuralToLayout: snapshot the last-PRESENTED rect while
                 // the paint still holds the translated origin, so the band the node vacates repaints instead of
@@ -499,7 +502,9 @@ public sealed partial class AnimEngine
     /// pose so no stale translate/scale survives to draw the node at slot+staleOffset. Gesture-owned Translate/Scale (WhileHover Offset
     /// on a Fold cover) are skipped — those are the authored rest pose, not a FLIP leftover; wiping them to identity
     /// stacked covers at the origin until the next hover. Interaction/brush/opacity/blur rows are left running.
-    /// Zero-alloc POD-slab walk (no LINQ/enumerator); the caller runs it BEFORE layout so bounds land clean.</summary>
+    /// A looping row (<see cref="AnimFlags.Loop"/>, e.g. a meter bar's ScaleY) is authored continuous motion, not a stale
+    /// projection: it is skipped, and never forces the transform reset. Zero-alloc POD-slab walk (no LINQ/enumerator);
+    /// the caller runs it BEFORE layout so bounds land clean.</summary>
     public void SnapStructuralToLayout(NodeHandle node)
     {
         int idx = (int)node.Raw.Index;
@@ -512,7 +517,7 @@ public sealed partial class AnimEngine
         {
             int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
             AnimChannel ch = _slab.At(s).Channel;
-            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch))
+            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop))
             {
                 // Ghost-band damage (Fix 1): the FIRST structural row we're about to cancel means this node was drawing
                 // at a translated/reveal-inflated extent LAST frame. Snapshot that last-presented rect NOW — before the
