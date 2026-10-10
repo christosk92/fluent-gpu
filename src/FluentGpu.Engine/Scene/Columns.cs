@@ -422,12 +422,18 @@ public struct ScrollState
 /// written by the band's AnimChannel.RevealBand row). Opening = the band is revealing toward Extent (cleared at rest);
 /// a closing band rests at 0 until its owner's commit removes the rows. Committed = that commit is running
 /// (ItemsViewController.BandSettled marks it right before invoking it) and CommitCount = the viewport's ItemCount then:
-/// once the count moves off it the rows are gone, and the band presents nothing at all (<see cref="Presents"/>).</summary>
+/// once the count moves off it the rows are gone, and the band presents nothing at all (<see cref="Presents"/>). A commit
+/// that publishes the SAME count (rows inserted elsewhere) never moves off it, so the owner's render retires the band
+/// explicitly (SceneStore.RetireRevealBand sets CommitCount = int.MinValue, which no count equals).</summary>
 public struct RevealBand : IEquatable<RevealBand>
 {
     public int First, Count;
     public float Top, Extent;
     public float Presented;
+    /// <summary>The span the clamped reveal spring drives (RevealPlan.TryClamp: max(from, to), at most <see cref="Extent"/>);
+    /// NaN or &lt;= 0 = the whole <see cref="Extent"/>. The band's rows slide with the moving edge by min(0, Presented − Visible),
+    /// so a tall band whose far end is off screen still slides its on-screen rows from the first frame.</summary>
+    public float Visible;
     public bool Opening;
     public bool Committed;
     public int CommitCount;
@@ -440,9 +446,9 @@ public struct RevealBand : IEquatable<RevealBand>
     // float.Equals, not ==: a NaN Presented equals itself (the default struct equality's semantics, which parity relies on).
     public readonly bool Equals(RevealBand o)
         => First == o.First && Count == o.Count && Top.Equals(o.Top) && Extent.Equals(o.Extent)
-           && Presented.Equals(o.Presented) && Opening == o.Opening && Committed == o.Committed && CommitCount == o.CommitCount;
+           && Presented.Equals(o.Presented) && Visible.Equals(o.Visible) && Opening == o.Opening && Committed == o.Committed && CommitCount == o.CommitCount;
     public override readonly bool Equals(object? obj) => obj is RevealBand o && Equals(o);
-    public override readonly int GetHashCode() => HashCode.Combine(First, Count, Top, Extent, Presented, Opening, Committed, CommitCount);
+    public override readonly int GetHashCode() => HashCode.Combine(HashCode.Combine(First, Count, Top, Extent), HashCode.Combine(Presented, Visible), Opening, Committed, CommitCount);
 }
 
 /// <summary>The fixed per-viewport band slots. FOUR NAMED FIELDS, deliberately not an <c>[InlineArray]</c>: ScrollState is

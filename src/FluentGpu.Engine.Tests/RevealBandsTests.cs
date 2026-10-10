@@ -46,6 +46,32 @@ public sealed class RevealBandsTests
     }
 
     [Fact]
+    public void ARetiredCommittedBandPresentsNothingAtAnyCount()
+    {
+        var scene = new SceneStore();
+        var root = scene.CreateNode(1);
+        scene.Root = root;
+        var content = scene.CreateNode(1);
+        scene.AppendChild(root, content);
+        ref ScrollState sc = ref scene.ScrollRef(root);
+        sc.ContentNode = content;
+        sc.ItemCount = 5;
+        Assert.True(scene.SetRevealBand(root, 0, 1, 2, 30f, 60f, opening: false, presented: 0f));
+        scene.RetireRevealBand(root, 0);                         // not committed yet: a no-op
+        Assert.True(scene.TryGetRevealBand(root, 0, out var live) && live.Presents(5) && !live.Committed);
+        scene.CommitRevealBand(root, 0);
+        Assert.True(scene.TryGetRevealBand(root, 0, out var committed) && committed.Presents(5));
+        scene.RetireRevealBand(root, 0);
+        scene.RetireRevealBand(root, 0);                         // idempotent
+        Assert.True(scene.TryGetRevealBand(root, 0, out var retired));
+        Assert.False(retired.Presents(5));                       // the commit's count is unchanged: still retired
+        Assert.False(retired.Presents(3));
+        Assert.True(scene.HasActiveRevealBands);                 // the slot is released by ClearRevealBand, not by retiring
+        scene.ClearRevealBand(root, 0);
+        Assert.False(scene.HasActiveRevealBands);
+    }
+
+    [Fact]
     public void SlotsOutsideTheCapacityThrow()
     {
         var bands = new RevealBands();

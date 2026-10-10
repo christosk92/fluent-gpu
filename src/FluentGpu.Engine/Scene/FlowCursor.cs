@@ -5,7 +5,8 @@ namespace FluentGpu.Scene;
 /// <see cref="NodePaint.FlowDelta"/>, and a revealing exit orphan pushes the children laid out at/below its old top. Shared
 /// verbatim by SceneRecorder.Walk, InputDispatcher.Hit/HitAny and SceneStore.PresentedAbsoluteRect so paint, input and
 /// geometry queries agree. A virtual list's reveal bands ride the same walk: the rows of a band clip to the band's presented
-/// height, and the rows after a band shift by its presented-minus-laid-out delta. POD, allocation-free, O(1) per child.</summary>
+/// height and slide with its moving edge (up by the span the clamped spring has not yet reached, min(0, presented - visible)),
+/// and the rows after a band shift by its presented-minus-laid-out delta. POD, allocation-free, O(1) per child.</summary>
 internal struct FlowCursor
 {
     private float _shift;
@@ -52,13 +53,18 @@ internal struct FlowCursor
 
     private static float BandPresented(in RevealBand b) => float.IsNaN(b.Presented) ? b.Extent : Math.Clamp(b.Presented, 0f, b.Extent);
 
+    // The span the clamped spring drives: NaN / <= 0 = the whole extent, else at most the extent.
+    private static float BandVisible(in RevealBand b) => float.IsNaN(b.Visible) || b.Visible <= 0f ? b.Extent : Math.Min(b.Visible, b.Extent);
+
     /// <summary>Advance over the child at <paramref name="ordinal"/> laid out at <paramref name="childTop"/> (parent-local)
     /// whose own flow delta is <paramref name="childFlowDelta"/>; returns the Y shift to draw / hit-test it at.
     /// <paramref name="clipTop"/>/<paramref name="clipBottom"/> (parent-local) bound it when a reveal band clips it, NaN
-    /// otherwise. Call it for EVERY child in order, including ones the caller then skips.</summary>
+    /// otherwise. A row inside a band additionally rides the band's moving edge: it is drawn min(0, presented - visible) higher
+    /// (the clip and the suffix shift are unchanged). Call it for EVERY child in order, including ones the caller then skips.</summary>
     public float Step(int ordinal, float childTop, float childFlowDelta, out float clipTop, out float clipBottom)
     {
         clipTop = clipBottom = float.NaN;
+        float slide = 0f;
         if (_bandCount > 0)
         {
             int logical = ordinal < _prefix ? ordinal : _firstRealized + (ordinal - _prefix);
@@ -76,6 +82,7 @@ internal struct FlowCursor
                 {
                     clipTop = band.Top + _shift;
                     clipBottom = clipTop + BandPresented(in band);
+                    slide = Math.Min(0f, BandPresented(in band) - BandVisible(in band));
                 }
             }
         }
@@ -84,7 +91,7 @@ internal struct FlowCursor
             _shift += _orphanDelta;
             _orphanPending = false;
         }
-        float s = _shift;
+        float s = _shift + slide;
         _shift += childFlowDelta;
         return s;
     }

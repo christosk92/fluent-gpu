@@ -851,6 +851,36 @@ static class RevealSuite
                 $"commits={commits} settled={settled} maxStep={maxStep:0.00} y={prev:0.0}/{y0:0.0}");
         }
 
+        // rv.band.3b — reverse an EXPAND into a collapse near 50%: the band's rows slide by the live band's span, so neither the first
+        // band row (B) nor the suffix (D) steps.
+        {
+            var probe = new VirtualRevealProbe(["A", "D", "E"], [28f, 32f, 40f]);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 220f);
+            int commits = 0;
+            float By() { var n = FindText(rig.Scene, strings, rig.Scene.Root, "B"); return n.IsNull ? float.NaN : rig.Y(n); }
+            float Dy() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "D"));
+            var range = new ItemDisclosureRange("band", 1, 2);
+            probe.Publish(five, fiveH);
+            probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Expand);
+            var vp = probe.Controller.Viewport;
+            rig.Host.RunFrame();   // arms the band
+            int guard = 0;
+            while (guard++ < 70 && rig.Scene.TryGetRevealBand(vp, 0, out var mid) && mid.Presented < 40f) rig.Host.RunFrame();
+            float prevB = By(), prevD = Dy(), maxStepB = 0f, maxStepD = 0f;
+            probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Collapse, collapseCommit: () => commits++);
+            for (int i = 0; i < 70; i++)
+            {
+                rig.Host.RunFrame();
+                float b = By(), d = Dy();
+                if (!float.IsNaN(b) && !float.IsNaN(prevB)) maxStepB = MathF.Max(maxStepB, MathF.Abs(b - prevB));
+                maxStepD = MathF.Max(maxStepD, MathF.Abs(d - prevD));
+                prevB = b; prevD = d;
+            }
+            Check("rv.band.3b reverse: an expand reversed into a collapse near 50% is continuous for the first band row and the suffix (no step >15%)",
+                guard > 1 && guard < 70 && maxStepB <= 80f * 0.15f && maxStepD <= 80f * 0.15f,
+                $"guard={guard} maxStepB={maxStepB:0.00} maxStepD={maxStepD:0.00} commits={commits}");
+        }
+
         // rv.band.4 — two bands at once, re-found by key after the first commit shifts the indices.
         {
             var probe = new VirtualRevealProbe(["A", "B", "C", "D", "E", "F"], [30f, 30f, 30f, 30f, 30f, 30f]);
@@ -932,6 +962,97 @@ static class RevealSuite
                 && commits == 1 && probe.Count.Peek() == 15 && !rig.Scene.HasActiveRevealBands,
                 $"offset {start:0.0}→{prev:0.0} commit@{commitFrame} {beforeCommit:0.0}→{atCommit:0.0} maxStep={maxStep:0.00} monotone={monotone} commits={commits} bands={rig.Scene.HasActiveRevealBands}");
         }
+
+        // rv.band.9 — a collapse commit that publishes the SAME row count (the band's rows leave, new rows land elsewhere).
+        // The count never moves off the commit-time count, so only the source version advance releases the band: from the
+        // commit frame the survivors sit right under A (no clip, no delta), and the slot is cleared.
+        {
+            var probe = new VirtualRevealProbe(five, [30f, 30f, 30f, 30f, 30f]);
+            probe.Resolve = key =>
+            {
+                int i = Array.IndexOf(probe.Labels, "B");
+                return key == "b" && i >= 0 ? new ItemDisclosureRange(key, i, 2) : null;
+            };
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 300f);
+            var vp = probe.Controller.Viewport;
+            float AY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "A"));
+            float DY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "D"));
+            int frame = 0, commitFrame = -1, commits = 0, checkedFrames = 0, bad = 0;
+            float worst = 0f;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("b", 1, 2), ItemDisclosureDirection.Collapse,
+                collapseCommit: () => { commits++; commitFrame = frame; probe.Publish(["A", "D", "E", "X", "Y"], [30f, 30f, 30f, 30f, 30f]); });
+            for (; frame < 80; frame++)
+            {
+                rig.Host.RunFrame();
+                if (commitFrame < 0 || commitFrame > frame) continue;
+                checkedFrames++;
+                float off = DY() - AY() - 30f;
+                bool presenting = rig.Scene.TryGetScroll(vp, out var s9) && rig.Scene.TryGetRevealBand(vp, 0, out var b9) && b9.Presents(s9.ItemCount);
+                worst = MathF.Max(worst, MathF.Abs(off));
+                if (MathF.Abs(off) > 0.5f || presenting) bad++;
+            }
+            bool cleared = probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Cleared && d.Range.Key == "b");
+            Check("rv.band.9 a collapse commit at an UNCHANGED count: from the commit frame D sits 30 under A with no clip (the source-version advance retires the band), then the slot clears",
+                commits == 1 && commitFrame >= 0 && checkedFrames > 3 && bad == 0 && cleared && !rig.Scene.HasActiveRevealBands && probe.Count.Peek() == 5,
+                $"commits={commits} commit@{commitFrame} checked={checkedFrames} bad={bad} worst={worst:0.00} cleared={cleared} bands={rig.Scene.HasActiveRevealBands}");
+        }
+
+        // rv.band.10 — band rows SLIDE with the moving edge instead of wiping in place.
+        {
+            // (a) the 5-row collapse: the first band row (B) moves up monotonically with the closing edge and ends a full
+            // band extent (36 + 44) above where it started.
+            var probe = new VirtualRevealProbe(five, fiveH);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 220f);
+            float BY() { var n = FindText(rig.Scene, strings, rig.Scene.Root, "B"); return n.IsNull ? float.NaN : rig.Y(n); }
+            float y0 = BY(), prev = y0, minY = y0;
+            bool monotone = true;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("band", 1, 2), ItemDisclosureDirection.Collapse,
+                collapseCommit: () => probe.Publish(["A", "D", "E"], [28f, 32f, 40f]));
+            int seen = 0;
+            for (int i = 0; i < 70; i++)
+            {
+                rig.Host.RunFrame();
+                float y = BY();
+                if (float.IsNaN(y)) break;   // the commit removed B
+                seen++;
+                monotone &= y <= prev + 0.01f;
+                prev = y;
+                minY = MathF.Min(minY, y);
+            }
+            Check("rv.band.10a a 5-row collapse slides the first band row up monotonically, by the whole band extent",
+                seen > 5 && monotone && minY <= y0 - 70f, $"B y {y0:0.0}→{minY:0.0} frames={seen} monotone={monotone}");
+        }
+        {
+            // (b) rv.band.5's 40-row band in a 300-DIP view: presented(0) is clamped, and the topmost visible band row (r1)
+            // moves exactly with the presented edge on every frame until the commit.
+            var labels = new string[45]; var heights = new float[45];
+            for (int i = 0; i < 45; i++) { labels[i] = "r" + i; heights[i] = 30f; }
+            var probe = new VirtualRevealProbe(labels, heights);
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 300f);
+            var vp = probe.Controller.Viewport;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("big", 1, 40), ItemDisclosureDirection.Collapse, collapseCommit: () => { });
+            float R1Y() { var n = FindText(rig.Scene, strings, rig.Scene.Root, "r1"); return n.IsNull ? float.NaN : rig.Y(n); }
+            float yRest = R1Y();
+            rig.Host.RunFrame();
+            bool armed = rig.Scene.TryGetRevealBand(vp, 0, out var b0);
+            float p0 = b0.Presented, y0 = R1Y(), worst = 0f;
+            // the first frame starts with the visible rows in place: the slide is presented - visible, ~0 for a clamped band
+            bool inPlace = armed && !float.IsNaN(b0.Visible) && b0.Visible < b0.Extent - 1f && Near(b0.Visible, p0, 8.5f)
+                && Near(y0 - yRest, b0.Presented - b0.Visible, 0.6f) && MathF.Abs(y0 - yRest) <= 8.5f;
+            int frames = 0;
+            for (int i = 0; i < 70 && armed; i++)
+            {
+                if (!rig.Scene.TryGetRevealBand(vp, 0, out var b) || b.Committed) break;
+                float y = R1Y();
+                if (float.IsNaN(y)) break;
+                frames++;
+                worst = MathF.Max(worst, MathF.Abs((y - y0) - (b.Presented - p0)));
+                rig.Host.RunFrame();
+            }
+            Check("rv.band.10b a 40-row band closing in a 300-DIP view starts clamped and its topmost visible row moves exactly with the presented edge",
+                armed && inPlace && p0 < 600f && p0 < b0.Extent - 1f && frames > 5 && worst <= 0.6f,
+                $"armed={armed} inPlace={inPlace} visible={b0.Visible:0.0} dy0={y0 - yRest:0.00} presented0={p0:0.0}/{b0.Extent:0.0} frames={frames} worst={worst:0.00}");
+        }
     }
 
     // rv.band.6/7 — the scene-level band API: hit-testing clips the band and maps the shifted suffix; the census balances.
@@ -979,9 +1100,11 @@ static class RevealSuite
         var restingHit = dispatcher.HitTest(new Point2(10f, 90f));
         scene.SetRevealBandPresented(viewport, 0, 10f);   // a late animation write after the clear is ignored
         bool cleared = !scene.HasActiveRevealBands;
-        Check("rv.band.6 hit-testing clips a band to its presented height and maps the shifted suffix; a clear restores layout",
-            idle && armed && bodyHit == b && suffixHit == d && restingHit == c && cleared,
-            $"idle={idle} armed={armed} body={bodyHit == b} suffix={suffixHit == d} resting={restingHit == c} cleared={cleared}");
+        // Presented 40 of an 80 extent: the band's rows ride the edge 40 up (Visible NaN = the whole extent), so B is slid out
+        // of the [40,80) clip and C sits under (10,50); the suffix (D) maps up by the same 40.
+        Check("rv.band.6 hit-testing clips a band to its presented height, slides its rows with the edge (C is under y=50, B is slid out) and maps the shifted suffix; a clear restores layout",
+            idle && armed && bodyHit == c && suffixHit == d && restingHit == c && cleared,
+            $"idle={idle} armed={armed} body(C)={bodyHit == c} suffix={suffixHit == d} resting={restingHit == c} cleared={cleared}");
 
         var census = new SceneStore();
         var root = census.CreateNode(1);
