@@ -55,10 +55,39 @@ public sealed partial class RenderContext
         _ => touched || submitted,            // OnBlur / OnTouched / OnChangeAfterFirstError
     };
 
-    /// <summary>Validate <paramref name="value"/> against <paramref name="rules"/> with default options. See the
-    /// options overload for timing/async/compound-error/explicit-form control.</summary>
-    public Field<T> UseField<T>(Signal<T> value, params Validator<T>[] rules)
-        => UseField(value, DefaultOptions<T>.Value, rules);
+    // UseField takes up to four inline rules (or an array) instead of a params array: a params array must be the last
+    // parameter, which leaves no room for the caller-info pair every inner hook is keyed to. Without the caller's call
+    // site, every UseField in a component shares this file's lines and is told apart only by call ORDER, so a
+    // conditionally skipped field would hand its cells to the next one (reactivity.md: conditional hooks are legal).
+
+    /// <summary>Validate <paramref name="value"/> against up to four inline rules with default options (pass an array
+    /// for more). See the options overload for timing/async/compound-error/explicit-form control.</summary>
+    public Field<T> UseField<T>(Signal<T> value, Validator<T>? rule0 = null, Validator<T>? rule1 = null, Validator<T>? rule2 = null,
+                                Validator<T>? rule3 = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseField(value, DefaultOptions<T>.Value, PackRules(rule0, rule1, rule2, rule3), __hf, __hl);
+
+    /// <summary>Validate <paramref name="value"/> against <paramref name="rules"/> with default options.</summary>
+    public Field<T> UseField<T>(Signal<T> value, Validator<T>[] rules, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseField(value, DefaultOptions<T>.Value, rules, __hf, __hl);
+
+    /// <summary>As the options overload, with up to four inline rules.</summary>
+    public Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, Validator<T>? rule0 = null, Validator<T>? rule1 = null,
+                                Validator<T>? rule2 = null, Validator<T>? rule3 = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => UseField(value, options, PackRules(rule0, rule1, rule2, rule3), __hf, __hl);
+
+    // The inline overloads' rule array (what the caller's params array used to be); a null rule is skipped.
+    private static Validator<T>[] PackRules<T>(Validator<T>? r0, Validator<T>? r1, Validator<T>? r2, Validator<T>? r3)
+    {
+        int n = (r0 is null ? 0 : 1) + (r1 is null ? 0 : 1) + (r2 is null ? 0 : 1) + (r3 is null ? 0 : 1);
+        if (n == 0) return Array.Empty<Validator<T>>();
+        var rules = new Validator<T>[n];
+        int i = 0;
+        if (r0 is not null) rules[i++] = r0;
+        if (r1 is not null) rules[i++] = r1;
+        if (r2 is not null) rules[i++] = r2;
+        if (r3 is not null) rules[i++] = r3;
+        return rules;
+    }
 
     /// <summary>
     /// Create a reactive validation field over the caller-owned <paramref name="value"/> signal. The returned
@@ -67,13 +96,16 @@ public sealed partial class RenderContext
     /// (<c>UseForm()</c>), via <see cref="FieldOptions{T}.Form"/>, or provided through <see cref="FormScope.Context"/>,
     /// the field joins it (and deregisters on unmount).
     /// </summary>
-    public Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, params Validator<T>[] rules)
+    public Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, Validator<T>[] rules,
+                                [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        // Every inner hook is keyed to the CALLER's call site (one key, ordinals 0..10 in this fixed order), so two
+        // UseField calls never share cells, however many of them a render skips.
         var opts = options ?? DefaultOptions<T>.Value;
-        var touched = UseSignal(false);
-        var server = UseSignal(MsgId.None);
-        var node = UseSignal<NodeHandle>(default);
-        var validating = UseSignal(false);
+        var touched = UseSignal(false, __hf, __hl);
+        var server = UseSignal(MsgId.None, __hf, __hl);
+        var node = UseSignal<NodeHandle>(default, __hf, __hl);
+        var validating = UseSignal(false, __hf, __hl);
         ValidationTiming timing = opts.Timing;
         bool allErrors = opts.AllErrors;
 
@@ -89,19 +121,19 @@ public sealed partial class RenderContext
             bool submitted = form?.SubmitAttempted is { } sa && sa.Value;
             if (!Gate(timing, touched.Value, submitted)) return FieldError.Valid;
             return Rules.FirstFailing(rules, value.Value, allErrors);  // reads value.Value (+ any sibling signals) → subscribes
-        });
+        }, __hf, __hl);
 
         // True validity (ungated) for submit gating: rules pass AND no server error.
         var isValid = UseComputed(() =>
         {
             if (!server.Value.IsEmpty) return false;
             return Rules.FirstFailing(rules, value.Value, false).IsValid;
-        });
+        }, __hf, __hl);
 
-        var isValidating = UseComputed(() => validating.Value);
+        var isValidating = UseComputed(() => validating.Value, __hf, __hl);
 
         // Stable Field handle (created once; its members are all persistent signals/memos).
-        var fieldRef = UseRef<Field<T>?>(null);
+        var fieldRef = UseRef<Field<T>?>(null, __hf, __hl);
         if (fieldRef.Value is null)
         {
             Action markTouched = () => touched.Value = true;
@@ -112,10 +144,10 @@ public sealed partial class RenderContext
 
         // Async/server validation (debounced + cancel-stale, off the paint path). The hook is always invoked so the
         // cell order is stable whether or not an async check is configured.
-        UseAsyncValidation(value, opts, server, validating);
+        UseAsyncValidation(value, opts, server, validating, __hf, __hl);
 
         // Join the form once at mount (deregistered on unmount). Kept unconditional for stable cell order.
-        UseRegistration(() => form?.Register(new FieldEntry<T>(field)));
+        UseRegistration(() => form?.Register(new FieldEntry<T>(field)), __hf, __hl);
 
         return field;
     }
@@ -146,12 +178,13 @@ public sealed partial class RenderContext
     /// <see cref="Effect"/> subscribes to the value signal; on each change it (re)arms a single reused
     /// <see cref="Timer"/> for the debounce — so the per-keystroke path on the UI thread does no allocation. When the
     /// timer fires (off the UI thread) it cancels any stale request and runs the check, then posts the result back via
-    /// the UI poster. Out-of-order completion is race-immune: the result lands in an equality-gated signal the field's
-    /// error memo merges. The hook is always invoked (even with no async) so the cell sequence stays stable.
+    /// the UI poster. A result is applied only if the value has not changed since its check started (a newer keystroke
+    /// re-armed the debounce and its own check will land), so an older value's verdict never lands on a newer value.
+    /// The hook is always invoked (even with no async) so the cell sequence stays stable.
     /// </summary>
     private void UseAsyncValidation<T>(Signal<T> value, FieldOptions<T> opts, Signal<MsgId> server, Signal<bool> validating, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var stateRef = UseRef<AsyncFieldState<T>?>(null);
+        var stateRef = UseRef<AsyncFieldState<T>?>(null, __hf, __hl);
 
         int idx = LookupCell(__hf, __hl, out var __k);
         if (idx < 0)
@@ -181,6 +214,7 @@ public sealed partial class RenderContext
         private readonly Timer _timer;
         private CancellationTokenSource? _cts;
         private T _latest = default!;
+        private int _gen;                              // bumped per value change on the UI thread; a check tagged older is stale
         private bool _primed;
 
         public AsyncFieldState(FieldOptions<T> opts, Signal<MsgId> server, Signal<bool> validating, Action<Action> post)
@@ -199,6 +233,7 @@ public sealed partial class RenderContext
         public void OnValueChanged(T v)
         {
             _latest = v;
+            Volatile.Write(ref _gen, _gen + 1);       // publishes _latest to Fire's acquire read of _gen
             if (!_primed) { _primed = true; return; }
             _validating.Value = true;                 // equality-gated; cleared when the result (or an error) lands
             _timer.Change(_debounceMs, Timeout.Infinite);
@@ -208,11 +243,12 @@ public sealed partial class RenderContext
         {
             _cts?.Cancel();
             var cts = _cts = new CancellationTokenSource();   // off the UI thread / off the paint window
+            int gen = Volatile.Read(ref _gen);                // before _latest: a newer value only makes this check stale
             T v = _latest;
-            _ = RunAsync(v, cts);
+            _ = RunAsync(v, gen, cts);
         }
 
-        private async Task RunAsync(T v, CancellationTokenSource cts)
+        private async Task RunAsync(T v, int gen, CancellationTokenSource cts)
         {
             try
             {
@@ -220,13 +256,17 @@ public sealed partial class RenderContext
                 if (cts.IsCancellationRequested) return;
                 _post(() =>
                 {
-                    if (cts.IsCancellationRequested) return;
+                    // A keystroke since this check started means the verdict belongs to an older value; the re-armed
+                    // debounce runs the newer check, which clears the validating flag.
+                    if (cts.IsCancellationRequested || gen != _gen) return;
                     _server.Value = result;
                     _validating.Value = false;
                 });
             }
-            catch (OperationCanceledException) { /* superseded by a newer keystroke */ }
-            catch { _post(() => _validating.Value = false); }
+            // Only OUR cancel (a newer keystroke / unmount) is dropped; a check that times out on its own deadline
+            // must still clear the validating flag (unless a newer value's check is already pending).
+            catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* superseded by a newer keystroke */ }
+            catch { _post(() => { if (gen == _gen) _validating.Value = false; }); }
         }
 
         public void Dispose() { _cts?.Cancel(); _timer.Dispose(); }

@@ -43,13 +43,18 @@ public sealed partial class AnimEngine
 
     /// <summary>Current state → exit terminal, driven by a <see cref="MotionTokenDef"/> (the declarative Element.Exit path).</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in MotionTokenDef m, float delayMs = 0f)
+        => SeedExitOver(node, in e, in m, EnterRest.Identity, delayMs);
+
+    /// <summary>Token <see cref="SeedExit(NodeHandle, in EnterExit, in MotionTokenDef, float)"/> over the node's AUTHORED
+    /// pose (see the LayoutTransition overload).</summary>
+    internal void SeedExitOver(NodeHandle node, in EnterExit e, in MotionTokenDef m, in EnterRest rest, float delayMs = 0f)
     {
-        SeedChannel(node, AnimChannel.Opacity, e.Opacity, in m, null, delayMs);   // always (the exit-settle signal)
-        if (e.Dx != 0f) SeedChannel(node, AnimChannel.TranslateX, e.Dx, in m, null, delayMs);
-        if (e.Dy != 0f) SeedChannel(node, AnimChannel.TranslateY, e.Dy, in m, null, delayMs);
-        if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, e.Sx, in m, null, delayMs);
-        if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, e.Sy, in m, null, delayMs);
-        if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, e.Blur, in m, null, delayMs);
+        SeedChannel(node, AnimChannel.Opacity, rest.Opacity * e.Opacity, in m, null, delayMs);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedChannel(node, AnimChannel.TranslateX, rest.OffsetX + e.Dx, in m, null, delayMs);
+        if (e.Dy != 0f) SeedChannel(node, AnimChannel.TranslateY, rest.OffsetY + e.Dy, in m, null, delayMs);
+        if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, in m, null, delayMs);
+        if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, in m, null, delayMs);
+        if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, in m, null, delayMs);
         MarkStartPending(node);
     }
 
@@ -90,17 +95,42 @@ public sealed partial class AnimEngine
     /// static transform (<c>Rotation</c>/<c>OffsetX</c>/…) the instant a hover/press state first engages and then lets
     /// go — exactly the bug this rework fixes. Folding the rest pose in HERE, at seed time, means the seeded target
     /// value already IS the authored-pose-plus-delta, so the replace-fold composes correctly with no rest-pose memory
-    /// needed downstream.</para></summary>
-    internal void SeedTargetOver(NodeHandle node, in MotionTarget rest, in MotionTarget d, in MotionTokenDef m)
+    /// needed downstream.</para>
+    /// <para><paramref name="channels"/> limits the seed to the channels a While* target actually moves off rest
+    /// (<c>1u &lt;&lt; (int)AnimChannel</c> bits — the resolver passes <c>InteractTargets.Channels</c>). Seeding an
+    /// undeclared channel creates a row that owns it anyway: a press-only Scale card with a BOUND Opacity (rest 1 —
+    /// the bind owns the channel) sprang to opacity 1 on every hover edge and stayed there after the settle.</para></summary>
+    internal void SeedTargetOver(NodeHandle node, in MotionTarget rest, in MotionTarget d, in MotionTokenDef m,
+                                 uint channels = AllGestureChannels)
     {
-        SeedChannel(node, AnimChannel.ScaleX,     rest.Scale    * d.Scale,    in m, null, 0f);
-        SeedChannel(node, AnimChannel.ScaleY,     rest.Scale    * d.Scale,    in m, null, 0f);
-        SeedChannel(node, AnimChannel.Opacity,    rest.Opacity  * d.Opacity,  in m, null, 0f);
-        SeedChannel(node, AnimChannel.TranslateX, rest.OffsetX  + d.OffsetX,  in m, null, 0f);
-        SeedChannel(node, AnimChannel.TranslateY, rest.OffsetY  + d.OffsetY,  in m, null, 0f);
-        SeedChannel(node, AnimChannel.Rotation,   rest.Rotation + d.Rotation, in m, null, 0f);
-        SeedChannel(node, AnimChannel.BlurSigma,  rest.Blur     + d.Blur,     in m, null, 0f);
+        if (Drives(channels, AnimChannel.ScaleX))     SeedGesture(node, AnimChannel.ScaleX,     rest.Scale    * d.Scale,    in m);
+        if (Drives(channels, AnimChannel.ScaleY))     SeedGesture(node, AnimChannel.ScaleY,     rest.Scale    * d.Scale,    in m);
+        if (Drives(channels, AnimChannel.Opacity))    SeedGesture(node, AnimChannel.Opacity,    rest.Opacity  * d.Opacity,  in m);
+        if (Drives(channels, AnimChannel.TranslateX)) SeedGesture(node, AnimChannel.TranslateX, rest.OffsetX  + d.OffsetX,  in m);
+        if (Drives(channels, AnimChannel.TranslateY)) SeedGesture(node, AnimChannel.TranslateY, rest.OffsetY  + d.OffsetY,  in m);
+        if (Drives(channels, AnimChannel.Rotation))   SeedGesture(node, AnimChannel.Rotation,   rest.Rotation + d.Rotation, in m);
+        if (Drives(channels, AnimChannel.BlurSigma))  SeedGesture(node, AnimChannel.BlurSigma,  rest.Blur     + d.Blur,     in m);
     }
+
+    // A gesture seed toward the value a running row on the channel already heads to is a no-op. The dispatcher fires
+    // REDUNDANT edges: a card whose pointer moves onto its own nested button takes a HoverWithin on edge, then a leaf off
+    // edge the effective-hover guard turns back into on (and the reverse on the way back up), and both resolve to the
+    // target the row is already easing to. Re-seeding restarted every eased row from where it stood with its full
+    // duration and a fresh seed-frame hold, so the lift stalled and landed late on every card <-> button crossing; on the
+    // render-owned path the two stamps in one frame also left the re-seed's drift base a revision ahead of the render
+    // thread's (RenderCompositorAnimations.Adopt), so it restarted from the UI's stale pose instead of the one on screen.
+    private void SeedGesture(NodeHandle node, AnimChannel ch, float to, in MotionTokenDef m)
+    {
+        if (!HeadsTo(node, ch, to)) SeedChannel(node, ch, to, in m, null, 0f);
+    }
+
+    /// <summary>Every gesture channel <see cref="SeedTargetOver"/> can drive, as <c>1u &lt;&lt; (int)AnimChannel</c> bits.</summary>
+    internal const uint AllGestureChannels =
+        1u << (int)AnimChannel.ScaleX | 1u << (int)AnimChannel.ScaleY | 1u << (int)AnimChannel.Opacity
+        | 1u << (int)AnimChannel.TranslateX | 1u << (int)AnimChannel.TranslateY | 1u << (int)AnimChannel.Rotation
+        | 1u << (int)AnimChannel.BlurSigma;
+
+    private static bool Drives(uint channels, AnimChannel ch) => (channels & (1u << (int)ch)) != 0;
 
     /// <summary>Seed (or retarget) ONE channel toward <paramref name="to"/> under a NAMED motion token — the focused,
     /// token-aware entry point a control uses INSTEAD of hand-rolling a duration/curve on <see cref="Animate"/> /
@@ -132,7 +162,11 @@ public sealed partial class AnimEngine
         if (m.Mode == IntegrationMode.Spring)
             Spring(node, ch, to, m.Spring, initial, initialVelocity, delayMs: delayMs);
         else
-            Animate(node, ch, initial ?? CurrentValue(node, ch), to, m.DurationMs, m.Easing, delayMs: delayMs);
+        {
+            float from = initial ?? CurrentValue(node, ch);
+            Animate(node, ch, from, to, m.DurationMs, m.Easing, delayMs: delayMs);
+            if (initial is null) MarkSeedRelative(Find(node, ch), from);   // from-current: rebased on the render pose
+        }
     }
 
     // Reduced-motion as a VALUE (read at the seed, never an early-return in authoring code — Motion.ReducedMotion is a
@@ -149,34 +183,76 @@ public sealed partial class AnimEngine
 
     /// <summary>An inserted node animates FROM the enter terminal (offset/scale/opacity/blur) TO identity.
     /// <see cref="EnterExit.DelayMs"/> (E20, Wavee Home redesign) is an enter-only extra delay, added on top of
-    /// <paramref name="spec"/>'s own <see cref="LayoutTransition.DelayMs"/> (which already carries any parent
-    /// <c>FluentGpu.Dsl.Element.Stagger</c> — <c>FluentGpu.Reconciler.TreeReconciler.SynthesizeDeclarative</c> bakes
-    /// <c>index * Stagger</c> in there). Default 0f sums to the pre-E20 delay exactly (byte-identical).</summary>
+    /// <paramref name="spec"/>'s own <see cref="LayoutTransition.DelayMs"/> (a parent
+    /// <c>FluentGpu.Dsl.Element.Stagger</c> is baked into <see cref="EnterExit.DelayMs"/> itself by
+    /// <c>FluentGpu.Reconciler.TreeReconciler.SynthesizeDeclarative</c>, so it never delays the exit or FLIP legs). Default 0f sums to the pre-E20 delay exactly (byte-identical). The reconciler
+    /// calls <see cref="SeedEnterOver"/> with the element's authored pose instead.</summary>
     public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+        => SeedEnterOver(node, in e, in spec, EnterRest.Identity);
+
+    /// <summary><see cref="SeedEnter"/> over the node's AUTHORED static pose <paramref name="rest"/>: the enter settles ON
+    /// it, and its terminal is relative to it (offset/blur ADD, scale/opacity MULTIPLY — <see cref="MotionTarget"/>'s
+    /// contract). WHY explicit, like <see cref="SeedTargetOver"/>: PASS2 replace-folds the row over paint, so the row owns
+    /// the channel, and a settle leaves its last value in paint (SettleRestore skips opacity/transform). An identity
+    /// terminal therefore erased an authored Opacity/OffsetY/Scale until the next reconcile (the Queue's dimmed Autoplay
+    /// rows faded in to 1, then popped to 0.72). Read from the ELEMENT, not paint: a keep-alive reclaim or a presence
+    /// re-show seeds while paint still holds a cancelled mid-exit value.</summary>
+    internal void SeedEnterOver(NodeHandle node, in EnterExit e, in LayoutTransition spec, in EnterRest rest)
     {
         TransitionDynamics dyn = Normalize(spec.Dynamics);
         float delay = spec.DelayMs + e.DelayMs;
-        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity, delayMs: delay);
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx, delayMs: delay);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy, delayMs: delay);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: delay);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: delay);
-        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, 0f, dyn, initial: e.Blur, delayMs: delay);
+        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, rest.Opacity, dyn, initial: rest.Opacity * e.Opacity, delayMs: delay);
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, rest.OffsetX, dyn, initial: rest.OffsetX + e.Dx, delayMs: delay);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, rest.OffsetY, dyn, initial: rest.OffsetY + e.Dy, delayMs: delay);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX, dyn, initial: rest.ScaleX * e.Sx, delayMs: delay);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY, dyn, initial: rest.ScaleY * e.Sy, delayMs: delay);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur, dyn, initial: rest.Blur + e.Blur, delayMs: delay);
         MarkStartPending(node);
+    }
+
+    /// <summary>Cancel the channels a page Enter/Exit drives and land <paramref name="rest"/> in paint at once. A KeepAlive
+    /// page parks holding whatever its exit composed (or the mid-flight value of the enter that exit cut off): neither a
+    /// settle nor a cancel writes opacity or transform back. The reconciler calls this when it brings a parked or
+    /// exiting page back, so an Enter that names fewer channels (a fade after a slide), or none (reduced motion), cannot
+    /// show the leftover pose.</summary>
+    internal void LandEnterRest(NodeHandle node, in EnterRest rest)
+    {
+        Cancel(node, AnimChannel.Opacity);
+        Cancel(node, AnimChannel.TranslateX);
+        Cancel(node, AnimChannel.TranslateY);
+        Cancel(node, AnimChannel.ScaleX);
+        Cancel(node, AnimChannel.ScaleY);
+        Cancel(node, AnimChannel.BlurSigma);
+        if (!_scene.IsLive(node)) return;
+        var acc = Accum.FromPaint(in _scene.Paint(node));
+        acc.Fold(AnimChannel.Opacity, rest.Opacity, replace: true);
+        acc.Fold(AnimChannel.TranslateX, rest.OffsetX, replace: true);
+        acc.Fold(AnimChannel.TranslateY, rest.OffsetY, replace: true);
+        acc.Fold(AnimChannel.ScaleX, rest.ScaleX, replace: true);
+        acc.Fold(AnimChannel.ScaleY, rest.ScaleY, replace: true);
+        acc.Fold(AnimChannel.BlurSigma, rest.Blur, replace: true);
+        Compose(node, in acc);
     }
 
     /// <summary>A removed (now-Exiting) node animates FROM its current state TO the exit terminal; the host reclaims it
     /// when its rows settle. (Under the full rework this routes through the DetachedAnimSlab — Phase 5.)</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+        => SeedExitOver(node, in e, in spec, EnterRest.Identity);
+
+    /// <summary><see cref="SeedExit"/> relative to the node's AUTHORED pose <paramref name="rest"/>, the mirror of
+    /// <see cref="SeedEnterOver"/>: offset/blur ADD, scale/opacity MULTIPLY. The rows replace-fold over paint, so a raw
+    /// terminal is absolute: a dimmed (Opacity 0.6) row under a slide-only Exit brightened to 1 as it left, and an
+    /// OffsetX 24 node with Exit Dx 24 did not move at all.</summary>
+    internal void SeedExitOver(NodeHandle node, in EnterExit e, in LayoutTransition spec, in EnterRest rest)
     {
         TransitionDynamics dyn = Normalize(spec.ExitDynamics ?? spec.Dynamics);
         float delay = spec.ExitDelayMs ?? spec.DelayMs;
-        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn, delayMs: delay);   // always (the exit-settle signal)
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn, delayMs: delay);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn, delayMs: delay);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: delay);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: delay);
-        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: delay);
+        SeedTerminal(node, AnimChannel.Opacity, rest.Opacity * e.Opacity, dyn, delayMs: delay);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, rest.OffsetX + e.Dx, dyn, delayMs: delay);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, rest.OffsetY + e.Dy, dyn, delayMs: delay);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, dyn, delayMs: delay);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, dyn, delayMs: delay);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, dyn, delayMs: delay);
         MarkStartPending(node);
         // SizeMode.Reflow exit: ease THIS node's layout size to 0. SeedExit used to seed only opacity/transform, so a
         // DrawerReveal-style orphan kept its last full Bounds (and therefore its ClipToBounds window) while its
@@ -185,7 +261,16 @@ public sealed partial class AnimEngine
         // no-op that reclaims in a couple of frames).
         if ((spec.Channels & TransitionChannels.Size) != 0 && spec.Size == SizeMode.Reflow)
         {
-            bool horiz = _scene.Layout(node).Direction == 0;
+            // The closing axis is the PARENT's main axis, as for the enter (AppHost's PendingEnterReflow) and for
+            // FlexLayout.AddOrphanMain, which reads the orphan's extent along it. Remove orphans BEFORE this seed, so the
+            // topological Parent is already null: read the retained visual parent. The node's own Direction picked the
+            // width of a default-row drawer in a column, so it wiped sideways, held no height, and opened on one axis
+            // but closed on the other.
+            NodeHandle par = _scene.Parent(node);
+            if (par.IsNull) _scene.TryGetOrphanVisualParent(node, out par);
+            bool horiz = !par.IsNull && _scene.IsLive(par)
+                ? _scene.Layout(par).Direction == 0
+                : _scene.Layout(node).Direction == 0;   // rootless orphan: no parent axis to follow
             if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) == 0) horiz = !horiz;
             if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) != 0)
             {
@@ -216,8 +301,9 @@ public sealed partial class AnimEngine
             Console.Error.WriteLine($"[motion-diag] AnimateBounds node={node.Raw.Index} channels={spec.Channels} size={spec.Size} contracts={contracts} dyn={dyn.Kind}/{dyn.DurationMs:0}ms from=({fromAbs.X:0.0},{fromAbs.Y:0.0},{fromAbs.W:0.0},{fromAbs.H:0.0}) to=({toAbs.X:0.0},{toAbs.Y:0.0},{toAbs.W:0.0},{toAbs.H:0.0})");
         if ((spec.Channels & TransitionChannels.Position) != 0)
         {
-            ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, dyn, spec.DelayMs);
-            ReframePosition(node, AnimChannel.TranslateY, fromAbs.Y - toAbs.Y, dyn, spec.DelayMs);
+            Affine2D rest = RestTransformOf((int)node.Raw.Index);   // settle on the AUTHORED offset, not 0
+            ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, rest.Dx, dyn, spec.DelayMs);
+            ReframePosition(node, AnimChannel.TranslateY, fromAbs.Y - toAbs.Y, rest.Dy, dyn, spec.DelayMs);
         }
         if ((spec.Channels & TransitionChannels.Size) != 0)
         {
@@ -231,16 +317,8 @@ public sealed partial class AnimEngine
                     if (height) RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Relayout:   // re-solve the subtree at the interpolated size each tick (live re-wrap)
-                    if (width)
-                    {
-                        RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
-                        MarkRestoreLayout(node, AnimChannel.SizeW, _scene.Layout(node).Width);
-                    }
-                    if (height)
-                    {
-                        RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
-                        MarkRestoreLayout(node, AnimChannel.SizeH, _scene.Layout(node).Height);
-                    }
+                    if (width) RelayoutSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
+                    if (height) RelayoutSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     _scene.Mark(node, NodeFlags.Relayouting);
                     break;
                 case SizeMode.ScaleCorrect:
@@ -251,14 +329,17 @@ public sealed partial class AnimEngine
                     if (width) ReflowSize(node, AnimChannel.LayoutW, fromAbs.W, toAbs.W, spec);
                     if (height) ReflowSize(node, AnimChannel.LayoutH, fromAbs.H, toAbs.H, spec);
                     break;
+                case SizeMode.FlowReveal:   // the presented height was seeded at 6.3 (AppHost.SeedFlowRevealsPostLayout)
+                    break;
             }
         }
     }
 
     // Position FLIP. Spring: shift a running spring's frame by the layout delta (keep velocity — analytical rebase),
-    // or start a fresh spring at +delta springing to 0. Tween: retarget IN PLACE over the time the original tween has
-    // left (a fresh tween only when no row is flying).
-    private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn, float delayMs = 0f)
+    // or start a fresh spring at rest+delta springing to the node's AUTHORED offset `rest` (0 unless OffsetX/Y or a
+    // static matrix is authored). Tween: retarget IN PLACE over the time the original tween has left (a fresh tween
+    // only when no row is flying).
+    private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, float rest, in TransitionDynamics dyn, float delayMs = 0f)
     {
         if (s_motionDiag) Console.Error.WriteLine($"[motion-diag]   Reframe node={node.Raw.Index} ch={ch} delta={delta:0.0} found={Find(node, ch) >= 0}");
         if (MathF.Abs(delta) < 0.01f && Find(node, ch) < 0) return;
@@ -269,13 +350,15 @@ public sealed partial class AnimEngine
             if (ex >= 0 && _slab.At(ex).Kind == GenKind.Spring)
             {
                 ref AnimValue r = ref _slab.At(ex);
+                float uiBase = r.Position;
                 r.Position += delta;                       // coordinate frame shifted by the move
-                r.To = 0f;
-                r.Gen = Generators.BakeSpring(in sp, x0: r.Position, v0: r.Velocity);   // keep velocity (handoff)
+                r.To = rest;
+                r.Gen = Generators.BakeSpring(in sp, x0: r.Position - rest, v0: r.Velocity);   // keep velocity (handoff)
                 r.ElapsedMs = 0f; r.Flags &= ~AnimFlags.Done;
                 StampCompositorSeed(ex, newInstance: false, explicitFrom: true);
+                MarkSeedRelative(ex, uiBase);              // shift the render thread's pose, not the older imported one
             }
-            else Spring(node, ch, 0f, sp, initial: delta, delayMs: delayMs);
+            else Spring(node, ch, rest, sp, initial: rest + delta, delayMs: delayMs);
         }
         else
         {
@@ -296,19 +379,24 @@ public sealed partial class AnimEngine
                 && !_slab.At(ex).Has(AnimFlags.Driven);
             if (retargetable)
             {
-                float start = _slab.At(ex).Position + delta;   // shift the coordinate frame by the move, as the spring does
+                float uiBase = _slab.At(ex).Position;
+                float start = uiBase + delta;   // shift the coordinate frame by the move, as the spring does
                 float remaining = MathF.Max(1f, _slab.At(ex).Gen.DurationMs - _slab.At(ex).ElapsedMs);
-                Animate(node, ch, start, 0f, remaining, dyn.Easing);   // no delay: the entry stagger was already served
+                // A row still in its start delay (a staggered enter) keeps what is left of it, as the spring rebase
+                // above does: the move must not start while the node's delayed fade still holds it invisible.
+                float pendingDelay = _slab.At(ex).DelayRemainingMs;
+                Animate(node, ch, start, rest, remaining, dyn.Easing, delayMs: pendingDelay);
                 int s = Find(node, ch);
                 // A retarget keeps MOVING — clear the seed-frame hold, exactly as Spring's rebase branch does. Leaving
                 // it set would freeze the row outright here, because a per-tick shove would re-seed the hold every
                 // frame and ElapsedMs would never advance past 0.
                 if (s >= 0) _slab.At(s).Flags &= ~AnimFlags.JustSeeded;
+                MarkSeedRelative(s, uiBase);
             }
             else
             {
                 float cur = CurrentValue(node, ch);
-                Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
+                Animate(node, ch, cur + delta, rest, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
             }
         }
     }
@@ -321,7 +409,31 @@ public sealed partial class AnimEngine
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, toSize, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromSize, delayMs: delayMs);
         else
+        {
+            // The captured rect carries the LAYOUT size (AppHost.RelRect), which mid-flight is the previous TARGET, not
+            // what is on screen. Restart an interrupted tween from the presented extent (the live row), as the spring
+            // branch does — else a quick open/close reversal popped fully open for the seed frame before closing.
+            if (TryLiveTween(node, ch, out float presented)) fromSize = presented;
             Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
+        }
+    }
+
+    // SizeMode.Relayout seed/retarget. While a row flies, RunIncrementalLayout pins LayoutInput.Width/Height to its interp
+    // every tick, so that column is OURS, not the author's. A commit that re-solves the parent WITHOUT re-rendering this
+    // node (it was only shoved — a centred/trailing toggle beside an async count) hands that pinned interp back as BOTH the
+    // captured and the solved size: re-seeding from it restarted a zero-distance tween (the resize froze mid-way), and
+    // re-reading the column as the "declared" size stashed the interp as RestoreTo, which SettleRestore then wrote back
+    // as the node's permanent size. Mirror ReflowSize: an echo of our own interp keeps flying, and a genuine retarget
+    // carries the declared value stashed at the row's creation (a re-render refreshes it through RecordDeclaredSize).
+    private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs)
+    {
+        int ex = Find(node, ch);
+        bool live = ex >= 0 && _slab.At(ex).Has(AnimFlags.RestoreLayout);
+        if (live && MathF.Abs(_slab.At(ex).Position - toSize) < 0.5f) return;   // echo: layout still holds our own interp
+        float declared = live ? _slab.At(ex).RestoreTo
+            : ch == AnimChannel.SizeW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
+        RevealSize(node, ch, fromSize, toSize, dyn, delayMs);
+        MarkRestoreLayout(node, ch, declared);
     }
 
     // ScaleCorrect: spring a scale channel old/new → 1 (recorder composites about centre; opted-in children counter-scale).
@@ -329,9 +441,39 @@ public sealed partial class AnimEngine
     {
         if (MathF.Abs(fromRatio - 1f) < 0.001f && Find(node, ch) < 0) return;
         if (dyn.Kind == DynamicsKind.Spring)
-            Spring(node, ch, 1f, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromRatio, delayMs: delayMs);
+        {
+            var sp = SpringParams.FromResponse(dyn.Response, dyn.DampingRatio);
+            // fromRatio is old LAYOUT / new layout, and a live spring row holds a ratio of the OLD layout box: Spring's
+            // retarget would continue from it against the new box and pop (a 240→480 cover reversed at 360 showed 180).
+            // Re-base the row into the new box, its velocity too, as ConnectedAnimation.RetargetFlight does. An unchanged
+            // box (a position-only move) keeps the plain retarget, which continues from the render thread's own pose.
+            int ex = Find(node, ch);
+            if (ex >= 0 && _slab.At(ex).Kind == GenKind.Spring && MathF.Abs(fromRatio - 1f) >= 0.001f)
+                RebaseSpring(node, ch, 1f, sp, _slab.At(ex).Position * fromRatio, fromRatio);
+            else Spring(node, ch, 1f, sp, initial: fromRatio, delayMs: delayMs);
+        }
         else
+        {
+            // fromRatio is old LAYOUT / new layout; an interrupted tween was presenting old layout × its live scale, so
+            // fold that scale in (same reason as RevealSize: restart from what is on screen, not the previous target).
+            if (TryLiveTween(node, ch, out float scale)) fromRatio *= scale;
             Animate(node, ch, fromRatio, 1f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
+        }
+    }
+
+    /// <summary>The live value of an in-flight, wall-clock tween on <paramref name="ch"/> (its last tick, or the render
+    /// thread's last feedback pose) — the value a retarget must depart from.</summary>
+    private bool TryLiveTween(NodeHandle node, AnimChannel ch, out float position)
+    {
+        int ex = Find(node, ch);
+        if (ex >= 0 && _slab.At(ex).Kind is GenKind.Eased or GenKind.Keyframes
+            && !_slab.At(ex).Has(AnimFlags.Driven | AnimFlags.Additive))
+        {
+            position = _slab.At(ex).Position;
+            return true;
+        }
+        position = 0f;
+        return false;
     }
 
     /// <summary>Fill default dynamics (matches AnimEngine.Normalize): a spring with no response → the standard
@@ -346,4 +488,12 @@ public sealed partial class AnimEngine
                 Easing = d.Easing.IsDefault ? TweenDefault : d.Easing,
             };
     }
+}
+
+/// <summary>A node's AUTHORED static pose, the rest an Enter settles on and an Exit's terminal is relative to (<see cref="AnimEngine.SeedEnterOver"/>,
+/// <see cref="AnimEngine.SeedExitOver(NodeHandle, in EnterExit, in LayoutTransition, in EnterRest)"/>).
+/// Unlike <see cref="MotionTarget"/>, scale is per axis, because an Enter seeds ScaleX and ScaleY separately.</summary>
+internal readonly record struct EnterRest(float OffsetX, float OffsetY, float ScaleX, float ScaleY, float Opacity, float Blur)
+{
+    public static EnterRest Identity => new(0f, 0f, 1f, 1f, 1f, 0f);
 }

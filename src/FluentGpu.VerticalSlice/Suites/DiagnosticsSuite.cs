@@ -763,10 +763,9 @@ static class DiagnosticsSuite
                 int tombAfterQueuedCancel = sched.CanceledPending;   // must be 0: queued cancels leave nothing behind
                 releaseA.Set();                                      // let the parked decodes and all survivors run
                 sw.Restart();
-                // Drain on Inflight+RequestCount only: _queued is never decremented for a cancel-before-claim id
-                // (TryClaim dequeues-and-skips it), so QueueDepth would hold the loop to the full timeout.
+                // QueueDepth is paid back by a cancel-before-claim too, so it drains to 0 alongside RequestCount.
                 while (sw.ElapsedMilliseconds < 5000
-                       && (sched.Inflight > 0 || sched.RequestCount > 0))
+                       && (sched.Inflight > 0 || sched.RequestCount > 0 || sched.QueueDepth > 0))
                 {
                     sched.Pump((id, ok, w, h, f, a) => { }, (id, px, w, h) => { if (id >= 0 && id <= N) appliedA[id] = true; });
                     System.Threading.Thread.Sleep(1);                // workers finish in ms; don't spin the pump hot

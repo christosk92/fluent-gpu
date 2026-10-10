@@ -225,6 +225,10 @@ public sealed class HiddenWindowHostTests
         Assert.InRange(f.Host.RecommendedWaitMs(), 1, (int)HiddenMemoryBudget.DefaultShallowDelayMs);   // then it sleeps until the hidden-memory stage is due...
         f.Host.AdvanceFrameClockForTest(HiddenMemoryBudget.DefaultShallowDelayMs);
         f.Host.RunFrame();
+        Assert.Equal((int)(HiddenMemoryBudget.DefaultDeepDelayMs - HiddenMemoryBudget.DefaultShallowDelayMs), f.Host.RecommendedWaitMs());   // ...once more for Deep...
+        f.Host.AdvanceFrameClockForTest(HiddenMemoryBudget.DefaultDeepDelayMs - HiddenMemoryBudget.DefaultShallowDelayMs);
+        f.Host.RunFrame();
+        Assert.Equal(HiddenStage.Deep, f.Host.HiddenStageForTest);
         Assert.Equal(-1, f.Host.RecommendedWaitMs());  // ...and then blocks on messages, exactly as minimized
         Assert.Equal(1, f.Probe.Deactivated);          // UseActivation / UseIsActive saw the hide on the edge frame
 

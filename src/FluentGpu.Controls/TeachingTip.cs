@@ -224,13 +224,17 @@ public sealed class TeachingTip : Component
             Closing?.Invoke(args);
             if (args.Cancel) return false;
             closeReason.Value = reason;
+            // Every close that passes the veto (close button, light dismiss, a host close) writes IsOpen false at close START,
+            // WinUI's IsOpen(false) (TeachingTip.cpp:1271-1276, :1382-1388).
+            if (IsOpen is { } isOpen) isOpen.Value = false;
             return true;
         }
 
-        void AfterHostClosed(OverlayCloseCause cause)
+        void AfterHostClosed(OverlayHandle closed, OverlayCloseCause cause)
         {
             var reason = ReasonFor(cause, closeReason.Value);
-            h.Value = null;
+            // A tip reopened while this handle was still contracting already holds its NEW handle: keep it.
+            if (ReferenceEquals(h.Value, closed)) h.Value = null;
             Closed?.Invoke(reason);
         }
 
@@ -251,13 +255,14 @@ public sealed class TeachingTip : Component
 
             float margin = PlacementMargin;
             bool centerMode = PreferredPlacement == PlacementMode.Center;
+            OverlayHandle opened;
             if (margin > 0f || centerMode)
             {
                 // PlacementMargin / Center mode anchor to a DERIVED rect: the target rect inflated by the margin on
                 // the placement axis (cpp:480/:588), or the target's center POINT for Center (:249-259 — the tail
                 // points at the target middle).
                 var node = anchorThunk();
-                h.Value = svc.OpenAt(
+                opened = svc.OpenAt(
                     () =>
                     {
                         var scene = Context.Scene;
@@ -269,10 +274,12 @@ public sealed class TeachingTip : Component
             }
             else
             {
-                h.Value = svc.Open(anchorThunk, content, flyoutPlacement, options);
+                opened = svc.Open(anchorThunk, content, flyoutPlacement, options);
             }
-            h.Value.ClosingAction = BeforeHostClose;
-            h.Value.ClosedWithCauseAction = AfterHostClosed;
+            h.Value = opened;
+            opened.ClosingAction = BeforeHostClose;
+            opened.ClosedWithCauseAction = cause => AfterHostClosed(opened, cause);
+            if (IsOpen is { } isOpen) isOpen.Value = true;   // a trigger / OpenOnMount open reads back as IsOpen true
 
             Opened?.Invoke();   // WinUI raises Opened once the popup is shown (synchronous slice)
         }
@@ -284,12 +291,34 @@ public sealed class TeachingTip : Component
             Toggle();
         }, OpenOnMount);
 
+        // WinUI IsOpen as a CONTROLLED signal: an auto-tracked effect (reading isOpen.Value subscribes it) opens on true and
+        // closes on false. The open/close work runs untracked so Opened/Closing handlers and the overlay host's own reads
+        // never subscribe this effect, and so the veto revert below is not a same-run backwards write.
+        UseEffect(() =>
+        {
+            if (IsOpen is not { } isOpen) return;
+            bool want = isOpen.Value;
+            Reactive.Untrack(() =>
+            {
+                bool open = h.Value is { IsOpen: true };
+                if (want && !open) Toggle();
+                else if (!want && open)
+                {
+                    RequestClose(CloseReason.Programmatic);
+                    if (h.Value is { IsOpen: true }) isOpen.Value = true;   // a cancelled Closing restores true (the WinUI deferral revert)
+                }
+            });
+        });
+
+        // An empty TriggerLabel (the default) renders NO trigger, the WinUI shape: the tip opens through IsOpen /
+        // OpenOnMount, and the wrapper stays a zero-size anchor for an untargeted-Target (Target == null) tip.
+        bool hasTrigger = TriggerLabel.Length > 0;
         return new BoxEl
         {
             AlignSelf = FlexAlign.Start,
-            Role = AutomationRole.Button,
+            Role = hasTrigger ? AutomationRole.Button : AutomationRole.None,
             OnRealized = x => anchor.Value = x,
-            Children = [Button.Accent(TriggerLabel, Toggle)],
+            Children = hasTrigger ? [Button.Accent(TriggerLabel, Toggle)] : [],
         };
     }
 

@@ -27,6 +27,12 @@ public sealed partial class AnimEngine
     // Per-node layout-transition spec, keyed by node INDEX (slot reuse self-cleans; bounded by the slab size). The
     // reconciler Set/Clears it from BoxEl.Animate/Layout each reconcile; FLIP capture/apply read it.
     private readonly Dictionary<int, LayoutTransition> _transitions = new();
+    // node index -> the AUTHORED static transform WriteColumns wrote (OffsetX/Y·Rotation·Scale or the unbound matrix):
+    // the rest a position FLIP settles on and a structural snap lands back on. Absent => identity.
+    private readonly Dictionary<int, Affine2D> _restTransforms = new();
+    // node index -> the AUTHORED static pose (EnterRest: offset/scale/opacity/blur) WriteColumns read off the BoxEl: the
+    // rest an Exit's terminal is relative to (Reconciler.Remove has no Element in hand, only the node). Absent => identity.
+    private readonly Dictionary<int, EnterRest> _restPoses = new();
 
     // ── census (read by the MemCensus sampler / wake diagnostics) ─────────────────────────────────
     /// <summary>Active rows, all channels — O(1).</summary>
@@ -170,15 +176,22 @@ public sealed partial class AnimEngine
                 if (loop) loops++;
                 // Parked/Done/Driven rows are never TIMER-due: parked is quiesced, done retires this tick, driven is
                 // event-woken by its signal write (that was the whole point — a paused playhead costs zero frames).
-                // A PAUSED row (SetPaused) neither moves nor ages, so it owes no frame either.
-                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven | AnimFlags.Paused)) != 0) continue;
+                // A PAUSED row (SetPaused) neither moves nor ages, so it owes no frame either, and a HELD one (SetHeld) only
+                // ages: its value stands, so it asks for no frames (the render thread's HasActive reads both the same way).
+                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven | AnimFlags.Paused | AnimFlags.Hold)) != 0) continue;
+                // A RENDER-OWNED compositor row is advanced, posed and paced by the render thread: the UI tick skips it
+                // (Tick PASS1) and only completion feedback retires it, so it owes the UI loop no frame. HasUiWork already
+                // keeps it out of the Anim bit; counting it as due here pinned the cadence wait to 0, so a looping meter
+                // beside a focused caret ran the UI loop at the panel rate. Still counted as a loop for the diagnostics.
+                bool renderOwned = RenderOwnsCompositor && IsCompositorRow(in _slab.At(s));
                 int period = PeriodMsOf(s);
                 if (period <= 0)
                 {
-                    dueNow = true;
                     if (loop) drLoops++;
+                    if (!renderOwned) dueNow = true;
                     continue;
                 }
+                if (renderOwned) continue;
                 double last = _lastAdvanceMs[s];
                 if (last <= 0d) { dueNow = true; continue; }      // never advanced ⇒ owed its first frame
                 double due = last + period;
@@ -193,8 +206,8 @@ public sealed partial class AnimEngine
     }
 
     /// <summary>Milliseconds until the earliest live row needs a frame. <c>0</c> = a frame is due NOW; <c>+∞</c> =
-    /// nothing is timer-due (idle, or only Driven/Parked rows — those are woken by their signal write, never by the
-    /// clock); otherwise the ms until the soonest <see cref="CadenceKind.Hz"/> row's next advance. THE host's wait
+    /// nothing is timer-due (idle, or only Driven/Parked/held/paused rows and rows the render thread owns — none of them
+    /// owes the UI loop a clock frame); otherwise the ms until the soonest <see cref="CadenceKind.Hz"/> row's next advance. THE host's wait
     /// authority — it calls this several times per frame, so it is O(1): the scan is memoized per tick and per slab
     /// mutation. <paramref name="nowMs"/> is the caller's own monotonic ms clock (see the domain note above
     /// <c>_extAnchorMs</c>).</summary>
@@ -226,13 +239,49 @@ public sealed partial class AnimEngine
     // ── layout-transition side-table (node index → spec) ──────────────────────────────────────────
     public void SetTransition(NodeHandle node, in LayoutTransition t) => _transitions[(int)node.Raw.Index] = t;
     public bool TryGetTransition(NodeHandle node, out LayoutTransition t) => _transitions.TryGetValue((int)node.Raw.Index, out t);
-    public void ClearTransition(NodeHandle node) => _transitions.Remove((int)node.Raw.Index);
+    public void ClearTransition(NodeHandle node)
+    {
+        _transitions.Remove((int)node.Raw.Index);
+        _restTransforms.Remove((int)node.Raw.Index);
+        _restPoses.Remove((int)node.Raw.Index);
+    }
+
+    /// <summary>Stash a transition node's AUTHORED static transform (the reconciler calls this beside SetTransition).
+    /// WHY, like <see cref="SeedEnterOver"/>: the FLIP's TranslateX/Y rows replace-fold over paint and a settle leaves
+    /// their last value there, so a FLIP springing to 0 erased an authored OffsetY until the node's next reconcile.
+    /// Identity is not stored.</summary>
+    internal void SetRestTransform(NodeHandle node, in Affine2D rest)
+    {
+        int idx = (int)node.Raw.Index;
+        if (rest == Affine2D.Identity || rest == default) _restTransforms.Remove(idx);
+        else _restTransforms[idx] = rest;
+    }
+
+    private Affine2D RestTransformOf(int nodeIndex)
+        => _restTransforms.TryGetValue(nodeIndex, out Affine2D m) ? m : Affine2D.Identity;
+
+    /// <summary>Stash a transition node's AUTHORED pose (the reconciler calls this beside SetRestTransform) for
+    /// <see cref="SeedExitOver(NodeHandle, in EnterExit, in LayoutTransition, in EnterRest)"/>: the orphan path has only
+    /// the node. Identity is not stored.</summary>
+    internal void SetRestPose(NodeHandle node, in EnterRest rest)
+    {
+        int idx = (int)node.Raw.Index;
+        if (rest == EnterRest.Identity) _restPoses.Remove(idx);
+        else _restPoses[idx] = rest;
+    }
+
+    internal EnterRest RestPoseOf(NodeHandle node)
+        => _restPoses.TryGetValue((int)node.Raw.Index, out EnterRest r) ? r : EnterRest.Identity;
     /// <summary>Symmetric teardown when a scene slot is FREED (wired to SceneStore.OnFreeIndex): drop the index-keyed
     /// spec so a freed node leaves no dormant spec the next node reusing the slot inherits. In-flight rows are
-    /// gen-checked and self-prune at the next tick's IsLive guard.</summary>
+    /// gen-checked and self-prune at the next tick's IsLive guard. Settle callbacks registered on the slot (WhenSettled)
+    /// are queued once and forgotten.</summary>
     public void ClearForIndex(int index)
     {
+        FireSettleCallbacksForIndex(index);   // a dying node's settle callbacks run once and are dropped (smooth-reveal §4.1)
         _transitions.Remove(index);
+        _restTransforms.Remove(index);
+        _restPoses.Remove(index);
         ClearInteractTargets(index);
         // A forced orphan reclaim runs after Tick. Render-owned rows cannot rely on another UI tick
         // to notice the dead node: those rows intentionally do not request one. Retire them with the node.

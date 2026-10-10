@@ -92,7 +92,7 @@ public sealed partial class SceneRecordingSnapshot
     public RectF OverlayClip { get; private set; }
     public RectF? SpotlightScrimClip { get; private set; }
     public int OrphanCount { get; private set; }
-    public bool HasActiveVirtualDisclosures { get; private set; }
+    public bool HasActiveRevealBands { get; private set; }
     public bool PendingRemovalOverflow { get; private set; }
     public ReadOnlySpan<SceneStore.RemovedNodeExtent> PendingRemovalExtents => _removals.AsSpan(0, _removalCount);
     public RecordingScrollChrome ScrollChrome { get; } = new();
@@ -270,7 +270,7 @@ public sealed partial class SceneRecordingSnapshot
         OverlayClip = source.OverlayClip;
         SpotlightScrimClip = source.SpotlightScrimClip;
         OrphanCount = source.OrphanCount;
-        HasActiveVirtualDisclosures = source.HasActiveVirtualDisclosures;
+        HasActiveRevealBands = source.HasActiveRevealBands;
         PendingRemovalOverflow = source.PendingRemovalOverflow;
         _removalCount = source.PendingRemovalExtents.Length;
         Grow(ref _removals, _removalCount);
@@ -970,19 +970,18 @@ public sealed partial class SceneRecordingSnapshot
         return true;
     }
 
-    public bool TryGetVirtualDisclosure(NodeHandle content, out int firstIndex, out int count,
-        out float top, out float extent, out float progress, out int persistentPrefixCount, out int firstRealized)
+    public bool TryGetRevealBands(NodeHandle content, out RevealBands bands, out byte mask, out int prefix, out int firstRealized)
     {
-        firstIndex = -1; count = 0; top = extent = progress = 0; persistentPrefixCount = firstRealized = 0;
-        if (!HasActiveVirtualDisclosures || content.IsNull || !IsLive(content)) return false;
+        bands = default; mask = 0; prefix = firstRealized = 0;
+        if (!HasActiveRevealBands || content.IsNull || !IsLive(content)) return false;
         var viewport = Parent(content);
         if (viewport.IsNull || !IsLive(viewport) || !TryGetScroll(viewport, out var scroll)
-            || scroll.ContentNode != content || scroll.Orientation != 0 || !float.IsFinite(scroll.DisclosureT)
-            || scroll.DisclosureFirst < 0 || scroll.DisclosureCount <= 0 || scroll.DisclosureExtent <= 0) return false;
-        firstIndex = scroll.DisclosureFirst; count = scroll.DisclosureCount;
-        top = scroll.DisclosureTop; extent = scroll.DisclosureExtent; progress = Math.Clamp(scroll.DisclosureT, 0, 1);
-        persistentPrefixCount = Math.Clamp(scroll.PersistentPrefixCount, 0, scroll.ItemCount);
-        firstRealized = Math.Max(persistentPrefixCount, scroll.FirstRealized);
+            || scroll.ContentNode != content || scroll.Orientation != 0 || scroll.BandMask == 0) return false;
+        mask = scroll.Bands.PresentingMask(scroll.BandMask, scroll.ItemCount);   // the same rule as SceneStore's
+        if (mask == 0) return false;
+        bands = scroll.Bands;
+        prefix = Math.Clamp(scroll.PersistentPrefixCount, 0, scroll.ItemCount);
+        firstRealized = Math.Max(prefix, scroll.FirstRealized);
         return true;
     }
 

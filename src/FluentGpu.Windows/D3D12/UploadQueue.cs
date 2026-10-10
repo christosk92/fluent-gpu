@@ -53,6 +53,11 @@ internal sealed unsafe class UploadQueue : IDisposable
     /// <summary>True while a batch is being recorded (between <see cref="Open"/> and <see cref="Submit"/>).</summary>
     public bool IsOpen => _open >= 0;
 
+    /// <summary>Would <see cref="Open"/> block on the allocator ring (no batch open and the next allocator's last batch
+    /// still in flight)? A caller that must never wait on the GPU (the render thread's off-frame bake) checks this and
+    /// defers its work instead.</summary>
+    public bool OpenWouldWait => _open < 0 && !IsComplete(_allocatorFence[_next]);
+
     /// <summary>The recording list, opening a batch on the next allocator of the ring when none is open (resetting it
     /// once its last batch completed — a CPU wait only when all <see cref="Depth"/> are still in flight).</summary>
     public ID3D12GraphicsCommandList* Open()

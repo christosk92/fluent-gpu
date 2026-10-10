@@ -182,8 +182,14 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout
             _itemCount = n;
             _geomCols = cols;
             _geomCross = cross;
-            (_rowTable ??= new ExtentTable(rows, Estimate)).Reset(rows, Estimate);
-            _rowMax = rows > 0 ? new float[rows] : [];
+            // RESIZE, never Reset (see MeasuredStackVirtualLayout.Ensure / ExtentTable.Resize): a width change (every frame
+            // of a resize drag) or an append keeps the height every surviving row measured. A reset re-seeded the rows
+            // ABOVE the anchor to the estimate outside SetMeasured, so no anchor delta shifted the plan and a scrolled grid
+            // jumped to another row. A row still re-shrinks at a new width: its max restarts below and in ResetMeasurePass.
+            if (_rowTable is null) _rowTable = new ExtentTable(rows, Estimate);
+            else _rowTable.Resize(rows, Estimate);
+            if (_rowMax is null || _rowMax.Length < rows) _rowMax = new float[rows];   // grows only, never per frame
+            else Array.Clear(_rowMax);
         }
     }
 

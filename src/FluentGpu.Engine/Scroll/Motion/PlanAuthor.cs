@@ -102,8 +102,8 @@ public static class PlanAuthor
     }
 
     /// <summary>The wheel's <see cref="SegKind.Cubic"/> from what <paramref name="prev"/> shows at <paramref name="t0"/>
-    /// to <paramref name="dest"/> — the one place a wheel segment is shaped (a notch, and a snap re-target of its
-    /// destination). It starts at <c>prev</c>'s position AND velocity at <c>t0</c>, so a re-plan is C1: the velocity
+    /// to <paramref name="dest"/> — the one place a wheel segment is shaped (every notch; a wheel is never snapped). It
+    /// starts at <c>prev</c>'s position AND velocity at <c>t0</c>, so a re-plan is C1: the velocity
     /// carried in the notch's direction (0 from rest, or against it — a reversal turns at once) blends onto the
     /// front-loaded kick <c>1.5R/D</c> over <see cref="MotionFeel.WheelRiseS"/>. When the carried velocity already
     /// exceeds the kick (a slower notch late in a fast spin, or a destination clamped at an edge), the same cubic is
@@ -194,8 +194,15 @@ public static class PlanAuthor
         if (prev.Clock == ContactClock.Present && cap > 0.0 && Math.Abs(v0) > cap) v0 = v0 > 0.0 ? cap : -cap;
         // The RAW contact position the Follow plan shows at tNow (its rubber band maps it the same way this plan will).
         double p0 = prev.Ring.Eval(tNow, prev.Clock, out _);
-        double tEnd = tNow;
+        return Coast(in prev, tNow, p0, v0, in feel);
+    }
 
+    /// <summary>A released coast from RAW position <paramref name="p0"/> at velocity <paramref name="v0"/> from
+    /// <paramref name="tEnd"/> (the shape <see cref="FollowEnd"/> releases): past an edge under the rubber band, the spring
+    /// back to it; below <see cref="MotionFeel.FlingMinVelocity"/>, a Hold in place; else a Decay, ended at the edge it
+    /// crosses by a Spring (rubber band) or a Hold.</summary>
+    private static ScrollPlan Coast(in ScrollPlan prev, double tEnd, double p0, double v0, in MotionFeel feel)
+    {
         if (prev.Overpan == OverpanPolicy.RubberBand && (p0 < prev.Min || p0 > prev.Max))
             return OverpanRelease(in prev, tEnd, p0, v0, in feel);
 
@@ -231,6 +238,20 @@ public static class PlanAuthor
 
         return new ScrollPlan(decayClamped, second, default, default, 2, prev.Vp, prev.Gen, prev.Seq + 1, prev.Min, prev.Max,
             prev.ViewportExtent, prev.RubberC, prev.Clock, prev.Overpan, MotionKind.Fling, default);
+    }
+
+    /// <summary>Re-aims a moving plan whose destination the extent no longer holds — content shrank under it: an End-key
+    /// glide or a fling's edge spring authored against an estimated end, rows measured smaller as they are revealed — at
+    /// the edge, continuing from its position and velocity at <paramref name="tNow"/> (no jump, no velocity drop). A
+    /// rubber-band plan (a fling) coasts on from its raw position exactly as a release there would (<see cref="Coast"/>);
+    /// every other plan glides to its clamped destination. The plan keeps its <see cref="ScrollPlan.Kind"/> where it keeps
+    /// moving (a fling stays a fling, a wheel glide stays user-driven).</summary>
+    public static ScrollPlan Reaim(in ScrollPlan prev, double tNow, in MotionFeel feel)
+    {
+        if (prev.Overpan != OverpanPolicy.RubberBand)
+            return Glide(in prev, tNow, prev.Dest, in feel) with { Kind = prev.Kind };
+        double raw = (prev with { Overpan = OverpanPolicy.None }).Eval(tNow, out double v, out _);
+        return Coast(in prev, tNow, raw, v, in feel);
     }
 
     /// <summary>The floor of the stopped-finger window (<see cref="StoppedAfterS"/>): two reports of a 100 Hz-class
@@ -328,21 +349,27 @@ public static class PlanAuthor
             prev.ViewportExtent, prev.RubberC, prev.Clock, OverpanPolicy.None, MotionKind.Programmatic, default);
     }
 
-    /// <summary>A keyboard move — arrows/page/home/end — authored as a <see cref="Glide"/> from the plan's current
-    /// displayed position.</summary>
+    /// <summary>A keyboard move — arrows/page/home/end — authored as a <see cref="Glide"/>. A line/page step
+    /// ACCUMULATES onto the pending destination like a wheel notch: while the previous plan is a live programmatic glide
+    /// heading the same way, the step is added to <c>prev.Dest</c>, so quick presses and a held key's auto-repeat travel
+    /// every step's full distance instead of re-basing on the lagging displayed position. A first press, a press after
+    /// the glide settled, a press over any other motion (a fling's destination is only its asymptote), or a reversal
+    /// steps from the displayed position. Home/End glide to the extent's ends.</summary>
     public static ScrollPlan Key(in ScrollPlan prev, double tNow, KeyMove move, in MotionFeel feel, double viewportExtent)
     {
-        double p0 = prev.Eval(tNow, out _, out _);
-        double target = move switch
+        if (move == KeyMove.Home) return Glide(in prev, tNow, prev.Min, in feel);
+        if (move == KeyMove.End) return Glide(in prev, tNow, prev.Max, in feel);
+        double step = move switch
         {
-            KeyMove.LineUp => p0 - feel.KeyLineDip,
-            KeyMove.LineDown => p0 + feel.KeyLineDip,
-            KeyMove.PageUp => p0 - feel.PageFraction * viewportExtent,
-            KeyMove.PageDown => p0 + feel.PageFraction * viewportExtent,
-            KeyMove.Home => prev.Min,
-            KeyMove.End => prev.Max,
-            _ => p0,
+            KeyMove.LineUp => -feel.KeyLineDip,
+            KeyMove.LineDown => feel.KeyLineDip,
+            KeyMove.PageUp => -feel.PageFraction * viewportExtent,
+            KeyMove.PageDown => feel.PageFraction * viewportExtent,
+            _ => 0.0,
         };
-        return Glide(in prev, tNow, target, in feel);
+        double p0 = prev.Eval(tNow, out _, out _);
+        bool liveGlide = prev.Kind == MotionKind.Programmatic && prev.Count == 1 && prev.S0.Kind == SegKind.Glide;
+        double from = liveGlide && (prev.Dest - p0) * step > 0.0 ? prev.Dest : p0;
+        return Glide(in prev, tNow, from + step, in feel);
     }
 }

@@ -294,14 +294,16 @@ public sealed record RemovalOptions
     public float StaggerMs { get; init; }
 }
 
-/// <summary>Reactive one-shot provider for an inserted contiguous range. The owner records its logical key on the user
-/// event; once its new plan exists, ItemsView consumes the exact range before the first expanded paint.</summary>
+/// <summary>The disclosure seam of a bound virtual list (docs/plans/smooth-reveal-implementation.md §10). The owner starts
+/// or reverses a band with <see cref="ItemsViewController.BeginDisclosure"/>; this record lets the view re-find each band
+/// as the model moves under it.</summary>
 public sealed record DisclosureOptions
 {
+    /// <summary>Re-render trigger for the model the bands index (a plan version).</summary>
     public IReadSignal<int>? Version { get; init; }
-    public Func<ItemDisclosureRange?>? PendingExpand { get; init; }
-    public Action<ItemDisclosureRange>? OnExpandStarted { get; init; }
-    public Action<ItemDisclosureRange>? OnExpandSettled { get; init; }
+    /// <summary>A band's CURRENT range by its key, or null once its rows are gone (a committed collapse). Optional: without
+    /// it a band keeps its armed range and a collapse clears when the count has dropped by the band.</summary>
+    public Func<string, ItemDisclosureRange?>? ResolveRange { get; init; }
     /// <summary>Optional cold-path lifecycle trace. Invoked from controller/layout/effect work, never paint or input.</summary>
     public Action<ItemDisclosureDiagnostic>? Diagnostic { get; init; }
 }

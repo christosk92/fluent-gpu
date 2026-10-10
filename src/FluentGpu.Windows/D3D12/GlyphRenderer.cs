@@ -81,7 +81,7 @@ internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors
 /// CharacterSpacing ×10, LineHeight ×10, packed LineStacking|LineBounds, the SpanRunId inline-run overlay — a span style
 /// change mints a fresh id upstream, so the key self-invalidates), so two runs differing only in weight or tracking
 /// can never alias. Excludes color/transform/opacity (replayed). Bounds origin and width are layout-stable for a given
-/// element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
+/// element (scroll rides the world transform, not the bounds), so they can key safely — and they key EXACTLY (their float bits), never rounded: see MakeRunKey.</summary>
 internal readonly struct RunKey : IEquatable<RunKey>
 {
     private readonly int _textId, _famId, _sizeQ, _weight, _wrap, _trim, _maxLines, _widthQ, _originXQ, _originYQ, _scaleQ;
@@ -786,8 +786,7 @@ float4 PSMain(VSOutG i) : SV_Target
             if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId);
 #endif
             var quads = hit.Glyphs.AsSpan(0, hit.Count);
-            float snap = SnapDy(quads, world, dpiScale, motionSoft, out int ph);
-            Replay(quads, hit.Colors, forceColor, color, world, opacity, snap, ph, outList);
+            Replay(quads, hit.Colors, forceColor, color, world, opacity, dpiScale, motionSoft, outList);
             return;
         }
 
@@ -827,8 +826,7 @@ float4 PSMain(VSOutG i) : SV_Target
         }
         if (_preparing) { if (!consistent) ReturnQuads(arr); return; }
         var baked = arr.AsSpan(0, n);
-        float bsnap = SnapDy(baked, world, dpiScale, motionSoft, out int bph);
-        Replay(baked, colors, forceColor, color, world, opacity, bsnap, bph, outList);
+        Replay(baked, colors, forceColor, color, world, opacity, dpiScale, motionSoft, outList);
         if (!consistent) ReturnQuads(arr);   // Replay already copied into outList; the rented array is not retained
     }
 
@@ -923,17 +921,16 @@ float4 PSMain(VSOutG i) : SV_Target
             bool sung = split >= 1f;
             ColorF settled = sung ? before : after;
             if (settled.A * opacity <= SettledAlphaEpsilon) return;   // invisible (e.g. the glow layer's unsung pass)
-            float settledSnap = SnapDy(quads, world, dpiScale, motionSoft, out int settledPhase);
             if (sung)
             {
-                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, settledPhase, plainList);
+                Replay(quads, null, forceColor: true, settled, world, opacity, dpiScale, motionSoft, plainList);
             }
             else
             {
                 if (_gradDy.Length < count) _gradDy = new float[count];
                 var dy = _gradDy.AsSpan(0, count);
                 dy.Fill(lift);   // a == 0 everywhere ⇒ lift*(1-a) == lift; Span.Fill is intrinsic, no allocation
-                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, settledPhase, plainList, dy);
+                Replay(quads, null, forceColor: true, settled, world, opacity, dpiScale, motionSoft, plainList, dy);
             }
             return;
         }
@@ -998,8 +995,7 @@ float4 PSMain(VSOutG i) : SV_Target
             float a = Math.Clamp((splitShader - gtc) / fade + 0.5f, 0f, 1f);
             _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept (settles to 0 at split==1)
         }
-        float gsnap = SnapDy(quads, world, dpiScale, motionSoft, out int gph);
-        ReplayGradient(quads, world, opacity, gsnap, gph, before, after, splitShader, fade, total,
+        ReplayGradient(quads, world, opacity, dpiScale, motionSoft, before, after, splitShader, fade, total,
             _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), outList);
     }
 
@@ -1033,25 +1029,34 @@ float4 PSMain(VSOutG i) : SV_Target
 
     // Colour-blind by design (like GlyphKey and the atlas): a colour emoji's palette layers bake into the run's Colors
     // array, not the key, so the same run replays under any run colour; forceColor (selection/disabled) still wins.
-    private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
+    // Width and origin key on their EXACT float bits, never a whole-DIP bucket: the shape bakes the origin into every
+    // quad and makes every wrap/trim decision at the exact width (TextLayoutEngine.WrapAndPosition's
+    // `pen + adv > maxWidth + WrapSlack`, the same test the UI measure pass re-runs at the exact width). A rounded key
+    // let a box resizing through 199.6 and settling at 200.4 replay the 199.6 shape — a line more than measure sized the
+    // box for, or an ellipsis cut at the wrong width — for as long as the text stayed on screen. A box at rest keeps its
+    // exact width, so steady-state hits are unchanged.
+    internal static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, int spanRunId)
     {
-        int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : (int)MathF.Round(maxWidth);
+        int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : ExactKey(maxWidth);
         int lineHQ = float.IsNaN(lineHeight) || lineHeight <= 0f ? 0 : (int)MathF.Round(lineHeight * 10f);   // 0 = font-natural
         // The size at the glyph cache's own resolution (DeviceEmQ): a whole-DIP bucket let a 13.5-DIP and a 14-DIP run
         // of the same text share ONE baked quad set.
         return new RunKey(textId.Value, familyId.Value, DeviceEmQ(size, dpiScale), weight, wrap, trim, maxLines,
-            widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f),
+            widthQ, ExactKey(originX), ExactKey(topY), (int)MathF.Round(dpiScale * 100f),
             (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId);
     }
+
+    /// <summary>A layout float as an exact key: its IEEE bits, with -0 folded onto +0 (they lay out identically).</summary>
+    private static int ExactKey(float v) => v == 0f ? 0 : BitConverter.SingleToInt32Bits(v);
 
     /// <summary>Per-run vertical placement, applied at replay: snap the run's baseline to the nearest <b>1/N device
     /// row</b> and report which of the <see cref="SubPixelPhases"/> baked variants realises that fraction. Returns the
     /// correction in local DIP; <paramref name="phase"/> selects the atlas rows.
     ///
     /// <para>Glyph bitmaps are rasterized for an integer device baseline PLUS a known sub-pixel offset, and every
-    /// bearing/height is an integer device row, so all of a run's quads share the first quad's fractional device-Y
-    /// phase. The correction moves the baseline onto the integer row <c>i</c>; the bitmap itself carries the remaining
+    /// bearing/height is an integer device row, so all quads of one BASELINE share the first quad's fractional device-Y
+    /// phase (Replay snaps each baseline group, see <see cref="BaselineGroupEnd"/>). The correction moves the baseline onto the integer row <c>i</c>; the bitmap itself carries the remaining
     /// <c>phase/N</c>. Worst-case residual is 1/(2N) device pixels.</para>
     ///
     /// <para>This replaces a whole-pixel snap that was <b>motion-gated off</b> for the entire duration of every scroll,
@@ -1061,8 +1066,9 @@ float4 PSMain(VSOutG i) : SV_Target
     /// fraction, so text stays sharp in motion AND the scene is free to move sub-pixel.</para>
     ///
     /// <para>Snapping happens HERE, not at bake, so cached quads stay phase-agnostic and one run cached at one position
-    /// replays correctly at any other. One scalar for the whole run: multi-line leading stays uniform (lines snap as a
-    /// group from the first baseline). Y only — X keeps DirectWrite's sub-pixel advances. Skewed/rotated/flipped worlds
+    /// replays correctly at any other. One scalar PER BASELINE, not per run: a wrapped run's pitch is fractional in device px
+    /// (Segoe UI 14 → 18.62 DIP), so a run-wide snap left lines 2..n at a fractional device row, bilinearly smeared.
+    /// Snapping each line on its own moves its leading by at most 1/N px. Y only — X keeps DirectWrite's sub-pixel advances. Skewed/rotated/flipped worlds
     /// (M12 ≠ 0 or M22 ≤ 0) draw unsnapped at phase 0 — there is no meaningful pixel grid for them.</para></summary>
     private static float SnapDy(ReadOnlySpan<ShapedGlyph> glyphs, in Affine2D world, float dpiScale, float motionSoft, out int phase)
     {
@@ -1081,20 +1087,46 @@ float4 PSMain(VSOutG i) : SV_Target
         return (rowF - devY) / (world.M22 * dpiScale) * relax;
     }
 
+    /// <summary>Two quads whose LOCAL device-Y fractions agree within this many device px sit on the same baseline grid
+    /// (see <see cref="BaselineGroupEnd"/>). Far above float error at any realistic local Y, far below anything visible.</summary>
+    private const float BaselineGroupSlack = 1f / 64f;
+
+    /// <summary>The end (exclusive) of the baseline group that starts at quad <paramref name="start"/>: the following quads
+    /// that share its fractional LOCAL device-Y. ShapeInto bakes every quad at <c>topY + lineBaseline + bearing</c> with an
+    /// integer device-row bearing, so one visual line is one group whatever its glyph sizes or spans. A wrapped line whose
+    /// pitch is fractional in device px (Segoe UI 14 → 18.62 DIP) starts a new group and gets its own <see cref="SnapDy"/>.</summary>
+    private static int BaselineGroupEnd(ReadOnlySpan<ShapedGlyph> glyphs, int start, float dpiScale)
+    {
+        float anchor = glyphs[start].DstY * dpiScale;
+        int i = start + 1;
+        for (; i < glyphs.Length; i++)
+        {
+            float d = glyphs[i].DstY * dpiScale - anchor;
+            if (MathF.Abs(d - MathF.Round(d)) > BaselineGroupSlack) break;
+        }
+        return i;
+    }
+
     /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity
-    /// and the run's <see cref="SnapDy"/> correction. Allocation-free (appends into the reused glyph-instance list) —
+    /// and each baseline's <see cref="SnapDy"/> correction. Allocation-free (appends into the reused glyph-instance list) —
     /// the steady-state path for unchanged text.
     /// <paramref name="colors"/> (span runs and colour-emoji runs): the per-quad tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
     /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint) — so a selected
     /// or disabled emoji goes FLAT in the forced colour, exactly like WinUI's selection repaint of a colour glyph.
     /// <paramref name="perGlyphDy"/> (optional, parallel to <paramref name="glyphs"/>): an extra per-glyph local-DIP Y
-    /// offset added on top of <paramref name="snapDy"/> — how <see cref="LayoutRunGradient"/>'s settled-split fast path
+    /// offset added on top of the baseline's snap — how <see cref="LayoutRunGradient"/>'s settled-split fast path
     /// reproduces the wipe's uniform unsung `Lift` through this lean single-color path.</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, int phase, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
+    internal static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float dpiScale, float motionSoft, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
     {
+        float snapDy = 0f; int phase = 0, groupEnd = 0;
         for (int i = 0; i < glyphs.Length; i++)
         {
+            if (i == groupEnd)   // a new baseline: snap it onto its OWN 1/N phase (see BaselineGroupEnd)
+            {
+                groupEnd = BaselineGroupEnd(glyphs, i, dpiScale);
+                snapDy = SnapDy(glyphs[i..], world, dpiScale, motionSoft, out phase);
+            }
             ref readonly var s = ref glyphs[i];
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
             float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
@@ -1113,14 +1145,20 @@ float4 PSMain(VSOutG i) : SV_Target
     /// and record its run-local-x extent [gt0,gt1] plus before/after/split/fade — the PS does the per-PIXEL colour mix, so
     /// the wipe boundary cuts THROUGH glyphs (half sung / half unsung), not glyph-by-glyph. The quad's SIZE is never
     /// touched: glyphs do not magnify at the front (the refuted char pop — see LayoutRunGradient).</summary>
-    private static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float snapDy, int phase,
+    internal static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float dpiScale, float motionSoft,
         ColorF before, ColorF after, float split, float fade, float total,
         ReadOnlySpan<float> ro0, ReadOnlySpan<float> ro1,
         ReadOnlySpan<float> perGlyphDy, List<GradGlyphInstance> outList)
     {
         float inv = 1f / total;
+        float snapDy = 0f; int phase = 0, groupEnd = 0;
         for (int i = 0; i < glyphs.Length; i++)
         {
+            if (i == groupEnd)   // a new baseline: snap it onto its OWN 1/N phase (see BaselineGroupEnd)
+            {
+                groupEnd = BaselineGroupEnd(glyphs, i, dpiScale);
+                snapDy = SnapDy(glyphs[i..], world, dpiScale, motionSoft, out phase);
+            }
             ref readonly var s = ref glyphs[i];
             float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
             float v = phase * s.VStride;   // select the baked sub-pixel variant (contiguous phase stack)

@@ -191,9 +191,12 @@ public sealed class Pivot : Component
 
         // Per-tab content (WinUI PivotItem): margin = PivotItemMargin 12,0,12,0 (Pivot_themeresources.xaml:12,
         // :452), PivotItem Padding=0 (:453). The node handle is captured for the selection fly-in.
-        Element body = props.Content is { } factory
+        // KEYED by the selected index, which is the PivotItem's identity: a header switch REMOUNTS the new item's
+        // content. Unkeyed, a factory returning one component type for every index was updated in place and carried
+        // the previous item's instance and state.
+        Element body = (props.Content is { } factory
             ? factory(selected)
-            : new TextEl($"Content for {headers[selected]}") { Size = 14f, Color = Tok.TextPrimary };
+            : new TextEl($"Content for {headers[selected]}") { Size = 14f, Color = Tok.TextPrimary }) with { Key = "item#" + selected };
         Action<NodeHandle> captureContent = h => contentNode.Value = h;
         var content = new BoxEl
         {

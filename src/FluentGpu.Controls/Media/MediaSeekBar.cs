@@ -508,8 +508,9 @@ public sealed class MediaSeekBar : Component
     private void OnWheel(WheelEventArgs e)
     {
         if (!Enabled()) return;
-        float step = e.Delta > 0f ? 5f : -5f;
-        SeekBy(step);
+        // Steps, not Delta: a hi-res wheel sends one detent as several fractional packets, and a seek per packet multiplied
+        // the 5 s step. The packets between steps are still consumed so the page never scrolls under the rail.
+        if (e.Steps != 0) SeekBy(5f * e.Steps);
         e.Handled = true;
     }
 

@@ -14,8 +14,11 @@ namespace FluentGpu.Animation;
 /// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity + the presented
 /// SizeW/SizeH → PaintDirty. LayoutW/LayoutH are the one deliberate exception to "animation never relays out": a
 /// SizeMode.Reflow track writes the interpolated size into LayoutInput each tick and the host re-solves the nearest
-/// layout boundary, so neighbours reflow smoothly.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma, BrushFade, HoverFade, PressFade, DisclosureProgress, GlyphWipeSplit }
+/// layout boundary, so neighbours reflow smoothly. RevealExtent is the PRESENTED vertical extent of a SizeMode.FlowReveal
+/// node (DIP) — a side-table row read by AnimEngine.PropagateFlowReveals, never composed into NodePaint directly.
+/// RevealBand0..3 = the presented height of virtual reveal band slot 0..3 on a viewport node — side-table rows written
+/// into ScrollState.Bands.</summary>
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma, BrushFade, HoverFade, PressFade, GlyphWipeSplit, RevealExtent, RevealBand0, RevealBand1, RevealBand2, RevealBand3 }
 
 public enum IntegrationMode : byte { Eased, Spring }
 
@@ -63,10 +66,27 @@ public readonly record struct Keyframe
 }
 
 /// <summary>A value source (scroll offset, playback ms, a custom MotionValue) that can drive a timeline instead of wall-time.
-/// (Retained for parity; the index-based SignalSource that retires this List&lt;Func&lt;float&gt;&gt; closure model is a follow-up.)</summary>
+/// A source's owner <see cref="Unregister"/>s it when it unmounts or re-seeds: the closure is released and its index reused,
+/// so the table stays as small as the live drivers. (The index-based SignalSource that retires this closure model is a follow-up.)</summary>
 public sealed class DrivenClockTable
 {
-    private readonly List<Func<float>> _sources = new();
-    public int Register(Func<float> source) { _sources.Add(source); return _sources.Count - 1; }
-    public float Sample(int i) => (uint)i < (uint)_sources.Count ? _sources[i]() : 0f;
+    private readonly List<Func<float>?> _sources = new();
+    private readonly Stack<int> _free = new();   // unregistered indices, reused before the list grows
+
+    public int Register(Func<float> source)
+    {
+        if (_free.TryPop(out int i)) { _sources[i] = source; return i; }
+        _sources.Add(source);
+        return _sources.Count - 1;
+    }
+
+    /// <summary>Drop a registered source; a row still reading the index samples 0 until it is re-driven.</summary>
+    public void Unregister(int i)
+    {
+        if ((uint)i >= (uint)_sources.Count || _sources[i] is null) return;
+        _sources[i] = null;
+        _free.Push(i);
+    }
+
+    public float Sample(int i) => (uint)i < (uint)_sources.Count && _sources[i] is { } s ? s() : 0f;
 }

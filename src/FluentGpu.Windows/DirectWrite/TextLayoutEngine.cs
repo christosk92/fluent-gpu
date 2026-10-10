@@ -6,8 +6,10 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Text.DirectWrite;
 
-/// <summary>One laid-out glyph: post-shaping glyph id, the DWrite face it belongs to (as <c>nint</c>), and its pen
-/// position in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top.
+/// <summary>One laid-out glyph: post-shaping glyph id, the DWrite face it belongs to (as <c>nint</c>), and its draw origin
+/// in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top, both shifted by
+/// the shaper's GPOS glyph offset (combining marks attach to their base; zero for ordinary glyphs). Pen positions for
+/// hit-testing are in <see cref="LaidCluster"/>.
 /// <see cref="Size"/> is the DIP em size the glyph was shaped at (spans may override the base size) and
 /// <see cref="Span"/> the index of the <see cref="SpanStyle"/> it belongs to (−1 = the base style) — the renderer
 /// rasterizes at <see cref="Size"/> and tints per span (rtb-01 inline runs).</summary>
@@ -123,7 +125,8 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// <see cref="Layout"/>.</summary>
     public ReadOnlySpan<LaidLine> Lines => _lines.AsSpan(0, _lineRecCount);
 
-    private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; public float Size; public short Span; }
+    // OffX/OffY: the shaper's GPOS glyph offset (mark-to-base / mark-to-mark attachment) in the VISUAL top-down frame — ink only; Advance (pen, wrap, hit-test) is unaffected.
+    private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; public float Size; public short Span; public float OffX, OffY; }
 
     // ── Shape cache ─────────────────────────────────────────────────────────────────────────────────
     // Shaping (itemize → shape) is width-INDEPENDENT — only WrapAndPosition consumes maxWidth. A drag-resize
@@ -133,7 +136,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     // lineBounds); a (text,style) match restores them and replays ONLY WrapAndPosition at the new width. Plain
     // (no-span) text only — spanned inline runs (rtb-01) re-shape (never a resize hot path). Bounded LRU, instance
     // reused on eviction. Single-thread-confined: the measure engine (UI thread) and the render engine (render thread)
-    // are SEPARATE instances (DirectWriteFontSystem.cs:13), so each has its own cache — no cross-thread sharing.
+    // are SEPARATE instances (DirectWriteFontSystem.cs:13), so each has its own cache and eviction scratch — no cross-thread sharing.
     private sealed class ShapeEntry
     {
         public char[] Text = Array.Empty<char>(); public int TextLen;
@@ -151,7 +154,9 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     // ago re-ran DirectWrite itemize+shape. Eviction is batched (EvictLru) so a full cache costs one pass per ~cap/4
     // misses instead of one full scan per miss.
     private const int ShapeCacheCap = 2048;
-    private static readonly List<long> s_evictScratch = new(ShapeCacheCap / 4);
+    // Per instance, like the cache it scans: the UI measure engine and the render-thread glyph engines evict on their
+    // own threads, and a shared static scratch let one engine's Clear/Add break another's foreach mid-eviction.
+    private readonly List<long> _evictScratch = new(ShapeCacheCap / 4);
 
     /// <summary>Diagnostics/regression counter: the number of ACTUAL itemize+shape passes. A width-only re-wrap of
     /// already-shaped text does NOT bump it, so a resize that re-wraps cached text leaves this flat.</summary>
@@ -224,17 +229,17 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         // buys ~cap/4 misses), handing the caller one of the evicted entries to reuse. When every entry is recent
         // (a burst larger than the cache), fall back to evicting the single oldest.
         long threshold = _shapeTick - ShapeCacheCap * 3 / 4;
-        s_evictScratch.Clear();
+        _evictScratch.Clear();
         long oldestKey = 0, oldestTick = long.MaxValue; ShapeEntry? oldest = null;
         foreach (var kv in _shapeCache)
         {
-            if (kv.Value.Tick < threshold) s_evictScratch.Add(kv.Key);
+            if (kv.Value.Tick < threshold) _evictScratch.Add(kv.Key);
             if (kv.Value.Tick < oldestTick) { oldestTick = kv.Value.Tick; oldestKey = kv.Key; oldest = kv.Value; }
         }
-        if (s_evictScratch.Count > 1)
+        if (_evictScratch.Count > 1)
         {
             ShapeEntry? reuse = null;
-            foreach (long key in s_evictScratch)
+            foreach (long key in _evictScratch)
                 if (_shapeCache.Remove(key, out var evicted)) reuse ??= evicted;
             return reuse ?? new ShapeEntry();
         }
@@ -417,7 +422,11 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                             // caret/terminator math relies on it) but make it NON-DRAWING (Face 0 ⇒ GlyphRenderer skips it,
                             // GlyphRenderer.cs) and zero-advance.
                             bool brk = (uint)g.Cluster < (uint)n && FluentGpu.Text.LineBreaker.IsHardBreak(p[g.Cluster]);
-                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = brk ? 0 : (nint)subFace, Advance = brk ? 0f : g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan };
+                            // GPOS offset → visual top-down frame: advanceOffset runs along the reading direction (leftward in an
+                            // RTL run, whose glyphs EmitLine reverses into left-edge slots), ascenderOffset is positive-up.
+                            float offX = brk ? 0f : (run.IsRightToLeft ? -g.OffsetX : g.OffsetX);
+                            float offY = brk ? 0f : -g.OffsetY;
+                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = brk ? 0 : (nint)subFace, Advance = brk ? 0f : g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan, OffX = offX, OffY = offY };
                         }
                         pos += subLen; remaining -= subLen;
                     }
@@ -480,7 +489,10 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             if (!end)
             {
                 int c = _glyphs[i].Cluster;
-                byte bb = c >= 0 && c < _breaks.Count ? _breaks[c].BreakBefore : BreakOpp.Neutral;
+                // A break opportunity belongs to the cluster's first glyph: a multi-glyph cluster (base + combining
+                // mark, Devanagari consonant + matra) must never open a line or set lastBreak mid-cluster.
+                bool clusterHead = i == 0 || _glyphs[i - 1].Cluster != c;
+                byte bb = clusterHead && c >= 0 && c < _breaks.Count ? _breaks[c].BreakBefore : BreakOpp.Neutral;
                 bool mustBreak = bb == BreakOpp.MustBreak;
                 bool canBreak = bb == BreakOpp.CanBreak || mustBreak;
 
@@ -505,7 +517,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 if (canBreak) lastBreak = i;
 
                 float adv = _glyphs[i].Advance;
-                if (doWrap && pen + adv > maxWidth + WrapSlack && i > lineStart)
+                // Trailing whitespace HANGS past the box edge (DirectWrite/WinUI/CSS): a space never triggers the wrap.
+                // UAX #14 puts the break opportunity on the letter AFTER the space, so wrapping on the space itself
+                // either pushed a word that fits to the next line (br = start of the current word) or, with no earlier
+                // break, started the next line with the space (br = i): an indented line, or a line of only spaces.
+                // The wrap now fires on the next letter, whose CanBreak keeps the spaces on this line.
+                bool hang = c >= 0 && c < _breaks.Count && _breaks[c].IsWhitespace;
+                if (doWrap && !hang && pen + adv > maxWidth + WrapSlack && i > lineStart)
                 {
                     int br = lastBreak > lineStart ? lastBreak : i;
                     if (line + 1 >= maxL)
@@ -535,6 +553,24 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 // The final line: it may overflow (no-wrap, or the maxLines-truncated remainder) → trim if requested.
                 EmitLine(lineStart, gc, line, lineHeight, doTrim, maxWidth, ref maxLineW); line++;
             }
+        }
+
+        // A paragraph that ENDS in a hard break owns an empty last line after the terminator (IDWriteTextLayout reports it
+        // too). UAX #14 puts the MustBreak BEFORE the char that follows the terminator, and there is none, so the loop above
+        // never opens that line: Enter at the end of a multi-line TextBox left the caret on the old line and the box did not
+        // grow. DWrite reports MustBreak AFTER the final char only for a hard break (a plain final char gets CanBreak). The
+        // line is skipped when MaxLines already cut the paragraph or the overflow suffix ended it.
+        if (!emittedOverflowSuffix && line < maxL && _lineRecCount > 0
+            && visibleTextEnd > 0 && visibleTextEnd <= _breaks.Count
+            && _breaks[visibleTextEnd - 1].BreakAfter == BreakOpp.MustBreak)
+        {
+            EnsureLines(_lineRecCount + 1);
+            _lines[_lineRecCount++] = new LaidLine
+            {
+                StartChar = visibleTextEnd, EndChar = visibleTextEnd, VisibleBodyEnd = -1, SuffixStart = -1,
+                Top = line * lineHeight, Height = lineHeight, Width = 0f, FirstGlyph = _clusterCount, GlyphCount = 0,
+            };
+            line++;
         }
 
         LineCount = Math.Max(1, line);
@@ -610,7 +646,8 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int i = start; i < end; i++)
         {
             int c = _glyphs[i].Cluster;
-            if (c >= 0 && c < _breaks.Count)
+            bool clusterHead = i == 0 || _glyphs[i - 1].Cluster != c;
+            if (clusterHead && c >= 0 && c < _breaks.Count)
             {
                 byte before = _breaks[c].BreakBefore;
                 if (before == BreakOpp.CanBreak || before == BreakOpp.MustBreak) lastBreak = i;
@@ -631,7 +668,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int i = start; i < end; i++)
         {
             ref readonly var g = ref _glyphs[i];
-            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY, g.Size, g.Span);
+            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x + g.OffX, baselineY + g.OffY, g.Size, g.Span);
             _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
@@ -641,24 +678,55 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private void EmitLine(int start, int end, int lineIndex, float lineHeight, bool doTrim, float maxWidth, ref float maxLineW)
     {
         if (end <= start) return;
-        // Reorder visual order: reverse maximal sequences of level >= L, for L from highest down to 1 (UAX #9 L2).
         int len = end - start;
-        Span<int> order = len <= 256 ? stackalloc int[len] : new int[len];
-        for (int i = 0; i < len; i++) order[i] = start + i;
-        byte maxLevel = 0, minOdd = 255; int minCluster = int.MaxValue;
-        for (int i = start; i < end; i++)
+        int minCluster = int.MaxValue;
+        for (int i = start; i < end; i++) { int c = _glyphs[i].Cluster; if (c < minCluster) minCluster = c; }
+
+        // Trim in LOGICAL order, before the reorder: the cut drops the line's logical END and keeps its logical start, as
+        // DirectWrite/WinUI do. Fitting the visual prefix instead kept an RTL run's logical TAIL (L2 puts its last glyph
+        // first), so a trimmed Hebrew/Arabic title showed its closing words and lost its opening ones.
+        int useLen = len; bool ellipsize = false; int ellSpan = -1;
+        if (doTrim)
+        {
+            float total = 0f; for (int i = start; i < end; i++) total += _glyphs[i].Advance;
+            if (total > maxWidth)
+            {
+                if (_spanEllCount == 0)
+                {
+                    // Single-style paragraph: the base "…" (unchanged path).
+                    float budget = MathF.Max(0f, maxWidth - _ellAdv); float acc = 0f; useLen = 0;
+                    for (int k = 0; k < len; k++) { float a = _glyphs[start + k].Advance; if (acc + a > budget && useLen > 0) break; acc += a; useLen++; }
+                }
+                else
+                {
+                    // Spanned paragraph: the "…" takes the style of the span the cut lands in (the last kept glyph's),
+                    // and each candidate cut reserves THAT ellipsis's advance — the pure fit is LineBreaker's.
+                    Span<float> advs = len <= 256 ? stackalloc float[len] : new float[len];
+                    Span<short> spanOf = len <= 256 ? stackalloc short[len] : new short[len];
+                    for (int k = 0; k < len; k++) { ref readonly var g = ref _glyphs[start + k]; advs[k] = g.Advance; spanOf[k] = g.Span; }
+                    useLen = FluentGpu.Text.LineBreaker.FitEllipsisBySpan(advs, spanOf, maxWidth, _ellAdv,
+                        _spanEllAdv.AsSpan(0, _spanEllCount), out ellSpan);
+                }
+                ellipsize = true;
+            }
+        }
+
+        // Reorder the KEPT glyphs into visual order: reverse maximal sequences of level >= L, for L from highest down to 1 (UAX #9 L2).
+        Span<int> order = useLen <= 256 ? stackalloc int[useLen] : new int[useLen];
+        for (int i = 0; i < useLen; i++) order[i] = start + i;
+        byte maxLevel = 0, minOdd = 255;
+        for (int i = start; i < start + useLen; i++)
         {
             byte l = _glyphs[i].Level; if (l > maxLevel) maxLevel = l; if ((l & 1) != 0 && l < minOdd) minOdd = l;
-            int c = _glyphs[i].Cluster; if (c < minCluster) minCluster = c;
         }
         for (int lvl = maxLevel; lvl >= (minOdd == 255 ? maxLevel + 1 : minOdd); lvl--)
         {
             int i = 0;
-            while (i < len)
+            while (i < useLen)
             {
                 if (_glyphs[order[i]].Level >= lvl)
                 {
-                    int j = i; while (j < len && _glyphs[order[j]].Level >= lvl) j++;
+                    int j = i; while (j < useLen && _glyphs[order[j]].Level >= lvl) j++;
                     order.Slice(i, j - i).Reverse();
                     i = j;
                 }
@@ -667,31 +735,6 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
 
         float baselineY = Baseline + lineIndex * lineHeight;
-        int useLen = len; bool ellipsize = false; int ellSpan = -1;
-        if (doTrim)
-        {
-            float total = 0f; for (int k = 0; k < len; k++) total += _glyphs[order[k]].Advance;
-            if (total > maxWidth)
-            {
-                if (_spanEllCount == 0)
-                {
-                    // Single-style paragraph: the base "…" (unchanged path).
-                    float budget = MathF.Max(0f, maxWidth - _ellAdv); float acc = 0f; useLen = 0;
-                    for (int k = 0; k < len; k++) { float a = _glyphs[order[k]].Advance; if (acc + a > budget && useLen > 0) break; acc += a; useLen++; }
-                }
-                else
-                {
-                    // Spanned paragraph: the "…" takes the style of the span the cut lands in (the last visible glyph's),
-                    // and each candidate cut reserves THAT ellipsis's advance — the pure fit is LineBreaker's.
-                    Span<float> advs = len <= 256 ? stackalloc float[len] : new float[len];
-                    Span<short> spanOf = len <= 256 ? stackalloc short[len] : new short[len];
-                    for (int k = 0; k < len; k++) { ref readonly var g = ref _glyphs[order[k]]; advs[k] = g.Advance; spanOf[k] = g.Span; }
-                    useLen = FluentGpu.Text.LineBreaker.FitEllipsisBySpan(advs, spanOf, maxWidth, _ellAdv,
-                        _spanEllAdv.AsSpan(0, _spanEllCount), out ellSpan);
-                }
-                ellipsize = true;
-            }
-        }
         float x = 0f;
         EnsureLaid(_laidCount + useLen + 1);
         EnsureClusters(_clusterCount + useLen);
@@ -699,7 +742,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int k = 0; k < useLen; k++)
         {
             ref readonly var g = ref _glyphs[order[k]];
-            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY, g.Size, g.Span);
+            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x + g.OffX, baselineY + g.OffY, g.Size, g.Span);
             _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
@@ -846,16 +889,18 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     }
 
     /// <summary>The insertion index for a hit past a line's right edge. Normally the line's EndChar (== the next line's
-    /// start at a soft wrap — affinity is the caller's job); a HARD-broken line (UAX #14 MustBreak before the next line)
-    /// returns the terminator cluster's start instead, keeping the caret on the clicked line. (TextEditCore feeds
-    /// single-char '\r' hard breaks, so the terminator is one cluster.)</summary>
+    /// start at a soft wrap — affinity is the caller's job); a HARD-broken line (UAX #14 MustBreak after its terminator,
+    /// including the empty line after a trailing hard break) returns the terminator cluster's start instead, keeping the
+    /// caret on the clicked line. (TextEditCore feeds single-char '\r' hard breaks, so the terminator is one cluster.)</summary>
     private int LineEndInsertion(int li)
     {
         ref readonly var line = ref _lines[li];
         if (li + 1 < _lineRecCount && line.GlyphCount > 0)
         {
-            int nextStart = _lines[li + 1].StartChar;
-            if (nextStart >= 0 && nextStart < _breaks.Count && _breaks[nextStart].BreakBefore == BreakOpp.MustBreak)
+            // The char before the next line's start is this line's terminator; MustBreak AFTER it also covers the empty
+            // line that follows a trailing hard break (whose start == text length has no BreakBefore entry).
+            int term = _lines[li + 1].StartChar - 1;
+            if (term >= 0 && term < _breaks.Count && _breaks[term].BreakAfter == BreakOpp.MustBreak)
                 return _clusters[line.FirstGlyph + line.GlyphCount - 1].Cluster;
         }
         return line.EndChar;
@@ -937,6 +982,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 int len = 1;
                 while (len < remaining)
                 {
+                    // A variation selector belongs to the char before it. The base face maps none (Segoe UI has no
+                    // FE00–FE0F), but shaped WITH its base the shaper folds it into the base cluster (♥️ → the heart,
+                    // 1️⃣ → Segoe UI's keycap ligature). Breaking here handed the bare selector to MapCharacters, which
+                    // maps it to no font, so it shaped alone in the base face as a drawn .notdef box after ©️ ™️ ♥️ ‼️.
+                    int vs = VariationSelectorLength(txt, pos + len, pos + remaining);
+                    if (vs > 0) { len += vs; continue; }
                     uint cp = txt[pos + len]; ushort gi; baseFace->GetGlyphIndices(&cp, 1, &gi);
                     if (gi == 0) break;
                     len++;
@@ -947,7 +998,11 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
         if (_fallback == null || _sysColl == null) return;
         string fam = string.IsNullOrEmpty(family) ? DefaultFamily : family;
-        if (fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)) return;
+        // A custom font FILE ("Assets/Fonts/Inter.ttf#Inter") names no system family, but its uncovered characters still
+        // need a system face: returning here shaped CJK / emoji / other scripts in the file face as drawn .notdef boxes.
+        // MapCharacters only takes the family as a preference, so hand it the default; the covered-prefix scan above
+        // already kept every character the file can render in the file face.
+        if (fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)) fam = DefaultFamily;
         uint mappedLen; IDWriteFont* mappedFont = null; float sc;
         int hr;
         fixed (char* fn = fam)
@@ -961,6 +1016,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             if (!string.IsNullOrEmpty(famName)) subFace = ResolveFallbackFace(famName, mappedFont, baseFace);
             mappedFont->Release();
         }
+    }
+
+    // UTF-16 length of the variation selector at t[i] — VS1–VS16 (U+FE00–FE0F, one unit) or VS17–VS256 (U+E0100–E01EF,
+    // the pair DB40 DD00–DDEF) — or 0 when t[i] starts none. `end` bounds the low-surrogate read.
+    private static int VariationSelectorLength(char* t, int i, int end)
+    {
+        char c = t[i];
+        if (c >= '︀' && c <= '️') return 1;
+        if (c == '\uDB40' && i + 1 < end && t[i + 1] >= '\uDD00' && t[i + 1] <= '\uDDEF') return 2;
+        return 0;
     }
 
     private string GetFamilyName(IDWriteFont* font)

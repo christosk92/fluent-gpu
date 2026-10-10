@@ -15,6 +15,13 @@ public sealed class OverlayHandle
     internal Action<OverlayCloseCause>? CloseAction;
     public Action? ClosedAction;
     internal Action<OverlayCloseCause>? ClosedWithCauseAction;
+    internal Func<bool>? FocusOutsideAction;
+    /// <summary>True while keyboard focus sits on a LIVE node outside this overlay and outside every overlay nested
+    /// under it (a menu opened from one of its rows): focus has left for another control. False while focus is inside,
+    /// or cleared (null/dead — a blur, not a move). A field that keeps focus while its non-trapping popup is open
+    /// (AutoSuggestBox, editable ComboBox) closes the popup on this departure — WinUI closes the suggestion list /
+    /// dropdown in LostFocus. A press on a popup row focuses the row first, so it never reads as a departure.</summary>
+    internal bool IsFocusOutside => FocusOutsideAction?.Invoke() ?? false;
     /// <summary>Close veto. Invoked with the close cause before dismissal; return <c>true</c> to allow the close,
     /// <c>false</c> to veto it (e.g. an Escape that a zoomed viewer consumes internally). See ContentDialog.VetoClosing.</summary>
     public Func<OverlayCloseCause, bool>? ClosingAction;
@@ -211,7 +218,7 @@ internal sealed class OverlayEntry
 {
     public int Id;
     public required Func<NodeHandle> Anchor;
-    public Func<RectF>? AnchorRect;   // rect-anchored open (pointer placement) — wins over Anchor when set
+    public Func<RectF>? AnchorRect;   // rect-anchored open (derived/pointer rect, live-followed) — wins over Anchor when set
     public required Func<Element> Content;
     public FlyoutPlacement Placement;
     public required OverlayHandle Handle;
@@ -224,6 +231,7 @@ internal sealed class OverlayEntry
     public float MeasuredW;
     public float MeasuredH;
     public RectF LastAnchorRect;      // anchor rect at last placement — the live-anchor follow re-places on drift
+    public RectF LastViewport;        // root viewport at last placement — the follow re-places an in-window popup on a window resize
     public bool OpensUp;
     public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
     public FlyoutPlacement EffectivePlacement;   // placement that WON after fallback (FlyoutPositioner) — drives the PopupThemeTransition entrance AXIS
@@ -365,6 +373,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             OpenRequestTicks = FluentGpu.Hosting.RenderBudget.CompiledIn ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L,
         };
         handle.CloseAction = cause => BeginClose(entry, cause);
+        handle.FocusOutsideAction = () => FocusOutside(entry);
         Entries.Add(entry);
         if (entry.PinsAnchor) _pinEpoch.Value = _pinEpoch.Peek() + 1;
         Bump();
@@ -399,6 +408,34 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 if (n == scope) return true;
         }
         return false;
+    }
+
+    /// <see cref="OverlayHandle.IsFocusOutside"/>: the focused node is live and sits under neither this entry's
+    /// wrapper nor the wrapper of any entry nested under it (ParentId chain). Null/dead focus is a cleared focus, not a
+    /// departure: BeginClose's restore would otherwise hand it straight back to the field that was just blurred.
+    internal bool FocusOutside(OverlayEntry e)
+    {
+        if (Scene is not { } scene) return false;
+        var f = GetFocus?.Invoke() ?? NodeHandle.Null;
+        if (f.IsNull || !scene.IsLive(f)) return false;
+        foreach (var x in Entries)
+            if (!x.WrapperNode.IsNull && NestedUnder(x, e) && IsUnder(scene, x.WrapperNode, f)) return false;
+        return true;
+    }
+
+    // A parent always opened first (smaller Id), so the ParentId walk cannot cycle.
+    private bool NestedUnder(OverlayEntry x, OverlayEntry root)
+    {
+        for (OverlayEntry? c = x; c is not null; c = EntryById(c.ParentId))
+            if (ReferenceEquals(c, root)) return true;
+        return false;
+    }
+
+    private OverlayEntry? EntryById(int id)
+    {
+        if (id < 0) return null;
+        foreach (var x in Entries) if (x.Id == id) return x;
+        return null;
     }
 
     /// <summary>Nested-flyout chain: the parent is the open entry whose wrapper subtree contains this entry's anchor
@@ -614,9 +651,11 @@ internal sealed class OverlayServiceImpl : IOverlayService
     internal const long ClosingDeadlineMs = 2000;
 
     /// <summary>Host phase 7.1: remove closing entries whose retained tracks have settled, before recording the frame —
-    /// and follow LIVE anchors: an open popup whose anchor node moved since its last placement re-places against the
-    /// cached measure (the WinUI slider thumb tooltip tracks the scrubbing thumb; an anchored flyout rides a reflow).
-    /// No OverlayHost re-render, no open-animation reseed; silent (zero writes) while the anchor is still.</summary>
+    /// and follow LIVE anchors: an open popup whose anchor node moved, whose own content re-laid it out at a new size, or
+    /// (in-window) whose root viewport resized, since its last placement re-places (the WinUI slider thumb tooltip tracks
+    /// the scrubbing thumb; an anchored flyout rides a reflow; an upward menu that gains a row stays on its anchor; a
+    /// flyout on a top-left anchor is re-clamped when the window narrows). No OverlayHost re-render, no open-animation
+    /// reseed; silent (zero writes) while the anchor, the popup size and the window are still.</summary>
     public void AfterAnimations()
     {
         if (Scene is not { } scene || Anim is not { } anim) return;
@@ -688,10 +727,20 @@ internal sealed class OverlayServiceImpl : IOverlayService
         for (int i = 0; i < Entries.Count; i++)
         {
             var e = Entries[i];
-            // Node-anchored, open, in-tree entries only: rect-thunk anchors are pointer placements (no live target),
-            // Modal centers on the viewport, a Closing entry keeps its last placement while it fades.
-            if (e.Phase == OverlayPhase.Closing || e.Chrome == PopupChrome.Modal || e.AnchorRect is not null) continue;
+            // Open, in-tree entries: Modal centers on the viewport, a Closing entry keeps its last placement while it fades.
+            // Rect-thunk anchors follow too: the non-editable ComboBox carousel, the pickers, ToolTip, TeachingTip's
+            // margin/center forms and OpenAtLocal all derive their rect from a LIVE node on every call, so a resize or reflow
+            // that moves the target must re-place them like a node anchor (OverlayHost does not re-render on resize).
+            // A constant rect never drifts, so it stays silent.
+            if (e.Phase == OverlayPhase.Closing || e.Chrome == PopupChrome.Modal) continue;
             if (e.WrapperNode.IsNull || !scene.IsLive(e.WrapperNode) || e.MeasuredW <= 0f) continue;
+            if (e.AnchorRect is not null)
+            {
+                // A rect entry whose owner died or parked holds its last placement: its thunk degrades to a synthetic
+                // near-origin rect (not the origin ghost), and the prune above closes it unless a ClosingAction vetoed.
+                var owner = e.Anchor();
+                if (!owner.IsNull && (!scene.IsLive(owner) || (scene.Flags(owner) & NodeFlags.Parked) != 0)) continue;
+            }
             var resolve = ResolveAnchor(e, scene, out var aRect);
             if (resolve == AnchorResolve.Dead)
             {
@@ -699,13 +748,29 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 continue;
             }
             if (resolve != AnchorResolve.Live) continue;
-            if (MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
+            // The popup's OWN laid-out size is the other placement input. Content that re-renders while open (a device
+            // roster gaining a row, a suggestion list filtering per keystroke) re-solves the wrapper at a new size without
+            // re-rendering this host, and a placement computed for the old height grows an upward popup DOWN over its
+            // anchor (or leaves a gap above it when it shrinks). A 0×0 pass is not a measure.
+            var wb = scene.Bounds(e.WrapperNode);
+            bool resized = wb.W > 0f && wb.H > 0f
+                && (MathF.Abs(wb.W - e.MeasuredW) >= 0.5f || MathF.Abs(wb.H - e.MeasuredH) >= 0.5f);
+            // The third input is the container. A window restore/narrow/DPI move changes the root bounds under a still
+            // anchor and a still popup (a flyout on a top-left toolbar button), and a placement clamped against the old
+            // viewport hangs past the new right/bottom edge. A windowed popup places against the monitor work area, not
+            // the root, so only an in-window entry compares it.
+            bool windowed = e.PopupWindowToken >= 0;
+            bool viewportResized = !windowed
+                && (MathF.Abs(ViewportRect.W - e.LastViewport.W) >= 0.5f || MathF.Abs(ViewportRect.H - e.LastViewport.H) >= 0.5f);
+            if (!resized && !viewportResized
+                && MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
                 && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f)
                 continue;
 
             e.LastAnchorRect = aRect;
+            e.LastViewport = ViewportRect;
+            if (resized) { e.MeasuredW = wb.W; e.MeasuredH = wb.H; }
             var popupSize = new Size2(e.MeasuredW, e.MeasuredH);
-            bool windowed = e.PopupWindowToken >= 0;
             RectF container = ViewportRect;
             if (windowed && Hooks is { GetWorkArea: { } workArea })
                 container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
@@ -1232,6 +1297,7 @@ public sealed class OverlayHost : Component
                         e.CornerJoin = place.CornerJoin;
                         e.EffectivePlacement = place.Placement;
                         e.LastAnchorRect = aRect;   // baseline for the live-anchor follow (AfterAnimations)
+                        e.LastViewport = vpRect;    // baseline for the follow's window-resize re-place
                         e.PlacementInfo.Value = new OverlayPlacementInfo(
                             aRect.X + aRect.W * 0.5f - place.X,
                             aRect.Y + aRect.H * 0.5f - place.Y,
@@ -1261,7 +1327,10 @@ public sealed class OverlayHost : Component
                 if (e.FocusTrap && !e.ScopePushed && e.Phase != OverlayPhase.Closing)
                 {
                     e.ScopePushed = true;
-                    hooks.PushFocusScope?.Invoke(e.WrapperNode);
+                    // A Modal trap also scopes accelerators and access keys: the scrim blocks the pointer to the page behind,
+                    // and Ctrl+T / Alt+Left / Alt+letter must not reach it either (a light-dismiss menu leaves them window-global).
+                    if (e.DismissBehavior == DismissBehavior.Modal) hooks.PushModalFocusScope?.Invoke(e.WrapperNode);
+                    else hooks.PushFocusScope?.Invoke(e.WrapperNode);
                     if (!e.PreserveFocusOnOpen)
                     {
                         var firstStop = hooks.FirstFocusableIn?.Invoke(e.WrapperNode) ?? NodeHandle.Null;
@@ -1478,6 +1547,13 @@ public sealed class OverlayHost : Component
                 // would otherwise wheel the page under an open menu. Consume the wheel here (WinUI: the light-dismiss
                 // layer eats PointerWheelChanged without dismissing). Modal eats it the same way.
                 OnPointerWheel = svc.AnyInputBlocking ? static e => e.Handled = true : null,
+                // That handler only runs for a wheel that lands ON the scrim. Over the open popup itself the hit chain is
+                // plate → surface → overlay stack (the scrim is a sibling, never an ancestor), and a touchpad pan never
+                // asks element handlers at all. Both then fell to InputDispatcher's containing-scroller scan, which still
+                // found the page list laid out beneath in Child and scrolled it under the menu. Opaque to that scan, the
+                // scrim discards everything behind it; a scroller INSIDE a popup is a later sibling and is still found.
+                // See Element.BlocksBackgroundScroll.
+                BlocksBackgroundScroll = svc.AnyInputBlocking,
                 // Right-click on the light-dismiss scrim = WinUI outside-right-click: close the top overlay AND re-fire
                 // the context request at the same point so the node underneath opens its own menu in ONE gesture. The
                 // scrim is full-bleed at origin, so args.Position (scrim-local) IS the window-DIP point. CloseTop first

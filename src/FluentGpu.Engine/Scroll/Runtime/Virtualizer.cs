@@ -7,7 +7,7 @@ namespace FluentGpu.Scroll.Runtime;
 
 /// <summary>The realize window one frame of a viewport must materialize (design §6): rows
 /// [<see cref="First"/>, <see cref="Last"/>] inclusive, covering content [<see cref="CoverStart"/>, <see cref="CoverEnd"/>).
-/// <see cref="AnchorIndex"/> is the first FULLY visible row — the row a measured-extent correction anchors against;
+/// <see cref="AnchorIndex"/> is the first item of the first FULLY visible row — the row a measured-extent correction anchors against;
 /// [<see cref="VisibleFirst"/>, <see cref="VisibleLast"/>] is the strictly visible band (partially visible rows
 /// included). An empty source yields <c>Last = First − 1</c>.</summary>
 public readonly record struct RealizeWindow(int First, int Last, double CoverStart, double CoverEnd, int AnchorIndex, int VisibleFirst = 0, int VisibleLast = -1)
@@ -53,9 +53,17 @@ public static class Virtualizer
         int visibleLast = ext.IndexAt(p + viewport);
         if (visibleLast < visibleFirst) visibleLast = visibleFirst;
         // The anchor is the first FULLY visible row: a correction to the partially hidden top row is ABOVE it, so the
-        // frame shifts and the rows the user is reading stay put (only the hidden part of that row moves).
+        // frame shifts and the rows the user is reading stay put (only the hidden part of that row moves). The next ROW,
+        // not the next item: a grid's later cells share the hidden row's offset, so anchoring on one of them left every
+        // correction to that row unanchored (a zero delta) and moved all the rows below it.
         int anchor = visibleFirst;
-        if (ext.OffsetOf(anchor) < p && anchor + 1 < n && ext.OffsetOf(anchor + 1) < p + viewport) anchor++;
+        double top = ext.OffsetOf(anchor);
+        if (top < p)
+        {
+            int next = anchor + 1;
+            while (next < n && ext.OffsetOf(next) == top) next++;
+            if (next < n && ext.OffsetOf(next) < p + viewport) anchor = next;
+        }
 
         return new RealizeWindow(first, last, ext.OffsetOf(first), ext.OffsetOf(last + 1), anchor, visibleFirst, visibleLast);
     }

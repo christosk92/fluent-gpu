@@ -44,11 +44,12 @@ public sealed partial class RenderContext
     /// default registrar (<see cref="MediaRouter.SetDefaultRegistrar"/>): without one (headless) every open fails with
     /// <see cref="MediaError.NoBackend"/>. Each new source opens from a passive effect (after commit, never from Render),
     /// and cancels the previous source's open and play (last wins).</summary>
-    public MediaPlayer UseVideo(Func<MediaSource> source)
+    public MediaPlayer UseVideo(Func<MediaSource> source, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var player = UseMediaPlayer();
-        var last = UseRef<MediaSource?>(null);
-        var version = UseRef(0);
+        // Every cell is keyed to the CALLER's call site, so two UseVideo calls never swap players when one is skipped.
+        var player = UseMediaPlayer(null, __hf, __hl);
+        var last = UseRef<MediaSource?>(null, __hf, __hl);
+        var version = UseRef(0, __hf, __hl);
         var next = source();
         if (!Equals(last.Value, next))   // MediaSource is a record ⇒ value equality; re-load only on a real change
         {
@@ -61,7 +62,7 @@ public sealed partial class RenderContext
             var cts = new CancellationTokenSource();
             _ = player.Play(next, cts.Token);
             return () => { cts.Cancel(); cts.Dispose(); };
-        }, DepKey.From(version.Value));
+        }, DepKey.From(version.Value), __hf, __hl);
         return player;
     }
 }

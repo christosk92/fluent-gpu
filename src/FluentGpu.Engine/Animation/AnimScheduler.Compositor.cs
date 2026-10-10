@@ -10,10 +10,24 @@ public sealed partial class AnimEngine
     private readonly Dictionary<NodeHandle, Accum> _compositorFeedbackAccumulators = new(64);
     private readonly List<int> _compositorCompletedSlots = new(64);
     private ulong _nextCompositorInstance;
-    private readonly record struct CompositorSeed(ulong Instance, ulong Revision, bool ExplicitFrom);
+    /// <summary><paramref name="Base"/>: NaN, or the UI's view of the row that this re-seed's start departed from (taken
+    /// against <paramref name="BaseRevision"/>, the revision the row carried before it), and <paramref name="DriftScale"/>
+    /// the factor that start re-based it by - see <see cref="MarkSeedRelative"/>.</summary>
+    private readonly record struct CompositorSeed(ulong Instance, ulong Revision, bool ExplicitFrom, float Base = float.NaN,
+        ulong BaseRevision = 0, float DriftScale = 1f);
 
     /// <summary>Enabled by a host whose render thread owns scene recording and compositor pose evaluation.</summary>
-    public bool RenderOwnsCompositor { get; set; }
+    public bool RenderOwnsCompositor
+    {
+        get => _renderOwnsCompositor;
+        set
+        {
+            if (_renderOwnsCompositor == value) return;
+            _renderOwnsCompositor = value;
+            _slab.BumpVersion();   // ownership of every compositor row just flipped: re-derive the wake census
+        }
+    }
+    private bool _renderOwnsCompositor;
 
     // ── perf plan item 4: compositor-candidate cache ────────────────────────────────────────────────────────────────
     // IsCompositorRowStatic below is a pure function of a row's OWN static fields (Flags/Kind/Channel) plus its
@@ -75,6 +89,22 @@ public sealed partial class AnimEngine
             : new(seed.Instance, seed.Revision + 1, explicitFrom);
     }
 
+    /// <summary>The re-seed just stamped on <paramref name="slot"/> starts from the UI's view of the row's CURRENT value
+    /// (<paramref name="uiBase"/>, plus any frame shift the caller added), not from an authored one. A render-owned row's UI
+    /// view is only the last imported feedback pose (or, before a pose of that revision came back, the start the UI gave it),
+    /// while the render thread kept advancing it - so the renderer moves this start by however far its own pose ran from
+    /// <paramref name="uiBase"/> (RenderCompositorAnimations.Adopt), and an interrupted fade or move continues from the pixel
+    /// on screen instead of stepping back to the older pose. A fresh instance has nothing in flight there: it keeps its start.
+    /// <paramref name="driftScale"/>: a start the caller re-based into a new basis (uiBase times the scale, plus a shift - a
+    /// connected fly's re-based model box) moves by the render drift times the same scale, and so does its velocity.</summary>
+    private void MarkSeedRelative(int slot, float uiBase, float driftScale = 1f)
+    {
+        if (!RenderOwnsCompositor || slot < 0) return;
+        ref var seed = ref CollectionsMarshal.GetValueRefOrNullRef(_compositorSeeds, slot);
+        if (System.Runtime.CompilerServices.Unsafe.IsNullRef(ref seed) || seed.Revision <= 1) return;
+        seed = seed with { Base = uiBase, BaseRevision = seed.Revision - 1, DriftScale = driftScale };
+    }
+
     /// <summary>The structural part of compositor eligibility — everything except the live scene-state (Relayouting)
     /// check, which can flip without a slab mutation. Pure function of the slab's seed-time data; see the perf plan
     /// item 4 remarks above <see cref="_compositorCandidateSlots"/> for why that makes it cacheable per-Version.</summary>
@@ -82,7 +112,7 @@ public sealed partial class AnimEngine
     {
         if (row.Has(AnimFlags.Driven | AnimFlags.Additive | AnimFlags.RestoreLayout | AnimFlags.TrailingAnchor)) return false;
         if (row.Kind is not (GenKind.Spring or GenKind.Eased or GenKind.Keyframes)) return false;
-        if (row.Channel is AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.DisclosureProgress) return false;
+        if (row.Channel is AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.RevealExtent or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3)) return false;
         // A mixed additive/replace axis remains one UI-owned composition so no captured additive value is applied twice.
         for (int slot = _slab.HeadOnNode((int)row.Node.Raw.Index); slot >= 0; slot = _slab.At(slot).NextOnNode)
             if (_slab.At(slot).Channel == row.Channel && _slab.At(slot).Has(AnimFlags.Additive)) return false;
@@ -139,7 +169,8 @@ public sealed partial class AnimEngine
             // Cadence travels WITH the row: the render thread owns these rows' advance, so it must apply the same
             // due-check the UI-thread PASS1 does or an explicit Cadence.At(hz) row would silently run at panel rate once
             // the compositor adopts it.
-            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot));
+            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)PeriodMsOf(slot),
+                identity.Base, identity.BaseRevision, identity.DriftScale);
         }
         target.EndCapture();
     }
@@ -147,7 +178,8 @@ public sealed partial class AnimEngine
     /// <summary>A fingerprint of exactly what <see cref="CaptureCompositorAnimations"/> would hand the renderer, as far as the
     /// renderer's adoption can tell rows apart (<c>RenderCompositorAnimations.Adopt</c>): which rows are captured (live,
     /// compositor-owned), and for each its identity (instance), its seed revision (every retarget re-stamps it), its node,
-    /// its cadence and its Parked/Done flags. Two equal fingerprints mean a re-capture would adopt to the identical render
+    /// its cadence and its Parked/Done/Hold/Paused flags (a hold or a pause rewrites nothing else, and the renderer learns of
+    /// it only by adopting). Two equal fingerprints mean a re-capture would adopt to the identical render
     /// state — the renderer advances these rows itself, so their positions are not an input. Same walk as the capture
     /// (O(compositor-candidate rows)), no allocation. The host compares it across frames for its no-op publication skip.</summary>
     internal ulong CompositorCaptureFingerprint()
@@ -163,7 +195,8 @@ public sealed partial class AnimEngine
             h = Mix(h, identity.Instance);
             h = Mix(h, identity.Revision);
             h = Mix(h, ((ulong)row.Node.Raw.Index << 32) | row.Node.Raw.Gen);
-            h = Mix(h, ((ulong)(uint)PeriodMsOf(slot) << 16) | (ulong)(row.Flags & (AnimFlags.Parked | AnimFlags.Done)));
+            h = Mix(h, ((ulong)(uint)PeriodMsOf(slot) << 16)
+                | (ulong)(row.Flags & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Hold | AnimFlags.Paused)));
             n++;
         }
         return Mix(h, (ulong)n);
@@ -235,6 +268,12 @@ public sealed class CompositorAnimationSnapshot
         public Keyframe[] Keys;
         /// <summary>The row's resolved cadence period in ms (0 = display rate) — see the note at the Add call site.</summary>
         public ushort PeriodMs;
+        /// <summary>NaN, or the UI's view of the row (taken against <see cref="BaseRevision"/>) that this re-seed's start
+        /// departed from - see <c>AnimEngine.MarkSeedRelative</c>.</summary>
+        public float Base;
+        public ulong BaseRevision;
+        /// <summary>The factor the re-seed's start re-based the UI's view by: the renderer scales its drift and velocity by it.</summary>
+        public float DriftScale;
     }
     private Entry[] _entries = [];
     private int _count, _oldCount, _distinctNodes;
@@ -253,7 +292,8 @@ public sealed class CompositorAnimationSnapshot
         CapturedAtMs = now; _oldCount = _count; _count = 0;
         _distinctNodes = 0; _lastAddedNode = NodeHandle.Null;
     }
-    internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys, ushort periodMs)
+    internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys, ushort periodMs,
+        float fromBase = float.NaN, ulong baseRevision = 0, float driftScale = 1f)
     {
         SceneRecordingSnapshot.Grow(ref _entries, _count + 1);
         if (row.Node != _lastAddedNode) { _distinctNodes++; _lastAddedNode = row.Node; }
@@ -266,6 +306,7 @@ public sealed class CompositorAnimationSnapshot
         target.Row.DrivenSrc = AnimValue.WallClock;
         target.Instance = instance; target.Revision = revision; target.ExplicitFrom = explicitFrom;
         target.PeriodMs = periodMs;
+        target.Base = fromBase; target.BaseRevision = baseRevision; target.DriftScale = driftScale;
     }
     internal void EndCapture()
     {

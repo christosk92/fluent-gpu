@@ -23,10 +23,9 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 // pins: (1) ONE fact per persistent slot — every RowScope the template receives carries its own IsFocused, and the
 // template (the only place a scope is minted) never re-runs for a rebind; (2) the fact FOLLOWS the slot root's focus
 // edge — a click, the arrow keys moving the roving stop, and focus leaving the list; (3) a slot that RECYCLES while
-// focused reads false while it shows another item (the reconciler's rebind clears the Focused flag and fires no focus
-// edge — the dispatcher keeps its handle on the node), and landing focus on that same node for its new item reads true
-// again (no edge fires there either — ItemsView.FocusIndex re-stamps it). A reader component subscribed to IsFocused
-// proves every flip actually re-renders the content, not just that a peek changed.
+// focused loses focus (the rebind's OnSlotRebound drops the dispatcher's handle, so keys never reach the item the slot
+// shows now) and reads false, and focusing that same node for its new item reads true again. A reader component
+// subscribed to IsFocused proves every flip actually re-renders the content, not just that a peek changed.
 static partial class ControlsSuite
 {
     sealed class RowFocusProbe : Component
@@ -141,19 +140,19 @@ static partial class ControlsSuite
         Frames(3);
         int shownNow = kA >= 0 ? probe.Scopes[kA].Index.Peek() : -1;
         bool recycled = shownNow >= 0 && shownNow != 102;
-        bool engineKeptFocus = !nodeA.IsNull && host.Input.Focused == nodeA;   // the precondition: no focus edge fired
+        bool focusDropped = host.Input.Focused.IsNull;        // keys must not reach the item the slot shows now
         bool readsFalse = kA >= 0 && !Live(kA) && !probe.Rendered[kA] && LiveCount() == 0 && RenderedCount() == 0;
 
         var rect = nodeA.IsNull ? default : scene.AbsoluteRect(nodeA);
         bool visible = !nodeA.IsNull && rect.Y >= -0.5f && rect.Y + rect.H <= RowFocusProbe.ViewH + 0.5f;
-        if (visible) ClickNode(host, window, nodeA);          // pointer focus on the node that ALREADY holds it — edge-free
+        if (visible) ClickNode(host, window, nodeA);          // pointer focus lands on the same node for its new item
         Frames(3);
         bool refocused = Only(kA) && host.Input.Focused == nodeA && ctl.CurrentItemIndex == shownNow
                          && probe.Scopes[kA].Index.Peek() == shownNow;
 
-        Check("gate.virt.rowFocus.recycle a bound slot that recycles while focused reads IsFocused=false while it shows another item (the rebind fires no focus edge — the engine keeps its focus handle on the node), and landing focus on that same node for its new item reads true again (ItemsView.FocusIndex re-stamps it; no edge fires there either)",
-            kA >= 0 && focusedA && recycled && engineKeptFocus && readsFalse && visible && refocused,
-            $"kA={kA} focusedA={focusedA} shownNow={shownNow} recycled={recycled} engineKeptFocus={engineKeptFocus} readsFalse={readsFalse} visible={visible}(y={rect.Y:0.#}) refocused={refocused} current={ctl.CurrentItemIndex} live={LiveCount()} rendered={RenderedCount()}");
+        Check("gate.virt.rowFocus.recycle a bound slot that recycles while focused loses focus (the engine drops its focus handle on the rebind, so keys never act on the item the slot shows now) and reads IsFocused=false, and landing focus on that same node for its new item reads true again",
+            kA >= 0 && focusedA && recycled && focusDropped && readsFalse && visible && refocused,
+            $"kA={kA} focusedA={focusedA} shownNow={shownNow} recycled={recycled} focusDropped={focusDropped} readsFalse={readsFalse} visible={visible}(y={rect.Y:0.#}) refocused={refocused} current={ctl.CurrentItemIndex} live={LiveCount()} rendered={RenderedCount()}");
 
         // ── (1) checked last: two no-overlap jumps rebound every slot, yet the template (the only place a RowScope — and its
         // focus fact — is minted) ran exactly once per slot the pool holds: attached + parked == template calls. ──────────

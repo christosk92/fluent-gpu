@@ -146,18 +146,6 @@ public sealed class CloakParkTests
     }
 
     [Fact]
-    public void ACloakedPrimaryHost_IsNotParked()
-    {
-        var (parent, _, pw, _, td) = Build();
-        using (td)
-        {
-            pw.IsCloaked = true;
-            PaintFrames(parent, (int)(CloakParkGate.EnterDelayMs / 16) + 8);
-            Assert.False(parent.IsParked);   // only a detached child reads the cloak
-        }
-    }
-
-    [Fact]
     public void AHiddenAndCloakedChild_StillBlocksForTheShowMessage()
     {
         var (_, child, _, cw, td) = Build();

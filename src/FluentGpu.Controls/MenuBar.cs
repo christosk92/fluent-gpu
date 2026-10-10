@@ -134,7 +134,7 @@ public sealed class MenuBar : Component
                 if (handle.Value is { IsOpen: true }) return;
                 bool focusFirst = keyboard || Bar.KeyboardOpen;
                 Bar.KeyboardOpen = false;
-                handle.Value = svc.Open(
+                var opened = handle.Value = svc.Open(
                     () => anchor.Value,
                     () => Embed.Comp(() => new MenuFlyoutPresenter
                     {
@@ -154,8 +154,11 @@ public sealed class MenuBar : Component
                         // over the strip bypass the light-dismiss scrim — hover-switch + press-another-title work.
                         PassThrough = () => Bar.Root,
                     });
-                handle.Value.ClosedAction = () =>
+                opened.ClosedAction = () =>
                 {
+                    // A reopen inside this menu's close fade (pointer onto Edit and back onto File within 83 ms) already
+                    // put a NEWER handle in the cell: that live menu owns the cell and the bar's OpenIndex now.
+                    if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;
                     handle.Value = null;
                     // Light-dismiss/Escape/invoke closed MY menu → the bar is closed (unless another title took over).
                     if (Bar.OpenIndex.Peek() == Index) Bar.OpenIndex.Value = -1;

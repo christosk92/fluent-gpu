@@ -89,6 +89,7 @@ public sealed class DragController
 
     private NodeHandle _node;          // armed candidate / active drag node
     private bool _active;              // promoted past the drag box
+    private bool _released;            // the source's bound-list slot was rebound to another item (NotifySlotRebound)
     private Point2 _pressAbs;          // press point (window space) — Total deltas measure from here
     private Point2 _lastAbs;
     private uint _lastMs;
@@ -141,7 +142,7 @@ public sealed class DragController
 
     /// <summary>The node whose drag is in flight (<see cref="NodeHandle.Null"/> when idle/armed). The host's FLIP pass
     /// must SKIP this node — the pointer owns its presented transform until the drag ends.</summary>
-    public NodeHandle ActiveNode => _active ? _node : NodeHandle.Null;
+    public NodeHandle ActiveNode => _active && !_released ? _node : NodeHandle.Null;
 
     /// <summary>The lift mode of the drag in flight (<see cref="DragLift.Ghost"/> when idle). THE seam L2 consults:
     /// the dispatcher passes it to <see cref="DragDropContext.TryBegin"/> so a Stationary session survives its source
@@ -151,7 +152,12 @@ public sealed class DragController
     /// <summary>True while a <see cref="DragLift.Stationary"/> gesture is in flight whose SOURCE node has been freed by
     /// a reconcile: the gesture is deliberately still live (the chip carries it), so node-visual work and the node's own
     /// drag handlers are skipped for the rest of the gesture. Always false in Ghost mode (there the death aborts).</summary>
-    public bool SourceRecycled => _active && _dragStyle.Lift == DragLift.Stationary && !_scene.IsLive(_node);
+    public bool SourceRecycled => _active && _dragStyle.Lift == DragLift.Stationary && SourceGone;
+
+    /// <summary>The source no longer belongs to this gesture: freed by a reconcile, or still live but rebound by a
+    /// bound-list recycle to show another item (<see cref="NotifySlotRebound"/>). Every node-visual write and the node's
+    /// own drag handlers gate on this, never on bare liveness.</summary>
+    private bool SourceGone => _released || !_scene.IsLive(_node);
 
     /// <summary>The smoothed pointer velocity (px/s, ~50ms EMA) — fed into the L2 <see cref="DragDropContext"/> session.</summary>
     public float VelocityX => _vx;
@@ -232,7 +238,7 @@ public sealed class DragController
     public bool Move(Point2 abs, KeyModifiers mods, uint timestampMs, bool arenaGoverned = false)
     {
         if (_node.IsNull) return false;
-        if (!_scene.IsLive(_node))
+        if (SourceGone)
         {
             // Stationary lift: the drag visual is the DragPreviewLayer chip, so a virtualized-away / rebuilt source row
             // must NOT kill the gesture (the E10 abort is a GHOST-mode concern — there the visual died with the slot).
@@ -304,7 +310,7 @@ public sealed class DragController
         // Stationary lift owns no transform, so there is nothing to ease or re-pin — and a recycled source has no node
         // to touch at all. Both are steady-state no-ops (the chip follows the pointer through its own bound transform).
         if (_dragStyle.Lift == DragLift.Stationary) return false;
-        if (!_scene.IsLive(_node)) return false;
+        if (SourceGone) return false;
         RetargetFromRest();
         float dx = _tgtTx - _appliedTx, dy = _tgtTy - _appliedTy;
         bool settled = MathF.Abs(dx) <= 0.05f && MathF.Abs(dy) <= 0.05f
@@ -437,7 +443,7 @@ public sealed class DragController
         UpdateVelocity(abs, timestampMs);
 
         var node = _node;
-        bool live = _scene.IsLive(node);
+        bool live = !SourceGone;
         bool stationary = _dragStyle.Lift == DragLift.Stationary;
         RectF draggedRect = default, restingRect = default;
         if (live)
@@ -474,7 +480,7 @@ public sealed class DragController
         var node = _node;
         bool wasActive = _active;
         bool stationary = wasActive && _dragStyle.Lift == DragLift.Stationary;
-        bool live = _scene.IsLive(node);
+        bool live = !SourceGone;
         Reset();
         if (!wasActive) return;
         if (!live)
@@ -504,7 +510,7 @@ public sealed class DragController
     /// <see cref="OnAbandoned"/> (the node's own <c>OnDragCanceled</c> column is dead), so the L2 session closes.</summary>
     public void PruneDead()
     {
-        if (_node.IsNull || _scene.IsLive(_node)) return;
+        if (_node.IsNull || !SourceGone) return;
         // Stationary lift TOLERATES its source dying: the chip is the visual and the payload was resolved at promotion,
         // so the gesture (and its L2 session, which DragDropContext.PruneDead reparents onto the scene root) runs to a
         // real drop. Only the GHOST lift — whose visual literally WAS the freed node — must abort.
@@ -514,13 +520,31 @@ public sealed class DragController
         if (wasActive) OnAbandoned?.Invoke();
     }
 
+    /// <summary>Called by the host when a bound-list recycle REBINDS <paramref name="slotRoot"/> to another item
+    /// (<c>TreeReconciler.OnSlotRebound</c>). A rebind keeps the slot's handle, so <see cref="PruneDead"/> never sees it:
+    /// without this the gesture went on dimming (or lifting) and hit-test-hiding whichever item the slot shows now, and an
+    /// armed press promoted into the new item's payload. An armed candidate in that slot disarms; an active gesture
+    /// restores the slot's resting visuals and lets go of it — a Stationary drag carries on through the chip exactly as
+    /// for a freed source (<see cref="SourceRecycled"/>), a Ghost drag aborts at the next <see cref="PruneDead"/> (its
+    /// visual was the row). Idempotent, 0-alloc: one parent walk, and only while a drag is armed or active.</summary>
+    public void NotifySlotRebound(NodeHandle slotRoot)
+    {
+        if (_node.IsNull || _released || !_scene.IsLive(_node)) return;
+        var n = _node;
+        while (!n.IsNull && n != slotRoot) n = _scene.Parent(n);
+        if (n.IsNull) return;                     // the source is not inside the rebound slot
+        if (!_active) { Reset(); return; }
+        RestoreVisuals(_node);
+        _released = true;
+    }
+
     /// <summary>Re-assert the presented ghost after a mid-drag reconcile commit restored the dragged node's AUTHORED
     /// opacity / shadow / hit-test (Reconciler ApplyBox writes them unconditionally). <see cref="Tick"/> alone cannot
     /// cover this: a settled (or snap-tracking) gesture early-outs before <c>ApplyPresented</c>, so the clobbered
     /// visuals would survive into the frame's record. Idempotent, 0-alloc; a no-op unless a live drag is active.</summary>
     public void ReassertPresented()
     {
-        if (!_active || !_scene.IsLive(_node)) return;
+        if (!_active || SourceGone) return;
         // Stationary re-asserts the dim + hit-test opt-out only; it owns no transform, so there is nothing to re-aim.
         if (_dragStyle.Lift != DragLift.Stationary) RetargetFromRest();
         ApplyPresented();
@@ -636,7 +660,7 @@ public sealed class DragController
         _args.VelocityY = _vy;
         _args.Mods = _mods;
         _args.Kind = _kind;
-        if (_scene.IsLive(_node))
+        if (!SourceGone)
         {
             // LOGICAL moving origin = current resting origin + the gesture-target translate. The spring-lagged
             // PRESENTED visual may trail it; Local must stay EXACTLY the grab offset regardless (the
@@ -657,6 +681,7 @@ public sealed class DragController
         _scene.DragSourceOpacityOverride = null;
         _node = NodeHandle.Null;
         _active = false;
+        _released = false;
         _armThresholdMul = 1f;   // TryArm re-resolves it per gesture; back to the base box while idle
         _sprung = false;
         _springVx = _springVy = 0f;

@@ -143,16 +143,23 @@ public sealed partial class AnimEngine
     /// <c>force: true</c> arm: a reveal is seeded, a nested interactive control is not, so a button that mounts (or
     /// re-keys) inside a hovered card no longer lights up with no pointer edge at all. A transparent listener
     /// (<c>HoverScopeTransparent</c>) is not a boundary here either, so its subtree seeds from the scope behind it.
+    /// <para>A non-boundary node's own declarative WhileHover is seeded too — the cascade's third leg, which drives it on
+    /// every later container edge. A presentational child (a badge, a fanned cover) mounting under an already-hovered card
+    /// otherwise sat at rest until the pointer left and re-entered the card. A row with no Hover target is skipped, so a
+    /// press-only row's mount Enter is not retargeted to rest.</para>
     /// <para>Returns false when nothing was seeded, so a caller without an <see cref="AnimEngine"/> equivalent can tell
     /// the node was deliberately left at rest.</para></summary>
     public bool TrySeedHoverFromContainer(NodeHandle node)
     {
         if (node.IsNull || !_scene.IsLive(node)) return false;
         bool boundary = IsNestedHoverBoundary(node);
-        if (!FollowsContainer(node, boundary)) return false;
-        SetHoverCore(node, true, force: true);
-        if (!boundary) SetHoverDescendants(node, true);
-        return true;
+        bool follows = FollowsContainer(node, boundary);
+        if (follows) SetHoverCore(node, true, force: true);
+        if (boundary) return follows;                       // its own interaction scope — only a reveal crosses it
+        bool whileHover = _interactTargets.TryGetValue((int)node.Raw.Index, out var t) && t.Hover is not null;
+        if (whileHover) ApplyInteractionEdgeSelf(node, InteractKind.Hover, true);   // declarative While* follows its container
+        SetHoverDescendants(node, true);
+        return follows || whileHover;
     }
 
     private void SetHoverCore(NodeHandle node, bool on, bool force)
@@ -175,5 +182,9 @@ public sealed partial class AnimEngine
     /// duration/easing, written to the InteractionAnim side-table each tick. No first-frame hold — matches the old
     /// InteractionAnimator.Step (which advanced immediately), so the recorder's per-frame composite is identical.</summary>
     private void SeedInteractFade(NodeHandle node, AnimChannel ch, float from, float to, float durMs, EasingSpec easing)
-        => SeedEased(node, ch, from, to, durMs, easing.NamedOr(Easing.FluentPopOpen));
+    {
+        if (HeadsTo(node, ch, to)) return;   // a redundant same-target edge (SeedGesture) must not restart the fade
+        SeedEased(node, ch, from, to, durMs, easing.NamedOr(Easing.FluentPopOpen));
+        MarkSeedRelative(Find(node, ch), from);   // `from` is HoverT/PressT: the UI's view of the fade, not an authored start
+    }
 }

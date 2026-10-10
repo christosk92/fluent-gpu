@@ -77,12 +77,19 @@ public sealed unsafe class DWriteTextShaper : IDisposable
 
         int gc = (int)actual;
         if (_out.Length < gc) _out = new GlyphPlacement[gc];
-        // cluster start (first source text index) per glyph, inverting clusterMap
+        // cluster start (first source text index) per glyph, inverting clusterMap. clusterMap points each char at its
+        // cluster's FIRST glyph only, so the rest of a multi-glyph cluster (a reordered Indic matra, an unattached
+        // combining mark) has no entry: it inherits the previous glyph's cluster (glyphs are in logical order), never
+        // the sub-run start, whose break opportunity (MustBreak after a newline, CanBreak after a space) would
+        // otherwise land mid-cluster.
         Span<int> clusterStart = gc <= 256 ? stackalloc int[gc] : new int[gc];
         clusterStart.Fill(-1);
         for (int t = 0; t < length; t++) { int g = _cluster[t]; if (g >= 0 && g < gc && clusterStart[g] < 0) clusterStart[g] = start + t; }
         for (int i = 0; i < gc; i++)
-            _out[i] = new GlyphPlacement(_gids[i], _adv[i], _off[i].advanceOffset, _off[i].ascenderOffset, clusterStart[i] < 0 ? start : clusterStart[i]);
+        {
+            if (clusterStart[i] < 0) clusterStart[i] = i > 0 ? clusterStart[i - 1] : start;
+            _out[i] = new GlyphPlacement(_gids[i], _adv[i], _off[i].advanceOffset, _off[i].ascenderOffset, clusterStart[i]);
+        }
         return _out.AsSpan(0, gc);
     }
 

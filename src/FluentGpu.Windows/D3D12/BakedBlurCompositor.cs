@@ -167,6 +167,11 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
     public bool DrainOne(ImageTextureStore images, BakedBlurQueue queue)
     {
         CollectGpuTimes(queue);
+        // Never wait on the compute fence here. At the one-job-per-turn cadence the next bank's previous batch (and the
+        // allocator Open would reuse) landed long ago; when it has not (a slow or HUNG GPU) the job stays queued for a
+        // later turn. This runs at the top of turns whose frame elides, so an INFINITE wait here would park the render
+        // thread outside the frame-fence watchdog (WaitFenceEventBounded) that turns a hang into a controlled recovery.
+        if (!_compute.IsComplete(_bankFence[_nextBank]) || _compute.OpenWouldWait) return false;
         if (!queue.TryDequeueRunnableJob(out var job)) return false;
         long recordStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!queue.IsCurrent(in job) || !images.TryGetBakeSource(job.SourceId, out var source, out var sourceUv))
@@ -183,8 +188,7 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
 
         int bank = _nextBank;
         _nextBank = (bank + 1) % Banks;
-        _compute.WaitFor(_bankFence[bank]);   // the bank's previous batch (the one-job-per-turn cadence makes this a no-op)
-        CollectBank(queue, bank);
+        CollectBank(queue, bank);             // the bank's previous batch completed (checked above)
         EnsureBank(bank);
         AcrylicKawaseMath.SelectChain(job.SigmaTexels, 1f, out int iters, out float offset);
 
