@@ -36,6 +36,11 @@ public sealed class ItemsViewController
     internal Action<int>? ClearBandImpl;
     /// <summary>Marks the engine band committed (AnimEngine.CommitRevealBand) right before a collapse commit runs.</summary>
     internal Action<int>? CommitBandImpl;
+    /// <summary>Stops a committed engine band presenting right away (SceneStore.RetireRevealBand) — the render that first sees
+    /// its rows gone, ahead of the layout pass (the layout effect only releases the slot, after 6.3).</summary>
+    internal Action<int>? RetireBandImpl;
+    /// <summary>The owner's disclosure source version (DisclosureOptions.Version), or int.MinValue without one.</summary>
+    internal Func<int>? SourceVersionImpl;
     internal readonly Signal<int> DisclosureVersion = new(0);
     /// <summary>The live disclosure bands, by slot (the engine's RevealBands slots on this view's viewport).</summary>
     internal readonly ItemRevealBand?[] Bands = new ItemRevealBand?[RevealBands.Capacity];
@@ -291,6 +296,8 @@ public sealed class ItemsViewController
         {
             band.Phase = ItemRevealPhase.Committed;
             band.CountAtCommit = ObservedCount;
+            band.SourceVersionAtCommit = SourceVersionImpl?.Invoke() ?? int.MinValue;
+            band.Retired = false;
             band.Spliced = false;
             Trace(ItemDisclosureDiagnosticKind.Committing, band, ObservedCount);
             // The engine band goes committed BEFORE the owner removes the rows: from the flush that drops them it adds no
@@ -335,6 +342,18 @@ public sealed class ItemsViewController
             if (band.Direction == ItemDisclosureDirection.Collapse && band.Phase != ItemRevealPhase.Committed) band.CollapseCommit?.Invoke();
             band.Settled?.Invoke();
         }
+    }
+
+    /// <summary>True when a COMMITTED collapse band's rows have left the model. With a resolver: it returned null (its
+    /// contract: null, never an empty range, once the rows are gone) AND the model moved — the count changed, or the source
+    /// version advanced past the commit (a commit that inserts rows elsewhere lands at an unchanged count). Without one: the
+    /// count dropped by the band, or the source advanced at a changed count.</summary>
+    internal static bool BandGone(ItemRevealBand band, int count, int sourceVer, Func<string, ItemDisclosureRange?>? resolve)
+    {
+        bool advanced = band.SourceVersionAtCommit != int.MinValue && sourceVer != band.SourceVersionAtCommit;
+        return resolve is not null
+            ? resolve(band.Range.Key) is null && (count != band.CountAtCommit || advanced)
+            : count <= band.CountAtCommit - band.Range.Count || (advanced && count != band.CountAtCommit);
     }
 
     /// <summary>The bands' STRUCTURAL edits, applied to a splicing layout in the render that first observes the new count —
@@ -388,6 +407,10 @@ internal sealed class ItemRevealBand
     public ItemRevealPhase Phase;
     public long OperationId;
     public int CountAtCommit = -1;
+    /// <summary>The owner's source version when the collapse committed (int.MinValue = none); its advance is the clear signal.</summary>
+    public int SourceVersionAtCommit = int.MinValue;
+    /// <summary>The engine band already stopped presenting (RetireBandImpl) — set once by the render that saw the rows go.</summary>
+    public bool Retired;
     public bool Spliced;
 }
 
@@ -979,6 +1002,21 @@ public sealed class ItemsView : Component
         // estimate. Idempotent: after the splice the layout's count matches and the guard stops firing.
         if (layout is ISplicingVirtualLayout splicing && Controller is { } spliceOwner)
             spliceOwner.SpliceDisclosures(splicing, count);
+
+        // A committed collapse whose rows already left the model stops presenting NOW, in the render that first observes it.
+        // The layout effect that releases the slot (6.5) runs after the 6.3 flow pass (AddBands), and at an unchanged count
+        // (the commit inserted rows elsewhere) RevealBand.Presents would keep clipping/shifting the survivors until then.
+        if (Controller is { } retireOwner && Context.Anim is { } retireAnim && viewportNode.Value is { IsNull: false } retireVp)
+        {
+            var retireResolve = Disclosure?.ResolveRange;
+            for (int slot = 0; slot < retireOwner.Bands.Length; slot++)
+                if (retireOwner.Bands[slot] is { Phase: ItemRevealPhase.Committed, Retired: false } rb
+                    && ItemsViewController.BandGone(rb, count, disclosureSourceVer, retireResolve))
+                {
+                    retireAnim.RetireRevealBand(retireVp, slot);
+                    rb.Retired = true;
+                }
+        }
 
         var sceneRef = Context.Scene;
 
@@ -1615,6 +1653,8 @@ public sealed class ItemsView : Component
                     viewportNode.Value, indices, removal.Exit, removal.Motion, removal.StaggerMs, commit);
             ctl.ClearBandImpl = slot => Context.Anim?.ClearRevealBand(viewportNode.Value, slot);
             ctl.CommitBandImpl = slot => Context.Anim?.CommitRevealBand(viewportNode.Value, slot);
+            ctl.RetireBandImpl = slot => Context.Anim?.RetireRevealBand(viewportNode.Value, slot);
+            ctl.SourceVersionImpl = Disclosure?.Version is { } sourceVersion ? () => sourceVersion.Peek() : null;
             ctl.DisclosureDiagnostic = Disclosure?.Diagnostic;
             ctl.ObserveInsertionMembershipImpl = insertion is null ? null : insertion.ObserveMembership;
         }
@@ -1645,6 +1685,8 @@ public sealed class ItemsView : Component
                 ctl.ObserveInsertionMembershipImpl = null;
                 ctl.ClearBandImpl = null;
                 ctl.CommitBandImpl = null;
+                ctl.RetireBandImpl = null;
+                ctl.SourceVersionImpl = null;
                 ctl.ResetBands();
                 ctl.Selection = null;
             };
@@ -1681,10 +1723,7 @@ public sealed class ItemsView : Component
                 if (ctl.Bands[slot] is not { } band) continue;
                 if (band.Phase == ItemRevealPhase.Committed)
                 {
-                    bool gone = resolve is not null
-                        ? resolve(band.Range.Key) is null && count != band.CountAtCommit
-                        : count <= band.CountAtCommit - band.Range.Count;
-                    if (!gone) continue;
+                    if (!ItemsViewController.BandGone(band, count, disclosureSourceVer, resolve)) continue;
                     anim.ClearRevealBand(viewport, slot);
                     ctl.BandCleared(slot, count);
                     continue;

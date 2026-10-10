@@ -932,6 +932,40 @@ static class RevealSuite
                 && commits == 1 && probe.Count.Peek() == 15 && !rig.Scene.HasActiveRevealBands,
                 $"offset {start:0.0}→{prev:0.0} commit@{commitFrame} {beforeCommit:0.0}→{atCommit:0.0} maxStep={maxStep:0.00} monotone={monotone} commits={commits} bands={rig.Scene.HasActiveRevealBands}");
         }
+
+        // rv.band.9 — a collapse commit that publishes the SAME row count (the band's rows leave, new rows land elsewhere).
+        // The count never moves off the commit-time count, so only the source version advance releases the band: from the
+        // commit frame the survivors sit right under A (no clip, no delta), and the slot is cleared.
+        {
+            var probe = new VirtualRevealProbe(five, [30f, 30f, 30f, 30f, 30f]);
+            probe.Resolve = key =>
+            {
+                int i = Array.IndexOf(probe.Labels, "B");
+                return key == "b" && i >= 0 ? new ItemDisclosureRange(key, i, 2) : null;
+            };
+            using var rig = new Rig(strings, fonts, probe, 16.67f, 260f, 300f);
+            var vp = probe.Controller.Viewport;
+            float AY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "A"));
+            float DY() => rig.Y(FindText(rig.Scene, strings, rig.Scene.Root, "D"));
+            int frame = 0, commitFrame = -1, commits = 0, checkedFrames = 0, bad = 0;
+            float worst = 0f;
+            probe.Controller.BeginDisclosure(new ItemDisclosureRange("b", 1, 2), ItemDisclosureDirection.Collapse,
+                collapseCommit: () => { commits++; commitFrame = frame; probe.Publish(["A", "D", "E", "X", "Y"], [30f, 30f, 30f, 30f, 30f]); });
+            for (; frame < 80; frame++)
+            {
+                rig.Host.RunFrame();
+                if (commitFrame < 0 || commitFrame > frame) continue;
+                checkedFrames++;
+                float off = DY() - AY() - 30f;
+                bool presenting = rig.Scene.TryGetScroll(vp, out var s9) && rig.Scene.TryGetRevealBand(vp, 0, out var b9) && b9.Presents(s9.ItemCount);
+                worst = MathF.Max(worst, MathF.Abs(off));
+                if (MathF.Abs(off) > 0.5f || presenting) bad++;
+            }
+            bool cleared = probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Cleared && d.Range.Key == "b");
+            Check("rv.band.9 a collapse commit at an UNCHANGED count: from the commit frame D sits 30 under A with no clip (the source-version advance retires the band), then the slot clears",
+                commits == 1 && commitFrame >= 0 && checkedFrames > 3 && bad == 0 && cleared && !rig.Scene.HasActiveRevealBands && probe.Count.Peek() == 5,
+                $"commits={commits} commit@{commitFrame} checked={checkedFrames} bad={bad} worst={worst:0.00} cleared={cleared} bands={rig.Scene.HasActiveRevealBands}");
+        }
     }
 
     // rv.band.6/7 — the scene-level band API: hit-testing clips the band and maps the shifted suffix; the census balances.

@@ -422,7 +422,9 @@ public struct ScrollState
 /// written by the band's AnimChannel.RevealBand row). Opening = the band is revealing toward Extent (cleared at rest);
 /// a closing band rests at 0 until its owner's commit removes the rows. Committed = that commit is running
 /// (ItemsViewController.BandSettled marks it right before invoking it) and CommitCount = the viewport's ItemCount then:
-/// once the count moves off it the rows are gone, and the band presents nothing at all (<see cref="Presents"/>).</summary>
+/// once the count moves off it the rows are gone, and the band presents nothing at all (<see cref="Presents"/>). A commit
+/// that publishes the SAME count (rows inserted elsewhere) never moves off it, so the owner's render retires the band
+/// explicitly (SceneStore.RetireRevealBand sets CommitCount = int.MinValue, which no count equals).</summary>
 public struct RevealBand : IEquatable<RevealBand>
 {
     public int First, Count;

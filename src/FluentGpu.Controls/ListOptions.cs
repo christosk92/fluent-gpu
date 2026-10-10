@@ -299,9 +299,13 @@ public sealed record RemovalOptions
 /// as the model moves under it.</summary>
 public sealed record DisclosureOptions
 {
-    /// <summary>Re-render trigger for the model the bands index (a plan version).</summary>
+    /// <summary>Re-render trigger for the model the bands index (a plan version). A committed collapse band is released once
+    /// its rows are gone AND the count changed OR this version advanced past the commit, so bump it with every publish (a
+    /// commit that inserts rows elsewhere lands at an unchanged count).</summary>
     public IReadSignal<int>? Version { get; init; }
-    /// <summary>A band's CURRENT range by its key, or null once its rows are gone (a committed collapse). Optional: without
+    /// <summary>A band's CURRENT range by its key, or null once its rows are gone (a committed collapse). It MUST return null
+    /// (not an empty range, not the stale one) once the band's rows left the model: that is what releases the band and stops
+    /// it presenting. Optional: without
     /// it a band keeps its armed range and a collapse clears when the count has dropped by the band.</summary>
     public Func<string, ItemDisclosureRange?>? ResolveRange { get; init; }
     /// <summary>Optional cold-path lifecycle trace. Invoked from controller/layout/effect work, never paint or input.</summary>
