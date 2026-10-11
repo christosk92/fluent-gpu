@@ -55,6 +55,7 @@ logic — not yet written; its layout-participant half is owned here), `threadin
 | **`OverlayPlacement` flip/nudge anchor geometry** | the pure-math overlay placement the overlay manager calls | §10B |
 | **Container queries** (`ContainerSizeQuery` resolved-size exposure + `UseContainerSize` participant half) | size-based responsive layout — a container publishes its content-box size to descendants | §10C |
 | **Inline-flow participation** (`InlineBox` object-replacement boxes laid out within a text run) | layout's half of the rich-text inline-object seam, coordinating with `text.md` | §10D |
+| **Window size tiers** (`TierLadder`/`TierEdge`/`TierAspectRule`, `UseTier`, the host `CommitPendingTiers` step, the tier-gated `Responsive.Of`, `Viewport.InModalLoop`, window-scaled tile caps) | size tiers with direction-aware hysteresis whose crossing lands on the first non-resized frame, right before FLIP capture, so a resize animates instead of snapping | §10E |
 
 ### 1.2 What it explicitly does NOT own (and where it lives)
 
@@ -1443,6 +1444,104 @@ U+FFFC slot, so there is **no new `LayoutKind`**.)
 seam (`ITextItemizer`) is already portable (text.md §12/§20 — CoreText `CTRunDelegate` is the analogous U+FFFC
 mechanism behind the same seam), and the inline-box measure is pure C# over SoA columns — the CoreText itemizer
 recognizes U+FFFC and calls the same `MeasureInlineBox`.
+
+---
+
+## 10E. WINDOW SIZE TIERS: `TierLadder`, `UseTier`, and the pending-tier commit (E22)
+
+**Decision:** a window (or a measured slot) is classified into a small number of **size tiers** by a pure, hysteretic
+ladder, and a tier **crossing after mount never snaps**: it is committed on the first frame that is NOT resized, right
+before FLIP capture, so every keyed node whose rect changed animates. Tier *numbers* and per-tier layouts are the
+application's (structure policy); the engine owns the primitive and the frame step. The motivating analysis is the
+Wavee themes technical plan, section 3 (window size tiers).
+
+### 10E.1 `TierLadder`: pure policy (`Foundation/TierLadder.cs`)
+
+```csharp
+public readonly record struct TierEdge(float At, float NarrowHold = 0f, float WidenHold = 0f); // TierEdge.None = absent (At NaN)
+public readonly record struct TierAspectRule(float PortraitBelow, int PortraitMaxTier,
+    float LandscapeAbove = +inf, int LandscapeMinTier = 0, float Hold = 0f);
+public sealed class TierLadder { TierLadder(ReadOnlySpan<TierEdge>, TierAspectRule? = null);
+    int Resolve(float value, int previous); int Resolve(float value, float aspect, int previous); }
+```
+
+- `N` ascending edges give `N + 1` tier indices (0 below the first edge, `i + 1` at or above edge `i`); the index is the
+  caller's own enum. An absent edge is never crossed (its upper tier is unreachable); an empty ladder is always tier 0.
+- **Direction-aware hold per edge.** With a previous tier `p`: edge `i` counts as crossed when `p > i` (already above) and
+  `value >= At - NarrowHold`, or when `p <= i` and `value >= At + WidenHold`; a fresh resolve (`previous = -1`) uses `At`
+  itself. The highest crossed edge wins, so a drag across several edges jumps in one step.
+- **Aspect rule (optional).** After the edge walk, `aspect = width / height` caps a portrait window at `PortraitMaxTier`
+  and lifts a very wide one to `LandscapeMinTier`; `Hold` is the aspect hysteresis. NaN aspect disables it.
+- `Resolve` is **allocation-free** (an array walk, no closures); the previous tier is the caller's state.
+
+### 10E.2 `UseTier(ladder, source)`: a signal that changes only on a crossing
+
+`RenderContext.UseTier` (impl `Hooks/RenderContext.Tiers.cs`, surface `Component.UseTier`) returns an `IReadSignal<int>`.
+`TierSource` picks the value: `ViewportWidth` / `ViewportHeight` (the ambient `Viewport.Size`; the aspect rule sees
+width / height), `Measured(slot, seed)` (a measured width signal, seeded by an estimate while it reads 0) or
+`Estimate(thunk)` (tracked). The ladder and source freeze at mount.
+
+- **First mount resolves in its own frame.** The cell resolves the source while it is created, so the first render already
+  reads the final tier (no deferral, no corrective render); `Viewport.Size` is same-frame, known before the first layout.
+- **The source is read by a standalone eager `Effect`, never by the owner's render**, so a viewport-driven tier does not
+  re-render the component on every resized frame, only when the tier crosses.
+- **A crossing after mount is PENDING, not written.** The effect stores the new tier in the host-owned `TierRegistry`
+  (`Hosting/Tiers/TierRegistry.cs`; ambient `TierHost.Registry`) and requests a frame immediately. The hysteresis state is
+  the pending value when one exists; a source that crosses back before the commit cancels the pending value and writes nothing.
+
+### 10E.3 The host step `CommitPendingTiers`: why it lands before capture
+
+Every in-frame global flush after layout (`FlushRebindsToQuiescence` when a scroll plan moved and virtual lists
+re-realize, the flow pass, the realize loops) reconciles a plain signal write with **no FLIP capture**, and the timer
+drain / UI-post drain / `FrameClock.Tick` publish run **after** capture: a deferral built on any of them snaps. So the
+write is a host commit placed in `AppHost.Paint`:
+
+```
+PublishViewport, ..., RunScrollFrame, CommitPendingTiers(resized), then willReconcile = _runtime.HasPending || _needFullLayout,
+CaptureProjections (skipped when resized), timers / posts / flush, layout, ApplyProjections
+```
+
+`CommitPendingTiers(resized)` writes every pending tier into its signal **only when the frame is not resized**; the writes
+schedule the tier's consumers, which makes `_runtime.HasPending` true, so capture runs with the post-resize rects as the
+FLIP "first" (`RelRect` = bounds + local transform) and the reconcile in this frame's flush produces tracks. A resized frame
+(or two in a row: Win+Arrow, Snap assist, a DPI or zoom step) leaves them pending and requests the next frame; a resized
+frame lays out the OLD tier at the new size, snapped, exactly as before.
+
+- **Frame wake.** Storing a pending tier calls the host's `WakeFrame`, and `ComputeWakeReasons` reports `FrameNeeded`
+  while any tier is pending (not while parked). `FrameNeeded` is in `ModalLoopEssentialWake`, so the modal-loop keep-alive
+  idle skip cannot swallow the commit frame.
+- **Composited drag.** Sizes are deferred inside the modal loop (no layout); the settle paint at `WM_EXITSIZEMOVE` is the
+  resized frame (old tier); the next frame commits and animates: exactly one crossing per drag. Not composited: every tick
+  is resized, the crossing commits on the first tick that is not. **Motion inside the loop is suppressed** by the
+  `WindowResize` bit (it mirrors `InModalLoop`), so a crossing committed inside the loop snaps; after the loop it animates.
+- **Measured sources land one frame later still**: the bounds callback writes in the layout phase, the effect re-runs in the
+  next frame's flush (after that frame's commit step), and the following frame commits. Prefer the viewport or a seeded
+  estimate for the shell.
+- A **theme transaction** and a **first mount / navigation** resolve in render (nothing resized, no pending value).
+
+### 10E.4 Related surface
+
+- **`Responsive.Of(key, ladder, estimate, build)`** (`FluentGpu.Controls/Responsive.cs`, `TierBox`): `build(tier)` runs only
+  when the tier crosses; the first frame is seeded by `estimate` (no fixed fallback width), then the measured slot width
+  drives the ladder. `Of<TState>(key, state, ladder, estimate, build)` adds the by-value state gate. The width-driven
+  `Of(build, fallback, grow)` overloads are unchanged.
+- **`Viewport.InModalLoop`** (`Context<bool>`): `IPlatformWindow.InModalLoop` as a host context signal, written at the top
+  of a paint on its edges only.
+- **Tile caps follow the window area** (`TileBudget.CoverTiles/CeilingFor/SurfaceCapFor`): the retained-tile surface cap
+  and the budget ceiling scale with the window (`max(fixed value, cover tiles x 2 MiB x 1.5)`, the fixed 64 surfaces /
+  128 MiB are the floors), so a 7680 x 4320 px window (3840 x 2160 DIP at 200 %) keeps its visible tiles resident
+  instead of degrading to direct, untiled drawing. `AppHost` sizes the `SliceTable` once, from the larger of the client
+  size and the monitor size.
+
+### 10E.5 Gates
+
+`Engine.Tests/Tiers/`: `TierLadderTests` (both hold directions, absent and empty edges, aspect, no allocation),
+`UseTierTests` (first frame resolved, once per crossing, a crossing from a resized frame lands one frame later, cancel on
+cross-back), `TileBudgetScaleTests`, `TierCrossingTests` (composited drag, maximize, DPI, zoom, consecutive resized
+paints, the wake, not composited, `Viewport.InModalLoop`, and the two negative controls: a `UseTimeout(0)` deferral and
+a plain layout-phase write do not FLIP). VerticalSlice `tiers` suite: ladder rules, `gate.tiers.resolve-zero-alloc`,
+`gate.tiers.commit-zero-alloc`, the first-frame tier, the seeded tier-gated `Responsive.Of`, and the resize at the end
+of a virtual list. The frame-freeze case belongs to the freeze work (EP10).
 
 ---
 
