@@ -101,7 +101,10 @@ public static partial class SettingsCard
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.SettingsCardStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a SettingsCard entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         Background = Tok.FillCardDefault,
         BackgroundPointerOver = Tok.FillControlSecondary,

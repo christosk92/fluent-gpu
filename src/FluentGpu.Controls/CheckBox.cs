@@ -61,7 +61,10 @@ public static partial class CheckBox
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.CheckBoxStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a CheckBox entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         // Ramp = (Rest, PointerOver, Pressed, Disabled) — the exact WinUI CheckBox_themeresources brush ladder.
         OffFill   = new(Tok.FillControlAltSecondary, Tok.FillControlAltTertiary, Tok.FillControlAltQuaternary, Tok.FillControlAltDisabled),

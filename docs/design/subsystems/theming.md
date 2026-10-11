@@ -359,9 +359,10 @@ first, which E9 will walk). The consequences are the rules this section exists t
   override) and by the host for the scrollbar arrows. Caches keyed by family string are keyed by the resolved name, so a family
   change creates a new key; evicting the old default's entries and walking the `Body` chain belong to the font registry (E9).
 - Control `Style` records (`Button.Style`, `IconButton.Style`, …) still capture `Radii.Control` etc. when a style *instance* is
-  built; the per-control style table that makes them theme-owned is E14 (`ControlStyleTable`, a minimal placeholder today).
+  built; the per-control style table that makes them theme-owned is `ControlStyleTable` (E14/EP15, §16.2): a control resolves its
+  default style from `Tok.Definition.Controls` at render, so the instance is built from the live definition.
 
-`MaterialPolicy`, `IconSet`, `ExtTokenTable` and `ControlStyleTable` are deliberately empty records in E3 (equal to each other,
+`MaterialPolicy`, `IconSet` and `ExtTokenTable` are deliberately empty records in E3 (equal to each other,
 carried and compared so a definition can already reference them); their members arrive with the window-material, icon-set,
 extension-token and control-style PRs. `ThemeKind` still has only Light/Dark: `HighContrast` is carried by the definition but
 nothing reads it yet. NuGet: this is a breaking API change (`Theme.BodyFont`/`IconFont`, the `Spacing`/`Radii` consts,
@@ -1047,6 +1048,43 @@ weight). The table lives on the definition so a theme switch swaps it in the sam
   time. Nothing reads them yet and `ThemeDefinition` does not carry a table; they are deliberately minimal.
 - Gates: `Engine.Tests/Theming/AppRolesTests` (colour-only vs non-colour role changes through `Tok.Use`/`StyleEpoch`, the
   per-epoch cache, `App<T>` following a theme swap, the override, the reserved table).
+
+### 16.2 Control style table (`ThemeDefinition.Controls`, EP15)
+
+`ControlStyleTable` (`Theming/ControlStyleTable.cs`) replaces the single global `Button.StyleHook` with one entry per control that
+has a style record, carried by the theme.
+
+- **Assembly split.** The table type is in the ENGINE (it is a member of `ThemeDefinition`), and it is a typed bag, not a struct of
+  the controls' types: `ControlStyleKey<TProvider>(string Id)` keys an entry, the table maps id to provider
+  (`With`/`Without`/`TryGet`/`Contains`, immutable, value-equal by entries, allocation-free lookup). The controls and their styles
+  stay in `FluentGpu.Controls`, which declares the keys (`ControlStyles.SliderStyle`, ...) and each control's built-in default
+  (`Slider.FluentStyle()`). The engine therefore never references a control, a new control adds a key without touching the engine,
+  and an application can add its own keys. The alternative (the table living in Controls, held by `ThemeDefinition` through an
+  engine interface) would force every consumer of a definition through an interface and make the engine unable to compare or
+  default it; the typed-bag shape keeps `ThemeDefinition` a plain value.
+- **Absent entry = the built-in Fluent look.** `ControlStyleTable.FluentDefault` is the empty table, so FluentDefault renders exactly
+  what the controls rendered before tables existed (the defaults are the WinUI-derived ladders the controls own). A theme restyles
+  a control with `table.With(ControlStyles.SliderStyle, static () => Slider.FluentStyle() with { TrackHeight = 8f })`;
+  `ControlStyles.FluentExplicit` lists every built-in and is the starting point for a theme that restyles a few.
+- **Read at render.** `Control.DefaultStyle` is `StyleOverride ?? ControlStyles.Resolve(key, FluentStyle)`; `Resolve` reads
+  `Tok.Definition.Controls` on every call, so nothing is captured at type load and a `Tok.Use` (one epoch bump, the host re-renders
+  every component) restyles every mounted control on the next frame. Precedence: per-instance `style:` argument, the control's
+  app-level static `StyleOverride`, the table entry, the built-in default. Button's entry is axis-aware
+  (`Func<ButtonAppearance, ControlSize, Style?>`, null falls through); its built-in is `Button.FluentStyle(appearance, size, palette)`
+  (a provider must build from that, not from `DefaultStyle`, which would recurse).
+- **A changed table is a non-colour change** (`HasSameStyleAs` compares `Controls`): `Tok.StyleEpoch` moves and the definition is
+  applied as a unit.
+- **Keys today (17):** button, appbarbutton, caption.minmax, caption.close, checkbox, colorpicker, hyperlinkbutton, iconbutton,
+  numberbox, radiobutton, repeatbutton, segmented, settingscard, slider, splitter, togglebutton, toggleswitch. Controls that have
+  no style record in this kit (ComboBox, TextBox, TabStrip, MenuFlyout, ToolTip, ScrollBar, Expander, InfoBar, ...) get a key when
+  their style record lands; `ControlRole` (the app's semantic button roles) is application policy and lives in the app's
+  provider, not in the engine table.
+- **Package break.** `Button.StyleHook` is removed; `ThemeDefinition.Controls` is now a table with members (it was an empty record).
+  Each affected control gains `public static Style FluentStyle()` (Button: `FluentStyle(appearance, size, palette)`).
+- Gates: `Engine.Tests/Theming/ControlStyleTableTests` (the value semantics, `StyleEpoch`, no allocation) and the VerticalSlice
+  `control-style-table` suite (every control's style record and a mounted sample of each kind are identical under the empty table
+  and the explicit built-in table; a definition with another Button style restyles a mounted button on the next frame; swapping
+  back leaves no stale style) plus `gate.ctl.button.styletable` (the old stylehook gate, re-pointed).
 
 ---
 

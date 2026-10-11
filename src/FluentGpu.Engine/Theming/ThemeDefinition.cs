@@ -45,7 +45,10 @@ public sealed record ThemeDefinition
     /// <summary>Theme-defined extra colour tokens.</summary>
     public ExtTokenTable Ext { get; init; } = ExtTokenTable.Empty;
 
-    /// <summary>Per-control style table (EP15 fills it; a minimal placeholder until then).</summary>
+    /// <summary>Per-control style table (<see cref="ControlStyleTable"/>): control kind to the provider of its default style. Read by
+    /// each control at render (<c>Tok.Definition.Controls</c>); an absent entry is the control's built-in Fluent look, so
+    /// <see cref="ControlStyleTable.FluentDefault"/> (the empty table) reproduces the shipped looks. Replaces the old
+    /// global <c>Button.StyleHook</c>.</summary>
     public required ControlStyleTable Controls { get; init; }
 
     /// <summary>Application-owned role table: colours AND non-colour roles (row heights, corner choices, weights) the engine

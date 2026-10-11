@@ -53,7 +53,10 @@ public static partial class IconButton
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.IconButtonStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a IconButton entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         Foreground = Tok.TextPrimary,            // AppBarButtonForeground = TextFillColorPrimary (line 9/79)
         Fill = Tok.FillSubtleTransparent,        // EXPLICIT rest (AppBarButtonBackground = SubtleFillColorTransparent, line 5/75)

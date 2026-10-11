@@ -119,7 +119,10 @@ public static partial class ToggleButton
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.ToggleButtonStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ToggleButton entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         OnBackground = Tok.AccentDefault,                  // ToggleButtonBackgroundChecked = AccentFillColorDefault (line 11/127)
         OnHover = Tok.AccentSecondary,                     // ToggleButtonBackgroundCheckedPointerOver = AccentFillColorSecondary (line 12/128)

@@ -47,8 +47,9 @@ var green = Button.AccentStyle with
 };
 Button.Accent("Save", OnSave, green);
 
-// 2) Global: replace the default style for ALL instances (set once at startup).
-Button.StyleHook = (appearance, size) => appearance == ButtonAppearance.Accent ? green : null;  // every Button.Accent now uses it
+// 2) Theme-wide: put the style in the theme's control style table (read at render, so a theme swap restyles every button).
+Tok.Use(Tok.Definition with { Controls = Tok.Definition.Controls.With(ControlStyles.ButtonStyle,
+    (appearance, size) => appearance == ButtonAppearance.Accent ? green : null) }, Tok.Theme);  // every Button.Accent now uses it
 Slider.StyleOverride       = mySliderStyle;
 
 // 3) Ad-hoc: chain a modifier — a `with`-copy of that one instance, no Style fork.

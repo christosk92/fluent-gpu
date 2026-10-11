@@ -319,7 +319,7 @@ silhouette edge is hard. Preview it with `dotnet run --project src/FluentGpu.Win
 
 Most controls are **element-returning factories** (call them in render); `NavigationView`/`PageHost` are `Component`s.
 Every control has a `Style` record and reads theme tokens by default; most expose a global `…StyleOverride`, while
-`Button` exposes the axis-aware `Button.StyleHook` (below).
+`Button` reads the axis-aware Button entry of the theme's control style table (`ControlStyles.ButtonStyle`, below).
 
 **One creation idiom.** Every public control exposes exactly ONE canonical `X.Create(…)`; named variants are one-line
 forwarders onto it — `Button.Accent/Standard/Subtle/Outline`, `InfoBadge.Dot/Count/Icon` (→ `InfoBadge.Create(kind, …)`),
@@ -359,7 +359,7 @@ through one 4-arm `ButtonPalette` switch (the token ramp: fill/foreground/border
 them into the same 24-member `Style` record, which survives as the **full-override escape hatch** (pass `style:` to win
 outright). Standard/Accent are pixel-identical to before; Subtle uses the WinUI SubtleFillColor* ramp; Outline is a
 documented Fluent-2 extension (solid stroke all states). `glyph:` adds a leading icon-font run. To restyle globally,
-set `Button.StyleHook = (appearance, size) => …` (return a `Style`, or `null` to fall through to the composed default)
+put a Button entry in the theme's control style table (`ThemeDefinition.Controls.With(ControlStyles.ButtonStyle, (appearance, size) => …)`, return a `Style`, or `null` to fall through to the composed default)
 — it replaces the old per-appearance `AccentStyleOverride`/`StandardStyleOverride`. Sibling button-family controls
 (`IconButton`/`ToggleButton`/`RepeatButton`/`HyperlinkButton`) adopt `ControlSize` too; a control may **clamp** an axis
 value it can't honor (a small per-control table, Radix precedent): `IconButton` clamps `Large`→`Medium` to keep its

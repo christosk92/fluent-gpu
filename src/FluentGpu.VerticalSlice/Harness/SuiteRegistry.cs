@@ -48,6 +48,7 @@ public static class SuiteRegistry
         new("reveal", "anim", FluentGpu.VerticalSlice.Suites.RevealSuite.Run),   // SizeMode.FlowReveal: layout once, motion at paint time (smooth-reveal plan §9)
         new("scroll", "scroll", ScrollSuite.Run),
         new("scroll-motion", "scroll", FluentGpu.VerticalSlice.Suites.ScrollMotionSuite.Run),   // scroll rework: closed-form plans, coverage, zero-alloc flat lists
+        new("scroll-first-layout", "scroll", FluentGpu.VerticalSlice.Suites.ScrollFirstLayoutSuite.Run),   // E8/EP12: a ScrollKey restore lands in the FIRST layout of the remount (plain + 2,000-row virtual list, clamp, unknown key, zero-alloc)
         new("scroll-effects", "scroll", FluentGpu.VerticalSlice.Suites.ScrollEffectsSuite.Run),   // scroll-GPU plan §F: engaged edge, collapse, stretch, UseScroll, MeasureAll
         new("engaged-feather", "scroll", FluentGpu.VerticalSlice.Suites.EngagedFeatherSuite.Run),   // F(ii) 2026-09-25: a WhileStuck edge fade engages on the sticky clip's own pose
         new("item-band-deep", "scroll", FluentGpu.VerticalSlice.Suites.ItemBandDeepSuite.Run),   // G 2026-09-25: a deep jump in an item-band list keeps every row above the arrange origin
@@ -62,6 +63,7 @@ public static class SuiteRegistry
         new("evidence", "tiles", FluentGpu.VerticalSlice.Suites.EvidenceSuite.Run),   // evidence ledgers: #1 failing-first (open), ledger alloc-zero, capture alignment, item record == model
         new("tile-lifetime", "tiles", FluentGpu.VerticalSlice.Suites.TileLifetimeChecks.Run),   // tile texture lifetime at idle: retained group / leaf-blur tiles keep their textures (Wavee idle blanking)
         new("controls", "controls", ControlsSuite.Run),
+        new("control-style-table", "controls", FluentGpu.VerticalSlice.Suites.ControlStyleTableSuite.Run),   // E14/EP15: ThemeDefinition.Controls (replaced Button.StyleHook): empty == explicit built-in table, restyle a mounted control, no stale style
         new("zone-list-spikes", "controls", FluentGpu.VerticalSlice.Suites.ZoneListSpikeChecks.Run),   // Wave-0 spikes for Wavee's Home zone list: E17 sticky-in-realized-row, E18 controller rebind, KeepAlive same-key view, nested-shelf alloc
         new("component-anchor", "controls", FluentGpu.VerticalSlice.Suites.ComponentAnchorChecks.Run),   // E14: WriteAnchorColumns applies a ComponentEl's base-Element props to its own anchor (sticky/visible/exit/alloc)
         new("titlebar", "titlebar", TitleBarSuite.Run),
