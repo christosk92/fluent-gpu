@@ -73,7 +73,7 @@ public static class CaptionButton
             [
                 new TextEl(glyph)
                 {
-                    Size = GlyphSize, FontFamily = Theme.IconFont,
+                    Size = GlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = active ? style.Foreground : style.InactiveForeground,
                     HoverColor = style.HoverForeground,
                     PressedColor = style.PressedForeground,

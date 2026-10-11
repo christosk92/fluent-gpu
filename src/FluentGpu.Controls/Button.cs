@@ -306,7 +306,7 @@ public static partial class Button
         {
             var glyphEl = parts.Apply(PartGlyph, new TextEl(glyph)
             {
-                Size = iconSize, FontFamily = Theme.IconFont,
+                Size = iconSize, FontFamily = Tok.Definition.Fonts.Icon,
                 Color = s.Foreground,
                 HoverColor = s.HoverForeground,
                 PressedColor = s.PressedForeground,

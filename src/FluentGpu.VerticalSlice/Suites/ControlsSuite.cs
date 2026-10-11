@@ -1787,7 +1787,7 @@ static partial class ControlsSuite
             if (t == "plain") plainEmpty = fam.Length == 0;
         }
         var icon = Ui.Icon(Icons.Play, 20f);
-        bool iconFactory = icon.FontFamily == Theme.IconFont && icon.Text.Value == Icons.Play && icon.Size == 20f;
+        bool iconFactory = icon.FontFamily == Tok.Definition.Fonts.Icon && icon.Text.Value == Icons.Play && icon.Size == 20f;
         Check("56. per-run font family threads to the glyph cmd; Ui.Icon uses the icon font", hiFam && plainEmpty && iconFactory,
             $"hiFam={hiFam} plainEmpty={plainEmpty} iconFont='{icon.FontFamily}'");
     }

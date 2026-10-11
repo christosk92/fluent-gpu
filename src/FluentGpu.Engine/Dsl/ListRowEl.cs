@@ -29,7 +29,7 @@ public readonly record struct RowCell()
     public TextTrim Trim { get; init; }
     public float FontSize { get; init; } = 12f;
     public ushort FontWeight { get; init; }
-    /// <summary>Null = the row's default UI font (Glyph cells set the icon font here, e.g. <c>Theme.IconFont</c>).</summary>
+    /// <summary>Null = the row's default UI font (Glyph cells set the icon font here, e.g. <c>Tok.Definition.Fonts.Icon</c>).</summary>
     public string? FontFamily { get; init; }
 }
 

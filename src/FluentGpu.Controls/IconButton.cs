@@ -35,7 +35,8 @@ public static partial class IconButton
         public float? Height { get; init; }
         public float GlyphSize { get; init; } = 16f;                 // WinUI NavigationViewItem / AppBar icon box height
         public float CornerRadius { get; init; } = Radii.Control;    // ControlCornerRadius (AppBarButton_themeresources.xaml:137) — rounded-square, NOT a circle
-        public string IconFont { get; init; } = Theme.IconFont;
+        /// <summary>Icon-font family override; null = the active definition's <c>Fonts.Icon</c>, read when the glyph is built (never captured with the style).</summary>
+        public string? IconFont { get; init; }
         public ColorF Foreground { get; init; }
         public ColorF Fill { get; init; }                           // rest (AppBarButtonBackground = SubtleFillColorTransparent, line 5/75)
         public ColorF HoverFill { get; init; }
@@ -92,7 +93,7 @@ public static partial class IconButton
             [
                 parts.Apply(PartGlyph, new TextEl(glyph)
                 {
-                    Size = s.GlyphSize, FontFamily = s.IconFont,
+                    Size = s.GlyphSize, FontFamily = s.IconFont ?? Tok.Definition.Fonts.Icon,
                     Color = s.Foreground,                // P2 foreground ramp: rest → hover → pressed; disabled via the gate
                     HoverColor = s.HoverForeground,
                     PressedColor = s.PressedForeground,

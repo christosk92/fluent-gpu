@@ -2861,10 +2861,10 @@ static class AnimSuite
         var withGlyph = Button.Create("Save", () => { }, glyph: Icons.Play);
         var noGlyph = Button.Create("Save", () => { });
         bool glyphStructure = withGlyph.Children.Length == 2
-            && withGlyph.Children[0] is TextEl g && g.FontFamily == Theme.IconFont && g.Text.Value == Icons.Play
+            && withGlyph.Children[0] is TextEl g && g.FontFamily == Tok.Definition.Fonts.Icon && g.Text.Value == Icons.Play
             && withGlyph.Children[1] is TextEl gl && gl.Text.Value == "Save";
         bool labelOnly = noGlyph.Children.Length == 1
-            && noGlyph.Children[0] is TextEl only && only.Text.Value == "Save" && only.FontFamily != Theme.IconFont;
+            && noGlyph.Children[0] is TextEl only && only.Text.Value == "Save" && only.FontFamily != Tok.Definition.Fonts.Icon;
         Check("gate.ctl.button.glyph-slot Create(glyph) renders icon+label; without = label-only",
             glyphStructure && labelOnly, $"withGlyph={glyphStructure} labelOnly={labelOnly}");
     }

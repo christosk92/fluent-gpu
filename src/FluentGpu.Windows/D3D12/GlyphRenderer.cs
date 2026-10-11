@@ -177,7 +177,8 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private static int PhaseStackHeight(int h) => h * SubPixelPhases + (SubPixelPhases - 1);
 
     private IDWriteFactory* _dw;
-    private const string DefaultFamily = "Segoe UI";
+    // The default text family is a member of the active theme definition (Fonts.BodyPrimary), read at use.
+    private static string DefaultFamily => FluentGpu.Dsl.Tok.Definition.Fonts.BodyPrimary;
     // Per-(family, numeric weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
     private readonly Dictionary<(string fam, int weight), nint> _faces = new();
     private readonly Dictionary<(string fam, int weight), FaceMetrics> _faceMetrics = new();

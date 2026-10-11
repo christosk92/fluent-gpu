@@ -224,7 +224,7 @@ internal abstract class PipsPagerCoreBase : Component
                         HoverColor = Tok.TextSecondary,                 // ForegroundPointerOver = TextFillColorSecondary (:16)
                         PressedColor = Tok.TextSecondary,               // ForegroundPressed = TextFillColorSecondary (:17)
                         DisabledColor = Tok.FillControlStrongDisabled,  // ForegroundDisabled = ControlStrongFillColorDisabled (:19)
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                     },
                 ],
             };
@@ -320,7 +320,7 @@ internal abstract class PipsPagerCoreBase : Component
                             new TextEl(glyph)
                             {
                                 Size = NavGlyphSize,                            // FontSize 8 (themeresources:106)
-                                FontFamily = Theme.IconFont,
+                                FontFamily = Tok.Definition.Fonts.Icon,
                                 Color = Tok.FillControlStrong,                  // NavigationButtonForeground (themeresources:28)
                                 HoverColor = Tok.TextSecondary,                 // PointerOver (:29)
                                 PressedColor = Tok.TextSecondary,               // Pressed (:30)

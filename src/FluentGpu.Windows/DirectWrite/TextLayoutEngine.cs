@@ -66,7 +66,8 @@ public struct LaidLine
 /// </summary>
 public sealed unsafe class TextLayoutEngine : IDisposable
 {
-    private const string DefaultFamily = "Segoe UI";
+    // The default text family is a member of the active theme definition (Fonts.BodyPrimary), read at use.
+    private static string DefaultFamily => FluentGpu.Dsl.Tok.Definition.Fonts.BodyPrimary;
     private IDWriteFactory* _dw;
     private readonly DWriteItemizer _itemizer;
     private readonly DWriteTextShaper _shaper;

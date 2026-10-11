@@ -144,7 +144,7 @@ public static class MenuFlyout
         if (checkColumn)
         {
             Element glyph = (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) && it.IsChecked
-                ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Theme.IconFont }
+                ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Tok.Definition.Fonts.Icon }
                 : new BoxEl();
             children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [glyph] });
         }
@@ -172,7 +172,7 @@ public static class MenuFlyout
         if (it.Kind == MenuItemKind.SubMenu)
             children.Add(new TextEl(Icons.ChevronRightMed)
             {
-                Size = ChevronGlyphSize, FontFamily = Theme.IconFont, Margin = ChevronMargin,
+                Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Margin = ChevronMargin,
                 Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, DisabledColor = Tok.TextDisabled,
             });
 

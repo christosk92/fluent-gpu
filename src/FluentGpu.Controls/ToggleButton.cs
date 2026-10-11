@@ -272,7 +272,7 @@ public static partial class ToggleButton
             ColorF glyphDisabled = on ? (s.OnGlyphForeground ?? disFg) : (s.OffGlyphForeground ?? disFg);
             var glyphEl = parts.Apply(PartGlyph, new TextEl(activeGlyph)
             {
-                Size = s.GlyphSize, FontFamily = Theme.IconFont,
+                Size = s.GlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                 Color = glyphRest,
                 HoverColor = glyphRest,   // pinned unchanged on hover, same convention as the label above
                 PressedColor = glyphPressed,

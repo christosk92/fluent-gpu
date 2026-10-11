@@ -172,7 +172,7 @@ The bug this fixes: the old override stored one flat color and every accent FILL
 themes, so light theme showed the washed-out dark-theme shade (strip icons, progress bar, sliders). Gate:
 `gate.theme.accent-ramp`.
 
-### 2.2bis T0 multi-palette axis (SHIPPED — `ThemePalette` + `PaletteSeed`, MUX tabbed-window ladder both themes)
+### 2.2bis T0 multi-palette axis (SHIPPED — presets are `ThemeDefinition`s built from a `PaletteSeed`, MUX tabbed-window ladder both themes)
 
 Beyond the Light/Dark kind switch, T0 tokens support **N base-color presets** (shadcn-style semantic slots +
 multiple value sets). Owner: `src/FluentGpu.Engine/Dsl/{Tokens,PaletteBuilder}.cs`.
@@ -180,9 +180,9 @@ multiple value sets). Owner: `src/FluentGpu.Engine/Dsl/{Tokens,PaletteBuilder}.c
 | Artifact | Role |
 |---|---|
 | `PaletteSeed` | Hue/chroma + light luminance anchors (frame / rail / page / card) + per-theme chrome saturations (`LightChromeSat` / `DarkChromeSat`) |
-| `PaletteBuilder` | Build-time generator → paired `TokenSet` + `ShellPalette` per seed |
-| `ThemePalette` | `{ Id, Light, Dark, LightShell, DarkShell }` — one preset |
-| `Tok.Use(ThemePalette, ThemeKind)` | Pointer swap + `Epoch++` (palette-only changes bump Epoch) |
+| `PaletteBuilder` | Build-time generator → a `ThemeDefinition` per seed (paired `TokenSet` + `ShellPalette`, Fluent-default non-colour tables) |
+| `ThemeDefinition` | One preset (`Id`, `Light`, `Dark`, `LightShell`, `DarkShell` + the non-colour tables, §2.2quinquies); replaces the old `ThemePalette` |
+| `Tok.Use(ThemeDefinition, ThemeKind)` | Pointer swap + `Epoch++` (palette-only changes bump Epoch; non-colour changes also bump `StyleEpoch`) |
 | `TokenSet.LayerOnMicaBaseAlt` | The app-body **plate** material (WinUI `LayerOnMicaBaseAltFillColorDefault`), per-preset since the tabbed ladder — its value is MIRRORED into `ShellPalette.{Toolbar,Sidebar,PlayerBar}` (the shell builders run before the `TokenSet`, so a `TokenSet`→shell read would be circular); the `palette.ladder` gate asserts the mirror |
 | `MicaRef` (`Foundation`) | Reference DWM Mica tones (`Light/Dark` × `Default/Bright/Dim`, ±0x14 assumed swing) — the flatten targets for the tertiary-ink solve, the gates, and the opaque plate/pane equivalents a floating pane needs |
 | `ColorContrast.Flatten` | Straight-alpha composite of a translucent surface over an opaque backdrop (what actually renders) |
@@ -276,6 +276,7 @@ flattened colors rather than element structure.
 | Counter | Bumped by | Host response |
 |---|---|---|
 | `Tok.Epoch` | `Tok.Use` (light/dark, preset) and `Tok.SetAccent` | `RethemeAll()` + `SetThemeTransition(250ms)` — every mounted component re-renders in place and the color diffs cross-fade |
+| `Tok.StyleEpoch` | `Tok.Use(ThemeDefinition, …)` when a NON-colour table changed (always together with `Epoch`) | host-side re-derivation of state pinned from a non-colour table (the scrollbar-arrow icon family); the re-render itself rides `Epoch` |
 | `Tok.WindowBackgroundEpoch` | `Tok.SetWindowBackground` / `Theme.WindowBackground` only | latch + defeat the skip-submit hash once (`_lastPresentedDrawListHash = 0`) — one guaranteed submit, **no** re-render, **no** cross-fade, **no** `OnApplyThemeMaterial` |
 
 The backdrop override has exactly one engine consumer: the frame's clear color, which the host reads **live** at
@@ -303,7 +304,7 @@ leaf values / generated forwarders (NOT SPEC-INDEX §2 contracts); owner `src/Fl
   `ColorContrast.{RelativeLuminance, Ratio, PickContrast}` live in `Foundation/ColorContrast.cs` (pure, alloc-free);
   the near-black ink is `#161616`. Adopted from Wavee's `WaveePalette.OnAccent` (now deletable). Gates:
   `gate.tok.onaccent-contrast`, `gate.tok.onmedia-static-identity`.
-- **Spacing / Radii scales.** `Spacing` (`Dsl/Spacing.cs`) = a 4px-grid scale `XXS(2)/XS(4)/S(8)/M(12)/L(16)/XL(20)/
+- **Spacing / Radii scales.** `Spacing` (`Dsl/Spacing.cs`; static PROPERTIES over `Tok.Definition.Spacing` since E3, §2.2quinquies - not consts) = a 4px-grid scale `XXS(2)/XS(4)/S(8)/M(12)/L(16)/XL(20)/
   XXL(24)/XXXL(32)` + `Gutter(24)` with the existing semantic names re-pointed onto it. `Radii` (`Dsl/Radii.cs`) adds
   `None(0)/Card(8)/Full(999)` (Full clamped to half-box at record time). These make Wavee's `WaveeSpace`/`WaveeRadius`
   const-for-const deletable (G6).
@@ -321,6 +322,53 @@ leaf values / generated forwarders (NOT SPEC-INDEX §2 contracts); owner `src/Fl
   `FluentGpuGlyphs="true"` in the csproj) and emits `public const string <Name> = "\uXXXX";` into `partial class
   FluentGpu.Controls.Icons` (`Icons.Glyphs.g.cs`). Dormant unless a `glyphs.json` is present (per the JSON-source-of-truth
   preference; distinct from the layered-vector `ThemedIconData.g.cs`).
+
+### 2.2quinquies `ThemeDefinition`: the whole theme as one value (SHIPPED — E3 / EP2, `feat/theme-definition`)
+
+Until E3 only colours swapped with `Tok.Use`: spacing and radii were `const`s, the type ramp was literals in `Ui.Caption`..
+`Ui.Display`, elevation was static presets, motion was a hard `switch`, and the body/icon families were mutable statics. A
+theme that wants a different rhythm, corner radius, type ramp, motion table or font could not exist. E3 makes the **whole
+theme one immutable value**, published by one pointer swap. Owner `src/FluentGpu.Engine/Theming/` (namespace
+`FluentGpu.Theming`) plus the token layer `src/FluentGpu.Engine/Dsl/{Tokens,Spacing,Radii,Elevation,Typography,PaletteBuilder}.cs`
+and `Animation/MotionTok.cs`. Leaf values and the `Tok` surface, NOT a SPEC-INDEX §2 contract beyond the registered row.
+
+| Artifact | Role |
+|---|---|
+| `ThemeDefinition` (sealed record) | `Id`, `Light`/`Dark`/`HighContrast?` `TokenSet`, `LightShell`/`DarkShell` `ShellPalette`, `Accent` `AccentRamp`, `Type` `TypeRamp`, `Spacing` `SpacingScale`, `Radii` `RadiiScale`, `Elevation` `ElevationSet`, `Motion` `MotionTable`, `Fonts` `FontSet`, `Materials` `MaterialPolicy`, `Icons` `IconSet`, `Ext` `ExtTokenTable`, `Controls` `ControlStyleTable`, `AppRoles` `object?`. It **replaces `ThemePalette`**: a preset is a definition whose colours come from a `PaletteSeed` and whose other tables are the Fluent defaults |
+| `ThemeDefinition.FluentDefault` | The engine default, **bit-for-bit what the engine shipped before E3**: the Warm preset's colours (`Tok.WarmPalette` is the same instance) with the old `Spacing`/`Radii` consts, the `Ui.*` type ramp, the `Elevation` presets, the `MotionTok.Get` switch and `Segoe UI` / `Segoe Fluent Icons`. `ThemeDefinitionTests` pins every value as a literal |
+| `bool DiffersOnlyInColours(other)` | True when only `Id`, `Light`, `Dark`, `HighContrast`, `LightShell`, `DarkShell`, `Accent`, `Ext` differ. Used by E5 to choose the live cross-fade path (colour-only) over an atomic transaction (anything else). Allocation-free |
+| `Tok.Definition` | The active definition (`Tok.Palette` is kept as an alias for callers that read `.LightShell`/`.Light`) |
+| `Tok.Use(ThemeDefinition, ThemeKind)` | One pointer swap. Bumps `Epoch` (so the paint-time poll, `RethemeAll`, `SetThemeTransition` and the BrushAnim seeding behave exactly as before: colours **and** spacing/radii/type/motion/fonts reach the screen in the same publication) and, when a non-colour table changed, `StyleEpoch`. Same definition + kind is a no-op; an equal-valued definition adopts the new reference and moves no epoch. 0 allocations. `Tok.Use(ThemeKind)` is the light/dark switch on the current definition |
+| `Tok.StyleEpoch` | Bumped with `Epoch` only for non-colour changes. The host uses it to re-derive state pinned from a non-colour table (the overlay-scrollbar arrow icon family, `AppHost.RefreshScrollbarArrowFamily`) |
+| `Tok.SetAccent` | Still public (the OS accent is injected through it by `FluentApp`). It sets an *override* ramp that wins over `Definition.Accent`; clearing it reverts to the definition's accent. A definition whose `Accent` equals the marker `AccentRamp.FluentDefault` (every built-in preset) reads its accent tokens from its baked `TokenSet`s; any other ramp drives the accent tokens exactly like `SetAccent(in AccentRamp)` |
+
+**Token statics are properties.** `Spacing.*`, `Radii.*` (and the composites `PagePadWide`/`CardPad`/`ControlAll`/…),
+`Elevation.*`, `MotionTok.Get` and `Ui.Caption`..`Ui.Display` read `Tok.Definition` **when they are read**; `Theme.BodyFont`/
+`Theme.IconFont` are gone (use `Tok.Definition.Fonts.BodyPrimary` / `.Icon`; `Fonts.Body` is a comma-separated chain, primary
+first, which E9 will walk). The consequences are the rules this section exists to state:
+
+- A theme token must never be read into a `const`, a `static readonly` field, an attribute argument, a `case` label or an
+  optional-parameter default: the value would be the first theme's forever. Use a property, a local, a method body or a
+  lambda thunk. The analyzer **FGTH004** (`FluentGpu.SourceGen/Analyzers/FrozenThemeTokenAnalyzer.cs`, Warning, so an error
+  under warnings-as-errors) flags `const`/`static readonly` fields initialised from `Spacing`, `Radii`, `Elevation`, `Tok`,
+  `Theme` or a type-ramp factory. It ignores reads inside lambdas/local functions, `nameof`/`typeof`, `const`/`readonly` members
+  of those types (theme-invariant, e.g. `Tok.OnMediaPrimary`) and pure helpers (`Radii.Circle`). Optional-parameter defaults
+  become overloads; `SplitButton.CornerRadius` and the `NavigationView` corner statics are properties now.
+- Font families are read at use. The default text family (`TextLayoutEngine`, `GlyphRenderer`, the shaper self-test) is
+  `Tok.Definition.Fonts.BodyPrimary`; the icon family is read at the glyph site (`IconButton.Style.IconFont` is a nullable
+  override) and by the host for the scrollbar arrows. Caches keyed by family string are keyed by the resolved name, so a family
+  change creates a new key; evicting the old default's entries and walking the `Body` chain belong to the font registry (E9).
+- Control `Style` records (`Button.Style`, `IconButton.Style`, …) still capture `Radii.Control` etc. when a style *instance* is
+  built; the per-control style table that makes them theme-owned is E14 (`ControlStyleTable`, a minimal placeholder today).
+
+`MaterialPolicy`, `IconSet`, `ExtTokenTable` and `ControlStyleTable` are deliberately empty records in E3 (equal to each other,
+carried and compared so a definition can already reference them); their members arrive with the window-material, icon-set,
+extension-token and control-style PRs. `ThemeKind` still has only Light/Dark: `HighContrast` is carried by the definition but
+nothing reads it yet. NuGet: this is a breaking API change (`Theme.BodyFont`/`IconFont`, the `Spacing`/`Radii` consts,
+`ThemePalette`, `Tok.Use(ThemePalette, …)`), so the next publish bumps the package minor (0.2.0).
+
+Gates: `Engine.Tests\Theming\ThemeDefinitionTests` (FluentDefault literals, `DiffersOnlyInColours`, epochs, accent, geometry
+in one publication, 0 allocations), `FluentGpu.SourceGen.Tests\FrozenThemeTokenAnalyzerTests` (FGTH004).
 
 ---
 
@@ -923,6 +971,9 @@ all hooks ship **unchanged**. This is the cleanest realization of the PAL seam c
 the `IBrushSink` and `ISystemColors` seam contracts, and the hooks `UseTheme`/`UseSystemColors`/
 `UseHighContrast`/`UseDerivedBrush`/`UseDynamicColor`. Owns the derived-brush eviction discipline (frame-start
 sweep + back-ref `MarkPaintDirty` walk) and the recolor opacity-cross-fade contract.
+Also owns the theme-definition model (§2.2quinquies): `ThemeDefinition` and its tables (`SpacingScale`, `RadiiScale`, `TypeRamp`,
+`ElevationSet`, `MotionTable`, `FontSet`, `MaterialPolicy`, `IconSet`, `ExtTokenTable`, `ControlStyleTable`), `Tok.Definition`/
+`Tok.StyleEpoch`/`Tok.Use(ThemeDefinition, ThemeKind)`, and the FGTH004 frozen-token analyzer.
 
 **HANDS OFF / DEPENDS ON:**
 - **Media** (`FluentGpu.Media`): `UseDynamicColor` is a wrapper over `UseImage(wantPalette:true)`; the worker

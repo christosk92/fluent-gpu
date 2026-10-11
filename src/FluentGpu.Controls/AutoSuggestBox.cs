@@ -622,7 +622,7 @@ public sealed class AutoSuggestBox : Component
                 OnClick = SubmitQuery,
                 Children = [Parts.Apply(PartQueryIcon, new TextEl(QueryIcon!)
                 {
-                    Size = IconFontSize, FontFamily = Theme.IconFont,
+                    Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
                 })],
             };
@@ -866,7 +866,7 @@ internal sealed class SuggestionsList : Component
     {
         var kids = new List<Element>(4);
         if (owner.ItemGlyph is { } g)
-            kids.Add(new TextEl(g) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, Margin = new Edges4(0, 0, 12, 0) });
+            kids.Add(new TextEl(g) { Size = 16f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextSecondary, Margin = new Edges4(0, 0, 12, 0) });
 
         int mi = owner.BoldMatch && query.Length > 0
             ? text.ToLowerInvariant().IndexOf(query.ToLowerInvariant(), System.StringComparison.Ordinal) : -1;

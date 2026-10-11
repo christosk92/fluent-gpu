@@ -1696,6 +1696,11 @@ public sealed partial class AppHost : IDisposable
     // The Mica backdrop override rides its OWN counter (Tok.WindowBackgroundEpoch): a window activation flip changes
     // only the frame's clear color, which is read live at submit, so it repaints WITHOUT a re-render or a cross-fade.
     private int _lastWindowBgEpoch;              // last Tok.WindowBackgroundEpoch the host forced a submit for
+    // The overlay scrollbar's arrow glyphs + their icon family, pinned in the ctor. The family is a member of the active
+    // theme definition (Fonts.Icon) and is re-read when Tok.StyleEpoch moves (RefreshScrollbarArrowFamily), not frozen.
+    private StringId _sbUp, _sbDown, _sbLeft, _sbRight, _sbFam;
+    private string _sbFamName = "";
+    private int _lastStyleEpoch;                 // last Tok.StyleEpoch the host re-derived non-colour host state for
 
     /// <summary>Host seam set by the windowing backend: re-apply the OS window material (DWM immersive-dark + Mica) when
     /// the theme flips. Invoked on the UI thread on every theme change with the new "is dark" flag. Headless leaves it null;
@@ -4881,9 +4886,12 @@ public sealed partial class AppHost : IDisposable
         // arrows silently resolve to "" for the rest of the session.
         StringId sbUp = strings.Intern(IconGlyphs.CaretUpSolid8), sbDown = strings.Intern(IconGlyphs.CaretDownSolid8),
                  sbLeft = strings.Intern(IconGlyphs.CaretLeftSolid8), sbRight = strings.Intern(IconGlyphs.CaretRightSolid8),
-                 sbFam = strings.Intern(Theme.IconFont);
+                 sbFam = strings.Intern(Tok.Definition.Fonts.Icon);
         strings.AddRef(sbUp); strings.AddRef(sbDown); strings.AddRef(sbLeft); strings.AddRef(sbRight); strings.AddRef(sbFam);
         SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, sbUp, sbDown, sbLeft, sbRight, sbFam);
+        _sbUp = sbUp; _sbDown = sbDown; _sbLeft = sbLeft; _sbRight = sbRight; _sbFam = sbFam;
+        _sbFamName = Tok.Definition.Fonts.Icon;
+        _lastStyleEpoch = Tok.StyleEpoch;
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
         if (window.Handle.Kind == NativeHandleKind.Hwnd) _videoSurfaces.WindowHandle = (nuint)window.Handle.Value;   // protected video ties output protection to THIS window (main or pop-out)
@@ -5304,6 +5312,22 @@ public sealed partial class AppHost : IDisposable
         // applied before this ctor returns) has already bumped Tok.Epoch, so the FIRST paint must not see a spurious change.
         _lastThemeEpoch = Tok.Epoch;
         _lastWindowBgEpoch = Tok.WindowBackgroundEpoch;
+    }
+
+    /// <summary>Re-point the overlay scrollbar's arrow glyphs at the active definition's icon family when it changed
+    /// (<c>Tok.StyleEpoch</c>): intern + pin the new family, reconfigure the recorder (which publishes), then drop the old pin.
+    /// The arrow code points are theme-invariant and stay pinned from the ctor.</summary>
+    private void RefreshScrollbarArrowFamily()
+    {
+        string icon = Tok.Definition.Fonts.Icon;
+        if (string.Equals(icon, _sbFamName, StringComparison.Ordinal)) return;
+        StringId family = _strings.Intern(icon);
+        _strings.AddRef(family);
+        StringId previous = _sbFam;
+        _sbFam = family;
+        _sbFamName = icon;
+        SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, _sbUp, _sbDown, _sbLeft, _sbRight, family);
+        _strings.Release(previous);
     }
 
     private void WakeFrame()
@@ -6318,6 +6342,14 @@ public sealed partial class AppHost : IDisposable
             {
                 _lastWindowBgEpoch = Tok.WindowBackgroundEpoch;
                 _lastPresentedDrawListHash = 0;
+            }
+            // A non-colour table changed (Tok.StyleEpoch): re-derive host state that was pinned from one (the icon family
+            // behind the overlay scrollbar's arrows). Runs on the UI thread before the reconcile flush, so the recorded
+            // frame of this publication already carries the new family.
+            if (Tok.StyleEpoch != _lastStyleEpoch)
+            {
+                _lastStyleEpoch = Tok.StyleEpoch;
+                RefreshScrollbarArrowFamily();
             }
             bool virtualsChanged = false;
             double reactiveFlushMs = 0, virtualRealizeMs = 0;

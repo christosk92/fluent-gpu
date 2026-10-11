@@ -860,7 +860,7 @@ static class DiagnosticsSuite
             stockLayerLight && stockLayerLightFlat && stockLayerDark && stockPlate && filesCard,
             $"light={stockLayerLight} lightFlat={stockLayerLightFlat} dark={stockLayerDark} plate={stockPlate} card={filesCard}");
 
-        ThemePalette[] all = [Tok.WarmPalette, Tok.SlatePalette, Tok.NeutralPalette, Tok.AccentTintedPalette];
+        FluentGpu.Theming.ThemeDefinition[] all = [Tok.WarmPalette, Tok.SlatePalette, Tok.NeutralPalette, Tok.AccentTintedPalette];
         bool contrastOk = true;
         bool ladderOk = true;
         var detail = new System.Text.StringBuilder();

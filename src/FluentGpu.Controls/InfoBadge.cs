@@ -273,7 +273,7 @@ public static class InfoBadge
                 new TextEl(glyph)
                 {
                     Size = glyphSize,   // IconPresenter Viewbox target: 8 (padded FontIcon / SymbolIcon) or 14 (unpadded FontIcon)
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextOnAccentPrimary,
                     Margin = contentMargin,   // FontIcon 4,0,4,2 / 'Icon' (symbol) 4,4,4,4 — per the display state
                 },
