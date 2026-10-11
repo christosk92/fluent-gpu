@@ -586,8 +586,13 @@ public sealed class HeadlessSwapchain : ISwapchain
             return;
         }
         if (PresentStandDown) return;
+        PresentObserved?.Invoke();
         PresentCount++;
     }
+
+    /// <summary>Test seam: invoked for every present that actually happens (not held, not stood down), just before it is counted - lets a
+    /// test record the order of presents against the host's other calls (the ordered DWM writes).</summary>
+    public Action? PresentObserved { get; set; }
 
     private bool _holdOnce;
     /// <inheritdoc/>

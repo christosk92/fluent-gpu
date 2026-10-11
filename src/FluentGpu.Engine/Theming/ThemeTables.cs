@@ -182,12 +182,21 @@ public sealed record FontSet
     public static FontSet FluentDefault { get; } = new("Segoe UI", "Segoe Fluent Icons");
 }
 
-/// <summary>Per-theme material policy (window material, opaque canvas, acrylic recipes). Reserved: the members arrive
-/// with the window-material work (EP9); today the host-set <see cref="FluentGpu.Dsl.Materials"/> statics remain the
-/// source and every definition carries the empty policy.</summary>
+/// <summary>Per-theme material policy (EP9). <see cref="Light"/> / <see cref="Dark"/> name the window material the theme wants for
+/// each kind (null = the application's own option decides); a theme that wants an opaque ground says <see cref="WindowMaterial.None"/>
+/// and its <c>WindowBackground</c> token is the ground. The application applies it (<c>FluentApp.SetWindowMaterial</c>);
+/// the host's acrylic recipes stay the <see cref="FluentGpu.Dsl.Materials"/> statics.</summary>
 public sealed record MaterialPolicy
 {
     public static MaterialPolicy FluentDefault { get; } = new();
+
+    /// <summary>The window material for the light kind, or null for "no opinion".</summary>
+    public FluentGpu.Pal.WindowMaterial? Light { get; init; }
+    /// <summary>The window material for the dark kind, or null for "no opinion".</summary>
+    public FluentGpu.Pal.WindowMaterial? Dark { get; init; }
+
+    /// <summary>The material this policy asks for under <paramref name="kind"/> (null = none requested).</summary>
+    public FluentGpu.Pal.WindowMaterial? For(FluentGpu.Dsl.ThemeKind kind) => kind == FluentGpu.Dsl.ThemeKind.Dark ? Dark : Light;
 }
 
 /// <summary>Per-theme icon overrides merged into the themed-icon registry under a theme scope. Reserved: members arrive

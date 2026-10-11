@@ -2483,6 +2483,7 @@ public sealed partial class AppHost : IDisposable
     private bool PresentFrame(in Threading.RenderFrame rf, bool composited, bool hold = false)
     {
         if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
+        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
         {
             if (!_swapchain.PresentNoWait())
@@ -7029,6 +7030,7 @@ public sealed partial class AppHost : IDisposable
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         if (heldInline) _swapchain.HoldNextPresent();
+                        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: ordered DWM writes (see QueueBeforePresent)
                         _swapchain.Present();                       // 11 present (UI thread)
                         if (heldInline && _swapchain.LastPresentHeld) _framesHeld++;
                         else

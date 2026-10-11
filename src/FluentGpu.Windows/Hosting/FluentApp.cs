@@ -34,12 +34,42 @@ public static class FluentApp
     // held here rather than read off the captured options record because DwmSetWindowAttribute is re-callable: both the
     // startup apply and the host's re-theme hook must see the CURRENT variant, or a live change would be reverted by the
     // next theme flip.
-    private static bool s_mica, s_customFrame, s_micaAlt;
+    private static WindowMaterial s_material = WindowMaterial.Mica;
+    private static bool s_composited = true, s_customFrame;
+
+    /// <summary>The window's CURRENT system backdrop (<see cref="WindowMaterial"/>): seeded from <see cref="AppOptions.Material"/>
+    /// (or the legacy <see cref="AppOptions.Mica"/>), changed by <see cref="SetWindowMaterial"/>.</summary>
+    public static WindowMaterial Material => s_material;
+
+    /// <summary>True when the swapchain is composited (a DirectComposition surface bound to the window). Independent of
+    /// <see cref="Material"/>; video needs it.</summary>
+    public static bool Composited => s_composited;
+
+    /// <summary>Change the LIVE window material (EP9): <see cref="WindowMaterial.None"/> removes the DWM backdrop and the glass and
+    /// the frame clears to the theme's opaque ground; the others switch the backdrop. The ground and the DWM write are published
+    /// together: the DWM attribute is queued to the presenting thread (after a <c>DwmFlush</c>) and lands immediately before the
+    /// present that first shows the new ground, so the backdrop never changes a frame before or after the pixels. The new material
+    /// sticks across theme flips. UI-thread only; before the window exists it records the value for the next run. A non-composited
+    /// window keeps an opaque ground whatever the material (only its title bar can show a backdrop).</summary>
+    public static void SetWindowMaterial(WindowMaterial material)
+    {
+        s_material = material;
+        if (WindowHandle == 0 || s_host is not { } host) return;
+        host.SetWindowMaterial(material, Theme.Dark, ordered: true);
+    }
+
+    // The sink the host calls (on the UI thread for an immediate apply, on the presenting thread for an ordered one): align to DWM's
+    // cycle, then write the dark attribute, backdrop and frame extension together.
+    private static void WriteWindowMaterial(nint hwnd, WindowMaterial material, bool dark, bool ordered)
+    {
+        if (ordered) Win32Theme.AlignToDwm();
+        Win32Theme.ApplyWindowMaterial(hwnd, dark, material, s_composited, s_customFrame);
+    }
 
     /// <summary>True when the window is using Mica <b>BaseAlt</b> (a stronger tint of the desktop wallpaper than base
     /// Mica) rather than base Mica. Seeded from <see cref="AppOptions.MicaAlt"/>; changed by
-    /// <see cref="SetWindowMaterialAlt"/>.</summary>
-    public static bool WindowMaterialAlt => s_micaAlt;
+    /// <see cref="SetWindowMaterialAlt"/> / <see cref="SetWindowMaterial"/>.</summary>
+    public static bool WindowMaterialAlt => s_material == WindowMaterial.MicaAlt;
 
     /// <summary>Switch the LIVE window between Mica BaseAlt (<paramref name="micaAlt"/> true) and base Mica — the
     /// re-callable half of the startup <c>ApplyWindowMaterial</c>, for an app that exposes the material as a user setting.
@@ -48,9 +78,8 @@ public static class FluentApp
     /// seeds from <see cref="AppOptions.MicaAlt"/>). No-op when the window is not Mica-backed.</summary>
     public static void SetWindowMaterialAlt(bool micaAlt)
     {
-        s_micaAlt = micaAlt;
-        if (WindowHandle != 0 && s_mica)
-            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, micaAlt);
+        if (s_material is WindowMaterial.Mica or WindowMaterial.MicaAlt)
+            SetWindowMaterial(micaAlt ? WindowMaterial.MicaAlt : WindowMaterial.Mica);
     }
 
     // The LIVE app-zoom state, seeded from AppOptions at Run and re-writable through SetZoom. Held here rather than
@@ -271,7 +300,7 @@ public static class FluentApp
         // the cadence bottleneck on the current build. It is not a product backdrop decision.
         if (EngineSwitches.OpaqueWindow)
         {
-            o = o with { Mica = false };
+            o = o with { Mica = false, Material = WindowMaterial.None, Composited = false };
             Console.Error.WriteLine("[window] --fg opaque — DWM Mica disabled; using opaque HWND swapchain");
         }
 
@@ -304,11 +333,18 @@ public static class FluentApp
         using var app = new Win32App();
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
+        // EP9: material and composition are two decisions. The material is the explicit Material or the legacy Mica/MicaAlt flags;
+        // composited defaults to the legacy rule (on with Mica) unless the app says otherwise - a composited window with no
+        // backdrop (WindowMaterial.None + an opaque ground) is the supported way to keep video without Mica.
+        WindowMaterial material = o.Material ?? WindowMaterialPolicy.FromLegacy(o.Mica, o.MicaAlt);
+        bool composited = o.Composited ?? o.Mica;
+        var plan = WindowMaterialPolicy.Resolve(material, composited, o.CustomFrame);
+        if (!plan.VideoCapable) Console.Error.WriteLine("[window] composited = false: video playback is unavailable (it needs a composited swapchain)");
         var window = (Win32Window)app.CreateWindow(new WindowDesc(
             o.Title,
             new Size2(o.Width, o.Height),
             1f,
-            o.Mica,
+            composited,
             CustomFrame: o.CustomFrame,
             MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight),
             Zoom: ZoomLadder.Clamp(o.Zoom)));
@@ -317,7 +353,7 @@ public static class FluentApp
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
         // Seed the live material state (see SetWindowMaterialAlt) — every later apply reads these, not the options record.
-        s_mica = o.Mica; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt;
+        s_material = material; s_composited = composited; s_customFrame = o.CustomFrame;
         // Seed the live app-zoom state (see SetZoom): the window was CREATED at the clamped factor above, so the first
         // frame already lays out at the user's persisted level — keep the statics in agreement with it.
         s_zoom = ZoomLadder.Clamp(o.Zoom);
@@ -330,15 +366,15 @@ public static class FluentApp
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
         else if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_mica, s_customFrame, s_micaAlt);
-        if (o.Mica) Theme.WindowBackground = ColorF.Transparent;
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_material, s_composited, s_customFrame);
+        if (plan.TransparentGround) Theme.WindowBackground = ColorF.Transparent;
         BootStamp("accent+material");
 
         // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
         // uses to render), so measured wrap/height matches rendered wrap/height exactly. (GDI measure is retired here.)
         var fonts = new DirectWriteFontSystem(strings);
         BootStamp("directwrite-fonts");
-        IGpuDevice device = new D3D12Device(strings, composited: o.Mica, debugLayer: o.D3D12DebugLayer, dred: o.D3D12Dred);
+        IGpuDevice device = new D3D12Device(strings, composited: composited, debugLayer: o.D3D12DebugLayer, dred: o.D3D12Dred);
         BootStamp("d3d12device-ctor");
         // Bring the ADAPTER up here, not at the first CreateSwapchain inside the AppHost constructor below. The three
         // budgets on the next few lines are captured once and read GpuProfile.Tier, which only InitDevice publishes —
@@ -399,7 +435,10 @@ public static class FluentApp
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
         // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the LIVE material
         // statics so a SetWindowMaterialAlt change survives every subsequent theme flip.
-        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_mica, s_customFrame, s_micaAlt);
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_material, s_composited, s_customFrame);
+        // EP9: the ordered writer SetWindowMaterial uses (queued to the presenting thread, DWM-aligned).
+        host.SeedWindowMaterial(material);
+        host.WindowMaterialSink = (m, dark) => WriteWindowMaterial(window.Handle.Value, m, dark, ordered: true);
         // Relay the host's UI-thread OS color-settings-change to the app-layer static event (the app subscribes to follow
         // the OS dark-mode/accent live while its theme mode is "System").
         Action forwardSystemColors = () => SystemColorsChanged?.Invoke();
@@ -434,10 +473,10 @@ public static class FluentApp
         // watchdog fires) - no white/black flash, no fallback-glyph first frame. It needs a composited swapchain (a non-composited
         // target stands a hidden window's presents down), so a non-Mica window keeps today's show-first behaviour.
         s_reveal = null;
-        if (o.RevealOnFirstPresent && o.Mica)
+        if (o.RevealOnFirstPresent && composited)
             s_reveal = new RevealGateOptions { FirstFrameReady = o.FirstFrameReady, TimeoutMs = o.RevealTimeoutMs };
         else if (o.RevealOnFirstPresent)
-            Console.Error.WriteLine("[reveal] RevealOnFirstPresent ignored: the window is not composited (Mica = false)");
+            Console.Error.WriteLine("[reveal] RevealOnFirstPresent ignored: the window is not composited (a hidden window's presents are stood down)");
         if (o.StartHidden) { }
         else if (s_reveal is { } gate) host.BeginRevealGate(gate);
         else window.Show();
@@ -786,6 +825,18 @@ public sealed record AppOptions
     public bool Mica { get; init; } = true;
     /// <summary>Use Mica BaseAlt (the flatter File-Explorer tint) instead of the default Mica Base.</summary>
     public bool MicaAlt { get; init; }
+
+    /// <summary>The window's system backdrop (EP9). Null (the default) keeps the legacy flags: <see cref="Mica"/> /
+    /// <see cref="MicaAlt"/> on = Mica / Mica Alt, <see cref="Mica"/> off = <see cref="WindowMaterial.None"/>. Set it for
+    /// <see cref="WindowMaterial.Acrylic"/> or to say <see cref="WindowMaterial.None"/> while keeping a composited swapchain
+    /// (an opaque ground, no DWM backdrop, video still works). Change it live with <see cref="FluentApp.SetWindowMaterial"/>.</summary>
+    public WindowMaterial? Material { get; init; }
+
+    /// <summary>Whether the swapchain is composited (a DirectComposition surface bound to the window). Null (the default) keeps
+    /// the legacy rule: composited iff <see cref="Mica"/>. Independent of the material: <c>Composited = true</c> with
+    /// <see cref="WindowMaterial.None"/> is allowed; video playback needs a composited window (logged when it is off); a
+    /// non-composited window has an opaque ground whatever the material and no <see cref="RevealOnFirstPresent"/>.</summary>
+    public bool? Composited { get; init; }
     /// <summary>The app draws its own title bar (OS caption stripped; engine caption buttons + snap layouts).</summary>
     public bool CustomFrame { get; init; }
     /// <summary>Adaptive GPU pacing (default <c>true</c>): when MEASURED whole-frame on-GPU execution proves the panel
