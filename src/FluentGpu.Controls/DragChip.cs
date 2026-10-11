@@ -148,7 +148,7 @@ public static class DragChip
         if (refused)
             content.Add(new TextEl(NotAllowedGlyph)
             {
-                Size = 14f, FontFamily = Theme.IconFont, Color = Tok.SystemFillCritical, AlignSelf = FlexAlign.Center,
+                Size = 14f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.SystemFillCritical, AlignSelf = FlexAlign.Center,
             });
 
         var card = new BoxEl
@@ -219,6 +219,6 @@ public static class DragChip
     {
         Width = ArtSize, Height = ArtSize, Corners = Radii.ControlAll,
         Fill = Tok.FillSubtleSecondary, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Children = [new TextEl(glyph) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary }],
+        Children = [new TextEl(glyph) { Size = 16f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextSecondary }],
     };
 }

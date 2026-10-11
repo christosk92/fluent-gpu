@@ -13,38 +13,38 @@ using static FluentGpu.Dsl.Ui;
 [GalleryPage("colors", "Colors & tokens", "Design", Icon = Icons.Brush)]
 sealed class ColorsPage : Component
 {
-    static readonly (string Name, ColorF Value)[] Accent =
+    static (string Name, ColorF Value)[] Accent => new (string Name, ColorF Value)[]
     {
         ("Tok.AccentDefault", Tok.AccentDefault), ("Tok.AccentSecondary", Tok.AccentSecondary),
         ("Tok.AccentTertiary", Tok.AccentTertiary), ("Tok.AccentSubtle", Tok.AccentSubtle),
     };
-    static readonly (string Name, ColorF Value)[] Fills =
+    static (string Name, ColorF Value)[] Fills => new (string Name, ColorF Value)[]
     {
         ("Tok.FillControlDefault", Tok.FillControlDefault), ("Tok.FillControlSecondary", Tok.FillControlSecondary),
         ("Tok.FillCardDefault", Tok.FillCardDefault), ("Tok.FillLayerDefault", Tok.FillLayerDefault),
         ("Tok.FillSolidBase", Tok.FillSolidBase), ("Tok.FillSubtleSecondary", Tok.FillSubtleSecondary),
     };
-    static readonly (string Name, ColorF Value)[] Strokes =
+    static (string Name, ColorF Value)[] Strokes => new (string Name, ColorF Value)[]
     {
         ("Tok.StrokeControlDefault", Tok.StrokeControlDefault), ("Tok.StrokeCardDefault", Tok.StrokeCardDefault),
         ("Tok.StrokeDividerDefault", Tok.StrokeDividerDefault), ("Tok.StrokeSurfaceDefault", Tok.StrokeSurfaceDefault),
     };
-    static readonly (string Name, ColorF Value)[] System =
+    static (string Name, ColorF Value)[] System => new (string Name, ColorF Value)[]
     {
         ("Tok.SystemFillCritical", Tok.SystemFillCritical), ("Tok.SystemFillCaution", Tok.SystemFillCaution),
         ("Tok.SystemFillSuccess", Tok.SystemFillSuccess), ("Tok.SystemFillCriticalBackground", Tok.SystemFillCriticalBackground),
         ("Tok.SystemFillCautionBackground", Tok.SystemFillCautionBackground), ("Tok.SystemFillSuccessBackground", Tok.SystemFillSuccessBackground),
     };
-    static readonly (string Name, ColorF Value)[] Texts =
+    static (string Name, ColorF Value)[] Texts => new (string Name, ColorF Value)[]
     {
         ("Tok.TextPrimary", Tok.TextPrimary), ("Tok.TextSecondary", Tok.TextSecondary),
         ("Tok.TextTertiary", Tok.TextTertiary), ("Tok.TextDisabled", Tok.TextDisabled),
     };
-    static readonly (string Name, float Value)[] RadiiScale =
+    static (string Name, float Value)[] RadiiScale => new (string Name, float Value)[]
     {
         ("Radii.None", Radii.None), ("Radii.Control", Radii.Control), ("Radii.Overlay", Radii.Overlay), ("Radii.Pill", Radii.Pill),
     };
-    static readonly (string Name, float Value)[] SpaceScale =
+    static (string Name, float Value)[] SpaceScale => new (string Name, float Value)[]
     {
         ("XXS", Spacing.XXS), ("XS", Spacing.XS), ("S", Spacing.S), ("M", Spacing.M),
         ("L", Spacing.L), ("XL", Spacing.XL), ("XXL", Spacing.XXL), ("XXXL", Spacing.XXXL),
@@ -111,10 +111,11 @@ sealed class ColorsPage : Component
 
     static Element RadiiRuler()
     {
-        var tiles = new Element[RadiiScale.Length];
-        for (int i = 0; i < RadiiScale.Length; i++)
+        var radii = RadiiScale;
+        var tiles = new Element[radii.Length];
+        for (int i = 0; i < radii.Length; i++)
         {
-            var (name, r) = RadiiScale[i];
+            var (name, r) = radii[i];
             tiles[i] = new BoxEl
             {
                 Direction = 1, Gap = 8f, AlignItems = FlexAlign.Center,
@@ -130,10 +131,11 @@ sealed class ColorsPage : Component
 
     static Element SpacingRuler()
     {
-        var rows = new Element[SpaceScale.Length];
-        for (int i = 0; i < SpaceScale.Length; i++)
+        var scale = SpaceScale;
+        var rows = new Element[scale.Length];
+        for (int i = 0; i < scale.Length; i++)
         {
-            var (name, v) = SpaceScale[i];
+            var (name, v) = scale[i];
             rows[i] = new BoxEl
             {
                 Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, MinHeight = 28f,

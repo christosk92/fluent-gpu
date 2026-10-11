@@ -295,7 +295,7 @@ public sealed class RatingControl : Component
         {
             Width = starSize, Height = starSize, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             HitTestVisible = false,
-            Children = new Element[] { new TextEl(glyph) { Size = starSize, Color = color, FontFamily = Theme.IconFont } },
+            Children = new Element[] { new TextEl(glyph) { Size = starSize, Color = color, FontFamily = Tok.Definition.Fonts.Icon } },
         };
 
         var stars = new Element[max];

@@ -891,7 +891,7 @@ internal sealed class AnnotatedScrollBarCore : Component
                 new TextEl(up ? IconGlyphs.CaretUpSolid8 : IconGlyphs.CaretDownSolid8)
                 {
                     Size = AnnotatedScrollBar.ButtonGlyph,
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = onClick is null ? Tok.TextDisabled : Tok.TextPrimary,
                     HoverColor = Tok.TextSecondary,
                     PressedColor = Tok.TextTertiary,

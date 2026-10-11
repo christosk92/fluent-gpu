@@ -262,7 +262,7 @@ public sealed class CommandBarFlyout : Component
             Children =
             [
                 new TextEl(TriggerLabel) { Size = 14f, Color = Tok.TextPrimary },
-                new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Tok.Definition.Fonts.Icon },
             ],
         };
         // Parts: restyle the trigger freely; the open toggle and the popup anchor capture always win.
@@ -880,7 +880,7 @@ internal sealed class CommandBarFlyoutBody : Component
             Role = AutomationRole.Button,
             Children =
             [
-                new TextEl(Icons.More) { Size = 16f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                new TextEl(Icons.More) { Size = 16f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, FontFamily = Tok.Definition.Fonts.Icon },
             ],
         };
         var m = Parts.Apply(CommandBarFlyout.PartMoreButton, box);
@@ -975,7 +975,7 @@ internal sealed class CommandBarFlyoutBody : Component
         if (hasCheckColumn)
         {
             Element check = isChecked
-                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont }
+                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, FontFamily = Tok.Definition.Fonts.Icon }
                 : new BoxEl { Width = 12f };
             children.Add(new BoxEl
             {
@@ -1024,7 +1024,7 @@ internal sealed class CommandBarFlyoutBody : Component
         if (hasSub)
             children.Add(new TextEl(Icons.ChevronRight)
             {
-                Size = 12f, FontFamily = Theme.IconFont, Margin = new Edges4(12, 0, 10, 0), AlignSelf = FlexAlign.Center,
+                Size = 12f, FontFamily = Tok.Definition.Fonts.Icon, Margin = new Edges4(12, 0, 10, 0), AlignSelf = FlexAlign.Center,
                 Color = enabled ? Tok.TextSecondary : Tok.TextDisabled,
                 PressedColor = enabled ? Tok.TextTertiary : Tok.TextDisabled,
                 DisabledColor = Tok.TextDisabled,

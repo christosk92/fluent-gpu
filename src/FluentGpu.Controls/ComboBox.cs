@@ -528,7 +528,7 @@ public sealed class ComboBox : Component
             [
                 new TextEl(Icons.ChevronDown)
                 {
-                    Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
+                    Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
                     DisabledColor = Tok.TextDisabled,
                 },
@@ -576,7 +576,7 @@ public sealed class ComboBox : Component
                 [
                     new TextEl(Icons.ChevronDown)
                     {
-                        Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
+                        Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                         Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
                         DisabledColor = Tok.TextDisabled,
                     },

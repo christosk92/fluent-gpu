@@ -359,7 +359,7 @@ public sealed class NumberBox : Component
                     // Popup spin glyph: FontSize 16 (NumberBox.xaml:201), TextControlButtonForeground → pressed Tertiary
                     // (NumberBox.xaml:125–146 RepeatButton* remap).
                     Children = [Parts.Apply(PartSpinGlyph,
-                        new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor })],
+                        new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor })],
                 };
                 // Parts: restyle the button; the step mechanics (click + auto-repeat) and the field-keeps-focus guard always win.
                 if (Parts is { } sp)
@@ -412,7 +412,7 @@ public sealed class NumberBox : Component
                     OnClick = step,
                     Children = [Parts.Apply(PartSpinGlyph, new TextEl(glyph)
                     {
-                        Size = s.SpinGlyphSize, FontFamily = Theme.IconFont,   // FontSize 12 (NumberBox.xaml:189)
+                        Size = s.SpinGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,   // FontSize 12 (NumberBox.xaml:189)
                         Color = enabled ? s.SpinGlyphColor : s.SpinGlyphDisabledColor,
                         PressedColor = enabled ? s.SpinGlyphPressedColor : s.SpinGlyphDisabledColor,
                     })],
@@ -446,7 +446,7 @@ public sealed class NumberBox : Component
                 HitTestVisible = false,
                 Children = [new TextEl(s.PopupIndicatorGlyph)
                 {
-                    Size = s.PopupIndicatorGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor,
+                    Size = s.PopupIndicatorGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Color = s.SpinGlyphColor,
                     Margin = new Edges4(0, 0, 8f, 0),
                 }],
             };

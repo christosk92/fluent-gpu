@@ -543,7 +543,7 @@ public sealed class EditableText : Component
         [
             new TextEl(glyph)
             {
-                Size = glyphSize, FontFamily = Theme.IconFont,
+                Size = glyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                 Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
             },
         ],

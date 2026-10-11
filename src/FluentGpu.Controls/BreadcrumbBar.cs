@@ -139,7 +139,7 @@ internal sealed class BreadcrumbBarCore : Component
                     {
                         Size = 12f,                       // BreadcrumbBarChevronFontSize (themeresources:33)
                         Color = Tok.TextPrimary,          // PART_ChevronTextBlock = BreadcrumbBarNormalForegroundBrush = TextFillColorPrimary (BreadcrumbBar.xaml:320, themeresources:9)
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                         Margin = new Edges4(2, 0, 2, 0),  // BreadcrumbBarChevronPadding = 2,0 (BreadcrumbBar.xaml:321, themeresources:7)
                     }));
         }

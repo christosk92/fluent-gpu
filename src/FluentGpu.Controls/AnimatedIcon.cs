@@ -25,7 +25,7 @@ public static class AnimatedIcon
             {
                 Size = size,
                 Color = color ?? Tok.TextPrimary,
-                FontFamily = fontFamily ?? Theme.IconFont,
+                FontFamily = fontFamily ?? Tok.Definition.Fonts.Icon,
             },
         ],
     };

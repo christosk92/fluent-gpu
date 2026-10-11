@@ -760,7 +760,8 @@ Tok.FillControlStrong /*slider rail*/, Tok.ScrollThumb, Tok.FocusOuter/FocusInne
 Tok.Use(ThemeKind.Dark);          // switch theme — one pointer write, re-themes the whole app
 Tok.SetAccent(osAccentColor);     // inject the OS accent at startup
 Tok.SetWindowBackground(color);   // Mica / window background
-Theme.BodyFont = "Segoe UI"; Theme.IconFont = "Segoe Fluent Icons";   // typefaces
+Tok.Use(myDefinition, ThemeKind.Dark);  // switch the WHOLE theme (colours, spacing, radii, type, motion, fonts) - a ThemeDefinition
+var fonts = Tok.Definition.Fonts;                // typefaces: fonts.BodyPrimary, fonts.Icon (read at use)
 ```
 
 `Theme.*` is a small back-compat facade forwarding to `Tok`. `FluentApp.Run` already wires the real OS accent + Mica.
@@ -786,6 +787,6 @@ the fill's WCAG luminance. `Tok.OnAccent` is **baked at accent-set time** (memoi
 **Non-color tokens**: `Spacing` is the 4px grid (`XXS=2, XS=4, S=8, M=12, L=16, XL=20, XXL=24, XXXL=32, Gutter=24`)
 with the semantic names (`PageWide/PageNarrow/Card/Inner/StackS/StackM/StackL` + `PagePadWide/PagePadNarrow/CardPad`
 presets) re-pointed onto it. `Radii` adds `None=0, Card=8, Full=999` alongside `Control=4/Overlay=8/Pill=16`
-(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set.
+(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set. These are static PROPERTIES over `Tok.Definition` (`ThemeDefinition.Spacing`/`Radii`/`Type`/`Elevation`), so a `Tok.Use(definition, kind)` re-lays-out everything built from them: never read one into a `const`, a `static readonly` field or a parameter default (analyzer FGTH004 flags the fields). Start a custom theme from `ThemeDefinition.FluentDefault with { Spacing = ..., Radii = ... }`.
 
 Next: **[rendering-and-performance.md](./rendering-and-performance.md)** — the frame pipeline and how to keep it fast.

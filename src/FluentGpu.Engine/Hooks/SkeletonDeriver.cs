@@ -191,7 +191,7 @@ internal static class SkeletonDeriver
         if (text.Grow > 0f) return float.NaN;
 
         float size = text.Size <= 0f ? 14f : text.Size;
-        if (string.Equals(text.FontFamily, Theme.IconFont, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(text.FontFamily, Tok.Definition.Fonts.Icon, StringComparison.OrdinalIgnoreCase))
             return size;
 
         string value = text.Text.ValueOr("");

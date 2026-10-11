@@ -554,7 +554,7 @@ internal sealed class ScrollBarAnatomy : Component
                 new TextEl(horiz ? (dec ? IconGlyphs.CaretLeftSolid8 : IconGlyphs.CaretRightSolid8) : (dec ? IconGlyphs.CaretUpSolid8 : IconGlyphs.CaretDownSolid8))
                 {
                     Size = ScrollBar.ArrowFontSize,             // (:186)
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Disabled ? Tok.FillControlStrongDisabled : Tok.FillControlStrong,   // (:22/:25)
                     HoverColor = Tok.TextSecondary,             // (:23)
                     PressedColor = Tok.TextSecondary,           // (:24)

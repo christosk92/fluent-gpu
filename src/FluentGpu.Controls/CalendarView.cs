@@ -208,7 +208,7 @@ public sealed class CalendarView : Component
             [
                 new TextEl(glyph)
                 {
-                    Size = NavGlyphSize, FontFamily = Theme.IconFont,
+                    Size = NavGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.FillControlStrong, HoverColor = Tok.FillControlStrong,
                     PressedColor = Tok.FillControlStrong, DisabledColor = Tok.FillControlStrongDisabled,
                 },

@@ -1,4 +1,5 @@
 using FluentGpu.Foundation;
+using FluentGpu.Theming;
 
 namespace FluentGpu.Dsl;
 
@@ -27,10 +28,9 @@ public sealed record ShellPalette(
     ColorF Toolbar, ColorF Sidebar, ColorF PlayerBar, ColorF FileArea, ColorF Content, ColorF ContentAlt,
     ColorF RowZebra, ColorF RowHover, ColorF RowHoverZebra, ColorF RowPressed, ColorF RowPressedZebra);
 
-/// <summary>A named preset: paired light/dark <see cref="TokenSet"/>s + shell surfaces. Switched via <see cref="Tok.Use(ThemePalette, ThemeKind)"/>.</summary>
-public sealed record ThemePalette(string Id, TokenSet Light, TokenSet Dark, ShellPalette LightShell, ShellPalette DarkShell);
-
-/// <summary>Build-time generator for seed-derived theme palettes (startup-only; no per-frame allocation).</summary>
+/// <summary>Build-time generator for seed-derived theme definitions (startup-only; no per-frame allocation). A preset is a
+/// <see cref="ThemeDefinition"/> whose colours come from a <see cref="PaletteSeed"/> and whose non-colour tables are the
+/// Fluent defaults. Switched via <see cref="Tok.Use(ThemeDefinition, ThemeKind)"/>.</summary>
 public static class PaletteBuilder
 {
     // Slate sits at 230° (not the accent default's 210°) so slate and accent-tinted stay tellable apart.
@@ -41,9 +41,26 @@ public static class PaletteBuilder
     public static PaletteSeed AccentTinted(float accentHueDeg)
         => new("accent", accentHueDeg, 0.025f, 0.862f, 0.898f, 0.938f, 0.984f, 0.26f, 0.22f);
 
-    public static ThemePalette Build(PaletteSeed seed) => new(seed.Id, BuildLight(seed), BuildDark(seed), BuildLightShell(seed), BuildDarkShell(seed));
+    public static ThemeDefinition Build(PaletteSeed seed) => new()
+    {
+        Id = seed.Id,
+        Light = BuildLight(seed),
+        Dark = BuildDark(seed),
+        LightShell = BuildLightShell(seed),
+        DarkShell = BuildDarkShell(seed),
+        Accent = AccentRamp.FluentDefault,
+        Type = TypeRamp.FluentDefault,
+        Spacing = SpacingScale.FluentDefault,
+        Radii = RadiiScale.FluentDefault,
+        Elevation = ElevationSet.FluentDefault,
+        Motion = MotionTable.FluentDefault,
+        Fonts = FontSet.FluentDefault,
+        Materials = MaterialPolicy.FluentDefault,
+        Icons = IconSet.FluentDefault,
+        Controls = ControlStyleTable.FluentDefault,
+    };
 
-    public static ThemePalette BuildAccentTinted(ColorF accent) => Build(AccentTinted(ColorRamp.HueDegrees(accent)));
+    public static ThemeDefinition BuildAccentTinted(ColorF accent) => Build(AccentTinted(ColorRamp.HueDegrees(accent)));
 
     /// <summary>The app-body PLATE material — WinUI <c>LayerOnMicaBaseAltFillColorDefault</c>. It backs the toolbar,
     /// the nav pane, the player dock AND the content-pane chrome; the tab rail band above it stays UNPAINTED so the

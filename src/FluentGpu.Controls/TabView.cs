@@ -472,7 +472,7 @@ public sealed class TabView : Component
                 main.Add(new TextEl(glyph)
                 {
                     Size = 16f,                          // TabViewItemHeaderIconSize 16 viewbox (themeresources:246; TabView.xaml:568)
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     // Compact zeroes the icon margin (TabView.xaml:486); standard = 0,0,10,0 (themeresources:247).
                     Margin = compact ? default : new Edges4(0, 0, 10, 0),
                     Color = isSel ? Tok.TextPrimary : Tok.TextSecondary,           // TabViewItemIconForeground (:95) / Selected (:97)
@@ -528,7 +528,7 @@ public sealed class TabView : Component
                         new TextEl(Icons.Cancel)                // E711 (TabView.xaml:576)
                         {
                             Size = 12f,                         // TabViewItemHeaderCloseFontSize (themeresources:251)
-                            FontFamily = Theme.IconFont,
+                            FontFamily = Tok.Definition.Fonts.Icon,
                             Color = Tok.TextPrimary,            // CloseButtonForeground (:132)
                             HoverColor = Tok.TextPrimary,       // PointerOver (:134)
                             PressedColor = Tok.TextSecondary,   // Pressed = TextFillColorSecondary (:133)
@@ -729,7 +729,7 @@ public sealed class TabView : Component
                             new TextEl(back ? CaretLeftSolid8 : CaretRightSolid8)
                             {
                                 Size = 8f,                          // TabViewItemScrollButonFontSize (themeresources:257)
-                                FontFamily = Theme.IconFont,
+                                FontFamily = Tok.Definition.Fonts.Icon,
                                 Color = Tok.TextSecondary,          // ScrollButtonForeground — same token rest/hover/pressed (:116-118)
                                 DisabledColor = Tok.TextDisabled,   // Disabled (:119)
                             },
@@ -791,7 +791,7 @@ public sealed class TabView : Component
                 new TextEl(Icons.Add)                   // E710 (TabView.xaml:41)
                 {
                     Size = 12f,                         // TabViewItemAddButtonFontSize (themeresources:263)
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextPrimary,            // TabViewButtonForeground (:104)
                     HoverColor = Tok.TextPrimary,       // PointerOver (:106)
                     PressedColor = Tok.TextSecondary,   // Pressed = TextFillColorSecondary (:105)

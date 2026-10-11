@@ -392,7 +392,7 @@ internal sealed class FlipViewCore : Component
                         [
                             new TextEl(glyph)
                             {
-                                Size = ButtonFontSize, FontFamily = Theme.IconFont,
+                                Size = ButtonFontSize, FontFamily = Tok.Definition.Fonts.Icon,
                                 Color = Tok.FillControlStrong,    // FlipViewNextPreviousArrowForeground (:10)
                                 HoverColor = Tok.TextSecondary,   // ...PointerOver (:11)
                                 PressedColor = Tok.TextSecondary, // ...Pressed (:12)

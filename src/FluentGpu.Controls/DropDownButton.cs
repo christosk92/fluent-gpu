@@ -105,7 +105,7 @@ public sealed class DropDownButton : Component
         if (Glyph is { Length: > 0 } g)
             children.Add(Parts.Apply(PartIcon, new TextEl(g)
             {
-                Size = 14f, Color = restFg, FontFamily = Theme.IconFont,
+                Size = 14f, Color = restFg, FontFamily = Tok.Definition.Fonts.Icon,
                 Margin = new Edges4(0, 0, 8, 0),                                 // icon→content spacing 8 (WinUI inline icon+text gap; mirrors TabView icon Margin)
                 HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,  // ButtonForeground ramp
             }));
@@ -129,7 +129,7 @@ public sealed class DropDownButton : Component
             [
                 new TextEl(ChevronGlyph)
                 {
-                    Size = ChevronGlyphSize, Color = chevronFg, FontFamily = Theme.IconFont,
+                    Size = ChevronGlyphSize, Color = chevronFg, FontFamily = Tok.Definition.Fonts.Icon,
                     HoverColor = Tok.TextTertiary, PressedColor = Tok.TextTertiary, DisabledColor = Tok.TextDisabled,
                 },
             ],

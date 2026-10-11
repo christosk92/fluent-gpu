@@ -77,7 +77,7 @@ public static class AppBarButton
                 HoverColor = s.HoverForeground,
                 PressedColor = s.PressedForeground,
                 DisabledColor = s.DisabledForeground,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
             },
         };
         if (labeled)
@@ -139,7 +139,7 @@ public static class AppBarButton
         if (hasToggles)
         {
             Element check = isChecked
-                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = enabled ? s.PressedForeground : fg, FontFamily = Theme.IconFont }
+                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = enabled ? s.PressedForeground : fg, FontFamily = Tok.Definition.Fonts.Icon }
                 : new BoxEl();
             children.Add(new BoxEl
             {

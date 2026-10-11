@@ -251,15 +251,20 @@ window (the backdrop becomes acrylic and the window background stays opaque). Th
 
 ## Typefaces and the `Theme` back-compat facade
 
-Typefaces live on `Theme` (the facade), as two plain fields you can assign at startup:
+Typefaces are members of the active theme definition (`Tok.Definition.Fonts`), set by building a definition and installing it with `Tok.Use(definition, kind)`:
 
 ```csharp
-Theme.BodyFont = "Segoe UI";              // default text face for every run
-Theme.IconFont = "Segoe Fluent Icons";    // symbol face for Icon()/IconButton/NavigationView glyphs
+var def = ThemeDefinition.FluentDefault with
+{
+    Fonts = new FontSet("Segoe UI", "Segoe Fluent Icons"),   // body chain (primary first), icon face
+};
+Tok.Use(def, Tok.Theme);
+string body = Tok.Definition.Fonts.BodyPrimary;   // default text face for every run
+string icons = Tok.Definition.Fonts.Icon;         // symbol face for Icon()/IconButton/NavigationView glyphs
 ```
 
-`BodyFont` is the default family for text runs; `IconFont` is the glyph face used by `Ui.Icon`, `IconButton`,
-and the navigation chrome. (Any single run can still override its family with `.Font("Consolas")` — see the
+`Fonts.Body` is the default family for text runs; `Fonts.Icon` is the glyph face used by `Ui.Icon`, `IconButton`,
+and the navigation chrome. (The old `Theme.BodyFont`/`Theme.IconFont` statics are gone.) (Any single run can still override its family with `.Font("Consolas")` — see the
 typography section of **[components, elements & layout](../../guide/components-elements-layout.md)**.)
 
 **`Theme` is a small back-compat facade over `Tok`** (`src/FluentGpu.Engine/Dsl/Theme.cs`). Its flat names forward to
