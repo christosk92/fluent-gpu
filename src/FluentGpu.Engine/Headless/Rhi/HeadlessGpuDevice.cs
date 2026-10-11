@@ -208,7 +208,7 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {
         if (_renderConfined) ThreadGuard.AssertRenderOwner();
-        var sc = new HeadlessSwapchain(desc.SizePx, _renderConfined) { PresentStandDown = desc.DesktopAcrylic && StandDownPopupPresents };
+        var sc = new HeadlessSwapchain(desc.SizePx, _renderConfined) { PresentStandDown = desc.DesktopAcrylic && StandDownPopupPresents, SummarizeBackBuffer = SummarizeLastFrame };
         _primarySwapchain ??= sc;
         _createdSwapchains.Add(sc);
         return sc;
@@ -257,6 +257,26 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     /// headless gate (LayoutShellSuite.cs RZ-SETTLE) creates exactly one swapchain, so this keeps them passing
     /// unchanged.</summary>
     public int HintSettlePresentCount => _primarySwapchain?.HintSettlePresentCount ?? 0;
+
+    /// <summary>The summary of the most recent modelled frame (the one a target's back buffer holds right after its submit):
+    /// the headless stand-in for reading the back buffer, taken on demand by a snapshot capture or a dissolve.</summary>
+    public HeadlessFrameSummary SummarizeLastFrame()
+    {
+        ulong h = 14695981039346656037UL;
+        const ulong P = 1099511628211UL;
+        ColorF first = default;
+        for (int i = 0; i < _rects.Count; i++)
+        {
+            var f = _rects[i].Fill;
+            if (i == 0) first = f;
+            h = (h ^ (uint)BitConverter.SingleToInt32Bits(f.R)) * P;
+            h = (h ^ (uint)BitConverter.SingleToInt32Bits(f.G)) * P;
+            h = (h ^ (uint)BitConverter.SingleToInt32Bits(f.B)) * P;
+            h = (h ^ (uint)BitConverter.SingleToInt32Bits(f.A)) * P;
+        }
+        for (int i = 0; i < _glyphs.Count; i++) h = (h ^ (uint)_glyphs[i].Text.Value) * P;
+        return new HeadlessFrameSummary(FrameCount, _rects.Count, first, h);
+    }
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
@@ -577,22 +597,83 @@ public sealed class HeadlessSwapchain : ISwapchain
     public void Present()
     {
         LastPresentHeld = false;
+        LastPresentDissolved = false;
         if (_holdOnce)
         {
             // A held present (the restore hold): recorded, not shown. Never a stand-down - PresentStandDown / IsOccluded stay put.
             _holdOnce = false;
+            _dissolveFrom = null;
             LastPresentHeld = true;
             HeldPresentCount++;
+            if (RecordPresents) PresentLog.Add(new HeadlessPresentRecord(HeadlessPresentKind.Held, Summarize(), default, 0f, 0));
             return;
         }
-        if (PresentStandDown) return;
+        if (PresentStandDown) { _dissolveFrom = null; return; }
         PresentObserved?.Invoke();
         PresentCount++;
+        if (_dissolveFrom is { } from)
+        {
+            LastPresentDissolved = true;
+            DissolvedPresentCount++;
+            LastDissolveT = _dissolveT;
+            if (RecordPresents) PresentLog.Add(new HeadlessPresentRecord(HeadlessPresentKind.Dissolve, Summarize(), from.Summary, _dissolveT, from.Id));
+            _dissolveFrom = null;
+            return;
+        }
+        if (RecordPresents) PresentLog.Add(new HeadlessPresentRecord(HeadlessPresentKind.Normal, Summarize(), default, 0f, 0));
     }
 
     /// <summary>Test seam: invoked for every present that actually happens (not held, not stood down), just before it is counted - lets a
     /// test record the order of presents against the host's other calls (the ordered DWM writes).</summary>
     public Action? PresentObserved { get; set; }
+
+    private HeadlessFrameSummary Summarize() => SummarizeBackBuffer?.Invoke() ?? default;
+
+    // ── frame freeze (E2): the headless model of a snapshot capture and a dissolve present ───────────────────────────────
+    /// <summary>Reads the device's last modelled frame (the one this target's back buffer holds after its submit). Set by
+    /// <see cref="HeadlessGpuDevice.CreateSwapchain"/>.</summary>
+    internal Func<HeadlessFrameSummary>? SummarizeBackBuffer { get; set; }
+
+    /// <summary>Test switch: record every present into <see cref="PresentLog"/> (off by default so a plain host stays allocation-free).</summary>
+    public bool RecordPresents { get; set; }
+    public List<HeadlessPresentRecord> PresentLog { get; } = new();
+
+    /// <summary>Test switch: model a backend with no snapshot / dissolve support (its thaw is then a cut).</summary>
+    public bool DissolveUnsupported { get; set; }
+
+    public bool SupportsFrameDissolve => !DissolveUnsupported;
+
+    private long _nextSnapshotId;
+    private int _liveSnapshots;
+    private HeadlessFrameSnapshot? _dissolveFrom;
+    private float _dissolveT;
+
+    /// <summary>Snapshots captured and not yet disposed (the freeze's extra textures).</summary>
+    public int LiveSnapshots => _liveSnapshots;
+    /// <summary>Snapshots ever captured.</summary>
+    public int SnapshotsCaptured => (int)_nextSnapshotId;
+    /// <summary>Presents that were dissolves, and the t of the last one.</summary>
+    public int DissolvedPresentCount { get; private set; }
+    public float LastDissolveT { get; private set; }
+    /// <inheritdoc/>
+    public bool LastPresentDissolved { get; private set; }
+
+    /// <inheritdoc/>
+    public IFrameSnapshot? CaptureSnapshot()
+    {
+        if (DissolveUnsupported) return null;
+        _liveSnapshots++;
+        return new HeadlessFrameSnapshot(this, ++_nextSnapshotId, SizePx, Summarize());
+    }
+
+    /// <inheritdoc/>
+    public void DissolveNextPresent(IFrameSnapshot from, float t)
+    {
+        _dissolveFrom = from as HeadlessFrameSnapshot;
+        _dissolveT = t;
+    }
+
+    internal void NoteSnapshotReleased() => _liveSnapshots--;
 
     private bool _holdOnce;
     /// <inheritdoc/>

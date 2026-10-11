@@ -1266,6 +1266,10 @@ public sealed partial class InputDispatcher
         return handled;
     }
 
+    /// <summary>Drop every in-flight pointer interaction (hover, press, capture, an item drag): the frame freeze calls it so no
+    /// interaction state survives behind a tree nobody can see (E2).</summary>
+    internal void CancelInteractions() => CancelPointer();
+
     /// <summary>Clear ALL in-flight pointer interaction across every contact (window deactivated — the WindowBlur path,
     /// no single PointerId). Each live slot's capture side-effects fire (RepeatReleased / OnPointerExit / hover clear)
     /// then its slot is recycled.</summary>

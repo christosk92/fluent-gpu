@@ -391,6 +391,53 @@ public sealed class TierCrossingTests
         AssertSettled(rig, p, 760f);
     }
 
+    // ── a resize during a frame freeze (technical-plan §3.3 rule 8, E2) ────────────────────────────────────────────
+
+    [Fact]
+    public void AResizeDuringAFrameFreeze_CutsIt_EndsTheSnapScope_ThenTheCrossingAnimates()
+    {
+        var p = new TierShell();
+        using var rig = new Rig(p, 400f, composited: true);
+
+        var token = rig.Host.Freeze();
+        rig.Host.Paint(0);                                            // the capture frame
+        Assert.True(rig.Host.IsFrozen);
+        Assert.True(rig.Host.IsSnapping);                             // the freeze owns the snap scope: a transaction's motion lands at its end value
+
+        rig.Resize(900f);
+        rig.KeepAlive();                                              // the resized frame: the CUT, before the frame flushes
+        Assert.Equal(FreezeEnd.CutByResize, token.End);
+        Assert.False(rig.Host.IsFrozen);
+        Assert.False(rig.Host.IsSnapping);                            // the cut ended the snap scope ...
+        Assert.False(rig.Host.Animation.Snapping);
+        AssertOldTierAtNewSize(rig, p, 900f, tiers: 1);               // ... and the resized frame still lays out the OLD tier at the new size
+
+        rig.KeepAlive();                                              // the next, non-resized frame commits the pending tier
+        AssertCrossedWithTracks(rig, p, 900f);                        // so the crossing ANIMATES (tracks), it does not snap
+        AssertSettled(rig, p, 900f);
+    }
+
+    [Fact]
+    public void AnOpenSnapScope_WouldSwallowTheCrossing_SoTheCutMustEndIt()
+    {
+        // The negative control of the test above: the identical sequence with a snap scope still open lands the crossing at its end
+        // values with no tracks. That is the jump the cut exists to prevent.
+        var p = new TierShell();
+        using var rig = new Rig(p, 400f, composited: true);
+
+        rig.Resize(900f);
+        rig.KeepAlive();                                              // the resized frame (no freeze, no scope)
+        AssertOldTierAtNewSize(rig, p, 900f, tiers: 1);
+        using (SnapScope.Enter(rig.Host))
+        {
+            rig.KeepAlive();                                          // the crossing frame, inside a snap scope
+        }
+        Assert.Equal(new[] { 0, 1 }, p.Seen.ToArray());
+        Assert.Equal(220f, rig.Rect(p.Rail).W, 0.5f);                 // it crossed ...
+        Assert.False(rig.HasTracks(p.Rail));                          // ... with nothing animating
+        Assert.False(rig.HasTracks(p.Card));
+    }
+
     // ── negative controls: the two catches that make the host commit step necessary ────────────────────────────────
 
     [Fact]

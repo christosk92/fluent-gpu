@@ -360,6 +360,30 @@ public partial interface IGpuDevice : IDisposable
 public readonly record struct PopupChromeMetrics(
     RectF ContentRectPx, bool OpensUp, float ClosedRatio, float CornerRadiusPx, float BorderPx);
 
+/// <summary>A retained, immutable GPU snapshot of a presented frame (E2): premultiplied colour with alpha, the size of the
+/// target it was captured from. Owned by whoever captured it; <see cref="IDisposable.Dispose"/> releases the texture (the
+/// freeze's "one extra texture", returned when the thaw ends).</summary>
+public interface IFrameSnapshot : IDisposable
+{
+    /// <summary>The captured target size in device pixels.</summary>
+    Size2 SizePx { get; }
+    /// <summary>Always true: the snapshot keeps the premultiplied alpha channel as presented.</summary>
+    bool PremultipliedAlpha { get; }
+}
+
+/// <summary>The cross-dissolve of a frame freeze (E2) as a pure function, so the formula the backend implements is one
+/// testable thing: <c>out = (1-t)·S + t·N</c> applied to the four PREMULTIPLIED channels, alpha included. It is deliberately
+/// not src-over: a pixel that is alpha 0 in both frames (a video hole, a transparent Mica region) stays alpha 0 at every t.</summary>
+public static class FrameDissolve
+{
+    public static ColorF Blend(in ColorF snapshot, in ColorF next, float t)
+    {
+        t = t < 0f ? 0f : (t > 1f ? 1f : t);
+        float s = 1f - t;
+        return new ColorF(s * snapshot.R + t * next.R, s * snapshot.G + t * next.G, s * snapshot.B + t * next.B, s * snapshot.A + t * next.A);
+    }
+}
+
 public interface ISwapchain : IDisposable
 {
     Size2 SizePx { get; }
@@ -475,6 +499,29 @@ public interface ISwapchain : IDisposable
 
     /// <summary>True when the most recent present of THIS target was held (<see cref="HoldNextPresent"/>).</summary>
     bool LastPresentHeld => false;
+
+    // ── Frame freeze (E2): a retained, immutable snapshot of a presented frame, and a premultiplied dissolve from it ──────
+
+    /// <summary>True when this target can <see cref="CaptureSnapshot"/> and <see cref="DissolveNextPresent"/>. A backend that cannot
+    /// (the default) still freezes - the hold, the swallowed input and the deferred video releases are host-side - and its thaw
+    /// is a CUT: the new frame is presented at once, no dissolve.</summary>
+    bool SupportsFrameDissolve => false;
+
+    /// <summary>Capture the frame the last submit drew into THIS target's back buffer - BEFORE its present - as a retained,
+    /// immutable snapshot: premultiplied colour WITH ALPHA, exactly as presented (alpha-0 video holes and the transparent Mica
+    /// regions stay alpha 0; nothing is flattened onto a background). The caller disposes it; a target holds at most the
+    /// snapshots its host asked for. Null when unsupported. Render thread.</summary>
+    IFrameSnapshot? CaptureSnapshot() => null;
+
+    /// <summary>Make the NEXT <see cref="Present"/> / <see cref="PresentNoWait"/> of this target a DISSOLVE: the frame the last
+    /// submit drew (N) is replaced by <c>(1-t)·from + t·N</c> on premultiplied colour AND alpha - a true cross-dissolve, not a
+    /// src-over blend - drawn over a transparent clear so the compositor (DWM) composes the result over its live backdrop.
+    /// Every dissolve present, and the first present after the last one, is a FULL present (no partial-present history may
+    /// keep a stale lerped pixel). One-shot, like <see cref="HoldNextPresent"/>: consumed by that present. Render thread.</summary>
+    void DissolveNextPresent(IFrameSnapshot from, float t) { }
+
+    /// <summary>True when the most recent present of THIS target was a dissolve (<see cref="DissolveNextPresent"/>).</summary>
+    bool LastPresentDissolved => false;
 
     /// <summary>True while THIS target is not being shown: the backend's DXGI occlusion latch is set (DXGI_STATUS_OCCLUDED —
     /// a fully covered HWND swapchain; NOT reliably reported for composition swapchains) OR its last present stood down
