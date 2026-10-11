@@ -30,6 +30,13 @@ public sealed record VirtualListEl : Element
     /// (TextBind/FillBind/SourceBind/…) re-run — zero element rebuild, zero reconcile, zero keys. When set,
     /// <see cref="RenderItem"/>/<see cref="KeyOf"/> are ignored.</summary>
     public Func<IReadSignal<int>, Element>? RowBind { get; init; }
+    /// <summary>BOUND-path template generation (EP6). The reconciler remembers the stamp the live slots were built under; when a
+    /// later element carries a DIFFERENT stamp it rebuilds EVERY slot - realized, prefix, the Spare pool, the content-type
+    /// pools and the keep-alive bucket - from the current <see cref="RowBind"/>, reusing each slot's index signal, and resets the
+    /// measured extents, all in the reconcile that sees the new stamp (one publication). An unchanged stamp never rebuilds, so a
+    /// fresh <see cref="RowBind"/> closure on every render stays a no-op for existing slots (it serves new slots only). Ignored
+    /// on the <see cref="RenderItem"/> path. Default 0.</summary>
+    public int TemplateStamp { get; init; }
     /// <summary>The pluggable item layout seam (distinct from the base <see cref="Element.Layout"/> auto-FLIP channel):
     /// fixed OR measured (IMeasuredVirtualLayout); null ⇒ legacy variable Fenwick extent-table path.</summary>
     public IVirtualLayout? ItemLayout { get; init; }

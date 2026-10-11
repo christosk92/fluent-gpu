@@ -75,6 +75,7 @@ public static class SuiteRegistry
         new("text", "text", TextSuite.Run),
         new("span-links", "text", SpanLinkDispatchChecks.Run),   // inline-hyperlink dispatch ownership; runs with --suite text
         new("bound", "bound", BoundTemplateSuite.Run),
+        new("bound-rows", "bound", FluentGpu.VerticalSlice.Suites.BoundRowsSuite.Run),   // EP6 (E13): BoundRowTemplate + stamp-driven rebuild of every slot and pool, recycle hit rate, 0 hot-phase alloc
         new("listrow", "listrow", ListRowSuite.Run),   // scroll-rework Wave 0.E: ListRowEl one-node-per-row / zero-alloc-text-change / placeholder-geometry gates
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),
