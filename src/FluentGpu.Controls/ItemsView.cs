@@ -471,7 +471,7 @@ public delegate BoxEl ItemContainerFactory(
 /// • Selection is DECOUPLED from realization: SelectAll over 50k items stores one range; only the realized window
 ///   re-skins (this component subscribes to <c>SelectionModel.Version</c>).
 /// </summary>
-public sealed class ItemsView : Component
+public sealed class ItemsView : Component, IPropsHost
 {
     private const float TypeaheadResetMs = 1000f;
     private const int GeometricScan = 512;   // bounded candidate scan for custom-layout arrow nav
@@ -520,6 +520,25 @@ public sealed class ItemsView : Component
     /// row containing a Component/Marquee/bound leaf never replays its Enter transition). Mutually exclusive with
     /// <see cref="ItemTemplate"/>/<see cref="ContainerFactory"/>; gated by <see cref="BoundMode"/>.</summary>
     public Func<RowScope, Element>? RowTemplate;
+
+    // EP6: the live bound-list props (BoundListProps<TRow> via Embed.Comp(props, factory)); null for a propless mount. The latest
+    // props object always supplies the template for NEW slots; the stamp rides a signal so only a stamp change re-renders.
+    private IBoundListProps? _boundProps;
+    private Signal<int>? _boundStamp;
+    private Func<RowScope, Element>? _buildBoundRow;
+
+    /// <summary>The re-pushed props seam (<see cref="IPropsHost"/>): a <see cref="BoundListProps{TRow}"/> delivers the row
+    /// template (latest write wins, no re-render) and the template stamp (equality-gated signal: a change re-renders this view
+    /// once so the VirtualListEl carries the new stamp and the reconciler rebuilds every slot).</summary>
+    void IPropsHost.ApplyProps(object props)
+    {
+        if (props is not IBoundListProps p) return;
+        _boundProps = p;
+        if (_boundStamp is null) _boundStamp = new Signal<int>(p.TemplateStamp);
+        else _boundStamp.SetIfChanged(p.TemplateStamp);
+    }
+
+    private Element BuildBoundRow(RowScope scope) => _boundProps!.Build(scope);
     /// <summary>True ⇒ the bound realize path (<see cref="RowTemplate"/> + <see cref="VirtualListEl.RowBind"/>): rows are
     /// persistent slots; selection/current/now-playing re-skin in place via per-row binds, never a list re-render.</summary>
     public bool BoundMode;
@@ -728,7 +747,14 @@ public sealed class ItemsView : Component
                                       ListOptions? options = null)
     {
         var o = options ?? ListOptions.Default;
-        return Embed.Comp(() => new ItemsView
+        return Embed.Comp(() => NewBoundView(itemCount, rowTemplate, layout, o));
+    }
+
+    /// <summary>The bound ItemsView both <c>CreateBound</c> families mount. <paramref name="rowTemplate"/> is null on the typed
+    /// (props) path, where <see cref="BoundListProps{TRow}"/> supplies the template.</summary>
+    private static ItemsView NewBoundView(int itemCount, Func<RowScope, Element>? rowTemplate, RepeatLayout layout, ListOptions o)
+    {
+        return new ItemsView
         {
             ItemCount = itemCount,
             ItemCountSignal = o.CountSignal,
@@ -770,7 +796,7 @@ public sealed class ItemsView : Component
             MeasureAll = o.MeasureAll,
             RepaintBoundary = o.RepaintBoundary,
             KeepAlive = o.KeepAlive,
-        });
+        };
     }
 
     /// <summary>The typed bound factory. The collection snapshot and recycled slot index are resolved together through
@@ -779,6 +805,23 @@ public sealed class ItemsView : Component
     /// that read the item signal. Typed callbacks resolve the current item at invocation time.</summary>
     public static Element CreateBound<T>(BoundItemsSource<T> items, Func<BoundItemScope<T>, Element> rowTemplate,
                                          RepeatLayout layout, ListOptions<T>? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(rowTemplate);
+        return CreateBound(items, (BoundItemScope<T> row, in RowStyleContext _) => rowTemplate(row), layout, options);
+    }
+
+    /// <summary>The typed bound factory with a <see cref="BoundRowTemplate{TRow}"/> (EP6) - the same list as
+    /// <see cref="CreateBound{T}(BoundItemsSource{T}, Func{BoundItemScope{T}, Element}, RepeatLayout, ListOptions{T}?)"/>, delivered
+    /// through the props channel (<see cref="BoundListProps{TRow}"/>). <paramref name="rowTemplate"/> still runs once per slot and
+    /// additionally receives a <see cref="RowStyleContext"/> (<paramref name="metrics"/> + the theme's app roles).
+    /// <paramref name="templateStamp"/> is the template generation: when a later render of this call passes a DIFFERENT value, every
+    /// slot of the list (realized, Spare pool, content-type pools, keep-alive bucket) is rebuilt from the then-current template
+    /// with the same index signals and the measured extents are reset, in one reconcile (inside the host's <c>SnapScope</c> when a
+    /// transaction has one open). The same stamp never rebuilds: pass a value that changes exactly when the row shape the template
+    /// builds changes (a theme/option template epoch), not a counter that moves on every render.</summary>
+    public static Element CreateBound<T>(BoundItemsSource<T> items, BoundRowTemplate<T> rowTemplate,
+                                         RepeatLayout layout, ListOptions<T>? options = null,
+                                         int templateStamp = 0, object? metrics = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(rowTemplate);
@@ -835,11 +878,8 @@ public sealed class ItemsView : Component
             OnVisibleRange = o.OnVisibleRange,
         };
 
-        return CreateBound(
-            items.Count.Peek(),
-            scope => rowTemplate(new BoundItemScope<T>(scope, items.BindItem(scope.Index, scope.Runtime!, comparer: o.ItemComparer))),
-            layout,
-            baseOptions);
+        var props = new BoundListProps<T>(rowTemplate, templateStamp, items, o.ItemComparer, metrics);
+        return Embed.Comp<ItemsView, BoundListProps<T>>(props, () => NewBoundView(items.Count.Peek(), null, layout, baseOptions));
     }
 
     // ── built-in presets (the former ListView/GridView controls, folded onto ItemsView) ──────────────
@@ -2008,7 +2048,16 @@ public sealed class ItemsView : Component
         Func<IReadSignal<int>, Element>? rowBind = null;
         Action<int>? onSlotWindow = null;
         Action<int, int>? onSlotRebind = null;
-        if (BoundMode && RowTemplate is { } rowTpl)
+        // EP6: with live BoundListProps the template is the props' (latest write) and the stamp is read here, so a stamp change -
+        // and only a stamp change - re-renders the view and reaches the reconciler as VirtualListEl.TemplateStamp.
+        Func<RowScope, Element>? boundTemplate = RowTemplate;
+        int templateStamp = 0;
+        if (BoundMode && _boundProps is not null)
+        {
+            templateStamp = _boundStamp!.Value;
+            boundTemplate = _buildBoundRow ??= BuildBoundRow;
+        }
+        if (BoundMode && boundTemplate is { } rowTpl)
         {
             // The tab-stop re-sync triggers: the stop's item entering/leaving the window, or a rebind onto/off it.
             onSlotWindow = index =>
@@ -2073,6 +2122,7 @@ public sealed class ItemsView : Component
                 ItemCount = count,
                 ItemLayout = layout,
                 RowBind = rowBind,
+                TemplateStamp = templateStamp,
                 PersistentPrefixCount = PersistentPrefixCount,
                 MeasureAll = MeasureAll,
                 ContentType = ContentType,       // #16 recycle-pool discriminator (bound path)

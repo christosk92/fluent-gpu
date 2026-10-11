@@ -64,6 +64,8 @@ public sealed partial class TreeReconciler
     private sealed class VirtualEntry
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
+        // EP6: the VirtualListEl.TemplateStamp the live bound slots were built under; a different stamp on a later pass rebuilds them all.
+        public int BuiltStamp;
         // W2-E3: the viewport's VISIBLE item band [VisibleFirst, VisibleLast) (whole rows for a grid/FillRow layout) as of
         // the latest RealizeWindow — the reference every image request from a realized slot classifies against (inside →
         // Visible lane; realized in the overscan halo, incl. the +1 guard rows → Overscan lane). Written before the
@@ -218,6 +220,18 @@ public sealed partial class TreeReconciler
     /// <summary>Probe seam (VerticalSlice gate.virt.slotPool*): parked spare slots of the bound list at <paramref name="viewport"/>.</summary>
     internal int SpareSlotCount(NodeHandle viewport)
         => _virtuals.TryGetValue(viewport, out var e) && e.Spare is { } sp ? sp.Count : 0;
+
+    /// <summary>Probe seam (EP6 gate.boundrows.*): keep-alive-parked slots of the bound list at <paramref name="viewport"/>.</summary>
+    internal int KeptSlotCount(NodeHandle viewport)
+        => _virtuals.TryGetValue(viewport, out var e) && e.Kept is { } kept ? kept.Count : 0;
+
+    /// <summary>Probe seam: the root node of the keep-alive-parked slot bound to <paramref name="item"/>.</summary>
+    internal bool TryGetKeptSlotRoot(NodeHandle viewport, int item, out NodeHandle root)
+    {
+        if (_virtuals.TryGetValue(viewport, out var e) && e.Kept is { } kept && kept.TryGetValue(item, out var ks)) { root = ks.Root; return true; }
+        root = default;
+        return false;
+    }
 
     /// <summary>Probe seam: the root node of the <paramref name="i"/>-th parked spare slot.</summary>
     internal bool TryGetSpareSlotRoot(NodeHandle viewport, int i, out NodeHandle root)
@@ -3278,7 +3292,7 @@ public sealed partial class TreeReconciler
         var content = _scene.CreateNode(1);
         _scene.AppendChild(node, content);
         _scene.ScrollRef(node).ContentNode = content;
-        _virtuals[node] = new VirtualEntry { El = ve };
+        _virtuals[node] = new VirtualEntry { El = ve, BuiltStamp = ve.TemplateStamp };
         RealizeWindow(node, ve, mount: true);   // E4: mount realizes the VISIBLE band only; overscan trickles via the budget
         ve.OnRealized?.Invoke(node);   // E11: viewport-handle escape hatch (ItemsView StartBringItemIntoView / sticky pinning)
     }
@@ -3342,6 +3356,11 @@ public sealed partial class TreeReconciler
         float cross = horizontal ? (sc.ContentH > 0f ? sc.ContentH : sc.ViewportH > 0f ? sc.ViewportH : Hint(ve.Height))
                                  : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW > 0f ? sc.ViewportW : Hint(ve.Width));
         if (ve.ItemLayout is IViewportVirtualLayout vvl) vvl.SetViewport(viewport, cross);
+
+        // EP6: a changed template stamp re-measures everything - drop the extent source (and a reseedable layout's measured
+        // table) BEFORE it is consulted, so this pass plans its window against fresh extents; the slots are rebuilt below.
+        bool rebuildBound = ve.RowBind is not null && entry.BuiltStamp != ve.TemplateStamp;
+        if (rebuildBound) ResetBoundMeasure(node, ve, count);
 
         ref ScrollState scEnsure = ref _scene.ScrollRef(node);
         IExtentSource ext = EnsureExtentSource(ref scEnsure, ve, count, cross);
@@ -3431,6 +3450,7 @@ public sealed partial class TreeReconciler
             // P3 (virtualization.md §5.5): every bound realize pass runs under SuppressBoundTransitions so a bound-channel
             // transition seed or the P1 Visible Enter seed snaps instead of animating.
             using var _suppressBoundTx = PushSuppressBoundTransitions();
+            if (rebuildBound) RebuildBoundSlots(node, content, entry, ve);   // EP6: every slot + pool, same index signals
             if (prefix > 0 || entry.PrefixSlots is { Count: > 0 })
                 RealizeBoundWindowWithPersistentPrefix(node, content, entry, ve, prefix, first, last, w, visibleSlots);
             else if (ve.KeepAlive is not null || ve.ContentType is not null)

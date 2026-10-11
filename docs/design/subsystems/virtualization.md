@@ -568,6 +568,35 @@ node, reached through a bound-window recycle instead, seeds nothing on that node
 
 ---
 
+### 5.6 Bound-row templates and the stamp-driven slot rebuild (EP6)
+
+A bound slot's subtree is built once and recycled by an index-signal write, so a new row template can never reach a slot
+that already exists. The explicit edge is `VirtualListEl.TemplateStamp` (engine) / `BoundListProps<TRow>.TemplateStamp`
+(`ItemsView.CreateBound(items, BoundRowTemplate<T>, layout, options, templateStamp:, metrics:)`):
+
+- `ItemsView.CreateBound` (typed) is an `Embed.Comp(props, factory)` of the `ItemsView` with `BoundListProps<TRow>` (template,
+  stamp, source, comparer, metrics) delivered through `IPropsHost.ApplyProps`: the template and metrics are latest-write values,
+  the stamp rides an equality-gated signal. A parent that hands a fresh delegate every render therefore re-renders nothing; only a
+  stamp change re-renders the view, which then carries the new stamp on its `VirtualListEl`.
+- `BoundRowTemplate<TRow>(BoundItemScope<TRow> row, in RowStyleContext ctx)`: `RowStyleContext` exposes the active theme's
+  `AppRoles` (`App<T>()`) and the list-level `Metrics` object the application supplied (`MetricsAs<T>()`). The template still
+  runs once per slot.
+- The reconciler remembers the stamp the slots were built under (`VirtualEntry.BuiltStamp`). A pass that sees a different stamp
+  (before it consults the extent source) drops the extent source (and reseeds a `MeasuredStackVirtualLayout`), then rebuilds EVERY
+  slot: the realized slots, the persistent prefix, the Spare pool, the content-type pools and the keep-alive bucket. Each slot
+  keeps its index signal; the new subtree is mounted from the current `RowBind`, replaces the old one in the same position or
+  pool (parked ones are re-parked), and the old subtree is freed at once (no exit orphan). All of it happens in the reconcile that
+  sees the stamp, so one publication carries the new template everywhere. The mounts run inside the realize pass, which already
+  snaps bound transitions; under a `SnapScope` the reconciler's `SnapMotion` checks keep every seed at its end value. An unchanged
+  stamp rebuilds nothing, whatever the `RowBind` closure identity does (it serves only newly created slots).
+- The recycle hit rate is preserved: the pools are rebuilt, not dropped, so the next grow still takes a parked slot instead of
+  cold-mounting. Frame phases 6-13 stay allocation-free; the rebuild itself is a reconcile-edge flush.
+- Analyzer FGTH003 (Info; promote per project): a bound row template or a keyed `Virtual.List` row may not contain `Embed.Comp`,
+  `Slots.View`, `ctx.View`, `Flow.*`, `Ctx.Provide`, `Skel.*` or the boundary element records.
+- Gates: VerticalSlice suite `bound-rows` (`gate.boundrows.*`); analyzer tests `RowTemplateBoundaryAnalyzerTests`.
+
+---
+
 ## 6. Uniform fast path vs variable-height + anchoring (POLICY owned here; mechanics in layout.md)
 
 The single most important *policy* decision (the mechanics — `VirtualLayout` two-pass, the Fenwick offset↔index

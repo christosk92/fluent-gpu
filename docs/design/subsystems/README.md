@@ -162,6 +162,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | UseTheme / UseSystemColors / UseHighContrast / UseDerivedBrush / UseDynamicColor | theming.md (UseDynamicColor's wantPalette trigger half: media-pipeline.md) |
 | **Theme definition model** — `ThemeDefinition` + its tables, `Tok.Definition`/`StyleEpoch`/`Use(ThemeDefinition, ThemeKind)`, the FGTH004 frozen-token analyzer | theming.md §2.2quinquies |
 | **View slots + option cells** — `Slots.View`, `ViewKey<TProps>`/`StyleKey<TStyle>`/`ViewTemplate<TProps>`/`ViewSlotArgs<TProps>`, `ViewRegistry`(+`Builder`, `Context`), `ViewContext` (incl. `AppRolesContext`), `OptionKey<T>`/`IOptionReader`/`IOptionRequests`/`IOptionPersistence`/`OptionStore` (`src\FluentGpu.Engine\Theming\`) | theming.md §16 |
+| **Bound-row templates + slot rebuild** - `BoundRowTemplate<TRow>`, `RowStyleContext`, `IBoundListProps`/`BoundListProps<TRow>`, `ItemsView.CreateBound(..., templateStamp, metrics)`, `VirtualListEl.TemplateStamp`, the reconciler's `RebuildBoundSlots` (`Reconciler.BoundRebuild.cs`) | virtualization.md §5.6 |
 | UseFocus / UseElementRef / UseCommand / UseAccelerator / UseGesture / UseAnnounce | input-a11y.md |
 | **UseScroll / UseScrollProgress + `ScrollCtx.Nearest`** (the nearest scroller's `ScrollHandle` signals as a `ScrollObservation`; normalized progress memo) | scroll.md §5.4 |
 | **UseDragState / UseDragPosition** (live drag snapshot + the two bound drag-position signals) | input-a11y.md §12 (contract) / controls.md §7.4 (`DragPreviewLayer`, the only consumer) |
