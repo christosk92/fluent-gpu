@@ -167,7 +167,13 @@ public static class FluentApp
     public static void SetWindowVisible(bool visible)
     {
         if (s_window is not { IsClosed: false } w || w.IsVisible == visible) return;
-        if (visible) w.Show();
+        if (visible)
+        {
+            // A show-from-hidden under RevealOnFirstPresent repaints the frame into the hidden window and shows it on its present
+            // (re-armed reveal exemption), instead of showing whatever the swapchain last held. Idempotent while one is pending.
+            if (s_reveal is { } gate && s_host is { } host) { if (!host.IsRevealPending) host.BeginRevealGate(gate); }
+            else w.Show();
+        }
         else w.Hide();
     }
 
@@ -424,8 +430,18 @@ public static class FluentApp
 
         // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
         // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
-        if (!o.StartHidden) window.Show();
-        BootStamp(o.StartHidden ? "window-start-hidden" : "window-show");
+        // RevealOnFirstPresent (EP8): the window stays hidden until its first frame has presented with the app's fonts ready (or the
+        // watchdog fires) - no white/black flash, no fallback-glyph first frame. It needs a composited swapchain (a non-composited
+        // target stands a hidden window's presents down), so a non-Mica window keeps today's show-first behaviour.
+        s_reveal = null;
+        if (o.RevealOnFirstPresent && o.Mica)
+            s_reveal = new RevealGateOptions { FirstFrameReady = o.FirstFrameReady, TimeoutMs = o.RevealTimeoutMs };
+        else if (o.RevealOnFirstPresent)
+            Console.Error.WriteLine("[reveal] RevealOnFirstPresent ignored: the window is not composited (Mica = false)");
+        if (o.StartHidden) { }
+        else if (s_reveal is { } gate) host.BeginRevealGate(gate);
+        else window.Show();
+        BootStamp(o.StartHidden ? "window-start-hidden" : s_reveal is not null ? "window-reveal-gate" : "window-show");
 
         // Optional diagnostic-harness takeover (the gallery's SoakProbe longevity / leak-hunt + targeted-stress modes,
         // selected by the gallery's command line). Installed via FluentApp.DiagnosticRun; when it handles the run it
@@ -689,10 +705,12 @@ public static class FluentApp
         s_zoomWindow = null; s_zoom = 1f;   // same for the zoom seam: a later SetZoom must not poke a dead window.
         s_window = null;    // and the lifecycle seam: CloseWindow/SetWindowVisible after the run are no-ops.
         s_host = null;
+        s_reveal = null;
         s_gpuDevice = null;
     }
 
     private static AppHost? s_host;
+    private static RevealGateOptions? s_reveal;   // non-null while RevealOnFirstPresent gates every show-from-hidden
     private static D3D12Device? s_gpuDevice;
 
     /// <summary>The engine's live-object census (scene nodes, strings, decoded-image bytes, components, bindings,
@@ -805,6 +823,22 @@ public sealed record AppOptions
     /// the sign-in start of an app that lives in the notification area. Deciding WHEN to start hidden is the app's
     /// (only the startup activation, never a Start-menu click); the engine only honours it.</summary>
     public bool StartHidden { get; init; }
+
+    /// <summary>Keep the window hidden until its first frame has PRESENTED with <see cref="FirstFrameReady"/> true, then show it
+    /// (EP8): the first thing the user sees is the final frame, with the OS material and dark attribute already applied. The same
+    /// gate re-arms for every later <see cref="FluentApp.SetWindowVisible"/>(true) (tray restore): the frame is repainted into
+    /// the hidden window and shown on its present. Requires a composited window (<see cref="Mica"/>); ignored (and logged)
+    /// otherwise. A watchdog (<see cref="RevealTimeoutMs"/>) shows the window anyway. Default false (show first, as before).</summary>
+    public bool RevealOnFirstPresent { get; init; }
+
+    /// <summary>The fonts-ready predicate of <see cref="RevealOnFirstPresent"/>: true once the first screen's fonts are loaded
+    /// (pass the font registry's readiness). Evaluated on the UI thread every frame while the reveal is pending. Null = ready
+    /// at once.</summary>
+    public Func<bool>? FirstFrameReady { get; init; }
+
+    /// <summary>The watchdog of <see cref="RevealOnFirstPresent"/> (ms, default 750): the window is shown anyway when a ready
+    /// frame has not presented by then.</summary>
+    public int RevealTimeoutMs { get; init; } = 750;
 
     /// <summary>Item E: the scene store's (and the render seam's snapshot slots') starting node capacity, and the
     /// floor cold maintenance will never trim it back below. 0 (the default) keeps the engine's own small default (64,

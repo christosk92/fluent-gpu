@@ -424,6 +424,14 @@ public interface ISwapchain : IDisposable
     /// with an empty content surface. Backends that do not track it report true (today's unconditional reveal).</para></summary>
     bool HasPresentedContent => true;
 
+    /// <summary>RE-ARM the reveal exemption (EP8): forget that this target ever presented content, so the NEXT present is the
+    /// "atomic reveal frame" again - exempt from the hidden / cloaked / covered stand-down of a composited target - and
+    /// <see cref="HasPresentedContent"/> reads false until that present lands. Called before a hidden window is shown again (tray
+    /// restore, wake) so the host can paint the frame it will show into the hidden window and reveal on its present, instead of
+    /// showing the last frame it had. The cold-start reveal needs no call (a fresh target has never presented). Backends that
+    /// do not track presented content ignore it.</summary>
+    void ArmRevealExemption() { }
+
     /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
     /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>
     void ConfigurePopupChrome(in PopupChromeMetrics m) { }

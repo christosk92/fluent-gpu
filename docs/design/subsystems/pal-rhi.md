@@ -480,6 +480,26 @@ promise otherwise. Gate: `gate.occlusion.hook-follows-swapchain` (`SeriesSuite`)
 
 ---
 
+### 2.5 The main-window reveal gate and the re-armable reveal exemption (AS-BUILT 2026-10, EP8)
+
+A composited window shown before its swapchain has presented is a hollow or wrong-coloured rectangle, so the main window now
+uses the pop-out rule (the hidden window + first-present reveal, `DetachedRevealGate`) behind a public host API.
+
+| Member | Contract |
+|---|---|
+| `AppHost.BeginRevealGate(RevealGateOptions? = null)` | Main window, UI thread, window **hidden**. Arms the gate: the host is exempt from the hidden-window park (`_revealPending`, shared with the pop-out reveal) so the frame the reveal waits for paints into the hidden window; re-arms the swapchain exemption; requests a full repaint. A pop-out throws (it uses `BeginDetachedReveal`). |
+| `RevealGateOptions { FirstFrameReady, TimeoutMs = 750 }` | `FirstFrameReady` is evaluated at the start of every frame while pending (null = ready); the first frame at which it is true records `PublishSequence` and asks for a fresh publication. `TimeoutMs` is the watchdog. |
+| Reveal condition (`TryRevealMain`, after `RunFrame`) | `FirstFrameReady` was seen true **and** `ISwapchain.HasPresentedContent` **and** `RenderPresentSeq` is newer than the publication recorded at the ready edge (a stood-down present or a pre-ready frame never reveals), **or** the watchdog deadline. Then, once: `OnApplyThemeMaterial(Tok.Theme == Dark)` (OS material + dark attribute, and anything that changed while hidden, land **before** the window is visible), `IPlatformWindow.Show()`, `MainRevealed(RevealTiming)`, one `[reveal] main shown ...` line. |
+| `ISwapchain.ArmRevealExemption()` (default no-op) | Forgets that the target ever presented content: `HasPresentedContent` reads false and the next present of a composited target is the exempt reveal frame again (`D3D12Device.Present`'s `revealFrame`). `BeginRevealGate` calls it, so a tray restore repaints into the hidden window and shows on that present instead of showing the last frame. |
+| `AppOptions.RevealOnFirstPresent` / `FirstFrameReady` / `RevealTimeoutMs` (`FluentApp`) | Cold start calls `BeginRevealGate` instead of `window.Show()`; `FluentApp.SetWindowVisible(true)` re-arms it for every later show-from-hidden. Needs a composited window (`Mica`); a non-composited window logs and keeps show-first. While pending the `WindowStateChanged` relay reads the window as visible, so the real Show is not a second "shown" edge. |
+
+**Not done (still open from the plan's E6 item):** decoupling `Composited` from `Mica` (`AppOptions.Composited`, the sites listed in
+the technical plan) and a real `WindowMaterial.None`; a non-composited target stands a hidden window's presents down, so the gate
+is composited-only. Tests: `RevealGateTests` (headless window: show after the first ready present and after the material callback,
+the watchdog, a stood-down present, re-arm for a show-from-hidden).
+
+---
+
 ## 3. D3D12 device, queues, fences, heaps, allocator (`FluentGpu.Windows` D3D12/)
 
 Forked from ComputeSharp's compute-only `GraphicsDevice` (per `architecture-spec.md` §3b.3): keep

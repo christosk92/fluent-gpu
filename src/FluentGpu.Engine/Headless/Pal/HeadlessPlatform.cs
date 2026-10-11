@@ -230,7 +230,11 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public void SetCursor(CursorId id) => LastCursor = id;
     public void SetTitle(StringId title) { }
-    public void Show() { Shown = true; IsVisible = true; ShowCalls++; }
+    public void Show() { ShowObserved?.Invoke(); Shown = true; IsVisible = true; ShowCalls++; }
+
+    /// <summary>Test seam: invoked at the start of every <see cref="Show"/>, before the window reads as shown - lets a test
+    /// record the order of the host's calls around the show (material applied, first present, show).</summary>
+    public Action? ShowObserved { get; set; }
 
     /// <summary>How many times <see cref="Show"/> was called (test seam): the pop-out reveal must show its window exactly once.</summary>
     public int ShowCalls { get; private set; }

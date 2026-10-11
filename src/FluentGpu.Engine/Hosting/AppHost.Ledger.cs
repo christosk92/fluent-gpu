@@ -40,6 +40,16 @@ public sealed partial class AppHost
     /// <see cref="FrameLedger"/> on, the frame is recorded (early-outs included) when this host owns the ledger.</summary>
     public FrameStats RunFrame()
     {
+        // EP8: a main window waiting on its reveal gate notes fonts-ready before the frame and gets its chance to show after it.
+        if (!_revealPending || _isDetachedChild) return RunFrameLedgerGate();
+        NoteRevealReadiness();
+        var stats = RunFrameLedgerGate();
+        TryRevealMain();
+        return stats;
+    }
+
+    private FrameStats RunFrameLedgerGate()
+    {
         if (!FrameLedger.Enabled) return RunFrameCore();
         if (_isDetachedChild || !FrameLedger.TryOwn(this)) return RunFrameCore();
         return RunFrameLedgered();

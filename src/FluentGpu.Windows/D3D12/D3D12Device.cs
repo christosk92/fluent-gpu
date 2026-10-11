@@ -5385,6 +5385,12 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     /// <see cref="D3D12Device.Present"/>; read by the UI thread's popup reveal gate + wake computation. A one-way
     /// latch, so the volatile int needs no further ordering.</remarks>
     public bool HasPresentedContent => System.Threading.Volatile.Read(ref _presentedContent) != 0;
+    /// <inheritdoc/>
+    /// <remarks>Clears the one-way latch so <c>Present</c> treats the next frame as the reveal frame again (exempt from the
+    /// hidden / cloaked stand-down of a composited target). UI thread; a present already in flight on the render thread may
+    /// re-set the latch - the host's reveal also requires a publication newer than the arm, so that cannot reveal early.</remarks>
+    public void ArmRevealExemption() => System.Threading.Volatile.Write(ref _presentedContent, 0);
+
     internal void NotePresentedContent()
     {
         if (System.Threading.Volatile.Read(ref _presentedContent) == 0)

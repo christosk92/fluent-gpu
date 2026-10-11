@@ -613,7 +613,11 @@ public sealed class HeadlessSwapchain : ISwapchain
     }
 
     /// <inheritdoc/>
-    public bool HasPresentedContent => PresentCount > 0;
+    public bool HasPresentedContent => PresentCount > _revealBaseline;
+
+    private int _revealBaseline;
+    /// <inheritdoc/>
+    public void ArmRevealExemption() => _revealBaseline = PresentCount;
     public void Dispose() { if (_renderConfined) ThreadGuard.AssertRenderOwner(); }
 
     /// <summary>THIS target's last-present stand-down (Phase 1: per-target, not device-global). Mirrors

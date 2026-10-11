@@ -5679,11 +5679,13 @@ public sealed partial class AppHost : IDisposable
         // Window lifecycle relay (AppHost.WindowStateChanged): one placement + visibility sample per frame, parked frames
         // included, raised BEFORE the park gate so a minimize-to-tray handler hears the minimize in the frame it happened.
         // A handler may hide/show/restore the window, so the park decision below reads a FRESH sample after it ran.
-        WindowStatus windowStatus = new(_window.State, _window.IsVisible);
+        // A main window waiting on its reveal gate (EP8) reads as visible to the relay: the app asked for it to be shown, and the
+        // later real Show must not surface as a second "shown" edge (the first frame only seeds).
+        WindowStatus windowStatus = new(_window.State, _window.IsVisible || (_revealPending && !_isDetachedChild));
         if (_windowStateRelay.TryAdvance(windowStatus, out WindowStateChange windowChange))
         {
             WindowStateChanged?.Invoke(windowChange);
-            windowStatus = new(_window.State, _window.IsVisible);
+            windowStatus = new(_window.State, _window.IsVisible || (_revealPending && !_isDetachedChild));
         }
         // A window DWM has cloaked for a sustained period (another virtual desktop) parks exactly like a hidden one, the primary
         // as much as a pop-out: it presents nothing (Present stands down) yet keeps WS_VISIBLE, so unparked it kept painting,
