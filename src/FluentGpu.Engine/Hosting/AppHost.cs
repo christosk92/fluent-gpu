@@ -5,6 +5,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Hosting.Tiers;
 using FluentGpu.Input;
 using FluentGpu.Layout;
 using FluentGpu.Pal;
@@ -485,11 +486,27 @@ public sealed partial class AppHost : IDisposable
     // device-wide tile pool the primary window also uses (F229). Assigned once in the constructor.
     private readonly FluentGpu.Render.Tiles.SliceTable? _renderTiles;
     private readonly SliceRecorder _uiSlices = new();
-    private readonly FluentGpu.Render.Tiles.SliceTable _uiTiles = new(SliceTableCap, SliceTileCap, SliceSurfaceCap);
+    private readonly FluentGpu.Render.Tiles.SliceTable _uiTiles;   // assigned in the constructor: its surface cap derives from the window area (E22)
     // P1 sizes: every slice SEGMENT is a SliceTable row (a static root split around each child slice, a scroll slice
     // around a sticky header…), so the table is sized for the segment count a real page reaches, not the design's
     // composited-slice default of 16 — P2 pins the real budget with the surfaces.
+    // SliceSurfaceCap and SliceTileCap are the FLOORS: the constructor raises both from the window area
+    // (TileBudget.SurfaceCapFor) so a 7680 x 4320 px window (3840 x 2160 DIP at 200 %) keeps every visible tile resident instead of
+    // degrading its slices to direct, untiled drawing. Every window up to 4K at 100 % keeps today's 64.
     private const int SliceTableCap = 256, SliceTileCap = 64, SliceSurfaceCap = 64;
+
+    /// <summary>The surface cap for a window of <paramref name="window"/>'s client size, or its monitor's when that is larger
+    /// (the window may be maximized later; the table is sized once): <see cref="FluentGpu.Render.Tiles.TileBudget.SurfaceCapFor"/>
+    /// floored at <see cref="SliceSurfaceCap"/>.</summary>
+    private static int SliceSurfaceCapFor(IPlatformWindow window) => SliceSurfaceCapFor(window.ClientSizePx, window.MonitorSizePx);
+
+    /// <summary>The pure form of <see cref="SliceSurfaceCapFor(IPlatformWindow)"/> (test seam): the larger of the client size and
+    /// the monitor size, through <see cref="FluentGpu.Render.Tiles.TileBudget.SurfaceCapFor"/>, floored at 64.</summary>
+    internal static int SliceSurfaceCapFor(Size2 clientPx, FluentGpu.Media.SizeI monitorPx)
+    {
+        int w = (int)Math.Max(clientPx.Width, monitorPx.Width), h = (int)Math.Max(clientPx.Height, monitorPx.Height);
+        return FluentGpu.Render.Tiles.TileBudget.SurfaceCapFor(w, h, SliceSurfaceCap);
+    }
 
     /// <summary>The UI-thread (SingleThread / headless) slice recorder and tile table — gates read the partition and the
     /// per-turn invalidation census off these.</summary>
@@ -1452,6 +1469,13 @@ public sealed partial class AppHost : IDisposable
 
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
+    // E22 window tiers. _tiers is the host-owned table of pending UseTier crossings (CommitPendingTiers writes them on the first
+    // non-resized frame, before FLIP capture). _inModalLoopSig is the Viewport.InModalLoop ambient: the OS modal move/size loop
+    // flag, written (boxed once, cached) only on an edge.
+    private readonly TierRegistry _tiers;
+    private static readonly object s_boxedTrue = true, s_boxedFalse = false;
+    private readonly Signal<object?> _inModalLoopSig = new(s_boxedFalse);
+    private bool _lastInModalLoop;
     private readonly Signal<object?> _viewportScaleSig = new(1f);   // Viewport.Scale ambient (DIP→device px)
     private readonly Signal<object?> _viewportZoomSig = new(1f);    // Viewport.Zoom ambient (app-zoom factor; display-only — Scale already contains it)
     private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
@@ -4656,6 +4680,9 @@ public sealed partial class AppHost : IDisposable
         // A theme mutation (Tok.Use / Tok.SetAccent, from anywhere: a settings click, an async album accent) is work the
         // next Paint re-renders for: it wakes that frame itself instead of waiting on an unrelated wake. One int compare.
         if (Tok.Epoch != _lastThemeEpoch) r |= WakeReasons.FrameNeeded;
+        // A stored UseTier crossing (E22) is work: it owes the frame that commits it. FrameNeeded is in ModalLoopEssentialWake, so the
+        // modal-loop keep-alive idle skip cannot swallow that frame. Not while parked: a minimized window paints nothing to commit on.
+        if (_tiers.HasPending && !_wasParked) r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so the [wake] census can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
@@ -4844,6 +4871,7 @@ public sealed partial class AppHost : IDisposable
                      Threading.RenderThread? parentRenderThread, RenderLoopMode? loopModeOverride,
                      int initialSceneCapacity = 0)
     {
+        _tiers = new TierRegistry(WakeFrame);   // E22: first, so ComputeWakeReasons never sees it unassigned; a stored crossing requests its frame at once (WakeFrame is _inPaint-aware)
         // Item E: 0 keeps SceneStore's own built-in default (64) and no trim floor — today's behaviour, byte-for-byte.
         _scene = initialSceneCapacity > 0 ? new SceneStore(initialSceneCapacity) : new SceneStore();
         if (initialSceneCapacity > 0) _scene.CapacityFloor = initialSceneCapacity;
@@ -4854,7 +4882,10 @@ public sealed partial class AppHost : IDisposable
         _app = app;
         _fonts = fonts;
         _isDetachedChild = isDetachedChild;
-        if (!isDetachedChild) _renderTiles = new(SliceTableCap, SliceTileCap, SliceSurfaceCap);   // a child never composites (see the field)
+        int sliceSurfaceCap = SliceSurfaceCapFor(window);
+        int sliceTileCap = Math.Max(SliceTileCap, sliceSurfaceCap);   // one slice may hold the whole resident set
+        _uiTiles = new(SliceTableCap, sliceTileCap, sliceSurfaceCap);
+        if (!isDetachedChild) _renderTiles = new(SliceTableCap, sliceTileCap, sliceSurfaceCap);   // a child never composites (see the field)
         _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
         _pacingSource = window as IInputPacingSource;   // once: the Win32 window implements it, headless does not (→ 0)
@@ -5224,6 +5255,8 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(Viewport.Size, _viewportSig);
         _reconciler.SetAmbient(Viewport.Scale, _viewportScaleSig);
         _reconciler.SetAmbient(Viewport.Zoom, _viewportZoomSig);
+        _reconciler.SetAmbient(TierHost.Registry, new Signal<object?>(_tiers));
+        _reconciler.SetAmbient(Viewport.InModalLoop, _inModalLoopSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
         // Fully qualified: FluentGpu.Pal.FrameClock (the scroll-v3 seam clock, §5.1) is now ALSO in scope via
@@ -6071,7 +6104,13 @@ public sealed partial class AppHost : IDisposable
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
             _reconciler.BeginRenderCensus();
-            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
+            bool inModalLoop = _window.InModalLoop;
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, inModalLoop);
+            if (inModalLoop != _lastInModalLoop)
+            {
+                _lastInModalLoop = inModalLoop;
+                _inModalLoopSig.Value = inModalLoop ? s_boxedTrue : s_boxedFalse;   // Viewport.InModalLoop: an edge, never per frame
+            }
             // --fg resize: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
             // is on AND this is a keep-alive tick — zero work / zero alloc otherwise (the normal hot path is untouched).
             bool diagTick = keepAlive && s_resizeDiag;
@@ -6165,6 +6204,11 @@ public sealed partial class AppHost : IDisposable
             // The frame step: plans → this frame's offsets/motion, realize windows, chrome, the FLIP-suppression latch
             // (a reconcile landing while a user scroll moves content this frame or the last must SNAP, not fly).
             RunScrollFrame(_palFrameClock.PresentQpc / (double)Stopwatch.Frequency);
+
+            // E22 pending-tier commit (technical-plan §3.3 rule 3): AFTER the scroll frame step and BEFORE willReconcile is read, so
+            // the committed signal writes make _runtime.HasPending true and the FLIP capture below runs with the post-resize rects
+            // as "before". Only on a frame that is NOT resized (a resized frame snaps and cancels structural tracks; the crossing waits).
+            CommitPendingTiers(resized);
 
             // FLIP "First": capture presented rects of layout-animated nodes BEFORE the reconcile/relayout that moves them.
             // Skip on the very first layout — freshly-mounted nodes are unmeasured (0-size), so FLIPping them would animate
@@ -7481,6 +7525,22 @@ public sealed partial class AppHost : IDisposable
             }
         }
     }
+
+    /// <summary>E22: write every pending <c>UseTier</c> crossing into its signal, but only on a frame that is NOT resized. A
+    /// resized frame lays out the OLD tier at the new size and snaps (FLIP capture is skipped, structural tracks are cancelled);
+    /// the crossing then lands on the first frame after it as an ordinary animated update. Called after <c>RunScrollFrame</c> and
+    /// before <c>willReconcile</c> is computed: the writes schedule the tier's consumers, which makes <c>_runtime.HasPending</c>
+    /// true, so <c>CaptureProjections</c> runs with this frame's pre-reconcile (post-resize) rects as the FLIP "first". Zero
+    /// allocation (a table walk over already-created slots).</summary>
+    private void CommitPendingTiers(bool resized)
+    {
+        if (!_tiers.HasPending) return;
+        if (resized) { WakeFrame(); return; }   // keep them pending and owe the next eligible frame
+        _tiers.CommitPending();
+    }
+
+    /// <summary>The pending-tier table (tests / census).</summary>
+    internal TierRegistry TiersForTest => _tiers;
 
     private void PublishViewport(Size2 dip)
     {

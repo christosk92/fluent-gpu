@@ -119,6 +119,11 @@ public abstract class Component
     /// <summary>The arranged width of this component's rendered root as a read signal; <paramref name="quantum"/> &gt; 0
     /// rounds the value to that grid before the write (kills sub-quantum churn). See <see cref="RenderContext.UseMeasuredWidth"/>.</summary>
     protected IReadSignal<float> UseMeasuredWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMeasuredWidth(quantum, __hf, __hl);
+    /// <summary>A size tier of <paramref name="source"/> on <paramref name="ladder"/> (edges with a direction-aware hold) as a
+    /// read signal that changes ONLY on a crossing. A first mount resolves in its own frame; a crossing after mount is
+    /// stored pending in the host and committed on the first non-resized frame right before FLIP capture, so a resize lands
+    /// one animated crossing instead of a snap. See <see cref="RenderContext.UseTier"/>.</summary>
+    protected IReadSignal<int> UseTier(TierLadder ladder, TierSource source, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseTier(ladder, source, __hf, __hl);
     /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
     protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseLoadable(initial, __hf, __hl);
     /// <summary>A stale-while-revalidate async resource: kicks the loader at mount, RELOADS when <paramref name="deps"/>

@@ -55,6 +55,7 @@ public static class SuiteRegistry
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
         new("budgets", "budgets", BudgetsSuite.Run),
+        new("tiers", "tiers", FluentGpu.VerticalSlice.Suites.TiersSuite.Run),   // E22 window tiers: TierLadder hysteresis, Resolve/commit zero-alloc, first-frame tier, tier-gated Responsive.Of, resize at the end of a virtual list
         new("hidden", "hidden", FluentGpu.VerticalSlice.Suites.HiddenSuite.Run),   // hidden-window Shallow stage: tiles + unpinned images released after the park delay, rebuilt on restore
         new("tiles", "tiles", FluentGpu.VerticalSlice.Suites.TileSuite.Run),   // scroll-GPU plan P0: retained-tile needed set, slice table, budget, feather, composite seam
         new("slices", "tiles", FluentGpu.VerticalSlice.Suites.SliceSuite.Run),   // scroll-GPU plan P1: the recorder partition — paint order, zero-byte scroll tick, tile invalidation reasons

@@ -29,6 +29,11 @@ public static class Viewport
     /// using Scale — read this channel only to DISPLAY the level (a settings row, a diagnostics receipt), never to
     /// convert coordinates. Default 1.0 (headless / pre-publish).</summary>
     public static readonly Context<float> Zoom = new(1f);
+    /// <summary>True while the window is inside the OS modal move/size loop (a title-bar drag or an edge resize;
+    /// <c>IPlatformWindow.InModalLoop</c>). A host context signal: read with <c>UseContext(Viewport.InModalLoop)</c> (re-renders
+    /// on the edge) or <c>UseContextSignal</c>. The tier machinery's "resizing" fact; false in a headless/pre-publish context.
+    /// Written by the host at the top of a paint, on an edge only.</summary>
+    public static readonly Context<bool> InModalLoop = new(false);
 }
 
 /// <summary>
