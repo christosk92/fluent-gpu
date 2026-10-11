@@ -3366,12 +3366,40 @@ public sealed partial class TreeReconciler
         IExtentSource ext = EnsureExtentSource(ref scEnsure, ve, count, cross);
         // A restore (ScrollKey memory, a ScrollTo posted before mount) still pending resolves HERE against the extent
         // source — before this pass picks its window — so the first realized window is the restored one.
-        if (_scene.ScrollHandleFor(node) is { RestorePending: true } pending)
+        var restoreHandle = _scene.ScrollHandleFor(node);
+        if (restoreHandle is { RestorePending: true } pending)
         {
             pending.SetExtent(ext.Total, viewport);
             if (!pending.RestorePending)
             {
                 offset = pending.OffsetNow;
+                velocity = 0.0;
+                scEnsure.Offset = offset;
+                scEnsure.Velocity = 0.0;
+            }
+            else if (offset <= 0.0 && pending.OffsetNow > 0.5)
+            {
+                double clamped = pending.OffsetNow;
+                // EP12: a remembered offset past a SHORTER extent stays latched (it resolves if the list grows) but SetExtent has
+                // already put the plan at today's clamp. A fresh mount still sits at offset 0 here: take the clamp, so the
+                // first window is the one around the end the user will see, never the top rows followed by a corrective pass.
+                offset = Math.Min(clamped, Math.Max(0.0, ext.Total - viewport));
+                velocity = 0.0;
+                scEnsure.Offset = offset;
+                scEnsure.Velocity = 0.0;
+            }
+        }
+        else if (mount && offset <= 0.0 && restoreHandle is not null)
+        {
+            // EP12: a remembered offset can resolve EARLIER than this pass. ApplyScrollKey arms the restore at mount, and
+            // ScrollHandle.Restore resolves at once when the extent the handle was last given (the node's seeded content size)
+            // already holds the target. That writes the PLAN, but ScrollState.Offset is only stepped by a frame sync, so this first
+            // pass would read offset 0 and build the top rows before the sync moved the window. A fresh mount that already has a
+            // planned offset plans its FIRST window there, bounded by the extent source's own total.
+            double planned = restoreHandle.OffsetNow;
+            if (planned > 0.5)
+            {
+                offset = Math.Min(planned, Math.Max(0.0, ext.Total - viewport));
                 velocity = 0.0;
                 scEnsure.Offset = offset;
                 scEnsure.Velocity = 0.0;

@@ -307,6 +307,11 @@ public sealed partial class AppHost
             if ((_scene.Flags(node) & NodeFlags.Parked) != 0) continue;   // off screen — see RunScrollFrame
             var handle = ResolveScrollHandle(idx);
             if (!_scene.TryGetScroll(node, out var peek)) continue;
+            // EP12: a viewport that has NOT been laid out yet but already carries an offset (a virtual list that just mounted and
+            // realized its first window AT the remembered offset) has no geometry to clamp against: publishing its 0 x 0 extent
+            // here would clamp the plan, and so the offset, to 0, and the next re-realize would build the top rows. The
+            // post-layout sync (after FlexLayout) is the one that resolves it against real geometry.
+            if (peek.Offset > 0.0 && peek.ViewportMain <= 0f && peek.ContentMain <= 0f) continue;
             // This frame's laid-out geometry first: a move authored against a viewport that only now has an extent (a
             // freshly mounted list's BringIntoView from its layout effect) resolves its latched target HERE, so the first
             // presented frame already shows it — never a frame at 0 followed by the jump.

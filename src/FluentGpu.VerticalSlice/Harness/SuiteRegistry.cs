@@ -48,6 +48,7 @@ public static class SuiteRegistry
         new("reveal", "anim", FluentGpu.VerticalSlice.Suites.RevealSuite.Run),   // SizeMode.FlowReveal: layout once, motion at paint time (smooth-reveal plan §9)
         new("scroll", "scroll", ScrollSuite.Run),
         new("scroll-motion", "scroll", FluentGpu.VerticalSlice.Suites.ScrollMotionSuite.Run),   // scroll rework: closed-form plans, coverage, zero-alloc flat lists
+        new("scroll-first-layout", "scroll", FluentGpu.VerticalSlice.Suites.ScrollFirstLayoutSuite.Run),   // E8/EP12: a ScrollKey restore lands in the FIRST layout of the remount (plain + 2,000-row virtual list, clamp, unknown key, zero-alloc)
         new("scroll-effects", "scroll", FluentGpu.VerticalSlice.Suites.ScrollEffectsSuite.Run),   // scroll-GPU plan §F: engaged edge, collapse, stretch, UseScroll, MeasureAll
         new("engaged-feather", "scroll", FluentGpu.VerticalSlice.Suites.EngagedFeatherSuite.Run),   // F(ii) 2026-09-25: a WhileStuck edge fade engages on the sticky clip's own pose
         new("item-band-deep", "scroll", FluentGpu.VerticalSlice.Suites.ItemBandDeepSuite.Run),   // G 2026-09-25: a deep jump in an item-band list keeps every row above the arrange origin
