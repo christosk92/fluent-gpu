@@ -921,7 +921,7 @@ all hooks ship **unchanged**. This is the cleanest realization of the PAL seam c
 **OWNS (authority):** `Palette` (80B), `BrushRecipe`, `DerivedKey`, `SystemColorSnapshot`, `HcPalette`,
 `PaletteExtractor`, `BrushDeriver`, `PaletteCache`, `BrushCache`, `DerivedBrushBackRefs`, the `Recipes` table,
 the `IBrushSink` and `ISystemColors` seam contracts, and the hooks `UseTheme`/`UseSystemColors`/
-`UseHighContrast`/`UseDerivedBrush`/`UseDynamicColor`. Owns the derived-brush eviction discipline (frame-start
+`UseHighContrast`/`UseDerivedBrush`/`UseDynamicColor`, and the view-slot / option-cell surface of §16. Owns the derived-brush eviction discipline (frame-start
 sweep + back-ref `MarkPaintDirty` walk) and the recolor opacity-cross-fade contract.
 
 **HANDS OFF / DEPENDS ON:**
@@ -936,6 +936,42 @@ sweep + back-ref `MarkPaintDirty` walk) and the recolor opacity-cross-fade contr
 - **Animation**: the phase-7 AnimTrack that ticks the recolor cross-fade `Opacity` (Theme supplies the two
   endpoint `BrushHandle`s; Animation owns the tween).
 - **`FluentGpu.Windows` Pal/**: the `ISystemColors` impl + the `WM_SETTINGCHANGE` wiring into the InputEventRing.
+
+---
+
+## 16. View slots and option cells (`FluentGpu.Theming`, EP3)
+
+Where a theme decides WHICH view fills a place (not only which colours it uses). All of it is composition over the existing
+component machinery: no new element type, opcode, scene column, PAL seam or hook. Code: `src\FluentGpu.Engine\Theming\`.
+
+- **Slots.** `Slots.View(ViewKey<TProps> key, TProps props, string? callerKey = null)` returns an `Embed.Comp(props, factory)`
+  of an internal `ViewSlotHost<TProps>`. The props are a `ViewSlotArgs<TProps>` record, so the reconciler's props gate
+  (`component-props-contract.md`, mechanism 1) compares them by value: an equal record re-renders nothing and runs no
+  template. That holds only under the props-stability rules (a props record that holds a delegate or an `Element` member never
+  compares equal).
+- **Resolution.** The host reads `ViewRegistry.Context` (`UseContext`) and looks the key id up in the immutable
+  `ViewRegistry` (built with `ViewRegistryBuilder.Add(key, template, templateId)` / `AddStyle`; every registry has an `Epoch`).
+  It renders a body component with the resolved `ViewTemplate<TProps>`; the body is where the template runs, so everything the
+  template reads while rendering (props, registry, option cells, `ViewContext.App<T>()`'s context) subscribes the body only.
+  A registry swap therefore re-renders slot hosts and bodies and nothing else (the embedding component is autonomous).
+- **Remount.** Slot identity is (key id without `@version`, template id, caller key). A changed template id makes the host
+  render the other of two body component types (A/B). A component whose type differs is replaced by the reconciler; a plain `Key`
+  on a component's root is inert (`ReconcileSingleChild`, `ReuseGuard.KeyIgnoredInSingleChildSlot`), so the type flip is what
+  disposes the old template's hook cells, effects, intervals and measure hooks. The sibling `Key` set by `Slots.View` is
+  `"{id without @version}|{callerKey}"` (absent without a caller key; a caller's own `Key` is never overwritten). Pass
+  `callerKey` inside any loop, `Flow.For` or collection builder.
+- **Missing key.** No provider, an unregistered id, or an id registered for other props renders an empty `BoxEl` and logs once
+  per key (per registry) through `Diag.Line` (always on, so a Release build shows it).
+- **`ViewContext`** (ref struct, one template call): `Hooks` (the body's `RenderContext`), `Options` (`IOptionReader`),
+  `OptionRequests`, `Reduced` (`Motion.ReducedMotion`), `App<T>()` (reads `ViewContext.AppRolesContext`, a
+  `Context<object?>` the app provides), `View(...)` (nested slot), `StyleOf(StyleKey<T>)` (from the current registry).
+- **Option cells.** `OptionKey<T>(Id, Default)`; `OptionStore` keeps one `Signal<T>` per id, created on first touch and seeded from
+  `IOptionPersistence` (raw boxed values) or the default. `Get` is a tracked read, so a template re-renders when an option it
+  read changes and not when another does. Writes never touch a cell from a template: `ctx.OptionRequests.Set` forwards to
+  `OptionStore.Requests`, the sink the app installs; the app applies the change (live or as a transaction) and commits it with
+  `OptionStore.Publish`, which writes the cell (equality-gated), bumps `Epoch` and persists. `OptionStore.Context` provides the
+  store to a subtree; without one every option reads as its default.
+- **Tests.** `Theming/ViewSlotTests.cs`, `Theming/OptionStoreTests.cs` in `FluentGpu.Engine.Tests`.
 
 ---
 
