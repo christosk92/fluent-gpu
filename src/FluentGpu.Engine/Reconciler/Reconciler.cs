@@ -39,7 +39,7 @@ public sealed partial class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
 
@@ -2123,7 +2123,7 @@ public sealed partial class TreeReconciler
         if (_comps.TryGetValue(node, out var entry))
         {
             entry.Parked = parked;
-            if (parked) entry.ExitFrozen = false;   // park subsumes freeze; DeferredRender debt carries
+            if (parked) { entry.ExitFrozen = false; entry.ParkEpoch = Tok.Epoch; }   // park subsumes freeze; DeferredRender debt carries
             // P1 presence folds in too: Active is Parked-AND-Hidden-free (SetSubtreeHidden, Reconciler.Presence.cs)
             // so UseIsActive()/UseInterval auto-pause across EITHER edge without duplicating this formula.
             if (entry.ActiveSig is { } sig) sig.Value = !parked && !entry.Hidden;   // value-gated; flips the UseIsActive memo → UseActivation
@@ -2133,7 +2133,9 @@ public sealed partial class TreeReconciler
             if (!parked && entry.DeferredRender)
             {
                 entry.DeferredRender = false;
-                if (!budgetReplays || TakeReplayBudget()) entry.Effect?.Schedule();
+                // A theme changed while it was parked: the debt includes the re-theme, so it renders NOW, in this activation
+                // flush, unbudgeted — dripped, the page would show old- and new-theme components side by side for frames.
+                if (!budgetReplays || entry.ParkEpoch != Tok.Epoch || TakeReplayBudget()) entry.Effect?.Schedule();
                 else { entry.QueuedReplay = true; _replayQueue.Enqueue(entry); }   // drips from BeginRenderCensus
             }
         }

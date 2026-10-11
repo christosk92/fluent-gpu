@@ -5289,7 +5289,17 @@ public sealed partial class AppHost : IDisposable
         // virtualized list binds its scroll handle here, and that plan write wakes the (already running) render thread
         // through a UI-asserted call — unbound, that tripped the Debug confinement guard at startup.
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
+#if FGGUARD
+        int mountThemeEpoch = Tok.Epoch;
+#endif
         _reconciler.MountRoot(_root);
+#if FGGUARD
+        // The baseline below absorbs any re-theme the mount itself made, so a component that themes inside its first
+        // render (Tok.Use, an accent write) would leave the first frame on whatever half of the tree rendered before it.
+        if (Tok.Epoch != mountThemeEpoch)
+            throw new InvalidOperationException(
+                "Tok.Epoch changed during the root mount: a component re-themed inside its first render. Seed the theme before constructing the host.");
+#endif
         // Baseline the re-theme epoch AFTER the root mount — startup theme injection (OS accent / Mica window background,
         // applied before this ctor returns) has already bumped Tok.Epoch, so the FIRST paint must not see a spurious change.
         _lastThemeEpoch = Tok.Epoch;

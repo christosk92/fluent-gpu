@@ -5298,29 +5298,6 @@ static class ScrollSuite
                 windowed && scrolled && shapeStable,
                 $"realized {realized0}→{realized1} arity {arityBefore}→{arityAfter} first {sc0.FirstRealized}→{sc1.FirstRealized} (no Debug.Fail = shape guard passed)");
         }
-
-        // ── cp2.partdelta.epochcache (S1b hazard fix — INDIRECT): TemplateParts.TryApplyCached (the apply-once
-        // list-uniform prototype cache) is `internal` and FluentGpu.Dsl carries NO InternalsVisibleTo("FluentGpu.VerticalSlice")
-        // (verified — the SelectorVisuals builders are likewise tested only through the PUBLIC ItemsView surface, see
-        // cp2.selectorpresets). So we cannot call TryApplyCached directly. We DO verify its invalidation key — the
-        // public TemplateParts.Epoch — which is the cache's correctness foundation: a fresh map is epoch 0; EVERY
-        // modifier-map mutation (Set<T>, the box indexer set, and a null-removal) bumps the epoch, so changing a
-        // list-uniform modifier provably invalidates the (part, epoch)-keyed prototype. The apply-ONCE half is covered
-        // by cp2.partdelta.alloc (steady-state 0-alloc through the value seam). NOTE THE LIMITATION: making the
-        // apply-once count directly observable would need TryApplyCached promoted to public or an InternalsVisibleTo.
-        {
-            var parts = new TemplateParts();
-            int e0 = parts.Epoch;                                  // fresh map: epoch 0
-            parts.Set<BoxEl>("Header", b => b with { Fill = Tok.FillSubtleSecondary });
-            int e1 = parts.Epoch;                                  // Set<T> bumps
-            parts["Header"] = b => b with { Fill = Tok.FillSubtleTertiary };   // box indexer set bumps (replace modifier)
-            int e2 = parts.Epoch;
-            parts["Header"] = null;                                // null-removal bumps (invalidation on removal)
-            int e3 = parts.Epoch;
-            bool monotonic = e0 == 0 && e1 > e0 && e2 > e1 && e3 > e2;
-            Check("cp2.partdelta.epochcache TemplateParts.Epoch (the apply-once cache's invalidation key) bumps on every modifier-map mutation — fresh=0, Set/indexer/removal each invalidate",
-                monotonic, $"epoch 0={e0} setT={e1} indexer={e2} removal={e3} (TryApplyCached internal; apply-once covered by cp2.partdelta.alloc)");
-        }
     }
 
     /// <summary>Stand-alone AnnotatedScrollBar gates (no list mounted): publish a viewport geometry and a shown offset on

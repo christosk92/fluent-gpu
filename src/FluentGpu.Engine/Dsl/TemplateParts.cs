@@ -27,20 +27,12 @@ namespace FluentGpu.Dsl;
 /// those); type-preserving (a modifier that changes the record type is ignored — parts style, content SLOTS like
 /// <c>Content</c>/<c>HeaderContent</c> restructure); avoid reshaping <c>Children</c> (structural reconcile).
 ///
-/// List-UNIFORM (content-independent) item-chrome modifiers are cached apply-once via the parts epoch
-/// (<see cref="TryApplyCached"/>); per-item CONTENT differences use the PartDelta value seam (SelectorVisuals.cs),
-/// never a per-item modifier in a recycled scroll path.
+/// Per-item CONTENT differences use the PartDelta value seam (SelectorVisuals.cs), never a per-item modifier in a
+/// recycled scroll path.
 /// </summary>
 public sealed class TemplateParts
 {
     private readonly Dictionary<string, Func<Element, Element>> _map = new(StringComparer.Ordinal);
-
-    private int _epoch;
-    /// <summary>Bumped on every modifier-map mutation; the apply-once prototype cache keys on it so an app changing a
-    /// modifier invalidates the cached list-uniform prototype.</summary>
-    public int Epoch => _epoch;
-
-    private readonly Dictionary<(string, int), Element> _protoCache = new();
 
     /// <summary>Box parts — the common case, object-initializer friendly:
     /// <c>Parts = new() { [Expander.PartHeader] = b => b with { … } }</c>. Setting null removes the modifier.</summary>
@@ -48,8 +40,8 @@ public sealed class TemplateParts
     {
         set
         {
-            if (value is null) { _map.Remove(part); _epoch++; }
-            else { _map[part] = el => el is BoxEl b ? value(b) : el; _epoch++; }
+            if (value is null) _map.Remove(part);
+            else _map[part] = el => el is BoxEl b ? value(b) : el;
         }
     }
 
@@ -57,7 +49,6 @@ public sealed class TemplateParts
     public void Set<T>(string part, Func<T, T> modify) where T : Element
     {
         _map[part] = el => el is T t ? modify(t) : el;
-        _epoch++;
     }
 
     internal bool TryApply(string part, Element el, out Element result)
@@ -65,21 +56,6 @@ public sealed class TemplateParts
         if (_map.TryGetValue(part, out var modify)) { result = modify(el); return true; }
         result = el;
         return false;
-    }
-
-    /// <summary>Apply a part modifier ONCE per (part, epoch) for a list-uniform (content-independent) modifier: every
-    /// recycled row reuses the cached prototype instead of re-running the Func per item. SOUND ONLY for
-    /// content-independent modifiers — per-item content differences MUST use the PartDelta value seam, never this.
-    /// Invalidation key is (part, Epoch) only — a theme switch forces full reconstruction (theme is startup-resolved),
-    /// so no theme-epoch term is needed.</summary>
-    internal bool TryApplyCached(string part, Element prototype, out Element result)
-    {
-        if (!_map.ContainsKey(part)) { result = prototype; return false; }
-        var key = (part, _epoch);
-        if (_protoCache.TryGetValue(key, out var cached)) { result = cached; return true; }
-        TryApply(part, prototype, out result);
-        _protoCache[key] = result;
-        return true;
     }
 
     /// <summary>Compose a control-internal handler with a modifier-supplied one (<c>OnRealized</c>/<c>OnKeyDown</c>):
