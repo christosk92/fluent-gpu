@@ -359,6 +359,7 @@ public sealed partial class AnimEngine
     /// allocates a Keyframe[] per call (fine for one-shot enter/exit, not for frequent hover/press/brush edges).</summary>
     public void SeedEased(NodeHandle node, AnimChannel channel, float from, float to, float durationMs, Easing ease)
     {
+        if (Snapping && TryLandAtEnd(node, channel, to)) return;   // SnapScope: end value now, no row
         int s = Get(node, channel, false);
         ref AnimValue r = ref _slab.At(s);
         r.Kind = GenKind.Eased;
@@ -416,6 +417,7 @@ public sealed partial class AnimEngine
                        float? initial = null, float initialVelocity = 0f,
                        CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
     {
+        if (Snapping && composite == CompositeOp.Replace && TryLandAtEnd(node, channel, to)) return;   // SnapScope: end value now, no row
         int existing = Find(node, channel);
         if (existing >= 0 && _slab.At(existing).Kind == GenKind.Spring)
         {
@@ -453,6 +455,7 @@ public sealed partial class AnimEngine
     internal void RebaseSpring(NodeHandle node, AnimChannel channel, float to, in SpringParams spring, float from,
                                float velocityScale = 1f)
     {
+        if (Snapping && TryLandAtEnd(node, channel, to)) return;   // SnapScope: end value now, no row
         int existing = Find(node, channel);
         if (existing < 0 || _slab.At(existing).Kind != GenKind.Spring)
         {

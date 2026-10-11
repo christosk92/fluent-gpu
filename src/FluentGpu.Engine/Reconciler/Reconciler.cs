@@ -589,6 +589,12 @@ public sealed partial class TreeReconciler
     /// derives it from where the write physically happens.</summary>
     public int SuppressBoundTransitions { get; private set; }
 
+    /// <summary>True while the host's <see cref="FluentGpu.Hosting.SnapScope"/> is active (E17a): mount Enters are not seeded,
+    /// removals free at once (no Exit orphan, no keep-alive exit), and the seeds that still run (brush fades, bound
+    /// transitions, Transition/While* targets) land at their end value in <see cref="AnimEngine"/>'s seed funnels.
+    /// Outside a scope this is false and nothing here changes.</summary>
+    private bool SnapMotion => Anim is { Snapping: true };
+
     /// <summary>RAII helper for <see cref="SuppressBoundTransitions"/> — <c>using (reconciler.PushSuppressBoundTransitions())</c>.</summary>
     public SuppressBoundTransitionsScope PushSuppressBoundTransitions() { SuppressBoundTransitions++; return new SuppressBoundTransitionsScope(this); }
 
@@ -1822,7 +1828,7 @@ public sealed partial class TreeReconciler
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
             transition = options.TransitionFor?.Invoke(oldActive.Token, token);
-            if (transition is { } spec && spec.Exit.Active && Anim is not null && !Motion.ReducedMotion)
+            if (transition is { } spec && spec.Exit.Active && Anim is not null && !Motion.ReducedMotion && !SnapMotion)
                 BeginKeepAliveExit(state, oldActive, options, spec);
             else
             {
@@ -1904,7 +1910,7 @@ public sealed partial class TreeReconciler
         state.ActiveKey = key;
         MirrorParticipation(node, entry.Root);
         RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
-        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion)
+        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion && !SnapMotion)
         {
             anim.CancelAll(entry.Root);
             anim.SeedEnterOver(entry.Root, enter.Enter, enter, EnterRestOf(entry.El));
@@ -2486,6 +2492,7 @@ public sealed partial class TreeReconciler
     {
         var images = Images!;
         int idx = (int)node.Raw.Index;
+        if (images.SnapReveals) cut = true;   // SnapScope: the incoming draws at once, no dissolve
         // A newer swap supersedes an older one: its outgoing is the older swap's INCOMING, so only the older outgoing
         // is released — unless it is the NEW incoming (re-keyed back mid-dissolve), whose pin the caller keeps.
         if (_imageSwaps.Remove(idx, out var prev) && prev.OutgoingId != outgoingId && prev.OutgoingId != incomingId)
@@ -4494,7 +4501,7 @@ public sealed partial class TreeReconciler
         bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0;
         // A recycle (a rebind flush) never replays a FlowReveal: from the app's view it is the same persistent row.
         bool recycledReveal = SuppressBoundTransitions > 0;
-        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active
+        if (!parked && !SnapMotion && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active   // SnapMotion: free at once, no orphan
             && !(spec.Size == SizeMode.FlowReveal && recycledReveal))
         {
             // Smooth exit (mirror of the enter-reflow): orphaning DETACHES this node, so its sibling would SNAP into the
@@ -4712,7 +4719,7 @@ public sealed partial class TreeReconciler
         {
             danim.SetTransition(node, dt);
             if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-            if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+            if (isMount && dt.Enter.Active && !SnapMotion && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
                 // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout (host-driven). SizeMode.FlowReveal enter:
@@ -5396,7 +5403,7 @@ public sealed partial class TreeReconciler
                     anim.SetRestTransform(node, restTf);
                     anim.SetRestPose(node, EnterRestOf(b));
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && at.Enter.Active && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && at.Enter.Active && !SnapMotion && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnterOver(node, at.Enter, at, EnterRestOf(b));
                         // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
@@ -5417,7 +5424,7 @@ public sealed partial class TreeReconciler
                     danim.SetRestTransform(node, restTf);
                     danim.SetRestPose(node, EnterRestOf(b));
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && dt.Enter.Active && !SnapMotion && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(b));
                         if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);

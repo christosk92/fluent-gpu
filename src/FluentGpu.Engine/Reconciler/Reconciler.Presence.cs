@@ -55,7 +55,7 @@ public sealed partial class TreeReconciler
             // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
             // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
             // declared Enter is read off fx.El — the element this node was LAST reconciled against, not the mount one.
-            if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion
+            if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion && !anim.Snapping
                 && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
             {
                 anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
