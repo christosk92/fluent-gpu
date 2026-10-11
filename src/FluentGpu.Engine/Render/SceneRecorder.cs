@@ -2526,12 +2526,12 @@ internal sealed class SceneRecordingContext
                         dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink);
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink, textCase: (int)style.Case);
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, key, spanRunId, ink: in ink);
+                            world, opacity, key, spanRunId, ink: in ink, textCase: (int)style.Case);
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
@@ -2590,7 +2590,7 @@ internal sealed class SceneRecordingContext
                         dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, key | 0x1, spanRunId, forceColor: true);
+                            world, opacity, key | 0x1, spanRunId, forceColor: true, textCase: (int)style.Case);
                         dl.PopClip(key | 0x1);
                     }
 

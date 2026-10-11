@@ -576,7 +576,8 @@ public sealed partial class FlexLayout
             // P4: a 2-ENTRY RING — a stretched leaf is measured at the parent's available width AND again at the final
             // arranged width, which thrashed a single slot into a miss on every single pass (Scene/Columns.cs).
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
-            if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached))
+            int fontEpoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;   // E9: a body-font change evicts every cached measure
+            if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached, fontEpoch))
             {
                 _dTextHit++;
                 w = cached.Size.Width; h = cached.Size.Height;
@@ -602,7 +603,7 @@ public sealed partial class FlexLayout
                 mc.Store(new TextMeasureEntry
                 {
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
-                    FitSize = fit,
+                    FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
                 });
             }

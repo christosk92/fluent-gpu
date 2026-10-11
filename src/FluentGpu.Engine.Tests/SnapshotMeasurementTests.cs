@@ -84,7 +84,7 @@ public sealed class SnapshotMeasurementTests
         var local = snapshot.ResolveMeasureForWidth(node, 100);
         local.FitSize = 99;
         Assert.Equal(12, snapshot.ResolveMeasureForWidth(node, 100).FitSize);
-        Assert.Equal(24, scene.MeasureCacheRef(node).E1.FitSize);
+        Assert.Equal(24, scene.MeasureCacheRef(node).ResolveForWidth(100).FitSize);   // the scene's latest measure at that width
     }
 
     [Theory]

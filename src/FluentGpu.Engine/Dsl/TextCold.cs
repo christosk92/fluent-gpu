@@ -28,6 +28,7 @@ internal sealed class TextCold : IEquatable<TextCold>
     public ColorF SelectionHighlightColor;
     public DynamicTextKind DynamicText;
     public float MinSize = float.NaN;
+    public TextCase Case = TextCase.AsWritten;
 
     public TextCold CloneFor(TextEl owner)
     {
@@ -54,7 +55,8 @@ internal sealed class TextCold : IEquatable<TextCold>
             && EqualityComparer<bool>.Default.Equals(IsTextSelectionEnabled, o.IsTextSelectionEnabled)
             && EqualityComparer<ColorF>.Default.Equals(SelectionHighlightColor, o.SelectionHighlightColor)
             && EqualityComparer<DynamicTextKind>.Default.Equals(DynamicText, o.DynamicText)
-            && EqualityComparer<float>.Default.Equals(MinSize, o.MinSize);
+            && EqualityComparer<float>.Default.Equals(MinSize, o.MinSize)
+            && EqualityComparer<TextCase>.Default.Equals(Case, o.Case);
     }
 
     public override bool Equals(object? obj) => Equals(obj as TextCold);

@@ -36,3 +36,15 @@ public enum TextLineBounds : byte
     Full = 0,
     Tight = 1
 }
+
+/// <summary>Case transform applied to a text run AT SHAPING (E19), culture-invariantly: the stored string is never rewritten
+/// and nothing is allocated per render. <see cref="Lower"/> / <see cref="Upper"/> are the simple Unicode case mappings of
+/// the invariant culture (a Turkish current culture never turns <c>i</c> into <c>İ</c>), UTF-16 length preserving, so every
+/// index (caret, selection, span range) is the same in the written and the shaped text. Wavee feeds it from theme-written
+/// labels only; content strings keep <see cref="AsWritten"/>.</summary>
+public enum TextCase : byte
+{
+    AsWritten = 0,
+    Lower = 1,
+    Upper = 2
+}

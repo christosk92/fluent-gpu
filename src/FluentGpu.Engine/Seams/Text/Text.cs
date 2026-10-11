@@ -19,7 +19,8 @@ public readonly record struct TextStyle(StringId FontFamily, float SizeDip, usho
     TextWrap Wrap = TextWrap.NoWrap, TextTrim Trim = TextTrim.None, int MaxLines = 0,
     float CharSpacing = 0f, float LineHeight = float.NaN,
     LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full,
-    int SpanRunId = 0, float MinSizeDip = 0f);   // MinSizeDip > 0 ⇒ auto-fit floor (TextEl.MinSize; shrink-to-fit MaxLines)
+    int SpanRunId = 0, float MinSizeDip = 0f,   // MinSizeDip > 0 ⇒ auto-fit floor (TextEl.MinSize; shrink-to-fit MaxLines)
+    TextCase Case = TextCase.AsWritten);        // E19: invariant case transform applied at shaping; part of the key because it can change the glyph run
 
 /// <summary>Result of measuring a run: the box the shaped glyphs occupy + the baseline offset from the top, plus the
 /// face's decoration metrics — all vertical values measured DOWN from the line top, the same frame as

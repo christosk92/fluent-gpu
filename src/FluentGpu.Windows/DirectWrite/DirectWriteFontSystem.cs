@@ -97,7 +97,7 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
         var spans = run is not null ? run.Spans.AsSpan() : default(ReadOnlySpan<SpanStyle>);
         _engine.Layout(text, family, style.Weight, style.SizeDip, maxWidth, (int)style.Wrap, (int)style.Trim, style.MaxLines,
             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds, spans, _strings,
-            run?.OverflowSuffixStart ?? -1);
+            run?.OverflowSuffixStart ?? -1, (int)style.Case);
     }
 
     public void Dispose() => _engine.Dispose();
