@@ -1724,6 +1724,7 @@ public sealed partial class AppHost : IDisposable
     // theme definition (Fonts.Icon) and is re-read when Tok.StyleEpoch moves (RefreshScrollbarArrowFamily), not frozen.
     private StringId _sbUp, _sbDown, _sbLeft, _sbRight, _sbFam;
     private string _sbFamName = "";
+    private int _lastBodyFontVersion;             // last FontRegistry.BodyVersion this host re-measured for (E9)
     private int _lastStyleEpoch;                 // last Tok.StyleEpoch the host re-derived non-colour host state for
 
     /// <summary>Host seam set by the windowing backend: re-apply the OS window material (DWM immersive-dark + Mica) when
@@ -4923,6 +4924,8 @@ public sealed partial class AppHost : IDisposable
         _sbUp = sbUp; _sbDown = sbDown; _sbLeft = sbLeft; _sbRight = sbRight; _sbFam = sbFam;
         _sbFamName = Tok.Definition.Fonts.Icon;
         _lastStyleEpoch = Tok.StyleEpoch;
+        FluentGpu.Text.FontRegistry.Shared.SyncBody();   // adopt the active body chain now, so a LATER change is seen as a change (E9)
+        _lastBodyFontVersion = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
         if (window.Handle.Kind == NativeHandleKind.Hwnd) _videoSurfaces.WindowHandle = (nuint)window.Handle.Value;   // protected video ties output protection to THIS window (main or pop-out)
@@ -6396,6 +6399,16 @@ public sealed partial class AppHost : IDisposable
             {
                 _lastStyleEpoch = Tok.StyleEpoch;
                 RefreshScrollbarArrowFamily();
+                // E9: a run with no family of its own shapes in the theme's body font, which its style cannot see. When the
+                // definition changed that font, every cached measure is stale (they key on FontRegistry.BodyVersion) and the
+                // whole tree must re-measure; the shape and glyph-run caches evict themselves on the same version.
+                FluentGpu.Text.FontRegistry.Shared.SyncBody();
+                if (FluentGpu.Text.FontRegistry.Shared.BodyVersion != _lastBodyFontVersion)
+                {
+                    _lastBodyFontVersion = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
+                    _scene.MarkAllTextLayoutDirty();
+                    _needFullLayout = true;
+                }
             }
             bool virtualsChanged = false;
             double reactiveFlushMs = 0, virtualRealizeMs = 0;

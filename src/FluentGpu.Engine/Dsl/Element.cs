@@ -850,6 +850,11 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// <see cref="Trim"/> ellipsis applies at the floor. Use a font-natural line height (leave <see cref="LineHeight"/>
     /// unset) so the chosen size's spacing scales with it. NaN = off (no auto-fit; the default).</summary>
     public float MinSize { get => (_cold ?? TextCold.Default).MinSize; init { if (!EqualityComparer<float>.Default.Equals((_cold ?? TextCold.Default).MinSize, value)) Cold.MinSize = value; } }
+    /// <summary>Case transform applied at SHAPING (E19), culture-invariantly and length-preserving: the string is stored and
+    /// interned as written, the glyph run is shaped from its lower/upper-cased form, and no string is allocated per render.
+    /// Part of the measure key (<c>TextStyle.Case</c>). Default <see cref="TextCase.AsWritten"/>. For theme-written labels
+    /// (Wavee's <c>R.Case.For(LabelKind)</c>); content strings (titles, lyrics, user text) keep the default.</summary>
+    public TextCase Case { get => (_cold ?? TextCold.Default).Case; init { if (!EqualityComparer<TextCase>.Default.Equals((_cold ?? TextCold.Default).Case, value)) Cold.Case = value; } }
 
     // Leaf layout participation. Text needs the same sizing/flex knobs as other leaves so wrapped runs can be
     // constrained by their container instead of contributing their full single-line width to parent measure.

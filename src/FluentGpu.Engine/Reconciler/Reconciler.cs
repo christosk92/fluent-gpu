@@ -6033,7 +6033,7 @@ public sealed partial class TreeReconciler
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 li.TextStyle = new TextStyle(famId, t.Size, t.ResolvedWeight, t.Wrap, t.Trim, t.MaxLines,
                     t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds,
-                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize);
+                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;

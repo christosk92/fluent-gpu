@@ -125,6 +125,7 @@ public sealed partial class FlexLayout
         MixF(ref h, li.TextStyle.LineHeight);
         MixU(ref h, (uint)li.TextStyle.SpanRunId);
         MixF(ref h, li.TextStyle.MinSizeDip);
+        MixU(ref h, (uint)li.TextStyle.Case);
         MixU(ref h, (uint)li.JustifySelf);
         MixU(ref h, li.MeasureUnboundedWidth ? 1u : 0u);
         return h;

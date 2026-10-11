@@ -319,7 +319,7 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // sub-tile damage reads (SliceOpBounds, InkRect). Bounds stays the LAYOUT box the replay shapes into. Empty = the box.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
-    int SpanRunId = 0, int ForceColor = 0, int InMotion = 0, RectF Ink = default)
+    int SpanRunId = 0, int ForceColor = 0, int InMotion = 0, RectF Ink = default, int Case = 0)   // Case: a FluentGpu.Foundation.TextCase value, applied by the replay's shaping (E19)
 {
     /// <summary>The painted extent (<see cref="Ink"/>, or the layout box when none was recorded).</summary>
     public RectF InkRect => Ink.W > 0f && Ink.H > 0f ? Ink : Bounds;
@@ -332,7 +332,7 @@ public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, String
 // cache key is identical to the plain run (no reshape as the split advances). General text-reveal; the lyrics karaoke uses it.
 public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
-    ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0, RectF Ink = default)
+    ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0, RectF Ink = default, int Case = 0)
 {
     /// <summary>The painted extent (<see cref="Ink"/>, or the layout box when none was recorded) — see DrawGlyphRunCmd.</summary>
     public RectF InkRect => Ink.W > 0f && Ink.H > 0f ? Ink : Bounds;
@@ -590,12 +590,12 @@ public sealed class DrawList
 
     public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0,
-        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f, in RectF ink = default)
+        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f, in RectF ink = default, int textCase = 0)
     {
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
             charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, QuantizeMotionSoft(motionSoft),
-            ink.W > 0f && ink.H > 0f ? ink : default));
+            ink.W > 0f && ink.H > 0f ? ink : default, textCase));
         PushSort(sortKey);
     }
 
@@ -607,12 +607,12 @@ public sealed class DrawList
     public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
         in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, float motionSoft = 0f,
-        in RectF ink = default)
+        in RectF ink = default, int textCase = 0)
     {
         WriteOp(DrawOp.DrawGlyphRunGradient);
         WritePayload(new DrawGlyphRunGradientCmd(bounds, text, family, fontSize, weight, wrap, trim, maxLines,
             charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, QuantizeMotionSoft(motionSoft),
-            ink.W > 0f && ink.H > 0f ? ink : default));
+            ink.W > 0f && ink.H > 0f ? ink : default, textCase));
         PushSort(sortKey);
     }
 

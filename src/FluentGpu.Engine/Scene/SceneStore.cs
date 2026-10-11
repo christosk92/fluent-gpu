@@ -1012,6 +1012,15 @@ public sealed partial class SceneStore : ISceneBackend
             }
     }
 
+    /// <summary>Mark every live text node <see cref="NodeFlags.LayoutDirty"/> and <see cref="NodeFlags.PaintDirty"/>: a body-font
+    /// change (E9) invalidates every measure shaped in the default family, and a clean subtree is skipped by measure, so a
+    /// full layout alone would keep the stale sizes. Cold path (once per body-font change).</summary>
+    public void MarkAllTextLayoutDirty()
+    {
+        for (int i = 1; i < _high; i++)
+            if (_gen[i] != 0 && !_paint[i].Text.IsEmpty) Mark(HandleAt(i), NodeFlags.LayoutDirty | NodeFlags.PaintDirty);
+    }
+
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
     /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
     /// recorder snaps to the live color. The engine's BrushFade track keeps the loop awake while a fade runs.</summary>

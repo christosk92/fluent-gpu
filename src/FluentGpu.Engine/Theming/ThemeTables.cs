@@ -149,8 +149,10 @@ public sealed class MotionTable : IEquatable<MotionTable>
 
 /// <summary>
 /// The font families of a <see cref="ThemeDefinition"/>. <see cref="Body"/> is the default text family CHAIN (a
-/// comma-separated family list, primary first, e.g. <c>"Segoe UI Variable Text, Segoe UI"</c>); the text pipeline
-/// resolves <see cref="BodyPrimary"/> (the first entry) until the font registry (E9) walks the chain. <see cref="Icon"/>
+/// comma-separated family list, primary first, e.g. <c>"Segoe UI Variable Text, Segoe UI"</c>); the font registry
+/// (<see cref="FluentGpu.Text.FontRegistry"/>, E9) walks it entry by entry and uses the first that exists, so a missing
+/// primary falls back along the chain and an exhausted chain is an error. <see cref="BodyPrimary"/> is the first entry
+/// (a single-name consumer's preference). <see cref="Icon"/>
 /// is the symbol face behind <c>Ui.Icon</c> / IconButton / NavigationView. A family is a system name or
 /// <c>"path/to.ttf#Family"</c>. Read as <c>Tok.Definition.Fonts</c>, at use, never captured at construction.
 /// </summary>

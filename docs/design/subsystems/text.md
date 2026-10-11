@@ -536,6 +536,40 @@ ResolveFace(req):
 - **Glyph-id BMP cache** (`ushort[256]` per face): `GetGlyphIndices` is COM-call-per-batch; caching cmap for
   Latin UI text means the overwhelming common path never crosses COM for cmap during shaping.
 
+### 4.3b The font registry (`FontRegistry`, EP7 / E9) - one face cache for every consumer
+
+```csharp
+public interface IFontFaceSource { bool HasSystemFamily(string f); string[]? ReadFileFamilies(string path);
+    nint CreateSystemFace(string f, int weight, out FontFaceMetrics m); nint CreateFileFace(string path, int index, int weight, out FontFaceMetrics m);
+    void ReleaseFace(nint face); }                                   // Seams/Text/FontRegistry.cs; DirectWrite impl: DWriteFontFaceSource
+public sealed class FontRegistry { public static FontRegistry Shared; nint ResolveFace(string? spec, int weight, out FontFaceMetrics m);
+    bool SyncBody(); int BodyVersion; Task Preload(FontSet set); bool IsReady(FontSet set); long FacesCreatedOnUiThread; int ChainViolations; }
+public static class Fonts { Task Preload(FontSet set); bool IsReady(FontSet set); }
+```
+
+`TextLayoutEngine` (measure) and `GlyphRenderer` (raster) used to keep a private face cache each, with their own silent fallback
+and a `#Family` that was ignored (always face 0). Both now resolve through `FontRegistry.Shared`, so a (family, weight) is created
+and metered once. The registry owns every policy decision; the source is only the COM edge (a headless fake keeps the suites TerraFX-free).
+
+- **Chain.** A spec (a style's `FontFamily`, or `FontSet.Body`) is a comma-separated chain, primary first
+  (`"Segoe UI Variable Display, Segoe UI"`). The first entry that exists supplies the face; falling back along the chain is the
+  style's choice, not a wrong frame. An empty family is the theme's body chain (`Tok.Definition.Fonts.Body`).
+- **Falling off the chain** (no entry exists) is an error: counted (`ChainViolations`), logged to `ErrorSink` (stderr by default, in
+  Debug and Release), and thrown as `FontChainException` when `ThrowOnViolation` is set (the strict DEBUG/gate mode). The run still
+  gets the body chain's face, then Segoe UI, so a missing font never produces no text. The result is cached: one report per spec.
+- **`path.ttf#Family`.** The `#` part selects the face of the file whose family name matches (case-insensitive), so a `.ttc` holding
+  Inter and Inter Display yields each by name; the face is cached by the face the name selected, not the spelling. A single-face file
+  whose name does not match still resolves its only face with a logged warning; a multi-face file with no match does not exist
+  (the chain moves on). No `#Family` = the first face. Bold is synthesized for a raw file at weight 600 and above.
+- **Preload.** `Fonts.Preload(FontSet)` resolves the body chain at 400/600/700 and the icon family at 400 on a worker; `IsReady`
+  is the reveal gate's predicate. After it the UI thread creates no face (`FacesCreatedOnUiThread` is the proof counter).
+- **Body-font change.** A run with no family shapes in the body chain, which `TextStyle` cannot see. `SyncBody` follows the
+  definition; `BodyVersion` moves on a real change; `TextMeasureEntry.FontEpoch` (the per-node measure cache), the layout engine's
+  shape cache (keyed on the chain, not on `""`) and the glyph renderer's run cache all miss or evict on it, and the host
+  re-measures the whole tree on the `Tok.StyleEpoch` that carried the change.
+- The shaper's system font-fallback faces (`MapCharacters`) are cached in the same registry; the preferred family handed to
+  `MapCharacters` is the first system entry of the chain that exists.
+
 ### 4.4 Itemization & shaping pipeline (`DWriteItemizer`, `DWriteTextShaper`)
 
 ```
@@ -938,6 +972,16 @@ identical rebind keeps the `SpanRunId` and shapes nothing), `gate.spans.scene-ow
 run). The pre-existing rtb-01/rtb-02 checks (`WC-SPAN.*` in the same suite) stay green unchanged.
 
 ---
+
+### 8.5 Case transform at shaping (`TextEl.Case`, EP7 / E19)
+
+`TextEl.Case : TextCase { AsWritten, Lower, Upper }` -> `TextStyle.Case` -> `DrawGlyphRunCmd.Case`. The string is stored and
+interned as written; the engines transform it AT SHAPING, culture-invariantly (`TextCaseMap`: the invariant simple case
+mapping, so a Turkish current culture never produces a dotless i) into a reused grow-only buffer (`TextCaseScratch`), so nothing
+is allocated per render and the UTF-16 length is unchanged (every caret, selection and span index is the same in the written
+and the shaped text). `TextStyle.Case` is part of the `TextMeasureEntry` key and of the glyph `RunKey`; the layout engine's
+shape cache keys on the transformed text. Wavee's `R.Case.For(LabelKind)` feeds it for theme-written labels only; content
+strings keep `AsWritten` (WVTH003 bans `ToLower/ToUpper` in structure code).
 
 ## 9. Color & the text gamma exception (cross-ref §4.5, `architecture-spec.md` §5.2)
 
