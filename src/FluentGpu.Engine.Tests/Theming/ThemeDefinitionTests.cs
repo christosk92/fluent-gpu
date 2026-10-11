@@ -210,7 +210,7 @@ public sealed class ThemeDefinitionTests
         Assert.False(b.DiffersOnlyInColours(b with { Fonts = new FontSet("Cascadia Code", "Segoe Fluent Icons") }));
         Assert.False(b.DiffersOnlyInColours(b with { Motion = b.Motion.With(MotionTokenId.ControlFast, MotionTokenDef.Eased(1f, Easing.Linear)) }));
         Assert.False(b.DiffersOnlyInColours(b with { Elevation = b.Elevation with { Dark = b.Elevation.Dark with { Card = default } } }));
-        Assert.False(b.DiffersOnlyInColours(b with { AppRoles = "roles" }));
+        Assert.False(b.DiffersOnlyInColours(b with { AppRoles = new AppRolesFixture(default, 1) }));
         // A colour change that rides along with a geometry change is still a geometry change.
         Assert.False(b.DiffersOnlyInColours(b with { Light = b.Light with { TextPrimary = ColorF.FromRgba(1, 2, 3) }, Spacing = b.Spacing with { S = 9f } }));
     }

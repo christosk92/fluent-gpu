@@ -10,8 +10,8 @@ namespace FluentGpu.Theming;
 /// </summary>
 public readonly ref struct ViewContext
 {
-    /// <summary>The app's role table, provided by the app as <c>Ctx.Provide(ViewContext.AppRolesContext, roles, child)</c>
-    /// and read by <see cref="App{T}"/>. (It moves onto the theme definition with the app role table work.)</summary>
+    /// <summary>An OVERRIDE of the app role table for a subtree (a test, a preview): <c>Ctx.Provide(ViewContext.AppRolesContext,
+    /// roles, child)</c>. When none is provided (the normal case) <see cref="App{T}"/> reads <c>Tok.Definition.AppRoles</c>.</summary>
     public static readonly Context<object?> AppRolesContext = new(null);
 
     private readonly ViewRegistry? _registry;
@@ -38,15 +38,24 @@ public readonly ref struct ViewContext
     /// <summary>Reduced motion as a value (never branch hook order on it).</summary>
     public bool Reduced { get; }
 
-    /// <summary>The app's role object as <typeparamref name="T"/>, read through <see cref="AppRolesContext"/> (so a
-    /// change of the provided object re-renders the template). Throws when none is provided or it is another type.</summary>
+    /// <summary>The app's role object as <typeparamref name="T"/>: the active <see cref="ThemeDefinition.AppRoles"/> (checked once
+    /// per <c>Tok.Epoch</c>, so it is a field compare on the steady path). A theme switch bumps the epoch and the host re-renders
+    /// every mounted template in place, so a template always reads the roles of the theme on screen. A subtree that provides
+    /// <see cref="AppRolesContext"/> overrides it. Throws when no roles are set or they are another type.</summary>
     public T App<T>() where T : class
     {
-        object? roles = Hooks.UseContext(AppRolesContext);
-        if (roles is T typed) return typed;
-        throw new InvalidOperationException(roles is null
-            ? $"ViewContext.App<{typeof(T).Name}>: no app roles object is provided. Wrap an ancestor in Ctx.Provide(ViewContext.AppRolesContext, roles, ...)."
-            : $"ViewContext.App<{typeof(T).Name}>: the provided app roles object is a {roles.GetType().Name}.");
+        object? overridden = Hooks.UseContext(AppRolesContext);
+        if (overridden is not null)
+        {
+            if (overridden is T typedOverride) return typedOverride;
+            throw new InvalidOperationException($"ViewContext.App<{typeof(T).Name}>: the provided AppRolesContext object is a {overridden.GetType().Name}.");
+        }
+        T? roles = AppRolesCache<T>.Get();
+        if (roles is not null) return roles;
+        object? actual = Tok.Definition.AppRoles;
+        throw new InvalidOperationException(actual is null
+            ? $"ViewContext.App<{typeof(T).Name}>: the active ThemeDefinition has no AppRoles (set ThemeDefinition.AppRoles to the app's role table)."
+            : $"ViewContext.App<{typeof(T).Name}>: ThemeDefinition.AppRoles is a {actual.GetType().Name}.");
     }
 
     /// <summary>Nest another slot (same as <see cref="Slots.View{TProps}"/>). Inside a loop, <c>Flow.For</c> or any

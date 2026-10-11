@@ -334,7 +334,7 @@ and `Animation/MotionTok.cs`. Leaf values and the `Tok` surface, NOT a SPEC-INDE
 
 | Artifact | Role |
 |---|---|
-| `ThemeDefinition` (sealed record) | `Id`, `Light`/`Dark`/`HighContrast?` `TokenSet`, `LightShell`/`DarkShell` `ShellPalette`, `Accent` `AccentRamp`, `Type` `TypeRamp`, `Spacing` `SpacingScale`, `Radii` `RadiiScale`, `Elevation` `ElevationSet`, `Motion` `MotionTable`, `Fonts` `FontSet`, `Materials` `MaterialPolicy`, `Icons` `IconSet`, `Ext` `ExtTokenTable`, `Controls` `ControlStyleTable`, `AppRoles` `object?`. It **replaces `ThemePalette`**: a preset is a definition whose colours come from a `PaletteSeed` and whose other tables are the Fluent defaults |
+| `ThemeDefinition` (sealed record) | `Id`, `Light`/`Dark`/`HighContrast?` `TokenSet`, `LightShell`/`DarkShell` `ShellPalette`, `Accent` `AccentRamp`, `Type` `TypeRamp`, `Spacing` `SpacingScale`, `Radii` `RadiiScale`, `Elevation` `ElevationSet`, `Motion` `MotionTable`, `Fonts` `FontSet`, `Materials` `MaterialPolicy`, `Icons` `IconSet`, `Ext` `ExtTokenTable`, `Controls` `ControlStyleTable`, `AppRoles` `IAppRoles?` (§16.1). It **replaces `ThemePalette`**: a preset is a definition whose colours come from a `PaletteSeed` and whose other tables are the Fluent defaults |
 | `ThemeDefinition.FluentDefault` | The engine default, **bit-for-bit what the engine shipped before E3**: the Warm preset's colours (`Tok.WarmPalette` is the same instance) with the old `Spacing`/`Radii` consts, the `Ui.*` type ramp, the `Elevation` presets, the `MotionTok.Get` switch and `Segoe UI` / `Segoe Fluent Icons`. `ThemeDefinitionTests` pins every value as a literal |
 | `bool DiffersOnlyInColours(other)` | True when only `Id`, `Light`, `Dark`, `HighContrast`, `LightShell`, `DarkShell`, `Accent`, `Ext` differ. Used by E5 to choose the live cross-fade path (colour-only) over an atomic transaction (anything else). Allocation-free |
 | `Tok.Definition` | The active definition (`Tok.Palette` is kept as an alias for callers that read `.LightShell`/`.Light`) |
@@ -1014,8 +1014,8 @@ component machinery: no new element type, opcode, scene column, PAL seam or hook
 - **Missing key.** No provider, an unregistered id, or an id registered for other props renders an empty `BoxEl` and logs once
   per key (per registry) through `Diag.Line` (always on, so a Release build shows it).
 - **`ViewContext`** (ref struct, one template call): `Hooks` (the body's `RenderContext`), `Options` (`IOptionReader`),
-  `OptionRequests`, `Reduced` (`Motion.ReducedMotion`), `App<T>()` (reads `ViewContext.AppRolesContext`, a
-  `Context<object?>` the app provides), `View(...)` (nested slot), `StyleOf(StyleKey<T>)` (from the current registry).
+  `OptionRequests`, `Reduced` (`Motion.ReducedMotion`), `App<T>()` (reads `Tok.Definition.AppRoles`, §16.1; a
+  subtree may override it through `ViewContext.AppRolesContext`), `View(...)` (nested slot), `StyleOf(StyleKey<T>)` (from the current registry).
 - **Option cells.** `OptionKey<T>(Id, Default)`; `OptionStore` keeps one `Signal<T>` per id, created on first touch and seeded from
   `IOptionPersistence` (raw boxed values) or the default. `Get` is a tracked read, so a template re-renders when an option it
   read changes and not when another does. Writes never touch a cell from a template: `ctx.OptionRequests.Set` forwards to
@@ -1023,6 +1023,30 @@ component machinery: no new element type, opcode, scene column, PAL seam or hook
   `OptionStore.Publish`, which writes the cell (equality-gated), bumps `Epoch` and persists. `OptionStore.Context` provides the
   store to a subtree; without one every option reads as its default.
 - **Tests.** `Theming/ViewSlotTests.cs`, `Theming/OptionStoreTests.cs` in `FluentGpu.Engine.Tests`.
+
+
+### 16.1 App role table (`ThemeDefinition.AppRoles`, EP5)
+
+An application's roles are colours (a brand wash, a status colour) AND non-colour data (a row height, a corner choice, a
+weight). The table lives on the definition so a theme switch swaps it in the same publication as every other table.
+
+- **`IAppRoles`** (`Theming/AppRoles.cs`): the interface `ThemeDefinition.AppRoles` must implement. Its one member,
+  `bool DiffersOnlyInColours(IAppRoles other)`, is true when every non-colour role is equal. Only the table can answer this
+  (reference or `Equals` cannot tell a recolour from a row-height change), so `ThemeDefinition.DiffersOnlyInColours` /
+  `HasSameStyleAs` ask it: reference-equal tables are the same; a missing table against a present one is a difference;
+  otherwise the verdict is `a.DiffersOnlyInColours(b)`. A colour-only role change therefore keeps the live cross-fade path
+  (`Tok.Epoch` only); a non-colour role change bumps `Tok.StyleEpoch` and is applied as a unit.
+- **`ViewContext.App<T>()`** reads `Tok.Definition.AppRoles` as `T`, cached per `Tok.Epoch` (`AppRolesCache<T>`: an epoch
+  compare plus a reference check against the live object, so a steady template call is two field compares). A theme swap
+  bumps the epoch and the host re-renders every mounted template in place, so a template always sees the roles of the theme on
+  screen. Throws a descriptive `InvalidOperationException` when the definition has no roles or they are another type.
+- **`ViewContext.AppRolesContext`** is kept as an OVERRIDE for a subtree (tests, previews): when provided it wins over the
+  definition and is not cached.
+- **Reserved for the theme-package loader:** `RoleKey<T>(Id)` and `ExtRoleTable` (immutable, `With`/`TryGet`) are the typed
+  key and the table for extension roles a loaded theme declares that the app's `IAppRoles` object does not know at compile
+  time. Nothing reads them yet and `ThemeDefinition` does not carry a table; they are deliberately minimal.
+- Gates: `Engine.Tests/Theming/AppRolesTests` (colour-only vs non-colour role changes through `Tok.Use`/`StyleEpoch`, the
+  per-epoch cache, `App<T>` following a theme swap, the override, the reserved table).
 
 ---
 

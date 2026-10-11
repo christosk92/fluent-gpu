@@ -48,10 +48,11 @@ public sealed record ThemeDefinition
     /// <summary>Per-control style table (EP15 fills it; a minimal placeholder until then).</summary>
     public required ControlStyleTable Controls { get; init; }
 
-    /// <summary>Application-owned role table (read back by the application through its own typed accessor). Compared with
-    /// <see cref="object.Equals(object, object)"/>: an application whose roles hold non-colour data should expose a value
-    /// type with value equality so a role change is seen as a non-colour change.</summary>
-    public object? AppRoles { get; init; }
+    /// <summary>Application-owned role table: colours AND non-colour roles (row heights, corner choices, weights) the engine
+    /// knows nothing about. It is the source of <c>ViewContext.App&lt;T&gt;()</c> (cached per <c>Tok.Epoch</c>). It must implement
+    /// <see cref="IAppRoles"/>, whose <see cref="IAppRoles.DiffersOnlyInColours"/> is what <see cref="DiffersOnlyInColours"/> asks
+    /// (reference equality is the shortcut, never the verdict for two different tables).</summary>
+    public IAppRoles? AppRoles { get; init; }
 
     /// <summary>
     /// The engine default: the Warm preset's colours with every non-colour table at the value the engine shipped before
@@ -64,7 +65,8 @@ public sealed record ThemeDefinition
     /// True when <paramref name="other"/> differs from this definition only in colours: the <see cref="Light"/>,
     /// <see cref="Dark"/>, <see cref="HighContrast"/>, <see cref="LightShell"/>, <see cref="DarkShell"/>, <see cref="Accent"/>
     /// and <see cref="Ext"/> members and the <see cref="Id"/>. Every other member (type ramp, spacing, radii, elevation,
-    /// motion, fonts, materials, icons, control styles, app roles) must be equal. Two equal definitions return true. Used
+    /// motion, fonts, materials, icons, control styles) must be equal, and the app roles must differ only in colours as their own
+    /// <see cref="IAppRoles.DiffersOnlyInColours"/> reports (a missing table against a present one is a difference). Two equal definitions return true. Used
     /// to choose the live cross-fade path (colour-only) over an atomic transaction (anything else).
     /// </summary>
     public bool DiffersOnlyInColours(ThemeDefinition other)
@@ -84,5 +86,9 @@ public sealed record ThemeDefinition
         && Materials.Equals(other.Materials)
         && Icons.Equals(other.Icons)
         && Controls.Equals(other.Controls)
-        && object.Equals(AppRoles, other.AppRoles);
+        && AppRolesSameStyle(AppRoles, other.AppRoles);
+
+    // AppRoles holds colours and non-colour roles, so only the table itself can say whether a difference is colour-only.
+    private static bool AppRolesSameStyle(IAppRoles? a, IAppRoles? b)
+        => ReferenceEquals(a, b) || (a is not null && b is not null && a.DiffersOnlyInColours(b));
 }
