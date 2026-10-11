@@ -890,6 +890,15 @@ public sealed class ImageCache
         else _revealingOverflow = true;
     }
 
+    /// <summary>True while the host's <see cref="FluentGpu.Hosting.SnapScope"/> is active (E17a): a decode that lands now
+    /// reveals instantly (the disabled-transition arm of <see cref="BeginReveal"/>: no fade, nothing for the fade clock to
+    /// run) and a reconciler image swap becomes a hard cut. Reveals begun before the scope keep their fade. Set by
+    /// <c>AppHost</c> on the scope's depth edges.</summary>
+    public bool SnapReveals => _snapDepth > 0;
+    private int _snapDepth;   // depth-counted: hosts that share one cache (a pop-out) nest instead of clobbering each other
+    internal void PushSnap() => _snapDepth++;
+    internal void PopSnap() { if (_snapDepth > 0) _snapDepth--; }
+
     // `id` + `cause` are carried for the trace only (a reveal is exactly the "flashed back in" the user sees, so which
     // texture started it — the blurhash LQIP, the full decode, a baked derivative — is the whole question).
     void BeginReveal(Entry e, int id, string cause)
@@ -900,7 +909,7 @@ public sealed class ImageCache
                 $"sinceRequestMs={(float.IsInfinity(e.RequestedMs) ? -1f : _clockMs - e.RequestedMs):0.#} " +
                 $"size={e.W}x{e.H} derived={(e.Derived ? 1 : 0)}");
         if (e.RequestedTicks != 0) { Latency.NoteFetched(e.RequestedTicks); e.RequestedTicks = 0; }
-        if (!e.Transition.Enabled)
+        if (!e.Transition.Enabled || SnapReveals)   // SnapReveals: a SnapScope lands the picture instantly
         {
             e.TextureMs = float.NaN;
             e.RevealMs = 0f;

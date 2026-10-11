@@ -80,6 +80,7 @@ public static class SuiteRegistry
         new("continuity", "continuity", VisualContinuityChecks.Run),
         new("detached-render", "detached-render", FluentGpu.VerticalSlice.Suites.DetachedRenderResilienceSuite.Run),
         new("detached-pacing", "detached-pacing", FluentGpu.VerticalSlice.Suites.DetachedPacingSuite.Run),   // F094/F097: a pop-out's motion is not the parent's present; per-target pacing evidence and queue depth
+        new("snap-scope", "snap-scope", FluentGpu.VerticalSlice.Suites.SnapScopeChecks.Run),   // EP17 E17a/b: SnapScope lands brush/FLIP/Enter/Exit at end values in one publication, holds FrameClock.Tick + timers without a burst, instant image reveal, 0-alloc enter/exit
         new("detached-video", "detached-video", FluentGpu.VerticalSlice.Suites.DetachedVideoSuite.Run),   // F208/F080: the early video drain runs before the slot wait with no UI publish; one deferred commit per turn
     ];
 

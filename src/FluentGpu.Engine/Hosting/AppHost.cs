@@ -6229,7 +6229,9 @@ public sealed partial class AppHost : IDisposable
             // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
             // frame and the loop could never fall out of display rate. Only when watched — 0-alloc when nothing polls.
-            if (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers)
+            // SnapScope (E17b): the tick does not advance while a transaction snaps the UI, so FrameTicker-style sources
+            // schedule nothing (the counter resumes from where it stopped; no catch-up burst).
+            if (_snapDepth == 0 && (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers))
             {
                 ++_frameClock;
                 if (_frameClockSig.HasSubscribers) _frameClockSig.Value = _frameClock;
@@ -6389,7 +6391,7 @@ public sealed partial class AppHost : IDisposable
             // (resizes from the FLIP capture, enters), fold them into the presented flow, and clamp every scroll offset
             // against the PRESENTED extent. Effects and the sync below then see the geometry this frame presents.
             bool keepAliveSuppressed = _reconciler.ConsumeKeepAliveLayoutSuppressionFrame();
-            if (flowRevealFrame && SeedFlowRevealsPostLayout(capturedProjections, Motion.LayoutTransitionsSuppressed || keepAliveSuppressed, layoutSize))
+            if (flowRevealFrame && SeedFlowRevealsPostLayout(capturedProjections, Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0, layoutSize))
                 reconciled = true;
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
@@ -6405,7 +6407,7 @@ public sealed partial class AppHost : IDisposable
                 DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
             }
             long tLayoutEffects = Stopwatch.GetTimestamp();
-            _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
+            _connected.ReducedMotion = Motion.ReducedMotion || _snapDepth > 0;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
             _connected.Tick65();
             long tConnected = Stopwatch.GetTimestamp();
             // Responsive show/hide "make room": nodes that mounted with a SizeMode.Reflow enter now have their natural
@@ -7553,7 +7555,7 @@ public sealed partial class AppHost : IDisposable
         //    just laid out so bounds track the pointer with no stale translate/overlap.
         //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
         //    lets opacity/etc. animate — behaviour left exactly as before.
-        bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed;
+        bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0;   // SnapScope: every FLIP lands on the laid-out bounds
         bool reduced = Motion.ReducedMotion;
 
         // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
