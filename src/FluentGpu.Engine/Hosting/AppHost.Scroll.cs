@@ -114,6 +114,7 @@ public sealed partial class AppHost
     private void OnUrgentScrollInput(ScrollInputEvent e)
     {
         Threading.ThreadGuard.AssertUi();
+        if (_fzPhase == FreezePhase.Frozen) return;   // E2: a frozen tree takes no input
         _dispatcher.DispatchScroll(in e);
         WakeFrame();
     }

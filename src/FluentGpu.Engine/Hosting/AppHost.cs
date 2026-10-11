@@ -2142,6 +2142,7 @@ public sealed partial class AppHost : IDisposable
         // presents it, without the UI ever parking this loop for it (the old Quiesce per pointer move).
         DrainPopupRenderActions();
         if (!_renderSeam.IsCurrentTarget(rf)) return;
+        VideoApplier.DeferAll = rf.Freeze == Threading.FreezeKind.Hold;   // E2: a frozen frame defers every video placement and release until the thaw frame
         try
         {
             if (retryOwedPresent)
@@ -2306,7 +2307,7 @@ public sealed partial class AppHost : IDisposable
                 // exactly the retained pixels.
                 // Never while HELD (or when this publication is the one that releases): the held frames must submit for their uploads
                 // and copies to land, and the release must put its frame on the glass even when it is byte-identical to the last.
-                bool skip = !(_renderHeld || rf.PresentHeld) && Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
+                bool skip = !(_renderHeld || rf.PresentHeld) && rf.Freeze == Threading.FreezeKind.None && Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
                     clockActive: clockActive, hasPopupWindows: Volatile.Read(ref _popupWindowCount) != 0);
                 var submit = rf.Submit with
                 {
@@ -2445,6 +2446,10 @@ public sealed partial class AppHost : IDisposable
     /// <see cref="HoldGuardMs"/> so a gate that can never open (a rejected upload) cannot freeze the window.</summary>
     private bool DecideHold(in Threading.RenderFrame rf, int imageGaps)
     {
+        // E2: a frame that carries a freeze directive is decided by the directive alone. The faithful-frame extension below is the
+        // RESTORE hold's (it keeps the glass on the pre-hide frame until its images are resident); a freeze release is exactly the
+        // frame that must reach the glass, and a freeze hold must not latch the restore state.
+        if (rf.Freeze != Threading.FreezeKind.None) return rf.Freeze == Threading.FreezeKind.Hold;
         if (rf.PresentHeld)
         {
             // The UI is still holding: the guard's clock starts at the first release CANDIDATE, never earlier. A motion re-present
@@ -2482,6 +2487,8 @@ public sealed partial class AppHost : IDisposable
     /// present is neither counted as a present nor acknowledged (<see cref="NotePresented"/>).</summary>
     private bool PresentFrame(in Threading.RenderFrame rf, bool composited, bool hold = false)
     {
+        // E2: the freeze directive acts here so the owed-present retry (which passes no hold) carries it too.
+        if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref hold);
         if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
         {
@@ -4104,6 +4111,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked host wakes when its park debounce ends
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
+        w = ClampWaitToFreeze(w);                          // E2: the freeze watchdog thaws on time even when nothing else wakes the loop
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -4689,6 +4697,8 @@ public sealed partial class AppHost : IDisposable
         // A stored UseTier crossing (E22) is work: it owes the frame that commits it. FrameNeeded is in ModalLoopEssentialWake, so the
         // modal-loop keep-alive idle skip cannot swallow that frame. Not while parked: a minimized window paints nothing to commit on.
         if (_tiers.HasPending && !_wasParked) r |= WakeReasons.FrameNeeded;
+        // E2: the capture frame, a running dissolve, a cut waiting for its Release frame and an overdue watchdog are all owed frames.
+        if (FreezeNeedsFrame()) r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so the [wake] census can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
@@ -5551,6 +5561,7 @@ public sealed partial class AppHost : IDisposable
         _ring.Clear();
         long gapT = Stopwatch.GetTimestamp();                 // UI-gap segments (AppHost.UiGap.cs)
         _pumpedEvents = _window.PumpInto(_ring);              // 1 pump
+        if (_fzPhase == FreezePhase.Frozen) _pumpedEvents = _ring.DropInteractive();   // E2: input is swallowed while frozen (window lifecycle events still pass)
         _ledgerPumpQpc = GapSegment(ref _gapMessagesTicks, gapT);
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
 
@@ -6154,6 +6165,7 @@ public sealed partial class AppHost : IDisposable
             double ensureMs = 0, layoutMs0 = 0;
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             bool resized = EnsureSize(keepAlive);
+            if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
             if (diagTick) { ensureMs = ElapsedMs(segStart); segStart = Stopwatch.GetTimestamp(); }
 
             // Modal-loop keep-alive idle skip. During a title-bar MOVE or edge RESIZE the OS runs its own modal
@@ -6235,7 +6247,7 @@ public sealed partial class AppHost : IDisposable
             // its contact events dispatch through the ordinary input path (InputKind.Scroll).
             _scrollPumpRing.Clear();
             int scrollPumped = _window.PumpScroll(in _palFrameClock, _scrollPumpRing);
-            if (scrollPumped > 0)
+            if (scrollPumped > 0 && _fzPhase != FreezePhase.Frozen)
                 _dispatcher.Dispatch(_scrollPumpRing.Drain(), _scrollPumpRing.DrainVelocitySamples());
 
             // The frame step: plans → this frame's offsets/motion, realize windows, chrome, the FLIP-suppression latch
@@ -6828,8 +6840,12 @@ public sealed partial class AppHost : IDisposable
             // The restore hold rides this publication. Decided HERE, after this frame's image pump, so a landing that completed the
             // restore releases it in the very publication that shows it. A frame whose hold bit differs from the last published one
             // is owed a publication even when nothing else changed (the release is exactly that frame).
-            bool presentHeld = EvaluateRestoreHold(resized);
-            bool holdOwesPublication = presentHeld || _lastPublishedHeld;
+            bool restoreHeld = EvaluateRestoreHold(resized);
+            // E2 frame freeze: this frame's directive (Capture / Hold / Dissolve / Release), decided HERE with the restore hold and
+            // carried by the publication. A frozen frame is also a held one, so the upload cap lifts and the skip gates stay shut.
+            Threading.FreezeKind freezeKind = ResolveFreezeDirective(out float dissolveT);
+            bool presentHeld = restoreHeld || freezeKind == Threading.FreezeKind.Hold;
+            bool holdOwesPublication = presentHeld || _lastPublishedHeld || freezeKind != Threading.FreezeKind.None || _fzLastPublished != Threading.FreezeKind.None;
             bool maybeUnchanged = !recordOnRender && _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !holdOwesPublication
                 && !reconciled && !layoutNeeded && !transformWrote
@@ -6940,6 +6956,7 @@ public sealed partial class AppHost : IDisposable
                 subHashMs = ElapsedMs(tHash0);
                 var submitInfo = new FrameInfo(recordOnRender ? publishFrameSize : FrameSizePx(keepAlive), _window.Scale, Clear, _images.ClockMs, repaint);
                 _lastPublishedHeld = presentHeld;
+                _fzLastPublished = freezeKind;
                 _lastPublishedFrameSize = _window.ClientSizePx;   // what a restore into another size would stretch (the hold is then not armed)
                 _lastPublishedScale = _window.Scale;
                 // F101: a settle frame (resized && keepAlive) carries its hint IN the publication (settlePresent below); it
@@ -6954,7 +6971,8 @@ public sealed partial class AppHost : IDisposable
                     _framePublishSeq = _renderSeam.PublishScene(_scene, _images, _strings, recordOptions,
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
                         CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
-                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld);
+                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
+                        freeze: freezeKind, dissolveT: dissolveT);
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;
@@ -6985,11 +7003,14 @@ public sealed partial class AppHost : IDisposable
                     _scene.ClearCaptureLedger(oldestSlotSeq);
                 }
                 else _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
-                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld);
+                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
+                    freeze: freezeKind, dissolveT: dissolveT);
                 if (_renderThread is not null)
                 {
-                    if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
-                    else _renderThread.DrainSync();                  // force-sync: block until the render thread presented
+                    // A freeze CAPTURE frame waits for its turn even under async: the render side adopts only the newest publication, so the
+                    // hold frame that follows must not be published until this one was consumed (else the snapshot is never taken).
+                    if (_asyncActive && freezeKind != Threading.FreezeKind.Capture) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
+                    else _renderThread.DrainSync();                  // force-sync (or a freeze capture): block until the render thread presented
                     tSubmitDone = Stopwatch.GetTimestamp();          // async: present is off-thread; force-sync collapses the boundary
                     if (recordOnRender) subTailMs = ToMs(tSubmitDone - tCap0);
                 }
@@ -7001,8 +7022,8 @@ public sealed partial class AppHost : IDisposable
                     // render-confined. An inline UI-thread submit here would violate that confinement + race the parent's
                     // presents. Async: fire-and-return (BindDComp + video drain ride our first present on the render thread).
                     // Force-sync: block until the parent thread's turn drained us (mirrors the primary DrainSync contract).
-                    if (_asyncActive) _parentRenderThread.WakeAsync();
-                    else _parentRenderThread.DrainSync();
+                    if (_asyncActive && freezeKind != Threading.FreezeKind.Capture) _parentRenderThread.WakeAsync();
+                    else _parentRenderThread.DrainSync();            // force-sync, or a freeze capture frame (see the primary branch above)
                     tSubmitDone = Stopwatch.GetTimestamp();
                 }
                 else
@@ -7023,7 +7044,9 @@ public sealed partial class AppHost : IDisposable
                                 composited = true;
                             }
                             else _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
+                            VideoApplier.DeferAll = rf.Freeze == Threading.FreezeKind.Hold;   // E2: a frozen frame defers every video placement and release
                             heldInline = DecideHold(in rf, 0);   // the UI thread is the render thread here: the UI half decides, the gate checks the atlas
+                            if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref heldInline);   // E2: snapshot / hold / dissolve this present
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         if (heldInline) _swapchain.HoldNextPresent();
@@ -7355,7 +7378,7 @@ public sealed partial class AppHost : IDisposable
     /// (<see cref="PopupWindowsEnabled"/> false, or the PAL declined) — callers fall back to constrained placement.</summary>
     private int OpenPopupWindow(NodeHandle subtreeRoot, PopupWindowMaterial material)
     {
-        if (!PopupWindowsEnabled || subtreeRoot.IsNull) return -1;
+        if (!PopupWindowsEnabled || subtreeRoot.IsNull || _fzPhase == FreezePhase.Frozen) return -1;   // E2: no popup window opens against a frozen tree
         // NO render-thread park (F207): the HWND is the UI thread's own, and the swapchain is built by the render thread (below).
         long leaseStart = Stopwatch.GetTimestamp();
         var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
@@ -8538,6 +8561,8 @@ public sealed partial class AppHost : IDisposable
     /// for unregistering the child and releasing it (<see cref="ReapDetachedChild"/>); <c>Quiesce</c> is not re-entrant, so this never parks.</summary>
     private void ReleaseRenderResourcesParked()
     {
+        ReleaseFrozenSnapshot();   // E2: the freeze's extra texture goes with the target
+        CloseFreezeSnap();
         _renderSeam.InvalidateTarget();
         PurgePopupRenderActions();   // the loop is parked (or gone): no drain can be in flight
         _imageQueue?.RemoveSceneReader(this);

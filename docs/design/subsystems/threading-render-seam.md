@@ -1044,7 +1044,56 @@ pool**; `ISystemColors`/`IVirtualMemory` → UI thread (reserve/commit at the Sc
 
 ---
 
-## 11. Backpressure policy
+### 10.1 Frame freeze - `AppHost.Freeze` / `Thaw` (EP10, E2)
+
+```csharp
+public FreezeToken Freeze();                                                  // UI thread; the window and every pop-out
+public void Thaw(FreezeToken t, DissolveSpec d = default, DwmPlan? dwm = null);
+public readonly record struct DissolveSpec(float Ms);                         // Cut = 0 ms
+public sealed record DwmPlan(Action? AtThawStart = null, Action? AtThawEnd = null);
+public sealed class FreezeToken { bool IsCaptured; Task WhenCaptured; FreezeEnd End; }   // End: Thawed | CutByResize | CutByWatchdog
+public event Action<FreezeToken, FreezeEnd>? FreezeEnded;                     // + FreezeWatchdogMs (2000), FreezeState, IsFrozen
+// seams: ISwapchain.SupportsFrameDissolve / CaptureSnapshot() -> IFrameSnapshot / DissolveNextPresent(snapshot, t) / LastPresentDissolved
+```
+
+A theme transaction must not show a hybrid frame. Like the restore hold, the freeze is a property of the PUBLICATION: each frame carries a
+`FreezeKind` (`RenderFrame.Freeze`, plus `DissolveT`) that the UI decides and the presenting side obeys per adopted frame.
+
+- **Capture.** `Freeze()` arms the capture; the FIRST frame published afterwards is the outgoing tree (`FreezeKind.Capture`): submitted and
+  presented as usual, and the presenting side snapshots the target's back buffer before the flip (`ISwapchain.CaptureSnapshot`:
+  premultiplied colour WITH alpha, alpha-0 video holes and transparent Mica regions kept, nothing flattened). The app awaits
+  `FreezeToken.WhenCaptured` (every participating window has published its capture) and only then changes anything. **Deviation from
+  the sketch:** the sketch captures synchronously; a synchronous capture would need a paint inside `Freeze()` (re-entrant from a handler),
+  so the handshake moves the app's first write after the capture frame instead.
+- **Hold.** Every later frame is `FreezeKind.Hold` (also `PresentHeld`): recorded and submitted so uploads, the glyph atlas and copies
+  land, never flipped (`HoldNextPresent`). `DecideHold` decides a freeze frame by its directive alone: the restore hold's faithful-frame
+  extension does not apply, and a freeze hold does not latch the restore state. The owed-present retry carries the directive (the
+  handling lives in `PresentFrame`). Capture, Dissolve and Release frames are never skipped by the byte-identical-frame elision.
+- **While frozen.** The input ring drops pointer, key, char and scroll events before the dispatcher (window-lifecycle events pass),
+  the urgent wheel sink and the scroll pump are gated, in-flight interactions are cancelled at `Freeze()`, windowed popups cannot open,
+  and `VideoPlacementApplier.DeferAll` makes every apply path a no-op: video releases (and creations and moves) wait for the thaw frame.
+- **Snap scope.** The freeze owns a `SnapScope` (E17a) on every frozen host, so the transaction's changes land at their end values and
+  the FrameClock and timers stand still. It ends at `Thaw()` and at a cut.
+- **Cuts.** A resize or DPI/zoom change cuts the freeze (`FreezeFrameStart`, right after `EnsureSize`, before the frame flushes) on the
+  precedent of `EvaluateRestoreHold(resized)`: the snap scope ends first, the cut frame is the `Release` frame, and the tier crossing the
+  resize owes commits on the next non-resized frame and animates (technical-plan §3.3 rule 8; `TierCrossingTests`). A 2 s watchdog
+  (`FreezeWatchdogMs`, on the host timer clock, with a wait clamp so an idle loop still wakes) cuts the same way. A thaw of a cut token is a no-op.
+- **Thaw.** `Thaw` puts the host in `Dissolving`: each frame is `FreezeKind.Dissolve` with `t = elapsed / Ms` and the presenting side arms
+  `DissolveNextPresent(snapshot, t)`: `out = (1-t)·S + t·N` on premultiplied colour AND alpha (`FrameDissolve.Blend`; not src-over, so an
+  alpha-0 hole in both frames stays a hole), a FULL present over a transparent clear so DWM composes it over the live backdrop. The
+  last frame is `Release`: a normal present, the snapshot disposed (the freeze's one extra texture). `DwmPlan.AtThawStart` runs before
+  the first dissolve frame is published, `AtThawEnd` before the last (both run on a cut that follows a thaw). EP9's present hook will move
+  the invocation onto the present index; the ordering contract is the same. Pop-outs thaw in the same call, each on its own swapchain.
+- **Backends.** A swapchain that cannot snapshot or dissolve (`SupportsFrameDissolve` false) still freezes; its thaw is a CUT. The
+  headless swapchain implements the seam (a summary of the frame in the back buffer stands in for pixels; `RecordPresents` logs each
+  present as Normal, Held or Dissolve). NuGet: a binary-breaking change for compiled consumers, so it joins the 0.2.0 minor bump:
+  `RenderFrame` (a public struct) gained `Freeze` and `DissolveT`, `SceneFramePublisher.Publish`/`PublishScene` gained optional
+  parameters (baked into call sites), `DrawGlyphRunCmd`/`DrawGlyphRunGradientCmd` grew by one field when E19 landed, and
+  `ISwapchain` gained four default-implemented members (source-compatible for implementers, but a backend must opt in to dissolve).
+  **The D3D12 implementation of `CaptureSnapshot` / `DissolveNextPresent` (the retained target,
+  the Dissolve composite kind and the full-present knockout) is not part of EP10 as landed**; D3D12 reports false until it is.
+
+
 
 Two regimes, both off the lock-free hot path:
 
