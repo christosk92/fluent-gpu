@@ -121,7 +121,10 @@ public sealed class NumberBox : Component
     }
 
     public static Style? GlobalStyle;
-    public static Style DefaultStyle => GlobalStyle ?? new Style();
+    public static Style DefaultStyle => GlobalStyle ?? ControlStyles.Resolve(ControlStyles.NumberBoxStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a NumberBox entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style();
 
     // ── Factories ────────────────────────────────────────────────────────────────────────────────────────────────
     // The full factory leads with `Signal<double>? value` so it never collides with the legacy (double,double) overloads.

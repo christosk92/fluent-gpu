@@ -63,6 +63,7 @@ public static class SuiteRegistry
         new("evidence", "tiles", FluentGpu.VerticalSlice.Suites.EvidenceSuite.Run),   // evidence ledgers: #1 failing-first (open), ledger alloc-zero, capture alignment, item record == model
         new("tile-lifetime", "tiles", FluentGpu.VerticalSlice.Suites.TileLifetimeChecks.Run),   // tile texture lifetime at idle: retained group / leaf-blur tiles keep their textures (Wavee idle blanking)
         new("controls", "controls", ControlsSuite.Run),
+        new("control-style-table", "controls", FluentGpu.VerticalSlice.Suites.ControlStyleTableSuite.Run),   // E14/EP15: ThemeDefinition.Controls (replaced Button.StyleHook): empty == explicit built-in table, restyle a mounted control, no stale style
         new("zone-list-spikes", "controls", FluentGpu.VerticalSlice.Suites.ZoneListSpikeChecks.Run),   // Wave-0 spikes for Wavee's Home zone list: E17 sticky-in-realized-row, E18 controller rebind, KeepAlive same-key view, nested-shelf alloc
         new("component-anchor", "controls", FluentGpu.VerticalSlice.Suites.ComponentAnchorChecks.Run),   // E14: WriteAnchorColumns applies a ComponentEl's base-Element props to its own anchor (sticky/visible/exit/alloc)
         new("titlebar", "titlebar", TitleBarSuite.Run),

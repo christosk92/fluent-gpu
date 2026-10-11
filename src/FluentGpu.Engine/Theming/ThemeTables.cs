@@ -203,10 +203,3 @@ public sealed record ExtTokenTable
 {
     public static ExtTokenTable Empty { get; } = new();
 }
-
-/// <summary>Per-control style table (replaces the one <c>StyleHook</c>). Reserved: EP15 fills it with the per-control
-/// style records; every definition carries the empty table today.</summary>
-public sealed record ControlStyleTable
-{
-    public static ControlStyleTable FluentDefault { get; } = new();
-}

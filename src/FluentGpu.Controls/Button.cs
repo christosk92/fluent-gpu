@@ -39,7 +39,7 @@ public enum ButtonAppearance : byte
 
 /// <summary>The Button control: barebone behavior (clickable, hover/pressed, focusable) + a default Fluent style on the
 /// two ORTHOGONAL axes <see cref="ButtonAppearance"/> × <see cref="ControlSize"/>. Override the look per-instance (pass a
-/// <see cref="Style"/> — the full-override escape hatch), globally (<see cref="StyleHook"/>), or ad-hoc (chain
+/// <see cref="Style"/> — the full-override escape hatch), theme-wide (<see cref="ControlStyles.ButtonStyle"/> in <c>ThemeDefinition.Controls</c>), or ad-hoc (chain
 /// modifiers). Defaults are sourced from WinUI 3 DefaultButtonStyle / AccentButtonStyle (microsoft-ui-xaml
 /// controls\dev\CommonStyles\Button_themeresources.xaml): ButtonPadding 11,5,11,6 (line 152); ControlCornerRadius 4
 /// (line 168); ControlContentThemeFontSize 14; ButtonBorderThemeThickness 1 (lines 29/90/127); FocusVisualMargin −3
@@ -197,23 +197,27 @@ public static partial class Button
         public static BorderRamp Flat(GradientSpec g) => new(g, g, g, g);
     }
 
-    /// <summary>Global style hook consulted BEFORE <see cref="DefaultStyle(ButtonAppearance, ControlSize)"/> composes:
-    /// return a <see cref="Style"/> to override that (appearance, size) pair, or <c>null</c> to fall through to the
-    /// composed default. The single, axis-aware replacement for the old per-appearance style-override statics
-    /// (the accent/standard override fields deleted in G5d).</summary>
-    public static Func<ButtonAppearance, ControlSize, Style?>? StyleHook;
-
     /// <summary>Composes the full 24-member <see cref="Style"/> for a point on the (<paramref name="appearance"/>,
-    /// <paramref name="size"/>) axes: the <see cref="StyleHook"/> wins if it returns non-null, else the
+    /// <paramref name="size"/>) axes: the active theme's <see cref="ControlStyles.ButtonStyle"/> provider
+    /// (<c>Tok.Definition.Controls</c>, read now) wins if it returns non-null, else the
     /// <see cref="ButtonPalette"/> (colors) + <see cref="ControlMetrics"/> (geometry) fold into the record. Everything
     /// else (BorderWidth 1, Center content alignment, FocusVisualMargin −3, 83ms brush) keeps the record defaults.
     /// <paramref name="palette"/> substitutes the color axis only (a runtime-derived fill), leaving every geometric and
-    /// timing default on the stock ladder; null = the appearance switch, so existing call sites are unchanged. The
-    /// <see cref="StyleHook"/> still wins first — it is the global full override and outranks both.</summary>
+    /// timing default on the stock ladder; null = the appearance switch, so existing call sites are unchanged. The theme's
+    /// provider still wins first — it is the theme-wide full override and outranks both.</summary>
     public static Style DefaultStyle(ButtonAppearance appearance, ControlSize size = ControlSize.Medium,
         ButtonPalette? palette = null)
     {
-        if (StyleHook is { } hook && hook(appearance, size) is { } custom) return custom;
+        if (ControlStyles.ButtonProvider is { } hook && hook(appearance, size) is { } custom) return custom;
+        return FluentStyle(appearance, size, palette);
+    }
+
+    /// <summary>The built-in Fluent <see cref="Style"/> for (<paramref name="appearance"/>, <paramref name="size"/>): the palette +
+    /// metrics composition WITHOUT consulting the theme's <see cref="ControlStyles.ButtonStyle"/> provider. A provider builds its
+    /// styles from this (<c>Button.FluentStyle(a, s) with { ... }</c>); calling <see cref="DefaultStyle(ButtonAppearance, ControlSize, ButtonPalette?)"/>
+    /// from inside the provider would recurse.</summary>
+    public static Style FluentStyle(ButtonAppearance appearance, ControlSize size = ControlSize.Medium, ButtonPalette? palette = null)
+    {
         var p = palette ?? ButtonPalette.For(appearance);
         var m = ControlMetrics.For(size);
         return new Style
