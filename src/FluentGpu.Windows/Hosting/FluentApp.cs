@@ -256,6 +256,21 @@ public static class FluentApp
     // The frame-loop body proper — everything from DPI awareness through the message pump — on the dedicated UI thread.
     private static void RunCoreOnUiThread(Func<Component> root, AppOptions o, HarnessOptions h)
     {
+        try { RunLifetime.Run(lifetime => RunCoreOnUiThreadBody(root, o, h, lifetime), ClearRunState); }
+        finally { ClearRunState(); }   // safety if entering the lifetime itself failed
+    }
+
+    private static void ClearRunState()
+    {
+        WindowHandle = 0;
+        s_zoomWindow = null; s_zoom = 1f;
+        s_window = null;
+        s_host = null;
+        s_gpuDevice = null;
+    }
+
+    private static void RunCoreOnUiThreadBody(Func<Component> root, AppOptions o, HarnessOptions h, RunLifetime lifetime)
+    {
         // The engine's diagnostic switches come from THIS process's command line (`--fg name,...`, EngineSwitches) —
         // never from the environment — and are applied once, before anything below reads them.
         EngineSwitches.Apply(Environment.GetCommandLineArgs());
@@ -295,7 +310,7 @@ public static class FluentApp
         MediaRouter.SetDefaultRegistrar(static router =>
             router.RegisterDefault(MediaKind.MfVideoOrFile, static () => new FluentGpu.Media.Windows.MfMediaPlayer()));
         var strings = new StringTable();
-        using var app = new Win32App();
+        var app = lifetime.Own(new Win32App());
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
         var window = (Win32Window)app.CreateWindow(new WindowDesc(
@@ -351,20 +366,20 @@ public static class FluentApp
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         if (o.ImageCacheDirectory is { Length: > 0 }) SweepLegacyImageCache();
-        using var imageFetcher = new DefaultImageFetcher(
+        var imageFetcher = lifetime.Own(new DefaultImageFetcher(
             http: o.ImageHttpHandler is { } wrap ? DefaultImageFetcher.CreateClient(wrap) : null,
-            diskCache: new DiskImageCache(o.ImageCacheDirectory));
+            diskCache: new DiskImageCache(o.ImageCacheDirectory)));
         // ONE bounded CPU pixel pool for the whole pipeline: decode BGRA buffers (workers) + async-upload copies (UI)
         // share one budget (media-pipeline.md §3 staging blocks, as built).
         var pixelPool = new PixelBufferPool(budgets.PixelPool);
-        using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher,
-            new DecodeOptions { PixelPool = pixelPool });
+        var imageDecoder = lifetime.Own(new DecodeScheduler(new WicImageCodec(), imageFetcher,
+            new DecodeOptions { PixelPool = pixelPool }));
         var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes(budgets.ImageCache, GpuProfile.IsWeak, o.ImageCacheMegabytes),
             budgets.Derived, weak: GpuProfile.IsWeak);
         BootStamp("image-pipeline");
 
-        using var host = new AppHost(app, window, device, fonts, strings, root(), images,
-            initialSceneCapacity: o.InitialSceneCapacity);
+        var host = lifetime.Own(new AppHost(app, window, device, fonts, strings, root(), images,
+            initialSceneCapacity: o.InitialSceneCapacity));
         BootStamp("apphost-ctor");
         host.PixelPool = pixelPool;   // before the first RunFrame
         // Adaptive GPU pacing (default on): pace continuous motion to a sustainable rate when MEASURED on-GPU
@@ -431,7 +446,7 @@ public static class FluentApp
         // selected by the gallery's command line). Installed via FluentApp.DiagnosticRun; when it handles the run it
         // returns true and we skip the interactive loop, returning to the clean shutdown below. Null for normal apps.
         // Pair with `--fg d3d-mem` for the per-resource [d3d-mem] create/release trace.
-        if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; s_zoomWindow = null; s_zoom = 1f; s_window = null; return; }
+        if (DiagnosticRun is { } diag && diag(host, window, device)) return;
 
         bool fpsLog = EngineSwitches.FpsLog;   // `--fg fps`: periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
         int n = 0;
@@ -685,11 +700,6 @@ public static class FluentApp
             Console.Error.WriteLine($"screenshot: wrote {shotPath} ({cw}x{ch})");
         }
 
-        WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
-        s_zoomWindow = null; s_zoom = 1f;   // same for the zoom seam: a later SetZoom must not poke a dead window.
-        s_window = null;    // and the lifecycle seam: CloseWindow/SetWindowVisible after the run are no-ops.
-        s_host = null;
-        s_gpuDevice = null;
     }
 
     private static AppHost? s_host;
