@@ -858,6 +858,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // fence waits become bounded (WaitFenceEventBounded) so a lost device can't hang the loop forever. The non-async
     // (default/force-sync) path keeps throwing on loss, unchanged.
     private int _deviceLostReason;
+    private int _recoveryCount;
+    private bool _firstRecoverySubmitPending;
+    private bool _disposed;
     private bool _signalDeviceLostInsteadOfThrow;
     public void EnableAsyncDeviceLostSignaling() => _signalDeviceLostInsteadOfThrow = true;
     public int PollDeviceLost() => System.Threading.Volatile.Read(ref _deviceLostReason);
@@ -1932,6 +1935,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         Rec(RecordedOp.ListClose);
 
+        bool firstRecoverySubmit = _firstRecoverySubmitPending;
+        if (firstRecoverySubmit)
+        {
+            _firstRecoverySubmitPending = false;
+            Diag.Line($"[d3d12.recovery] phase=submit-start recovery={_recoveryCount} target={sc.Ordinal} primary={(ReferenceEquals(sc, _primarySwapchain) ? 1 : 0)}");
+        }
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
         // One monotonic device fence value, stamped into BOTH ledgers — the target's own back-buffer-keyed FenceValues
@@ -1941,6 +1950,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         f.LastSubmitFence = v;
         ulong gpuExecutionSubmitSequence = sc.NoteGpuSubmit();
         _ring.Stamp(slot, v, sc, gpuExecutionSubmitSequence);
+        if (firstRecoverySubmit)
+            Diag.Line($"[d3d12.recovery] phase=submit-end recovery={_recoveryCount} target={sc.Ordinal} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         if (gpuExecutionResolved) _ring.ExecTsPending[slot] = true;
         DrainDebugLayerMessages();
         // Always-on device counters for THIS submit (plain fields — never Diag.*, which compiles out of Release).
@@ -5015,7 +5026,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // is released below (this target's command list, stencil DSV, back buffers, RTV heap, DComp visuals) is only ever
         // referenced by this target's own submits, which its fence ledger covers; DComp / DXGI keep their own references for
         // anything still being composed, and the shared pools (atlases, image textures, ring allocators) are not released here.
-        if (_device != null) WaitForFenceValue(TargetFenceHorizon(target.Frame));
+        Diag.Line($"[d3d12.teardown] phase=target-drain target={target.Ordinal} recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+        DrainForTeardown(TargetFenceHorizon(target.Frame), signal: false);
         ReleaseSwapchainResources(target);
         // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
         // but while the shared _dcomp is still alive (so the presenter's own child-visual ComPtrs release cleanly). This
@@ -5024,6 +5036,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.VideoPresenter = null;
         _swapchains.Remove(target);
         if (_primarySwapchain == target) { _primarySwapchain = null; _compositeOwner = 0; }   // the next primary is a new composite owner
+        Diag.Line($"[d3d12.teardown] phase=target-released target={target.Ordinal} recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         // Phase 1 (§3.5): no more device-global working copy to drop — ReleaseSwapchainResources already zeroed every
         // ComPtr on `target` itself (its own Frame/BackBuffers/SwapChain/RtvHeap), and `_f` never mirrors another
         // target's state in the first place (BeginTargetFrame/EndTargetFrame bracket it to one call).
@@ -5111,6 +5124,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public void RecoverDevice()
     {
         AssertSubmitThread();
+        _recoveryCount++;
+        Diag.Line($"[d3d12.recovery] phase=recover-start recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+        try
+        {
+            RecoverDeviceCore();
+            _firstRecoverySubmitPending = true;
+            Diag.Line($"[d3d12.recovery] phase=recover-end recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+        }
+        catch
+        {
+            Diag.Line($"[d3d12.recovery] phase=recover-failed recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+            throw;
+        }
+    }
+
+    private void RecoverDeviceCore()
+    {
         // 1. Release every swapchain's GPU resources but KEEP the D3D12Swapchain objects (their W/H/Hwnd/Composited/etc.
         //    survive for re-init); reset Disposed since we are recreating, not tearing down. ReleaseSwapchainResources
         //    now also tears down each target's OWN command list + layer pools (Phase 1 §3.1/§3.3 — used to be device-
@@ -5209,8 +5239,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     public void Dispose()
     {
+        if (_disposed) return;
         AssertDeviceOwner();   // after the render loop was joined (RenderThread.Dispose adopts ownership for the UI)
-        if (_device != null) WaitForGpu();
+        Diag.Line($"[d3d12.teardown] phase=device-drain recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+        // A lost fence cannot retire normally. Poll loss even in a non-async host, including removal racing Signal.
+        // Unexpected drain errors propagate BEFORE releasing live in-flight GPU resources. A healthy fence still
+        // waits for retirement, however long it takes; a polling interval is not a new shutdown timeout.
+        DrainForTeardown(_fenceValue + 1, signal: true);
+        Diag.Line($"[d3d12.teardown] phase=device-release recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         for (int i = _swapchains.Count - 1; i >= 0; i--)
         {
             // Video spine: release each swapchain's presenter (child visuals + wrapped surface content) BEFORE the shared
@@ -5226,26 +5262,26 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
         _testSurfaceSwapchains.Clear();
         ReleaseVideoBacking();   // after every presenter (their backing visuals share this content), before the DComp device
-        if (_dcomp != null) _dcomp->Release();
-        _glyphs?.Dispose();
-        _imagePipe?.Dispose();
-        _bakedBlur?.Dispose();
-        _surfaces?.Dispose();
+        if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
+        _glyphs?.Dispose(); _glyphs = null;
+        _imagePipe?.Dispose(); _imagePipe = null;
+        _bakedBlur?.Dispose(); _bakedBlur = null;
+        _surfaces?.Dispose(); _surfaces = null;
         ReleaseGroupRepairValidation();
         ReleaseDamageChecks();
         ReleasePresentChecks();
-        _compositor?.Dispose();
-        _imageTextures?.Dispose();
-        _shadowPipe?.Dispose();
-        _arcPipe?.Dispose();
-        _polylinePipe?.Dispose();
-        _gradPipe?.Dispose();
-        _pathPipe?.Dispose();
-        _seriesPipe?.Dispose();
-        _spritePipe?.Dispose();
-        _rectPipe?.Dispose();
-        _uploadArena?.Dispose();   // after every borrower (see the device-lost teardown's note)
-        _sdf?.Dispose();
+        _compositor?.Dispose(); _compositor = null;
+        _imageTextures?.Dispose(); _imageTextures = null;
+        _shadowPipe?.Dispose(); _shadowPipe = null;
+        _arcPipe?.Dispose(); _arcPipe = null;
+        _polylinePipe?.Dispose(); _polylinePipe = null;
+        _gradPipe?.Dispose(); _gradPipe = null;
+        _pathPipe?.Dispose(); _pathPipe = null;
+        _seriesPipe?.Dispose(); _seriesPipe = null;
+        _spritePipe?.Dispose(); _spritePipe = null;
+        _rectPipe?.Dispose(); _rectPipe = null;
+        _uploadArena?.Dispose(); _uploadArena = null;   // after every borrower (see the device-lost teardown's note)
+        _sdf?.Dispose(); _sdf = null;
         // No device-global _backBuffers to null (Phase 1 §3.1 — each target's own BackBuffers[] was released above).
         ReleaseGpuTimingResources();
         // Stencil DSVs are per-target now (CANDIDATE FIX, INCIDENT 2026-09) — the per-swapchain
@@ -5256,14 +5292,41 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // No device-global _cmdList to release (Phase 1 §3.1 — each target's own list was released above by
         // ReleaseSwapchainResources); the ring's allocators are, though (they are device-shared CPU-written banks).
         for (int i = 0; i < SubmissionRing.Depth; i++)
-            if (_ring.Allocators[i] != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_ring.Allocators[i]);
-        if (_fence != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence);
-        if (_queue != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue);
+            if (_ring.Allocators[i] != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_ring.Allocators[i]); _ring.Allocators[i] = null; }
+        if (_fence != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence); _fence = null; }
+        if (_queue != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue); _queue = null; }
         ReleaseAdapter3();
-        if (_factory != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory);
-        if (_device != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device);
-        if (_fenceEvent != HANDLE.NULL) CloseHandle(_fenceEvent);
+        if (_factory != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory); _factory = null; }
+        if (_device != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device); _device = null; }
+        if (_fenceEvent != HANDLE.NULL) { CloseHandle(_fenceEvent); _fenceEvent = HANDLE.NULL; }
         if (_slotGraceTimer != HANDLE.NULL) { CloseHandle(_slotGraceTimer); _slotGraceTimer = HANDLE.NULL; }
+        _disposed = true;
+        Diag.Line($"[d3d12.teardown] phase=device-released recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+    }
+
+    private void DrainForTeardown(ulong value, bool signal)
+    {
+        if (_device == null || _queue == null || _fence == null) return;   // never initialized / partially created, no submitted work
+        var fence = new NativeTeardownFence(this);
+        _ = GpuTeardownFence.Drain(ref fence, value, signal);
+    }
+
+    private readonly struct NativeTeardownFence(D3D12Device device) : IGpuTeardownFence
+    {
+        public bool IsRemoved() => device.NoteIfDeviceLost();
+        public ulong CompletedValue() => global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(device._fence);
+        public void RecordRemoval(int reason)
+        {
+            if (!device.NoteIfDeviceLost()) System.Threading.Volatile.Write(ref device._deviceLostReason, reason);
+        }
+        public int Signal(ulong value)
+        {
+            int hr = global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.Signal(device._queue, device._fence, value);
+            if (hr >= 0) device._fenceValue = value;
+            return hr;
+        }
+        public int Arm(ulong value) => global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(device._fence, value, (void*)device._fenceEvent);
+        public uint Wait(int milliseconds) => WaitForSingleObject(device._fenceEvent, (uint)milliseconds);
     }
 }
 

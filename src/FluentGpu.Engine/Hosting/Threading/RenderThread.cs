@@ -231,6 +231,7 @@ public sealed class RenderThread : IDisposable
     private readonly Func<long, int>? _idleTrim;
     private int _idleTrimWaitMs = -1;
     private volatile bool _running = true;
+    internal bool StopRequested => !_running;
     private ulong _presentAck;
 
     public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
@@ -344,7 +345,11 @@ public sealed class RenderThread : IDisposable
             _displayClock?.SetActive(motionDue);
             // A publication still pending with no motion live is unpaced work (a skip above left it when motion ended
             // in the same turn): present it now instead of blocking on a wake that already happened.
-            if (!(!motionDue && _publisher.HasPendingFrame))
+            // Events are coalescing nudges, not the state of a request. Recovery (or an idle-trim callback) can consume
+            // a wake while the UI requests a park: never sleep again with that request still actionable.
+            bool controlPending = !_running || Volatile.Read(ref _resizeQuiesce) != 0
+                || (_deviceLost is { } pendingLoss && pendingLoss.RecoverRequest != 0 && pendingLoss.RecoverDone == 0);
+            if (!controlPending && !(!motionDue && _publisher.HasPendingFrame))
             {
                 if (motionDue && _displayClock?.IsAvailable == true)
                     WaitHandle.WaitAny(_displayWaits!, BackstopMs());   // the tick is the turn (or a wake / the backstop)
@@ -373,7 +378,8 @@ public sealed class RenderThread : IDisposable
             if (!_running) break;
             // Step 4: device-lost recovery takes priority. The UI observed a lost device and is BLOCKING (not publishing)
             // until RecoverDone. Rebuild the device here (render-confined — this thread is the sole ComPtr owner), mark
-            // done, and nudge the UI out of its clean block. No resize/present can be pending (the UI blocks both).
+            // done, and nudge the UI out of its clean block. A park arriving during recovery remains pending and is
+            // acknowledged on the next iteration, before any wait or submit.
             if (_deviceLost is { } dl && dl.RecoverRequest != 0 && dl.RecoverDone == 0)
             {
                 FluentGpu.Foundation.Diag.Line("[dl] render: recover gate — invoking RecoverDevice");
