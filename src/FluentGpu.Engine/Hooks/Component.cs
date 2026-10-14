@@ -114,11 +114,18 @@ public abstract class Component
     /// component is active — auto-pauses while parked/minimized, resumes cleanly. See <see cref="RenderContext.UseInterval"/>.</summary>
     protected void UseInterval(Action tick, float ms, bool enabled = true, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseInterval(tick, ms, enabled, __hf, __hl);
     /// <summary>The arranged LOCAL bounds of this component's rendered root (<see cref="RenderContext.HostNode"/>) as a
-    /// read signal. Written during layout ⇒ consumers re-render NEXT frame. See <see cref="RenderContext.UseMeasuredBounds"/>.</summary>
+    /// read signal. Written during layout ⇒ consumers re-render NEXT frame. See <see cref="RenderContext.UseMeasuredBounds(string?,int)"/>.</summary>
+    [OverloadResolutionPriority(-1)]   // a string argument means the KEYED overload, never this one's caller-info slot
     protected IReadSignal<FluentGpu.Foundation.RectF> UseMeasuredBounds([CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMeasuredBounds(__hf, __hl);
     /// <summary>The arranged width of this component's rendered root as a read signal; <paramref name="quantum"/> &gt; 0
-    /// rounds the value to that grid before the write (kills sub-quantum churn). See <see cref="RenderContext.UseMeasuredWidth"/>.</summary>
+    /// rounds the value to that grid before the write (kills sub-quantum churn). See <see cref="RenderContext.UseMeasuredWidth(float,string?,int)"/>.</summary>
     protected IReadSignal<float> UseMeasuredWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMeasuredWidth(quantum, __hf, __hl);
+    /// <summary>E17c — keyed measured bounds: start from the rect remembered for <paramref name="key"/> (a region role, composed
+    /// onto the ambient <see cref="MeasureMemory.Scope"/>) and remember every arranged rect, so a remount renders its first frame at
+    /// its laid-out size. See <see cref="RenderContext.UseMeasuredBounds(string,string?,int)"/>.</summary>
+    protected IReadSignal<FluentGpu.Foundation.RectF> UseMeasuredBounds(string key, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMeasuredBounds(key, __hf, __hl);
+    /// <summary>E17c — keyed measured width (see <see cref="RenderContext.UseMeasuredWidth(string,float,string?,int)"/>).</summary>
+    protected IReadSignal<float> UseMeasuredWidth(string key, float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMeasuredWidth(key, quantum, __hf, __hl);
     /// <summary>A size tier of <paramref name="source"/> on <paramref name="ladder"/> (edges with a direction-aware hold) as a
     /// read signal that changes ONLY on a crossing. A first mount resolves in its own frame; a crossing after mount is
     /// stored pending in the host and committed on the first non-resized frame right before FLIP capture, so a resize lands

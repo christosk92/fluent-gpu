@@ -120,7 +120,16 @@ contracts owned elsewhere:
 >   quiesce preserved). `Signal<T>.SetIfChanged(v): bool` (single compare, reports the write). `UseMeasuredBounds()` /
 >   `UseMeasuredWidth(quantum)` read the bounds-changed column; a layout-phase write only `MarksStale` so the re-render
 >   lands **next frame** (no re-entrancy) — quantum + delivered-baseline dedupe + a DEBUG oscillation tripwire (>8
->   consecutive changed frames warns). `.Boundary()` = `IsolateLayout + ClipToBounds`; `FrameStats.RootRelayoutEscapes`
+>   consecutive changed frames warns). **Keyed (E17c, EP11):** `UseMeasuredBounds(key)` / `UseMeasuredWidth(key, quantum)`
+>   start the signal from the rect `MeasureMemory` remembers for `key` composed onto the ambient `MeasureMemory.Scope`
+>   (`Context<string>`; the app provides the route instance there, the call site a semantic region role), and remember every
+>   arranged rect under it, so a remount renders its first frame at its laid-out size and the measurement that follows changes
+>   nothing. Key and scope are mount inputs (read once, untracked; the full key is composed once). The unkeyed
+>   `UseMeasuredBounds()` carries `[OverloadResolutionPriority(-1)]`, so a string argument always binds the key, never the
+>   caller-info slot. `MeasureMemory` (`Hooks/MeasureMemory.cs`): `Capture(key, Size2|RectF)`, `TryGet`/`TryGetSize`,
+>   `Forget`, `Clear`, `Compose(scope, role)`; at most `Capacity` = 1024 keys, least recently captured dropped first; a capture
+>   of an unchanged value allocates nothing. Every measured change (keyed or not) bumps its change serial, which the settle
+>   loop (`threading-render-seam.md` §10.2) compares across a pass and journals by key (an unkeyed hook by call site). `.Boundary()` = `IsolateLayout + ClipToBounds`; `FrameStats.RootRelayoutEscapes`
 >   counts relayouts that reached the root (+ a throttled `Diag` diagnostic under `--fg diag`).
 
 - **Reactive core** (`FluentGpu.Signals`, shipped in FluentGpu.Engine's `Foundation/` folder): `Signal<T>`/`FloatSignal`

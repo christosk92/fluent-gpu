@@ -1096,6 +1096,48 @@ A theme transaction must not show a hybrid frame. Like the restore hold, the fre
   **The D3D12 implementation of `CaptureSnapshot` / `DissolveNextPresent` (the retained target,
   the Dissolve composite kind and the full-present knockout) is not part of EP10 as landed**; D3D12 reports false until it is.
 
+### 10.2 Settle - `AppHost.Settle` (EP11, E17c)
+
+```csharp
+public Task<SettleResult> Settle(SettleSpec? spec = null);                    // UI thread; inside a snap scope; one at a time
+public sealed record SettleSpec(int MaxPasses = 6, int MaxMs = 250)            // + ImageSoftWaitMs (150), FontsReady (Func<bool>?), FontWaitMs (1000)
+public sealed record SettleResult(int Passes, bool TimedOut, IReadOnlyList<string> UnsettledKeys);   // + WorkPasses, ElapsedMs, FontWaitMs, ImagesUndecoded, Cut
+public event Action<SettleResult>? Settled;  public bool IsSettling { get; }
+```
+
+A theme transaction (E5) applies its change under the freeze and then settles, so the frame the thaw dissolves to is final, not
+the first frame of a cascade of measured corrections. The settle adds no frame path of its own: every pass is an ordinary
+(held) frame, and the settle only judges it.
+
+- **A pass** is one `Paint`: flush the scheduled renders and effects, lay out, run the layout effects (where the measured hooks
+  write), run the passive effects. `SettlePassStart` (right after the freeze's frame start) takes the measured-change baseline;
+  `SettleAfterPass` (right after phase 12) judges it.
+- **Quiet** = no measured value changed during the pass (`MeasureMemory`'s change serial, bumped by every measured hook and keyed
+  capture), no scheduled render or effect (`ReactiveRuntime.HasPending`), layout clean, no pending tier crossing, no virtual list
+  still warming, and the same for every detached pop-out in the snap. The snap scope (E17a/b) makes tickers and intervals unable
+  to keep it busy. UI posts are not awaited (a page without its data settles on its skeleton, as a fresh navigation would).
+- **Then it waits without frames** for `FontsReady` and for the PINNED images that have no texture yet
+  (`ImageCache.CountPinnedUndecoded`: decoding, or a canceled leftover awaiting its retry), the images up to `ImageSoftWaitMs`
+  from the settle's start; past it they keep their final-size placeholder and reveal after the thaw, as production does. An
+  image landing wakes the next pass; a font poll (16 ms) and the deadlines are folded into the idle wait (`ClampWaitToSettle`)
+  and the wake mask (`SettleNeedsFrame`, `FrameNeeded`). A headless host paints every turn while it settles: its clock only
+  moves on painted frames, so its deadlines would otherwise never pass.
+- **Caps**: `MaxPasses` passes that still changed something (waiting passes do not count), `MaxMs` from the moment the fonts are
+  ready, `FontWaitMs` for the fonts. A cap completes the task normally with `TimedOut`, the keys journaled in the last pass
+  (keyed hooks by key, unkeyed ones by call site) and the pending kinds (`render-pending`, `layout-dirty`, `tier-pending`,
+  `virtuals-warming`, `pop-out`, `fonts`), plus one `image:<source>` per undecoded pinned image. Logs: one always-on
+  `[settle] passes= work= ms= fontsMs= images= timedOut= cut=` line per settle and `[settle-timeout] ... unsettled=` on a
+  timeout (`Diag.Line`; a settle is a per-transaction event, never per frame).
+- **Cut**: the snap scope closing under the settle (a resize or the watchdog cuts the freeze) or the host's disposal ends it as
+  `Cut`. The settle never thaws: the transaction does.
+- **Keyed measurement** (`MeasureMemory`, owned by `reconciler-hooks.md` §0bis): `UseMeasuredWidth(key)` / `UseMeasuredBounds(key)`
+  and the keyed `Responsive.Of(key, ...)` start a remounted region at its remembered size, so the first pass is already final;
+  an unkeyed measured region costs one more pass.
+- Gates: Engine.Tests `SettleTests` (keyed remount, unkeyed remount, scope separation, LRU bound, the snap requirement, first-pass
+  settle under a freeze, the pass cap with the `[settle-timeout]` line, pinned image hold and soft wait, the fonts gate and its
+  timeout, tickers and intervals, the resize cut, disposal); VerticalSlice `settle` (keyed vs unkeyed `Responsive.Of`, the
+  freeze-apply-settle-thaw transaction keyed and unkeyed with no present while settling, a waiting pass allocates nothing).
+
 
 
 Two regimes, both off the lock-free hot path:

@@ -528,6 +528,26 @@ public sealed class ImageCache
 
     /// <summary>Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).</summary>
     public int PendingCount => _pendingCount;
+
+    /// <summary>E17c (the settle's image wait): the PINNED full images (a realized node holds them) that have no texture yet —
+    /// decoding, or a canceled leftover waiting for its retry. A failed decode with a reason is settled (it shows its failure
+    /// placeholder). One scan of the cache; a settle calls it at most once per pass, never a steady frame. Up to
+    /// <paramref name="max"/> of their sources are appended to <paramref name="sources"/> when given.</summary>
+    internal int CountPinnedUndecoded(System.Collections.Generic.List<string>? sources = null, int max = 8)
+    {
+        if (_pendingCount == 0 && _leftoverCount == 0 && !_leftoverOverflow) return 0;
+        int n = 0;
+        foreach (var e in _byId.Values)
+        {
+            if (e.Refs <= 0 || e.Derived || e.Parked) continue;
+            bool undecoded = e.State == ImageState.Pending
+                || (e.Failure == ImageFailureKind.Canceled && e.State is ImageState.None or ImageState.Failed);
+            if (!undecoded) continue;
+            if (sources is not null && n < max) sources.Add(e.Key.Source);
+            n++;
+        }
+        return n;
+    }
     /// <summary>True when decoded results are ready to apply on the UI thread. In-flight network/decode work does not
     /// require frame polling because its completion wakes the host.</summary>
     public bool HasReadyCompletions => _decoder.HasReadyCompletions || (_bakedBlurs?.HasResults ?? false);

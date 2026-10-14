@@ -4113,6 +4113,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
         w = ClampWaitToFreeze(w);                          // E2: the freeze watchdog thaws on time even when nothing else wakes the loop
+        w = ClampWaitToSettle(w);                          // E17c: a settle waiting for fonts/images looks again on time
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -4700,6 +4701,8 @@ public sealed partial class AppHost : IDisposable
         if (_tiers.HasPending && !_wasParked) r |= WakeReasons.FrameNeeded;
         // E2: the capture frame, a running dissolve, a cut waiting for its Release frame and an overdue watchdog are all owed frames.
         if (FreezeNeedsFrame()) r |= WakeReasons.FrameNeeded;
+        // E17c: a settle owes a pass until it is quiet, and while it waits for fonts/images, the pass whose deadline is due.
+        if (SettleNeedsFrame()) r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so the [wake] census can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
@@ -6183,6 +6186,7 @@ public sealed partial class AppHost : IDisposable
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             bool resized = EnsureSize(keepAlive);
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
+            if (_stTcs is not null) SettlePassStart();                      // E17c: this frame is a settle pass (measured-change baseline)
             if (diagTick) { ensureMs = ElapsedMs(segStart); segStart = Stopwatch.GetTimestamp(); }
 
             // Modal-loop keep-alive idle skip. During a title-bar MOVE or edge RESIZE the OS runs its own modal
@@ -7134,6 +7138,7 @@ public sealed partial class AppHost : IDisposable
             _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
 
             DrainPassiveEffects();                             // 12 passive effects
+            if (_stTcs is not null) SettleAfterPass();         // E17c: judge the settle pass (quiet? capped?) now that every effect has run
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -8560,6 +8565,7 @@ public sealed partial class AppHost : IDisposable
 
     public void Dispose()
     {
+        CancelSettleOnDispose();   // E17c: a running settle completes as a cut (its awaiter is never stranded)
         FrameLedger.Release(this);
         PrepareDispose();
         _renderThread?.Dispose();   // Step 4: stop + join the fgpu-render thread before tearing down the device it submits to
