@@ -87,6 +87,7 @@ public static class SuiteRegistry
         new("font-registry", "font-registry", FluentGpu.VerticalSlice.Suites.FontRegistryChecks.Run),   // EP7 E9: one face cache, chains + #Family selection, off-chain error, preload (0 UI-thread face creations), body-font change evicts measure caches
         new("frame-freeze", "frame-freeze", FluentGpu.VerticalSlice.Suites.FrameFreezeChecks.Run),   // EP10 E2: Freeze captures the outgoing frame (alpha), holds every present, swallows input, Thaw dissolves snapshot -> new frame; resize/DPI/watchdog cut
         new("snap-scope", "snap-scope", FluentGpu.VerticalSlice.Suites.SnapScopeChecks.Run),   // EP17 E17a/b: SnapScope lands brush/FLIP/Enter/Exit at end values in one publication, holds FrameClock.Tick + timers without a burst, instant image reveal, 0-alloc enter/exit
+        new("settle", "settle", FluentGpu.VerticalSlice.Suites.SettleChecks.Run),   // EP11 E17c: keyed Responsive.Of / UseMeasured* remount at the remembered size; freeze -> apply -> Settle quiet in its first pass (unkeyed: one corrective pass), no present while settling; a waiting pass allocates nothing
         new("detached-video", "detached-video", FluentGpu.VerticalSlice.Suites.DetachedVideoSuite.Run),   // F208/F080: the early video drain runs before the slot wait with no UI publish; one deferred commit per turn
     ];
 

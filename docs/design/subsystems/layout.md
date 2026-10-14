@@ -1524,7 +1524,9 @@ frame lays out the OLD tier at the new size, snapped, exactly as before.
 - **`Responsive.Of(key, ladder, estimate, build)`** (`FluentGpu.Controls/Responsive.cs`, `TierBox`): `build(tier)` runs only
   when the tier crosses; the first frame is seeded by `estimate` (no fixed fallback width), then the measured slot width
   drives the ladder. `Of<TState>(key, state, ladder, estimate, build)` adds the by-value state gate. The width-driven
-  `Of(build, fallback, grow)` overloads are unchanged.
+  `Of(build, fallback, grow)` overloads are unchanged; their keyed twins `Of(key, build, fallback, grow)` (E17c) start at
+  the width `MeasureMemory` remembers (`threading-render-seam.md` §10.2). The tier box keeps its estimate seed (the estimate
+  follows the window; a remembered width could be from another window size).
 - **`Viewport.InModalLoop`** (`Context<bool>`): `IPlatformWindow.InModalLoop` as a host context signal, written at the top
   of a paint on its edges only.
 - **Tile caps follow the window area** (`TileBudget.CoverTiles/CeilingFor/SurfaceCapFor`): the retained-tile surface cap

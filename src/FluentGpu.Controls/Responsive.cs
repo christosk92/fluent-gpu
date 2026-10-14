@@ -58,6 +58,40 @@ public static class Responsive
            };
     }
 
+    /// <summary>E17c — the <b>keyed</b> size-reactive box: <see cref="Of(Func{float,Element},float,float)"/> whose measured width is
+    /// remembered under <paramref name="key"/> (<see cref="MeasureMemory"/>, composed onto the ambient
+    /// <see cref="MeasureMemory.Scope"/>, which the application sets to the route instance). A box that mounts with the same key
+    /// builds its FIRST frame at the remembered width instead of <paramref name="fallback"/>, so a remounted page (a theme
+    /// transaction's new root, a revisit) is at its final width in one pass. <paramref name="key"/> is a semantic region role
+    /// (<c>"top-band"</c>); it is also the element's <c>Key</c>. <paramref name="fallback"/> is used only when nothing is
+    /// remembered.</summary>
+    public static Element Of(string key, Func<float, Element> build, float fallback = 0f, float grow = 0f)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var props = new ResponsiveBox.Props(build, fallback, grow) { MemoryKey = key };
+        return Embed.Comp(props, static () => new ResponsiveBox())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
+           };
+    }
+
+    /// <summary>E17c — the keyed <b>state-gated</b> size-reactive box: <see cref="Of{TState}(TState,Func{TState,float,Element},float,float)"/>
+    /// with the remembered width of <see cref="Of(string,Func{float,Element},float,float)"/>.</summary>
+    public static Element Of<TState>(string key, TState state, Func<TState, float, Element> build, float fallback = 0f, float grow = 0f)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        Func<float, Element> bound = w => build(state, w);
+        var props = new ResponsiveBox.Props(bound, fallback, grow, state) { MemoryKey = key };
+        return Embed.Comp(props, static () => new ResponsiveBox())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
+           };
+    }
+
     /// <summary>The <b>tier-gated, estimate-seeded</b> size-reactive box (E22): <paramref name="build"/> receives the TIER
     /// index of <paramref name="ladder"/> (the caller's own enum value) and is re-invoked only when the tier CROSSES, never for
     /// a width that stays inside its tier. There is no fixed fallback width: the first frame resolves the tier from
@@ -115,10 +149,13 @@ public sealed class ResponsiveBox : Component
     /// </list></summary>
     public sealed record Props(Func<float, Element> Build, float Fallback, float Grow, object? Gate = null)
     {
+        /// <summary>E17c: the <see cref="MeasureMemory"/> role of a keyed box (null = unkeyed). Compared by value.</summary>
+        public string? MemoryKey { get; init; }
+
         public bool Equals(Props? other)
         {
             if (ReferenceEquals(this, other)) return true;
-            if (other is null || Fallback != other.Fallback || Grow != other.Grow) return false;
+            if (other is null || Fallback != other.Fallback || Grow != other.Grow || !string.Equals(MemoryKey, other.MemoryKey, StringComparison.Ordinal)) return false;
             if (Gate is null || other.Gate is null)
                 return Gate is null && other.Gate is null && EqualityComparer<Func<float, Element>>.Default.Equals(Build, other.Build);
             return Gate.Equals(other.Gate);
@@ -127,20 +164,39 @@ public sealed class ResponsiveBox : Component
         public override int GetHashCode() => HashCode.Combine(Fallback, Grow, Gate);
     }
 
-    readonly Signal<float> _w = new(0f);
+    // The measured width. Created at the first render: a KEYED box (E17c) starts it at the remembered width, so the box builds
+    // at that width at once and its first measurement changes nothing.
+    Signal<float>? _w;
+    string? _memKey;   // the full MeasureMemory key of a keyed box (scope + role), composed once
 
     public override Element Render()
     {
         var props = UseProps<Props>();
-        float w = _w.Value;                                  // subscribe → rebuild on width change
+        if (_w is null)
+        {
+            float seed = 0f;
+            if (props.MemoryKey is { } role)
+            {
+                _memKey = MeasureMemory.Compose(UseContext(MeasureMemory.Scope), role);
+                if (MeasureMemory.TryGetSize(_memKey, out var remembered)) seed = remembered.Width;
+            }
+            _w = new Signal<float>(seed);
+        }
+        var wSig = _w;
+        float w = wSig.Value;                                // subscribe → rebuild on width change
         float effective = w > 0.5f ? w : props.Fallback;
+        string? memKey = _memKey;
         return new BoxEl
         {
             // Direction=1 so the built child CROSS-STRETCHES to our measured width (else a row wrapper would let the
             // child keep its natural width — the "spotlight doesn't stretch full-width" bug).
             Direction = 1, Grow = props.Grow,                     // grow 0 ⇒ column cross-stretch; >0 ⇒ fill a row parent
             // No explicit Width: the parent sizes us, so OnBoundsChanged reports the real available slot.
-            OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
+            OnBoundsChanged = r =>
+            {
+                if (memKey is not null && r.W > 0f) MeasureMemory.Capture(memKey, new Size2(r.W, r.H));
+                if (r.W > 0f && MathF.Abs(r.W - wSig.Peek()) > 0.5f) wSig.Value = r.W;
+            },
             Children = [ props.Build(effective) ],
         };
     }
