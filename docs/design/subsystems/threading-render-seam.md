@@ -1072,6 +1072,9 @@ A theme transaction must not show a hybrid frame. Like the restore hold, the fre
 - **While frozen.** The input ring drops pointer, key, char and scroll events before the dispatcher (window-lifecycle events pass),
   the urgent wheel sink and the scroll pump are gated, in-flight interactions are cancelled at `Freeze()`, windowed popups cannot open,
   and `VideoPlacementApplier.DeferAll` makes every apply path a no-op: video releases (and creations and moves) wait for the thaw frame.
+  A video inside a `Flow.Persist` subtree (E7, `reconciler-hooks.md`) is not released by a root swap at all: the new root's slot adopts
+  it, or it stays parked with its surface, and the park timer (held with the other timers by the snap scope) cannot release it under a
+  held frame. So the thaw frame either keeps it (adopted) or applies nothing for it until the park time has passed after the thaw.
 - **Snap scope.** The freeze owns a `SnapScope` (E17a) on every frozen host, so the transaction's changes land at their end values and
   the FrameClock and timers stand still. It ends at `Thaw()` and at a cut.
 - **Cuts.** A resize or DPI/zoom change cuts the freeze (`FreezeFrameStart`, right after `EnsureSize`, before the frame flushes) on the

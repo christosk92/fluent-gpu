@@ -4796,6 +4796,11 @@ public sealed partial class AppHost : IDisposable
     // already expose are reused; these surface the rest. All passive O(1) reads.
     internal StringTable Strings => _strings;
     internal TreeReconciler Reconciler => _reconciler;
+
+    /// <summary>E7: true while the <see cref="Flow.Persist"/> subtree of <paramref name="key"/> is parked in this window - its slot
+    /// left the tree and no slot with the key has mounted since. It is unmounted <see cref="Flow.PersistParkMs"/> after it parked
+    /// (host timer clock) unless a slot adopts it first. UI thread.</summary>
+    public bool IsPersistParked(string key) => _reconciler.IsPersistParked(key);
     internal (int initializedSlots, long indexedBytes, long textStyleBytes, long totalCapacity, long highestRequired)
         SceneCapacityCensus => _renderSeam.SceneCapacityCensus;
     internal int SceneCapacityReclaims => _renderSeam.CapacityReclaims;
@@ -4971,6 +4976,7 @@ public sealed partial class AppHost : IDisposable
         _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the --fg diag relayout-escape message (DEBUG-only invocation)
         _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
+        _reconciler.PersistTimers = _timers;   // E7: a parked Flow.Persist subtree expires on the host timer clock (held while frozen)
         _reconciler.OnSubtreeRemoved = _dispatcher.NotifySubtreeRemoved;
         _reconciler.OnSlotRebound = _dispatcher.NotifySlotRebound;   // a recycled slot that held the drag source lets go of it
         _anim =new AnimEngine(_scene);
@@ -6587,6 +6593,7 @@ public sealed partial class AppHost : IDisposable
             _anim.RevealExitCarriers.Clear();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
+            _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)

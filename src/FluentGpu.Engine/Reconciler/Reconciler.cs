@@ -39,7 +39,7 @@ public sealed partial class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
 
@@ -741,8 +741,11 @@ public sealed partial class TreeReconciler
         if (effect is null && _root is null) return;
         effect?.Dispose();
         if (_root is { } root) { _root = null; root.Unmount(); }
+        _persistTeardown = true;   // E7: nothing parks at teardown; the parked subtrees go too
         var sceneRoot = _scene.Root;
         if (!sceneRoot.IsNull && _scene.IsLive(sceneRoot)) UnmountSubtree(sceneRoot);
+        TearDownPersisted();
+        _persistTeardown = false;
         _oldRoot = null;
     }
 
@@ -963,7 +966,8 @@ public sealed partial class TreeReconciler
             // AND keeps its stale Pending build closure (which closed over the seed), so the section never resolves —
             // the "page only half-resolves" bug. Force a fresh mount so the real build + cleared derive flag take hold.
             if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
-                && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput)
+                && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput
+                && !PersistKeyChanged(oce, nce))   // E7: another Flow.Persist key is another subtree (the old one parks)
             {
                 var entry = _comps[node];
                 // E14: the reuse path never reached WriteColumns for this anchor either — re-apply its base-Element
@@ -1311,12 +1315,15 @@ public sealed partial class TreeReconciler
         // E14: apply the anchor's own base-Element props (Sticky/Visible/Enter/…) BEFORE the first render — mirrors
         // Mount's WriteColumns-then-mount-children order for every other element kind.
         WriteAnchorColumns(node, ce, old: null);
+        // E7: a Flow.Persist slot owns its key here, adopting the parked subtree of that key (or waiting for its live owner).
+        if (IsPersistSlot(ce)) MountPersistSlot(node, entry, ((PersistProps)ce.Props!).Key);
         effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
     }
 
     private void RunComponent(NodeHandle node, CompEntry entry)
     {
         if (!_scene.IsLive(node)) return;
+        if (entry.PersistWaiting) return;   // E7: a Flow.Persist slot waiting for its key's live owner renders nothing yet
         // Parked by Flow.KeepAlive (inactive tab/page), OR exit-frozen while a KeepAlive page is still attached and
         // animating out: skip the render — an exiting page must not rebuild against the incoming route (or any other
         // write) mid-fade. Parked pages are detached; exit-frozen pages stay attached so the exit track can paint.
@@ -1481,6 +1488,8 @@ public sealed partial class TreeReconciler
 
     private void ReplaceComponent(NodeHandle node, ComponentEl ce)
     {
+        // E7: a Flow.Persist slot being replaced parks its subtree BEFORE the children below are torn down.
+        if (_persistKeyByNode.Count != 0 && _persistKeyByNode.Remove((int)node.Raw.Index, out var persistKey)) ReleasePersistSlot(node, persistKey);
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
@@ -4609,6 +4618,8 @@ public sealed partial class TreeReconciler
 
     private void UnmountSubtree(NodeHandle node)
     {
+        // E7: a Flow.Persist slot detaches and parks its subtree (or hands it to a waiting slot) before its children unmount.
+        if (_persistKeyByNode.Count != 0 && _persistKeyByNode.Remove((int)node.Raw.Index, out var persistKey)) ReleasePersistSlot(node, persistKey);
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
         int idx = (int)node.Raw.Index;

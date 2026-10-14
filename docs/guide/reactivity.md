@@ -107,6 +107,17 @@ otherwise reassign state to the wrong row). A duplicate key trips a DEBUG tripwi
 `Func<IReadOnlyList<T>>` or the collection signal directly, and a `(item)` or `(item, index)` row builder. A parent
 re-render that rebuilds the `Flow.For` re-points the row closures in place (they never freeze at first mount). The list is layout-transparent: its rows flow on the enclosing container's axis with its `Gap`, `Wrap` and `AlignItems`, so `HStack(gap: 4, Flow.For(...))` lays the rows out side by side 4 DIP apart (a `GridEl` still places the whole list in one cell).
 
+**`Flow.Persist(key, build)` — a subtree that outlives its slot.** When the slot leaves the tree (a root swap such as a
+theme transaction, a branch flip, a closed panel) its content is not unmounted: it is parked — live, inactive
+(`UseIsActive` false, intervals paused), with its state, image pins and video surfaces — and the next `Flow.Persist` with
+the same key that mounts in the window adopts it, re-parented under the new slot and rendered once against its new
+providers. Without an adopter it is unmounted after `Flow.PersistParkMs` (10 s). One live slot per key per window; use it
+for heavy, stateful leaves (the playing video presenter, a stage) that a structure swap must not restart.
+
+```csharp
+Flow.Persist("video.presenter", () => Embed.Comp(() => new VideoPresenter()))
+```
+
 ### 4. Async data — `UseResource` (stale-while-revalidate)
 `UseResource` kicks an async `loader` at mount, reloads when its `DepKey deps` change, and returns a `Resource<T>` — a
 `Loadable<T>` spine (bind it straight into `Skel.Region`) plus fetch state and imperative controls. Every load is

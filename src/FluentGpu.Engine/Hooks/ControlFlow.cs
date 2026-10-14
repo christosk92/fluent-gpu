@@ -171,4 +171,28 @@ public static class Flow
     public static KeepAliveEl KeepAlive<TKey>(Func<TKey> active, Func<TKey, string> keyOf, Func<TKey, Element> view, KeepAliveOptions? options = null)
         where TKey : notnull
         => new(() => active()!, o => keyOf((TKey)o), o => view((TKey)o), options ?? KeepAliveOptions.Default);
+
+    /// <summary>How long a persistent subtree that lost its slot stays parked, with its resources, waiting for an adopter
+    /// before it is unmounted (10 s on the host timer clock; the clock stands still while a freeze holds the timers).</summary>
+    public const int PersistParkMs = 10_000;
+
+    /// <summary>
+    /// A persistent subtree (E7): <paramref name="build"/>'s content survives the removal of this slot. When the slot leaves the tree
+    /// (a root swap, a branch flip, a closed panel) its content is detached and parked - live, with its component state, effects,
+    /// image pins and video surfaces - and the next <c>Flow.Persist</c> with the same <paramref name="key"/> that mounts in this
+    /// window adopts it: the subtree is re-parented under the new slot and every component and binding in it renders once against
+    /// the new providers (theme, contexts, registry). Without an adopter it stays parked for <see cref="PersistParkMs"/>, then is
+    /// unmounted like any removed subtree. While parked it is inactive (<c>UseIsActive</c> false: a video presenter hides its
+    /// surface, intervals pause). The key is the identity: one live slot per key per window; a second slot with a live key waits
+    /// for the first to leave (the keyed diff mounts before it removes) and, if it never does, mounts its own content.
+    /// <para>A slot is a component anchor (layout-transparent). The slot re-renders <paramref name="build"/> on every parent
+    /// re-render like any embedded content; an adopted subtree is reconciled against the new <paramref name="build"/> result, so
+    /// a same-type root keeps its state and a different type remounts.</para>
+    /// </summary>
+    public static ComponentEl Persist(string key, Func<Element> build)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentNullException.ThrowIfNull(build);
+        return Embed.Comp(new PersistProps(key, build), static () => new PersistSlot());
+    }
 }

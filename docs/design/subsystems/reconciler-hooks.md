@@ -280,6 +280,23 @@ contracts owned elsewhere:
   parks the older outgoing root before starting the next transition, and revisiting an exiting key cancels its exit and
   reuses the retained subtree. Reduced motion bypasses the overlap and parks immediately. The 2s wall-clock exit
   backstop is belt-and-braces after freeze, not the snapshot mechanism.
+- **Persistent subtrees (E7, EP13).** `Flow.Persist(key, build)` (`Hooks/Persist.cs`) is an `Embed.Comp` of the internal
+  `PersistSlot` component (no new element type); a reconciler table (`Reconciler/Reconciler.Persist.cs`) keyed by the
+  string key makes the slot's child outlive the slot. One live slot owns a key per window. When the owning slot unmounts
+  (`UnmountSubtree` reaches the anchor, or `ReplaceComponent` swaps it) its child is detached BEFORE the children are torn
+  down and **parked** through the KeepAlive chokepoint (`SetSubtreeParked`: renders deferred, `UseIsActive` false,
+  tickers quiesced) with its resources kept (image pins, video surfaces: a parked video presenter hides, its DComp
+  surface survives). A slot with the key that mounts (`MountComponent`) **adopts** it: re-parent, un-park (or stay
+  parked under a parked slot), and schedule every component render and node binding in the subtree once (detached
+  KeepAlive pages inside it owe the render), so context reads re-resolve through the new ancestors — a re-parented
+  subtree otherwise keeps its old provider subscriptions. The slot's first render then reconciles the new `build()`
+  against the parked element (same root type keeps the state). The keyed child diff mounts before it removes, so a slot
+  that mounts while the owner is live **waits** (renders nothing) and adopts when the owner unmounts in the same pass; a
+  waiter still waiting after the paint (`SettlePersistWaiters`, a true duplicate) mounts its own content as a
+  non-owner (which unmounts normally). A different key on a reused slot replaces it. Without an adopter a parked subtree
+  is unmounted after `Flow.PersistParkMs` (10 s) by a `HostTimerQueue` timer (`TreeReconciler.PersistTimers`), whose
+  clock stands still while a freeze's snap scope holds the timers; `UnmountRoot` unmounts every parked subtree.
+  `AppHost.IsPersistParked(key)` reports the parked state. Gates: `persist-subtrees`, `PersistSubtreeTests`.
 
 ---
 
