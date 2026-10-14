@@ -86,6 +86,9 @@ public static class ScrollContentPose
         if (visFirst < sc.FirstRealized || visLast > sc.LastRealized) return true;
         // The lead band (velocity-sized overscan) is realized the moment it outruns the realized window.
         if (wantFirst < sc.FirstRealized || wantLast > sc.LastRealized) return true;
+        // A viewport with no main-axis size (laid out at 0: a pane collapsed or covered before it ever had a size) has nothing to trim
+        // toward: its realize falls back to the mount hint, so a trim would re-realize the same window every frame, forever.
+        if (sc.ViewportMain <= 0f) return false;
         // Trim: the realized window is wider than the present-time one by more than a slack band (a settled fling left
         // its velocity-sized overscan realized) — re-realize so the surplus parks. The slack keeps a slowing fling from
         // re-windowing every frame.

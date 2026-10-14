@@ -40,18 +40,36 @@ public sealed partial class AppHost
     public void SetWindowMaterial(WindowMaterial material, bool dark, bool ordered = true)
     {
         if (_isDetachedChild) throw new InvalidOperationException("SetWindowMaterial is for the main window.");
-        WindowMaterial = material;
-        bool transparent = _window.Composited && material != WindowMaterial.None;
-        _micaWindow = transparent;
-        if (transparent) Theme.WindowBackground = _window.IsActive ? ColorF.Transparent : Tok.T.WindowBackground;
-        else Tok.ClearWindowBackground();
+        ApplyMaterialGround(material);
         var sink = WindowMaterialSink;
         if (sink is not null)
         {
             if (ordered) QueueBeforePresent(() => sink(material, dark));
             else sink(material, dark);
         }
+    }
+
+    /// <summary>The host half of a material change: the recorded material and the ground the next publication clears to (a
+    /// composited window with a backdrop clears transparent, keeping the inactive solid fallback; a window without one clears to
+    /// the theme's opaque ground), with a full repaint so it is published. No DWM write: the caller orders it (the theme
+    /// transaction writes it at the edge of its dissolve the DWM rules ask for).</summary>
+    private void ApplyMaterialGround(WindowMaterial material)
+    {
+        WindowMaterial = material;
+        bool transparent = _window.Composited && material != WindowMaterial.None;
+        _micaWindow = transparent;
+        if (transparent) Theme.WindowBackground = _window.IsActive ? ColorF.Transparent : Tok.T.WindowBackground;
+        else Tok.ClearWindowBackground();
         RequestFullRepaintOnce();   // the ground changed with the material: publish it (also covers a hidden window and a missing sink)
+    }
+
+    /// <summary>Write <paramref name="material"/> and the dark flag to DWM immediately before the next shown present (the sink,
+    /// queued to the presenting thread), or, without a sink, through the live path's writer (<see cref="OnApplyThemeMaterial"/>,
+    /// which reads the backend's current material) on this thread.</summary>
+    private void WriteMaterialOrdered(WindowMaterial material, bool dark)
+    {
+        if (WindowMaterialSink is { } sink) QueueBeforePresent(() => sink(material, dark));
+        else OnApplyThemeMaterial?.Invoke(dark);
     }
 
     /// <summary>

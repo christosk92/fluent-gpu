@@ -355,6 +355,15 @@ public sealed class InputHooks
     /// backend without secondary swapchains all say no). An affordance can PREFLIGHT with this instead of discovering the
     /// answer by opening nothing — the difference between "that option isn't available here" and a dead click.</summary>
     public Func<bool>? CanOpenDetachedWindow;
+    /// <summary>E5: run a theme transaction on this window (freeze, apply, settle, thaw; its pop-outs freeze with it). Host-wired
+    /// to <c>AppHost.RunThemeTransaction</c> on a main window; null on a pop-out and in a host-less tree.</summary>
+    public Func<FluentGpu.Hosting.ThemeTransactionRequest, Task<FluentGpu.Hosting.ThemeTransactionResult>>? RunThemeTransaction;
+    /// <summary>E5: true while a transaction's prewarm has held the live UI for 100 ms (the originating control shows a busy
+    /// ring). Host-wired to <c>AppHost.ThemeTransactionBusy</c>; null where <see cref="RunThemeTransaction"/> is.</summary>
+    public IReadSignal<bool>? ThemeTransactionBusy;
+    /// <summary>E5: true from a transaction's request to its thaw start (the app queues navigation until then). Host-wired to
+    /// <c>AppHost.IsThemeTransactionRunning</c>; null where <see cref="RunThemeTransaction"/> is.</summary>
+    public Func<bool>? IsThemeTransactionRunning;
     /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
     /// the host forwards <c>regions.AsSpan(0, count)</c> to <c>IPlatformWindow.SetTitleBarRegions</c>; push happens
     /// on titlebar relayout only, never per frame).</summary>

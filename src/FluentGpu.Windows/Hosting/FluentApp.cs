@@ -39,7 +39,7 @@ public static class FluentApp
 
     /// <summary>The window's CURRENT system backdrop (<see cref="WindowMaterial"/>): seeded from <see cref="AppOptions.Material"/>
     /// (or the legacy <see cref="AppOptions.Mica"/>), changed by <see cref="SetWindowMaterial"/>.</summary>
-    public static WindowMaterial Material => s_material;
+    public static WindowMaterial Material => s_host?.WindowMaterial ?? s_material;
 
     /// <summary>True when the swapchain is composited (a DirectComposition surface bound to the window). Independent of
     /// <see cref="Material"/>; video needs it.</summary>
@@ -69,7 +69,7 @@ public static class FluentApp
     /// <summary>True when the window is using Mica <b>BaseAlt</b> (a stronger tint of the desktop wallpaper than base
     /// Mica) rather than base Mica. Seeded from <see cref="AppOptions.MicaAlt"/>; changed by
     /// <see cref="SetWindowMaterialAlt"/> / <see cref="SetWindowMaterial"/>.</summary>
-    public static bool WindowMaterialAlt => s_material == WindowMaterial.MicaAlt;
+    public static bool WindowMaterialAlt => Material == WindowMaterial.MicaAlt;
 
     /// <summary>Switch the LIVE window between Mica BaseAlt (<paramref name="micaAlt"/> true) and base Mica — the
     /// re-callable half of the startup <c>ApplyWindowMaterial</c>, for an app that exposes the material as a user setting.
@@ -78,7 +78,7 @@ public static class FluentApp
     /// seeds from <see cref="AppOptions.MicaAlt"/>). No-op when the window is not Mica-backed.</summary>
     public static void SetWindowMaterialAlt(bool micaAlt)
     {
-        if (s_material is WindowMaterial.Mica or WindowMaterial.MicaAlt)
+        if (Material is WindowMaterial.Mica or WindowMaterial.MicaAlt)
             SetWindowMaterial(micaAlt ? WindowMaterial.MicaAlt : WindowMaterial.Mica);
     }
 
@@ -433,9 +433,9 @@ public static class FluentApp
 
         // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
-        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the LIVE material
-        // statics so a SetWindowMaterialAlt change survives every subsequent theme flip.
-        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_material, s_composited, s_customFrame);
+        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the host's LIVE material
+        // (SetWindowMaterial, SetWindowMaterialAlt and a theme transaction all move it) so a change survives every later theme flip.
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, host.WindowMaterial, s_composited, s_customFrame);
         // EP9: the ordered writer SetWindowMaterial uses (queued to the presenting thread, DWM-aligned).
         host.SeedWindowMaterial(material);
         host.WindowMaterialSink = (m, dark) => WriteWindowMaterial(window.Handle.Value, m, dark, ordered: true);

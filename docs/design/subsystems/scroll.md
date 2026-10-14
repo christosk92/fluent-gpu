@@ -538,7 +538,9 @@ gutter before the rest of its column (`VirtualLayoutExtentLeadInsetTests`). The 
   VisibleFirst, VisibleLast)`: overscan **ahead** of the motion = `clamp(|v|·LookaheadS, OverscanMinPx, OverscanMaxPx)`,
   behind = `OverscanMinPx`. The anchor is the first FULLY visible row.
 - `ScrollContentPose.NeedsRealize(sc, rw)`: the strictly visible band must ALWAYS be realized; the lead band is realized
-  the moment it outruns the window; a window wider than needed by more than `max(TrimSlackRows = 4, count/2)` trims. A
+  the moment it outruns the window; a window wider than needed by more than `max(TrimSlackRows = 4, count/2)` trims, except
+  at a zero main-axis viewport (a pane laid out at 0, e.g. mounted under a covering stage), whose realize falls back to the
+  mount hint and would otherwise re-realize every frame (`ZeroViewportRealizeTests`). A
   persistent prefix counts as covered; `MeasureAll` re-realizes only when the count changes.
 - `ArrangeOriginIndex` keeps the previous arrange-origin row while every realized row stays within
   `MaxLocalExtent` = 16384 DIP of it (retained rows keep their boxes and their recorded spans), else re-centres.

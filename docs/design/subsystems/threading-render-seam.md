@@ -1138,6 +1138,68 @@ the first frame of a cascade of measured corrections. The settle adds no frame p
   timeout, tickers and intervals, the resize cut, disposal); VerticalSlice `settle` (keyed vs unkeyed `Responsive.Of`, the
   freeze-apply-settle-thaw transaction keyed and unkeyed with no present while settling, a waiting pass allocates nothing).
 
+### 10.3 Theme transaction - `AppHost.RunThemeTransaction` (EP14, E5)
+
+```csharp
+public Task<ThemeTransactionResult> RunThemeTransaction(ThemeTransactionRequest r);     // main window, UI thread
+public sealed record ThemeTransactionRequest(ThemeDefinition Next, ThemeKind Kind, Action Apply)
+{ PrewarmSet Prewarm; Action? Rollback; Action? CloseTransients; DissolveSpec Dissolve = 250 ms; SettleSpec? Settle;
+  Action? OnCommitted; Action<Exception>? OnFailed; string? Label; }
+public sealed record PrewarmSet { FontSet? Fonts; IReadOnlyList<ImagePrewarm>? Images; int MaxMs = 1500; }
+public sealed record ThemeTransactionResult(ThemeTransactionOutcome Outcome) { SettleResult? Settle; double PrewarmMs, LatencyMs; Exception? Error; }
+public enum ThemeTransactionOutcome { Committed, Cut, RolledBack, Superseded, Immediate, Canceled }
+public IReadSignal<bool> ThemeTransactionBusy { get; }  public bool IsThemeTransactionRunning { get; }
+// InputHooks (main window only): RunThemeTransaction, ThemeTransactionBusy, IsThemeTransactionRunning
+```
+
+A theme switch, or a change to a definition's NON-colour tables, reaches the screen as one settled frame under a frozen snapshot
+(light/dark and colour-only changes never come here: they keep the live cross-fade). The transaction is a state machine stepped
+by the host's own frames (`TxFrameStart` right after the freeze's frame start, `TxAfterPass` right after the settle judged its
+pass; `TxNeedsFrame` / `ClampWaitToTransaction` keep the loop awake), so no `await` and no continuation runs off the UI thread.
+
+1. **Prewarm**, UI live: `Fonts.Preload(Prewarm.Fonts)` on a worker (the freeze waits for it up to `MaxMs`; with no face source,
+   as headless, nothing is waited for), the images start decoding at prefetch priority (never waited for here).
+   `ThemeTransactionBusy` turns true after 100 ms (the originating control's busy ring) and false at the freeze.
+2. **Close transients**: `CloseTransients` (the app knows which popup hosts the originating control and keeps it). Gestures are
+   not cancelled.
+3. **Freeze** this window and every detached pop-out (§10.1; nothing of the page is captured, owner Q26).
+4. **Apply flush**, in the first frame after the capture, under the freeze's snap scope: `Tok.Use(Next, Kind)`, the material's
+   ground (`ApplyMaterialGround`, no DWM write), then `Apply()` (the app's root swap or in-place change). That frame's flush
+   re-renders every component for the new definition and is the first settle pass. While the transaction owns the frame the live
+   path's `OnApplyThemeMaterial` stays silent (`_txOwnsDwm`).
+5. **Settle** (§10.2) with `Settle ?? SettleSpec.Default` and the fonts gate on `Next.Fonts`.
+6. **Thaw** with `Dissolve` and the DWM plan of E2's table, derived from the material pair (`Next.Materials.For(Kind)`, null keeps
+   the current one) and the dark flag: equal → no write; translucent → `None` at thaw END; otherwise at thaw START. The write is
+   queued to the presenting thread (`QueueBeforePresent`), so it lands immediately before the first (or last) dissolve present.
+   Pop-outs thaw in the same call.
+7. **Committed**: `OnCommitted` at thaw start; one `[theme-tx] <label> outcome= prewarmMs= latencyMs= settlePasses= settleTimedOut=`
+   line per transaction (`latencyMs` = request → thaw start, wall clock).
+
+- **Rollback.** From the apply flush to the thaw the reconciler's `RenderFaultSink` is armed: a component whose render throws is
+  contained (it renders an empty box, so the reconcile that mounted it completes and the tree stays consistent) and recorded;
+  `TxAfterPass` ends the settle as cut and the next frame restores the previous definition, kind and material ground and calls
+  `Rollback` (the app re-activates its previous state and swaps the root back), flushes that under the same freeze and thaws with a
+  CUT. A throw out of `Apply` itself, or out of `Paint` (an effect), takes the same path (`TxAbsorbFault`); a restored tree that
+  keeps throwing (more than 4 frames) ends the transaction and propagates. Outcome `RolledBack`, `OnFailed(ex)`; only the
+  snapshot was ever shown. Outside a transaction a throwing render propagates exactly as before.
+- **Cuts.** A resize, DPI change or the watchdog cuts the freeze as always (§10.1): cut before the capture, the change applies
+  unfrozen; cut under the settle, the change is already applied. Either way the DWM write is made at once and the outcome is `Cut`.
+- **Coalescing.** A request while one runs waits; only the latest waiting request is kept (the replaced one completes
+  `Superseded`); it starts at the next frame after the running one finished (and after its dissolve: a freeze never nests).
+- **Immediate.** A window that shows nothing (hidden, minimized, parked, revealing) or a disposed host applies at once with no
+  freeze (`Immediate`). Disposal completes a running transaction (`Cut` when applied, else `Canceled`) and a waiting one (`Canceled`).
+- **Deviations from the sketch (technical-plan E5):** no `NextRoot` (the host's root component is fixed; the app's `Apply` swaps a
+  component of another type under it, which remounts everything below); no `DetachedHosts` (the host freezes, settles and thaws
+  its own pop-outs); no `DwmPlan` member (derived from the definition's `MaterialPolicy` as above); `Rollback`, `CloseTransients`,
+  `Settle`, `Label` added; the result is a `ThemeTransactionResult`.
+- **D3D12.** `ISwapchain.SupportsFrameDissolve` is still false on the D3D12 backend (§10.1), so on Windows the thaw is a cut: the
+  settled frame replaces the snapshot in one present. The headless backend dissolves.
+- Gates: Engine.Tests `ThemeTransactionTests` (the glass S / held / `(1-t)·S + t·N` / N with no motion at thaw start, a throwing
+  template and a throwing apply roll back, resize and watchdog cuts, coalescing, the immediate path, the hooks seam, the four DWM
+  rows, a pop-out frozen and thawed in the same call, all driven through `RunFrame`); VerticalSlice `theme-transaction`
+  (100 transactions alternating geometry and root type with a ticker running: 0 `settle-timeout`, glass per transaction, no motion
+  at thaw start, rollback showing only S).
+
 
 
 Two regimes, both off the lock-free hot path:

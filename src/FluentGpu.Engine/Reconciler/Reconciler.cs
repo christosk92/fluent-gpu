@@ -446,6 +446,11 @@ public sealed partial class TreeReconciler
 
     /// <summary>Number of component render-effects that ran since the last call (proves granular re-render in tests).</summary>
     public int ConsumeRenderCount() { var c = _renderCount; _renderCount = 0; return c; }
+
+    /// <summary>E5: while set (a theme transaction's apply and settle frames, under a freeze), a component whose render throws is
+    /// contained: the exception goes here and the component renders an empty box, so the reconcile that mounted it completes and
+    /// the tree stays consistent for the rollback. Null (every other time): a throwing render propagates exactly as before.</summary>
+    internal Action<Exception>? RenderFaultSink;
     /// <summary>Current frame's render-effect count without resetting (census dump before <see cref="ConsumeRenderCount"/>).</summary>
     public int PeekRenderCount() => _renderCount;
 
@@ -1348,7 +1353,18 @@ public sealed partial class TreeReconciler
             fx.StaleCause = null;
             causeTag = entry.Rendered is null ? (byte)1 : cause is not null && ReferenceEquals(cause, entry.PropsSig) ? (byte)2 : (byte)0;
         }
-        Element newRendered = comp.RenderWithHooks();
+        Element newRendered;
+        if (RenderFaultSink is { } faultSink)
+        {
+            try { newRendered = comp.RenderWithHooks(); }
+            catch (Exception ex)
+            {
+                comp.Context.EndRender();
+                faultSink(ex);
+                newRendered = new BoxEl();
+            }
+        }
+        else newRendered = comp.RenderWithHooks();
         if (entry.DerivedSkeletonStyle is { } skeletonStyle)
             newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
         long t1 = census ? Stopwatch.GetTimestamp() : 0;

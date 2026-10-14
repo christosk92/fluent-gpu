@@ -4114,6 +4114,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
         w = ClampWaitToFreeze(w);                          // E2: the freeze watchdog thaws on time even when nothing else wakes the loop
         w = ClampWaitToSettle(w);                          // E17c: a settle waiting for fonts/images looks again on time
+        w = ClampWaitToTransaction(w);                     // E5: a theme transaction's prewarm polls its fonts
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -4703,6 +4704,8 @@ public sealed partial class AppHost : IDisposable
         if (FreezeNeedsFrame()) r |= WakeReasons.FrameNeeded;
         // E17c: a settle owes a pass until it is quiet, and while it waits for fonts/images, the pass whose deadline is due.
         if (SettleNeedsFrame()) r |= WakeReasons.FrameNeeded;
+        // E5: a theme transaction's prewarm polls its fonts, a rollback is due, or a waiting request can start.
+        if (TxNeedsFrame()) r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so the [wake] census can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
@@ -5043,6 +5046,12 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
         // The same guard, askable in advance, so an affordance can offer or withhold the option instead of dead-clicking.
         _inputHooks.CanOpenDetachedWindow = () => !_isDetachedChild && !_isHeadless && _device.SupportsSecondarySwapchains;
+        if (!_isDetachedChild)
+        {
+            _inputHooks.RunThemeTransaction = RunThemeTransaction;   // E5: the app's theme switch and Transaction-mode options
+            _inputHooks.ThemeTransactionBusy = _txBusy;
+            _inputHooks.IsThemeTransactionRunning = () => IsThemeTransactionRunning;
+        }
         _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
@@ -6186,6 +6195,7 @@ public sealed partial class AppHost : IDisposable
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             bool resized = EnsureSize(keepAlive);
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
+            if (_tx is not null || _txPending is not null) TxFrameStart();  // E5: the theme transaction's step (its apply flush is this frame)
             if (_stTcs is not null) SettlePassStart();                      // E17c: this frame is a settle pass (measured-change baseline)
             if (diagTick) { ensureMs = ElapsedMs(segStart); segStart = Stopwatch.GetTimestamp(); }
 
@@ -6411,7 +6421,7 @@ public sealed partial class AppHost : IDisposable
             if (themeChanged)
             {
                 _lastThemeEpoch = Tok.Epoch;
-                OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);   // instant OS material flip (cannot cross-fade)
+                if (!_txOwnsDwm) OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);   // instant OS material flip (cannot cross-fade); a theme transaction orders its own
                 _reconciler.SetThemeTransition(themeMs);
                 _reconciler.RethemeAll();
             }
@@ -7139,6 +7149,7 @@ public sealed partial class AppHost : IDisposable
 
             DrainPassiveEffects();                             // 12 passive effects
             if (_stTcs is not null) SettleAfterPass();         // E17c: judge the settle pass (quiet? capped?) now that every effect has run
+            if (_tx is not null) TxAfterPass();                // E5: a settled transaction thaws; a rolled-back one thaws with a cut
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -7310,6 +7321,13 @@ public sealed partial class AppHost : IDisposable
             PublishFrameStats(LastStats);
             // (the frame-clock publish moved to phase 3, just before the flush — see the drain block there)
             if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
+            return LastStats;
+        }
+        catch (Exception ex) when (_tx is not null)
+        {
+            // E5: a template of the theme being applied threw inside its apply or settle frames. The frame is frozen, so nothing of it
+            // was shown: the transaction rolls back under the same freeze. Any other throw propagates exactly as before.
+            if (!TxAbsorbFault(ex)) throw;
             return LastStats;
         }
         finally
@@ -8565,6 +8583,7 @@ public sealed partial class AppHost : IDisposable
 
     public void Dispose()
     {
+        CancelThemeTransactionOnDispose();   // E5: a running or waiting transaction completes (its awaiter is never stranded)
         CancelSettleOnDispose();   // E17c: a running settle completes as a cut (its awaiter is never stranded)
         FrameLedger.Release(this);
         PrepareDispose();
