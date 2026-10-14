@@ -5433,9 +5433,17 @@ public sealed partial class AppHost : IDisposable
     /// parent's poster, and everything already queued here is handed over so no awaiter is stranded on a loop that will
     /// never tick again. Idempotent.</summary>
     private void ForwardPostsTo(Action<Action> parentPost)
+        => HandOffPosts(parentPost);
+
+    /// <summary>A host about to be disposed whose UI posts must still run (a headless mount ending while background threads
+    /// post into it): from now on <see cref="Post"/> forwards to <paramref name="target"/>, and everything already queued is
+    /// handed over first. Without it <see cref="Dispose"/> drops the queue, and a poster that latches "a wake is queued" (the
+    /// playback inbox does) never wakes again. UI thread. Idempotent.</summary>
+    public void HandOffPosts(Action<Action> target)
     {
-        Volatile.Write(ref _postForward, parentPost);
-        DrainPostsTo(parentPost);
+        ArgumentNullException.ThrowIfNull(target);
+        Volatile.Write(ref _postForward, target);
+        DrainPostsTo(target);
     }
 
     private void DrainPostsTo(Action<Action> target)
