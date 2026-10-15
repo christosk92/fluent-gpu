@@ -365,6 +365,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _dred = dred;
     }
 
+    /// <summary>Test seam: bring the device up on the WARP software adapter (as <c>--fg warp</c> does, without the process-wide
+    /// switch), so a pixel test reads the same results on every machine. Set before the device is created.</summary>
+    internal bool ForceWarpAdapter;
+
     public void SetBakedBlurQueue(FluentGpu.Hosting.Threading.BakedBlurQueue queue) => _bakedBlurQueue = queue;
 
     public string BackendNameSuffix { get; private set; } = "";
@@ -1076,7 +1080,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // device init; a runtime switch sets it and calls InjectDeviceLost so THIS re-run applies it via recovery).
         // 0 = auto. A stale/failed preference (adapter gone, driver refused) falls through to the auto walk below.
         long preferredLuid = GpuAdapterInfo.PreferredAdapterLuid;
-        if (FluentGpu.Hosting.EngineSwitches.ForceWarp)
+        if (FluentGpu.Hosting.EngineSwitches.ForceWarp || ForceWarpAdapter)
         {
             // `--fg warp`: the software adapter, explicitly (a validator run off the hardware driver)
             IDXGIAdapter* warp;
@@ -3508,6 +3512,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.Frame.LastPresentStoodDown = false;
         target.Frame.LastPresentRefused = false;
         target.Frame.LastPresentHeld = false;
+        target.Frame.LastPresentDissolved = false;
+        // E2: an armed dissolve is one-shot - a held or stood-down present below consumes it without drawing anything.
+        D3D12FrameSnapshot? dissolveFrom = target.Frame.DissolveFrom;
+        target.Frame.DissolveFrom = null;
+        DrainRetiredFrameSnapshots();
         if (target.Frame.HoldPresentOnce)
         {
             // The restore hold: the frame was recorded and submitted (its uploads and copies landed) but the window keeps showing
@@ -3560,6 +3569,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         uint flags = (interval == 0 && target.TearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
         // F085: a secondary target never blocks the shared render thread inside Present (the primary keeps its contract).
         if (noWait && !ReferenceEquals(target, _primarySwapchain)) flags |= DxgiPresentDoNotWait;
+        // E2: the frame-freeze dissolve lerps the back buffer toward the snapshot right before the flip (D3D12Device.FrameDissolve.cs),
+        // ahead of the motion-fence wait below so a video-moving thaw frame waits for the lerp too. It makes this present whole.
+        bool dissolved = dissolveFrom is not null && ApplyFrameDissolve(target, dissolveFrom, target.Frame.DissolveT);
         // F070 Stage B: a frame that moves video geometry waits (bounded) for its own GPU work to retire BEFORE the present, so the flip
         // and the video Commit the host issues right after it reach DWM together. Armed per turn by the host, never on steady playback.
         if (target.Frame.HintMotionFenceWait)
@@ -3602,7 +3614,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         if (FluentGpu.Render.Tiles.TileDamage.PresentValidate) NotePresentForValidation(target, pvMode);   // what DWM was told (--fg present-validate)
         target.PpPresentCount = 0;
-        target.PpNeedFullPresent = false;
+        // After a dissolve the next present is whole too: its dirty rects would describe the change from N, not from the lerp DWM shows.
+        target.PpNeedFullPresent = dissolved;
+        if (dissolved)
+        {
+            target.Frame.LastPresentDissolved = true;
+            DissolvedPresentCount++;
+        }
         // The Present is what SPENDS the latency credit a wait took (the waitable is a semaphore: it is re-signaled when
         // this present retires from the queue). Cleared on every path where Present actually ran — success AND
         // DXGI_STATUS_OCCLUDED, which is a success code that still consumed the slot. The stand-down / PRESENT_TEST /
@@ -5131,6 +5149,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ReleaseVideoBacking();
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
         ReleaseGpuTimingResources();
+        ReleaseFrameDissolveResources();   // E2: a frozen window's snapshot died with the device; its thaw presents the frame as it is
         // Stencil DSVs are per-target now (CANDIDATE FIX, INCIDENT 2026-09) — step 1's ReleaseSwapchainResources loop
         // above already released every swapchain's own StencilDsv/StencilDsvHeap; there is nothing device-global left
         // to release here (the old single call site this replaced).
@@ -5234,6 +5253,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ReleaseGroupRepairValidation();
         ReleaseDamageChecks();
         ReleasePresentChecks();
+        ReleaseFrameDissolveResources();   // E2: retained snapshots and the dissolve's command list (the GPU was drained above)
         _compositor?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
@@ -5396,6 +5416,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         if (System.Threading.Volatile.Read(ref _presentedContent) == 0)
             System.Threading.Volatile.Write(ref _presentedContent, 1);
     }
+
+    /// <summary>This target's submit count so far (the sequence <see cref="NoteGpuSubmit"/> last returned). Render thread.</summary>
+    internal ulong SubmitSequence => unchecked((ulong)System.Threading.Interlocked.Read(ref _gpuSubmitSequence));
 
     internal ulong NoteGpuSubmit()
     {
@@ -5618,8 +5641,21 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     public void HoldNextPresent() => Frame.HoldPresentOnce = true;
     /// <inheritdoc/>
     public bool LastPresentHeld => Frame.LastPresentHeld;
+    // ── Frame freeze (E2): the retained snapshot and the cross-dissolve (D3D12Device.FrameDissolve.cs) ──
     /// <inheritdoc/>
-    public bool IsOccluded => Frame.OccludedLatched || Frame.LastPresentStoodDown;
+    public bool SupportsFrameDissolve => true;
+    /// <inheritdoc/>
+    public IFrameSnapshot? CaptureSnapshot() => Device.CaptureFrameSnapshot(this);
+    /// <inheritdoc/>
+    public void DissolveNextPresent(IFrameSnapshot from, float t)
+    {
+        Frame.DissolveFrom = from as D3D12FrameSnapshot;
+        Frame.DissolveT = t;
+    }
+    /// <inheritdoc/>
+    public bool LastPresentDissolved => Frame.LastPresentDissolved;
+    /// <inheritdoc/>
+    public bool IsOccluded =>Frame.OccludedLatched || Frame.LastPresentStoodDown;
     public double LastFenceWaitMs => Frame.LastFenceWaitMs;
     public double LastLatencyWaitMs => Frame.LastLatencyWaitMs;
     public void GetLastSubmitWaits(out double latencyMs, out double bufferFenceMs)

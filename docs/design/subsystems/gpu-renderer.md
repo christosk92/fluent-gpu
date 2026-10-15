@@ -1836,6 +1836,11 @@ change, a different item STRUCTURE (a navigation, a flyout — the guard against
 there), a stood-down present, a forced-full repaint, a repaint ≥ 45 % of the window or a back buffer of unknown age.
 A whole-route composite never presents dirty rects: DWM keeps a pixel of an earlier frame only on a PRESERVE frame's word.
 
+**Frame-freeze dissolve presents** (E2, `D3D12Device.FrameDissolve.cs`, threading-render-seam.md §10.1): a thaw frame's back buffer
+is lerped in place toward the freeze snapshot right before the flip (`(1-t)·S + t·N`, the composite `Dissolve` pipeline: `PSLoad`
+at alpha `1-t` blended `ONE / BLEND_FACTOR(t)`). Such a present is WHOLE, the present after it is WHOLE (`PpNeedFullPresent`), and
+the lerped buffer's age is forgotten (`_ppBufTurn = 0`), so the next frame into it takes the whole-frame route.
+
 **Why an under-report is never transient.** DXGI keeps a `FLIP_SEQUENTIAL` chain's buffers in step from the dirty rects
 it is given: a dirty set that misses a changed pixel leaves the earlier pixel in the back buffers, and the PRESERVE route
 keeps it until something dirties it again (`--fg present-validate` measured it with an injected fault: the composite

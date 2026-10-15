@@ -92,7 +92,7 @@ Card(...).Opaque(Tok.LayerFill)             // default: opaque fill, Mica does N
 ## 6. Frame-loop integration
 
 - **Phase 8 (record, render thread):** a node carrying `NodeFlags.BackdropPassthrough` emits **no fill** for its region → those back-buffer pixels remain the transparent root clear. Everything else records normally on top.
-- **Phase 11 (present, render thread):** unchanged. DComp `Commit` presents the premultiplied frame; DWM composites Mica/Acrylic beneath. **No new GPU work, no new resource.**
+- **Phase 11 (present, render thread):** unchanged. DComp `Commit` presents the premultiplied frame; DWM composites Mica/Acrylic beneath. **No new GPU work, no new resource.** The one exception is a theme transaction's thaw (E2, [`threading-render-seam.md`](./threading-render-seam.md) §10.1): for 250 ms each present is a premultiplied cross-dissolve `(1-t)·S + t·N` of the frozen snapshot and the new frame, colour AND alpha, so transparent regions stay transparent and DWM keeps composing the live backdrop beneath; a material or dark-flag change is written at thaw start or thaw end per E2's table.
 - **Mutations are `PaintDirty`, never `LayoutDirty`:** switching `BackdropKind` or toggling passthrough is a `DwmSetWindowAttribute` call + a root re-clear. It never relayouts. (Consistent with [`scene-memory.md`](./scene-memory.md) dirty axes.)
 
 The transparent root clear is the **single render-side change** the whole feature needs; it lives in the root node's fill logic in [`gpu-renderer.md`](./gpu-renderer.md)/[`scene-memory.md`](./scene-memory.md) and is gated by `NodeFlags.BackdropPassthrough`.
