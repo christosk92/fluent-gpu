@@ -275,7 +275,7 @@ flattened colors rather than element structure.
 
 | Counter | Bumped by | Host response |
 |---|---|---|
-| `Tok.Epoch` | `Tok.Use` (light/dark, preset) and `Tok.SetAccent` | `RethemeAll()` + `SetThemeTransition(250ms)` — every mounted component re-renders in place and the color diffs cross-fade |
+| `Tok.Epoch` | `Tok.Use` (light/dark, preset) and `Tok.SetAccent` | `RethemeAll()` + `SetThemeTransition(250ms)` — every mounted component re-renders in place and every colour diff, bound channels included, cross-fades on one timeline (§2.2sexies) |
 | `Tok.StyleEpoch` | `Tok.Use(ThemeDefinition, …)` when a NON-colour table changed (always together with `Epoch`) | host-side re-derivation of state pinned from a non-colour table (the scrollbar-arrow icon family); the re-render itself rides `Epoch` |
 | `Tok.WindowBackgroundEpoch` | `Tok.SetWindowBackground` / `Theme.WindowBackground` only | latch + defeat the skip-submit hash once (`_lastPresentedDrawListHash = 0`) — one guaranteed submit, **no** re-render, **no** cross-fade, **no** `OnApplyThemeMaterial` |
 
@@ -286,6 +286,30 @@ and a Mica window flips it on every activation change (active → `Transparent`,
 alt-tab and to launch. Both halves of the replacement are required together: the recorded command stream is
 byte-identical across the flip, so without the skip-submit defeat the present is elided and the inactive fallback
 never reaches the screen. Gate: `gate.theme.windowBgNoRetheme`.
+
+### 2.2sexies The live cross-fade is complete: every colour consumer, one timeline (AS-BUILT — E20 / EP20, Classic tuning F10)
+
+The live path (`Tok.Use` light/dark, `Tok.SetAccent`, a colour-only option; no freeze) keeps its 250 ms cross-fade and makes it
+complete: inside the armed window (`SetThemeTransition(ms)` around the `RethemeAll` flush) **every** colour the re-run changes
+seeds the node's `BrushAnim` and fades on the one timeline the arming starts (`AnimEngine.ClockNowMs`), so no part snaps.
+Owner: `Reconciler\Reconciler.ThemeFade.cs`.
+
+| Consumer | Before | Now |
+|---|---|---|
+| Re-rendered static fill / border / text | faded (`BrushTransitionMs` overridden to the theme duration) | unchanged; a channel another writer is already fading on the same node is carried, not dropped |
+| Bound colour channels (`Fill`/`BorderColor`/`Color` = `() => Tok.X`, `IconLayerEl.Tint`, `ImageEl.Placeholder`, `ListRowEl.Fill`) | **snapped** (their effects wrote `NodePaint` directly) | fade (`BindEffect.Started`: never the mount run; never inside a recycled-row rebind, `SuppressBoundTransitions`) |
+| Static span-text foreground, icon tint, image placeholder, list-row fill | snapped | fade (`BrushAnim.FillBit`/`TextBit`; the recorder lerps the placeholder and the row fill too) |
+| Gradient fill / gradient border (`Tok.ControlElevationBorder` on every button) | snapped | fade: `BrushAnim.GradientBit`/`BorderBrushBit` + the origin spec in `SceneStore.SetGradientFadeFrom`/`SetBorderBrushFadeFrom` (snapshot columns `GradientFadeFrom`/`BorderBrushFadeFrom`); the recorder blends the current stops back toward the origin by `1 − T` (stack locals, before hover/press) |
+| Engine-drawn caption buttons (`TitleBar`, memo keyed on `Tok.Epoch`) | faded | unchanged (pinned by the test) |
+| A parked page (KeepAlive, a parked `Flow.Persist` subtree, a pooled bound row) that comes back **while the fade runs** | its owed re-render snapped on arrival; its bound fades (seeded while parked, rows paused) restarted from 0 | joins the fade where the timeline is: the owed render is a late joiner (`CompEntry.ThemeCatchUp` → the window is re-armed for that render with the remaining time and `fromT` = progress), and bound fades seeded while parked are re-seeded at the same progress on un-park (`SyncParkedThemeFade`) |
+
+Late joiners use `AnimEngine.SeedBrushFade(node, remainingMs, fromT)` (linear `fromT → 1`), which is the global curve exactly. Outside
+the window nothing changed: bound channels snap, `BrushTransitionMs` is as authored, a snap scope (the transaction) lands every seed at
+its end. The OS material and dark attribute (`OnApplyThemeMaterial`) still flip at once — DWM cannot cross-fade. Known limits: per-span
+explicit colours (`TextSpan.Color`, baked into the span run) and hovered/pressed state colours snap (the fade runs from the old resting
+colour). Tests: `LiveFadeCompletenessTests` (re-rendered fill, bound fill + text, the elevation border, a caption-button glyph and a
+KeepAlive page un-parked mid-fade all at the lerp of their two colours at one `T`; the control snaps outside the window; a snap scope
+lands), VerticalSlice `gate.icon.retheme` (an accent swap cross-fades a bound icon tint).
 
 ### 2.2ter On-media ink/scrim, OnAccent (memoized), spacing/radii scales, generated accessors (SHIPPED — G3, 2026-07)
 

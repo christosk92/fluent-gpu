@@ -2190,6 +2190,8 @@ public sealed partial class AppHost : IDisposable
                 _renderAnimations.CeilingPeriodMs = powerCap > 0
                     ? (float)CadencePacing.LatticePeriodMs(1000.0 / powerCap, RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency)
                     : 0f;
+                // E21: an unshown frame (the UI's verdict, or the render side's own restore latch) keeps pending starts at t = 0.
+                _renderAnimations.HoldPendingStarts = rf.EntranceHeld || _renderHeld;
                 bool fresh = rf.PublishSeq != _lastRecordedScene;
                 if (fresh)
                 {
@@ -6605,6 +6607,10 @@ public sealed partial class AppHost : IDisposable
             if (capturedProjections) ApplyProjections(keepAliveSuppressed);       // FLIP "Last+Invert+Play"
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
             _anim.RevealExitCarriers.Clear();
+            // E21: a frame that will not be shown holds every pending-start row at t = 0; the publication carries the same verdict
+            // to the render-thread compositor (RenderFrame.EntranceHeld).
+            bool entranceHeld = EntrancesUnseen();
+            _anim.HoldPendingStarts = entranceHeld;
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
@@ -7004,7 +7010,7 @@ public sealed partial class AppHost : IDisposable
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
                         CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
                         submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
-                        freeze: freezeKind, dissolveT: dissolveT);
+                        freeze: freezeKind, dissolveT: dissolveT, entranceHeld: entranceHeld);
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;

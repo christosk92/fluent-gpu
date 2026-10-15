@@ -108,5 +108,14 @@ public sealed partial class AppHost
         return true;
     }
 
+    /// <summary>E21, UI thread, before the frame's animation tick: will the frame being built NOT be shown? True while the main
+    /// window is hidden behind its reveal gate and its fonts are not ready (the first frame built after they are is the one the
+    /// reveal shows), while a freeze holds presents (its capture frame still presents), and while a restore hold keeps the pre-hide
+    /// frame on the glass. Entrances seeded under such frames start their clock on the first frame that is shown.</summary>
+    private bool EntrancesUnseen()
+        => (_revealPending && !_isDetachedChild && !_revealReadySeen)
+           || (_fzPhase == FreezePhase.Frozen && !_fzCapturePending)
+           || _restoreHoldArmed;
+
     private static double QpcMs(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
 }

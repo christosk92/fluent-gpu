@@ -255,7 +255,7 @@ public sealed class SceneFramePublisher
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
         bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null, bool presentHeld = false,
-        FreezeKind freeze = FreezeKind.None, float dissolveT = 0f)
+        FreezeKind freeze = FreezeKind.None, float dissolveT = 0f, bool entranceHeld = false)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -314,6 +314,7 @@ public sealed class SceneFramePublisher
             SuppressVsync = suppressVsync,
             SettlePresent = settlePresent,
             PresentHeld = presentHeld,
+            EntranceHeld = entranceHeld,
             Freeze = freeze,
             DissolveT = dissolveT,
             VideoIntentCount = videoCount,

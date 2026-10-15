@@ -195,6 +195,8 @@ public sealed partial class SceneRecordingSnapshot
         if (!SparseEqual(_PressedGradient, other._PressedGradient, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} PressedGradient ({which})");
         if (!SparseEqual(_HoverBorderBrush, other._HoverBorderBrush, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} HoverBorderBrush ({which})");
         if (!SparseEqual(_PressedBorderBrush, other._PressedBorderBrush, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} PressedBorderBrush ({which})");
+        if (!SparseEqual(_GradientFadeFrom, other._GradientFadeFrom, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} GradientFadeFrom ({which})");
+        if (!SparseEqual(_BorderBrushFadeFrom, other._BorderBrushFadeFrom, i, GradientEqual, out which)) return Fail(out mismatch, $"n#{i} BorderBrushFadeFrom ({which})");
 
         var node = _handles[i];
         if (!RectsEqual(GetTextEditSelectionRects(node), other.GetTextEditSelectionRects(node))) return Fail(out mismatch, $"n#{i} selection rects");

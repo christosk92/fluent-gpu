@@ -45,6 +45,17 @@ public sealed partial class AnimEngine
 
     public AnimEngine(SceneStore scene) => _scene = scene;
 
+    /// <summary>E21: the frame the next tick poses will not be SHOWN (the main window is still hidden behind its reveal gate, the
+    /// window is frozen, or a restore hold keeps an older frame on the glass). Set by the host before every tick. While true a
+    /// pending-start row (<see cref="AnimFlags.StartPending"/>: Enter, Stagger, Exit, a flow reveal) does not advance and keeps
+    /// its seed-frame hold, so the first frame that IS shown poses it at t = 0 and its clock starts there. The choreography
+    /// (order, delays, durations, curves) is unchanged, and a frame that is shown runs exactly as before.</summary>
+    public bool HoldPendingStarts { get; set; }
+
+    /// <summary>The scheduler's animation clock (the running sum of the frame steps): the time base the live theme cross-fade
+    /// (E20) measures its shared timeline on, so a subtree that joins the fade late lands on the same curve.</summary>
+    public double ClockNowMs => _clock.NowMs;
+
     /// <summary>Due-check slack (ms): a row whose period rounds to 17 ms must still be due on a 16.67 ms frame, and a
     /// 33 ms row on the fourth 8.33 ms tick. Chromium's begin-frame judder margin plays the same role.</summary>
     internal const double CadenceSlackMs = 0.5;
@@ -113,6 +124,13 @@ public sealed partial class AnimEngine
                 // commit work (a page mount making the frame 40-60 ms long). Web Animations resolves a pending play at the
                 // first frame after the commit (Gecko Animation::Tick/TryTriggerNow: "trigger on the next tick, with this
                 // tick's timestamp"); Flutter's Ticker takes the first vsync after start() as elapsed 0.
+                // E21: a frame that will not be shown is not a presentation. The row stays at t = 0 and keeps its seed-frame
+                // hold (JustSeeded), so the first SHOWN frame poses t = 0 and the start resolves from there.
+                if (HoldPendingStarts && r.Has(AnimFlags.StartPending))
+                {
+                    r.Flags |= AnimFlags.JustSeeded;
+                    continue;
+                }
                 if (!justSeeded && r.Has(AnimFlags.StartPending))
                 {
                     r.Flags &= ~AnimFlags.StartPending;
@@ -351,6 +369,12 @@ public sealed partial class AnimEngine
     /// hold (the old ticker advanced immediately), so the brush-transition gates (E3/cp7.g) are unaffected.</summary>
     public void SeedBrushFade(NodeHandle node, float durationMs)
         => SeedEased(node, AnimChannel.BrushFade, 0f, 1f, durationMs, Easing.Linear);
+
+    /// <summary>E20: seed the brush cross-fade part-way along a shared timeline — progress <paramref name="fromT"/> → 1 over the
+    /// <paramref name="remainingMs"/> that timeline has left, so a node that joins a running theme fade late (a parked page
+    /// that comes back mid-fade) shows the same <c>T</c> as the nodes that started with it. Linear, like every brush fade.</summary>
+    public void SeedBrushFade(NodeHandle node, float remainingMs, float fromT)
+        => SeedEased(node, AnimChannel.BrushFade, fromT, 1f, remainingMs, Easing.Linear);
 
     /// <summary>Seed (or retarget) a 0-ALLOC two-point eased track From→To over durationMs with a NAMED curve — no
     /// Keyframe[] (AdvanceTimeline's two-point branch reads Gen.FromV/To/EaseId directly). No first-frame hold: the fade

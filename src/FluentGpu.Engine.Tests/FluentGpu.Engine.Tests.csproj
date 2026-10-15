@@ -29,6 +29,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <!-- EP20: LiveFadeCompletenessTests fades the kit's TitleBar caption buttons (Controls is TerraFX-free). -->
+    <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
   </ItemGroup>
 
 </Project>

@@ -39,7 +39,7 @@ public sealed partial class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; public bool ThemeCatchUp; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
 
@@ -677,12 +677,17 @@ public sealed partial class TreeReconciler
     // Re-render every mounted component IN PLACE so it re-reads the active token set after a Tok.Use/SetAccent, with the
     // resulting fill/border/text color diffs cross-faded. No remount — node identity + component state survive.
 
-    /// <summary>Arm/disarm the live-re-theme cross-fade window. While &gt; 0, <c>WriteColumns</c> seeds a
-    /// <see cref="FluentGpu.Scene.BrushAnim"/> for EVERY fill/border/text color diff at this duration — overriding the
+    /// <summary>Arm/disarm the live-re-theme cross-fade window. While &gt; 0, <c>WriteColumns</c> and the bound colour channels
+    /// (E20) seed a <see cref="FluentGpu.Scene.BrushAnim"/> for EVERY colour diff at this duration (arming starts the shared
+    /// timeline a page un-parked mid-fade joins) — overriding the
     /// element's own <c>BrushTransitionMs</c> default (<c>NaN</c> = snap) — so a whole-app token swap animates uniformly.
     /// The host sets it around exactly the flush that runs the <see cref="RethemeAll"/>-scheduled re-renders, then clears
     /// it (<c>NaN</c>) so ordinary logical-state flips keep their own per-element timing afterward.</summary>
-    public void SetThemeTransition(float ms) => _themeTransitionMs = ms;
+    public void SetThemeTransition(float ms)
+    {
+        _themeTransitionMs = ms;
+        if (!float.IsNaN(ms) && ms > 0f) BeginThemeFadeClock(ms);   // E20: the shared timeline a page un-parked mid-fade joins
+    }
 
     /// <summary>The live-re-theme cross-fade duration when armed, else the element's own value — the one chokepoint the
     /// BrushAnim seeding blocks below consult so the override is applied identically to fill, border, and text.</summary>
@@ -701,8 +706,8 @@ public sealed partial class TreeReconciler
     /// re-render). Without this, Flow.For lists and bound/frozen surfaces keep the old theme.</item>
     /// </list>
     /// <c>Schedule()</c> only enqueues — the re-runs happen in the host's next flush; wrap that flush in
-    /// <see cref="SetThemeTransition"/> so the resulting color diffs cross-fade (re-rendered nodes cross-fade; bound
-    /// channels snap, as they bypass the BrushAnim path by design).</summary>
+    /// <see cref="SetThemeTransition"/> so the resulting color diffs cross-fade — re-rendered nodes and (E20) bound colour
+    /// channels alike, on one timeline (Reconciler.ThemeFade.cs).</summary>
     public void RethemeAll()
     {
         _rootEffect?.Schedule();
@@ -1353,24 +1358,33 @@ public sealed partial class TreeReconciler
             fx.StaleCause = null;
             causeTag = entry.Rendered is null ? (byte)1 : cause is not null && ReferenceEquals(cause, entry.PropsSig) ? (byte)2 : (byte)0;
         }
+        // E20: a page back from a park mid-theme-fade renders as a late joiner of that fade (Reconciler.ThemeFade.cs).
+        float savedThemeMs = 0f, savedThemeFromT = 0f;
+        bool catchUp = entry.ThemeCatchUp && BeginThemeCatchUp(out savedThemeMs, out savedThemeFromT);
+        entry.ThemeCatchUp = false;
         Element newRendered;
-        if (RenderFaultSink is { } faultSink)
-        {
-            try { newRendered = comp.RenderWithHooks(); }
-            catch (Exception ex)
-            {
-                comp.Context.EndRender();
-                faultSink(ex);
-                newRendered = new BoxEl();
-            }
-        }
-        else newRendered = comp.RenderWithHooks();
-        if (entry.DerivedSkeletonStyle is { } skeletonStyle)
-            newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
-        long t1 = census ? Stopwatch.GetTimestamp() : 0;
         bool prevShape = _layoutShapeMutated;
-        _layoutShapeMutated = false;
-        ReconcileSingleChild(node, newRendered, entry.Rendered);
+        long t1;
+        try
+        {
+            if (RenderFaultSink is { } faultSink)
+            {
+                try { newRendered = comp.RenderWithHooks(); }
+                catch (Exception ex)
+                {
+                    comp.Context.EndRender();
+                    faultSink(ex);
+                    newRendered = new BoxEl();
+                }
+            }
+            else newRendered = comp.RenderWithHooks();
+            if (entry.DerivedSkeletonStyle is { } skeletonStyle)
+                newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
+            t1 = census ? Stopwatch.GetTimestamp() : 0;
+            _layoutShapeMutated = false;
+            ReconcileSingleChild(node, newRendered, entry.Rendered);
+        }
+        finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
         // row's reconcile time therefore INCLUDES them — read the per-type numbers as inclusive of the subtree.
         if (census) NoteRenderCensus(comp, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0, cause, causeTag);
@@ -2165,6 +2179,7 @@ public sealed partial class TreeReconciler
         Anim?.SnapAuthoredPose(node);
         if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
         OnNodeParkedChanged?.Invoke(node, parked);
+        if (!parked) SyncParkedThemeFade(node);   // E20: a bound fade seeded while parked re-joins the live theme fade's timeline
         if (_comps.TryGetValue(node, out var entry))
         {
             entry.Parked = parked;
@@ -2178,6 +2193,8 @@ public sealed partial class TreeReconciler
             if (!parked && entry.DeferredRender)
             {
                 entry.DeferredRender = false;
+                // E20: the owed render carries a theme change while the live fade still runs: it joins that fade where it is.
+                if (ThemeCatchUpDue(entry.ParkEpoch)) entry.ThemeCatchUp = true;
                 // A theme changed while it was parked: the debt includes the re-theme, so it renders NOW, in this activation
                 // flush, unbudgeted — dripped, the page would show old- and new-theme components side by side for frames.
                 if (!budgetReplays || entry.ParkEpoch != Tok.Epoch || TakeReplayBudget()) entry.Effect?.Schedule();
@@ -2785,6 +2802,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
+                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                     paint.Fill = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -2832,6 +2850,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.BorderColor == next) return;
+                    BoundColorFade(fx, node, BrushAnim.BorderBit);   // E20
                     paint.BorderColor = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3004,6 +3023,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref var paint = ref _scene.Paint(node);
                     if (paint.TextColor == next) return;
+                    BoundColorFade(fx, node, BrushAnim.TextBit);   // E20
                     paint.TextColor = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3076,6 +3096,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
+                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                     paint.Fill = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3096,6 +3117,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
+                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                     paint.Fill = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -5252,29 +5274,21 @@ public sealed partial class TreeReconciler
                 bool fillOwned = !b.Fill.IsBound;
                 bool borderOwned = !b.BorderColor.IsBound;
                 float fillMs = ThemeTransitionOr(b.BrushTransitionMs);   // live re-theme overrides the element's NaN/own duration
-                if (!isMount && !float.IsNaN(fillMs) && fillMs > 0f
-                    && ((fillOwned && paint.Fill != b.Fill.Value)
-                        || (borderOwned && paint.BorderColor != b.BorderColor.Value)))
+                if (!isMount && !float.IsNaN(fillMs) && fillMs > 0f)
                 {
-                    bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
-                    var ba = new BrushAnim { DurationMs = fillMs };
-                    if (fillOwned && paint.Fill != b.Fill.Value)
+                    byte bits = 0;
+                    if (fillOwned && paint.Fill != b.Fill.Value) bits |= BrushAnim.FillBit;
+                    if (borderOwned && paint.BorderColor != b.BorderColor.Value) bits |= BrushAnim.BorderBit;
+                    // E20: a gradient fill / gradient border (the elevation border) has no BrushTransition of its own; it joins
+                    // the live theme fade, from the spec it shows now.
+                    GradientSpec gradientFrom = default, borderBrushFrom = default;
+                    if (ThemeFadeArmed)
                     {
-                        ba.FillFrom = midFlight && (prev.Channels & BrushAnim.FillBit) != 0
-                            ? ColorF.LerpLinear(prev.FillFrom, paint.Fill, prev.T)   // continue from the displayed color
-                            : paint.Fill;
-                        ba.Channels |= BrushAnim.FillBit;
+                        if (b.Gradient is { } ng && _scene.TryGetGradient(node, out gradientFrom) && !SameGradient(in gradientFrom, in ng)) bits |= BrushAnim.GradientBit;
+                        if (b.BorderBrush is { } nbb && _scene.TryGetBorderBrush(node, out borderBrushFrom) && !SameGradient(in borderBrushFrom, in nbb)) bits |= BrushAnim.BorderBrushBit;
                     }
-                    if (borderOwned && paint.BorderColor != b.BorderColor.Value)
-                    {
-                        ba.BorderFrom = midFlight && (prev.Channels & BrushAnim.BorderBit) != 0
-                            ? ColorF.LerpLinear(prev.BorderFrom, paint.BorderColor, prev.T)
-                            : paint.BorderColor;
-                        ba.Channels |= BrushAnim.BorderBit;
-                    }
-                    _scene.SetBrushAnim(node, ba);
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                    Anim?.SeedBrushFade(node, ba.DurationMs);   // drive the cross-fade T via the unified engine (no separate ticker)
+                    // From the displayed colours (a mid-flight fade continues), keeping a channel another writer is fading.
+                    if (bits != 0) SeedColorFade(node, bits, fillMs, BrushFadeFromT, in gradientFrom, in borderBrushFrom);
                 }
 
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
@@ -5958,7 +5972,11 @@ public sealed partial class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.ListRow;
                 paint.Corners = lr.Corners;
-                if (!lr.Fill.IsBound) paint.Fill = lr.Fill.Value;
+                if (!lr.Fill.IsBound)
+                {
+                    if (paint.Fill != lr.Fill.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
+                    paint.Fill = lr.Fill.Value;
+                }
                 if (!lr.HoverFill.IsBound) paint.HoverFill = lr.HoverFill.Value;
                 if (!lr.SelectedFill.IsBound) paint.PressedFill = lr.SelectedFill.Value;
 
@@ -5984,7 +6002,11 @@ public sealed partial class TreeReconciler
                 // Before any request / pin below: the flag is read when this node pins an id (PinImageNode).
                 if (im.KeepWhileHidden) _keepWhileHiddenNodes.Add((int)node.Raw.Index);
                 else _keepWhileHiddenNodes.Remove((int)node.Raw.Index);
-                if (!im.Placeholder.IsBound) paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
+                if (!im.Placeholder.IsBound)
+                {
+                    if (paint.Fill != im.Placeholder.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
+                    paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
+                }
                 paint.Corners = im.Corners;
                 paint.ImageFit = (byte)im.Fit;
                 paint.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
@@ -6050,7 +6072,11 @@ public sealed partial class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.IconLayer;
                 paint.ImageId = il.PathId;                       // ImageId column DOUBLES as the geometry PathId
-                if (!il.Tint.IsBound) paint.Fill = il.Tint.Value;   // bound tint recolors via the effect (theme-live)
+                if (!il.Tint.IsBound)
+                {
+                    if (paint.Fill != il.Tint.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
+                    paint.Fill = il.Tint.Value;   // bound tint recolors via the effect (theme-live)
+                }
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = il.Size; li.Height = il.Size;
@@ -6067,20 +6093,7 @@ public sealed partial class TreeReconciler
                 bool colorOwned = !t.Color.IsBound;
                 float textMs = ThemeTransitionOr(t.BrushTransitionMs);   // live re-theme overrides the element's NaN/own duration
                 if (!isMount && colorOwned && !float.IsNaN(textMs) && textMs > 0f && paint.TextColor != t.Color.Value)
-                {
-                    bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
-                    var ba = new BrushAnim
-                    {
-                        DurationMs = textMs,
-                        Channels = BrushAnim.TextBit,
-                        TextFrom = midFlight && (prev.Channels & BrushAnim.TextBit) != 0
-                            ? ColorF.LerpLinear(prev.TextFrom, paint.TextColor, prev.T)
-                            : paint.TextColor,
-                    };
-                    _scene.SetBrushAnim(node, ba);
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                    Anim?.SeedBrushFade(node, ba.DurationMs);   // drive the cross-fade T via the unified engine (no separate ticker)
-                }
+                    SeedColorFade(node, BrushAnim.TextBit, textMs, BrushFadeFromT);   // from the displayed colour (mid-flight continues)
 
                 // Guarded like Text below: a bound color is owned by its effect (EditableText's doc-vs-placeholder
                 // ColorBind was clobbered back to the static by any re-render between signal fires).
@@ -6122,6 +6135,7 @@ public sealed partial class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
+                if (paint.TextColor != st.Color) StaticThemeFade(node, isMount, BrushAnim.TextBit);   // E20: the base foreground spans tint over
                 paint.TextColor = st.Color;
                 paint.TextDecorations = 0;   // span decorations ride the span-run artifact path, not the single-run bits
 

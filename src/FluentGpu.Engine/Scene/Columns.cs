@@ -590,14 +590,17 @@ public struct InteractionAnim
 /// different Fill/BorderColor/TextColor and the element opted in (<c>BrushTransitionMs</c>), the reconciler captures the
 /// previously-DISPLAYED color here and the recorder cross-fades from it to the new resolved color as <c>T</c> advances
 /// (linear-light, like the hover/press cross-fade). Sparse side-table — O(transitioning nodes), 0-alloc steady frames.
+/// The live theme cross-fade (E20) rides the same row: <see cref="FillBit"/> also fades an icon layer's tint, an image's
+/// placeholder and a list row's fill, and <see cref="GradientBit"/>/<see cref="BorderBrushBit"/> fade a gradient fill and a
+/// gradient border from the spec kept in <c>SceneStore.TryGetGradientFadeFrom</c>/<c>TryGetBorderBrushFadeFrom</c>.
 /// </summary>
 public struct BrushAnim
 {
     public ColorF FillFrom, BorderFrom, TextFrom;
-    public float T;            // 0 → 1 progress (advanced by SceneStore.AdvanceBrushAnims at phase 7)
+    public float T;            // 0 → 1 progress (advanced by the unified engine's BrushFade track)
     public float DurationMs;
     public byte Channels;
-    public const byte FillBit = 1, BorderBit = 2, TextBit = 4;
+    public const byte FillBit = 1, BorderBit = 2, TextBit = 4, GradientBit = 8, BorderBrushBit = 16;
 }
 
 /// <summary>

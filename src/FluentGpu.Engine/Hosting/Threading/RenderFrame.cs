@@ -46,6 +46,12 @@ public struct RenderFrame
     /// governs: the release is simply the first publication without this bit.</summary>
     public bool PresentHeld;
 
+    /// <summary>E21: this frame will not be SHOWN (the main window still hidden behind its reveal gate, a freeze hold, a restore
+    /// hold), so the render-thread compositor keeps every pending-start row (Enter, Stagger, Exit, a flow reveal) at t = 0 and
+    /// starts its clock on the first shown frame (<c>RenderCompositorAnimations.HoldPendingStarts</c>). The UI scheduler held
+    /// its own rows on the same verdict.</summary>
+    public bool EntranceHeld;
+
     /// <summary>The frame-freeze directive this publication carries (E2). Like <see cref="PresentHeld"/> it rides the publication,
     /// never a side flag: the render side acts on each ADOPTED frame by this value, so a release can never race the frame it
     /// governs. A freeze directive replaces the restore hold's faithful-frame extension for this frame (the freeze release is

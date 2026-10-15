@@ -183,6 +183,10 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<TextMeasureCache> _measureCache = new();   // GEN-17 (wired) — hot: per-layout text measure
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
     private readonly ColdSlab<BrushAnim> _brushAnims = new();   // GEN-17 (wired)
+    // E20: the gradient fill / gradient border a live theme cross-fade starts from (BrushAnim.GradientBit / BorderBrushBit).
+    // Present only while such a fade runs; dropped with its BrushAnim row.
+    private readonly ColdSlab<GradientSpec> _gradientFadeFrom = new();
+    private readonly ColdSlab<GradientSpec> _borderBrushFadeFrom = new();
     private readonly List<int> _brushScratch = new();
     // Text-edit decoration state (sparse, O(editors)): caret/IME/focus PODs + per-node POOLED decoration-rect slots
     // (grow-only RectF[] reused across frames — a selection drag updates at pointer rate with ZERO steady alloc).
@@ -527,6 +531,8 @@ public sealed partial class SceneStore : ISceneBackend
             _edgeFades.Remove(idx);
             _imageEffects.Remove(idx);
             _brushAnims.Remove(idx);
+            _gradientFadeFrom.Remove(idx);
+            _borderBrushFadeFrom.Remove(idx);
         }
         if (_paint[idx].VisualKind == VisualKind.Text)
         {
@@ -998,6 +1004,34 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
+    /// <summary>E20: the gradient fill a theme cross-fade starts from (read only while the node's BrushAnim carries
+    /// <see cref="BrushAnim.GradientBit"/>).</summary>
+    public void SetGradientFadeFrom(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _gradientFadeFrom.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetGradientFadeFrom(NodeHandle h, out GradientSpec g) => _gradientFadeFrom.TryGet((int)h.Raw.Index, out g);
+
+    /// <summary>E20: the gradient border a theme cross-fade starts from (<see cref="BrushAnim.BorderBrushBit"/>).</summary>
+    public void SetBorderBrushFadeFrom(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _borderBrushFadeFrom.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetBorderBrushFadeFrom(NodeHandle h, out GradientSpec g) => _borderBrushFadeFrom.TryGet((int)h.Raw.Index, out g);
+
+    private void RemoveBrushAnim(int idx)
+    {
+        _brushAnims.Remove(idx);
+        _gradientFadeFrom.Remove(idx);
+        _borderBrushFadeFrom.Remove(idx);
+    }
+
     /// <summary>Force a full re-record: mark every occupied node <see cref="NodeFlags.PaintDirty"/>. Device-lost recovery
     /// (threading-render-seam.md §9) — after <c>RecoverDevice</c> the backend's textures + glyph atlas are freshly
     /// recreated and empty, so the next frame must regenerate the WHOLE DrawList to repopulate them via on-demand glyph
@@ -1027,11 +1061,11 @@ public sealed partial class SceneStore : ISceneBackend
     public void SetBrushAnimT(int idx, float t)
     {
         if (!_brushAnims.TryGet(idx, out var ba)) return;
-        if (_gen[idx] == 0) { _brushAnims.Remove(idx); return; }
+        if (_gen[idx] == 0) { RemoveBrushAnim(idx); return; }
         ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
-        if (ba.T >= 1f) _brushAnims.Remove(idx);
+        if (ba.T >= 1f) RemoveBrushAnim(idx);
         else _brushAnims.GetOrAdd(idx) = ba;
     }
 

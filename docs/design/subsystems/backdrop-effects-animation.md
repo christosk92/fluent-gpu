@@ -1134,6 +1134,21 @@ cross-fade of hybrids. A depth counter on the `AppHost` makes it nest; only the 
   transaction enters one; navigation, live option changes and light/dark never do, and with no scope open every path above is the
   existing one. Entering/leaving allocates nothing. Gates: `snap-scope` suite; tests `SnapScopeTests`.
 
+### 5.9c Entrance clocks start at the first SHOWN frame (AS-BUILT — E21 / EP20, Classic tuning F11)
+
+A pending-start row (`AnimFlags.StartPending`: `Enter`, `Stagger`, `Exit`, a flow reveal — everything `MarkStartPending` marks) already
+resolves its start at the first frame that presents it (the seed frame holds t = 0). A frame that is presented but never **shown** is
+not that frame: while the main window waits behind its reveal gate (fonts not ready yet), while a freeze holds presents (its capture
+frame still presents), and while a restore hold keeps the pre-hide frame on the glass, the host sets `AnimEngine.HoldPendingStarts`
+before the tick (`AppHost.EntrancesUnseen`). A held row does not advance, its `Stagger` delay is not spent, and it keeps its seed-frame
+hold (`JustSeeded`), so the first shown frame poses t = 0 and the start resolves from there. The verdict rides the publication
+(`RenderFrame.EntranceHeld`) to the render-thread compositor, which applies it per turn together with its own restore latch
+(`RenderCompositorAnimations.HoldPendingStarts`: the row re-takes its hold instead of resolving its start). Choreography (order,
+delays, durations, curves) is unchanged, and a frame that is shown runs exactly as before — a node mounted visible keeps today's
+timeline. Tests: `EntranceFirstFrameTests` (UI scheduler 1/5/30 held frames vs a visible mount, a Stagger delay not spent while held,
+the render compositor, and end to end a host behind `BeginRevealGate` against a visible host: identical opacity sequences from the
+first shown frame).
+
 ### 5.10 Motion tokens — named durations / easings / springs as theme tokens (FOLDED L7d / L14-motion)
 
 Motion is themeable. A **motion token** is a named, theme-resolved animation recipe (`MotionEmphasizedEnter`,

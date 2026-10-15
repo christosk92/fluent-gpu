@@ -67,8 +67,13 @@ internal abstract class BindEffect : Computation
     {
         _body = body;
         RunStale();
+        Started = true;
         return this;
     }
+
+    /// <summary>The mount run is over: every later run re-writes a channel that already shows a value (E20: a colour channel
+    /// re-fired inside the live theme fade cross-fades from it; the mount run has nothing on screen to fade from).</summary>
+    internal bool Started { get; private set; }
 
     private protected sealed override void OnStale() => Runtime.Schedule(this);
 
