@@ -1093,8 +1093,26 @@ A theme transaction must not show a hybrid frame. Like the restore hold, the fre
   `RenderFrame` (a public struct) gained `Freeze` and `DissolveT`, `SceneFramePublisher.Publish`/`PublishScene` gained optional
   parameters (baked into call sites), `DrawGlyphRunCmd`/`DrawGlyphRunGradientCmd` grew by one field when E19 landed, and
   `ISwapchain` gained four default-implemented members (source-compatible for implementers, but a backend must opt in to dissolve).
-  **The D3D12 implementation of `CaptureSnapshot` / `DissolveNextPresent` (the retained target,
-  the Dissolve composite kind and the full-present knockout) is not part of EP10 as landed**; D3D12 reports false until it is.
+- **D3D12** (`D3D12Device.FrameDissolve.cs`; every D3D12 swapchain reports `SupportsFrameDissolve` true). `CaptureSnapshot` copies the
+  back buffer the capture frame's submit drew (after the submit, before the flip: the frame about to be presented, never the front
+  buffer) into a retained BGRA texture with its alpha and its own one-descriptor SRV heap, on a small command list of the device's own
+  (two allocators, fenced), so no frame bank or recording state is touched. A dissolve present lerps the back buffer IN PLACE right
+  before the flip: the back buffer holds N (composited over the frame's transparent clear), one full-target quad of the composite
+  `Dissolve` pipeline loads S and writes `(1-t)·S`, and the blend `ONE / BLEND_FACTOR(t)` adds `t·N` - the formula exactly, on all four
+  channels, with no copy of N. That present is WHOLE (no `Present1` rects), the present after it is whole (`PpNeedFullPresent`: its
+  dirty rects would describe N against the previous N, not the lerp DWM shows), and the lerped back buffer forgets its partial-present
+  age (`_ppBufTurn = 0`), so the next frame into it is composited whole and no `FLIP_SEQUENTIAL` buffer keeps a stale lerped pixel.
+  The lerp runs before the geometry-motion fence wait, so a video-moving thaw frame waits for it too. The armed dissolve is one-shot: a
+  held or stood-down present consumes it without drawing; a refused non-blocking present that is re-presented without a new submit
+  does not lerp the lerped buffer twice. A snapshot of another size (a resize the cut has not reached yet), a disposed one, or one a
+  device loss released presents the frame as it is; a failed capture returns null and the thaw is a cut. `Dispose` releases the
+  texture once its last GPU use retired (drained by the next present). Gates: `FluentGpu.Windows.Tests` `FrameDissolveTests` on the
+  WARP adapter (CaptureBgra readback: every channel within one 8-bit step of the formula at t = 0, ¼, ½, ¾, 1; alpha-0 holes stay
+  holes; the snapshot equals the presented S and is unchanged after the dissolve; the dissolve and the following present are whole;
+  a held present neither draws nor flips; no double lerp; a mis-sized or disposed snapshot presents as is; the texture is released).
+  **Deviation from the sketch:** the sketch re-composites the pre-freeze publication into the snapshot and adds a `Dissolve` composite
+  item; the backend copies the back buffer the capture submit drew instead (the same pixels, with no second composite), and the
+  dissolve is a present-time pass over the finished back buffer, so it serves the direct route (pop-outs) and the composite route alike.
 
 ### 10.2 Settle - `AppHost.Settle` (EP11, E17c)
 
@@ -1192,8 +1210,8 @@ pass; `TxNeedsFrame` / `ClampWaitToTransaction` keep the loop awake), so no `awa
   component of another type under it, which remounts everything below); no `DetachedHosts` (the host freezes, settles and thaws
   its own pop-outs); no `DwmPlan` member (derived from the definition's `MaterialPolicy` as above); `Rollback`, `CloseTransients`,
   `Settle`, `Label` added; the result is a `ThemeTransactionResult`.
-- **D3D12.** `ISwapchain.SupportsFrameDissolve` is still false on the D3D12 backend (§10.1), so on Windows the thaw is a cut: the
-  settled frame replaces the snapshot in one present. The headless backend dissolves.
+- **D3D12.** The D3D12 backend dissolves (§10.1), so on Windows the thaw is the 250 ms dissolve over the live DWM backdrop, as on
+  the headless backend.
 - Gates: Engine.Tests `ThemeTransactionTests` (the glass S / held / `(1-t)·S + t·N` / N with no motion at thaw start, a throwing
   template and a throwing apply roll back, resize and watchdog cuts, coalescing, the immediate path, the hooks seam, the four DWM
   rows, a pop-out frozen and thawed in the same call, all driven through `RunFrame`); VerticalSlice `theme-transaction`
