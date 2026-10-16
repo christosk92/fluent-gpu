@@ -58,6 +58,11 @@ public interface IBoundListProps
 
     /// <summary>Build one slot root from its <see cref="RowScope"/> (called once per slot).</summary>
     Element Build(RowScope scope);
+
+    /// <summary>The layout the latest render asked for (null: the mount-time layout stands). A responsive grid's cell floor is re-fitted
+    /// in place (<see cref="FluentGpu.Scene.GridVirtualLayout.SetMinCellWidth"/>): a window-tier crossing re-fits the mounted list instead of
+    /// remounting it.</summary>
+    RepeatLayout? LiveLayout { get; }
 }
 
 /// <summary>
@@ -86,11 +91,15 @@ public sealed record BoundListProps<TRow>(
         return Template(row, in ctx);
     }
 
+    /// <summary>The layout this render asked for (see <see cref="IBoundListProps.LiveLayout"/>); part of the re-push gate by its geometry.</summary>
+    public RepeatLayout? LiveLayout { get; init; }
+
     public bool Equals(BoundListProps<TRow>? other)
         => other is not null
         && TemplateStamp == other.TemplateStamp
         && ReferenceEquals(Source, other.Source)
-        && Equals(ItemComparer, other.ItemComparer);
+        && Equals(ItemComparer, other.ItemComparer)
+        && RepeatLayout.SameGeometry(LiveLayout, other.LiveLayout);
 
     public override int GetHashCode() => HashCode.Combine(TemplateStamp, Source);
 }

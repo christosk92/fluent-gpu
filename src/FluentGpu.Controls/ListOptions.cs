@@ -93,6 +93,22 @@ public readonly struct RepeatLayout
     public static RepeatLayout Wrap(float gap = 8f) => new(RepeatKind.Wrap, 0, gap, 0, false, null);
     /// <summary>Non-virtual stack (column/row) — for small collections (nav panes, toolbars).</summary>
     public static RepeatLayout Inline(bool horizontal = false, float gap = 0f) => new(RepeatKind.Inline, 0, gap, 0, horizontal, null);
+
+    /// <summary>True when the two specs describe the same layout: every field by value, a custom layout by reference.</summary>
+    public static bool SameGeometry(in RepeatLayout a, in RepeatLayout b)
+        => a.Kind == b.Kind && a.Extent == b.Extent && a.Gap == b.Gap && a.Columns == b.Columns && a.MinCellWidth == b.MinCellWidth
+        && a.Estimate == b.Estimate && a.Horizontal == b.Horizontal && ReferenceEquals(a.CustomLayout, b.CustomLayout);
+
+    /// <summary><see cref="SameGeometry(in RepeatLayout, in RepeatLayout)"/> over two optional specs (both null is the same).</summary>
+    public static bool SameGeometry(RepeatLayout? a, RepeatLayout? b)
+        => a is { } x ? b is { } y && SameGeometry(in x, in y) : b is null;
+
+    /// <summary>True when <paramref name="next"/> differs from <paramref name="current"/> only in a responsive grid's cell floor (and its row estimate, a seed) — the one change a
+    /// mounted <see cref="FluentGpu.Scene.GridVirtualLayout"/> re-fits in place.</summary>
+    public static bool IsCellFloorRefit(in RepeatLayout current, in RepeatLayout next)
+        => current.Kind == RepeatKind.Grid && next.Kind == RepeatKind.Grid && current.MinCellWidth > 0f && next.MinCellWidth > 0f
+        && current.Extent == next.Extent && current.Gap == next.Gap && current.Columns == next.Columns
+        && current.Horizontal == next.Horizontal && ReferenceEquals(current.CustomLayout, next.CustomLayout);
 }
 
 /// <summary>
