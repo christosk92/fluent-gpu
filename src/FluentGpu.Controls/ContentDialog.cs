@@ -65,6 +65,20 @@ public sealed class ContentDialog : Component
     public bool IsPrimaryButtonEnabled = true;
     public bool IsSecondaryButtonEnabled = true;
 
+    /// <summary>The command buttons' density on the kit's size axis (<see cref="ControlSize"/>): <see cref="ControlSize.Medium"/>
+    /// (the default) is WinUI's 32-DIP command button; <see cref="ControlSize.Large"/> is the 40-DIP touch target a compact
+    /// window asks for (the Button's own Large metrics); <see cref="ControlSize.Small"/> the 24-DIP compact button. The
+    /// buttons' height is the size's <see cref="ControlMetrics.MinHeight"/>.</summary>
+    public ControlSize CommandSize = ControlSize.Medium;
+
+    /// <summary>The least width of each command button (WinUI's 130-DIP command column floor, the default). A narrow window
+    /// lowers it so two buttons still sit side by side in a card narrower than 2 x 130 plus the gap.</summary>
+    public float CommandMinWidth = ButtonMinW;
+
+    /// <summary>The command buttons share the row EQUALLY (WinUI's star columns: every button is the same width whatever its
+    /// label) instead of the default, where each grows from its own label's width. Off by default.</summary>
+    public bool UniformCommandWidths;
+
     /// <summary>Cancelable command clicks (WinUI <c>ContentDialogButtonClickEventArgs.Cancel</c>): setting
     /// <see cref="ContentDialogButtonClickArgs.Cancel"/> keeps the dialog OPEN — this is what lets one dialog advance
     /// through phases (Offer → Downloading → Ready) instead of closing on the first click. Runs BEFORE the matching
@@ -114,7 +128,6 @@ public sealed class ContentDialog : Component
     const float TitleSize = 20f;     // SubtitleTextBlockStyle (Title presenter) — 20px SemiBold
     const float ContentSize = 14f;
     const float ButtonMinW = 130f;
-    const float ButtonH = 32f;
 
     public static Element Create(string triggerLabel, string title, string message, string? primaryText = null,
                                  string secondaryText = "", string closeText = "", DefaultBtn defaultButton = DefaultBtn.Primary)
@@ -250,15 +263,19 @@ public sealed class ContentDialog : Component
             CloseWith(ContentDialogResult.None, CloseClick);
         }
 
+        // The size axis: Medium is WinUI's 32-DIP button (ControlMetrics.For(Medium).MinHeight == 32, the pre-knob height).
+        float commandH = ControlMetrics.For(CommandSize).MinHeight;
+        float commandMinW = MathF.Max(0f, CommandMinWidth);
         BoxEl CommandButton(string text, bool accent, bool enabled, Action onClick)
         {
-            var b = accent ? Button.Accent(text, onClick, isEnabled: enabled) : Button.Standard(text, onClick, isEnabled: enabled);
+            var b = Button.Create(text, onClick, accent ? ButtonAppearance.Accent : ButtonAppearance.Standard, CommandSize, isEnabled: enabled);
             return b with
             {
-                MinWidth = ButtonMinW,
-                Height = ButtonH,
-                MinHeight = ButtonH,
+                MinWidth = commandMinW,
+                Height = commandH,
+                MinHeight = commandH,
                 Grow = 1f,
+                Basis = UniformCommandWidths ? 0f : b.Basis,   // star columns: grow from zero, so every button ends the same width
                 Justify = FlexJustify.Center,
                 // The DEFAULT (accent) button ranks FIRST in tab order so the focus trap's initial focus lands on
                 // it — WinUI focuses the default button when the dialog opens (ContentDialog_Partial SetInitialFocus).

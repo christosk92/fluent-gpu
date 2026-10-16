@@ -159,6 +159,10 @@ public sealed class NumberBox : Component
         public Func<string, double?>? Parser { get; init; }
         public bool IsEnabled { get; init; } = true;
         public Field<double>? Field { get; init; }
+        /// <summary>The per-instance style (the <see cref="NumberBox.Style"/> record: field height, spin metrics, colours);
+        /// null keeps <see cref="DefaultStyle"/>. A compact window lifts the field to its touch target with
+        /// <c>Style = NumberBox.DefaultStyle with { FieldHeight = 40 }</c>. Mount-time, like the other options.</summary>
+        public Style? Style { get; init; }
     }
 
     static readonly NumberBoxOptions DefaultOptions = new();
@@ -178,7 +182,7 @@ public sealed class NumberBox : Component
             IsWrapEnabled = o.IsWrapEnabled, AcceptsExpression = o.AcceptsExpression,
             PlaceholderText = o.PlaceholderText, Header = o.Header, Description = o.Description,
             Width = o.Width, Formatter = o.Formatter, OnChange = onChange,
-            Text = o.Text, Parser = o.Parser, IsEnabled = o.IsEnabled, Field = o.Field,
+            Text = o.Text, Parser = o.Parser, IsEnabled = o.IsEnabled, Field = o.Field, StyleOverride = o.Style,
         });
     }
 

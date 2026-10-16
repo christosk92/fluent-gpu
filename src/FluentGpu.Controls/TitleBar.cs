@@ -53,6 +53,19 @@ public sealed record TitleBarOptions
     public bool ShowRailBaseline { get; init; } = true;
     public bool ShowCaptionButtons { get; init; } = true;
     public TemplateParts? Parts { get; init; }
+    /// <summary>The row's fixed spacing, read per render (see <see cref="TitleBar.RowSpacing"/>); null keeps <see cref="TitleBarSpacing.Default"/>.</summary>
+    public Func<TitleBarSpacing>? RowSpacing { get; init; }
+}
+
+/// <summary>The title bar row's two fixed spacers: the lead pad after the back / pane buttons (WinUI's left-header padding column,
+/// 14) and the guaranteed-grabbable drag strip before the caption cluster (WinUI's minimum drag column, 48). A narrow window narrows
+/// them so its buttons fit; a drag strip of 0 leaves only the bar's own grow bands as drag space, so keep one wide enough to grab.</summary>
+/// <param name="LeadPad">The lead pad's width.</param>
+/// <param name="MinDragStrip">The drag strip's width.</param>
+public readonly record struct TitleBarSpacing(float LeadPad, float MinDragStrip)
+{
+    /// <summary>WinUI's TitleBar: a 14-DIP lead pad and a 48-DIP drag strip.</summary>
+    public static TitleBarSpacing Default => new(14f, 48f);
 }
 
 /// <summary>
@@ -108,9 +121,7 @@ public sealed class TitleBar : Component
     public const float CompactHeight = 32f;
 
     const float NavButtonSize = 40f;     // back/pane button width (WinUI TitleBar back/pane = 40w)
-    const float LeftHeaderPad = 14f;     // WinUI left-header padding column
     const float IconSize = 16f;          // WinUI icon Viewbox 16×16
-    const float MinDragStrip = 48f;      // WinUI min drag-region column before the caption buttons
 
     // ── configuration ─────────────────────────────────────────────────────────────────────────────────────────────
     // MOUNT-TIME config: the reconciler reuses the component instance on parent re-render without re-applying these
@@ -202,6 +213,10 @@ public sealed class TitleBar : Component
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
     public TemplateParts? Parts;
+    /// <summary>The row's lead pad and drag strip (<see cref="TitleBarSpacing"/>), read at EVERY render — not mount-time: a thunk
+    /// that reads a signal (a window tier) re-renders the bar and re-reports its regions when it changes. Null keeps
+    /// <see cref="TitleBarSpacing.Default"/> (WinUI's 14 and 48).</summary>
+    public Func<TitleBarSpacing>? RowSpacing;
 
     /// <summary>Merged mode = at least one of the merged-row slots is present. Mount-time (both fields freeze at mount),
     /// so the branch below is stable for the life of the instance.</summary>
@@ -227,7 +242,7 @@ public sealed class TitleBar : Component
                 Trailing = options.Trailing, CaptionLeading = options.CaptionLeading,
                 ContentVersion = options.ContentVersion,
                 ShowRailBaseline = options.ShowRailBaseline,
-                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
+                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts, RowSpacing = options.RowSpacing,
             };
             if (options.IconColor is { } ic) tb.IconColor = ic;
             if (options.Content is { } content) tb.Content = _ => content(tb.ContentAvail);
@@ -269,6 +284,8 @@ public sealed class TitleBar : Component
         bool backEnabled = BackEnabledSignal is { } bes ? bes.Value : BackEnabled;   // subscribe: re-glyph the back button live
         bool paneEnabled = PaneToggleEnabledSignal is { } pes ? pes.Value : true;   // subscribe: re-glyph the toggle live
         string paneTip = PaneToggleToolTip?.Invoke() ?? "";
+        var spacing = RowSpacing?.Invoke() ?? TitleBarSpacing.Default;   // subscribe: a thunk over a tier re-renders on a change
+        float leadPad = MathF.Max(0f, spacing.LeadPad), dragStrip = MathF.Max(0f, spacing.MinDragStrip);
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
@@ -276,7 +293,7 @@ public sealed class TitleBar : Component
         // ContentVersion rides BOTH keys: a merged island that resizes without moving any other dep (an expanding search
         // box) must re-render AND re-push its region in the same frame, or the stale rect leaves dead drag space.
         UseLayoutEffect(() => PushRegions(hooks),
-            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled)));
+            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled, leadPad, dragStrip)));
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
@@ -285,6 +302,7 @@ public sealed class TitleBar : Component
         int key = unchecked(((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397
                               ^ StringComparer.Ordinal.GetHashCode(paneTip)) * 397)
             ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (TabsElasticLane ? 128 : 0) | (paneEnabled ? 256 : 0)));
+        key = HashCode.Combine(key, leadPad, dragStrip);
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
@@ -324,7 +342,7 @@ public sealed class TitleBar : Component
             kids.Add(paneTip.Length > 0 ? ToolTip.Wrap(paneEl, paneTip) : paneEl);
         }
 
-        kids.Add(new BoxEl { Width = LeftHeaderPad });
+        kids.Add(new BoxEl { Width = leadPad });
 
         if (IconGlyph.Length > 0)
         {
@@ -492,8 +510,8 @@ public sealed class TitleBar : Component
         // already flush against Minimize with the strip at full width, so shrinking it would trade real drag space for
         // nothing.
         kids.Add(Tabs is not null || merged
-            ? Band(MinDragStrip, 0f, 0f)
-            : new BoxEl { Width = MinDragStrip });
+            ? Band(dragStrip, 0f, 0f)
+            : new BoxEl { Width = dragStrip });
 
         if (CaptionLeading is { } captionLeadingFunc)
         {

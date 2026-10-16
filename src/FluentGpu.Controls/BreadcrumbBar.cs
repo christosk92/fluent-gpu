@@ -29,13 +29,21 @@ public static class BreadcrumbBar
     /// Owned: nothing (pure styling).</summary>
     public const string PartSeparator = "Separator";
 
-    public static Element Create(IReadOnlyList<string> items, Action<int>? onChange = null, TemplateParts? parts = null)
-        => Embed.Comp(new Props(items, onChange, parts), () => new BreadcrumbBarCore());
+    /// <summary>The trail. <paramref name="size"/> is the crumbs' density on the kit's size axis: <see cref="ControlSize.Medium"/>
+    /// (the default) is WinUI's crumb (a 20px line inside Padding 1,3 — no least size); <see cref="ControlSize.Large"/> makes every
+    /// crumb at least the 40 x 40 touch target a compact window asks for (the label centred in it; a documented extension). Small is
+    /// remapped to Medium. The size is a live prop: a re-render with another size re-sizes the mounted trail.</summary>
+    public static Element Create(IReadOnlyList<string> items, Action<int>? onChange = null, TemplateParts? parts = null,
+        ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new Props(items, onChange, parts, size), () => new BreadcrumbBarCore());
+
+    /// <summary>The least crumb edge of <paramref name="size"/>: 40 for <see cref="ControlSize.Large"/>, else none (NaN).</summary>
+    public static float MinCrumbExtent(ControlSize size) => size == ControlSize.Large ? ControlMetrics.For(ControlSize.Large).MinHeight : float.NaN;
 
     /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
     /// ComponentEl never re-runs its factory — so the trail stays LIVE across parent re-renders; the core reads them
     /// with <c>UseProps</c> (the SelectorBar/RadioButtons convention).</summary>
-    internal sealed record Props(IReadOnlyList<string> Items, Action<int>? OnChange, TemplateParts? Parts);
+    internal sealed record Props(IReadOnlyList<string> Items, Action<int>? OnChange, TemplateParts? Parts, ControlSize Size = ControlSize.Medium);
 }
 
 /// <summary>The stateful core: captures crumb node handles so Left/Right can move focus crumb-to-crumb, the
@@ -50,6 +58,8 @@ internal sealed class BreadcrumbBarCore : Component
         var handles = UseRef(new List<NodeHandle>()).Value;   // crumb node per index (arrow-key focus targets)
 
         var parts = p.Parts;
+        float minCrumb = BreadcrumbBar.MinCrumbExtent(p.Size);   // NaN at Medium: the stock crumb has no least size
+        bool lifted = !float.IsNaN(minCrumb);
         int count = p.Items?.Count ?? 0;
         while (handles.Count < count) handles.Add(NodeHandle.Null);
 
@@ -109,6 +119,8 @@ internal sealed class BreadcrumbBarCore : Component
             {
                 Direction = 0,
                 AlignItems = FlexAlign.Center,
+                Justify = lifted ? FlexJustify.Center : FlexJustify.Start,   // Large: the label centred in its 40 x 40 floor
+                MinWidth = minCrumb, MinHeight = minCrumb,
                 Padding = new Edges4(1, 3, 1, 3),  // PART_ItemButton / PART_LastItemContentPresenter Padding="1,3" (BreadcrumbBar.xaml:168, :298)
                 Corners = Radii.ControlAll,        // CornerRadius = ControlCornerRadius (BreadcrumbBar.xaml:17)
                 Role = AutomationRole.Button,      // BreadcrumbBarItemAutomationPeer reports a Button control type

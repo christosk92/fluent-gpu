@@ -366,6 +366,14 @@ value it can't honor (a small per-control table, Radix precedent): `IconButton` 
 square glyph box sane, and `HyperlinkButton` doesn't expose the appearance axis at all (it is link text with no fill
 chrome, so Subtle/Outline are meaningless).
 
+**Compact (touch) sizes.** `ControlSize.Large` is the 40-DIP hit target a compact window asks for, and the non-button controls
+take it too: `ContentDialog.CommandSize` (with `CommandMinWidth` and `UniformCommandWidths` so two 40-tall buttons share a narrow
+card), `ComboBox.Create(…, size: ControlSize.Large)` (pass `width: float.NaN` to fill a column), `MenuFlyout.Create(…, size:)`
+(40-DIP rows), `BreadcrumbBar.Create(…, size:)` and the toast lane's `ToastLaneStyle.ActionSize`. A NumberBox takes
+`NumberBoxOptions.Style = NumberBox.DefaultStyle with { FieldHeight = 40 }`, a TextBox `TextBoxOptions.Height`; the title bar
+narrows its lead pad and drag strip through `TitleBarOptions.RowSpacing`; the toast lane's margins and card widths come from the
+`Toast.Lane` context (`Ctx.Provide(Toast.Lane, () => style, OverlayHost.Create(…))`). Every default is unchanged.
+
 **`AccentSet` — a palette from any color.** `Tok.AccentDefault`/`AccentSecondary`/`AccentTertiary` shade the LIVE
 system/override accent; `FluentGpu.Dsl.AccentSet.From(ColorF)` (`Dsl/Tokens.cs`) derives the SAME tiers (fill @
 1.0/.90/.80 alpha, `.Subtle` @ .16, `.Text` the `AccentTextFillColorPrimary` shade, `.Ink`/`.InkSecondary` a

@@ -168,7 +168,7 @@ public sealed class EditableText : Component
     }
 
     /// <summary>Flip the enabled state on the LIVE instance. Props freeze at mount, so a composer whose enabled flag is
-    /// live (NumberBox/ComboBox re-push theirs through <c>EnabledProps</c>) forwards it here: the render epoch re-renders the
+    /// live (NumberBox/ComboBox re-push theirs through their live props) forwards it here: the render epoch re-renders the
     /// root (input gate, Focusable, Disabled chrome) and the display epoch re-evaluates BindColor's disabled foreground.</summary>
     internal void SetEnabled(bool enabled)
     {

@@ -445,6 +445,19 @@ revisions and occurrence reuse follow [virtualization.md](virtualization.md).
   replaced the former global `Button.StyleHook`, theming.md §16.2). `AccentStyleOverride`/
   `StandardStyleOverride` are **deleted**. `IconButton`/`ToggleButton`/`RepeatButton`/
   `HyperlinkButton` adopt `ControlSize`; a glyph-slot + icon+label overload landed. Gate: `gate.ctl.button.variants`.
+- **As built (2026-10, compact control sizes) — the size axis reaches the 40-DIP touch target.** A compact window's
+  hit-target rule (every target at least 40 x 40) is set per instance through each control's existing idiom; every default
+  is the pre-knob metric, pixel for pixel. `ControlSize.Large` (`ControlMetrics.For(Large).MinHeight` = 40) is the touch
+  rung: `ContentDialog.CommandSize` (+ `CommandMinWidth`, default 130, and `UniformCommandWidths`, WinUI's star columns,
+  default off), `ComboBox.Create(…, size:)` (field 32 → 40, re-pushed live with the width and the touch row padding; `width: float.NaN` fills a column parent, non-editable only,
+  the drop-down taking the field's laid-out width at open), `MenuFlyout.Create(…, size:)` (row 36 → 40, inherited by
+  cascades; `MenuFlyout.RowHeightFor`), `BreadcrumbBar.Create(…, size:)` (each crumb at least 40 x 40; a live prop) and
+  `ToastLaneStyle.ActionSize`. Small is remapped to Medium where the control has no compact form (ComboBox, MenuFlyout,
+  BreadcrumbBar — the ClampSize idiom). The rest ride a record: `NumberBox.NumberBoxOptions.Style` (the `Style` record's
+  `FieldHeight`), `TitleBarOptions.RowSpacing` / `TitleBar.RowSpacing` (`Func<TitleBarSpacing>`: the 14-DIP lead pad and
+  the 48-DIP drag strip, read at every render and in the memo key) and the toast lane's `ToastLaneStyle` (side margin 24,
+  cards 300-380, `FillWidth`, `ActionSize`), provided as the ambient `Toast.Lane` context (`Context<Func<ToastLaneStyle>?>`,
+  provided above the `OverlayHost`) — never a new mutable static. Tests: `ControlSizeKnobTests` (Engine.Tests).
 
 ### 5.2 Checkbox
 
