@@ -176,6 +176,13 @@ public sealed partial class AppHost
         bool horizontal = sc.Orientation == 1;
         var vp = new ScrollViewportId(idx, node.Raw.Gen);
         _scene.TryGetAuthoredScrollHandle(idx, out var authored);
+        // A keyed swap mounts the incoming viewport while the outgoing one still fades out as an exit orphan, and both can name the SAME
+        // authored handle (a page-owned handle across two arms of one page). Re-binding that one handle to each of them in turn re-seeds both
+        // plans every frame from whichever offset was shown last, which undoes a programmatic move on the incoming viewport (a restore, a
+        // bring-into-view) and moves the leaving one mid-fade. The handle belongs to the live successor; the leaving viewport paints its exit
+        // from a handle of its own, seeded at the offset it shows.
+        if (authored is not null && authored.IsBound && authored.Vp != vp && InExitingSubtree(node))
+            return LendExitingHandle(idx, vp, authored, in sc, horizontal);
         if (_scrollHandles.TryGetValue(idx, out var bound))
         {
             if (authored is not null && !ReferenceEquals(bound, authored))
@@ -194,6 +201,32 @@ public sealed partial class AppHost
         handle.SetExtent(PresentedContentMain(in sc) * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f), sc.ViewportMain);
         _scrollHandles[idx] = handle;
         return handle;
+    }
+
+    /// <summary>Is <paramref name="node"/> inside an exit orphan (a removed subtree still painting its exit)?</summary>
+    private bool InExitingSubtree(NodeHandle node)
+    {
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+            if ((_scene.Flags(n) & NodeFlags.Exiting) != 0) return true;
+        return false;
+    }
+
+    /// <summary>The leaving viewport's own handle while its authored one serves the successor (see <see cref="ResolveScrollHandle"/>):
+    /// host-minted once, seeded at the offset the viewport shows, freed with the node like any internal handle.</summary>
+    private ScrollHandle LendExitingHandle(int idx, ScrollViewportId vp, ScrollHandle authored, in ScrollState sc, bool horizontal)
+    {
+        if (_scrollHandles.TryGetValue(idx, out var own) && !ReferenceEquals(own, authored))
+        {
+            if (!own.IsBound || own.Vp != vp || own.Horizontal != horizontal) own.Bind(_planSlots, vp, _scrollNowFn ??= ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
+            return own;
+        }
+        var mine = new ScrollHandle();
+        mine.ScrollTo(sc.Offset, ScrollMove.Immediate);   // unbound: latched, so the bind seeds the plan at the shown offset
+        _internalScrollHandles.Add(idx);
+        mine.Bind(_planSlots, vp, _scrollNowFn ??= ScrollNowSec, horizontal, _scrollShownFloorFn ??= ScrollShownFloorSec);
+        mine.SetExtent(PresentedContentMain(in sc) * (sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f), sc.ViewportMain);
+        _scrollHandles[idx] = mine;
+        return mine;
     }
 
     // ── ScrollKey restore (design §9 — replaces the reconciler's ScrollMemory) ─────────────────────────────────
