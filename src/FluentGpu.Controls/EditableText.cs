@@ -167,6 +167,15 @@ public sealed class EditableText : Component
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }
 
+    /// <summary>Re-size the field on the LIVE instance (a composer whose style is live — NumberBox's field height across a window-tier
+    /// crossing — forwards it here): the render epoch re-renders the field at the new height. A no-op for an unchanged height.</summary>
+    internal void SetHeight(float height)
+    {
+        if (Height == height) return;
+        Height = height;
+        if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
+    }
+
     /// <summary>Flip the enabled state on the LIVE instance. Props freeze at mount, so a composer whose enabled flag is
     /// live (NumberBox/ComboBox re-push theirs through their live props) forwards it here: the render epoch re-renders the
     /// root (input gate, Focusable, Disabled chrome) and the display epoch re-evaluates BindColor's disabled foreground.</summary>

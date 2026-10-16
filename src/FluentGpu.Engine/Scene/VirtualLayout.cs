@@ -125,10 +125,12 @@ public sealed class StackVirtualLayout : IVirtualLayout
 /// (estimate-then-correct via <see cref="IMeasuredVirtualLayout"/> — virtualization.md ItemExtent=0 ⇒ measure).
 /// Pass <paramref name="minCellWidth"/> &gt; 0 (with <paramref name="columns"/> = 0) for responsive column count off the
 /// cross size — callers never compute cell width or column count.</para></summary>
-public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout
+public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout, IAnchoredReseedLayout
 {
     public readonly int Columns;           // fixed column count when MinCellWidth == 0
-    public readonly float MinCellWidth;    // &gt; 0 ⇒ responsive columns from cross (Columns ignored)
+    /// <summary>&gt; 0 ⇒ responsive columns from cross (Columns ignored). LIVE through <see cref="SetMinCellWidth"/>: a host re-fits
+    /// the mounted grid (a window-tier crossing changes the cell floor) and the viewport keeps its extent source and offset.</summary>
+    public float MinCellWidth { get; private set; }
     public readonly float ItemHeight;      // ≤ 0 ⇒ measured rows
     public readonly float Gap;
     public readonly float Estimate;        // initial row-height estimate in measured mode
@@ -151,6 +153,39 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout
         Gap = gap;
         Estimate = estimate <= 0f ? 120f : estimate;
         _cols = Math.Max(1, Columns > 0 ? Columns : 1);
+    }
+
+    // A cell floor set by SetMinCellWidth and not applied yet (NaN = none). It is applied in TakeReseedShift, the layout pass's
+    // out-of-band-rewrite seam, so the column change re-anchors the scroll exactly like a measured correction: the pass takes the
+    // anchor item's offset under the old floor, applies the new one, and shifts the plan frame by the difference.
+    private float _pendingMinCell = float.NaN;
+
+    /// <summary>Re-fit the responsive grid to a new cell floor (a responsive grid only: <see cref="MinCellWidth"/> &gt; 0 on both
+    /// sides). The floor lands on the next layout pass (<see cref="TakeReseedShift"/>), which keeps the anchor row where the user
+    /// sees it. False when nothing changes. The caller marks its viewport layout-dirty on true.</summary>
+    public bool SetMinCellWidth(float minCellWidth)
+    {
+        float v = minCellWidth < 0f ? 0f : minCellWidth;
+        if (v <= 0f || MinCellWidth <= 0f) return false;   // fixed-column grids keep their shape (a different layout, not a re-fit)
+        float current = float.IsNaN(_pendingMinCell) ? MinCellWidth : _pendingMinCell;
+        if (v == current) return false;
+        _pendingMinCell = v == MinCellWidth ? float.NaN : v;
+        return true;
+    }
+
+    /// <summary>Applies a pending <see cref="SetMinCellWidth"/>: <paramref name="delta"/> is how far it moved item
+    /// <paramref name="anchorIndex"/>'s offset (new − old) at the cross size last laid out. False when nothing was pending.</summary>
+    public bool TakeReseedShift(int anchorIndex, out double delta)
+    {
+        delta = 0.0;
+        if (float.IsNaN(_pendingMinCell)) return false;
+        float cross = float.IsNaN(_geomCross) ? 0f : _geomCross;
+        bool anchored = cross > 0f && anchorIndex > 0 && _itemCount > anchorIndex;
+        float before = anchored ? OffsetOf(anchorIndex, cross) : 0f;
+        MinCellWidth = _pendingMinCell;
+        _pendingMinCell = float.NaN;
+        if (anchored) delta = OffsetOf(anchorIndex, cross) - before;
+        return true;
     }
 
     /// <summary>Column count at the given cross size (for keyboard nav when columns are responsive).</summary>
@@ -378,11 +413,16 @@ public sealed class HorizontalGridVirtualLayout : IVirtualLayout
 /// </summary>
 public sealed class FillRowVirtualLayout : IViewportVirtualLayout
 {
-    public readonly float MinCardW, MaxCardW, Gap;
+    // The card band (min / max / gap / fixed width / column cap / lead minimum) is LIVE: a host re-fits a mounted layout through
+    // SetFit (a window-tier crossing changes the band) instead of building a new instance, so the viewport's extent source, its
+    // scroll offset and every realized card survive the change.
+    public float MinCardW { get; private set; }
+    public float MaxCardW { get; private set; }
+    public float Gap { get; private set; }
     public readonly int Rows;
     public readonly int PerPageOverride;   // 0 ⇒ auto-fit
-    public readonly float FixedCardW;      // 0 ⇒ auto-fit
-    public readonly int MaxColumns;        // 0 ⇒ unlimited; else the auto-fit never exceeds this many columns
+    public float FixedCardW { get; private set; }      // 0 ⇒ auto-fit
+    public int MaxColumns { get; private set; }        // 0 ⇒ unlimited; else the auto-fit never exceeds this many columns
     // Main-axis CONTENT INSETS (halo-bleed gutters, virtualization.md §fill-row): a leading/trailing gutter carved
     // INSIDE the (widened) viewport so the first/last card's elevation halo paints into the gutter instead of hard-
     // clipping at the viewport edge. The engine feeds a viewport already widened by Lead+Trail; the fit subtracts the
@@ -392,7 +432,7 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     // E22 — per-shelf lead minimum: the column count a page must reach before a lead span is honoured. 0 (the
     // default) keeps E11's half-row rule (2*span+1 — byte-identical to a layout built before this field existed);
     // a positive value replaces it with max(span+1, LeadMinColumns) — see MinColsFor, the ONE place the rule lives.
-    public readonly int LeadMinColumns;
+    public int LeadMinColumns { get; private set; }
 
     private float _main, _cross;           // last viewport fed by the engine (main = scroll-axis width)
     private int _perPage = 1;
@@ -417,6 +457,30 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         TrailInset = trailInset < 0f ? 0f : trailInset;
         LeadMinColumns = Math.Max(0, leadMinColumns);
         _cardW = MinCardW;
+    }
+
+    /// <summary>Re-fit this mounted layout to a new card band (a host's tier crossing): the band is normalized exactly as the
+    /// constructor normalizes it, and the fit is re-derived at once from the last viewport the engine fed, so the next geometry
+    /// query already answers for the new band. False (nothing written) when the band is unchanged. The caller marks its viewport
+    /// layout-dirty on true: nothing else tells the engine a band moved. Allocation-free.</summary>
+    public bool SetFit(float minCardW, float maxCardW, float gap, float fixedCardW, int maxColumns, int leadMinColumns)
+    {
+        float min = minCardW <= 0 ? 1f : minCardW;
+        float max = maxCardW < min ? min : maxCardW;
+        float g = gap < 0 ? 0f : gap;
+        float fixedW = fixedCardW < 0 ? 0f : fixedCardW;
+        int cols = Math.Max(0, maxColumns);
+        int leadMin = Math.Max(0, leadMinColumns);
+        if (min == MinCardW && max == MaxCardW && g == Gap && fixedW == FixedCardW && cols == MaxColumns && leadMin == LeadMinColumns)
+            return false;
+        MinCardW = min; MaxCardW = max; Gap = g; FixedCardW = fixedW; MaxColumns = cols; LeadMinColumns = leadMin;
+        if (_main > 0f)
+        {
+            float inner = MathF.Max(0f, _main - LeadInset - TrailInset);
+            (_perPage, _cardW) = Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
+        }
+        else _cardW = MinCardW;
+        return true;
     }
 
     /// <summary>The MINIMUM columns per page at which a lead span of <paramref name="leadSpan"/> cells is honoured

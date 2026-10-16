@@ -525,6 +525,9 @@ public sealed class ItemsView : Component, IPropsHost
     // props object always supplies the template for NEW slots; the stamp rides a signal so only a stamp change re-renders.
     private IBoundListProps? _boundProps;
     private Signal<int>? _boundStamp;
+    // The live layout's revision: bumped by ApplyProps when a later render asked for a different responsive cell floor (the only
+    // layout change a mounted list re-fits in place; see IBoundListProps.LiveLayout). Render subscribes it.
+    private Signal<int>? _layoutRev;
     private Func<RowScope, Element>? _buildBoundRow;
 
     /// <summary>The re-pushed props seam (<see cref="IPropsHost"/>): a <see cref="BoundListProps{TRow}"/> delivers the row
@@ -536,6 +539,13 @@ public sealed class ItemsView : Component, IPropsHost
         _boundProps = p;
         if (_boundStamp is null) _boundStamp = new Signal<int>(p.TemplateStamp);
         else _boundStamp.SetIfChanged(p.TemplateStamp);
+        _layoutRev ??= new Signal<int>(0);
+        if (p.LiveLayout is { } live && HasExplicitLayout && !RepeatLayout.SameGeometry(in live, in Layout)
+            && RepeatLayout.IsCellFloorRefit(in Layout, in live))
+        {
+            Layout = live;
+            _layoutRev.Value = _layoutRev.Peek() + 1;
+        }
     }
 
     private Element BuildBoundRow(RowScope scope) => _boundProps!.Build(scope);
@@ -878,7 +888,8 @@ public sealed class ItemsView : Component, IPropsHost
             OnVisibleRange = o.OnVisibleRange,
         };
 
-        var props = new BoundListProps<T>(rowTemplate, templateStamp, items, o.ItemComparer, metrics);
+        // The layout rides the props too: a later render's responsive cell floor re-fits the mounted grid (IBoundListProps.LiveLayout).
+        var props = new BoundListProps<T>(rowTemplate, templateStamp, items, o.ItemComparer, metrics) { LiveLayout = layout };
         return Embed.Comp<ItemsView, BoundListProps<T>>(props, () => NewBoundView(items.Count.Peek(), null, layout, baseOptions));
     }
 
@@ -1019,7 +1030,11 @@ public sealed class ItemsView : Component, IPropsHost
 
         // Resolve the layout spec → a (hoisted) IVirtualLayout. Stateful layout objects must be stable across
         // renders, so the instance is memoized on the spec's identity fields.
+        _ = _layoutRev?.Value;   // subscribe — a re-fitted cell floor (ApplyProps) re-renders this view once
         RepeatLayout spec = HasExplicitLayout ? Layout : RepeatLayout.Grid(Math.Max(1, Columns), 80f, 8f);
+        // A responsive grid's cell floor (and its row estimate, a seed only) is NOT part of the memo's identity: the mounted GridVirtualLayout re-fits to it in place
+        // (SetMinCellWidth below), so its measured rows, the viewport's extent source and the scroll offset survive a tier crossing.
+        bool responsiveGrid = spec.Kind == RepeatKind.Grid && spec.MinCellWidth > 0f;
         IVirtualLayout? layout = UseMemo<IVirtualLayout?>(
             () => spec.Kind switch
             {
@@ -1029,8 +1044,14 @@ public sealed class ItemsView : Component, IPropsHost
                 RepeatKind.Custom => spec.CustomLayout,
                 _ => null,   // Wrap/Inline — non-virtual fallback
             },
-            DepKey.From(HashCode.Combine((int)spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout)));
+            DepKey.From(HashCode.Combine((int)spec.Kind, spec.Extent, spec.Gap, spec.Columns, responsiveGrid ? -1f : spec.MinCellWidth, responsiveGrid ? -1f : spec.Estimate, spec.Horizontal, spec.CustomLayout)));
         bool horizontal = spec.Horizontal;
+        // The re-fit lands on THIS frame's layout pass: the grid applies the floor in its anchored-reseed seam (the anchor row keeps
+        // its place) and the viewport is marked here, in the reconcile that runs before layout, so a crossing frame's FLIP capture
+        // sees the reflowed cells as one move.
+        if (responsiveGrid && layout is GridVirtualLayout liveGrid && liveGrid.SetMinCellWidth(spec.MinCellWidth)
+            && Context.Scene is { } refitScene && viewportNode.Value is { IsNull: false } refitVp && refitScene.IsLive(refitVp))
+            refitScene.Mark(refitVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
 
         // ── the disclosure's STRUCTURAL count change, applied to the extent table before layout sees it ───────────────
         // A measured layout resolves a bare count change index-by-index, which is right for an append and wrong for the
