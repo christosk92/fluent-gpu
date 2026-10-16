@@ -45,6 +45,34 @@ public sealed class CaptureExportTests
     }
 
     [Fact]
+    public void FlattenOver_CompositesPremultipliedColourOverTheBackdrop()
+    {
+        Span<byte> dst = stackalloc byte[3];
+        // Opaque: unchanged. Transparent: the backdrop. Half-covered white (premultiplied 128) over #202020: 128 + 32 x 127/255.
+        PngWriter.FlattenOver([10, 20, 30, 255], 0x20, 0x20, 0x20, dst);
+        Assert.Equal(new byte[] { 10, 20, 30 }, dst.ToArray());
+        PngWriter.FlattenOver([0, 0, 0, 0], 0xF3, 0xF2, 0xF1, dst);
+        Assert.Equal(new byte[] { 0xF1, 0xF2, 0xF3 }, dst.ToArray());
+        PngWriter.FlattenOver([128, 128, 128, 128], 0x20, 0x20, 0x20, dst);
+        Assert.Equal(new byte[] { 144, 144, 144 }, dst.ToArray());
+    }
+
+    [Fact]
+    public void WriteBgra_OverABackdrop_IsAnOpaqueRgbPng()
+    {
+        byte[] px = [0, 0, 0, 0];   // one transparent pixel: the backdrop shows
+        string dir = Path.Combine(Path.GetTempPath(), "fgpu-png-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "c.png");
+            PngWriter.WriteBgra(path, px, 1, 1, backdrop: ColorF.FromRgba(0xF3, 0xF3, 0xF3));
+            Assert.Equal(2, File.ReadAllBytes(path)[25]);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public void WriteBgra_KeepAlpha_WritesAnRgbaHeader_AndTheOpaqueFormStaysRgb()
     {
         byte[] px = [0, 0, 255, 255, 0, 0, 0, 0];   // one opaque red, one transparent pixel

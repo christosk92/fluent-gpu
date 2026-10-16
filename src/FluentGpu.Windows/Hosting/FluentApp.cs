@@ -348,6 +348,14 @@ public static class FluentApp
             CustomFrame: o.CustomFrame,
             MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight),
             Zoom: ZoomLadder.Clamp(o.Zoom)));
+        // The screenshot harness's capture surface: the host lays out and rasterises at SurfaceSizeDip × SurfaceScale px
+        // whatever the monitor allows (before the host exists, so the first frame and the swapchain are already that size).
+        if (h.Screenshot is not null && h.SurfaceSizeDip is { Width: > 0f, Height: > 0f } surface)
+        {
+            float s = h.SurfaceScale > 0f ? h.SurfaceScale : 1f;
+            window.PinSurface(new Size2(surface.Width * s, surface.Height * s), s);
+            Console.Error.WriteLine($"[window] capture surface pinned at {surface.Width}x{surface.Height} DIP, scale {s}");
+        }
         BootStamp("create-window");
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
@@ -736,7 +744,10 @@ public static class FluentApp
         {
             host.QuiesceRenderThread();   // async (the default): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
             var px = d3d.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra(shotPath, px, cw, ch);
+            // The back buffer is PREMULTIPLIED and a Mica window's chrome and layer fills are see-through: dropping the alpha
+            // byte composited them over black (the grey "dim" every capture showed). Flatten over the theme's solid base, the
+            // material's own fallback, which is what the window shows wherever DWM's backdrop does not reach.
+            PngWriter.WriteBgra(shotPath, px, cw, ch, backdrop: Tok.T.WindowBackground);
             Console.Error.WriteLine($"screenshot: wrote {shotPath} ({cw}x{ch})");
         }
 
@@ -924,6 +935,13 @@ public sealed record HarnessOptions
     public string? Screenshot { get; init; }
     /// <summary>Per-frame wait (ms) used while a <see cref="Screenshot"/> is pending — deterministic settle pacing.</summary>
     public int FrameWaitMs { get; init; } = 8;
+    /// <summary>With <see cref="Screenshot"/>: the capture surface's size in DIP. Set, the host lays out and renders at this
+    /// size (× <see cref="SurfaceScale"/> px) whatever the window and the monitor allow, so a review capture can show a
+    /// 2560- or 3840-DIP layout on a smaller screen. The window on screen shows the surface's top-left corner; input is not
+    /// mapped to it. Empty (the default) keeps the window's own size.</summary>
+    public Size2 SurfaceSizeDip { get; init; }
+    /// <summary>The capture surface's DPI scale (px per DIP before app zoom); default 1. Read only with <see cref="SurfaceSizeDip"/>.</summary>
+    public float SurfaceScale { get; init; } = 1f;
 }
 
 /// <summary>

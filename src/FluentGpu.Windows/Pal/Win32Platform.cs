@@ -850,7 +850,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     }
 
     public NativeHandle Handle => new(_hwnd, NativeHandleKind.Hwnd);
-    public Size2 ClientSizePx => new(_w, _h);
+    public Size2 ClientSizePx => _pinnedSurfacePx.Width > 0f ? _pinnedSurfacePx : new(_w, _h);
+
+    // The capture surface (HarnessOptions.SurfaceSizeDip): when set, the host sees THIS client size and DPI scale instead of
+    // the HWND's, so a review capture lays out and rasterises at a size the monitor cannot hold (2560 or 3840 DIP at scale 1
+    // on a 1664-DIP screen). The composition swapchain is sized from it; the window on screen shows its top-left corner.
+    private Size2 _pinnedSurfacePx;
+    private bool _pinnedSurface;
+
+    /// <summary>Pin the client size the host reads to <paramref name="sizePx"/> and the OS DPI scale to
+    /// <paramref name="dpiScale"/>, whatever the HWND's real size and monitor (the screenshot harness's capture surface).
+    /// Call before the host is created. A pinned window ignores WM_SIZE / WM_DPICHANGED for its reported size and scale,
+    /// and its pointer input is not mapped to the pinned surface: a capture run is hands-off.</summary>
+    internal void PinSurface(Size2 sizePx, float dpiScale)
+    {
+        _pinnedSurfacePx = new Size2(MathF.Max(1f, MathF.Round(sizePx.Width)), MathF.Max(1f, MathF.Round(sizePx.Height)));
+        _pinnedSurface = true;
+        _rawDpiScale = dpiScale > 0f ? dpiScale : 1f;
+        _scale = _rawDpiScale * _zoom;
+        PaintRequested?.Invoke();
+    }
+
     /// <summary>The EFFECTIVE scale (px per engine DIP): OS per-monitor DPI scale × app <see cref="Zoom"/>.</summary>
     public float Scale => _scale;
 
@@ -1959,8 +1979,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // on the target monitor and expects us to adopt both. Update the scale FIRST (the SetWindowPos below
                 // raises WM_SIZE → the host's resize path re-lays-out in DIPs / re-rasterizes glyphs at the new
                 // scale), then take the suggested rect so the window keeps its apparent (DIP) size across monitors.
-                _rawDpiScale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
-                _scale = _rawDpiScale * _zoom;                  // app zoom survives the monitor hop
+                if (!_pinnedSurface)
+                {
+                    _rawDpiScale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
+                    _scale = _rawDpiScale * _zoom;                  // app zoom survives the monitor hop
+                }
                 RECT* suggested = (RECT*)(nint)lParam;
                 // No explicit OnDisplayChanged() call here: this SetWindowPos moves the window (no SWP_NOMOVE), and
                 // USER32 dispatches WM_MOVE synchronously (SendMessage, not PostMessage) before SetWindowPos returns
