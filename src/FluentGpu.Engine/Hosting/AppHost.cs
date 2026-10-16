@@ -1135,27 +1135,32 @@ public sealed partial class AppHost : IDisposable
     /// <summary>The device half of a stage change, on the thread that owns the device and between turns. Shallow: every retained
     /// tile goes (visible ones too - nothing is visible, and the first composite after the restore schedules and rasters each in its own
     /// submission before anything samples it), then the device drops scratch / stencil / pools behind their fences and the image
-    /// queue is drained so the evicted textures are freed now, not on the first frame back. Visible lifts the no-pooling latch.</summary>
+    /// queue is drained so the evicted textures are freed now, not on the first frame back. Visible lifts the no-pooling latch.
+    /// The applied stage is published LAST (a release write, also when the work throws: a failed stage counts as applied), so a
+    /// thread that reads it (<see cref="HiddenAppliedForTest"/>) sees the whole change done, not just begun.</summary>
     private void ApplyHiddenStage(HiddenStage stage, FluentGpu.Render.Tiles.SliceTable tiles)
     {
-        Volatile.Write(ref _renderHiddenApplied, (int)stage);
-        if (stage >= HiddenStage.Shallow)
+        try
         {
-            if (stage == HiddenStage.Deep) EnterDeepOnRenderSide();   // FIRST: drops the scene readers that would defer the parked images' evictions
-            _idleTrimDormant = false;   // the idle trim pass must run its hidden branch
-            tiles.EvictAll();
-            for (int guard = 0; guard < 8; guard++)
+            if (stage >= HiddenStage.Shallow)
             {
-                var freed = tiles.TrimFreeSlotsNow();
-                if (freed.IsEmpty) break;
-                _device.TrimTileSurfaces(freed);
+                if (stage == HiddenStage.Deep) EnterDeepOnRenderSide();   // FIRST: drops the scene readers that would defer the parked images' evictions
+                _idleTrimDormant = false;   // the idle trim pass must run its hidden branch
+                tiles.EvictAll();
+                for (int guard = 0; guard < 8; guard++)
+                {
+                    var freed = tiles.TrimFreeSlotsNow();
+                    if (freed.IsEmpty) break;
+                    _device.TrimTileSurfaces(freed);
+                }
+                bool shared = OtherWindowVisibleOnRenderThread();
+                _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);
+                DrainImageJobsOffFrame();
+                _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
             }
-            bool shared = OtherWindowVisibleOnRenderThread();
-            _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);
-            DrainImageJobsOffFrame();
-            _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
+            else _device.ReleaseHiddenResources(HiddenStage.Visible);
         }
-        else _device.ReleaseHiddenResources(HiddenStage.Visible);
+        finally { Volatile.Write(ref _renderHiddenApplied, (int)stage); }
     }
 
     /// <summary>Render thread (or the UI thread inline), the Deep step. (1) Drop the scene readers: the snapshot of the last published

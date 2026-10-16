@@ -185,6 +185,9 @@ public sealed class HiddenStageHostTests : IDisposable
         host.AdvanceFrameClockForTest(2_500);
         host.RunFrame();
         Assert.Equal(HiddenStage.Shallow, host.HiddenStageForTest);
+        // A parked host publishes no frame: the request only wakes the render thread, which applies it on its own turn. The wait
+        // is on the render side's publication of the APPLIED stage, written after the release work, so what follows sees it done
+        // (the 5 s is a hang guard, not a schedule).
         Assert.True(SpinWait.SpinUntil(() => host.HiddenAppliedForTest == HiddenStage.Shallow, 5_000), "the render thread never applied the stage");
         Assert.Equal(0, host.RenderTilesResidentForTest);   // the RENDER table, not the UI one
         Assert.Equal(new[] { HiddenStage.Shallow, HiddenStage.Shallow }, device.HiddenReleases.ToArray());
