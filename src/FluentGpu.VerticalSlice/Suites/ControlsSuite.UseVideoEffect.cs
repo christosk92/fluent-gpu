@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Dsl;
@@ -33,6 +34,7 @@ static partial class ControlsSuite
             return new ValueTask<IMediaSession>(new UseVideoNullSession(this));
         }
         public int OpenCount { get { lock (Opened) return Opened.Count; } }
+        public string OpenedSource(int index) { lock (Opened) return index < Opened.Count ? Opened[index] : ""; }
     }
 
     sealed class UseVideoNullSession(UseVideoCountingBackend owner) : IMediaSession
@@ -78,9 +80,23 @@ static partial class ControlsSuite
             var probe = new UseVideoProbe(backend);
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
 
+            void PumpUntilOpened(int expected)
+            {
+                // Source replacement disposes the previous session on the ThreadPool before opening the next one.
+                // A fixed number of tight frames does not settle that asynchronous work; pump its UI posts and yield
+                // under the same bounded wait used by the other media harness checks.
+                var deadline = Stopwatch.StartNew();
+                while (backend.OpenCount < expected && deadline.ElapsedMilliseconds < 5000)
+                {
+                    host.RunFrame();
+                    Thread.Sleep(1);
+                }
+            }
+
             for (int i = 0; i < 6; i++) host.RunFrame();
+            PumpUntilOpened(1);
             int firstOpens = backend.OpenCount;
-            string first = firstOpens > 0 ? backend.Opened[0] : "";
+            string first = backend.OpenedSource(0);
 
             probe.Tick.Value = 1;   // a re-render with the SAME source: nothing reopens
             for (int i = 0; i < 6; i++) host.RunFrame();
@@ -92,8 +108,9 @@ static partial class ControlsSuite
             var deadline = DateTime.UtcNow.AddSeconds(5);
             do { host.RunFrame(); Thread.Sleep(1); } while (backend.OpenCount < 2 && DateTime.UtcNow < deadline);
             for (int i = 0; i < 6; i++) host.RunFrame();
+            PumpUntilOpened(2);
             int afterChange = backend.OpenCount;
-            string second = afterChange > 1 ? backend.Opened[1] : "";
+            string second = backend.OpenedSource(1);
 
             Check("gate.media.usevideo.opens-from-effect-on-default-backend the default backend opens the first source once, from the effect and never inside Render; a same-source re-render opens nothing; a source change opens exactly the new source",
                 firstOpens == 1 && first == "a.mp4" && probe.OpensDuringRender == 0 && afterRerender == 1 && afterChange == 2 && second == "b.mp4" && probe.Renders >= 3,
