@@ -132,7 +132,15 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout, 
     /// the mounted grid (a window-tier crossing changes the cell floor) and the viewport keeps its extent source and offset.</summary>
     public float MinCellWidth { get; private set; }
     public readonly float ItemHeight;      // ≤ 0 ⇒ measured rows
-    public readonly float Gap;
+    /// <summary>The gap between two cells of a row (the column gap). Also the gap between rows unless a <see cref="RowGap"/> was given. LIVE through
+    /// <see cref="SetFit"/> on a responsive grid.</summary>
+    public float Gap { get; private set; }
+
+    // The row gap when it differs from the column gap (NaN ⇒ the column gap: the single-gap grid every existing caller builds).
+    private float _rowGap = float.NaN;
+
+    /// <summary>The gap between two rows (vertical air). The column <see cref="Gap"/> unless the grid was built (or re-fitted) with its own.</summary>
+    public float RowGap => float.IsNaN(_rowGap) ? Gap : _rowGap;
     public readonly float Estimate;        // initial row-height estimate in measured mode
 
     /// <summary>True when row heights come from cell measure (not a fixed <see cref="ItemHeight"/>).</summary>
@@ -145,45 +153,58 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout, 
     private int _geomCols;
     private float _geomCross = float.NaN;
 
-    public GridVirtualLayout(int columns, float itemHeight, float gap = 0f, float minCellWidth = 0f, float estimate = 120f)
+    public GridVirtualLayout(int columns, float itemHeight, float gap = 0f, float minCellWidth = 0f, float estimate = 120f, float rowGap = float.NaN)
     {
         Columns = Math.Max(0, columns);
         MinCellWidth = minCellWidth < 0f ? 0f : minCellWidth;
         ItemHeight = itemHeight;
         Gap = gap;
+        _rowGap = rowGap;
         Estimate = estimate <= 0f ? 120f : estimate;
         _cols = Math.Max(1, Columns > 0 ? Columns : 1);
     }
 
-    // A cell floor set by SetMinCellWidth and not applied yet (NaN = none). It is applied in TakeReseedShift, the layout pass's
-    // out-of-band-rewrite seam, so the column change re-anchors the scroll exactly like a measured correction: the pass takes the
-    // anchor item's offset under the old floor, applies the new one, and shifts the plan frame by the difference.
-    private float _pendingMinCell = float.NaN;
+    // A fit (cell floor, column gap, row gap) set by SetFit and not applied yet (NaN = none). It is applied in TakeReseedShift, the layout pass's
+    // out-of-band-rewrite seam, so the column or row change re-anchors the scroll exactly like a measured correction: the pass takes the
+    // anchor item's offset under the old fit, applies the new one, and shifts the plan frame by the difference.
+    private float _pendingMinCell = float.NaN, _pendingGap = float.NaN, _pendingRowGap = float.NaN;
+    private bool _pending;
 
-    /// <summary>Re-fit the responsive grid to a new cell floor (a responsive grid only: <see cref="MinCellWidth"/> &gt; 0 on both
-    /// sides). The floor lands on the next layout pass (<see cref="TakeReseedShift"/>), which keeps the anchor row where the user
+    /// <summary>Re-fit the responsive grid to a new cell floor, keeping its gaps (see <see cref="SetFit"/>).</summary>
+    public bool SetMinCellWidth(float minCellWidth) => SetFit(minCellWidth, PendingOrLiveGap, PendingOrLiveRowGap);
+
+    private float PendingOrLiveGap => _pending && !float.IsNaN(_pendingGap) ? _pendingGap : Gap;
+    private float PendingOrLiveRowGap => _pending && !float.IsNaN(_pendingRowGap) ? _pendingRowGap : RowGap;
+
+    /// <summary>Re-fit the responsive grid to a new cell floor, column gap and row gap (a responsive grid only: <see cref="MinCellWidth"/> &gt; 0 on both
+    /// sides). The fit lands on the next layout pass (<see cref="TakeReseedShift"/>), which keeps the anchor row where the user
     /// sees it. False when nothing changes. The caller marks its viewport layout-dirty on true.</summary>
-    public bool SetMinCellWidth(float minCellWidth)
+    public bool SetFit(float minCellWidth, float gap, float rowGap)
     {
         float v = minCellWidth < 0f ? 0f : minCellWidth;
         if (v <= 0f || MinCellWidth <= 0f) return false;   // fixed-column grids keep their shape (a different layout, not a re-fit)
-        float current = float.IsNaN(_pendingMinCell) ? MinCellWidth : _pendingMinCell;
-        if (v == current) return false;
-        _pendingMinCell = v == MinCellWidth ? float.NaN : v;
+        float curMin = _pending ? _pendingMinCell : MinCellWidth, curGap = _pending ? _pendingGap : Gap, curRow = _pending ? _pendingRowGap : RowGap;
+        if (v == curMin && gap == curGap && rowGap == curRow) return false;
+        if (v == MinCellWidth && gap == Gap && rowGap == RowGap) { _pending = false; _pendingMinCell = _pendingGap = _pendingRowGap = float.NaN; return true; }
+        _pending = true;
+        _pendingMinCell = v; _pendingGap = gap; _pendingRowGap = rowGap;
         return true;
     }
 
-    /// <summary>Applies a pending <see cref="SetMinCellWidth"/>: <paramref name="delta"/> is how far it moved item
+    /// <summary>Applies a pending <see cref="SetFit"/>: <paramref name="delta"/> is how far it moved item
     /// <paramref name="anchorIndex"/>'s offset (new − old) at the cross size last laid out. False when nothing was pending.</summary>
     public bool TakeReseedShift(int anchorIndex, out double delta)
     {
         delta = 0.0;
-        if (float.IsNaN(_pendingMinCell)) return false;
+        if (!_pending) return false;
         float cross = float.IsNaN(_geomCross) ? 0f : _geomCross;
         bool anchored = cross > 0f && anchorIndex > 0 && _itemCount > anchorIndex;
         float before = anchored ? OffsetOf(anchorIndex, cross) : 0f;
         MinCellWidth = _pendingMinCell;
-        _pendingMinCell = float.NaN;
+        Gap = _pendingGap;
+        _rowGap = _pendingRowGap;
+        _pending = false;
+        _pendingMinCell = _pendingGap = _pendingRowGap = float.NaN;
         if (anchored) delta = OffsetOf(anchorIndex, cross) - before;
         return true;
     }
@@ -203,7 +224,7 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout, 
 
     private static int RowCount(int n, int cols) => n <= 0 ? 0 : (n + cols - 1) / cols;
     private float ColWidth(float cross, int cols) => MathF.Max(1f, (cross - (cols - 1) * Gap) / cols);
-    private float FixedRowStride => ItemHeight + Gap;
+    private float FixedRowStride => ItemHeight + RowGap;
 
     private void Ensure(int n, float cross)
     {
@@ -236,7 +257,7 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout, 
     }
 
     private float RowTop(int row) => IsMeasured
-        ? (_rowTable?.OffsetOf(row) ?? row * Estimate) + row * Gap
+        ? (_rowTable?.OffsetOf(row) ?? row * Estimate) + row * RowGap
         : row * FixedRowStride;
 
     private float RowHeightAt(int row) => IsMeasured ? (_rowTable?.ExtentAt(row) ?? Estimate) : ItemHeight;
@@ -260,7 +281,7 @@ public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout, 
         if (!IsMeasured)
         {
             int rows = RowCount(n, _cols);
-            return rows <= 0 ? 0f : rows * ItemHeight + (rows - 1) * Gap;
+            return rows <= 0 ? 0f : rows * ItemHeight + (rows - 1) * RowGap;
         }
         int rc = RowCount(n, _cols);
         return rc <= 0 ? 0f : RowTop(rc - 1) + RowHeightAt(rc - 1);

@@ -60,7 +60,7 @@ public interface IBoundListProps
     Element Build(RowScope scope);
 
     /// <summary>The layout the latest render asked for (null: the mount-time layout stands). A responsive grid's cell floor is re-fitted
-    /// in place (<see cref="FluentGpu.Scene.GridVirtualLayout.SetMinCellWidth"/>): a window-tier crossing re-fits the mounted list instead of
+    /// in place (<see cref="FluentGpu.Scene.GridVirtualLayout.SetFit"/>): a window-tier crossing re-fits the mounted list instead of
     /// remounting it.</summary>
     RepeatLayout? LiveLayout { get; }
 }

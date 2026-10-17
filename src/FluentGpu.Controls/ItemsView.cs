@@ -1032,24 +1032,24 @@ public sealed class ItemsView : Component, IPropsHost
         // renders, so the instance is memoized on the spec's identity fields.
         _ = _layoutRev?.Value;   // subscribe — a re-fitted cell floor (ApplyProps) re-renders this view once
         RepeatLayout spec = HasExplicitLayout ? Layout : RepeatLayout.Grid(Math.Max(1, Columns), 80f, 8f);
-        // A responsive grid's cell floor (and its row estimate, a seed only) is NOT part of the memo's identity: the mounted GridVirtualLayout re-fits to it in place
-        // (SetMinCellWidth below), so its measured rows, the viewport's extent source and the scroll offset survive a tier crossing.
+        // A responsive grid's cell floor, its gaps (column and row) and its row estimate (a seed only) are NOT part of the memo's identity: the mounted GridVirtualLayout re-fits to
+        // them in place (SetFit below), so its measured rows, the viewport's extent source and the scroll offset survive a tier crossing.
         bool responsiveGrid = spec.Kind == RepeatKind.Grid && spec.MinCellWidth > 0f;
         IVirtualLayout? layout = UseMemo<IVirtualLayout?>(
             () => spec.Kind switch
             {
                 RepeatKind.Stack => new StackVirtualLayout(spec.Extent, spec.Horizontal),
                 RepeatKind.Grid => new GridVirtualLayout(spec.Columns, spec.Extent, spec.Gap, spec.MinCellWidth,
-                    spec.Estimate > 0f ? spec.Estimate : 120f),
+                    spec.Estimate > 0f ? spec.Estimate : 120f, spec.RowGap),
                 RepeatKind.Custom => spec.CustomLayout,
                 _ => null,   // Wrap/Inline — non-virtual fallback
             },
-            DepKey.From(HashCode.Combine((int)spec.Kind, spec.Extent, spec.Gap, spec.Columns, responsiveGrid ? -1f : spec.MinCellWidth, responsiveGrid ? -1f : spec.Estimate, spec.Horizontal, spec.CustomLayout)));
+            DepKey.From(HashCode.Combine(HashCode.Combine((int)spec.Kind, spec.Extent, responsiveGrid ? -1f : spec.Gap, responsiveGrid ? -1f : spec.EffectiveRowGap), HashCode.Combine(spec.Columns, responsiveGrid ? -1f : spec.MinCellWidth, responsiveGrid ? -1f : spec.Estimate, spec.Horizontal, spec.CustomLayout))));
         bool horizontal = spec.Horizontal;
         // The re-fit lands on THIS frame's layout pass: the grid applies the floor in its anchored-reseed seam (the anchor row keeps
         // its place) and the viewport is marked here, in the reconcile that runs before layout, so a crossing frame's FLIP capture
         // sees the reflowed cells as one move.
-        if (responsiveGrid && layout is GridVirtualLayout liveGrid && liveGrid.SetMinCellWidth(spec.MinCellWidth)
+        if (responsiveGrid && layout is GridVirtualLayout liveGrid && liveGrid.SetFit(spec.MinCellWidth, spec.Gap, spec.EffectiveRowGap)
             && Context.Scene is { } refitScene && viewportNode.Value is { IsNull: false } refitVp && refitScene.IsLive(refitVp))
             refitScene.Mark(refitVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
 
@@ -2132,7 +2132,7 @@ public sealed class ItemsView : Component, IPropsHost
         float lineDip = spec.Kind switch
         {
             RepeatKind.Stack when spec.Extent > 0f => spec.Extent,
-            RepeatKind.Grid when spec.Extent > 0f => spec.Extent + spec.Gap,
+            RepeatKind.Grid when spec.Extent > 0f => spec.Extent + spec.EffectiveRowGap,
             _ => 0f,
         };
 

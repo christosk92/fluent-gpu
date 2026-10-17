@@ -597,6 +597,8 @@ Repeater.ItemsRepeater(int count, Func<int,Element> template, in RepeatLayout la
 //     .LinedFlow(lineHeight,…) / .SpanGrid(cols,rowH,gap,spanOf) / .HorizontalGrid(rows,w,gap)
 //     .Measured(IMeasuredVirtualLayout) / .VariableList(estimate) / .GroupedList(headerIdx,headerH,itemEstimate)
 //     .Wrap(gap) / .Inline(…)   ← non-virtual, for small collections
+//   A grid's `gap` is the gap between the cells of a row AND between rows; `.WithRowGap(rowGap)` gives the rows their own (GridFit(min, 16).WithRowGap(12)).
+//   A responsive grid (GridFit) re-fits its cell floor and BOTH gaps live on the mounted layout (anchor row kept), no remount.
 ```
 Only the visible window (+overscan) is realized; scrolling recycles row nodes through the slab free-list. Provide a
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
