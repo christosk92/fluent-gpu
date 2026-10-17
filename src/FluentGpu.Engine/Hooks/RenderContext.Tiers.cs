@@ -87,7 +87,7 @@ internal sealed class TierCell : HookCell, IDisposableCell
         if (next == previous) return;
         if (_registry is null) { Slot.Committed.SetIfChanged(next); return; }   // no host: nothing to defer against
         if (next == Slot.Committed.Peek()) _registry.Cancel(Slot);               // crossed back before the commit: nothing to write
-        else _registry.Store(Slot, next);
+        else _registry.Store(Slot, next, measured: _source.Kind == TierSourceKind.Measured);
     }
 
     public void DisposeCell()

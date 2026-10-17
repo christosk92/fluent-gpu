@@ -6201,6 +6201,7 @@ public sealed partial class AppHost : IDisposable
             double ensureMs = 0, layoutMs0 = 0;
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             bool resized = EnsureSize(keepAlive);
+            _tiers.FrameResized = resized;   // a measured crossing stored during this frame's layout waits one more layout (TierRegistry.Store)
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
             if (_tx is not null || _txPending is not null) TxFrameStart();  // E5: the theme transaction's step (its apply flush is this frame)
             if (_stTcs is not null) SettlePassStart();                      // E17c: this frame is a settle pass (measured-change baseline)
