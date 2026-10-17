@@ -48,6 +48,9 @@ public sealed class ViewRegistry
 
     public bool Contains(string viewId) => _views.ContainsKey(viewId);
 
+    internal IEnumerable<KeyValuePair<string, ViewEntry>> ViewEntries => _views;
+    internal IEnumerable<KeyValuePair<string, object>> StyleEntries => _styles;
+
     /// <summary>The template id registered for <paramref name="viewId"/>, or null.</summary>
     public string? TemplateIdOf(string viewId) => _views.TryGetValue(viewId, out var e) ? e.TemplateId : null;
 
@@ -105,6 +108,16 @@ public sealed class ViewRegistryBuilder
         ArgumentNullException.ThrowIfNull(style);
         if (!_styles.TryAdd(key.Id, style))
             throw new InvalidOperationException($"ViewRegistryBuilder.AddStyle: style key '{key.Id}' is already registered.");
+        return this;
+    }
+
+    /// <summary>Copy every view and style of <paramref name="fallback"/> whose key is not registered here yet, with its template id. A theme
+    /// that is still being built registers its own views first and fills the rest from another theme's registry, key by key.</summary>
+    public ViewRegistryBuilder AddMissing(ViewRegistry fallback)
+    {
+        ArgumentNullException.ThrowIfNull(fallback);
+        foreach (var (id, entry) in fallback.ViewEntries) _views.TryAdd(id, entry);
+        foreach (var (id, style) in fallback.StyleEntries) _styles.TryAdd(id, style);
         return this;
     }
 
