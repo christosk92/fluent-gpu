@@ -438,7 +438,7 @@ public sealed class ContentDialog : Component
                 Parts.Apply(PartTitle, new TextEl(Title)
                 {
                     Size = st.TitleSize,
-                    Weight = st.TitleWeight,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
+                    Weight = (ushort)st.TitleWeight,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
                     Color = st.TitleColor,
                     Wrap = TextWrap.Wrap,
                     MaxLines = 2,

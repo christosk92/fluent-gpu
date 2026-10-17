@@ -390,7 +390,7 @@ public static class InfoBar
             // InfoBar.xaml:113); the numeric TextEl weight pipeline shapes 600 directly.
             kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
-                Size = st.TitleSize, Weight = st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
+                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, TitleHMargin.Top, 0f, 0f),   // first child: ignore leading-left margin
             }));
             first = false;
@@ -463,7 +463,7 @@ public static class InfoBar
             // InfoBar.xaml:113); the numeric TextEl weight pipeline shapes 600 directly.
             kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
-                Size = st.TitleSize, Weight = st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
+                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, first ? 0f : TitleVMargin.Top, 0f, 0f),   // first child: ignore leading-top margin
             }));
             first = false;

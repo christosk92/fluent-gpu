@@ -97,8 +97,7 @@ static class ControlStyleTableSuite
             string fromEmpty = AllStyles();
             Tok.Use(ThemeDefinition.FluentDefault with { Controls = ControlStyles.FluentExplicit }, kind);
             string fromExplicit = AllStyles();
-            Check($"gate.ctl.styletable.records-{kind} all 30 keyed style records
- are identical under the empty table and the explicit built-in table",
+            Check($"gate.ctl.styletable.records-{kind} all 30 keyed style records are identical under the empty table and the explicit built-in table",
                 fromEmpty == fromExplicit, fromEmpty == fromExplicit ? null : $"first difference at {FirstDiff(fromEmpty, fromExplicit)}");
         }
     }
